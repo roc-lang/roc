@@ -492,7 +492,10 @@ fn add_tag_union(
                     ),
                 );
 
-                let (ret_type_str, ret) = match payload_type {
+                let ret_type_str;
+                let ret;
+
+                match payload_type {
                     RocType::RocStr
                     | RocType::Bool
                     | RocType::I8
@@ -515,10 +518,58 @@ fn add_tag_union(
                     | RocType::RocBox(_)
                     | RocType::TagUnion(_)
                     | RocType::TransparentWrapper { .. } => {
-                        (payload_type_name.clone(), get_payload)
+                        ret_type_str = type_name(*payload_id, types);
+                        ret = "payload".to_string();
                     }
-                    RocType::Struct { .. } => {
-                        todo!();
+                    RocType::Struct { fields, .. } => {
+                        let mut sorted_fields = fields.iter().collect::<Vec<&Field>>();
+
+                        sorted_fields.sort_by(|field1, field2| {
+                            // Convert from e.g. "f12" to 12u64
+                            // This is necessary because the string "f10" sorts
+                            // to earlier than "f2", whereas the number 10
+                            // sorts after the number 2.
+                            let num1 = field1.label()[1..].parse::<u64>().unwrap();
+                            let num2 = field2.label()[1..].parse::<u64>().unwrap();
+
+                            num1.partial_cmp(&num2).unwrap()
+                        });
+
+                        let mut ret_types = Vec::new();
+                        let mut ret_buf = "(\n".to_string();
+
+                        for field in fields {
+                            for _ in 0..3 {
+                                ret_buf.push_str(INDENT);
+                            }
+
+                            let field_type_name = type_name(field.type_id(), types);
+
+                            ret_types.push(field_type_name.clone());
+
+                            match field {
+                                Field::NonRecursive(label, _) => {
+                                    ret_buf.push_str("payload.");
+                                    ret_buf.push_str(label);
+                                }
+                                Field::Recursive(label, _) => {
+                                    ret_buf.push_str(&format!(
+                                        "*((payload.{label} as usize & !{bitmask}) as *mut {field_type_name})"
+                                    ));
+                                }
+                            }
+
+                            ret_buf.push_str(",\n");
+                        }
+
+                        for _ in 0..2 {
+                            ret_buf.push_str(INDENT);
+                        }
+
+                        ret_buf.push_str(")");
+
+                        ret = ret_buf;
+                        ret_type_str = format!("({})", ret_types.join(", "));
                     }
                 };
 
@@ -532,6 +583,9 @@ fn add_tag_union(
     /// Panics in debug builds if the .variant() doesn't return {tag_name}.
     pub unsafe fn into_{tag_name}({self_for_into}) -> {ret_type_str} {{
         debug_assert_eq!(self.variant(), {discriminant_name}::{tag_name});
+
+        let payload = {get_payload};
+
         {ret}
     }}"#,
                     ),
