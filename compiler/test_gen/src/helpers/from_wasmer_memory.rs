@@ -1,5 +1,5 @@
 use roc_gen_wasm::wasm32_sized::Wasm32Sized;
-use roc_std::{ReferenceCount, RocDec, RocList, RocOrder, RocStr};
+use roc_std::{RocDec, RocList, RocOrder, RocStr};
 use std::convert::TryInto;
 
 pub trait FromWasmerMemory: Wasm32Sized {
@@ -74,7 +74,7 @@ impl FromWasmerMemory for RocStr {
     }
 }
 
-impl<T: FromWasmerMemory + Clone + ReferenceCount> FromWasmerMemory for RocList<T> {
+impl<T: FromWasmerMemory + Clone> FromWasmerMemory for RocList<T> {
     fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
         let bytes = <u64 as FromWasmerMemory>::decode(memory, offset);
 

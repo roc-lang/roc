@@ -1093,7 +1093,7 @@ pub struct {name} {{
 
         let payload = {assign_payload};
 
-        core::mem::drop(self);
+        core::mem::drop::<Self>(self);
 
         payload
     }}"#,
@@ -1161,72 +1161,6 @@ pub struct {name} {{
         );
     }
 
-    // The roc_std::ReferenceCount impl for the tag union
-    {
-        let opt_impl = Some(format!("unsafe impl roc_std::ReferenceCount for {name}"));
-
-        add_decl(
-            impls,
-            opt_impl.clone(),
-            architecture,
-            r#"fn increment(&self) {
-        if let Some(storage) = self.storage() {
-            let mut copy = storage.get();
-            if !copy.is_readonly() {
-                copy.increment_reference_count();
-                storage.set(copy);
-            }
-        }
-    }"#
-            .to_string(),
-        );
-
-        add_decl(
-            impls,
-            opt_impl,
-            architecture,
-                r#"unsafe fn decrement(wrapper_ptr: *const Self) {
-        let wrapper = &*wrapper_ptr;
-
-        if let Some(storage) = Self::storage(wrapper) {
-            // Decrement the refcount and return early if no dealloc is needed
-            {
-                let mut new_storage = storage.get();
-
-                if new_storage.is_readonly() {
-                    return;
-                }
-
-                let needs_dealloc = new_storage.decrease();
-
-                if !needs_dealloc {
-                    // Write the storage back.
-                    storage.set(new_storage);
-
-                    return;
-                }
-            }
-
-            if !wrapper.pointer.is_null() {
-                // If there is a payload, recursively drop it first.
-                let mut payload = core::mem::ManuallyDrop::take(&mut *wrapper.pointer);
-
-                core::mem::drop(payload);
-            }
-
-            // Dealloc the pointer
-            let alignment = core::mem::align_of::<Self>().max(core::mem::align_of::<roc_std::Storage>());
-            let alloc_ptr = wrapper.pointer.cast::<u8>().sub(alignment);
-
-            crate::roc_dealloc(
-                alloc_ptr as *mut core::ffi::c_void,
-                alignment as u32,
-            );
-        }
-    }"#.to_string()
-        );
-    }
-
     // The Clone impl for the tag union
     {
         // Note that these never have Copy because they always contain a pointer.
@@ -1234,7 +1168,13 @@ pub struct {name} {{
 
         // Recursive tag unions need a custom Clone which bumps refcount.
         let body = r#"fn clone(&self) -> Self {
-        roc_std::ReferenceCount::increment(self);
+        if let Some(storage) = self.storage() {
+            let mut new_storage = storage.get();
+            if !new_storage.is_readonly() {
+                new_storage.increment_reference_count();
+                storage.set(new_storage);
+            }
+        }
 
         Self {
             pointer: self.pointer
@@ -1254,12 +1194,47 @@ pub struct {name} {{
             impls,
             opt_impl,
             architecture,
-            r#"fn drop(&mut self) {
-        unsafe {
-            roc_std::ReferenceCount::decrement(self as *const Self);
-        }
-    }"#
-            .to_string(),
+            format!(
+                r#"fn drop(&mut self) {{
+        if let Some(storage) = self.storage() {{
+            // Decrement the refcount and return early if no dealloc is needed
+            {{
+                let mut new_storage = storage.get();
+
+                if new_storage.is_readonly() {{
+                    return;
+                }}
+
+                let needs_dealloc = new_storage.decrease();
+
+                if !needs_dealloc {{
+                    // Write the storage back.
+                    storage.set(new_storage);
+
+                    return;
+                }}
+            }}
+
+            if !self.pointer.is_null() {{
+                // If there is a payload, drop it first.
+               let payload = unsafe {{ core::mem::ManuallyDrop::take(&mut *self.pointer) }};
+
+                core::mem::drop::<{payload_type_name}>(payload);
+            }}
+
+            // Dealloc the pointer
+            unsafe {{
+                let alignment = core::mem::align_of::<Self>().max(core::mem::align_of::<roc_std::Storage>());
+                let alloc_ptr = self.pointer.cast::<u8>().sub(alignment);
+
+                crate::roc_dealloc(
+                    alloc_ptr as *mut core::ffi::c_void,
+                    alignment as u32,
+                );
+            }}
+        }}
+    }}"#
+            ),
         );
     }
 

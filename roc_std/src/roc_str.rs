@@ -8,7 +8,7 @@ use core::{
 };
 use std::hash::Hash;
 
-use crate::{rc::ReferenceCount, RocList};
+use crate::RocList;
 
 #[repr(transparent)]
 pub struct RocStr(RocStrInner);
@@ -116,28 +116,6 @@ impl Debug for RocStr {
     }
 }
 
-unsafe impl ReferenceCount for RocStr {
-    fn increment(&self) {
-        match self.as_enum_ref() {
-            RocStrInnerRef::HeapAllocated(h) => h.increment(),
-            RocStrInnerRef::SmallString(_) => {
-                // Do nothing.
-            }
-        }
-    }
-
-    unsafe fn decrement(ptr: *const Self) {
-        let this = unsafe { &*ptr };
-        if this.is_small_str() {
-            // Do nothing.
-        } else {
-            unsafe {
-                RocList::<u8>::decrement(ptr.cast());
-            }
-        }
-    }
-}
-
 impl Clone for RocStr {
     fn clone(&self) -> Self {
         match self.as_enum_ref() {
@@ -151,9 +129,7 @@ impl Clone for RocStr {
 
 impl Drop for RocStr {
     fn drop(&mut self) {
-        if self.is_small_str() {
-            // Do nothing.
-        } else {
+        if !self.is_small_str() {
             unsafe {
                 ManuallyDrop::drop(&mut self.0.heap_allocated);
             }
