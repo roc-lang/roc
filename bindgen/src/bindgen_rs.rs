@@ -196,17 +196,8 @@ fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut I
         | RocType::RocDict(_, _)
         | RocType::RocSet(_)
         | RocType::RocList(_)
-        | RocType::RocBox(_) => {}
-        RocType::TransparentWrapper { name, content } => {
-            let typ = types.get(id);
-            let derive = derive_str(typ, types, !typ.has_enumeration(types));
-            let body = format!(
-                "{derive}\n#[repr(transparent)]\npub struct {name}({});",
-                type_name(*content, types)
-            );
-
-            add_decl(impls, None, architecture, body);
-        }
+        | RocType::RocBox(_)
+        | RocType::TransparentWrapper { .. } => {}
     }
 }
 
@@ -1015,13 +1006,13 @@ fn type_name(id: TypeId, types: &Types) -> String {
         RocType::RocList(elem_id) => format!("roc_std::RocList<{}>", type_name(*elem_id, types)),
         RocType::RocBox(elem_id) => format!("roc_std::RocBox<{}>", type_name(*elem_id, types)),
         RocType::Struct { name, .. }
-        | RocType::TransparentWrapper { name, .. }
         | RocType::TagUnion(RocTagUnion::NonRecursive { name, .. })
         | RocType::TagUnion(RocTagUnion::Recursive { name, .. })
         | RocType::TagUnion(RocTagUnion::Enumeration { name, .. })
         | RocType::TagUnion(RocTagUnion::NullableWrapped { name, .. })
         | RocType::TagUnion(RocTagUnion::NullableUnwrapped { name, .. })
         | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { name, .. }) => name.clone(),
+        RocType::TransparentWrapper { content, .. } => type_name(*content, types),
     }
 }
 
