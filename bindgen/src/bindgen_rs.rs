@@ -201,7 +201,7 @@ fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut I
             let typ = types.get(id);
             let derive = derive_str(typ, types, !typ.has_enumeration(types));
             let body = format!(
-                "{derive}\n#[repr(transparent)]\npub struct {name}({});",
+                "{derive}\n#[repr(transparent)]\npub struct {name}(pub {});",
                 type_name(*content, types)
             );
 
