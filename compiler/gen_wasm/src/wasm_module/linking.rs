@@ -4,7 +4,6 @@ use bumpalo::Bump;
 use super::parse::parse_fixed_size_items;
 use super::sections::{update_section_size, write_custom_section_header, SectionId};
 use super::serialize::{SerialBuffer, Serialize};
-use super::Align;
 use crate::wasm_module::parse::{Parse, ParseError, SkipBytes};
 
 /*******************************************************************
@@ -241,7 +240,7 @@ impl<'a> Parse<RelocCtx<'a>> for RelocationSection<'a> {
 #[derive(Debug)]
 pub struct LinkingSegment<'a> {
     pub name: &'a str,
-    pub alignment: Align,
+    pub align_bytes_pow2: u32,
     pub flags: u32,
 }
 
@@ -249,15 +248,21 @@ impl<'a> Serialize for LinkingSegment<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         buffer.encode_u32(self.name.len() as u32);
         buffer.append_slice(self.name.as_bytes());
-        let align_bytes_pow2 = self.alignment as u32;
-        buffer.encode_u32(align_bytes_pow2);
+        buffer.encode_u32(self.align_bytes_pow2);
         buffer.encode_u32(self.flags);
     }
 }
 
 impl<'a> Parse<&'a Bump> for LinkingSegment<'a> {
     fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
-        todo!()
+        let name = <&'a str>::parse(arena, bytes, cursor)?;
+        let align_bytes_pow2 = u32::parse((), bytes, cursor)?;
+        let flags = u32::parse((), bytes, cursor)?;
+        Ok(LinkingSegment {
+            name,
+            align_bytes_pow2,
+            flags,
+        })
     }
 }
 
@@ -270,13 +275,7 @@ pub struct LinkingInitFunc {
 
 impl Serialize for LinkingInitFunc {
     fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
-        todo!();
-    }
-}
-
-impl Parse<()> for LinkingInitFunc {
-    fn parse(_: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
-        todo!()
+        unimplemented!(); // not todo, since we are not planning to do it!
     }
 }
 
@@ -303,13 +302,7 @@ pub struct ComdatSym {
 
 impl Serialize for ComdatSym {
     fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
-        todo!();
-    }
-}
-
-impl Parse<()> for ComdatSym {
-    fn parse(_: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
-        todo!()
+        unimplemented!(); // not todo, since we are not planning to do it!
     }
 }
 
@@ -327,13 +320,7 @@ pub struct LinkingComdat<'a> {
 
 impl<'a> Serialize for LinkingComdat<'a> {
     fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
-        todo!();
-    }
-}
-
-impl<'a> Parse<&'a Bump> for LinkingComdat<'a> {
-    fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
-        todo!()
+        unimplemented!(); // not todo, since we are not planning to do it!
     }
 }
 
@@ -717,11 +704,12 @@ impl<'a> Parse<&'a Bump> for LinkingSection<'a> {
             return Err(ParseError {
                 offset: *cursor,
                 message: format!(
-                    "Unsupported linking version {}. Only {} is supported.",
+                    "This file uses version {} of Wasm linking data, but only version {} is supported.",
                     linking_version, LINKING_VERSION
                 ),
             });
         }
+        *cursor += 1;
 
         // Linking section is encoded as an array of subsections, but we prefer a struct internally.
         // The order is not defined in the spec, so we loop over them and organise them into our struct.
@@ -735,19 +723,19 @@ impl<'a> Parse<&'a Bump> for LinkingSection<'a> {
                     let count = u32::parse((), bytes, cursor)?;
                     for _ in 0..count {
                         let item = SymInfo::parse(arena, bytes, cursor)?;
-                        section.symbol_table.push(item)
+                        section.symbol_table.push(item);
                     }
                 }
                 SubSectionId::SegmentInfo => {
                     let count = u32::parse((), bytes, cursor)?;
                     for _ in 0..count {
                         let item = LinkingSegment::parse(arena, bytes, cursor)?;
-                        section.segment_info.push(item)
+                        section.segment_info.push(item);
                     }
                 }
                 SubSectionId::InitFuncs | SubSectionId::ComdatInfo => {
-                    // don't care. skip over this.
-                    *cursor += len;
+                    // We don't use these sections, just skip over them.
+                    *cursor += len as usize;
                 }
             }
         }

@@ -951,7 +951,7 @@ impl<'a> WasmBackend<'a> {
         // Ensure the linker keeps the segment aligned when relocating it
         self.module.linking.segment_info.push(LinkingSegment {
             name,
-            alignment: Align::Bytes4,
+            align_bytes_pow2: Align::Bytes4 as u32,
             flags: 0,
         });
 
