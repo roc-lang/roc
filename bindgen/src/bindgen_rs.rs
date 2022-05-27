@@ -451,21 +451,25 @@ fn add_tag_union(
                 let payload_type = types.get(*payload_id);
 
                 let init_payload;
-                let get_payload;
                 let self_for_into;
                 let payload_args;
                 let args_to_payload;
                 let owned_ret_type;
                 let borrowed_ret_type;
+                let owned_get_payload;
+                let borrowed_get_payload;
                 let owned_ret;
                 let borrowed_ret;
 
                 if payload_type.has_pointer(types) {
-                    get_payload = format!("core::mem::ManuallyDrop::take(&mut self.{tag_name})",);
+                    owned_get_payload =
+                        format!("core::mem::ManuallyDrop::take(&mut self.{tag_name})",);
+                    borrowed_get_payload = format!("&self.{tag_name}",);
                     // we need `mut self` for the argument because of ManuallyDrop
                     self_for_into = "mut self";
                 } else {
-                    get_payload = format!("self.{tag_name}");
+                    owned_get_payload = format!("self.{tag_name}");
+                    borrowed_get_payload = format!("&{owned_get_payload}");
                     // we don't need `mut self` unless we need ManuallyDrop
                     self_for_into = "self";
                 };
@@ -500,10 +504,10 @@ fn add_tag_union(
 
                         owned_ret_type = type_name(*payload_id, types);
                         borrowed_ret_type = format!("&{}", owned_ret_type);
-                        owned_ret = "payload".to_string();
-                        borrowed_ret = "&payload".to_string();
                         payload_args = format!("arg: {owned_ret_type}");
                         args_to_payload = "arg".to_string();
+                        owned_ret = "payload".to_string();
+                        borrowed_ret = format!("&{owned_ret}");
                     }
                     RocType::TransparentWrapper { content, .. } => {
                         let wrapper_type_name = type_name(*payload_id, types);
@@ -520,10 +524,10 @@ fn add_tag_union(
                         // from the public API.
                         owned_ret_type = type_name(*content, types);
                         borrowed_ret_type = format!("&{}", owned_ret_type);
-                        owned_ret = "payload.0".to_string();
-                        borrowed_ret = format!("&{owned_ret}");
                         payload_args = format!("arg: {owned_ret_type}");
                         args_to_payload = "arg".to_string();
+                        owned_ret = "payload.0".to_string();
+                        borrowed_ret = format!("&{owned_ret}");
                     }
                     RocType::Struct { fields, .. } => {
                         if payload_type.has_pointer(types) {
@@ -578,10 +582,36 @@ fn add_tag_union(
                             fields
                                 .iter()
                                 .enumerate()
-                                .map(|(index, field)| format!(
-                                    "{INDENT}{INDENT}{INDENT}{}: arg{index},",
-                                    field.label()
-                                ))
+                                .map(|(index, field)| {
+                                    let (label, arg_val) = match field {
+                                        Field::NonRecursive(label, _) => {
+                                            (label, format!("arg{index}"))
+                                        }
+                                        Field::Recursive(label, field_id) => {
+                                            let field_type = type_name(*field_id, types);
+
+                                            // recursive pointers need to be heap-allocated
+                                            (
+                                                label,
+                                                format!(
+                                                    r#"{{
+                let size = core::mem::size_of::<{field_type}>();
+                let align = core::mem::size_of::<{field_type}>() as u32;
+
+                unsafe {{
+                    let ptr = crate::roc_alloc(size, align) as *mut {field_type};
+
+                    *ptr = arg{index};
+
+                    ptr
+                }}
+            }}"#
+                                                ),
+                                            )
+                                        }
+                                    };
+                                    format!("{INDENT}{INDENT}{INDENT}{label}: {arg_val},")
+                                })
                                 .collect::<Vec<String>>()
                                 .join("\n")
                         );
@@ -645,7 +675,7 @@ fn add_tag_union(
     pub unsafe fn into_{tag_name}({self_for_into}) -> {owned_ret_type} {{
         debug_assert_eq!(self.variant(), {discriminant_name}::{tag_name});
 
-        let payload = {get_payload};
+        let payload = {owned_get_payload};
 
         {owned_ret}
     }}"#,
@@ -663,7 +693,7 @@ fn add_tag_union(
     pub unsafe fn as_{tag_name}(&self) -> {borrowed_ret_type} {{
         debug_assert_eq!(self.variant(), {discriminant_name}::{tag_name});
 
-        let payload = {get_payload};
+        let payload = {borrowed_get_payload};
 
         {borrowed_ret}
     }}"#,
