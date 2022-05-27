@@ -974,11 +974,13 @@ fn add_struct(
             let mut buf = format!("{derive}\n#[repr(C)]\npub struct {name} {{\n");
 
             for field in fields {
-                buf.push_str(&format!(
-                    "{INDENT}pub {}: {},\n",
-                    field.label(),
-                    type_name(field.type_id(), types)
-                ));
+                let (label, type_str) = match field {
+                    Field::NonRecursive(label, field_id) => (label, type_name(*field_id, types)),
+                    Field::Recursive(label, field_id) => {
+                        (label, format!("*mut {}", type_name(*field_id, types)))
+                    }
+                };
+                buf.push_str(&format!("{INDENT}pub {label}: {type_str},\n",));
             }
 
             buf.push('}');
