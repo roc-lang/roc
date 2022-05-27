@@ -451,28 +451,23 @@ fn add_tag_union(
                 let payload_type = types.get(*payload_id);
                 let payload_type_name = type_name(*payload_id, types);
 
-                let (init_payload, get_payload, ref_if_needed, self_for_into) =
-                    if payload_type.has_pointer(types) {
-                        (
-                            "core::mem::ManuallyDrop::new(payload)",
-                            format!("core::mem::ManuallyDrop::take(&mut self.{tag_name})",),
-                            // Since this is a ManuallyDrop, our `as_` method will need
-                            // to dereference the variant (e.g. `&self.Foo`)
-                            "&",
-                            // we need `mut self` for the argument because of ManuallyDrop
-                            "mut self",
-                        )
-                    } else {
-                        (
-                            "payload",
-                            format!("self.{tag_name}"),
-                            // Since this is not a ManuallyDrop, our `as_` method will not
-                            // want to dereference the variant (e.g. `self.Foo` with no '&')
-                            "",
-                            // we don't need `mut self` unless we need ManuallyDrop
-                            "self",
-                        )
-                    };
+
+                let (init_payload, get_payload, self_for_into) = if payload_type.has_pointer(types)
+                {
+                    (
+                        "core::mem::ManuallyDrop::new(payload)",
+                        format!("core::mem::ManuallyDrop::take(&mut self.{tag_name})",),
+                        // we need `mut self` for the argument because of ManuallyDrop
+                        "mut self",
+                    )
+                } else {
+                    (
+                        "payload",
+                        format!("self.{tag_name}"),
+                        // we don't need `mut self` unless we need ManuallyDrop
+                        "self",
+                    )
+                };
 
                 add_decl(
                     impls,
