@@ -121,6 +121,11 @@ mod bindgen_cli_run {
             `Cons "small str" Nil` is: StrConsList::Cons(StrConsList_Cons { f0: "small str", f1: StrConsList::Nil })
             `Nil` is: StrConsList::Nil
         "#),
+        recursive_union:"recursive-union" => indoc!(r#"
+            tag_union was: StrConsList::Cons(StrConsList_Cons { f0: "World!", f1: StrConsList::Cons(StrConsList_Cons { f0: "Hello ", f1: StrConsList::Nil }) })
+            `Cons "small str" Nil` is: StrConsList::Cons(StrConsList_Cons { f0: "small str", f1: StrConsList::Nil })
+            `Nil` is: StrConsList::Nil
+        "#),
     }
 
     fn check_for_tests(all_fixtures: &mut roc_collections::VecSet<String>) {
