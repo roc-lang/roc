@@ -1,7 +1,7 @@
 use crate::types::{Field, RocTagUnion, RocType, TypeId, Types};
 use indexmap::IndexMap;
 use roc_mono::layout::UnionLayout;
-use roc_target::{Architecture, TargetInfo};
+use roc_target::Architecture;
 use std::convert::TryInto;
 use std::fmt::Display;
 
