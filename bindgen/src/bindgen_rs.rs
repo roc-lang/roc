@@ -449,48 +449,26 @@ fn add_tag_union(
             // }
             if let Some(payload_id) = opt_payload_id {
                 let payload_type = types.get(*payload_id);
-                let payload_type_name = type_name(*payload_id, types);
 
-
-                let (init_payload, get_payload, self_for_into) = if payload_type.has_pointer(types)
-                {
-                    (
-                        "core::mem::ManuallyDrop::new(payload)",
-                        format!("core::mem::ManuallyDrop::take(&mut self.{tag_name})",),
-                        // we need `mut self` for the argument because of ManuallyDrop
-                        "mut self",
-                    )
-                } else {
-                    (
-                        "payload",
-                        format!("self.{tag_name}"),
-                        // we don't need `mut self` unless we need ManuallyDrop
-                        "self",
-                    )
-                };
-
-                add_decl(
-                    impls,
-                    opt_impl.clone(),
-                    architecture,
-                    format!(
-                        r#"/// Construct a tag named {tag_name}, with the appropriate payload
-    pub fn {tag_name}(payload: {payload_type_name}) -> Self {{
-        let mut answer = Self {{
-            {tag_name}: {init_payload}
-        }};
-
-        answer.set_discriminant({discriminant_name}::{tag_name});
-
-        answer
-    }}"#
-                    ),
-                );
-
+                let init_payload;
+                let get_payload;
+                let self_for_into;
+                let payload_args;
+                let args_to_payload;
                 let owned_ret_type;
                 let borrowed_ret_type;
                 let owned_ret;
                 let borrowed_ret;
+
+                if payload_type.has_pointer(types) {
+                    get_payload = format!("core::mem::ManuallyDrop::take(&mut self.{tag_name})",);
+                    // we need `mut self` for the argument because of ManuallyDrop
+                    self_for_into = "mut self";
+                } else {
+                    get_payload = format!("self.{tag_name}");
+                    // we don't need `mut self` unless we need ManuallyDrop
+                    self_for_into = "self";
+                };
 
                 match payload_type {
                     RocType::RocStr
@@ -513,14 +491,47 @@ fn add_tag_union(
                     | RocType::RocDict(_, _)
                     | RocType::RocSet(_)
                     | RocType::RocBox(_)
-                    | RocType::TagUnion(_)
-                    | RocType::TransparentWrapper { .. } => {
+                    | RocType::TagUnion(_) => {
+                        if payload_type.has_pointer(types) {
+                            init_payload = "core::mem::ManuallyDrop::new(payload)".to_string();
+                        } else {
+                            init_payload = "payload".to_string();
+                        }
+
                         owned_ret_type = type_name(*payload_id, types);
                         borrowed_ret_type = format!("&{}", owned_ret_type);
                         owned_ret = "payload".to_string();
                         borrowed_ret = "&payload".to_string();
+                        payload_args = format!("arg: {owned_ret_type}");
+                        args_to_payload = "arg".to_string();
+                    }
+                    RocType::TransparentWrapper { content, .. } => {
+                        let wrapper_type_name = type_name(*payload_id, types);
+
+                        if payload_type.has_pointer(types) {
+                            init_payload = format!(
+                                "core::mem::ManuallyDrop::new({wrapper_type_name}(payload))"
+                            );
+                        } else {
+                            init_payload = format!("{wrapper_type_name}(payload)");
+                        }
+
+                        // This is a payload with 1 value, so we want to hide the wrapper
+                        // from the public API.
+                        owned_ret_type = type_name(*content, types);
+                        borrowed_ret_type = format!("&{}", owned_ret_type);
+                        owned_ret = "payload.0".to_string();
+                        borrowed_ret = format!("&{owned_ret}");
+                        payload_args = format!("arg: {owned_ret_type}");
+                        args_to_payload = "arg".to_string();
                     }
                     RocType::Struct { fields, .. } => {
+                        if payload_type.has_pointer(types) {
+                            init_payload = "core::mem::ManuallyDrop::new(payload)".to_string();
+                        } else {
+                            init_payload = "payload".to_string();
+                        }
+
                         let mut sorted_fields = fields.iter().collect::<Vec<&Field>>();
 
                         sorted_fields.sort_by(|field1, field2| {
@@ -554,6 +565,26 @@ fn add_tag_union(
                             }
                         }
 
+                        let payload_type_name = type_name(*payload_id, types);
+
+                        payload_args = ret_types
+                            .iter()
+                            .enumerate()
+                            .map(|(index, typ)| format!("arg{index}: {typ}"))
+                            .collect::<Vec<String>>()
+                            .join(", ");
+                        args_to_payload = format!(
+                            "{payload_type_name} {{\n{}\n{INDENT}{INDENT}}}",
+                            fields
+                                .iter()
+                                .enumerate()
+                                .map(|(index, field)| format!(
+                                    "{INDENT}{INDENT}{INDENT}{}: arg{index},",
+                                    field.label()
+                                ))
+                                .collect::<Vec<String>>()
+                                .join("\n")
+                        );
                         owned_ret = {
                             let lines = ret_values
                                 .iter()
@@ -583,6 +614,25 @@ fn add_tag_union(
                         );
                     }
                 };
+
+                add_decl(
+                    impls,
+                    opt_impl.clone(),
+                    architecture,
+                    format!(
+                        r#"/// Construct a tag named {tag_name}, with the appropriate payload
+    pub fn {tag_name}({payload_args}) -> Self {{
+        let payload = {args_to_payload};
+        let mut answer = Self {{
+            {tag_name}: {init_payload}
+        }};
+
+        answer.set_discriminant({discriminant_name}::{tag_name});
+
+        answer
+    }}"#
+                    ),
+                );
 
                 add_decl(
                     impls,
