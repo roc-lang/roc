@@ -550,7 +550,8 @@ fn add_tag_union(
                         });
 
                         let mut ret_types = Vec::new();
-                        let mut ret_values = Vec::new();
+                        let mut borrowed_ret_values = Vec::new();
+                        let mut owned_ret_values = Vec::new();
 
                         for field in fields {
                             let field_type_name = type_name(field.type_id(), types);
@@ -559,12 +560,17 @@ fn add_tag_union(
 
                             match field {
                                 Field::NonRecursive(label, _) => {
-                                    ret_values.push(format!("payload.{label}"));
+                                    let line = format!("payload.{label}");
+
+                                    owned_ret_values.push(line.clone());
+                                    borrowed_ret_values.push(line);
                                 }
                                 Field::Recursive(label, _) => {
-                                    ret_values.push(format!(
-                                        "core::mem::read((payload.{label} as usize & !{bitmask}) as *const {field_type_name})"
-                                    ));
+                                    let line = format!(
+                                        "(payload.{label} as usize & !{bitmask}) as *const {field_type_name}"
+                                    );
+                                    borrowed_ret_values.push(format!("&*({line})"));
+                                    owned_ret_values.push(format!("core::ptr::read({line})"));
                                 }
                             }
                         }
@@ -616,7 +622,7 @@ fn add_tag_union(
                                 .join("\n")
                         );
                         owned_ret = {
-                            let lines = ret_values
+                            let lines = owned_ret_values
                                 .iter()
                                 .map(|line| format!("\n{INDENT}{INDENT}{INDENT}{line}"))
                                 .collect::<Vec<String>>()
@@ -625,9 +631,9 @@ fn add_tag_union(
                             format!("({lines}\n{INDENT}{INDENT})")
                         };
                         borrowed_ret = {
-                            let lines = ret_values
+                            let lines = borrowed_ret_values
                                 .iter()
-                                .map(|line| format!("\n{INDENT}{INDENT}{INDENT}&{line}"))
+                                .map(|line| format!("\n{INDENT}{INDENT}{INDENT}{line}"))
                                 .collect::<Vec<String>>()
                                 .join(", ");
 
