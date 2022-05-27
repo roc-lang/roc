@@ -492,8 +492,10 @@ fn add_tag_union(
                     ),
                 );
 
-                let ret_type_str;
-                let ret;
+                let owned_ret_type;
+                let borrowed_ret_type;
+                let owned_ret;
+                let borrowed_ret;
 
                 match payload_type {
                     RocType::RocStr
@@ -518,8 +520,10 @@ fn add_tag_union(
                     | RocType::RocBox(_)
                     | RocType::TagUnion(_)
                     | RocType::TransparentWrapper { .. } => {
-                        ret_type_str = type_name(*payload_id, types);
-                        ret = "payload".to_string();
+                        owned_ret_type = type_name(*payload_id, types);
+                        borrowed_ret_type = format!("&{}", owned_ret_type);
+                        owned_ret = "payload".to_string();
+                        borrowed_ret = "&payload".to_string();
                     }
                     RocType::Struct { fields, .. } => {
                         let mut sorted_fields = fields.iter().collect::<Vec<&Field>>();
@@ -536,40 +540,52 @@ fn add_tag_union(
                         });
 
                         let mut ret_types = Vec::new();
-                        let mut ret_buf = "(\n".to_string();
+                        let mut ret_values = Vec::new();
 
                         for field in fields {
-                            for _ in 0..3 {
-                                ret_buf.push_str(INDENT);
-                            }
-
                             let field_type_name = type_name(field.type_id(), types);
 
                             ret_types.push(field_type_name.clone());
 
                             match field {
                                 Field::NonRecursive(label, _) => {
-                                    ret_buf.push_str("payload.");
-                                    ret_buf.push_str(label);
+                                    ret_values.push(format!("payload.{label}"));
                                 }
                                 Field::Recursive(label, _) => {
-                                    ret_buf.push_str(&format!(
+                                    ret_values.push(format!(
                                         "*((payload.{label} as usize & !{bitmask}) as *mut {field_type_name})"
                                     ));
                                 }
                             }
-
-                            ret_buf.push_str(",\n");
                         }
 
-                        for _ in 0..2 {
-                            ret_buf.push_str(INDENT);
-                        }
+                        owned_ret = {
+                            let lines = ret_values
+                                .iter()
+                                .map(|line| format!("\n{INDENT}{INDENT}{INDENT}{line}"))
+                                .collect::<Vec<String>>()
+                                .join(", ");
 
-                        ret_buf.push_str(")");
+                            format!("({lines}\n{INDENT}{INDENT})")
+                        };
+                        borrowed_ret = {
+                            let lines = ret_values
+                                .iter()
+                                .map(|line| format!("\n{INDENT}{INDENT}{INDENT}&{line}"))
+                                .collect::<Vec<String>>()
+                                .join(", ");
 
-                        ret = ret_buf;
-                        ret_type_str = format!("({})", ret_types.join(", "));
+                            format!("({lines}\n{INDENT}{INDENT})")
+                        };
+                        owned_ret_type = format!("({})", ret_types.join(", "));
+                        borrowed_ret_type = format!(
+                            "({})",
+                            ret_types
+                                .iter()
+                                .map(|ret_type| { format!("&{ret_type}") })
+                                .collect::<Vec<String>>()
+                                .join(", ")
+                        );
                     }
                 };
 
@@ -581,12 +597,12 @@ fn add_tag_union(
                         r#"/// Unsafely assume the given {name} has a .variant() of {tag_name} and convert it to {tag_name}'s payload.
     /// (Always examine .variant() first to make sure this is the correct variant!)
     /// Panics in debug builds if the .variant() doesn't return {tag_name}.
-    pub unsafe fn into_{tag_name}({self_for_into}) -> {ret_type_str} {{
+    pub unsafe fn into_{tag_name}({self_for_into}) -> {owned_ret_type} {{
         debug_assert_eq!(self.variant(), {discriminant_name}::{tag_name});
 
         let payload = {get_payload};
 
-        {ret}
+        {owned_ret}
     }}"#,
                     ),
                 );
@@ -599,9 +615,12 @@ fn add_tag_union(
                         r#"/// Unsafely assume the given {name} has a .variant() of {tag_name} and return its payload.
     /// (Always examine .variant() first to make sure this is the correct variant!)
     /// Panics in debug builds if the .variant() doesn't return {tag_name}.
-    pub unsafe fn as_{tag_name}(&self) -> {ref_if_needed}{payload_type_name} {{
+    pub unsafe fn as_{tag_name}(&self) -> {borrowed_ret_type} {{
         debug_assert_eq!(self.variant(), {discriminant_name}::{tag_name});
-        {ref_if_needed}self.{tag_name}
+
+        let payload = {get_payload};
+
+        {borrowed_ret}
     }}"#,
                     ),
                 );
