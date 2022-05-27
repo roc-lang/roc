@@ -139,14 +139,27 @@ impl ReplAppMemory for ExpectMemory {
     deref_number!(deref_f64, f64);
 
     fn deref_str(&self, addr: usize) -> &str {
-        let offset = self.deref_usize(addr);
-        let length = self.deref_usize(addr + std::mem::size_of::<usize>());
-        let capactiy = self.deref_usize(addr + 2 * std::mem::size_of::<usize>());
+        let last_byte_addr = addr + (3 * std::mem::size_of::<usize>()) - 1;
+        let last_byte = self.deref_i8(last_byte_addr);
 
-        let ptr = unsafe { self.start.add(offset) };
-        // let roc_str = unsafe { RocStr::from_raw_parts(ptr, length, capactiy) };
+        let is_small = last_byte < 0;
 
-        todo!()
+        if is_small {
+            let ptr = unsafe { self.start.add(addr) };
+            let roc_str: &RocStr = unsafe { &*ptr.cast() };
+
+            roc_str.as_str()
+        } else {
+            let offset = self.deref_usize(addr);
+            let length = self.deref_usize(addr + std::mem::size_of::<usize>());
+
+            unsafe {
+                let ptr = self.start.add(offset);
+                let slice = std::slice::from_raw_parts(ptr, length);
+
+                std::str::from_utf8_unchecked(slice)
+            }
+        }
     }
 }
 
@@ -190,7 +203,6 @@ impl<'a> ReplApp<'a> for ExpectReplApp<'a> {
         F: Fn(&'a Self::Memory, usize) -> T,
         Self::Memory: 'a,
     {
-        dbg!(std::any::type_name::<T>());
         transform(self.memory, self.start_offset)
     }
 }

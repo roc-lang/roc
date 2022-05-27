@@ -2381,7 +2381,7 @@ fn type_with_able_vars<'b>(
     alloc.concat(doc)
 }
 
-fn error_type_to_doc<'b>(
+pub fn error_type_to_doc<'b>(
     alloc: &'b RocDocAllocator<'b>,
     error_type: ErrorType,
 ) -> RocDocBuilder<'b> {

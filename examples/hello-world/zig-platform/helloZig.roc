@@ -5,8 +5,8 @@ app "helloZig"
 
 
 main = 
-    a = "foo" 
-    b = "bar" 
+    a = Str.concat "a" "foo" 
+    b = Str.concat "a" "bar" 
 
     (
         expect a == b

@@ -2858,7 +2858,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                                 "to_store_pointer",
                             );
 
-                            env.builder.build_store(cast_ptr, value);
+                            store_roc_value(env, *layout, cast_ptr, value);
 
                             let increment = layout.stack_size(env.target_info);
                             let increment = env.ptr_int().const_int(increment as _, false);
