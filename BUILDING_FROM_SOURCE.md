@@ -44,7 +44,7 @@ Use `cargo build` to build the whole project.
 #### Extra tips
 
 If you want to load all dependencies automatically whenever you `cd` into `roc`, check out [direnv](https://direnv.net/) and [lorri](https://github.com/nix-community/lorri).
-Now you no longer need to execute `nix develop` first.
+Then you will no longer need to execute `nix develop` first.
 
 ### Editor
 
