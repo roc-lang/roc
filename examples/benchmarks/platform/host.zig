@@ -96,8 +96,8 @@ pub export fn main() callconv(.C) u8 {
         roc_dealloc(raw_output, @alignOf(u64));
     }
 
-    var ts1: std.os.timespec = undefined;
-    std.os.clock_gettime(std.os.CLOCK.REALTIME, &ts1) catch unreachable;
+    // var ts1: std.os.timespec = undefined;
+    //  std.os.clock_gettime(std.os.CLOCK.REALTIME, &ts1) catch unreachable;
 
     roc__mainForHost_1_exposed_generic(output);
 
@@ -105,13 +105,13 @@ pub export fn main() callconv(.C) u8 {
 
     call_the_closure(closure_data_pointer);
 
-    var ts2: std.os.timespec = undefined;
-    std.os.clock_gettime(std.os.CLOCK.REALTIME, &ts2) catch unreachable;
+    // var ts2: std.os.timespec = undefined;
+    // std.os.clock_gettime(std.os.CLOCK.REALTIME, &ts2) catch unreachable;
 
-    const delta = to_seconds(ts2) - to_seconds(ts1);
+    // const delta = 3; // to_seconds(ts2) - to_seconds(ts1);
 
-    const stderr = std.io.getStdErr().writer();
-    stderr.print("runtime: {d:.3}ms\n", .{delta * 1000}) catch unreachable;
+    // const stderr = std.io.getStdErr().writer();
+    // stderr.print("runtime: {d:.3}ms\n", .{delta * 1000}) catch unreachable;
 
     return 0;
 }
