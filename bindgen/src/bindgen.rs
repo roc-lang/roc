@@ -403,9 +403,7 @@ fn add_tag_union(
                     NonRecursive(_) => RocType::TagUnion(RocTagUnion::NonRecursive { name, tags }),
                     // A recursive tag union (general case)
                     // e.g. `Expr : [Sym Str, Add Expr Expr]`
-                    Recursive(_) => {
-                        todo!()
-                    }
+                    Recursive(_) => RocType::TagUnion(RocTagUnion::Recursive { name, tags }),
                     // A recursive tag union with just one constructor
                     // Optimization: No need to store a tag ID (the payload is "unwrapped")
                     // e.g. `RoseTree a : [Tree a (List (RoseTree a))]`

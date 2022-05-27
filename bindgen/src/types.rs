@@ -321,7 +321,7 @@ impl RocType {
             RocType::RocBox(_) => target_info.ptr_size(),
             RocType::TagUnion(tag_union) => match tag_union {
                 RocTagUnion::Enumeration { tags, .. } => size_for_tag_count(tags.len()),
-                RocTagUnion::NonRecursive { tags, .. } => {
+                RocTagUnion::NonRecursive { tags, .. } | RocTagUnion::Recursive { tags, .. } => {
                     // The "unpadded" size (without taking alignment into account)
                     // is the sum of all the sizes of the fields.
                     let size_unpadded = tags.iter().fold(0, |total, (_, opt_payload_id)| {
@@ -355,7 +355,6 @@ impl RocType {
                         size_padded
                     }
                 }
-                RocTagUnion::Recursive { .. } => todo!(),
                 RocTagUnion::NonNullableUnwrapped { .. } => todo!(),
                 RocTagUnion::NullableWrapped { .. } => todo!(),
                 RocTagUnion::NullableUnwrapped { .. } => todo!(),
