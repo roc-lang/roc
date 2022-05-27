@@ -1,6 +1,6 @@
 mod bindings;
 
-use bindings::{Expr, Expr_Concat};
+use bindings::{Expr, Expr_Concat, Expr_String};
 use indoc::indoc;
 
 extern "C" {
@@ -39,10 +39,10 @@ pub extern "C" fn rust_main() -> i32 {
         ),
         tag_union,
         Expr::Concat(Expr_Concat {
-            f0: Expr::String("Hello, ".into()),
-            f1: Expr::String("World!".into()),
+            f0: Box::into_raw(Box::new(Expr::String(Expr_String("Hello, ".into())))),
+            f1: Box::into_raw(Box::new(Expr::String(Expr_String("World!".into())))),
         }),
-        Expr::String("this is a test".into()),
+        Expr::String(Expr_String("this is a test".into())),
     ); // Debug
 
     let mut set = HashSet::new();
