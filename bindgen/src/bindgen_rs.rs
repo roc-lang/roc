@@ -14,6 +14,32 @@ const VARIANT_DOC_COMMENT: &str =
 type Impls = IndexMap<Impl, IndexMap<String, Vec<Architecture>>>;
 type Impl = Option<String>;
 
+/// Recursive tag unions need a custom Clone which bumps refcount.
+const RECURSIVE_TAG_UNION_CLONE: &str = r#"fn clone(&self) -> Self {
+    if let Some(storage) = self.storage() {
+        let mut new_storage = storage.get();
+        if !new_storage.is_readonly() {
+            new_storage.increment_reference_count();
+            storage.set(new_storage);
+        }
+    }
+
+    Self {
+        pointer: self.pointer
+    }
+}"#;
+
+const RECURSIVE_TAG_UNION_STORAGE: &str = r#"#[inline(always)]
+    fn storage(&self) -> Option<&core::cell::Cell<roc_std::Storage>> {
+        if self.pointer.is_null() {
+            None
+        } else {
+            unsafe {
+                Some(&*self.pointer.cast::<core::cell::Cell<roc_std::Storage>>().sub(1))
+            }
+        }
+    }"#;
+
 /// Add the given declaration body, along with the architecture, to the Impls.
 /// This can optionally be within an `impl`, or if no `impl` is specified,
 /// then it's added at the top level.
@@ -263,6 +289,14 @@ fn add_tag_union(
     let discriminant_offset = RocTagUnion::discriminant_offset(tags, types, target_info);
     let size = typ.size(types, target_info);
     let union_name = format!("union_{name}");
+    let (actual_self, actual_self_mut, actual_other) = match recursiveness {
+        Recursiveness::Recursive => (
+            "(&*self.pointer)",
+            "(&mut *self.pointer)",
+            "(&*other.pointer)",
+        ),
+        Recursiveness::NonRecursive => ("self", "self", "other"),
+    };
 
     {
         // Recursive tag unions have a public struct, not a public union
@@ -338,6 +372,13 @@ pub struct {name} {{
 
         match recursiveness {
             Recursiveness::Recursive => {
+                add_decl(
+                    impls,
+                    opt_impl.clone(),
+                    architecture,
+                    RECURSIVE_TAG_UNION_STORAGE.to_string(),
+                );
+
                 if tags.len() <= max_pointer_tagged_variants(architecture) {
                     bitmask = format!("{:#b}", tagged_pointer_bitmask(architecture));
 
@@ -520,12 +561,18 @@ pub struct {name} {{
                         borrowed_ret = format!("&{owned_ret}");
                     }
                     RocType::TransparentWrapper { content, .. } => {
+                        let payload_type_name = type_name(*payload_id, types);
+
                         // This is a payload with 1 value, so we want to hide the wrapper
                         // from the public API.
                         owned_ret_type = type_name(*content, types);
                         borrowed_ret_type = format!("&{}", owned_ret_type);
                         payload_args = format!("arg: {owned_ret_type}");
-                        args_to_payload = "arg".to_string();
+                        args_to_payload = if types.get(*content).has_pointer(types) {
+                            format!("core::mem::ManuallyDrop::new({payload_type_name}(arg))")
+                        } else {
+                            format!("{payload_type_name}(arg)")
+                        };
                         owned_ret = "payload.0".to_string();
                         borrowed_ret = format!("&{owned_ret}");
                     }
@@ -771,7 +818,7 @@ pub struct {name} {{
             |tag_name, opt_payload_id| {
                 match opt_payload_id {
                     Some(payload_id) if types.get(payload_id).has_pointer(types) => {
-                        format!("unsafe {{ core::mem::ManuallyDrop::drop(&mut self.{tag_name}) }},",)
+                        format!("unsafe {{ core::mem::ManuallyDrop::drop(&mut {actual_self_mut}.{tag_name}) }},",)
                     }
                     _ => {
                         // If it had no payload, or if the payload had no pointers,
@@ -814,7 +861,7 @@ pub struct {name} {{
             &mut buf,
             |tag_name, opt_payload_id| {
                 if opt_payload_id.is_some() {
-                    format!("self.{tag_name} == other.{tag_name},")
+                    format!("{actual_self}.{tag_name} == {actual_other}.{tag_name},")
                 } else {
                     // if the tags themselves had been unequal, we already would have
                     // early-returned with false, so this means the tags were equal
@@ -837,12 +884,12 @@ pub struct {name} {{
     {
         let opt_impl = Some(format!("impl PartialOrd for {name}"));
         let mut buf = r#"fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-            match self.variant().partial_cmp(&other.variant()) {
-                Some(core::cmp::Ordering::Equal) => {}
-                not_eq => return not_eq,
-            }
+        match self.variant().partial_cmp(&other.variant()) {
+            Some(core::cmp::Ordering::Equal) => {}
+            not_eq => return not_eq,
+        }
 
-            unsafe {
+        unsafe {
 "#
         .to_string();
 
@@ -853,7 +900,7 @@ pub struct {name} {{
             &mut buf,
             |tag_name, opt_payload_id| {
                 if opt_payload_id.is_some() {
-                    format!("self.{tag_name}.partial_cmp(&other.{tag_name}),",)
+                    format!("{actual_self}.{tag_name}.partial_cmp(&{actual_other}.{tag_name}),",)
                 } else {
                     // if the tags themselves had been unequal, we already would have
                     // early-returned, so this means the tags were equal and there's
@@ -892,7 +939,7 @@ pub struct {name} {{
             &mut buf,
             |tag_name, opt_payload_id| {
                 if opt_payload_id.is_some() {
-                    format!("self.{tag_name}.cmp(&other.{tag_name}),",)
+                    format!("{actual_self}.{tag_name}.cmp(&{actual_other}.{tag_name}),",)
                 } else {
                     // if the tags themselves had been unequal, we already would have
                     // early-returned, so this means the tags were equal and there's
@@ -920,46 +967,66 @@ pub struct {name} {{
         };
 
         let opt_impl = Some(format!("{opt_impl_prefix}impl Clone for {name}"));
-        let mut buf = r#"fn clone(&self) -> Self {
+        let body = match recursiveness {
+            Recursiveness::Recursive => RECURSIVE_TAG_UNION_CLONE.to_string(),
+            Recursiveness::NonRecursive => {
+                let mut buf = r#"fn clone(&self) -> Self {
         let mut answer = unsafe {
 "#
-        .to_string();
+                .to_string();
 
-        write_impl_tags(
-            3,
-            tags.iter(),
-            &discriminant_name,
-            &mut buf,
-            |tag_name, opt_payload_id| {
-                if opt_payload_id.is_some() {
-                    format!(
-                        r#"Self {{
-                    {tag_name}: self.{tag_name}.clone(),
+                write_impl_tags(
+                    3,
+                    tags.iter(),
+                    &discriminant_name,
+                    &mut buf,
+                    |tag_name, opt_payload_id| {
+                        if opt_payload_id.is_some() {
+                            match recursiveness {
+                                Recursiveness::Recursive => {
+                                    format!(
+                                        r#"Self {{
+                    {union_name} {{
+                        {tag_name}: self.pointer
+                    }}
                 }},"#,
-                    )
-                } else {
-                    // when there's no payload, initialize to garbage memory.
-                    format!(
-                        r#"core::mem::transmute::<
+                                    )
+                                }
+                                Recursiveness::NonRecursive => {
+                                    format!(
+                                        r#"Self {{
+                    {tag_name}: {actual_self}.{tag_name}.clone(),
+                }},"#,
+                                    )
+                                }
+                            }
+                        } else {
+                            // when there's no payload, initialize to garbage memory.
+                            format!(
+                                r#"core::mem::transmute::<
                     core::mem::MaybeUninit<{name}>,
                     {name},
                 >(core::mem::MaybeUninit::uninit()),"#,
-                    )
-                }
-            },
-        );
+                            )
+                        }
+                    },
+                );
 
-        buf.push_str(
-            r#"
+                buf.push_str(
+                    r#"
         };
 
         answer.set_discriminant(self.variant());
 
         answer
     }"#,
-        );
+                );
 
-        add_decl(impls, opt_impl, architecture, buf);
+                buf
+            }
+        };
+
+        add_decl(impls, opt_impl, architecture, body);
     }
 
     // The Hash impl for the tag union
@@ -979,7 +1046,7 @@ pub struct {name} {{
                     format!(
                         r#"unsafe {{
                     {hash_tag};
-                    self.{tag_name}.hash(state);
+                    {actual_self}.{tag_name}.hash(state);
                 }},"#
                     )
                 } else {
@@ -1022,7 +1089,7 @@ pub struct {name} {{
                     };
 
                     format!(
-                        r#"f.debug_tuple("{tag_name}").field({deref_str}self.{tag_name}).finish(),"#,
+                        r#"f.debug_tuple("{tag_name}").field({deref_str}{actual_self}.{tag_name}).finish(),"#,
                     )
                 }
                 None => format!(r#"f.write_str("{tag_name}"),"#),
@@ -1268,17 +1335,7 @@ pub struct {name} {{
             impls,
             opt_impl.clone(),
             architecture,
-            r#"#[inline(always)]
-    fn storage(&self) -> Option<&core::cell::Cell<roc_std::Storage>> {
-        if self.pointer.is_null() {
-            None
-        } else {
-            unsafe {
-                Some(&*self.pointer.cast::<core::cell::Cell<roc_std::Storage>>().sub(1))
-            }
-        }
-    }"#
-            .to_string(),
+            RECURSIVE_TAG_UNION_STORAGE.to_string(),
         );
 
         add_decl(
@@ -1437,24 +1494,12 @@ pub struct {name} {{
         // Note that these never have Copy because they always contain a pointer.
         let opt_impl = Some(format!("impl Clone for {name}"));
 
-        // Recursive tag unions need a custom Clone which bumps refcount.
-        let body = r#"fn clone(&self) -> Self {
-        if let Some(storage) = self.storage() {
-            let mut new_storage = storage.get();
-            if !new_storage.is_readonly() {
-                new_storage.increment_reference_count();
-                storage.set(new_storage);
-            }
-        }
-
-        Self {
-            pointer: self.pointer
-        }
-    }
-"#
-        .to_string();
-
-        add_decl(impls, opt_impl, architecture, body);
+        add_decl(
+            impls,
+            opt_impl,
+            architecture,
+            RECURSIVE_TAG_UNION_CLONE.to_string(),
+        );
     }
 
     // The Drop impl for the tag union
