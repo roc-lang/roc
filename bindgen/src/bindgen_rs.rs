@@ -563,7 +563,7 @@ fn add_tag_union(
                                 }
                                 Field::Recursive(label, _) => {
                                     ret_values.push(format!(
-                                        "*((payload.{label} as usize & !{bitmask}) as *mut {field_type_name})"
+                                        "core::mem::read((payload.{label} as usize & !{bitmask}) as *const {field_type_name})"
                                     ));
                                 }
                             }
