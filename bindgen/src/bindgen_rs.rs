@@ -59,7 +59,7 @@ pub fn emit(types_by_architecture: &[(Architecture, Types)]) -> String {
                 1 => {
                     let arch = arch_to_str(architectures.get(0).unwrap());
 
-                    buf.push_str(&format!("r#[cfg(target_arch = \"{arch}\")]"));
+                    buf.push_str(&format!("#[cfg(target_arch = \"{arch}\")]"));
                 }
                 _ => {
                     // We should never have a decl recorded with 0 architectures!
