@@ -291,9 +291,9 @@ fn add_tag_union(
     let union_name = format!("union_{name}");
     let (actual_self, actual_self_mut, actual_other) = match recursiveness {
         Recursiveness::Recursive => (
-            "(&*self.pointer)",
-            "(&mut *self.pointer)",
-            "(&*other.pointer)",
+            "(&*self.union_pointer())",
+            "(&mut *self.union_pointer())",
+            "(&*other.union_pointer())",
         ),
         Recursiveness::NonRecursive => ("self", "self", "other"),
     };
@@ -401,7 +401,7 @@ pub struct {name} {{
                         architecture,
                         format!(
                             r#"/// Internal helper
-    fn set_discriminant(pointer: *mut {union_name}, discriminant: {discriminant_name}) -> *mut {union_name} {{
+    fn tag_discriminant(pointer: *mut {union_name}, discriminant: {discriminant_name}) -> *mut {union_name} {{
         // The discriminant is stored in the unused bytes at the end of the union pointer
         unsafe {{
             let untagged = (pointer as usize) & (!{bitmask} as usize);
@@ -409,6 +409,19 @@ pub struct {name} {{
 
             tagged as *mut {union_name}
         }}
+    }}"#
+                        ),
+                    );
+
+                    add_decl(
+                        impls,
+                        opt_impl.clone(),
+                        architecture,
+                        format!(
+                            r#"/// Internal helper
+    fn union_pointer(&self) -> *mut {union_name} {{
+        // The discriminant is stored in the unused bytes at the end of the union pointer
+        ((self.pointer as usize) & (!{bitmask} as usize)) as *mut {union_name}
     }}"#
                         ),
                     );
@@ -498,34 +511,34 @@ pub struct {name} {{
                 if payload_type.has_pointer(types) {
                     owned_get_payload = format!(
                         r#"unsafe {{
-                        let ptr = (self.pointer as usize & !{bitmask}) as *mut {union_name};
+            let ptr = (self.pointer as usize & !{bitmask}) as *mut {union_name};
 
-                        core::mem::ManuallyDrop::take(&mut (*ptr).{tag_name})
-                    }}"#
+            core::mem::ManuallyDrop::take(&mut (*ptr).{tag_name})
+        }}"#
                     );
                     borrowed_get_payload = format!(
                         r#"unsafe {{
-                        let ptr = (self.pointer as usize & !{bitmask}) as *mut {union_name};
+            let ptr = (self.pointer as usize & !{bitmask}) as *mut {union_name};
 
-                        &(*ptr).{tag_name}
-                    }}"#
+            &(*ptr).{tag_name}
+        }}"#
                     );
                     // we need `mut self` for the argument because of ManuallyDrop
                     self_for_into = "mut self";
                 } else {
                     owned_get_payload = format!(
                         r#"unsafe {{
-                        let ptr = (self.pointer as usize & !{bitmask}) as *mut {union_name};
+            let ptr = (self.pointer as usize & !{bitmask}) as *mut {union_name};
 
-                        core::ptr::read(ptr).{tag_name}
-                    }}"#
+            core::ptr::read(ptr).{tag_name}
+        }}"#
                     );
                     borrowed_get_payload = format!(
                         r#"unsafe {{
-                        let ptr = (self.pointer as usize & !{bitmask}) as *mut {union_name};
+            let ptr = (self.pointer as usize & !{bitmask}) as *mut {union_name};
 
-                        (&ptr).{tag_name}
-                    }}"#
+            (&ptr).{tag_name}
+        }}"#
                     );
                     // we don't need `mut self` unless we need ManuallyDrop
                     self_for_into = "self";
@@ -643,7 +656,7 @@ pub struct {name} {{
                                                 format!(
                                                     r#"{{
                         let size = core::mem::size_of::<{field_type}>();
-                        let align = core::mem::size_of::<{field_type}>() as u32;
+                        let align = core::mem::align_of::<{field_type}>() as u32;
 
                         unsafe {{
                             let ptr = crate::roc_alloc(size, align) as *mut {field_type};
@@ -717,7 +730,7 @@ pub struct {name} {{
             }};
 
             Self {{
-                pointer: Self::set_discriminant(ptr, {discriminant_name}::{tag_name}),
+                pointer: Self::tag_discriminant(ptr, {discriminant_name}::{tag_name}),
             }}
         }}
     }}"#
