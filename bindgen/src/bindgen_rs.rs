@@ -368,7 +368,7 @@ fn add_tag_union(
         // The discriminant is stored in the unused bytes at the end of the recursive pointer
         unsafe {{
             let untagged = (self.{recursive_pointer_field} as usize) & (!{bitmask} as usize);
-            let tagged = pointer | (self.variant() as usize);
+            let tagged = untagged | (self.variant() as usize);
 
             *self.{recursive_pointer_field} = tagged as _;
         }}
