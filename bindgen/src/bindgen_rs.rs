@@ -339,11 +339,12 @@ fn add_tag_union(
     // The impl for the tag union
     {
         let opt_impl = Some(format!("impl {name}"));
+        let bitmask;
 
         match recursiveness {
             Recursiveness::Recursive => {
                 if tags.len() <= max_pointer_tagged_variants(architecture) {
-                    let bitmask = format!("{:#b}", tagged_pointer_bitmask(architecture));
+                    bitmask = format!("{:#b}", tagged_pointer_bitmask(architecture));
 
                     add_decl(
                         impls,
@@ -384,6 +385,9 @@ fn add_tag_union(
                 }
             }
             Recursiveness::NonRecursive => {
+                // The bitmask doesn't come up in a nonrecursive tag union.
+                bitmask = String::new();
+
                 // An old design, which ended up not working out, was that the tag union
                 // was a struct containing two fields: one for the `union`, and another
                 // for the discriminant.
