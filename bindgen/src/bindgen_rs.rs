@@ -370,7 +370,7 @@ fn add_tag_union(
             let untagged = (self.{recursive_pointer_field} as usize) & (!{bitmask} as usize);
             let tagged = untagged | (self.variant() as usize);
 
-            *self.{recursive_pointer_field} = tagged as _;
+            self.{recursive_pointer_field} = tagged as *mut Self;
         }}
     }}"#
                         ),
