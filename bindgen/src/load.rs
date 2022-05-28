@@ -59,53 +59,55 @@ pub fn load_types(
     let mut answer = Vec::with_capacity(Architecture::iter().size_hint().0);
 
     for architecture in Architecture::iter() {
-        let mut layout_cache = LayoutCache::new(architecture.into());
-        let mut env = Env {
-            arena,
-            layout_cache: &mut layout_cache,
-            interns: &interns,
-            struct_names: Default::default(),
-            enum_names: Default::default(),
-            subs,
-        };
-        let mut types = Types::default();
+        let defs_iter = decls.iter().flat_map(|decl| match decl {
+            Declaration::Declare(def) => {
+                vec![def.clone()]
+            }
+            Declaration::DeclareRec(defs, cycle_mark) => {
+                if cycle_mark.is_illegal(subs) {
+                    Vec::new()
+                } else {
+                    defs.clone()
+                }
+            }
+            Declaration::Builtin(..) => {
+                unreachable!("Builtin decl in userspace module?")
+            }
+            Declaration::InvalidCycle(..) => Vec::new(),
+        });
 
-        for decl in decls.iter() {
-            let defs = match decl {
-                Declaration::Declare(def) => {
-                    vec![def.clone()]
-                }
-                Declaration::DeclareRec(defs, cycle_mark) => {
-                    if cycle_mark.is_illegal(subs) {
-                        Vec::new()
-                    } else {
-                        defs.clone()
-                    }
-                }
-                Declaration::Builtin(..) => {
-                    unreachable!("Builtin decl in userspace module?")
-                }
-                Declaration::InvalidCycle(..) => Vec::new(),
-            };
-
-            for Def {
-                loc_pattern,
-                pattern_vars,
-                ..
-            } in defs.into_iter()
-            {
+        let vars_iter = defs_iter.filter_map(
+            |Def {
+                 loc_pattern,
+                 pattern_vars,
+                 ..
+             }| {
                 if let Pattern::Identifier(sym) = loc_pattern.value {
                     let var = pattern_vars
                         .get(&sym)
                         .expect("Indetifier known but it has no var?");
 
-                    env.add_type(*var, &mut types);
+                    Some(*var)
                 } else {
-                    // figure out if we need to export non-identifier defs - when would that
-                    // happen?
+                    // figure out if we need to export non-identifier defs - when
+                    // would that happen?
+                    None
                 }
-            }
-        }
+            },
+        );
+
+        let mut layout_cache = LayoutCache::new(architecture.into());
+        let mut env = Env {
+            arena,
+            layout_cache: &mut layout_cache,
+            interns: &interns,
+            subs,
+            struct_names: Default::default(),
+            enum_names: Default::default(),
+            pending_recursive_types: Default::default(),
+            known_recursive_types: Default::default(),
+        };
+        let types = env.vars_to_types(vars_iter);
 
         answer.push((architecture, types));
     }

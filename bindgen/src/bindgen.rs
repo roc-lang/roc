@@ -25,15 +25,14 @@ pub struct Env<'a> {
 }
 
 impl<'a> Env<'a> {
-    pub fn vars_to_types<I, V>(&mut self, variables: I) -> Types
+    pub fn vars_to_types<I>(&mut self, variables: I) -> Types
     where
-        I: IntoIterator<Item = V>,
-        V: AsRef<Variable>,
+        I: IntoIterator<Item = Variable>,
     {
         let mut types = Types::default();
 
         for var in variables {
-            self.add_type(*var.as_ref(), &mut types);
+            self.add_type(var, &mut types);
         }
 
         self.resolve_pending_recursive_types(&mut types);
@@ -50,7 +49,7 @@ impl<'a> Env<'a> {
         add_type_help(self, layout, var, None, types, None)
     }
 
-    fn add_pending_recursive_type(&self, type_id: TypeId, var: Variable) {
+    fn add_pending_recursive_type(&mut self, type_id: TypeId, var: Variable) {
         self.pending_recursive_types.insert(type_id, var);
     }
 
