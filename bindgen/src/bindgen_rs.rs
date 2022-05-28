@@ -605,29 +605,13 @@ pub struct {name} {{
                         });
 
                         let mut ret_types = Vec::new();
-                        let mut borrowed_ret_values = Vec::new();
-                        let mut owned_ret_values = Vec::new();
+                        let mut ret_values = Vec::new();
 
                         for field in fields {
-                            let field_type_name = type_name(field.type_id(), types);
+                            let label = field.label();
 
-                            ret_types.push(field_type_name.clone());
-
-                            match field {
-                                Field::NonRecursive(label, _) => {
-                                    let line = format!("payload.{label}");
-
-                                    owned_ret_values.push(line.clone());
-                                    borrowed_ret_values.push(line);
-                                }
-                                Field::Recursive(label, _) => {
-                                    let line = format!(
-                                        "(payload.{label} as usize & !{bitmask}) as *const {field_type_name}"
-                                    );
-                                    borrowed_ret_values.push(format!("&*({line})"));
-                                    owned_ret_values.push(format!("core::ptr::read({line})"));
-                                }
-                            }
+                            ret_values.push(format!("payload.{label}"));
+                            ret_types.push(type_name(field.type_id(), types));
                         }
 
                         let payload_type_name = type_name(*payload_id, types);
@@ -644,47 +628,20 @@ pub struct {name} {{
                                 .iter()
                                 .enumerate()
                                 .map(|(index, field)| {
-                                    let (label, arg_val) = match field {
-                                        Field::NonRecursive(label, _) => {
-                                            (label, format!("arg{index}"))
-                                        }
-                                        Field::Recursive(label, field_id) => {
-                                            let field_type = type_name(*field_id, types);
-
-                                            // recursive pointers need to be heap-allocated
-                                            (
-                                                label,
-                                                format!(
-                                                    r#"{{
-                        let size = core::mem::size_of::<{field_type}>();
-                        let align = core::mem::align_of::<{field_type}>() as u32;
-
-                        unsafe {{
-                            let ptr = crate::roc_alloc(size, align) as *mut {field_type};
-
-                            *ptr = arg{index};
-
-                            ptr
-                        }}
-                    }}"#
-                                                ),
-                                            )
-                                        }
-                                    };
-
+                                    let label = field.label();
                                     let mut indents = String::new();
 
                                     for _ in 0..5 {
                                         indents.push_str(INDENT);
                                     }
 
-                                    format!("{indents}{label}: {arg_val},")
+                                    format!("{indents}{label}: arg{index},")
                                 })
                                 .collect::<Vec<String>>()
                                 .join("\n")
                         );
                         owned_ret = {
-                            let lines = owned_ret_values
+                            let lines = ret_values
                                 .iter()
                                 .map(|line| format!("\n{INDENT}{INDENT}{INDENT}{line}"))
                                 .collect::<Vec<String>>()
@@ -693,9 +650,9 @@ pub struct {name} {{
                             format!("({lines}\n{INDENT}{INDENT})")
                         };
                         borrowed_ret = {
-                            let lines = borrowed_ret_values
+                            let lines = ret_values
                                 .iter()
-                                .map(|line| format!("\n{INDENT}{INDENT}{INDENT}{line}"))
+                                .map(|line| format!("\n{INDENT}{INDENT}{INDENT}&{line}"))
                                 .collect::<Vec<String>>()
                                 .join(", ");
 
@@ -1220,12 +1177,9 @@ fn add_struct(
             let mut buf = format!("{derive}\n#[repr(C)]\npub struct {name} {{\n");
 
             for field in fields {
-                let (label, type_str) = match field {
-                    Field::NonRecursive(label, field_id) => (label, type_name(*field_id, types)),
-                    Field::Recursive(label, field_id) => {
-                        (label, format!("*mut {}", type_name(*field_id, types)))
-                    }
-                };
+                let label = field.label();
+                let type_str = type_name(field.type_id(), types);
+
                 buf.push_str(&format!("{INDENT}pub {label}: {type_str},\n",));
             }
 
