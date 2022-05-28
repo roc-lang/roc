@@ -4,7 +4,9 @@ use roc_collections::VecMap;
 use roc_mono::layout::UnionLayout;
 use roc_std::RocDec;
 use roc_target::TargetInfo;
+use std::cmp::Ordering;
 use std::convert::TryInto;
+use std::fmt::Display;
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeId(usize);
@@ -138,7 +140,7 @@ pub enum RocType {
     TagUnion(RocTagUnion),
     Struct {
         name: String,
-        fields: Vec<Field>,
+        fields: Vec<Field<String>>,
     },
     /// Either a single-tag union or a single-field record
     TransparentWrapper {
@@ -148,15 +150,15 @@ pub enum RocType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Field {
-    NonRecursive(String, TypeId),
+pub enum Field<T: Ord + Display> {
+    NonRecursive(T, TypeId),
     /// A recursive field, e.g. in StrConsList : [Nil, Cons Str StrConsList],
     /// this would be the field of Cons containing the (recursive) StrConsList type,
     /// and the TypeId is the TypeId of StrConsList itself.
-    Recursive(String, TypeId),
+    Recursive(T, TypeId),
 }
 
-impl Field {
+impl<T: Ord + Display> Field<T> {
     pub fn type_id(&self) -> TypeId {
         match self {
             Field::NonRecursive(_, type_id) => *type_id,
@@ -164,11 +166,23 @@ impl Field {
         }
     }
 
-    pub fn label(&self) -> &str {
+    pub fn label(&self) -> &T {
         match self {
             Field::NonRecursive(label, _) => label,
             Field::Recursive(label, _) => label,
         }
+    }
+}
+
+impl<T: Ord + Display> Ord for Field<T> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.label().cmp(other.label())
+    }
+}
+
+impl<T: Ord + Display> PartialOrd for Field<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.label().partial_cmp(other.label())
     }
 }
 
@@ -526,6 +540,12 @@ fn align_for_tag_count(num_tags: usize, target_info: TargetInfo) -> usize {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TagUnionPayload {
+    name: String,
+    fields: Vec<Field<u64>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RocTagUnion {
     Enumeration {
         name: String,
@@ -535,13 +555,13 @@ pub enum RocTagUnion {
     /// e.g. `Result a e : [Ok a, Err e]`
     NonRecursive {
         name: String,
-        tags: Vec<(String, Option<TypeId>)>,
+        tags: Vec<(String, Option<TagUnionPayload>)>,
     },
     /// A recursive tag union (general case)
     /// e.g. `Expr : [Sym Str, Add Expr Expr]`
     Recursive {
         name: String,
-        tags: Vec<(String, Option<TypeId>)>,
+        tags: Vec<(String, Option<TagUnionPayload>)>,
     },
     /// A recursive tag union with just one constructor
     /// Optimization: No need to store a tag ID (the payload is "unwrapped")
@@ -559,7 +579,7 @@ pub enum RocTagUnion {
     NullableWrapped {
         name: String,
         null_tag: String,
-        non_null_tags: Vec<(u16, String, Option<TypeId>)>,
+        non_null_tags: Vec<(u16, String, Option<TagUnionPayload>)>,
     },
 
     /// A recursive tag union with only two variants, where one is empty.
