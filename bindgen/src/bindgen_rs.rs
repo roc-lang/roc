@@ -1570,33 +1570,47 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
                                 .collect::<Vec<String>>()
                                 .join("\n")
                         );
-    let owned_ret = {
-        let lines = ret_values
-            .iter()
-            .map(|line| format!("\n{INDENT}{INDENT}{INDENT}{line}"))
-            .collect::<Vec<String>>()
-            .join(", ");
+    let owned_ret;
+    let borrowed_ret;
+    let owned_ret_type;
+    let borrowed_ret_type;
 
-        format!("({lines}\n{INDENT}{INDENT})")
-    };
-    let borrowed_ret = {
-        let lines = ret_values
-            .iter()
-            .map(|line| format!("\n{INDENT}{INDENT}{INDENT}&{line}"))
-            .collect::<Vec<String>>()
-            .join(", ");
+    if ret_types.len() == 1 {
+        owned_ret_type = ret_types.join("");
+        borrowed_ret_type = owned_ret_type.clone();
 
-        format!("({lines}\n{INDENT}{INDENT})")
-    };
-    let owned_ret_type = format!("({})", ret_types.join(", "));
-    let borrowed_ret_type = format!(
-        "({})",
-        ret_types
-            .iter()
-            .map(|ret_type| { format!("&{ret_type}") })
-            .collect::<Vec<String>>()
-            .join(", ")
-    );
+        let ret_val = ret_values.first().unwrap();
+        owned_ret = format!("\n{INDENT}{INDENT}{ret_val}");
+        borrowed_ret = format!("\n{INDENT}{INDENT}&{ret_val}");
+    } else {
+        owned_ret_type = format!("({})", ret_types.join(", "));
+        borrowed_ret_type = format!(
+            "({})",
+            ret_types
+                .iter()
+                .map(|ret_type| { format!("&{ret_type}") })
+                .collect::<Vec<String>>()
+                .join(", ")
+        );
+        owned_ret = {
+            let lines = ret_values
+                .iter()
+                .map(|line| format!("\n{INDENT}{INDENT}{INDENT}{line}"))
+                .collect::<Vec<String>>()
+                .join(", ");
+
+            format!("({lines}\n{INDENT}{INDENT})")
+        };
+        borrowed_ret = {
+            let lines = ret_values
+                .iter()
+                .map(|line| format!("\n{INDENT}{INDENT}{INDENT}&{line}"))
+                .collect::<Vec<String>>()
+                .join(", ");
+
+            format!("({lines}\n{INDENT}{INDENT})")
+        };
+    }
 
     StructIngredients {
         payload_args,
