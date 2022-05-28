@@ -233,6 +233,10 @@ fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut I
 
             add_decl(impls, None, architecture, body);
         }
+        RocType::RecursivePointer(_) => {
+            // This is recursively pointing to a type that should already have been added,
+            // so no extra work needs to happen.
+        }
     }
 }
 
