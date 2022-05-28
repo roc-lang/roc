@@ -122,9 +122,9 @@ mod bindgen_cli_run {
             `Nil` is: StrConsList::Nil
         "#),
         recursive_union:"recursive-union" => indoc!(r#"
-            tag_union was: StrConsList::Cons(StrConsList_Cons { f0: "World!", f1: StrConsList::Cons(StrConsList_Cons { f0: "Hello ", f1: StrConsList::Nil }) })
-            `Cons "small str" Nil` is: StrConsList::Cons(StrConsList_Cons { f0: "small str", f1: StrConsList::Nil })
-            `Nil` is: StrConsList::Nil
+            tag_union was: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
+            `Concat (String "Hello, ") (String "World!")` is: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
+            `String "this is a test"` is: Expr::String("this is a test")
         "#),
     }
 
