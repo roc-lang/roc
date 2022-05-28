@@ -1,4 +1,4 @@
-use crate::ast::{Collection, CommentOrNewline, Def, Module, Spaced};
+use crate::ast::{Collection, CommentOrNewline, Def, Defs, Module, Spaced};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::header::{
     package_entry, package_name, AppHeader, ExposedName, HostedHeader, ImportsEntry,
@@ -28,7 +28,19 @@ fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
 }
 
 #[inline(always)]
-pub fn module_defs<'a>() -> impl Parser<'a, Vec<'a, Loc<Def<'a>>>, SyntaxError<'a>> {
+pub fn module_defs<'a>() -> impl Parser<'a, Defs<'a>, SyntaxError<'a>> {
+    let min_indent = 0;
+    skip_second!(
+        specialize_region(
+            |e, r| SyntaxError::Expr(e, r.start()),
+            crate::expr::toplevel_defs(min_indent),
+        ),
+        end_of_file()
+    )
+}
+
+#[inline(always)]
+pub fn module_defs_help<'a>() -> impl Parser<'a, Vec<'a, Loc<Def<'a>>>, SyntaxError<'a>> {
     // force that we parse until the end of the input
     let min_indent = 0;
     skip_second!(

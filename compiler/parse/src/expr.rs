@@ -1,6 +1,6 @@
 use crate::ast::{
-    AssignedField, Collection, CommentOrNewline, Def, Derived, Expr, ExtractSpaces, Has, Pattern,
-    Spaceable, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    AssignedField, Collection, CommentOrNewline, Def, Defs, Derived, Expr, ExtractSpaces, Has,
+    Pattern, Spaceable, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     space0_after_e, space0_around_ee, space0_before_e, space0_before_optional_after, space0_e,
@@ -17,6 +17,7 @@ use crate::state::State;
 use crate::type_annotation;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_collections::soa::Slice;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
 
@@ -811,6 +812,337 @@ struct DefState<'a> {
     spaces_after: &'a [CommentOrNewline<'a>],
 }
 
+fn parse_toplevel_defs_end<'a>(
+    _options: ExprParseOptions,
+    start_column: u32,
+    mut defs: Defs<'a>,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Defs<'a>, EExpr<'a>> {
+    let min_indent = start_column;
+
+    let mut global_state = state;
+
+    loop {
+        let state = global_state;
+        let initial = state.clone();
+
+        let mut spaces_before_current = &[] as &[_];
+
+        let state = match space0_e(min_indent, EExpr::IndentStart).parse(arena, state) {
+            Err((MadeProgress, _, s)) => {
+                return Err((MadeProgress, EExpr::DefMissingFinalExpr(s.pos()), s));
+            }
+            Ok((_, spaces, state)) => {
+                spaces_before_current = spaces;
+                state
+            }
+            Err((NoProgress, _, state)) => state,
+        };
+
+        let start = state.pos();
+
+        match space0_after_e(
+            crate::pattern::loc_pattern_help(min_indent),
+            min_indent,
+            EPattern::IndentEnd,
+        )
+        .parse(arena, state.clone())
+        {
+            Err((NoProgress, _, _)) => {
+                match crate::parser::keyword_e(crate::keyword::EXPECT, EExpect::Expect)
+                    .parse(arena, state)
+                {
+                    Err((_, _, _)) => {
+                        // a hacky way to get expression-based error messages. TODO fix this
+                        return Ok((NoProgress, defs, initial));
+                    }
+                    Ok((_, _, state)) => {
+                        let parse_def_expr = space0_before_e(
+                            move |a, s| parse_loc_expr(min_indent + 1, a, s),
+                            min_indent,
+                            EExpr::IndentEnd,
+                        );
+
+                        let (_, loc_def_expr, state) = parse_def_expr.parse(arena, state)?;
+
+                        let end = loc_def_expr.region.end();
+                        let region = Region::new(start, end);
+
+                        let value_def = ValueDef::Expect(arena.alloc(loc_def_expr));
+                        defs.push_value_def(value_def, region, spaces_before_current, &[]);
+
+                        global_state = state;
+                        continue;
+                    }
+                }
+            }
+            Err((MadeProgress, _, _)) => {
+                // a hacky way to get expression-based error messages. TODO fix this
+                return Ok((NoProgress, defs, initial));
+            }
+            Ok((_, loc_pattern, state)) => {
+                // First let's check whether this is an ability definition.
+                let opt_tag_and_args: Option<(&str, Region, &[Loc<Pattern>])> =
+                    match loc_pattern.value {
+                        Pattern::Apply(
+                            Loc {
+                                value: Pattern::Tag(name),
+                                region,
+                            },
+                            args,
+                        ) => Some((name, *region, args)),
+                        Pattern::Tag(name) => Some((name, loc_pattern.region, &[])),
+                        _ => None,
+                    };
+
+                if let Some((name, name_region, args)) = opt_tag_and_args {
+                    if let Ok((_, loc_has, state)) =
+                        loc_has_parser(min_indent).parse(arena, state.clone())
+                    {
+                        let (_, (type_def, def_region), state) = finish_parsing_ability_def_help(
+                            start_column,
+                            Loc::at(name_region, name),
+                            args,
+                            loc_has,
+                            arena,
+                            state,
+                        )?;
+
+                        defs.push_type_def(type_def, def_region, spaces_before_current, &[]);
+
+                        global_state = state;
+                        continue;
+                    }
+                }
+
+                // Otherwise, this is a def or alias.
+                match operator().parse(arena, state) {
+                    Ok((_, BinOp::Assignment, state)) => {
+                        let parse_def_expr = space0_before_e(
+                            move |a, s| parse_loc_expr(min_indent + 1, a, s),
+                            min_indent,
+                            EExpr::IndentEnd,
+                        );
+
+                        let (_, loc_def_expr, state) = parse_def_expr.parse(arena, state)?;
+
+                        {
+                            let region =
+                                Region::span_across(&loc_pattern.region, &loc_def_expr.region);
+
+                            if spaces_before_current.len() <= 1 {
+                                let comment = match spaces_before_current.get(0) {
+                                    Some(CommentOrNewline::LineComment(s)) => Some(*s),
+                                    Some(CommentOrNewline::DocComment(s)) => Some(*s),
+                                    _ => None,
+                                };
+
+                                match defs.last() {
+                                    Some(Err(ValueDef::Annotation(ann_pattern, ann_type))) => {
+                                        // join this body with the preceding annotation
+
+                                        let value_def = ValueDef::AnnotatedBody {
+                                            ann_pattern: arena.alloc(*ann_pattern),
+                                            ann_type: arena.alloc(*ann_type),
+                                            comment,
+                                            body_pattern: arena.alloc(loc_pattern),
+                                            body_expr: &*arena.alloc(loc_def_expr),
+                                        };
+
+                                        let region =
+                                            Region::span_across(&ann_pattern.region, &region);
+
+                                        defs.replace_with_value_def(
+                                            defs.tags.len() - 1,
+                                            value_def,
+                                            region,
+                                        )
+                                    }
+                                    Some(Ok(TypeDef::Alias {
+                                        header,
+                                        ann: ann_type,
+                                    })) => {
+                                        // This is a case like
+                                        //   UserId x : [UserId Int]
+                                        //   UserId x = UserId 42
+                                        // We optimistically parsed the first line as an alias; we now turn it
+                                        // into an annotation.
+
+                                        let loc_name =
+                                            arena.alloc(header.name.map(|x| Pattern::Tag(x)));
+                                        let ann_pattern = Pattern::Apply(loc_name, header.vars);
+
+                                        let vars_region = Region::across_all(
+                                            header.vars.iter().map(|v| &v.region),
+                                        );
+                                        let region_ann_pattern =
+                                            Region::span_across(&loc_name.region, &vars_region);
+                                        let loc_ann_pattern =
+                                            Loc::at(region_ann_pattern, ann_pattern);
+
+                                        let value_def = ValueDef::AnnotatedBody {
+                                            ann_pattern: arena.alloc(loc_ann_pattern),
+                                            ann_type: arena.alloc(*ann_type),
+                                            comment,
+                                            body_pattern: arena.alloc(loc_pattern),
+                                            body_expr: &*arena.alloc(loc_def_expr),
+                                        };
+
+                                        let region =
+                                            Region::span_across(&header.name.region, &region);
+
+                                        defs.replace_with_value_def(
+                                            defs.tags.len() - 1,
+                                            value_def,
+                                            region,
+                                        )
+                                    }
+                                    _ => {
+                                        // the previous and current def can't be joined up
+                                        let value_def = ValueDef::Body(
+                                            arena.alloc(loc_pattern),
+                                            &*arena.alloc(loc_def_expr),
+                                        );
+
+                                        defs.push_value_def(
+                                            value_def,
+                                            region,
+                                            spaces_before_current,
+                                            &[],
+                                        )
+                                    }
+                                }
+                            } else {
+                                // the previous and current def can't be joined up
+                                let value_def = ValueDef::Body(
+                                    arena.alloc(loc_pattern),
+                                    &*arena.alloc(loc_def_expr),
+                                );
+
+                                defs.push_value_def(value_def, region, spaces_before_current, &[])
+                            }
+                        };
+
+                        global_state = state;
+                        continue;
+                    }
+                    Ok((_, BinOp::IsAliasType, state)) => {
+                        let (_, ann_type, state) =
+                            alias_signature_with_space_before(min_indent + 1)
+                                .parse(arena, state)?;
+
+                        let region = Region::span_across(&loc_pattern.region, &ann_type.region);
+
+                        // the previous and current def can't be joined up
+                        match &loc_pattern.value {
+                            Pattern::Apply(
+                                Loc {
+                                    value: Pattern::Tag(name),
+                                    ..
+                                },
+                                alias_arguments,
+                            ) => {
+                                let name = Loc::at(loc_pattern.region, *name);
+                                let header = TypeHeader {
+                                    name,
+                                    vars: alias_arguments,
+                                };
+
+                                let type_def = TypeDef::Alias {
+                                    header,
+                                    ann: ann_type,
+                                };
+
+                                defs.push_type_def(type_def, region, spaces_before_current, &[]);
+                            }
+                            Pattern::Tag(name) => {
+                                let name = Loc::at(loc_pattern.region, *name);
+                                let pattern_arguments: &'a [Loc<Pattern<'a>>] = &[];
+                                let header = TypeHeader {
+                                    name,
+                                    vars: pattern_arguments,
+                                };
+
+                                let type_def = TypeDef::Alias {
+                                    header,
+                                    ann: ann_type,
+                                };
+
+                                defs.push_type_def(type_def, region, spaces_before_current, &[]);
+                            }
+                            _ => {
+                                let value_def = ValueDef::Annotation(loc_pattern, ann_type);
+                                defs.push_value_def(value_def, region, spaces_before_current, &[]);
+                            }
+                        };
+
+                        global_state = state;
+                        continue;
+                    }
+                    Ok((_, BinOp::IsOpaqueType, state)) => {
+                        let (_, (signature, derived), state) =
+                            opaque_signature_with_space_before(min_indent + 1)
+                                .parse(arena, state)?;
+
+                        let region = Region::span_across(&loc_pattern.region, &signature.region);
+
+                        // the previous and current def can't be joined up
+                        match &loc_pattern.value {
+                            Pattern::Apply(
+                                Loc {
+                                    value: Pattern::Tag(name),
+                                    ..
+                                },
+                                alias_arguments,
+                            ) => {
+                                let name = Loc::at(loc_pattern.region, *name);
+                                let header = TypeHeader {
+                                    name,
+                                    vars: alias_arguments,
+                                };
+
+                                let type_def = TypeDef::Opaque {
+                                    header,
+                                    typ: signature,
+                                    derived,
+                                };
+
+                                defs.push_type_def(type_def, region, spaces_before_current, &[]);
+                            }
+                            Pattern::Tag(name) => {
+                                let name = Loc::at(loc_pattern.region, *name);
+                                let pattern_arguments: &'a [Loc<Pattern<'a>>] = &[];
+                                let header = TypeHeader {
+                                    name,
+                                    vars: pattern_arguments,
+                                };
+
+                                let type_def = TypeDef::Opaque {
+                                    header,
+                                    typ: signature,
+                                    derived,
+                                };
+
+                                defs.push_type_def(type_def, region, spaces_before_current, &[]);
+                            }
+                            _ => {
+                                let value_def = ValueDef::Annotation(loc_pattern, signature);
+                                defs.push_value_def(value_def, region, spaces_before_current, &[]);
+                            }
+                        };
+
+                        global_state = state;
+                        continue;
+                    }
+
+                    _ => return Ok((MadeProgress, defs, initial)),
+                }
+            }
+        }
+    }
+}
+
 fn parse_defs_end<'a>(
     options: ExprParseOptions,
     start_column: u32,
@@ -1309,6 +1641,32 @@ fn finish_parsing_ability_def<'a>(
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, &'a Loc<Def<'a>>, EExpr<'a>> {
+    let (_, (type_def, def_region), state) =
+        finish_parsing_ability_def_help(start_column, name, args, loc_has, arena, state)?;
+
+    let def = Def::Type(type_def);
+
+    let loc_def = &*(if spaces_before.is_empty() {
+        arena.alloc(Loc::at(def_region, def))
+    } else {
+        arena.alloc(
+            arena
+                .alloc(def)
+                .with_spaces_before(spaces_before, def_region),
+        )
+    });
+
+    Ok((MadeProgress, loc_def, state))
+}
+
+fn finish_parsing_ability_def_help<'a>(
+    start_column: u32,
+    name: Loc<&'a str>,
+    args: &'a [Loc<Pattern<'a>>],
+    loc_has: Loc<Has<'a>>,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, (TypeDef<'a>, Region), EExpr<'a>> {
     let mut demands = Vec::with_capacity_in(2, arena);
 
     let min_indent_for_demand = start_column + 1;
@@ -1347,23 +1705,13 @@ fn finish_parsing_ability_def<'a>(
     }
 
     let def_region = Region::span_across(&name.region, &demands.last().unwrap().typ.region);
-    let def = Def::Type(TypeDef::Ability {
+    let type_def = TypeDef::Ability {
         header: TypeHeader { name, vars: args },
         loc_has,
         members: demands.into_bump_slice(),
-    });
+    };
 
-    let loc_def = &*(if spaces_before.is_empty() {
-        arena.alloc(Loc::at(def_region, def))
-    } else {
-        arena.alloc(
-            arena
-                .alloc(def)
-                .with_spaces_before(spaces_before, def_region),
-        )
-    });
-
-    Ok((MadeProgress, loc_def, state))
+    Ok((MadeProgress, (type_def, def_region), state))
 }
 
 fn finish_parsing_ability<'a>(
@@ -1958,6 +2306,43 @@ fn assigned_expr_field_to_pattern_help<'a>(
         ),
         AssignedField::Malformed(string) => Pattern::Malformed(string),
     })
+}
+
+pub fn toplevel_defs<'a>(min_indent: u32) -> impl Parser<'a, Defs<'a>, EExpr<'a>> {
+    move |arena, state: State<'a>| {
+        let (_, initial_space, state) =
+            space0_e(min_indent, EExpr::IndentEnd).parse(arena, state)?;
+
+        let start_column = state.column();
+
+        let options = ExprParseOptions {
+            accept_multi_backpassing: false,
+            check_for_arrow: true,
+        };
+
+        let mut output = Defs::default();
+        let before = Slice::extend_new(&mut output.spaces, initial_space.iter().copied());
+
+        let (_, mut output, state) =
+            parse_toplevel_defs_end(options, start_column, output, arena, state)?;
+
+        let (_, final_space, state) =
+            space0_e(start_column, EExpr::IndentEnd).parse(arena, state)?;
+
+        if !output.tags.is_empty() {
+            // add surrounding whitespace
+            let after = Slice::extend_new(&mut output.spaces, final_space.iter().copied());
+
+            debug_assert!(output.space_before[0].is_empty());
+            output.space_before[0] = before;
+
+            let last = output.tags.len() - 1;
+            debug_assert!(output.space_after[last].is_empty() || after.is_empty());
+            output.space_after[last] = after;
+        }
+
+        Ok((MadeProgress, output, state))
+    }
 }
 
 pub fn defs<'a>(min_indent: u32) -> impl Parser<'a, Vec<'a, Loc<Def<'a>>>, EExpr<'a>> {

@@ -116,7 +116,6 @@ impl<'a> Formattable for Expr<'a> {
     ) {
         use self::Expr::*;
 
-        //dbg!(self);
         let apply_needs_parens = parens == Parens::InApply;
 
         match self {

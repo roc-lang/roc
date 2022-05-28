@@ -1,10 +1,10 @@
 use crate::abilities::AbilitiesStore;
 use crate::annotation::canonicalize_annotation;
-use crate::def::{canonicalize_defs, sort_can_defs, Declaration, Def};
+use crate::def::{canonicalize_toplevel_defs, sort_can_defs, Declaration, Def};
 use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
 use crate::expr::{ClosureData, Expr, Output, PendingDerives};
-use crate::operator::desugar_def;
+use crate::operator::desugar_toplevel_defs;
 use crate::pattern::Pattern;
 use crate::scope::Scope;
 use bumpalo::Bump;
@@ -12,7 +12,7 @@ use roc_collections::{MutMap, SendMap, VecSet};
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{IdentIds, IdentIdsByModule, ModuleId, ModuleIds, Symbol};
-use roc_parse::ast::{self, TypeAnnotation};
+use roc_parse::ast::{Defs, TypeAnnotation};
 use roc_parse::header::HeaderFor;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
@@ -160,7 +160,7 @@ fn has_no_implementation(expr: &Expr) -> bool {
 #[allow(clippy::too_many_arguments)]
 pub fn canonicalize_module_defs<'a>(
     arena: &'a Bump,
-    loc_defs: &'a [Loc<ast::Def<'a>>],
+    loc_defs: &'a mut Defs<'a>,
     header_for: &roc_parse::header::HeaderFor,
     home: ModuleId,
     module_ids: &'a ModuleIds,
@@ -198,15 +198,7 @@ pub fn canonicalize_module_defs<'a>(
     // visited a BinOp node we'd recursively try to apply this to each of its nested
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
-    let mut desugared =
-        bumpalo::collections::Vec::with_capacity_in(loc_defs.len() + num_deps, arena);
-
-    for loc_def in loc_defs.iter() {
-        desugared.push(&*arena.alloc(Loc {
-            value: desugar_def(arena, &loc_def.value),
-            region: loc_def.region,
-        }));
-    }
+    desugar_toplevel_defs(arena, loc_defs);
 
     let mut lookups = Vec::with_capacity(num_deps);
     let mut rigid_variables = RigidVariables::default();
@@ -282,12 +274,12 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
-    let (defs, output, symbols_introduced) = canonicalize_defs(
+    let (defs, output, symbols_introduced) = canonicalize_toplevel_defs(
         &mut env,
         Output::default(),
         var_store,
         &mut scope,
-        &desugared,
+        loc_defs,
         PatternType::TopLevelDef,
     );
 
