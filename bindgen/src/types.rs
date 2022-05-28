@@ -94,6 +94,106 @@ impl Types {
             len: self.by_id.len(),
         }
     }
+
+    /// Useful when determining whether to derive Eq, Ord, and Hash in a Rust type.
+    pub fn has_float(&self, type_id: TypeId) -> bool {
+        self.has_float_help(type_id, &[])
+    }
+
+    fn has_float_help(&self, type_id: TypeId, do_not_recurse_on: &[TypeId]) -> bool {
+        match self.get(type_id) {
+            RocType::F32 | RocType::F64 | RocType::F128 => true,
+            RocType::RocStr
+            | RocType::Bool
+            | RocType::I8
+            | RocType::U8
+            | RocType::I16
+            | RocType::U16
+            | RocType::I32
+            | RocType::U32
+            | RocType::I64
+            | RocType::U64
+            | RocType::I128
+            | RocType::U128
+            | RocType::RocDec
+            | RocType::TagUnion(RocTagUnion::Enumeration { .. }) => false,
+            RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
+                if do_not_recurse_on.contains(id) {
+                    false
+                } else {
+                    self.has_float(*id)
+                }
+            }
+            RocType::RocDict(key_id, val_id) => {
+                if do_not_recurse_on.contains(key_id) || do_not_recurse_on.contains(val_id) {
+                    false
+                } else {
+                    self.has_float(*key_id) || self.has_float(*val_id)
+                }
+            }
+            RocType::Struct { fields, .. } => fields.iter().any(|(_, type_id)| {
+                if do_not_recurse_on.contains(type_id) {
+                    false
+                } else {
+                    self.has_float(*type_id)
+                }
+            }),
+            RocType::TagUnion(RocTagUnion::Recursive { tags, .. })
+            | RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => {
+                let mut do_not_recurse_on: Vec<TypeId> = do_not_recurse_on.into();
+
+                do_not_recurse_on.push(type_id);
+
+                tags.iter().any(|(_, payloads)| {
+                    payloads.iter().any(|id| {
+                        if do_not_recurse_on.contains(id) {
+                            false
+                        } else {
+                            self.has_float_help(*id, &do_not_recurse_on)
+                        }
+                    })
+                })
+            }
+            RocType::TagUnion(RocTagUnion::NullableWrapped { non_null_tags, .. }) => {
+                let mut do_not_recurse_on: Vec<TypeId> = do_not_recurse_on.into();
+
+                do_not_recurse_on.push(type_id);
+
+                non_null_tags.iter().any(|(_, _, payloads)| {
+                    payloads.iter().any(|id| {
+                        if do_not_recurse_on.contains(id) {
+                            false
+                        } else {
+                            self.has_float_help(*id, &do_not_recurse_on)
+                        }
+                    })
+                })
+            }
+            RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { content, .. })
+            | RocType::TagUnion(RocTagUnion::NullableUnwrapped {
+                non_null_payload: content,
+                ..
+            }) => {
+                let mut do_not_recurse_on: Vec<TypeId> = do_not_recurse_on.into();
+
+                do_not_recurse_on.push(type_id);
+
+                if do_not_recurse_on.contains(&type_id) {
+                    false
+                } else {
+                    self.has_float_help(*content, &do_not_recurse_on)
+                }
+            }
+            RocType::TransparentWrapper { content, .. }
+            | RocType::RecursivePointer { content, .. } => {
+                if do_not_recurse_on.contains(&type_id) {
+                    false
+                } else {
+                    self.has_float(*content)
+                }
+            }
+        }
+    }
 }
 
 struct TypesIter<'a> {
@@ -198,51 +298,6 @@ impl RocType {
                 .iter()
                 .any(|(_, type_id)| types.get(*type_id).has_pointer(types)),
             RocType::TransparentWrapper { content, .. } => types.get(*content).has_pointer(types),
-        }
-    }
-
-    /// Useful when determining whether to derive Eq, Ord, and Hash in a Rust type.
-    pub fn has_float(&self, types: &Types) -> bool {
-        match self {
-            RocType::F32 | RocType::F64 | RocType::F128 => true,
-            RocType::RocStr
-            | RocType::Bool
-            | RocType::I8
-            | RocType::U8
-            | RocType::I16
-            | RocType::U16
-            | RocType::I32
-            | RocType::U32
-            | RocType::I64
-            | RocType::U64
-            | RocType::I128
-            | RocType::U128
-            | RocType::RocDec
-            | RocType::TagUnion(RocTagUnion::Enumeration { .. }) => false,
-
-            RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
-                types.get(*id).has_float(types)
-            }
-            RocType::RocDict(key_id, val_id) => {
-                types.get(*key_id).has_float(types) || types.get(*val_id).has_float(types)
-            }
-            RocType::Struct { fields, .. } => fields
-                .iter()
-                .any(|(_, type_id)| types.get(*type_id).has_float(types)),
-            RocType::TagUnion(RocTagUnion::Recursive { tags, .. })
-            | RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => tags
-                .iter()
-                .any(|(_, payloads)| payloads.iter().any(|id| types.get(*id).has_float(types))),
-            RocType::TagUnion(RocTagUnion::NullableWrapped { non_null_tags, .. }) => non_null_tags
-                .iter()
-                .any(|(_, _, payloads)| payloads.iter().any(|id| types.get(*id).has_float(types))),
-            RocType::TagUnion(RocTagUnion::NullableUnwrapped {
-                non_null_payload: content,
-                ..
-            })
-            | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { content, .. })
-            | RocType::TransparentWrapper { content, .. }
-            | RocType::RecursivePointer { content, .. } => types.get(*content).has_float(types),
         }
     }
 
