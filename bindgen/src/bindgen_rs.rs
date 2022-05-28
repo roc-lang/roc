@@ -213,16 +213,6 @@ fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut I
         | RocType::RocSet(_)
         | RocType::RocList(_)
         | RocType::RocBox(_) => {}
-        RocType::TransparentWrapper { name, content } => {
-            let typ = types.get(id);
-            let derive = derive_str(typ, types, true);
-            let body = format!(
-                "{derive}\n#[repr(transparent)]\npub struct {name}(pub {});",
-                type_name(*content, types)
-            );
-
-            add_decl(impls, None, architecture, body);
-        }
         RocType::RecursivePointer { .. } => {
             // This is recursively pointing to a type that should already have been added,
             // so no extra work needs to happen.
@@ -554,22 +544,6 @@ pub struct {name} {{
                         payload_args = format!("arg: {owned_ret_type}");
                         args_to_payload = "arg".to_string();
                         owned_ret = "payload".to_string();
-                        borrowed_ret = format!("&{owned_ret}");
-                    }
-                    RocType::TransparentWrapper { content, .. } => {
-                        let payload_type_name = type_name(*payload_id, types);
-
-                        // This is a payload with 1 value, so we want to hide the wrapper
-                        // from the public API.
-                        owned_ret_type = type_name(*content, types);
-                        borrowed_ret_type = format!("&{}", owned_ret_type);
-                        payload_args = format!("arg: {owned_ret_type}");
-                        args_to_payload = if types.get(*content).has_pointer(types) {
-                            format!("core::mem::ManuallyDrop::new({payload_type_name}(arg))")
-                        } else {
-                            format!("{payload_type_name}(arg)")
-                        };
-                        owned_ret = "payload.0".to_string();
                         borrowed_ret = format!("&{owned_ret}");
                     }
                     RocType::Struct { fields, .. } => {
@@ -997,9 +971,6 @@ pub struct {name} {{
                         | RocType::RecursivePointer { .. } => {
                             format!(".field({deref_str}{actual_self}.{tag_name})")
                         }
-                        RocType::TransparentWrapper { .. } => {
-                            format!(".field(&({deref_str}{actual_self}.{tag_name}).0)")
-                        }
                         RocType::Struct { fields, .. } => {
                             let mut buf = Vec::new();
 
@@ -1128,38 +1099,27 @@ fn add_struct<S: Display>(
     impls: &mut Impls,
     is_tag_union_payload: bool,
 ) {
-    match fields.len() {
-        0 => {
-            // An empty record is zero-sized and won't end up being passed to/from the host.
-        }
-        1 => {
-            // Unwrap single-field records
-            add_type(architecture, fields.first().unwrap().1, types, impls)
-        }
-        _ => {
-            let derive = derive_str(types.get(struct_id), types, true);
-            let pub_str = if is_tag_union_payload { "" } else { "pub " };
-            let mut buf = format!("{derive}\n#[repr(C)]\n{pub_str}struct {name} {{\n");
+    let derive = derive_str(types.get(struct_id), types, true);
+    let pub_str = if is_tag_union_payload { "" } else { "pub " };
+    let mut buf = format!("{derive}\n#[repr(C)]\n{pub_str}struct {name} {{\n");
 
-            for (label, type_id) in fields {
-                let type_str = type_name(*type_id, types);
+    for (label, type_id) in fields {
+        let type_str = type_name(*type_id, types);
 
-                // Tag union payloads have numbered fields, so we prefix them
-                // with an "f" because Rust doesn't allow struct fields to be numbers.
-                let label = if is_tag_union_payload {
-                    format!("f{label}")
-                } else {
-                    format!("{label}")
-                };
+        // Tag union payloads have numbered fields, so we prefix them
+        // with an "f" because Rust doesn't allow struct fields to be numbers.
+        let label = if is_tag_union_payload {
+            format!("f{label}")
+        } else {
+            format!("{label}")
+        };
 
-                buf.push_str(&format!("{INDENT}pub {label}: {type_str},\n",));
-            }
-
-            buf.push('}');
-
-            add_decl(impls, None, architecture, buf);
-        }
+        buf.push_str(&format!("{INDENT}pub {label}: {type_str},\n",));
     }
+
+    buf.push('}');
+
+    add_decl(impls, None, architecture, buf);
 }
 
 fn type_name(id: TypeId, types: &Types) -> String {
@@ -1190,7 +1150,6 @@ fn type_name(id: TypeId, types: &Types) -> String {
         RocType::RocBox(elem_id) => format!("roc_std::RocBox<{}>", type_name(*elem_id, types)),
         RocType::Struct { name, .. }
         | RocType::TagUnionPayload { name, .. }
-        | RocType::TransparentWrapper { name, .. }
         | RocType::TagUnion(RocTagUnion::NonRecursive { name, .. })
         | RocType::TagUnion(RocTagUnion::Recursive { name, .. })
         | RocType::TagUnion(RocTagUnion::Enumeration { name, .. })

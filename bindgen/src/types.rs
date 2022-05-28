@@ -138,11 +138,6 @@ pub enum RocType {
         name: String,
         fields: Vec<(usize, TypeId)>,
     },
-    /// Either a single-tag union or a single-field record
-    TransparentWrapper {
-        name: String,
-        content: TypeId,
-    },
     /// A recursive pointer, e.g. in StrConsList : [Nil, Cons Str StrConsList],
     /// this would be the field of Cons containing the (recursive) StrConsList type,
     /// and the TypeId is the TypeId of StrConsList itself.
@@ -238,7 +233,6 @@ impl RocType {
             RocType::TagUnionPayload { fields, .. } => fields
                 .iter()
                 .any(|(_, type_id)| types.get(*type_id).has_pointer(types)),
-            RocType::TransparentWrapper { content, .. } => types.get(*content).has_pointer(types),
         }
     }
 
@@ -293,7 +287,6 @@ impl RocType {
                 ..
             })
             | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { content, .. })
-            | RocType::TransparentWrapper { content, .. }
             | RocType::RecursivePointer(content) => {
                 if do_not_recurse.contains(content) {
                     false
@@ -326,9 +319,6 @@ impl RocType {
             RocType::TagUnionPayload { fields, .. } => fields
                 .iter()
                 .any(|(_, type_id)| types.get(*type_id).has_enumeration(types)),
-            RocType::TransparentWrapper { content, .. } => {
-                types.get(*content).has_enumeration(types)
-            }
         }
     }
 
@@ -394,9 +384,6 @@ impl RocType {
                 target_info,
                 self.alignment(types, target_info),
             ),
-            RocType::TransparentWrapper { content, .. } => {
-                types.get(*content).size(types, target_info)
-            }
             RocType::RecursivePointer { .. } => target_info.ptr_size(),
         }
     }
@@ -464,8 +451,7 @@ impl RocType {
                     align.max(types.get(*field_id).alignment(types, target_info))
                 })
             }
-            RocType::TransparentWrapper { content, .. }
-            | RocType::TagUnion(RocTagUnion::NullableUnwrapped {
+            RocType::TagUnion(RocTagUnion::NullableUnwrapped {
                 non_null_payload: content,
                 ..
             })
