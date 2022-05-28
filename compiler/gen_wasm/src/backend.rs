@@ -916,10 +916,10 @@ impl<'a> WasmBackend<'a> {
     /// Return the data we need for code gen: linker symbol index and memory address
     fn store_bytes_in_data_section(&mut self, bytes: &[u8], sym: Symbol) -> (u32, u32) {
         // Place the segment at a 4-byte aligned offset
-        let segment_addr = round_up_to_alignment!(self.module.data_end, PTR_SIZE);
+        let segment_addr = round_up_to_alignment!(self.module.data.end_addr, PTR_SIZE);
         let elements_addr = segment_addr + PTR_SIZE;
         let length_with_refcount = 4 + bytes.len();
-        self.module.data_end = segment_addr + length_with_refcount as u32;
+        self.module.data.end_addr = segment_addr + length_with_refcount as u32;
 
         let mut segment = DataSegment {
             mode: DataMode::active_at(segment_addr),

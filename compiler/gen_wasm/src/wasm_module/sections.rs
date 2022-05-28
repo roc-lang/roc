@@ -1218,9 +1218,47 @@ pub enum DataMode {
 }
 
 impl DataMode {
+    const ACTIVE: u8 = 0;
+    const PASSIVE: u8 = 0;
+
     pub fn active_at(offset: u32) -> Self {
         DataMode::Active {
             offset: ConstExpr::I32(offset as i32),
+        }
+    }
+}
+
+impl Serialize for DataMode {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        match self {
+            Self::Active { offset } => {
+                buffer.append_u8(Self::ACTIVE);
+                offset.serialize(buffer);
+            }
+            Self::Passive => {
+                buffer.append_u8(Self::PASSIVE);
+            }
+        }
+    }
+}
+
+impl Parse<()> for DataMode {
+    fn parse(_: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let variant_id = bytes[*cursor];
+        *cursor += 1;
+
+        if variant_id == Self::ACTIVE {
+            let offset = ConstExpr::parse_u32(bytes, cursor)?;
+            Ok(DataMode::Active {
+                offset: ConstExpr::I32(offset as i32),
+            })
+        } else if variant_id == Self::PASSIVE {
+            Ok(DataMode::Passive)
+        } else {
+            Err(ParseError {
+                offset: *cursor - 1,
+                message: format!("Data section: invalid DataMode variant 0x{:x}", variant_id),
+            })
         }
     }
 }
@@ -1233,27 +1271,25 @@ pub struct DataSegment<'a> {
 
 impl Serialize for DataSegment<'_> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        match &self.mode {
-            DataMode::Active { offset } => {
-                buffer.append_u8(0); // variant ID
-                offset.serialize(buffer);
-            }
-            DataMode::Passive => {
-                buffer.append_u8(1); // variant ID
-            }
-        }
-
+        self.mode.serialize(buffer);
         self.init.serialize(buffer);
     }
 }
 
 #[derive(Debug)]
 pub struct DataSection<'a> {
+    pub end_addr: u32,
     count: u32,
-    pub bytes: Vec<'a, u8>, // public so backend.rs can calculate addr of first string
+    bytes: Vec<'a, u8>,
 }
 
 impl<'a> DataSection<'a> {
+    const ID: SectionId = SectionId::Data;
+
+    pub fn size(&self) -> usize {
+        MAX_SIZE_SECTION_HEADER + self.bytes.len()
+    }
+
     pub fn append_segment(&mut self, segment: DataSegment<'a>) -> u32 {
         let index = self.count;
         self.count += 1;
@@ -1262,7 +1298,44 @@ impl<'a> DataSection<'a> {
     }
 }
 
-section_impl!(DataSection, SectionId::Data);
+impl<'a> Parse<&'a Bump> for DataSection<'a> {
+    fn parse(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let (count, range) = parse_section(Self::ID, module_bytes, cursor)?;
+
+        let end = range.end;
+        let mut bytes = Vec::<u8>::with_capacity_in(range.len() * 2, arena);
+        bytes.extend_from_slice(&module_bytes[range]);
+
+        let mut end_addr = 0;
+        for _ in 0..count {
+            let mode = DataMode::parse((), module_bytes, cursor)?;
+            match mode {
+                DataMode::Active {
+                    offset: ConstExpr::I32(offset_addr),
+                } if offset_addr > end_addr => {
+                    end_addr = offset_addr;
+                }
+                _ => {}
+            }
+            let segment_bytes_len = u32::parse((), module_bytes, cursor)?;
+            *cursor += segment_bytes_len as usize;
+        }
+
+        debug_assert_eq!(*cursor, end);
+
+        Ok(DataSection {
+            end_addr: end_addr as u32,
+            count,
+            bytes,
+        })
+    }
+}
+
+impl<'a> Serialize for DataSection<'a> {
+    fn serialize<B: SerialBuffer>(&self, buffer: &mut B) {
+        serialize_bytes_section(Self::ID, self.count, &self.bytes, buffer);
+    }
+}
 
 /*******************************************************************
  *
