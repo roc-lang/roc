@@ -200,6 +200,10 @@ impl RocType {
 
     /// Useful when determining whether to derive Eq, Ord, and Hash in a Rust type.
     pub fn has_float(&self, types: &Types) -> bool {
+        self.has_float_help(types, &[])
+    }
+
+    fn has_float_help(&self, types: &Types, do_not_recurse: &[TypeId]) -> bool {
         match self {
             RocType::F32 | RocType::F64 | RocType::F128 => true,
             RocType::RocStr
@@ -216,30 +220,48 @@ impl RocType {
             | RocType::U128
             | RocType::RocDec
             | RocType::TagUnion(RocTagUnion::Enumeration { .. }) => false,
-
             RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
-                types.get(*id).has_float(types)
+                types.get(*id).has_float_help(types, do_not_recurse)
             }
             RocType::RocDict(key_id, val_id) => {
-                types.get(*key_id).has_float(types) || types.get(*val_id).has_float(types)
+                types.get(*key_id).has_float_help(types, do_not_recurse)
+                    || types.get(*val_id).has_float_help(types, do_not_recurse)
             }
             RocType::Struct { fields, .. } => fields
                 .iter()
-                .any(|(_, type_id)| types.get(*type_id).has_float(types)),
+                .any(|(_, type_id)| types.get(*type_id).has_float_help(types, do_not_recurse)),
             RocType::TagUnion(RocTagUnion::Recursive { tags, .. })
-            | RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => tags
-                .iter()
-                .any(|(_, payloads)| payloads.iter().any(|id| types.get(*id).has_float(types))),
-            RocType::TagUnion(RocTagUnion::NullableWrapped { non_null_tags, .. }) => non_null_tags
-                .iter()
-                .any(|(_, _, payloads)| payloads.iter().any(|id| types.get(*id).has_float(types))),
+            | RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => {
+                tags.iter().any(|(_, payloads)| {
+                    payloads
+                        .iter()
+                        .any(|id| types.get(*id).has_float_help(types, do_not_recurse))
+                })
+            }
+            RocType::TagUnion(RocTagUnion::NullableWrapped { non_null_tags, .. }) => {
+                non_null_tags.iter().any(|(_, _, payloads)| {
+                    payloads
+                        .iter()
+                        .any(|id| types.get(*id).has_float_help(types, do_not_recurse))
+                })
+            }
             RocType::TagUnion(RocTagUnion::NullableUnwrapped {
                 non_null_payload: content,
                 ..
             })
             | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { content, .. })
             | RocType::TransparentWrapper { content, .. }
-            | RocType::RecursivePointer(content) => types.get(*content).has_float(types),
+            | RocType::RecursivePointer(content) => {
+                if do_not_recurse.contains(content) {
+                    false
+                } else {
+                    let mut do_not_recurse: Vec<TypeId> = do_not_recurse.into();
+
+                    do_not_recurse.push(*content);
+
+                    types.get(*content).has_float_help(types, &do_not_recurse)
+                }
+            }
         }
     }
 
