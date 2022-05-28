@@ -66,12 +66,23 @@ impl<'a> Env<'a> {
                 );
             });
 
-            debug_assert!(matches!(
-                types.get(type_id),
-                &RocType::PENDING_RECURSIVE_POINTER
-            ));
+            let name = match types.get(type_id) {
+                RocType::RecursivePointer {
+                    content: TypeId::PENDING,
+                    name,
+                } => name.clone(),
+                _ => {
+                    unreachable!("The TypeId {:?} was registered as a pending recursive pointer, but was not stored in Types as one.", type_id);
+                }
+            };
 
-            types.replace(type_id, RocType::RecursivePointer(*actual_type_id));
+            types.replace(
+                type_id,
+                RocType::RecursivePointer {
+                    content: *actual_type_id,
+                    name,
+                },
+            );
         }
     }
 }
@@ -175,7 +186,10 @@ fn add_type_help<'a>(
         Content::RangedNumber(_, _) => todo!(),
         Content::Error => todo!(),
         Content::RecursionVar { structure, .. } => {
-            let type_id = types.add(RocType::PENDING_RECURSIVE_POINTER);
+            let type_id = types.add(RocType::RecursivePointer {
+                name: env.enum_names.get_name(*structure),
+                content: TypeId::PENDING,
+            });
 
             env.add_pending_recursive_type(type_id, *structure);
 

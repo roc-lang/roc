@@ -9,6 +9,13 @@ use std::convert::TryInto;
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeId(usize);
 
+impl TypeId {
+    /// Used when making recursive pointers, which need to temporarily
+    /// have *some* TypeId value until we later in the process determine
+    /// their real TypeId and can go back and fix them up.
+    pub(crate) const PENDING: Self = Self(usize::MAX);
+}
+
 #[derive(Default, Debug, Clone)]
 pub struct Types {
     by_id: Vec<RocType>,
@@ -148,15 +155,13 @@ pub enum RocType {
     /// A recursive pointer, e.g. in StrConsList : [Nil, Cons Str StrConsList],
     /// this would be the field of Cons containing the (recursive) StrConsList type,
     /// and the TypeId is the TypeId of StrConsList itself.
-    RecursivePointer(TypeId),
+    RecursivePointer {
+        name: String,
+        content: TypeId,
+    },
 }
 
 impl RocType {
-    /// Used when making recursive pointers, which need to temporarily
-    /// have *some* TypeId value until we later in the process determine
-    /// their real TypeId and can go back and fix them up.
-    pub(crate) const PENDING_RECURSIVE_POINTER: Self = Self::RecursivePointer(TypeId(usize::MAX));
-
     /// Useful when determining whether to derive Copy in a Rust type.
     pub fn has_pointer(&self, types: &Types) -> bool {
         match self {
@@ -237,14 +242,14 @@ impl RocType {
             })
             | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { content, .. })
             | RocType::TransparentWrapper { content, .. }
-            | RocType::RecursivePointer(content) => types.get(*content).has_float(types),
+            | RocType::RecursivePointer { content, .. } => types.get(*content).has_float(types),
         }
     }
 
     /// Useful when determining whether to derive Default in a Rust type.
     pub fn has_enumeration(&self, types: &Types) -> bool {
         match self {
-            RocType::TagUnion { .. } | RocType::RecursivePointer(_) => true,
+            RocType::TagUnion { .. } | RocType::RecursivePointer { .. } => true,
             RocType::RocStr
             | RocType::Bool
             | RocType::I8
@@ -360,7 +365,7 @@ impl RocType {
             RocType::TransparentWrapper { content, .. } => {
                 types.get(*content).size(types, target_info)
             }
-            RocType::RecursivePointer(_) => target_info.ptr_size(),
+            RocType::RecursivePointer { .. } => target_info.ptr_size(),
         }
     }
 
@@ -449,7 +454,7 @@ impl RocType {
                     .try_into()
                     .unwrap()
             }
-            RocType::RecursivePointer(_) => target_info.ptr_alignment_bytes(),
+            RocType::RecursivePointer { .. } => target_info.ptr_alignment_bytes(),
         }
     }
 }
