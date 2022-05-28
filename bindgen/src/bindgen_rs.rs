@@ -123,7 +123,10 @@ pub fn emit(types_by_architecture: &[(Architecture, Types)]) -> String {
 fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut Impls) {
     match types.get(id) {
         RocType::Struct { name, fields } => {
-            add_struct(name, architecture, fields, id, types, impls)
+            add_struct(name, architecture, fields, id, types, impls, false)
+        }
+        RocType::TagUnionPayload { name, fields } => {
+            add_struct(name, architecture, fields, id, types, impls, true)
         }
         RocType::TagUnion(tag_union) => {
             match tag_union {
@@ -570,79 +573,25 @@ pub struct {name} {{
                         borrowed_ret = format!("&{owned_ret}");
                     }
                     RocType::Struct { fields, .. } => {
-                        let mut sorted_fields = fields.iter().collect::<Vec<_>>();
+                        let answer =
+                            tag_union_struct_help(fields.iter(), *payload_id, types, false);
 
-                        sorted_fields.sort_by(|(label1, _), (label2, _)| {
-                            // Convert from e.g. "f12" to 12u64
-                            // This is necessary because the string "f10" sorts
-                            // to earlier than "f2", whereas the number 10
-                            // sorts after the number 2.
-                            let num1 = label1[1..].parse::<u64>().unwrap();
-                            let num2 = label2[1..].parse::<u64>().unwrap();
+                        payload_args = answer.payload_args;
+                        args_to_payload = answer.args_to_payload;
+                        owned_ret = answer.owned_ret;
+                        borrowed_ret = answer.borrowed_ret;
+                        owned_ret_type = answer.owned_ret_type;
+                        borrowed_ret_type = answer.borrowed_ret_type;
+                    }
+                    RocType::TagUnionPayload { fields, .. } => {
+                        let answer = tag_union_struct_help(fields.iter(), *payload_id, types, true);
 
-                            num1.partial_cmp(&num2).unwrap()
-                        });
-
-                        let mut ret_types = Vec::new();
-                        let mut ret_values = Vec::new();
-
-                        for (label, type_id) in fields {
-                            ret_values.push(format!("payload.{label}"));
-                            ret_types.push(type_name(*type_id, types));
-                        }
-
-                        let payload_type_name = type_name(*payload_id, types);
-
-                        payload_args = ret_types
-                            .iter()
-                            .enumerate()
-                            .map(|(index, typ)| format!("arg{index}: {typ}"))
-                            .collect::<Vec<String>>()
-                            .join(", ");
-                        args_to_payload = format!(
-                            "core::mem::ManuallyDrop::new({payload_type_name} {{\n{}\n{INDENT}{INDENT}{INDENT}{INDENT}}})",
-                            fields
-                                .iter()
-                                .enumerate()
-                                .map(|(index, (label, _))| {
-                                    let mut indents = String::new();
-
-                                    for _ in 0..5 {
-                                        indents.push_str(INDENT);
-                                    }
-
-                                    format!("{indents}{label}: arg{index},")
-                                })
-                                .collect::<Vec<String>>()
-                                .join("\n")
-                        );
-                        owned_ret = {
-                            let lines = ret_values
-                                .iter()
-                                .map(|line| format!("\n{INDENT}{INDENT}{INDENT}{line}"))
-                                .collect::<Vec<String>>()
-                                .join(", ");
-
-                            format!("({lines}\n{INDENT}{INDENT})")
-                        };
-                        borrowed_ret = {
-                            let lines = ret_values
-                                .iter()
-                                .map(|line| format!("\n{INDENT}{INDENT}{INDENT}&{line}"))
-                                .collect::<Vec<String>>()
-                                .join(", ");
-
-                            format!("({lines}\n{INDENT}{INDENT})")
-                        };
-                        owned_ret_type = format!("({})", ret_types.join(", "));
-                        borrowed_ret_type = format!(
-                            "({})",
-                            ret_types
-                                .iter()
-                                .map(|ret_type| { format!("&{ret_type}") })
-                                .collect::<Vec<String>>()
-                                .join(", ")
-                        );
+                        payload_args = answer.payload_args;
+                        args_to_payload = answer.args_to_payload;
+                        owned_ret = answer.owned_ret;
+                        borrowed_ret = answer.borrowed_ret;
+                        owned_ret_type = answer.owned_ret_type;
+                        borrowed_ret_type = answer.borrowed_ret_type;
                     }
                 };
 
@@ -1062,6 +1011,18 @@ pub struct {name} {{
 
                             buf.join("\n")
                         }
+                        RocType::TagUnionPayload { fields, .. } => {
+                            let mut buf = Vec::new();
+
+                            for (label, _) in fields {
+                                // Needs an "f" prefix
+                                buf.push(format!(
+                                    ".field(&({deref_str}{actual_self}.{tag_name}).f{label})"
+                                ));
+                            }
+
+                            buf.join("\n")
+                        }
                     };
 
                     format!(
@@ -1158,13 +1119,14 @@ fn add_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str> + Display>(
     add_decl(impls, None, architecture, buf);
 }
 
-fn add_struct(
+fn add_struct<S: Display>(
     name: &str,
     architecture: Architecture,
-    fields: &[(String, TypeId)],
+    fields: &[(S, TypeId)],
     struct_id: TypeId,
     types: &Types,
     impls: &mut Impls,
+    is_tag_union_payload: bool,
 ) {
     match fields.len() {
         0 => {
@@ -1176,10 +1138,19 @@ fn add_struct(
         }
         _ => {
             let derive = derive_str(types.get(struct_id), types, true);
-            let mut buf = format!("{derive}\n#[repr(C)]\npub struct {name} {{\n");
+            let pub_str = if is_tag_union_payload { "" } else { "pub " };
+            let mut buf = format!("{derive}\n#[repr(C)]\n{pub_str}struct {name} {{\n");
 
             for (label, type_id) in fields {
                 let type_str = type_name(*type_id, types);
+
+                // Tag union payloads have numbered fields, so we prefix them
+                // with an "f" because Rust doesn't allow struct fields to be numbers.
+                let label = if is_tag_union_payload {
+                    format!("f{label}")
+                } else {
+                    format!("{label}")
+                };
 
                 buf.push_str(&format!("{INDENT}pub {label}: {type_str},\n",));
             }
@@ -1218,6 +1189,7 @@ fn type_name(id: TypeId, types: &Types) -> String {
         RocType::RocList(elem_id) => format!("roc_std::RocList<{}>", type_name(*elem_id, types)),
         RocType::RocBox(elem_id) => format!("roc_std::RocBox<{}>", type_name(*elem_id, types)),
         RocType::Struct { name, .. }
+        | RocType::TagUnionPayload { name, .. }
         | RocType::TransparentWrapper { name, .. }
         | RocType::TagUnion(RocTagUnion::NonRecursive { name, .. })
         | RocType::TagUnion(RocTagUnion::Recursive { name, .. })
@@ -1577,5 +1549,102 @@ fn tagged_pointer_bitmask(architecture: Architecture) -> u8 {
         Architecture::X86_64 | Architecture::Aarch64 => 0b0000_0111,
         // On a 32-bit system, pointers have 2 bits that are unused
         Architecture::X86_32 | Architecture::Aarch32 | Architecture::Wasm32 => 0b0000_0011,
+    }
+}
+
+struct StructIngredients {
+    payload_args: String,
+    args_to_payload: String,
+    owned_ret: String,
+    borrowed_ret: String,
+    owned_ret_type: String,
+    borrowed_ret_type: String,
+}
+
+fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + PartialOrd + 'a>(
+    fields: I,
+    payload_id: TypeId,
+    types: &Types,
+    is_tag_union_payload: bool,
+) -> StructIngredients {
+    let mut sorted_fields = fields.collect::<Vec<&(L, TypeId)>>();
+
+    sorted_fields.sort_by(|(label1, _), (label2, _)| label1.partial_cmp(&label2).unwrap());
+
+    let mut ret_types = Vec::new();
+    let mut ret_values = Vec::new();
+
+    for (label, type_id) in sorted_fields.iter() {
+        ret_values.push(format!("payload.{label}"));
+        ret_types.push(type_name(*type_id, types));
+    }
+
+    let payload_type_name = type_name(payload_id, types);
+    let payload_args = ret_types
+        .iter()
+        .enumerate()
+        .map(|(index, typ)| format!("arg{index}: {typ}"))
+        .collect::<Vec<String>>()
+        .join(", ");
+    let args_to_payload = format!(
+                            "core::mem::ManuallyDrop::new({payload_type_name} {{\n{}\n{INDENT}{INDENT}{INDENT}{INDENT}}})",
+                            sorted_fields
+                                .iter()
+                                .enumerate()
+                                .map(|(index, (label, _))| {
+                                    let mut indents = String::new();
+
+                                    for _ in 0..5 {
+                                        indents.push_str(INDENT);
+                                    }
+
+                                    let label = if is_tag_union_payload {
+                                        // Tag union payload fields need "f" prefix
+                                        // because they're numbers
+                                        format!("f{}", label)
+                                    } else {
+                                        format!("{}", label)
+                                    };
+
+                                    format!("{indents}{label}: arg{index},")
+                                })
+                                .collect::<Vec<String>>()
+                                .join("\n")
+                        );
+    let owned_ret = {
+        let lines = ret_values
+            .iter()
+            .map(|line| format!("\n{INDENT}{INDENT}{INDENT}{line}"))
+            .collect::<Vec<String>>()
+            .join(", ");
+
+        format!("({lines}\n{INDENT}{INDENT})")
+    };
+    let borrowed_ret = {
+        let lines = ret_values
+            .iter()
+            .map(|line| format!("\n{INDENT}{INDENT}{INDENT}&{line}"))
+            .collect::<Vec<String>>()
+            .join(", ");
+
+        format!("({lines}\n{INDENT}{INDENT})")
+    };
+    let owned_ret_type = format!("({})", ret_types.join(", "));
+    let borrowed_ret_type = format!(
+        "({})",
+        ret_types
+            .iter()
+            .map(|ret_type| { format!("&{ret_type}") })
+            .collect::<Vec<String>>()
+            .join(", ")
+    );
+
+    StructIngredients {
+        payload_args,
+        args_to_payload,
+        owned_ret,
+        borrowed_ret,
+        owned_ret_type,
+        borrowed_ret_type,
     }
 }

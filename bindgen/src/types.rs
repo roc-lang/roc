@@ -134,6 +134,10 @@ pub enum RocType {
         name: String,
         fields: Vec<(String, TypeId)>,
     },
+    TagUnionPayload {
+        name: String,
+        fields: Vec<(usize, TypeId)>,
+    },
     /// Either a single-tag union or a single-field record
     TransparentWrapper {
         name: String,
@@ -231,6 +235,9 @@ impl RocType {
             RocType::Struct { fields, .. } => fields
                 .iter()
                 .any(|(_, type_id)| types.get(*type_id).has_pointer(types)),
+            RocType::TagUnionPayload { fields, .. } => fields
+                .iter()
+                .any(|(_, type_id)| types.get(*type_id).has_pointer(types)),
             RocType::TransparentWrapper { content, .. } => types.get(*content).has_pointer(types),
         }
     }
@@ -261,6 +268,9 @@ impl RocType {
                     || types.get(*val_id).has_float_help(types, do_not_recurse)
             }
             RocType::Struct { fields, .. } => fields
+                .iter()
+                .any(|(_, type_id)| types.get(*type_id).has_float_help(types, do_not_recurse)),
+            RocType::TagUnionPayload { fields, .. } => fields
                 .iter()
                 .any(|(_, type_id)| types.get(*type_id).has_float_help(types, do_not_recurse)),
             RocType::TagUnion(RocTagUnion::Recursive { tags, .. })
@@ -311,6 +321,9 @@ impl RocType {
                     || types.get(*val_id).has_enumeration(types)
             }
             RocType::Struct { fields, .. } => fields
+                .iter()
+                .any(|(_, type_id)| types.get(*type_id).has_enumeration(types)),
+            RocType::TagUnionPayload { fields, .. } => fields
                 .iter()
                 .any(|(_, type_id)| types.get(*type_id).has_enumeration(types)),
             RocType::TransparentWrapper { content, .. } => {
@@ -369,23 +382,18 @@ impl RocType {
                 RocTagUnion::NullableWrapped { .. } => todo!(),
                 RocTagUnion::NullableUnwrapped { .. } => todo!(),
             },
-            RocType::Struct { fields, .. } => {
-                // The "unpadded" size (without taking alignment into account)
-                // is the sum of all the sizes of the fields.
-                let size_unpadded = fields.iter().fold(0, |total, (_, field_id)| {
-                    total + types.get(*field_id).size(types, target_info)
-                });
-
-                // Round up to the next multiple of alignment, to incorporate
-                // any necessary alignment padding.
-                //
-                // e.g. if we have a record with a Str and a U8, that would be a
-                // size_unpadded of 25, because Str is three 8-byte pointers and U8 is 1 byte,
-                // but the 8-byte alignment of the pointers means we'll round 25 up to 32.
-                let align = self.alignment(types, target_info);
-
-                (size_unpadded / align) * align
-            }
+            RocType::Struct { fields, .. } => struct_size(
+                fields.iter().map(|(_, type_id)| *type_id),
+                types,
+                target_info,
+                self.alignment(types, target_info),
+            ),
+            RocType::TagUnionPayload { fields, .. } => struct_size(
+                fields.iter().map(|(_, type_id)| *type_id),
+                types,
+                target_info,
+                self.alignment(types, target_info),
+            ),
             RocType::TransparentWrapper { content, .. } => {
                 types.get(*content).size(types, target_info)
             }
@@ -451,6 +459,11 @@ impl RocType {
             RocType::Struct { fields, .. } => fields.iter().fold(0, |align, (_, field_id)| {
                 align.max(types.get(*field_id).alignment(types, target_info))
             }),
+            RocType::TagUnionPayload { fields, .. } => {
+                fields.iter().fold(0, |align, (_, field_id)| {
+                    align.max(types.get(*field_id).alignment(types, target_info))
+                })
+            }
             RocType::TransparentWrapper { content, .. }
             | RocType::TagUnion(RocTagUnion::NullableUnwrapped {
                 non_null_payload: content,
@@ -468,6 +481,27 @@ impl RocType {
             RocType::RecursivePointer { .. } => target_info.ptr_alignment_bytes(),
         }
     }
+}
+
+fn struct_size(
+    fields: impl Iterator<Item = TypeId>,
+    types: &Types,
+    target_info: TargetInfo,
+    align: usize,
+) -> usize {
+    // The "unpadded" size (without taking alignment into account)
+    // is the sum of all the sizes of the fields.
+    let size_unpadded = fields.fold(0, |total, field_id| {
+        total + types.get(field_id).size(types, target_info)
+    });
+
+    // Round up to the next multiple of alignment, to incorporate
+    // any necessary alignment padding.
+    //
+    // e.g. if we have a record with a Str and a U8, that would be a
+    // size_unpadded of 25, because Str is three 8-byte pointers and U8 is 1 byte,
+    // but the 8-byte alignment of the pointers means we'll round 25 up to 32.
+    (size_unpadded / align) * align
 }
 
 fn size_for_tag_count(num_tags: usize) -> usize {

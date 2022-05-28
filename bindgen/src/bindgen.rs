@@ -7,7 +7,7 @@ use crate::{
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth::*, IntWidth::*};
 use roc_collections::VecMap;
-use roc_module::ident::{Lowercase, TagName};
+use roc_module::ident::TagName;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::layout::{cmp_fields, ext_var_is_empty_tag_union, Builtin, Layout, LayoutCache};
 use roc_types::subs::UnionTags;
@@ -15,6 +15,7 @@ use roc_types::{
     subs::{Content, FlatType, Subs, Variable},
     types::RecordField,
 };
+use std::fmt::Display;
 
 pub struct Env<'a> {
     pub arena: &'a Bump,
@@ -98,7 +99,7 @@ fn add_type_help<'a>(
                 .flat_map(|(label, field)| {
                     match field {
                         RecordField::Required(field_var) | RecordField::Demanded(field_var) => {
-                            Some((label.clone(), field_var))
+                            Some((label.to_string(), field_var))
                         }
                         RecordField::Optional(_) => {
                             // drop optional fields
@@ -112,7 +113,10 @@ fn add_type_help<'a>(
                 None => env.struct_names.get_name(var),
             };
 
-            add_struct(env, name, it, types)
+            add_struct(env, name, it, types, |name, fields| RocType::Struct {
+                name,
+                fields,
+            })
         }
         Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, *ext_var));
@@ -240,40 +244,24 @@ fn add_builtin_type<'a>(
     }
 }
 
-fn add_struct<I: IntoIterator<Item = (Lowercase, Variable)>>(
+fn add_struct<I, L, F>(
     env: &mut Env<'_>,
     name: String,
     fields: I,
     types: &mut Types,
-) -> TypeId {
+    to_type: F,
+) -> TypeId
+where
+    I: IntoIterator<Item = (L, Variable)>,
+    L: Display + Ord,
+    F: FnOnce(String, Vec<(L, TypeId)>) -> RocType,
+{
     let subs = env.subs;
     let fields_iter = &mut fields.into_iter();
-    let first_field = match fields_iter.next() {
-        Some(field) => field,
-        None => {
-            // This is an empty record; there's no more work to do!
-            return types.add(RocType::Struct {
-                name,
-                fields: Vec::new(),
-            });
-        }
-    };
-    let second_field = match fields_iter.next() {
-        Some(field) => field,
-        None => {
-            // This is a single-field record; put it in a transparent wrapper.
-            let content = env.add_type(first_field.1, types);
-
-            return types.add(RocType::TransparentWrapper { name, content });
-        }
-    };
     let mut sortables =
-        bumpalo::collections::Vec::with_capacity_in(2 + fields_iter.size_hint().0, env.arena);
+        bumpalo::collections::Vec::with_capacity_in(fields_iter.size_hint().0, env.arena);
 
-    for (label, field_var) in std::iter::once(first_field)
-        .chain(std::iter::once(second_field))
-        .chain(fields_iter)
-    {
+    for (label, field_var) in fields_iter {
         sortables.push((
             label,
             field_var,
@@ -298,11 +286,11 @@ fn add_struct<I: IntoIterator<Item = (Lowercase, Variable)>>(
         .map(|(label, field_var, field_layout)| {
             let type_id = add_type_help(env, field_layout, field_var, None, types);
 
-            (label.to_string(), type_id)
+            (label, type_id)
         })
-        .collect();
+        .collect::<Vec<(L, TypeId)>>();
 
-    types.add(RocType::Struct { name, fields })
+    types.add(to_type(name, fields))
 }
 
 fn add_tag_union(
@@ -335,41 +323,14 @@ fn add_tag_union(
             None => tag_name,
         };
 
-        match payload_vars.len() {
-            0 => {
-                // This is a single-tag union with no payload, e.g. `[Foo]`
-                // so just generate an empty record
-                types.add(RocType::Struct {
-                    name,
-                    fields: Vec::new(),
-                })
-            }
-            1 => {
-                // This is a single-tag union with 1 payload field, e.g.`[Foo Str]`.
-                // We'll just wrap that.
-                let var = *payload_vars.get(0).unwrap();
-                let content = env.add_type(var, types);
+        let fields = payload_vars
+            .iter()
+            .enumerate()
+            .map(|(index, payload_var)| (index, *payload_var));
 
-                types.add(RocType::TransparentWrapper { name, content })
-            }
-            _ => {
-                // This is a single-tag union with multiple payload field, e.g.`[Foo Str U32]`.
-                // Generate a record.
-                let fields = payload_vars.iter().enumerate().map(|(index, payload_var)| {
-                    let field_name = format!("f{}", index).into();
-
-                    (field_name, *payload_var)
-                });
-
-                // Note that we assume no recursion variable here. If you write something like:
-                //
-                // Rec : [Blah Rec]
-                //
-                // ...then it's not even theoretically possible to instantiate one, so
-                // bindgen won't be able to help you do that!
-                add_struct(env, name, fields, types)
-            }
-        }
+        add_struct(env, name, fields, types, |name, fields| {
+            RocType::TagUnionPayload { name, fields }
+        })
     } else {
         // This is a multi-tag union.
 
@@ -412,12 +373,13 @@ fn add_tag_union(
                         (tag_name, Some(payload_id))
                     }
                     _ => {
-                        // create a struct type for the payload and save it
+                        // create a RocType for the payload and save it
                         let struct_name = format!("{}_{}", name, tag_name); // e.g. "MyUnion_MyVariant"
-                        let fields = payload_vars.iter().enumerate().map(|(index, payload_var)| {
-                            (format!("f{}", index).into(), *payload_var)
-                        });
-                        let struct_id = add_struct(env, struct_name, fields, types);
+                        let fields = payload_vars.iter().copied().enumerate();
+                        let struct_id =
+                            add_struct(env, struct_name, fields, types, |name, fields| {
+                                RocType::TagUnionPayload { name, fields }
+                            });
 
                         (tag_name, Some(struct_id))
                     }
