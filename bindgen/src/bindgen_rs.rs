@@ -1053,14 +1053,59 @@ pub struct {name} {{
                     // If it's a ManuallyDrop, we need a `*` prefix to dereference it
                     // (because otherwise we're using ManuallyDrop's Debug instance
                     // rather than the Debug instance of the value it wraps).
-                    let deref_str = if types.get(payload_id).has_pointer(types) {
+                    let payload_type = types.get(payload_id);
+                    let deref_str = if payload_type.has_pointer(types) {
                         "&*"
                     } else {
                         "&"
                     };
 
+                    let fields_str = match payload_type {
+                        RocType::RocStr
+                        | RocType::Bool
+                        | RocType::I8
+                        | RocType::U8
+                        | RocType::I16
+                        | RocType::U16
+                        | RocType::I32
+                        | RocType::U32
+                        | RocType::I64
+                        | RocType::U64
+                        | RocType::I128
+                        | RocType::U128
+                        | RocType::F32
+                        | RocType::F64
+                        | RocType::F128
+                        | RocType::RocDec
+                        | RocType::RocList(_)
+                        | RocType::RocDict(_, _)
+                        | RocType::RocSet(_)
+                        | RocType::RocBox(_)
+                        | RocType::TagUnion(_) => {
+                            format!(".field({deref_str}{actual_self}.{tag_name})")
+                        }
+                        RocType::TransparentWrapper { .. } => {
+                            format!(".field(&({deref_str}{actual_self}.{tag_name}).0)")
+                        }
+                        RocType::Struct { fields, .. } => {
+                            let mut buf = Vec::new();
+
+                            for field in fields {
+                                let label = field.label();
+
+                                buf.push(format!(
+                                    ".field(&({deref_str}{actual_self}.{tag_name}).{label})"
+                                ));
+                            }
+
+                            buf.join("\n")
+                        }
+                    };
+
                     format!(
-                        r#"f.debug_tuple("{tag_name}").field({deref_str}{actual_self}.{tag_name}).finish(),"#,
+                        r#"f.debug_tuple("{tag_name}")
+        {fields_str}
+        .finish(),"#,
                     )
                 }
                 None => format!(r#"f.write_str("{tag_name}"),"#),
