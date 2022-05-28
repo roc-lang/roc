@@ -131,13 +131,20 @@ fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut I
                     if tags.len() == 1 {
                         // An enumeration with one tag is a zero-sized unit type, so
                         // represent it as a zero-sized struct (e.g. "struct Foo()").
-                        let derive = derive_str(id, types, true);
+                        let derive = derive_str(types.get(id), types, true);
                         let struct_name = type_name(id, types);
                         let body = format!("{derive}\nstruct {struct_name}();");
 
                         add_decl(impls, None, architecture, body);
                     } else {
-                        add_enumeration(name, architecture, id, tags.iter(), types, impls)
+                        add_enumeration(
+                            name,
+                            architecture,
+                            types.get(id),
+                            tags.iter(),
+                            types,
+                            impls,
+                        )
                     }
                 }
                 RocTagUnion::NonRecursive { tags, name } => {
@@ -217,7 +224,8 @@ fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut I
         | RocType::RocList(_)
         | RocType::RocBox(_) => {}
         RocType::TransparentWrapper { name, content } => {
-            let derive = derive_str(id, types, true);
+            let typ = types.get(id);
+            let derive = derive_str(typ, types, true);
             let body = format!(
                 "{derive}\n#[repr(transparent)]\npub struct {name}(pub {});",
                 type_name(*content, types)
@@ -236,6 +244,7 @@ fn add_discriminant(
     name: &str,
     architecture: Architecture,
     tag_names: Vec<String>,
+    types: &Types,
     impls: &mut Impls,
 ) -> String {
     // The tag union's discriminant, e.g.
@@ -246,17 +255,18 @@ fn add_discriminant(
     //     Foo,
     // }
     let discriminant_name = format!("variant_{name}");
+    let discriminant_type = RocType::TagUnion(RocTagUnion::Enumeration {
+        name: discriminant_name.clone(),
+        tags: tag_names.clone(),
+    });
 
-    // Don't call add_enumeration directly, because it needs a TypeId in order
-    // to correctly infer whether the enumeration contains floats...but it only
-    // does that in order to determine derive, and we already know exactly what to derive
-    // for a discriminant!
-    add_enumeration_with_derive(
+    add_enumeration(
         &discriminant_name,
         architecture,
+        &discriminant_type,
         tag_names.into_iter(),
+        types,
         impls,
-        "#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]",
     );
 
     discriminant_name
@@ -278,7 +288,7 @@ fn add_tag_union(
     impls: &mut Impls,
 ) {
     let tag_names = tags.iter().map(|(name, _)| name).cloned().collect();
-    let discriminant_name = add_discriminant(name, architecture, tag_names, impls);
+    let discriminant_name = add_discriminant(name, architecture, tag_names, types, impls);
     let typ = types.get(type_id);
     let target_info = architecture.into();
     let discriminant_offset = RocTagUnion::discriminant_offset(tags, types, target_info);
@@ -802,7 +812,7 @@ pub struct {name} {{
 
     // The PartialEq impl for the tag union
     {
-        let opt_impl_prefix = if types.has_float(type_id) {
+        let opt_impl_prefix = if typ.has_float(types) {
             String::new()
         } else {
             format!("impl Eq for {name} {{}}\n\n")
@@ -1146,27 +1156,17 @@ fn write_impl_tags<
 fn add_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str> + Display>(
     name: &str,
     architecture: Architecture,
-    type_id: TypeId,
+    typ: &RocType,
     tags: I,
     types: &Types,
     impls: &mut Impls,
-) {
-    let derive = derive_str(type_id, types, false);
-
-    add_enumeration_with_derive(name, architecture, tags, impls, &derive)
-}
-
-fn add_enumeration_with_derive<I: ExactSizeIterator<Item = S>, S: AsRef<str> + Display>(
-    name: &str,
-    architecture: Architecture,
-    tags: I,
-    impls: &mut Impls,
-    derive: &str,
 ) {
     let tag_bytes: usize = UnionLayout::discriminant_size(tags.len())
         .stack_size()
         .try_into()
         .unwrap();
+
+    let derive = derive_str(typ, types, false);
     let repr_bytes = tag_bytes * 8;
 
     // e.g. "#[repr(u8)]\npub enum Foo {\n"
@@ -1214,7 +1214,7 @@ fn add_struct(
             add_type(architecture, fields.first().unwrap().1, types, impls)
         }
         _ => {
-            let derive = derive_str(struct_id, types, true);
+            let derive = derive_str(types.get(struct_id), types, true);
             let mut buf = format!("{derive}\n#[repr(C)]\npub struct {name} {{\n");
 
             for (label, type_id) in fields {
@@ -1271,8 +1271,7 @@ fn type_name(id: TypeId, types: &Types) -> String {
 /// This explicitly asks for whether to include Debug because in the very specific
 /// case of a struct that's a payload for a recursive tag union, typ.has_enumeration()
 /// will return true, but actually we want to derive Debug here anyway.
-fn derive_str(type_id: TypeId, types: &Types, include_debug: bool) -> String {
-    let typ = types.get(type_id);
+fn derive_str(typ: &RocType, types: &Types, include_debug: bool) -> String {
     let mut buf = "#[derive(Clone, ".to_string();
 
     if !typ.has_pointer(types) {
@@ -1287,7 +1286,7 @@ fn derive_str(type_id: TypeId, types: &Types, include_debug: bool) -> String {
         buf.push_str("Default, ");
     }
 
-    if !types.has_float(type_id) {
+    if !typ.has_float(types) {
         buf.push_str("Eq, Ord, Hash, ");
     }
 
@@ -1312,7 +1311,7 @@ fn add_nullable_unwrapped(
 
     tag_names.sort();
 
-    let discriminant_name = add_discriminant(name, architecture, tag_names, impls);
+    let discriminant_name = add_discriminant(name, architecture, tag_names, types, impls);
     let payload_type = types.get(non_null_payload);
     let payload_type_name = type_name(non_null_payload, types);
     let has_pointer = payload_type.has_pointer(types);
@@ -1321,7 +1320,7 @@ fn add_nullable_unwrapped(
     {
         // This struct needs its own Clone impl because it has
         // a refcount to bump
-        let derive_extras = if types.has_float(id) {
+        let derive_extras = if types.get(id).has_float(types) {
             ""
         } else {
             ", Eq, Ord, Hash"
