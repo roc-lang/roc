@@ -1,8 +1,9 @@
 use crate::structs::Structs;
-use crate::types::{Field, RocTagUnion, TypeId, Types};
+use crate::types::{RocTagUnion, TypeId, Types};
 use crate::{enums::Enums, types::RocType};
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth::*, IntWidth::*};
+use roc_collections::VecMap;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::layout::{cmp_fields, ext_var_is_empty_tag_union, Builtin, Layout, LayoutCache};
@@ -19,16 +20,59 @@ pub struct Env<'a> {
     pub interns: &'a Interns,
     pub struct_names: Structs,
     pub enum_names: Enums,
+    pub pending_recursive_types: VecMap<TypeId, Variable>,
+    pub known_recursive_types: VecMap<Variable, TypeId>,
 }
 
 impl<'a> Env<'a> {
-    pub fn add_type(&mut self, var: Variable, types: &mut Types) -> TypeId {
+    pub fn vars_to_types<I, V>(&mut self, variables: I) -> Types
+    where
+        I: IntoIterator<Item = V>,
+        V: AsRef<Variable>,
+    {
+        let mut types = Types::default();
+
+        for var in variables {
+            self.add_type(*var.as_ref(), &mut types);
+        }
+
+        self.resolve_pending_recursive_types(&mut types);
+
+        types
+    }
+
+    fn add_type(&mut self, var: Variable, types: &mut Types) -> TypeId {
         let layout = self
             .layout_cache
             .from_var(self.arena, var, self.subs)
             .expect("Something weird ended up in the content");
 
         add_type_help(self, layout, var, None, types, None)
+    }
+
+    fn add_pending_recursive_type(&self, type_id: TypeId, var: Variable) {
+        self.pending_recursive_types.insert(type_id, var);
+    }
+
+    fn resolve_pending_recursive_types(&mut self, types: &mut Types) {
+        // TODO if VecMap gets a drain() method, use that instead of doing take() and into_iter
+        let pending = core::mem::take(&mut self.pending_recursive_types);
+
+        for (type_id, var) in pending.into_iter() {
+            let actual_type_id = self.known_recursive_types.get(&var).unwrap_or_else(|| {
+                unreachable!(
+                    "There was no known recursive TypeId for the pending recursive variable {:?}",
+                    var
+                );
+            });
+
+            debug_assert!(matches!(
+                types.get(type_id),
+                &RocType::PENDING_RECURSIVE_POINTER
+            ));
+
+            types.replace(type_id, RocType::RecursivePointer(*actual_type_id));
+        }
     }
 }
 
@@ -130,9 +174,12 @@ fn add_type_help<'a>(
         }
         Content::RangedNumber(_, _) => todo!(),
         Content::Error => todo!(),
-        Content::RecursionVar { .. } => {
-            // We should always skip over RecursionVars before we get here.
-            unreachable!()
+        Content::RecursionVar { structure, .. } => {
+            let type_id = types.add(RocType::PENDING_RECURSIVE_POINTER);
+
+            env.add_pending_recursive_type(type_id, *structure);
+
+            type_id
         }
     }
 }
@@ -253,14 +300,9 @@ fn add_struct<I: IntoIterator<Item = (Lowercase, Variable)>>(
         .into_iter()
         .map(|(label, field_var, field_layout)| {
             let content = subs.get_content_without_compacting(field_var);
+            let type_id = add_type_help(env, field_layout, field_var, None, types, None);
 
-            if matches!(content, Content::RecursionVar { .. }) {
-                Field::Recursive(label.to_string(), opt_recursion_id.unwrap())
-            } else {
-                let type_id = add_type_help(env, field_layout, field_var, None, types, None);
-
-                Field::NonRecursive(label.to_string(), type_id)
-            }
+            (label.to_string(), type_id)
         })
         .collect();
 
