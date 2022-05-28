@@ -398,6 +398,8 @@ fn add_tag_union(
         // Sort tags alphabetically by tag name
         tags.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
 
+        let is_recursive = is_recursive_tag_union(&layout);
+
         let mut tags: Vec<_> = tags
             .into_iter()
             .map(|(tag_name, payload_vars)| {
@@ -406,7 +408,7 @@ fn add_tag_union(
                         // no payload
                         (tag_name, None)
                     }
-                    1 if !is_recursive_tag_union(&layout) => {
+                    1 if !is_recursive => {
                         // this isn't recursive and there's 1 payload item, so it doesn't
                         // need its own struct - e.g. for `[Foo Str, Bar Str]` both of them
                         // can have payloads of plain old Str, no struct wrapper needed.
@@ -516,6 +518,10 @@ fn add_tag_union(
         };
 
         types.replace(type_id, typ);
+
+        if is_recursive {
+            env.known_recursive_types.insert(var, type_id);
+        }
 
         type_id
     }
