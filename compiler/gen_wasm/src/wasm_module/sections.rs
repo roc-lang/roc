@@ -385,14 +385,15 @@ impl<'a> ImportSection<'a> {
 
 impl<'a> Parse<&'a Bump> for ImportSection<'a> {
     fn parse(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let start = *cursor;
         let (count, range) = parse_section(Self::ID, module_bytes, cursor)?;
         let mut bytes = Vec::with_capacity_in(range.len() * 2, arena);
         let mut fn_signatures = Vec::with_capacity_in(range.len() / 8, arena);
 
         let end = range.end;
-        bytes.extend_from_slice(&module_bytes[range]);
 
         while *cursor < end {
+            let import_start = *cursor;
             String::skip_bytes(module_bytes, cursor)?; // import namespace
             String::skip_bytes(module_bytes, cursor)?; // import name
 
@@ -403,6 +404,7 @@ impl<'a> Parse<&'a Bump> for ImportSection<'a> {
                 ImportTypeId::Func => {
                     let sig = u32::parse((), module_bytes, cursor)?;
                     fn_signatures.push(sig);
+                    bytes.extend_from_slice(&module_bytes[import_start..*cursor]);
                 }
                 ImportTypeId::Table => {
                     TableType::skip_bytes(module_bytes, cursor)?;
@@ -415,6 +417,8 @@ impl<'a> Parse<&'a Bump> for ImportSection<'a> {
                 }
             }
         }
+
+        dbg!(bytes.len(), end - start);
 
         Ok(ImportSection {
             count,

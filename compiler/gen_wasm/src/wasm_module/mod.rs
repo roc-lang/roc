@@ -105,6 +105,7 @@ impl<'a> WasmModule<'a> {
         let function = FunctionSection::parse(arena, bytes, &mut cursor)?;
         let table = TableSection::parse((), bytes, &mut cursor)?;
         let memory = MemorySection::parse(arena, bytes, &mut cursor)?;
+        let global_start = cursor;
         let global = GlobalSection::parse(arena, bytes, &mut cursor)?;
         let export = ExportSection::parse(arena, bytes, &mut cursor)?;
         let start = OpaqueSection::parse((arena, SectionId::Start), bytes, &mut cursor)?;
@@ -126,6 +127,13 @@ impl<'a> WasmModule<'a> {
         let reloc_code = RelocationSection::parse((arena, "reloc.CODE"), bytes, &mut cursor)?;
         let reloc_data = RelocationSection::parse((arena, "reloc.DATA"), bytes, &mut cursor)?;
         let names = NameSection::parse(arena, bytes, &mut cursor)?;
+
+        if global.count != 0 {
+            return Err(ParseError {
+                offset: global_start,
+                message: format!("All globals in a relocatable Wasm module should be imported, but found {} internally defined", global.count),
+            });
+        }
 
         Ok(WasmModule {
             types,

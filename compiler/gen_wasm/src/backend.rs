@@ -86,6 +86,14 @@ impl<'a> WasmBackend<'a> {
             }
         }
 
+        module.global.append(Global {
+            ty: GlobalType {
+                value_type: ValueType::I32,
+                is_mutable: true,
+            },
+            init: ConstExpr::I32(1234), // TODO: come up with a value!
+        });
+
         module.export.exports = app_exports;
         module.code.code_builders.reserve(proc_lookup.len());
 
