@@ -46,7 +46,7 @@ impl<'a> Env<'a> {
             .from_var(self.arena, var, self.subs)
             .expect("Something weird ended up in the content");
 
-        add_type_help(self, layout, var, None, types, None)
+        add_type_help(self, layout, var, None, types)
     }
 
     fn add_pending_recursive_type(&mut self, type_id: TypeId, var: Variable) {
@@ -92,7 +92,6 @@ fn add_type_help<'a>(
     var: Variable,
     opt_name: Option<Symbol>,
     types: &mut Types,
-    opt_recursion_id: Option<TypeId>,
 ) -> TypeId {
     let subs = env.subs;
 
@@ -124,7 +123,7 @@ fn add_type_help<'a>(
                 None => env.struct_names.get_name(var),
             };
 
-            add_struct(env, name, it, types, opt_recursion_id)
+            add_struct(env, name, it, types)
         }
         Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, *ext_var));
@@ -179,7 +178,7 @@ fn add_type_help<'a>(
             } else {
                 // If this was a non-builtin type alias, we can use that alias name
                 // in the generated bindings.
-                add_type_help(env, layout, *real_var, Some(*name), types, opt_recursion_id)
+                add_type_help(env, layout, *real_var, Some(*name), types)
             }
         }
         Content::RangedNumber(_, _) => todo!(),
@@ -227,8 +226,8 @@ fn add_builtin_type<'a>(
         Builtin::Str => types.add(RocType::RocStr),
         Builtin::Dict(key_layout, val_layout) => {
             // TODO FIXME this `var` is wrong - should have a different `var` for key and for val
-            let key_id = add_type_help(env, *key_layout, var, opt_name, types, None);
-            let val_id = add_type_help(env, *val_layout, var, opt_name, types, None);
+            let key_id = add_type_help(env, *key_layout, var, opt_name, types);
+            let val_id = add_type_help(env, *val_layout, var, opt_name, types);
             let dict_id = types.add(RocType::RocDict(key_id, val_id));
 
             types.depends(dict_id, key_id);
@@ -237,7 +236,7 @@ fn add_builtin_type<'a>(
             dict_id
         }
         Builtin::Set(elem_layout) => {
-            let elem_id = add_type_help(env, *elem_layout, var, opt_name, types, None);
+            let elem_id = add_type_help(env, *elem_layout, var, opt_name, types);
             let set_id = types.add(RocType::RocSet(elem_id));
 
             types.depends(set_id, elem_id);
@@ -245,7 +244,7 @@ fn add_builtin_type<'a>(
             set_id
         }
         Builtin::List(elem_layout) => {
-            let elem_id = add_type_help(env, *elem_layout, var, opt_name, types, None);
+            let elem_id = add_type_help(env, *elem_layout, var, opt_name, types);
             let list_id = types.add(RocType::RocList(elem_id));
 
             types.depends(list_id, elem_id);
@@ -260,7 +259,6 @@ fn add_struct<I: IntoIterator<Item = (Lowercase, Variable)>>(
     name: String,
     fields: I,
     types: &mut Types,
-    opt_recursion_id: Option<TypeId>,
 ) -> TypeId {
     let subs = env.subs;
     let fields_iter = &mut fields.into_iter();
@@ -312,8 +310,7 @@ fn add_struct<I: IntoIterator<Item = (Lowercase, Variable)>>(
     let fields = sortables
         .into_iter()
         .map(|(label, field_var, field_layout)| {
-            let content = subs.get_content_without_compacting(field_var);
-            let type_id = add_type_help(env, field_layout, field_var, None, types, None);
+            let type_id = add_type_help(env, field_layout, field_var, None, types);
 
             (label.to_string(), type_id)
         })
@@ -384,7 +381,7 @@ fn add_tag_union(
                 //
                 // ...then it's not even theoretically possible to instantiate one, so
                 // bindgen won't be able to help you do that!
-                add_struct(env, name, fields, types, None)
+                add_struct(env, name, fields, types)
             }
         }
     } else {
@@ -405,12 +402,6 @@ fn add_tag_union(
         // Sort tags alphabetically by tag name
         tags.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
 
-        let opt_recursion_id = if is_recursive_tag_union(&layout) {
-            Some(type_id)
-        } else {
-            None
-        };
-
         let mut tags: Vec<_> = tags
             .into_iter()
             .map(|(tag_name, payload_vars)| {
@@ -419,7 +410,7 @@ fn add_tag_union(
                         // no payload
                         (tag_name, None)
                     }
-                    1 if opt_recursion_id.is_none() => {
+                    1 if !is_recursive_tag_union(&layout) => {
                         // this isn't recursive and there's 1 payload item, so it doesn't
                         // need its own struct - e.g. for `[Foo Str, Bar Str]` both of them
                         // can have payloads of plain old Str, no struct wrapper needed.
@@ -428,8 +419,7 @@ fn add_tag_union(
                             .layout_cache
                             .from_var(env.arena, *payload_var, env.subs)
                             .expect("Something weird ended up in the content");
-                        let payload_id =
-                            add_type_help(env, layout, *payload_var, None, types, opt_recursion_id);
+                        let payload_id = add_type_help(env, layout, *payload_var, None, types);
 
                         (tag_name, Some(payload_id))
                     }
@@ -439,8 +429,7 @@ fn add_tag_union(
                         let fields = payload_vars.iter().enumerate().map(|(index, payload_var)| {
                             (format!("f{}", index).into(), *payload_var)
                         });
-                        let struct_id =
-                            add_struct(env, struct_name, fields, types, opt_recursion_id);
+                        let struct_id = add_struct(env, struct_name, fields, types);
 
                         (tag_name, Some(struct_id))
                     }
