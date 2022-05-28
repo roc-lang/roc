@@ -337,7 +337,7 @@ fn add_tag_union(
         // This is a placeholder so that we can get a TypeId for future recursion IDs.
         // At the end, we will replace this with the real tag union type.
         let type_id = types.add(RocType::Struct {
-            name: "[THIS SHOULD BE REMOVED]".to_string(),
+            name: String::new(),
             fields: Vec::new(),
         });
         let layout = env.layout_cache.from_var(env.arena, var, subs).unwrap();
