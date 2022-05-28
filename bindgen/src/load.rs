@@ -19,8 +19,6 @@ pub fn load_types(
     dir: &Path,
     threading: Threading,
 ) -> Result<Vec<(Architecture, Types)>, io::Error> {
-    // TODO: generate both 32-bit and 64-bit #[cfg] macros if structs are different
-    // depending on 32-bit vs 64-bit targets.
     let target_info = (&Triple::host()).into();
 
     let arena = &Bump::new();
