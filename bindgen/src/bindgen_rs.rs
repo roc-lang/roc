@@ -125,9 +125,6 @@ fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut I
         RocType::Struct { name, fields } => {
             add_struct(name, architecture, fields, id, types, impls)
         }
-        RocType::TagUnionPayload { name, fields } => {
-            add_payload(name, architecture, fields, id, types, impls)
-        }
         RocType::TagUnion(tag_union) => {
             match tag_union {
                 RocTagUnion::Enumeration { tags, name } => {
@@ -594,7 +591,7 @@ pub struct {name} {{
                         borrowed_ret = format!("&{owned_ret}");
                     }
                     RocType::Struct { fields, .. } => {
-                        let mut sorted_fields = fields.iter().collect::<Vec<&Field<_>>>();
+                        let mut sorted_fields = fields.iter().collect::<Vec<&Field>>();
 
                         sorted_fields.sort_by(|field1, field2| {
                             // Convert from e.g. "f12" to 12u64
@@ -1202,7 +1199,7 @@ fn add_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str> + Display>(
 fn add_struct(
     name: &str,
     architecture: Architecture,
-    fields: &[Field<String>],
+    fields: &[Field],
     struct_id: TypeId,
     types: &Types,
     impls: &mut Impls,
@@ -1229,49 +1226,6 @@ fn add_struct(
                 let type_str = type_name(field.type_id(), types);
 
                 buf.push_str(&format!("{INDENT}pub {label}: {type_str},\n",));
-            }
-
-            buf.push('}');
-
-            add_decl(impls, None, architecture, buf);
-        }
-    }
-}
-
-fn add_payload(
-    name: &str,
-    architecture: Architecture,
-    fields: &[Field<u64>],
-    payload_id: TypeId,
-    types: &Types,
-    impls: &mut Impls,
-) {
-    match fields.len() {
-        0 => {
-            // An empty payload is zero-sized and won't end up being passed to/from the host.
-        }
-        1 => {
-            // Unwrap single-field payloads
-            add_type(
-                architecture,
-                fields.first().unwrap().type_id(),
-                types,
-                impls,
-            )
-        }
-        _ => {
-            // these never get a Debug impl, because they should always be debug-printed
-            // using their tag union's custom Debug implementation.
-            let derive = derive_str(types.get(payload_id), types, false);
-            // payload structs are private
-            let mut buf = format!("{derive}\n#[repr(C)]\nstruct {name} {{\n");
-
-            for field in fields {
-                let label = field.label();
-                let type_str = type_name(field.type_id(), types);
-
-                // The labels are numeric, so print them as f0, f1, f2, etc.
-                buf.push_str(&format!("{INDENT}pub f{label}: {type_str},\n",));
             }
 
             buf.push('}');
@@ -1308,7 +1262,6 @@ fn type_name(id: TypeId, types: &Types) -> String {
         RocType::RocList(elem_id) => format!("roc_std::RocList<{}>", type_name(*elem_id, types)),
         RocType::RocBox(elem_id) => format!("roc_std::RocBox<{}>", type_name(*elem_id, types)),
         RocType::Struct { name, .. }
-        | RocType::TagUnionPayload { name, .. }
         | RocType::TransparentWrapper { name, .. }
         | RocType::TagUnion(RocTagUnion::NonRecursive { name, .. })
         | RocType::TagUnion(RocTagUnion::Recursive { name, .. })
