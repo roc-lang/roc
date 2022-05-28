@@ -49,10 +49,6 @@ impl<'a> Env<'a> {
         add_type_help(self, layout, var, None, types)
     }
 
-    fn add_pending_recursive_type(&mut self, type_id: TypeId, var: Variable) {
-        self.pending_recursive_types.insert(type_id, var);
-    }
-
     fn resolve_pending_recursive_types(&mut self, types: &mut Types) {
         // TODO if VecMap gets a drain() method, use that instead of doing take() and into_iter
         let pending = core::mem::take(&mut self.pending_recursive_types);
@@ -189,7 +185,7 @@ fn add_type_help<'a>(
                 content: TypeId::PENDING,
             });
 
-            env.add_pending_recursive_type(type_id, *structure);
+            env.pending_recursive_types.insert(type_id, *structure);
 
             type_id
         }
