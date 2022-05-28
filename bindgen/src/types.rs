@@ -155,10 +155,7 @@ pub enum RocType {
     /// A recursive pointer, e.g. in StrConsList : [Nil, Cons Str StrConsList],
     /// this would be the field of Cons containing the (recursive) StrConsList type,
     /// and the TypeId is the TypeId of StrConsList itself.
-    RecursivePointer {
-        name: String,
-        content: TypeId,
-    },
+    RecursivePointer(TypeId),
 }
 
 impl RocType {
@@ -242,7 +239,7 @@ impl RocType {
             })
             | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { content, .. })
             | RocType::TransparentWrapper { content, .. }
-            | RocType::RecursivePointer { content, .. } => types.get(*content).has_float(types),
+            | RocType::RecursivePointer(content) => types.get(*content).has_float(types),
         }
     }
 

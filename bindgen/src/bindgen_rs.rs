@@ -1258,13 +1258,13 @@ fn type_name(id: TypeId, types: &Types) -> String {
         RocType::RocBox(elem_id) => format!("roc_std::RocBox<{}>", type_name(*elem_id, types)),
         RocType::Struct { name, .. }
         | RocType::TransparentWrapper { name, .. }
-        | RocType::RecursivePointer { name, .. }
         | RocType::TagUnion(RocTagUnion::NonRecursive { name, .. })
         | RocType::TagUnion(RocTagUnion::Recursive { name, .. })
         | RocType::TagUnion(RocTagUnion::Enumeration { name, .. })
         | RocType::TagUnion(RocTagUnion::NullableWrapped { name, .. })
         | RocType::TagUnion(RocTagUnion::NullableUnwrapped { name, .. })
         | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { name, .. }) => name.clone(),
+        RocType::RecursivePointer(content) => type_name(*content, types),
     }
 }
 
