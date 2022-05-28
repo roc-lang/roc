@@ -1585,7 +1585,7 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
 
     if ret_types.len() == 1 {
         owned_ret_type = ret_types.join("");
-        borrowed_ret_type = owned_ret_type.clone();
+        borrowed_ret_type = format!("&{owned_ret_type}");
 
         let ret_val = ret_values.first().unwrap();
         owned_ret = format!("\n{INDENT}{INDENT}{ret_val}");
