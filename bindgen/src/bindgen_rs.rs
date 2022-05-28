@@ -1534,6 +1534,14 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
     let mut ret_values = Vec::new();
 
     for (label, type_id) in sorted_fields.iter() {
+        let label = if is_tag_union_payload {
+            // Tag union payload fields need "f" prefix
+            // because they're numbers
+            format!("f{}", label)
+        } else {
+            format!("{}", label)
+        };
+
         ret_values.push(format!("payload.{label}"));
         ret_types.push(type_name(*type_id, types));
     }
