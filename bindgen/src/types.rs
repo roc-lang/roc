@@ -124,20 +124,7 @@ impl<'a> Iterator for TypesIter<'a> {
 pub enum RocType {
     RocStr,
     Bool,
-    I8,
-    U8,
-    I16,
-    U16,
-    I32,
-    U32,
-    I64,
-    U64,
-    I128,
-    U128,
-    F32,
-    F64,
-    F128,
-    RocDec,
+    Num(RocNum),
     RocList(TypeId),
     RocDict(TypeId, TypeId),
     RocSet(TypeId),
@@ -158,26 +145,76 @@ pub enum RocType {
     RecursivePointer(TypeId),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum RocNum {
+    I8,
+    U8,
+    I16,
+    U16,
+    I32,
+    U32,
+    I64,
+    U64,
+    I128,
+    U128,
+    F32,
+    F64,
+    F128,
+    Dec,
+}
+
+impl RocNum {
+    fn size(&self) -> usize {
+        use core::mem::size_of;
+        use RocNum::*;
+
+        match self {
+            I8 => size_of::<i8>(),
+            U8 => size_of::<u8>(),
+            I16 => size_of::<i16>(),
+            U16 => size_of::<u16>(),
+            I32 => size_of::<i32>(),
+            U32 => size_of::<u32>(),
+            I64 => size_of::<i64>(),
+            U64 => size_of::<u64>(),
+            I128 => size_of::<roc_std::I128>(),
+            U128 => size_of::<roc_std::U128>(),
+            F32 => size_of::<f32>(),
+            F64 => size_of::<f64>(),
+            F128 => todo!(),
+            Dec => size_of::<roc_std::RocDec>(),
+        }
+    }
+
+    fn alignment(&self, target_info: TargetInfo) -> usize {
+        use RocNum::*;
+
+        match self {
+            I8 => IntWidth::I8.alignment_bytes(target_info) as usize,
+            U8 => IntWidth::U8.alignment_bytes(target_info) as usize,
+            I16 => IntWidth::I16.alignment_bytes(target_info) as usize,
+            U16 => IntWidth::U16.alignment_bytes(target_info) as usize,
+            I32 => IntWidth::I32.alignment_bytes(target_info) as usize,
+            U32 => IntWidth::U32.alignment_bytes(target_info) as usize,
+            I64 => IntWidth::I64.alignment_bytes(target_info) as usize,
+            U64 => IntWidth::U64.alignment_bytes(target_info) as usize,
+            I128 => IntWidth::I128.alignment_bytes(target_info) as usize,
+            U128 => IntWidth::U128.alignment_bytes(target_info) as usize,
+            F32 => FloatWidth::F32.alignment_bytes(target_info) as usize,
+            F64 => FloatWidth::F64.alignment_bytes(target_info) as usize,
+            F128 => FloatWidth::F128.alignment_bytes(target_info) as usize,
+            Dec => align_of::<RocDec>(),
+        }
+    }
+}
+
 impl RocType {
     /// Useful when determining whether to derive Copy in a Rust type.
     pub fn has_pointer(&self, types: &Types) -> bool {
         match self {
             RocType::Bool
-            | RocType::I8
-            | RocType::U8
-            | RocType::I16
-            | RocType::U16
-            | RocType::I32
-            | RocType::U32
-            | RocType::I64
-            | RocType::U64
-            | RocType::I128
-            | RocType::U128
-            | RocType::F32
-            | RocType::F64
-            | RocType::F128
-            | RocType::TagUnion(RocTagUnion::Enumeration { .. })
-            | RocType::RocDec => false,
+            | RocType::Num(_)
+            | RocType::TagUnion(RocTagUnion::Enumeration { .. }) => false,
             RocType::RocStr
             | RocType::RocList(_)
             | RocType::RocDict(_, _)
@@ -205,20 +242,16 @@ impl RocType {
 
     fn has_float_help(&self, types: &Types, do_not_recurse: &[TypeId]) -> bool {
         match self {
-            RocType::F32 | RocType::F64 | RocType::F128 => true,
+            RocType::Num(num) => {
+                use RocNum::*;
+
+                match num {
+                    F32 | F64 | F128 => true,
+                    I8 | U8 | I16 | U16 | I32 | U32 | I64 | U64 | I128 | U128 | Dec => false,
+                }
+            }
             RocType::RocStr
             | RocType::Bool
-            | RocType::I8
-            | RocType::U8
-            | RocType::I16
-            | RocType::U16
-            | RocType::I32
-            | RocType::U32
-            | RocType::I64
-            | RocType::U64
-            | RocType::I128
-            | RocType::U128
-            | RocType::RocDec
             | RocType::TagUnion(RocTagUnion::Enumeration { .. }) => false,
             RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
                 types.get(*id).has_float_help(types, do_not_recurse)
@@ -269,22 +302,7 @@ impl RocType {
     pub fn has_enumeration(&self, types: &Types) -> bool {
         match self {
             RocType::TagUnion { .. } | RocType::RecursivePointer { .. } => true,
-            RocType::RocStr
-            | RocType::Bool
-            | RocType::I8
-            | RocType::U8
-            | RocType::I16
-            | RocType::U16
-            | RocType::I32
-            | RocType::U32
-            | RocType::I64
-            | RocType::U64
-            | RocType::I128
-            | RocType::U128
-            | RocType::F32
-            | RocType::F64
-            | RocType::F128
-            | RocType::RocDec => false,
+            RocType::RocStr | RocType::Bool | RocType::Num(_) => false,
             RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
                 types.get(*id).has_enumeration(types)
             }
@@ -306,20 +324,7 @@ impl RocType {
 
         match self {
             RocType::Bool => size_of::<bool>(),
-            RocType::I8 => size_of::<i8>(),
-            RocType::U8 => size_of::<u8>(),
-            RocType::I16 => size_of::<i16>(),
-            RocType::U16 => size_of::<u16>(),
-            RocType::I32 => size_of::<i32>(),
-            RocType::U32 => size_of::<u32>(),
-            RocType::I64 => size_of::<i64>(),
-            RocType::U64 => size_of::<u64>(),
-            RocType::I128 => size_of::<roc_std::I128>(),
-            RocType::U128 => size_of::<roc_std::U128>(),
-            RocType::F32 => size_of::<f32>(),
-            RocType::F64 => size_of::<f64>(),
-            RocType::F128 => todo!(),
-            RocType::RocDec => size_of::<roc_std::RocDec>(),
+            RocType::Num(num) => num.size(),
             RocType::RocStr | RocType::RocList(_) | RocType::RocDict(_, _) | RocType::RocSet(_) => {
                 3 * target_info.ptr_size()
             }
@@ -395,7 +400,7 @@ impl RocType {
             | RocType::RocDict(_, _)
             | RocType::RocSet(_)
             | RocType::RocBox(_) => target_info.ptr_alignment_bytes(),
-            RocType::RocDec => align_of::<RocDec>(),
+            RocType::Num(num) => num.alignment(target_info),
             RocType::Bool => align_of::<bool>(),
             RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => {
                 // The smallest alignment this could possibly have is based on the number of tags - e.g.
@@ -446,19 +451,6 @@ impl RocType {
             RocType::Struct { fields, .. } => fields.iter().fold(0, |align, (_, field_id)| {
                 align.max(types.get(*field_id).alignment(types, target_info))
             }),
-            RocType::I8 => IntWidth::I8.alignment_bytes(target_info) as usize,
-            RocType::U8 => IntWidth::U8.alignment_bytes(target_info) as usize,
-            RocType::I16 => IntWidth::I16.alignment_bytes(target_info) as usize,
-            RocType::U16 => IntWidth::U16.alignment_bytes(target_info) as usize,
-            RocType::I32 => IntWidth::I32.alignment_bytes(target_info) as usize,
-            RocType::U32 => IntWidth::U32.alignment_bytes(target_info) as usize,
-            RocType::I64 => IntWidth::I64.alignment_bytes(target_info) as usize,
-            RocType::U64 => IntWidth::U64.alignment_bytes(target_info) as usize,
-            RocType::I128 => IntWidth::I128.alignment_bytes(target_info) as usize,
-            RocType::U128 => IntWidth::U128.alignment_bytes(target_info) as usize,
-            RocType::F32 => FloatWidth::F32.alignment_bytes(target_info) as usize,
-            RocType::F64 => FloatWidth::F64.alignment_bytes(target_info) as usize,
-            RocType::F128 => FloatWidth::F128.alignment_bytes(target_info) as usize,
             RocType::TransparentWrapper { content, .. }
             | RocType::TagUnion(RocTagUnion::NullableUnwrapped {
                 non_null_payload: content,

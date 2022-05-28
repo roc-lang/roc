@@ -1,6 +1,9 @@
 use crate::structs::Structs;
 use crate::types::{RocTagUnion, TypeId, Types};
-use crate::{enums::Enums, types::RocType};
+use crate::{
+    enums::Enums,
+    types::{RocNum, RocType},
+};
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth::*, IntWidth::*};
 use roc_collections::VecMap;
@@ -188,24 +191,24 @@ fn add_builtin_type<'a>(
 ) -> TypeId {
     match builtin {
         Builtin::Int(width) => match width {
-            U8 => types.add(RocType::U8),
-            U16 => types.add(RocType::U16),
-            U32 => types.add(RocType::U32),
-            U64 => types.add(RocType::U64),
-            U128 => types.add(RocType::U128),
-            I8 => types.add(RocType::I8),
-            I16 => types.add(RocType::I16),
-            I32 => types.add(RocType::I32),
-            I64 => types.add(RocType::I64),
-            I128 => types.add(RocType::I128),
+            U8 => types.add(RocType::Num(RocNum::U8)),
+            U16 => types.add(RocType::Num(RocNum::U16)),
+            U32 => types.add(RocType::Num(RocNum::U32)),
+            U64 => types.add(RocType::Num(RocNum::U64)),
+            U128 => types.add(RocType::Num(RocNum::U128)),
+            I8 => types.add(RocType::Num(RocNum::I8)),
+            I16 => types.add(RocType::Num(RocNum::I16)),
+            I32 => types.add(RocType::Num(RocNum::I32)),
+            I64 => types.add(RocType::Num(RocNum::I64)),
+            I128 => types.add(RocType::Num(RocNum::I128)),
         },
         Builtin::Float(width) => match width {
-            F32 => types.add(RocType::F32),
-            F64 => types.add(RocType::F64),
-            F128 => types.add(RocType::F128),
+            F32 => types.add(RocType::Num(RocNum::F32)),
+            F64 => types.add(RocType::Num(RocNum::F64)),
+            F128 => types.add(RocType::Num(RocNum::F128)),
         },
+        Builtin::Decimal => types.add(RocType::Num(RocNum::Dec)),
         Builtin::Bool => types.add(RocType::Bool),
-        Builtin::Decimal => types.add(RocType::RocDec),
         Builtin::Str => types.add(RocType::RocStr),
         Builtin::Dict(key_layout, val_layout) => {
             // TODO FIXME this `var` is wrong - should have a different `var` for key and for val

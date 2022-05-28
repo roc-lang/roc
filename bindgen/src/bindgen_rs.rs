@@ -1,4 +1,4 @@
-use crate::types::{RocTagUnion, RocType, TypeId, Types};
+use crate::types::{RocNum, RocTagUnion, RocType, TypeId, Types};
 use indexmap::IndexMap;
 use roc_mono::layout::UnionLayout;
 use roc_target::Architecture;
@@ -203,21 +203,8 @@ fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut I
             }
         }
         // These types don't need to be declared in Rust.
-        RocType::U8
-        | RocType::U16
-        | RocType::U32
-        | RocType::U64
-        | RocType::U128
-        | RocType::I8
-        | RocType::I16
-        | RocType::I32
-        | RocType::I64
-        | RocType::I128
-        | RocType::F32
-        | RocType::F64
-        | RocType::F128
+        RocType::Num(_)
         | RocType::Bool
-        | RocType::RocDec
         | RocType::RocStr
         | RocType::RocDict(_, _)
         | RocType::RocSet(_)
@@ -552,20 +539,7 @@ pub struct {name} {{
                 match payload_type {
                     RocType::RocStr
                     | RocType::Bool
-                    | RocType::I8
-                    | RocType::U8
-                    | RocType::I16
-                    | RocType::U16
-                    | RocType::I32
-                    | RocType::U32
-                    | RocType::I64
-                    | RocType::U64
-                    | RocType::I128
-                    | RocType::U128
-                    | RocType::F32
-                    | RocType::F64
-                    | RocType::F128
-                    | RocType::RocDec
+                    | RocType::Num(_)
                     | RocType::RocList(_)
                     | RocType::RocDict(_, _)
                     | RocType::RocSet(_)
@@ -1065,20 +1039,7 @@ pub struct {name} {{
                     let fields_str = match payload_type {
                         RocType::RocStr
                         | RocType::Bool
-                        | RocType::I8
-                        | RocType::U8
-                        | RocType::I16
-                        | RocType::U16
-                        | RocType::I32
-                        | RocType::U32
-                        | RocType::I64
-                        | RocType::U64
-                        | RocType::I128
-                        | RocType::U128
-                        | RocType::F32
-                        | RocType::F64
-                        | RocType::F128
-                        | RocType::RocDec
+                        | RocType::Num(_)
                         | RocType::RocList(_)
                         | RocType::RocDict(_, _)
                         | RocType::RocSet(_)
@@ -1232,22 +1193,22 @@ fn add_struct(
 
 fn type_name(id: TypeId, types: &Types) -> String {
     match types.get(id) {
-        RocType::U8 => "u8".to_string(),
-        RocType::U16 => "u16".to_string(),
-        RocType::U32 => "u32".to_string(),
-        RocType::U64 => "u64".to_string(),
-        RocType::U128 => "roc_std::U128".to_string(),
-        RocType::I8 => "i8".to_string(),
-        RocType::I16 => "i16".to_string(),
-        RocType::I32 => "i32".to_string(),
-        RocType::I64 => "i64".to_string(),
-        RocType::I128 => "roc_std::I128".to_string(),
-        RocType::F32 => "f32".to_string(),
-        RocType::F64 => "f64".to_string(),
-        RocType::F128 => "roc_std::F128".to_string(),
-        RocType::Bool => "bool".to_string(),
-        RocType::RocDec => "roc_std::RocDec".to_string(),
         RocType::RocStr => "roc_std::RocStr".to_string(),
+        RocType::Bool => "bool".to_string(),
+        RocType::Num(RocNum::U8) => "u8".to_string(),
+        RocType::Num(RocNum::U16) => "u16".to_string(),
+        RocType::Num(RocNum::U32) => "u32".to_string(),
+        RocType::Num(RocNum::U64) => "u64".to_string(),
+        RocType::Num(RocNum::U128) => "roc_std::U128".to_string(),
+        RocType::Num(RocNum::I8) => "i8".to_string(),
+        RocType::Num(RocNum::I16) => "i16".to_string(),
+        RocType::Num(RocNum::I32) => "i32".to_string(),
+        RocType::Num(RocNum::I64) => "i64".to_string(),
+        RocType::Num(RocNum::I128) => "roc_std::I128".to_string(),
+        RocType::Num(RocNum::F32) => "f32".to_string(),
+        RocType::Num(RocNum::F64) => "f64".to_string(),
+        RocType::Num(RocNum::F128) => "roc_std::F128".to_string(),
+        RocType::Num(RocNum::Dec) => "roc_std::RocDec".to_string(),
         RocType::RocDict(key_id, val_id) => format!(
             "roc_std::RocDict<{}, {}>",
             type_name(*key_id, types),
