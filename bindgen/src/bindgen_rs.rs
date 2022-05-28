@@ -1,4 +1,4 @@
-use crate::types::{Field, RocTagUnion, RocType, TypeId, Types};
+use crate::types::{RocTagUnion, RocType, TypeId, Types};
 use indexmap::IndexMap;
 use roc_mono::layout::UnionLayout;
 use roc_target::Architecture;
@@ -233,7 +233,7 @@ fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut I
 
             add_decl(impls, None, architecture, body);
         }
-        RocType::RecursivePointer(_) => {
+        RocType::RecursivePointer { .. } => {
             // This is recursively pointing to a type that should already have been added,
             // so no extra work needs to happen.
         }
@@ -570,7 +570,8 @@ pub struct {name} {{
                     | RocType::RocDict(_, _)
                     | RocType::RocSet(_)
                     | RocType::RocBox(_)
-                    | RocType::TagUnion(_) => {
+                    | RocType::TagUnion(_)
+                    | RocType::RecursivePointer { .. } => {
                         owned_ret_type = type_name(*payload_id, types);
                         borrowed_ret_type = format!("&{}", owned_ret_type);
                         payload_args = format!("arg: {owned_ret_type}");
@@ -595,15 +596,15 @@ pub struct {name} {{
                         borrowed_ret = format!("&{owned_ret}");
                     }
                     RocType::Struct { fields, .. } => {
-                        let mut sorted_fields = fields.iter().collect::<Vec<&Field>>();
+                        let mut sorted_fields = fields.iter().collect::<Vec<_>>();
 
-                        sorted_fields.sort_by(|field1, field2| {
+                        sorted_fields.sort_by(|(label1, _), (label2, _)| {
                             // Convert from e.g. "f12" to 12u64
                             // This is necessary because the string "f10" sorts
                             // to earlier than "f2", whereas the number 10
                             // sorts after the number 2.
-                            let num1 = field1.label()[1..].parse::<u64>().unwrap();
-                            let num2 = field2.label()[1..].parse::<u64>().unwrap();
+                            let num1 = label1[1..].parse::<u64>().unwrap();
+                            let num2 = label2[1..].parse::<u64>().unwrap();
 
                             num1.partial_cmp(&num2).unwrap()
                         });
@@ -611,11 +612,9 @@ pub struct {name} {{
                         let mut ret_types = Vec::new();
                         let mut ret_values = Vec::new();
 
-                        for field in fields {
-                            let label = field.label();
-
+                        for (label, type_id) in fields {
                             ret_values.push(format!("payload.{label}"));
-                            ret_types.push(type_name(field.type_id(), types));
+                            ret_types.push(type_name(*type_id, types));
                         }
 
                         let payload_type_name = type_name(*payload_id, types);
@@ -631,8 +630,7 @@ pub struct {name} {{
                             fields
                                 .iter()
                                 .enumerate()
-                                .map(|(index, field)| {
-                                    let label = field.label();
+                                .map(|(index, (label, _))| {
                                     let mut indents = String::new();
 
                                     for _ in 0..5 {
@@ -1085,7 +1083,8 @@ pub struct {name} {{
                         | RocType::RocDict(_, _)
                         | RocType::RocSet(_)
                         | RocType::RocBox(_)
-                        | RocType::TagUnion(_) => {
+                        | RocType::TagUnion(_)
+                        | RocType::RecursivePointer { .. } => {
                             format!(".field({deref_str}{actual_self}.{tag_name})")
                         }
                         RocType::TransparentWrapper { .. } => {
@@ -1094,9 +1093,7 @@ pub struct {name} {{
                         RocType::Struct { fields, .. } => {
                             let mut buf = Vec::new();
 
-                            for field in fields {
-                                let label = field.label();
-
+                            for (label, _) in fields {
                                 buf.push(format!(
                                     ".field(&({deref_str}{actual_self}.{tag_name}).{label})"
                                 ));
@@ -1203,7 +1200,7 @@ fn add_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str> + Display>(
 fn add_struct(
     name: &str,
     architecture: Architecture,
-    fields: &[Field],
+    fields: &[(String, TypeId)],
     struct_id: TypeId,
     types: &Types,
     impls: &mut Impls,
@@ -1214,20 +1211,14 @@ fn add_struct(
         }
         1 => {
             // Unwrap single-field records
-            add_type(
-                architecture,
-                fields.first().unwrap().type_id(),
-                types,
-                impls,
-            )
+            add_type(architecture, fields.first().unwrap().1, types, impls)
         }
         _ => {
             let derive = derive_str(types.get(struct_id), types, true);
             let mut buf = format!("{derive}\n#[repr(C)]\npub struct {name} {{\n");
 
-            for field in fields {
-                let label = field.label();
-                let type_str = type_name(field.type_id(), types);
+            for (label, type_id) in fields {
+                let type_str = type_name(*type_id, types);
 
                 buf.push_str(&format!("{INDENT}pub {label}: {type_str},\n",));
             }
@@ -1267,6 +1258,7 @@ fn type_name(id: TypeId, types: &Types) -> String {
         RocType::RocBox(elem_id) => format!("roc_std::RocBox<{}>", type_name(*elem_id, types)),
         RocType::Struct { name, .. }
         | RocType::TransparentWrapper { name, .. }
+        | RocType::RecursivePointer { name, .. }
         | RocType::TagUnion(RocTagUnion::NonRecursive { name, .. })
         | RocType::TagUnion(RocTagUnion::Recursive { name, .. })
         | RocType::TagUnion(RocTagUnion::Enumeration { name, .. })
