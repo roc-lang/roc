@@ -151,32 +151,12 @@ pub enum RocType {
     RecursivePointer(TypeId),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Field {
-    NonRecursive(String, TypeId),
-    /// A recursive field, e.g. in StrConsList : [Nil, Cons Str StrConsList],
-    /// this would be the field of Cons containing the (recursive) StrConsList type,
-    /// and the TypeId is the TypeId of StrConsList itself.
-    Recursive(String, TypeId),
-}
-
-impl Field {
-    pub fn type_id(&self) -> TypeId {
-        match self {
-            Field::NonRecursive(_, type_id) => *type_id,
-            Field::Recursive(_, type_id) => *type_id,
-        }
-    }
-
-    pub fn label(&self) -> &str {
-        match self {
-            Field::NonRecursive(label, _) => label,
-            Field::Recursive(label, _) => label,
-        }
-    }
-}
-
 impl RocType {
+    /// Used when making recursive pointers, which need to temporarily
+    /// have *some* TypeId value until we later in the process determine
+    /// their real TypeId and can go back and fix them up.
+    pub(crate) const PENDING_RECURSIVE_POINTER: Self = Self::RecursivePointer(TypeId(usize::MAX));
+
     /// Useful when determining whether to derive Copy in a Rust type.
     pub fn has_pointer(&self, types: &Types) -> bool {
         match self {
