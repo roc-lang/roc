@@ -225,7 +225,7 @@ fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut I
         | RocType::RocBox(_) => {}
         RocType::TransparentWrapper { name, content } => {
             let typ = types.get(id);
-            let derive = derive_str(typ, types, !typ.has_enumeration(types));
+            let derive = derive_str(typ, types, true);
             let body = format!(
                 "{derive}\n#[repr(transparent)]\npub struct {name}(pub {});",
                 type_name(*content, types)
@@ -1080,9 +1080,9 @@ pub struct {name} {{
         let opt_impl = Some(format!("impl core::fmt::Debug for {name}"));
         let mut buf = format!(
             r#"fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
-            f.write_str("{name}::")?;
+        f.write_str("{name}::")?;
 
-            unsafe {{
+        unsafe {{
 "#
         );
 
