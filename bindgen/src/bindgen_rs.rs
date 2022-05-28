@@ -268,6 +268,7 @@ fn add_discriminant(
     discriminant_name
 }
 
+#[derive(Copy, Clone)]
 enum Recursiveness {
     Recursive,
     NonRecursive,
