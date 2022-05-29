@@ -281,9 +281,7 @@ impl<T> Drop for RocList<T> {
                 unsafe {
                     // Drop the stored elements.
                     for index in 0..self.len() {
-                        let elem_ptr = elements.as_ptr().add(index);
-
-                        mem::drop::<T>(ManuallyDrop::take(&mut *elem_ptr));
+                        ManuallyDrop::drop(&mut *elements.as_ptr().add(index));
                     }
 
                     let alignment = cmp::max(mem::align_of::<T>(), mem::align_of::<Storage>());
