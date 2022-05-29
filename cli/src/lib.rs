@@ -4,6 +4,7 @@ extern crate const_format;
 use build::BuiltFile;
 use bumpalo::Bump;
 use clap::{Arg, ArgMatches, Command};
+use libc::{c_char, c_int};
 use roc_build::link::{LinkType, LinkingStrategy};
 use roc_collections::VecMap;
 use roc_error_macros::{internal_error, user_error};
@@ -622,11 +623,10 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
             .iter()
             .map(|x| x.as_bytes_with_nul().as_ptr().cast());
 
-        let argv: bumpalo::collections::Vec<*const libc::c_char> =
-            std::iter::once(path_cstring.as_ptr())
-                .chain(c_string_pointers)
-                .chain([std::ptr::null()])
-                .collect_in(&arena);
+        let argv: bumpalo::collections::Vec<*const c_char> = std::iter::once(path_cstring.as_ptr())
+            .chain(c_string_pointers)
+            .chain([std::ptr::null()])
+            .collect_in(&arena);
 
         // envp is an array of pointers to strings, conventionally of the
         // form key=value, which are passed as the environment of the new
@@ -640,7 +640,7 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
             })
             .collect_in(&arena);
 
-        let envp: bumpalo::collections::Vec<*const libc::c_char> = envp_cstrings
+        let envp: bumpalo::collections::Vec<*const c_char> = envp_cstrings
             .iter()
             .map(|s| s.as_ptr())
             .chain([std::ptr::null()])
@@ -661,8 +661,8 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
 
 unsafe fn roc_run_native_fast(
     executable: ExecutableFile,
-    argv: &[*const libc::c_char],
-    envp: &[*const libc::c_char],
+    argv: &[*const c_char],
+    envp: &[*const c_char],
 ) {
     match executable {
         #[cfg(target_os = "linux")]
@@ -693,8 +693,8 @@ unsafe fn roc_run_native_fast(
 // with Expect
 unsafe fn roc_run_native_debug(
     executable: ExecutableFile,
-    argv: &[*const libc::c_char],
-    envp: &[*const libc::c_char],
+    argv: &[*const c_char],
+    envp: &[*const c_char],
     mut expectations: VecMap<ModuleId, Expectations>,
     interns: Interns,
 ) {
@@ -896,7 +896,7 @@ fn render_expect_failure<'a>(
 #[derive(Debug)]
 enum ExecutableFile {
     #[cfg(target_os = "linux")]
-    MemFd(libc::c_int, PathBuf),
+    MemFd(c_int, PathBuf),
     #[cfg(not(target_os = "linux"))]
     OnDisk(TempDir, PathBuf),
 }
