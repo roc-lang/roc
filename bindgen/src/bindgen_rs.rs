@@ -267,6 +267,10 @@ fn add_tag_union(
     types: &Types,
     impls: &mut Impls,
 ) {
+    // We should never be attempting to bindgen empty tag unions; RocType should not
+    // have let this happen.
+    debug_assert_ne!(tags.len(), 0);
+
     let tag_names = tags.iter().map(|(name, _)| name).cloned().collect();
     let discriminant_name = add_discriminant(name, architecture, tag_names, types, impls);
     let typ = types.get(type_id);
