@@ -676,8 +676,10 @@ unsafe fn roc_run_native_fast(
             }
         }
 
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(all(target_family = "unix", not(target_os = "linux")))]
         ExecutableFile::OnDisk(_, path) => {
+            use std::os::unix::ffi::OsStrExt;
+
             let path_cstring = CString::new(path.as_os_str().as_bytes()).unwrap();
             if libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr()) != 0 {
                 internal_error!(
@@ -710,11 +712,7 @@ unsafe fn roc_run_native_debug(
             // we are the child
             println!("we are the child {}", std::process::id());
 
-            let ExecutableFile::MemFd(fd, path) = executable;
-
-            let c = libc::fexecve(fd, argv.as_ptr(), envp.as_ptr());
-
-            if dbg!(c) < 0 {
+            if dbg!(executable.execve(argv, envp)) < 0 {
                 // Get the current value of errno
                 let e = errno::errno();
 
@@ -723,7 +721,6 @@ unsafe fn roc_run_native_debug(
 
                 // Display a human-friendly error message
                 println!("💥 Error {}: {}", code, e);
-                println!("after {:?}", c);
             }
         }
         -1 => {
@@ -897,18 +894,35 @@ fn render_expect_failure<'a>(
 enum ExecutableFile {
     #[cfg(target_os = "linux")]
     MemFd(c_int, PathBuf),
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(all(target_family = "unix", not(target_os = "linux")))]
     OnDisk(TempDir, PathBuf),
 }
 
 impl ExecutableFile {
-    fn as_path(&self) -> &Path {
+    pub fn as_path(&self) -> &Path {
         match self {
             #[cfg(target_os = "linux")]
             ExecutableFile::MemFd(_, path_buf) => path_buf.as_ref(),
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(all(target_family = "unix", not(target_os = "linux")))]
             ExecutableFile::OnDisk(_, path_buf) => path_buf.as_ref(),
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub unsafe fn execve(&self, argv: &[*const c_char], envp: &[*const c_char]) -> c_int {
+        let ExecutableFile::MemFd(fd, _) = self;
+
+        libc::fexecve(*fd, argv.as_ptr(), envp.as_ptr())
+    }
+
+    #[cfg(all(target_family = "unix", not(target_os = "linux")))]
+    pub unsafe fn execve(&self, argv: &[*const c_char], envp: &[*const c_char]) -> c_int {
+        use std::os::unix::ffi::OsStrExt;
+
+        let ExecutableFile::OnDisk(dir, path) = self;
+        let path_cstring = CString::new(path.as_os_str().as_bytes()).unwrap();
+
+        libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr())
     }
 }
 
