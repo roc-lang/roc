@@ -128,7 +128,7 @@ pub fn overwrite_padded_i32(buffer: &mut [u8], offset: usize, value: i32) {
         *byte = 0x80 | ((x & 0x7f) as u8);
         x >>= 7;
     }
-    buffer[4] = (x & 0x7f) as u8;
+    buffer[offset + 4] = (x & 0x7f) as u8;
 }
 
 fn overwrite_padded_u32_help(buffer: &mut [u8], value: u32) {
@@ -373,5 +373,12 @@ mod tests {
         assert_eq!(help_pad_i32(-1), [0xff, 0xff, 0xff, 0xff, 0x7f]);
         assert_eq!(help_pad_i32(i32::MAX), [0xff, 0xff, 0xff, 0xff, 0x07]);
         assert_eq!(help_pad_i32(i32::MIN), [0x80, 0x80, 0x80, 0x80, 0x78]);
+
+        let mut buffer = [0xff; 10];
+        overwrite_padded_i32(&mut buffer, 2, 0);
+        assert_eq!(
+            buffer,
+            [0xff, 0xff, 0x80, 0x80, 0x80, 0x80, 0x00, 0xff, 0xff, 0xff]
+        );
     }
 }
