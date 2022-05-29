@@ -9,6 +9,13 @@ use std::convert::TryInto;
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeId(usize);
 
+impl TypeId {
+    /// Used when making recursive pointers, which need to temporarily
+    /// have *some* TypeId value until we later in the process determine
+    /// their real TypeId and can go back and fix them up.
+    pub(crate) const PENDING: Self = Self(usize::MAX);
+}
+
 #[derive(Default, Debug, Clone)]
 pub struct Types {
     by_id: Vec<RocType>,
@@ -117,6 +124,28 @@ impl<'a> Iterator for TypesIter<'a> {
 pub enum RocType {
     RocStr,
     Bool,
+    Num(RocNum),
+    RocList(TypeId),
+    RocDict(TypeId, TypeId),
+    RocSet(TypeId),
+    RocBox(TypeId),
+    TagUnion(RocTagUnion),
+    Struct {
+        name: String,
+        fields: Vec<(String, TypeId)>,
+    },
+    TagUnionPayload {
+        name: String,
+        fields: Vec<(usize, TypeId)>,
+    },
+    /// A recursive pointer, e.g. in StrConsList : [Nil, Cons Str StrConsList],
+    /// this would be the field of Cons containing the (recursive) StrConsList type,
+    /// and the TypeId is the TypeId of StrConsList itself.
+    RecursivePointer(TypeId),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum RocNum {
     I8,
     U8,
     I16,
@@ -130,44 +159,50 @@ pub enum RocType {
     F32,
     F64,
     F128,
-    RocDec,
-    RocList(TypeId),
-    RocDict(TypeId, TypeId),
-    RocSet(TypeId),
-    RocBox(TypeId),
-    TagUnion(RocTagUnion),
-    Struct {
-        name: String,
-        fields: Vec<Field>,
-    },
-    /// Either a single-tag union or a single-field record
-    TransparentWrapper {
-        name: String,
-        content: TypeId,
-    },
+    Dec,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Field {
-    NonRecursive(String, TypeId),
-    /// A recursive field, e.g. in StrConsList : [Nil, Cons Str StrConsList],
-    /// this would be the field of Cons containing the (recursive) StrConsList type,
-    /// and the TypeId is the TypeId of StrConsList itself.
-    Recursive(String, TypeId),
-}
+impl RocNum {
+    fn size(&self) -> usize {
+        use core::mem::size_of;
+        use RocNum::*;
 
-impl Field {
-    pub fn type_id(&self) -> TypeId {
         match self {
-            Field::NonRecursive(_, type_id) => *type_id,
-            Field::Recursive(_, type_id) => *type_id,
+            I8 => size_of::<i8>(),
+            U8 => size_of::<u8>(),
+            I16 => size_of::<i16>(),
+            U16 => size_of::<u16>(),
+            I32 => size_of::<i32>(),
+            U32 => size_of::<u32>(),
+            I64 => size_of::<i64>(),
+            U64 => size_of::<u64>(),
+            I128 => size_of::<roc_std::I128>(),
+            U128 => size_of::<roc_std::U128>(),
+            F32 => size_of::<f32>(),
+            F64 => size_of::<f64>(),
+            F128 => todo!(),
+            Dec => size_of::<roc_std::RocDec>(),
         }
     }
 
-    pub fn label(&self) -> &str {
+    fn alignment(&self, target_info: TargetInfo) -> usize {
+        use RocNum::*;
+
         match self {
-            Field::NonRecursive(label, _) => label,
-            Field::Recursive(label, _) => label,
+            I8 => IntWidth::I8.alignment_bytes(target_info) as usize,
+            U8 => IntWidth::U8.alignment_bytes(target_info) as usize,
+            I16 => IntWidth::I16.alignment_bytes(target_info) as usize,
+            U16 => IntWidth::U16.alignment_bytes(target_info) as usize,
+            I32 => IntWidth::I32.alignment_bytes(target_info) as usize,
+            U32 => IntWidth::U32.alignment_bytes(target_info) as usize,
+            I64 => IntWidth::I64.alignment_bytes(target_info) as usize,
+            U64 => IntWidth::U64.alignment_bytes(target_info) as usize,
+            I128 => IntWidth::I128.alignment_bytes(target_info) as usize,
+            U128 => IntWidth::U128.alignment_bytes(target_info) as usize,
+            F32 => FloatWidth::F32.alignment_bytes(target_info) as usize,
+            F64 => FloatWidth::F64.alignment_bytes(target_info) as usize,
+            F128 => FloatWidth::F128.alignment_bytes(target_info) as usize,
+            Dec => align_of::<RocDec>(),
         }
     }
 }
@@ -177,21 +212,8 @@ impl RocType {
     pub fn has_pointer(&self, types: &Types) -> bool {
         match self {
             RocType::Bool
-            | RocType::I8
-            | RocType::U8
-            | RocType::I16
-            | RocType::U16
-            | RocType::I32
-            | RocType::U32
-            | RocType::I64
-            | RocType::U64
-            | RocType::I128
-            | RocType::U128
-            | RocType::F32
-            | RocType::F64
-            | RocType::F128
-            | RocType::TagUnion(RocTagUnion::Enumeration { .. })
-            | RocType::RocDec => false,
+            | RocType::Num(_)
+            | RocType::TagUnion(RocTagUnion::Enumeration { .. }) => false,
             RocType::RocStr
             | RocType::RocList(_)
             | RocType::RocDict(_, _)
@@ -200,84 +222,90 @@ impl RocType {
             | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { .. })
             | RocType::TagUnion(RocTagUnion::NullableUnwrapped { .. })
             | RocType::TagUnion(RocTagUnion::NullableWrapped { .. })
-            | RocType::TagUnion(RocTagUnion::Recursive { .. }) => true,
+            | RocType::TagUnion(RocTagUnion::Recursive { .. })
+            | RocType::RecursivePointer { .. } => true,
             RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => tags
                 .iter()
                 .any(|(_, payloads)| payloads.iter().any(|id| types.get(*id).has_pointer(types))),
-            RocType::Struct { fields, .. } => fields.iter().any(|field| match field {
-                Field::NonRecursive(_, type_id) => types.get(*type_id).has_pointer(types),
-                Field::Recursive(_, _) => true,
-            }),
-            RocType::TransparentWrapper { content, .. } => types.get(*content).has_pointer(types),
+            RocType::Struct { fields, .. } => fields
+                .iter()
+                .any(|(_, type_id)| types.get(*type_id).has_pointer(types)),
+            RocType::TagUnionPayload { fields, .. } => fields
+                .iter()
+                .any(|(_, type_id)| types.get(*type_id).has_pointer(types)),
         }
     }
 
     /// Useful when determining whether to derive Eq, Ord, and Hash in a Rust type.
     pub fn has_float(&self, types: &Types) -> bool {
+        self.has_float_help(types, &[])
+    }
+
+    fn has_float_help(&self, types: &Types, do_not_recurse: &[TypeId]) -> bool {
         match self {
-            RocType::F32 | RocType::F64 | RocType::F128 => true,
+            RocType::Num(num) => {
+                use RocNum::*;
+
+                match num {
+                    F32 | F64 | F128 => true,
+                    I8 | U8 | I16 | U16 | I32 | U32 | I64 | U64 | I128 | U128 | Dec => false,
+                }
+            }
             RocType::RocStr
             | RocType::Bool
-            | RocType::I8
-            | RocType::U8
-            | RocType::I16
-            | RocType::U16
-            | RocType::I32
-            | RocType::U32
-            | RocType::I64
-            | RocType::U64
-            | RocType::I128
-            | RocType::U128
-            | RocType::RocDec
             | RocType::TagUnion(RocTagUnion::Enumeration { .. }) => false,
             RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
-                types.get(*id).has_float(types)
+                types.get(*id).has_float_help(types, do_not_recurse)
             }
             RocType::RocDict(key_id, val_id) => {
-                types.get(*key_id).has_float(types) || types.get(*val_id).has_float(types)
+                types.get(*key_id).has_float_help(types, do_not_recurse)
+                    || types.get(*val_id).has_float_help(types, do_not_recurse)
             }
-            RocType::Struct { fields, .. } => fields.iter().any(|field| match field {
-                Field::NonRecursive(_, type_id) => types.get(*type_id).has_float(types),
-                // This has a float iff there's a float somewhere else.
-                // We don't want to recurse here, because that would recurse forever!
-                Field::Recursive(_, _) => false,
-            }),
+            RocType::Struct { fields, .. } => fields
+                .iter()
+                .any(|(_, type_id)| types.get(*type_id).has_float_help(types, do_not_recurse)),
+            RocType::TagUnionPayload { fields, .. } => fields
+                .iter()
+                .any(|(_, type_id)| types.get(*type_id).has_float_help(types, do_not_recurse)),
             RocType::TagUnion(RocTagUnion::Recursive { tags, .. })
-            | RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => tags
-                .iter()
-                .any(|(_, payloads)| payloads.iter().any(|id| types.get(*id).has_float(types))),
-            RocType::TagUnion(RocTagUnion::NullableWrapped { non_null_tags, .. }) => non_null_tags
-                .iter()
-                .any(|(_, _, payloads)| payloads.iter().any(|id| types.get(*id).has_float(types))),
+            | RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => {
+                tags.iter().any(|(_, payloads)| {
+                    payloads
+                        .iter()
+                        .any(|id| types.get(*id).has_float_help(types, do_not_recurse))
+                })
+            }
+            RocType::TagUnion(RocTagUnion::NullableWrapped { non_null_tags, .. }) => {
+                non_null_tags.iter().any(|(_, _, payloads)| {
+                    payloads
+                        .iter()
+                        .any(|id| types.get(*id).has_float_help(types, do_not_recurse))
+                })
+            }
             RocType::TagUnion(RocTagUnion::NullableUnwrapped {
                 non_null_payload: content,
                 ..
             })
             | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { content, .. })
-            | RocType::TransparentWrapper { content, .. } => types.get(*content).has_float(types),
+            | RocType::RecursivePointer(content) => {
+                if do_not_recurse.contains(content) {
+                    false
+                } else {
+                    let mut do_not_recurse: Vec<TypeId> = do_not_recurse.into();
+
+                    do_not_recurse.push(*content);
+
+                    types.get(*content).has_float_help(types, &do_not_recurse)
+                }
+            }
         }
     }
 
     /// Useful when determining whether to derive Default in a Rust type.
     pub fn has_enumeration(&self, types: &Types) -> bool {
         match self {
-            RocType::TagUnion { .. } => true,
-            RocType::RocStr
-            | RocType::Bool
-            | RocType::I8
-            | RocType::U8
-            | RocType::I16
-            | RocType::U16
-            | RocType::I32
-            | RocType::U32
-            | RocType::I64
-            | RocType::U64
-            | RocType::I128
-            | RocType::U128
-            | RocType::F32
-            | RocType::F64
-            | RocType::F128
-            | RocType::RocDec => false,
+            RocType::TagUnion { .. } | RocType::RecursivePointer { .. } => true,
+            RocType::RocStr | RocType::Bool | RocType::Num(_) => false,
             RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
                 types.get(*id).has_enumeration(types)
             }
@@ -285,14 +313,12 @@ impl RocType {
                 types.get(*key_id).has_enumeration(types)
                     || types.get(*val_id).has_enumeration(types)
             }
-            RocType::Struct { fields, .. } => fields.iter().any(|field| match field {
-                Field::NonRecursive(_, type_id) => types.get(*type_id).has_enumeration(types),
-                // If this struct has a recursive field, that means we're inside an enumeration!
-                Field::Recursive(_, _) => true,
-            }),
-            RocType::TransparentWrapper { content, .. } => {
-                types.get(*content).has_enumeration(types)
-            }
+            RocType::Struct { fields, .. } => fields
+                .iter()
+                .any(|(_, type_id)| types.get(*type_id).has_enumeration(types)),
+            RocType::TagUnionPayload { fields, .. } => fields
+                .iter()
+                .any(|(_, type_id)| types.get(*type_id).has_enumeration(types)),
         }
     }
 
@@ -301,27 +327,14 @@ impl RocType {
 
         match self {
             RocType::Bool => size_of::<bool>(),
-            RocType::I8 => size_of::<i8>(),
-            RocType::U8 => size_of::<u8>(),
-            RocType::I16 => size_of::<i16>(),
-            RocType::U16 => size_of::<u16>(),
-            RocType::I32 => size_of::<i32>(),
-            RocType::U32 => size_of::<u32>(),
-            RocType::I64 => size_of::<i64>(),
-            RocType::U64 => size_of::<u64>(),
-            RocType::I128 => size_of::<roc_std::I128>(),
-            RocType::U128 => size_of::<roc_std::U128>(),
-            RocType::F32 => size_of::<f32>(),
-            RocType::F64 => size_of::<f64>(),
-            RocType::F128 => todo!(),
-            RocType::RocDec => size_of::<roc_std::RocDec>(),
+            RocType::Num(num) => num.size(),
             RocType::RocStr | RocType::RocList(_) | RocType::RocDict(_, _) | RocType::RocSet(_) => {
                 3 * target_info.ptr_size()
             }
             RocType::RocBox(_) => target_info.ptr_size(),
             RocType::TagUnion(tag_union) => match tag_union {
                 RocTagUnion::Enumeration { tags, .. } => size_for_tag_count(tags.len()),
-                RocTagUnion::NonRecursive { tags, .. } => {
+                RocTagUnion::NonRecursive { tags, .. } | RocTagUnion::Recursive { tags, .. } => {
                     // The "unpadded" size (without taking alignment into account)
                     // is the sum of all the sizes of the fields.
                     let size_unpadded = tags.iter().fold(0, |total, (_, opt_payload_id)| {
@@ -355,37 +368,23 @@ impl RocType {
                         size_padded
                     }
                 }
-                RocTagUnion::Recursive { .. } => todo!(),
                 RocTagUnion::NonNullableUnwrapped { .. } => todo!(),
                 RocTagUnion::NullableWrapped { .. } => todo!(),
                 RocTagUnion::NullableUnwrapped { .. } => todo!(),
             },
-            RocType::Struct { fields, .. } => {
-                // The "unpadded" size (without taking alignment into account)
-                // is the sum of all the sizes of the fields.
-                let size_unpadded = fields.iter().fold(0, |total, field| match field {
-                    Field::NonRecursive(_, field_id) => {
-                        total + types.get(*field_id).size(types, target_info)
-                    }
-                    Field::Recursive(_, _) => {
-                        // The recursion var is a pointer.
-                        total + target_info.ptr_size()
-                    }
-                });
-
-                // Round up to the next multiple of alignment, to incorporate
-                // any necessary alignment padding.
-                //
-                // e.g. if we have a record with a Str and a U8, that would be a
-                // size_unpadded of 25, because Str is three 8-byte pointers and U8 is 1 byte,
-                // but the 8-byte alignment of the pointers means we'll round 25 up to 32.
-                let align = self.alignment(types, target_info);
-
-                (size_unpadded / align) * align
-            }
-            RocType::TransparentWrapper { content, .. } => {
-                types.get(*content).size(types, target_info)
-            }
+            RocType::Struct { fields, .. } => struct_size(
+                fields.iter().map(|(_, type_id)| *type_id),
+                types,
+                target_info,
+                self.alignment(types, target_info),
+            ),
+            RocType::TagUnionPayload { fields, .. } => struct_size(
+                fields.iter().map(|(_, type_id)| *type_id),
+                types,
+                target_info,
+                self.alignment(types, target_info),
+            ),
+            RocType::RecursivePointer { .. } => target_info.ptr_size(),
         }
     }
 
@@ -396,7 +395,7 @@ impl RocType {
             | RocType::RocDict(_, _)
             | RocType::RocSet(_)
             | RocType::RocBox(_) => target_info.ptr_alignment_bytes(),
-            RocType::RocDec => align_of::<RocDec>(),
+            RocType::Num(num) => num.alignment(target_info),
             RocType::Bool => align_of::<bool>(),
             RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => {
                 // The smallest alignment this could possibly have is based on the number of tags - e.g.
@@ -444,30 +443,15 @@ impl RocType {
 
                 align
             }
-            RocType::Struct { fields, .. } => fields.iter().fold(0, |align, field| match field {
-                Field::NonRecursive(_, field_id) => {
-                    align.max(types.get(*field_id).alignment(types, target_info))
-                }
-                Field::Recursive(_, _) => {
-                    // The recursion var is a pointer.
-                    align.max(target_info.ptr_alignment_bytes())
-                }
+            RocType::Struct { fields, .. } => fields.iter().fold(0, |align, (_, field_id)| {
+                align.max(types.get(*field_id).alignment(types, target_info))
             }),
-            RocType::I8 => IntWidth::I8.alignment_bytes(target_info) as usize,
-            RocType::U8 => IntWidth::U8.alignment_bytes(target_info) as usize,
-            RocType::I16 => IntWidth::I16.alignment_bytes(target_info) as usize,
-            RocType::U16 => IntWidth::U16.alignment_bytes(target_info) as usize,
-            RocType::I32 => IntWidth::I32.alignment_bytes(target_info) as usize,
-            RocType::U32 => IntWidth::U32.alignment_bytes(target_info) as usize,
-            RocType::I64 => IntWidth::I64.alignment_bytes(target_info) as usize,
-            RocType::U64 => IntWidth::U64.alignment_bytes(target_info) as usize,
-            RocType::I128 => IntWidth::I128.alignment_bytes(target_info) as usize,
-            RocType::U128 => IntWidth::U128.alignment_bytes(target_info) as usize,
-            RocType::F32 => FloatWidth::F32.alignment_bytes(target_info) as usize,
-            RocType::F64 => FloatWidth::F64.alignment_bytes(target_info) as usize,
-            RocType::F128 => FloatWidth::F128.alignment_bytes(target_info) as usize,
-            RocType::TransparentWrapper { content, .. }
-            | RocType::TagUnion(RocTagUnion::NullableUnwrapped {
+            RocType::TagUnionPayload { fields, .. } => {
+                fields.iter().fold(0, |align, (_, field_id)| {
+                    align.max(types.get(*field_id).alignment(types, target_info))
+                })
+            }
+            RocType::TagUnion(RocTagUnion::NullableUnwrapped {
                 non_null_payload: content,
                 ..
             })
@@ -480,8 +464,30 @@ impl RocType {
                     .try_into()
                     .unwrap()
             }
+            RocType::RecursivePointer { .. } => target_info.ptr_alignment_bytes(),
         }
     }
+}
+
+fn struct_size(
+    fields: impl Iterator<Item = TypeId>,
+    types: &Types,
+    target_info: TargetInfo,
+    align: usize,
+) -> usize {
+    // The "unpadded" size (without taking alignment into account)
+    // is the sum of all the sizes of the fields.
+    let size_unpadded = fields.fold(0, |total, field_id| {
+        total + types.get(field_id).size(types, target_info)
+    });
+
+    // Round up to the next multiple of alignment, to incorporate
+    // any necessary alignment padding.
+    //
+    // e.g. if we have a record with a Str and a U8, that would be a
+    // size_unpadded of 25, because Str is three 8-byte pointers and U8 is 1 byte,
+    // but the 8-byte alignment of the pointers means we'll round 25 up to 32.
+    (size_unpadded / align) * align
 }
 
 fn size_for_tag_count(num_tags: usize) -> usize {
@@ -603,14 +609,8 @@ impl RocTagUnion {
                         // into account, since the discriminant is
                         // stored after those bytes.
                         RocType::Struct { fields, .. } => {
-                            fields.iter().fold(0, |total, field| match field {
-                                Field::NonRecursive(_, field_id) => {
-                                    total + types.get(*field_id).size(types, target_info)
-                                }
-                                Field::Recursive(_, _) => {
-                                    // The recursion var is a pointer.
-                                    total + target_info.ptr_size()
-                                }
+                            fields.iter().fold(0, |total, (_, field_id)| {
+                                total + types.get(*field_id).size(types, target_info)
                             })
                         }
                         typ => max_size.max(typ.size(types, target_info)),

@@ -1,11 +1,11 @@
 mod bindings;
 
-use bindings::StrConsList;
+use bindings::Expr;
 use indoc::indoc;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(_: *mut StrConsList);
+    fn roc_main(_: *mut Expr);
 }
 
 #[no_mangle]
@@ -14,7 +14,7 @@ pub extern "C" fn rust_main() -> i32 {
     use std::collections::hash_set::HashSet;
 
     let tag_union = unsafe {
-        let mut ret: core::mem::MaybeUninit<StrConsList> = core::mem::MaybeUninit::uninit();
+        let mut ret: core::mem::MaybeUninit<Expr> = core::mem::MaybeUninit::uninit();
 
         roc_main(ret.as_mut_ptr());
 
@@ -33,13 +33,16 @@ pub extern "C" fn rust_main() -> i32 {
         indoc!(
             r#"
                 tag_union was: {:?}
-                `Cons "small str" Nil` is: {:?}
-                `Nil` is: {:?}
+                `Concat (String "Hello, ") (String "World!")` is: {:?}
+                `String "this is a test"` is: {:?}
             "#
         ),
         tag_union,
-        StrConsList::Cons("small str".into(), StrConsList::Nil),
-        StrConsList::Nil,
+        Expr::Concat(
+            Expr::String("Hello, ".into()),
+            Expr::String("World!".into()),
+        ),
+        Expr::String("this is a test".into()),
     ); // Debug
 
     let mut set = HashSet::new();

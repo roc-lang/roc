@@ -2971,10 +2971,10 @@ mod test {
 /// This is called by both code gen and bindgen, so that
 /// their field orderings agree.
 #[inline(always)]
-pub fn cmp_fields(
-    label1: &Lowercase,
+pub fn cmp_fields<L: Ord>(
+    label1: &L,
     layout1: &Layout<'_>,
-    label2: &Lowercase,
+    label2: &L,
     layout2: &Layout<'_>,
     target_info: TargetInfo,
 ) -> Ordering {
