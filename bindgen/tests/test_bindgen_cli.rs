@@ -117,8 +117,8 @@ mod bindgen_cli_run {
             `Blah 456` is: NonRecursive::Blah(456)
         "#),
         nullable_unwrapped:"nullable-unwrapped" => indoc!(r#"
-            tag_union was: StrConsList::Cons(StrConsList_Cons { f0: "World!", f1: StrConsList::Cons(StrConsList_Cons { f0: "Hello ", f1: StrConsList::Nil }) })
-            `Cons "small str" Nil` is: StrConsList::Cons(StrConsList_Cons { f0: "small str", f1: StrConsList::Nil })
+            tag_union was: StrConsList::Cons("World!", StrConsList::Cons("Hello ", StrConsList::Nil))
+            `Cons "small str" Nil` is: StrConsList::Cons("small str", StrConsList::Nil)
             `Nil` is: StrConsList::Nil
         "#),
         recursive_union:"recursive-union" => indoc!(r#"
