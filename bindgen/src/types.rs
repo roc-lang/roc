@@ -347,25 +347,30 @@ impl RocType {
                         }
                     });
 
-                    // Round up to the next multiple of alignment, to incorporate
-                    // any necessary alignment padding.
-                    //
-                    // e.g. if we have a record with a Str and a U8, that would be a
-                    // size_unpadded of 25, because Str is three 8-byte pointers and U8 is 1 byte,
-                    // but the 8-byte alignment of the pointers means we'll round 25 up to 32.
-                    let discriminant_align = align_for_tag_count(tags.len(), target_info);
-                    let align = self.alignment(types, target_info).max(discriminant_align);
-                    let size_padded = (size_unpadded / align) * align;
-
-                    if size_unpadded == size_padded {
-                        // We don't have any alignment padding, which means we can't
-                        // put the discriminant in the padding and the compiler will
-                        // add extra space for it.
-                        let discriminant_size = size_for_tag_count(tags.len());
-
-                        size_padded + discriminant_size.max(align)
+                    if tags.len() <= 1 {
+                        // If there is no discriminant, then size equals unpadded size.
+                        size_unpadded
                     } else {
-                        size_padded
+                        // Round up to the next multiple of alignment, to incorporate
+                        // any necessary alignment padding.
+                        //
+                        // e.g. if we have a record with a Str and a U8, that would be a
+                        // size_unpadded of 25, because Str is three 8-byte pointers and U8 is 1 byte,
+                        // but the 8-byte alignment of the pointers means we'll round 25 up to 32.
+                        let discriminant_align = align_for_tag_count(tags.len(), target_info);
+                        let align = self.alignment(types, target_info).max(discriminant_align);
+                        let size_padded = (size_unpadded / align) * align;
+
+                        if size_unpadded == size_padded {
+                            // We don't have any alignment padding, which means we can't
+                            // put the discriminant in the padding and the compiler will
+                            // add extra space for it.
+                            let discriminant_size = size_for_tag_count(tags.len());
+
+                            size_padded + discriminant_size.max(align)
+                        } else {
+                            size_padded
+                        }
                     }
                 }
                 RocTagUnion::NonNullableUnwrapped { .. } => todo!(),

@@ -341,15 +341,20 @@ pub struct {name} {{
             }
         }
 
-        // When there's no alignment padding after the largest variant,
-        // the compiler will make extra room for the discriminant.
-        // We need that to be reflected in the overall size of the enum,
-        // so add an extra variant with the appropriate size.
-        //
-        // (Do this even if theoretically shouldn't be necessary, since
-        // there's no runtime cost and it more explicitly syncs the
-        // union's size with what we think it should be.)
-        buf.push_str(&format!("{INDENT}_sizer: [u8; {size}],\n}}"));
+        if tags.len() > 1 {
+            // When there's a discriminant (so, multiple tags) and there is
+            // no alignment padding after the largest variant,
+            // the compiler will make extra room for the discriminant.
+            // We need that to be reflected in the overall size of the enum,
+            // so add an extra variant with the appropriate size.
+            //
+            // (Do this even if theoretically shouldn't be necessary, since
+            // there's no runtime cost and it more explicitly syncs the
+            // union's size with what we think it should be.)
+            buf.push_str(&format!("{INDENT}_sizer: [u8; {size}],\n"));
+        }
+
+        buf.push('}');
 
         add_decl(impls, None, architecture, buf);
     }
