@@ -257,7 +257,7 @@ mod test_gen_rs {
                 ))]
                 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
-                pub struct UserId {
+                struct UserId {
                     pub f1: roc_std::RocStr,
                     pub f0: u32,
                 }
@@ -269,7 +269,7 @@ mod test_gen_rs {
                 ))]
                 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
-                pub struct UserId {
+                struct UserId {
                     pub f0: u32,
                     pub f1: roc_std::RocStr,
                 }
@@ -303,8 +303,10 @@ mod test_gen_rs {
                     target_arch = "wasm32"
                 ))]
                 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
-                #[repr(transparent)]
-                pub struct UserId(roc_std::RocStr);
+                #[repr(C)]
+                struct UserId {
+                    pub f0: roc_std::RocStr,
+                }
             "#
             )
         );
