@@ -17,8 +17,8 @@ use roc_std::RocDec;
 use crate::layout::{CallConv, ReturnMethod, WasmLayout};
 use crate::low_level::{call_higher_order_lowlevel, LowLevelCall};
 use crate::storage::{Storage, StoredValue, StoredValueKind};
-use crate::wasm_module::linking::{DataSymbol, LinkingSegment, WasmObjectSymbol};
-use crate::wasm_module::sections::{DataMode, DataSegment, Limits};
+use crate::wasm_module::linking::{DataSymbol, LinkingSegment, SymType, WasmObjectSymbol};
+use crate::wasm_module::sections::{ConstExpr, DataMode, DataSegment, Global, GlobalType, Limits};
 use crate::wasm_module::{
     code_builder, CodeBuilder, ExportType, LocalId, Signature, SymInfo, ValueType, WasmModule,
 };
@@ -86,13 +86,9 @@ impl<'a> WasmBackend<'a> {
             }
         }
 
-        module.global.append(Global {
-            ty: GlobalType {
-                value_type: ValueType::I32,
-                is_mutable: true,
-            },
-            init: ConstExpr::I32(1234), // TODO: come up with a value!
-        });
+        // TODO: get this from a CLI parameter with some default
+        const STACK_SIZE: u32 = 1024 * 1024;
+        Self::set_memory_layout(&mut module, STACK_SIZE);
 
         module.export.exports = app_exports;
         module.code.code_builders.reserve(proc_lookup.len());
@@ -116,6 +112,29 @@ impl<'a> WasmBackend<'a> {
             code_builder: CodeBuilder::new(env.arena),
             storage: Storage::new(env.arena),
         }
+    }
+
+    /// A Wasm module's memory is all in one contiguous block, unlike native executables.
+    /// The standard layout is: constant data, then stack, then heap.
+    /// Since they're all in one block, they can't grow independently. Only the highest one can grow.
+    /// Also, there's no "invalid region" below the stack, so stack overflow will overwrite constants!
+    /// TODO: Detect stack overflow in function prologue... at least in Roc code...
+    fn set_memory_layout(module: &mut WasmModule<'a>, stack_size: u32) {
+        let stack_heap_boundary = module.data.end_addr + stack_size;
+
+        // Create a mutable global for __stack_pointer
+        // We assume __stack_pointer is Global #0 in the host object file
+        // TODO: make this a bit more robust (though it's always valid in practice)
+        debug_assert!(module.global.count == 0);
+        module.global.append(Global {
+            ty: GlobalType {
+                value_type: ValueType::I32,
+                is_mutable: true,
+            },
+            init: ConstExpr::I32(stack_heap_boundary as i32),
+        });
+
+        module.relocate_preloaded_code("__heap_base", SymType::Data, stack_heap_boundary);
     }
 
     pub fn get_helpers(&mut self) -> Vec<'a, Proc<'a>> {

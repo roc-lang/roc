@@ -1105,7 +1105,7 @@ impl<'a> Serialize for ElementSection<'a> {
 #[derive(Debug)]
 pub struct CodeSection<'a> {
     pub preloaded_count: u32,
-    pub preloaded_bytes: &'a [u8],
+    pub preloaded_bytes: Vec<'a, u8>,
     pub code_builders: Vec<'a, CodeBuilder<'a>>,
     dead_code_metadata: PreloadsCallGraph<'a>,
 }
@@ -1145,11 +1145,13 @@ impl<'a> CodeSection<'a> {
     ) -> Result<Self, ParseError> {
         let (preloaded_count, range) = parse_section(SectionId::Code, module_bytes, cursor)?;
         *cursor = range.end;
-        let preloaded_bytes = arena.alloc_slice_copy(&module_bytes[range]);
+
+        let mut preloaded_bytes = Vec::with_capacity_in(range.len(), arena);
+        preloaded_bytes.extend_from_slice(&module_bytes[range]);
 
         let dead_code_metadata = parse_preloads_call_graph(
             arena,
-            preloaded_bytes,
+            &preloaded_bytes,
             import_signatures,
             function_signatures,
             indirect_callees,
@@ -1183,12 +1185,12 @@ impl<'a> CodeSection<'a> {
             arena,
             &mut buffer,
             &self.dead_code_metadata,
-            self.preloaded_bytes,
+            &self.preloaded_bytes,
             import_fn_count,
             live_ext_fn_indices,
         );
 
-        self.preloaded_bytes = buffer.into_bump_slice();
+        self.preloaded_bytes = buffer;
     }
 }
 
@@ -1197,7 +1199,7 @@ impl<'a> Serialize for CodeSection<'a> {
         let header_indices = write_section_header(buffer, SectionId::Code);
         buffer.encode_u32(self.preloaded_count + self.code_builders.len() as u32);
 
-        buffer.append_slice(self.preloaded_bytes);
+        buffer.append_slice(&self.preloaded_bytes);
 
         for code_builder in self.code_builders.iter() {
             code_builder.serialize(buffer);

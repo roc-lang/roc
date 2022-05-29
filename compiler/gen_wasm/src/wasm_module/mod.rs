@@ -8,7 +8,7 @@ pub mod serialize;
 
 use bumpalo::{collections::Vec, Bump};
 pub use code_builder::{Align, CodeBuilder, LocalId, ValueType, VmSymbolState};
-pub use linking::SymInfo;
+pub use linking::{OffsetRelocType, RelocationEntry, SymInfo, SymType};
 pub use sections::{ConstExpr, Export, ExportType, Global, GlobalType, Signature};
 
 use self::linking::{LinkingSection, RelocationSection};
@@ -181,5 +181,15 @@ impl<'a> WasmModule<'a> {
             .iter()
             .find(|ex| ex.name == name)
             .and_then(|ex| self.global.parse_u32_at_index(ex.index).ok())
+    }
+
+    pub fn relocate_preloaded_code(&mut self, sym_name: &str, sym_type: SymType, value: u32) {
+        let sym_index = self
+            .linking
+            .find_symbol_by_name(sym_name, sym_type)
+            .unwrap_or_else(|| panic!("Linking failed! Can't find symbol `{}`", sym_name));
+
+        self.reloc_code
+            .apply_relocs_u32(&mut self.code.preloaded_bytes, sym_index, value);
     }
 }

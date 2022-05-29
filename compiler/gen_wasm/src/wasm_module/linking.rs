@@ -3,7 +3,7 @@ use bumpalo::Bump;
 
 use super::parse::parse_fixed_size_items;
 use super::sections::{update_section_size, write_custom_section_header, SectionId};
-use super::serialize::{SerialBuffer, Serialize};
+use super::serialize::{overwrite_padded_i32, SerialBuffer, Serialize};
 use crate::wasm_module::parse::{Parse, ParseError, SkipBytes};
 
 /*******************************************************************
@@ -180,6 +180,35 @@ pub struct RelocationSection<'a> {
     /// The *index* (not ID!) of the target section in the module
     pub target_section_index: u32,
     pub entries: Vec<'a, RelocationEntry>,
+}
+
+impl<'a> RelocationSection<'a> {
+    pub fn apply_relocs_u32(&self, section_bytes: &mut [u8], sym_index: u32, value: u32) {
+        for entry in self.entries.iter() {
+            match entry {
+                RelocationEntry::Index { symbol_index, .. } if *symbol_index == sym_index => {
+                    todo!("Linking RelocationEntry {:?}", entry)
+                }
+                RelocationEntry::Offset {
+                    type_id,
+                    offset,
+                    symbol_index,
+                    addend,
+                } if *symbol_index == sym_index => {
+                    use OffsetRelocType::*;
+                    match type_id {
+                        MemoryAddrSleb => overwrite_padded_i32(
+                            section_bytes,
+                            *offset as usize,
+                            value as i32 + *addend,
+                        ),
+                        _ => todo!("Linking relocation type {:?}", type_id),
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 impl<'a> Serialize for RelocationSection<'a> {
@@ -514,7 +543,8 @@ pub enum SymInfo<'a> {
 }
 
 #[repr(u8)]
-enum SymType {
+#[derive(Debug)]
+pub enum SymType {
     Function = 0,
     Data = 1,
     Global = 2,
@@ -667,6 +697,29 @@ impl<'a> LinkingSection<'a> {
             init_funcs: Vec::with_capacity_in(0, arena),
             comdat_info: Vec::with_capacity_in(0, arena),
         }
+    }
+
+    pub fn find_symbol_by_name(&self, sym_name: &str, sym_type: SymType) -> Option<u32> {
+        let found = match sym_type {
+            SymType::Data => self
+                .symbol_table
+                .iter()
+                .position(|sym_info| match sym_info {
+                    SymInfo::Data(DataSymbol::Imported { name, .. })
+                    | SymInfo::Data(DataSymbol::Defined { name, .. }) => *name == sym_name,
+                    _ => false,
+                }),
+            SymType::Function => self
+                .symbol_table
+                .iter()
+                .position(|sym_info| match sym_info {
+                    SymInfo::Function(WasmObjectSymbol::Defined { name, .. }) => *name == sym_name,
+                    _ => false,
+                }),
+            _ => unimplemented!("Finding {:?} symbols by name", sym_type),
+        };
+
+        found.map(|i| i as u32)
     }
 }
 

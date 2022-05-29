@@ -121,19 +121,23 @@ macro_rules! write_unencoded {
     };
 }
 
-macro_rules! encode_padded_sleb128 {
-    ($name: ident, $ty: ty) => {
-        /// write a maximally-padded SLEB128 integer (only used in relocations)
-        fn $name(&mut self, value: $ty) {
-            let mut x = value;
-            let size = (std::mem::size_of::<$ty>() / 4) * MAX_SIZE_ENCODED_U32;
-            for _ in 0..(size - 1) {
-                self.append_u8(0x80 | (x & 0x7f) as u8);
-                x >>= 7;
-            }
-            self.append_u8((x & 0x7f) as u8);
-        }
-    };
+/// For relocations
+pub fn overwrite_padded_i32(buffer: &mut [u8], offset: usize, value: i32) {
+    let mut x = value;
+    for byte in buffer.iter_mut().skip(offset).take(4) {
+        *byte = 0x80 | ((x & 0x7f) as u8);
+        x >>= 7;
+    }
+    buffer[4] = (x & 0x7f) as u8;
+}
+
+fn overwrite_padded_u32_help(buffer: &mut [u8], value: u32) {
+    let mut x = value;
+    for byte in buffer.iter_mut().take(4) {
+        *byte = 0x80 | ((x & 0x7f) as u8);
+        x >>= 7;
+    }
+    buffer[4] = x as u8;
 }
 
 pub trait SerialBuffer: Debug {
@@ -163,17 +167,6 @@ pub trait SerialBuffer: Debug {
     // methods for relocations
     write_unencoded!(write_unencoded_u32, u32);
     write_unencoded!(write_unencoded_u64, u64);
-    encode_padded_sleb128!(encode_padded_i32, i32);
-    encode_padded_sleb128!(encode_padded_i64, i64);
-}
-
-fn overwrite_padded_u32_help(buffer: &mut [u8], value: u32) {
-    let mut x = value;
-    for byte in buffer.iter_mut().take(4) {
-        *byte = 0x80 | ((x & 0x7f) as u8);
-        x >>= 7;
-    }
-    buffer[4] = x as u8;
 }
 
 impl SerialBuffer for std::vec::Vec<u8> {
@@ -367,48 +360,18 @@ mod tests {
         assert_eq!(buffer, &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
     }
 
-    fn help_pad_i32(val: i32) -> std::vec::Vec<u8> {
-        let mut buffer = std::vec::Vec::with_capacity(MAX_SIZE_ENCODED_U32);
-        buffer.encode_padded_i32(val);
+    fn help_pad_i32(val: i32) -> [u8; MAX_SIZE_ENCODED_U32] {
+        let mut buffer = [0; MAX_SIZE_ENCODED_U32];
+        overwrite_padded_i32(&mut buffer, 0, val);
         buffer
     }
 
     #[test]
     fn test_encode_padded_i32() {
-        assert_eq!(help_pad_i32(0), &[0x80, 0x80, 0x80, 0x80, 0x00]);
-        assert_eq!(help_pad_i32(1), &[0x81, 0x80, 0x80, 0x80, 0x00]);
-        assert_eq!(help_pad_i32(-1), &[0xff, 0xff, 0xff, 0xff, 0x7f]);
-        assert_eq!(help_pad_i32(i32::MAX), &[0xff, 0xff, 0xff, 0xff, 0x07]);
-        assert_eq!(help_pad_i32(i32::MIN), &[0x80, 0x80, 0x80, 0x80, 0x78]);
-    }
-
-    fn help_pad_i64(val: i64) -> std::vec::Vec<u8> {
-        let mut buffer = std::vec::Vec::with_capacity(10);
-        buffer.encode_padded_i64(val);
-        buffer
-    }
-
-    #[test]
-    fn test_encode_padded_i64() {
-        assert_eq!(
-            help_pad_i64(0),
-            &[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00]
-        );
-        assert_eq!(
-            help_pad_i64(1),
-            &[0x81, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00]
-        );
-        assert_eq!(
-            help_pad_i64(-1),
-            &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f]
-        );
-        assert_eq!(
-            help_pad_i64(i64::MAX),
-            &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00],
-        );
-        assert_eq!(
-            help_pad_i64(i64::MIN),
-            &[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x7f],
-        );
+        assert_eq!(help_pad_i32(0), [0x80, 0x80, 0x80, 0x80, 0x00]);
+        assert_eq!(help_pad_i32(1), [0x81, 0x80, 0x80, 0x80, 0x00]);
+        assert_eq!(help_pad_i32(-1), [0xff, 0xff, 0xff, 0xff, 0x7f]);
+        assert_eq!(help_pad_i32(i32::MAX), [0xff, 0xff, 0xff, 0xff, 0x07]);
+        assert_eq!(help_pad_i32(i32::MIN), [0x80, 0x80, 0x80, 0x80, 0x78]);
     }
 }
