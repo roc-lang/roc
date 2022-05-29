@@ -58,6 +58,13 @@ impl RocStr {
         }
     }
 
+    pub fn capacity(&self) -> usize {
+        match self.as_enum_ref() {
+            RocStrInnerRef::HeapAllocated(h) => h.capacity(),
+            RocStrInnerRef::SmallString(_) => SmallString::CAPACITY,
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
