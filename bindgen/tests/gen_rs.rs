@@ -253,11 +253,20 @@ mod test_gen_rs {
                 r#"
                 #[cfg(any(
                     target_arch = "x86_64",
+                    target_arch = "x86",
+                    target_arch = "aarch64",
+                    target_arch = "arm",
+                    target_arch = "wasm32"
+                ))]
+                pub type UserId = UserId_Id;
+
+                #[cfg(any(
+                    target_arch = "x86_64",
                     target_arch = "aarch64"
                 ))]
                 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
-                struct UserId {
+                struct UserId_Id {
                     pub f1: roc_std::RocStr,
                     pub f0: u32,
                 }
@@ -269,7 +278,7 @@ mod test_gen_rs {
                 ))]
                 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
-                struct UserId {
+                struct UserId_Id {
                     pub f0: u32,
                     pub f1: roc_std::RocStr,
                 }
@@ -302,11 +311,7 @@ mod test_gen_rs {
                     target_arch = "arm",
                     target_arch = "wasm32"
                 ))]
-                #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
-                #[repr(C)]
-                struct UserId {
-                    pub f0: roc_std::RocStr,
-                }
+                pub type UserId = roc_std::RocStr;
             "#
             )
         );
