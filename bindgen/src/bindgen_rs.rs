@@ -493,41 +493,63 @@ pub struct {name} {{
                 let owned_ret;
                 let borrowed_ret;
 
-                if payload_type.has_pointer(types) {
-                    owned_get_payload = format!(
-                        r#"unsafe {{
+                match recursiveness {
+                    Recursiveness::Recursive => {
+                        if payload_type.has_pointer(types) {
+                            owned_get_payload = format!(
+                                r#"unsafe {{
             let ptr = (self.pointer as usize & !{bitmask}) as *mut {union_name};
 
             core::mem::ManuallyDrop::take(&mut (*ptr).{tag_name})
         }}"#
-                    );
-                    borrowed_get_payload = format!(
-                        r#"unsafe {{
+                            );
+                            borrowed_get_payload = format!(
+                                r#"unsafe {{
             let ptr = (self.pointer as usize & !{bitmask}) as *mut {union_name};
 
             &(*ptr).{tag_name}
         }}"#
-                    );
-                    // we need `mut self` for the argument because of ManuallyDrop
-                    self_for_into = "mut self";
-                } else {
-                    owned_get_payload = format!(
-                        r#"unsafe {{
+                            );
+                            // we need `mut self` for the argument because of ManuallyDrop
+                            self_for_into = "mut self";
+                        } else {
+                            owned_get_payload = format!(
+                                r#"unsafe {{
             let ptr = (self.pointer as usize & !{bitmask}) as *mut {union_name};
 
             core::ptr::read(ptr).{tag_name}
         }}"#
-                    );
-                    borrowed_get_payload = format!(
-                        r#"unsafe {{
+                            );
+                            borrowed_get_payload = format!(
+                                r#"unsafe {{
             let ptr = (self.pointer as usize & !{bitmask}) as *mut {union_name};
 
             (&ptr).{tag_name}
         }}"#
-                    );
-                    // we don't need `mut self` unless we need ManuallyDrop
-                    self_for_into = "self";
-                };
+                            );
+                            // we don't need `mut self` unless we need ManuallyDrop
+                            self_for_into = "self";
+                        };
+                    }
+                    Recursiveness::NonRecursive => {
+                        if payload_type.has_pointer(types) {
+                            owned_get_payload = format!(
+                                "unsafe {{ core::mem::ManuallyDrop::take(&mut (*self.pointer).{tag_name}) }}"
+                            );
+                            borrowed_get_payload =
+                                format!("unsafe {{ &(*self.pointer).{tag_name} }}");
+                            // we need `mut self` for the argument because of ManuallyDrop
+                            self_for_into = "mut self";
+                        } else {
+                            owned_get_payload =
+                                format!("unsafe {{ core::ptr::read(self.pointer).{tag_name} }}");
+                            borrowed_get_payload =
+                                format!("unsafe {{ (&self.pointer).{tag_name} }}");
+                            // we don't need `mut self` unless we need ManuallyDrop
+                            self_for_into = "self";
+                        };
+                    }
+                }
 
                 match payload_type {
                     RocType::RocStr
