@@ -1150,7 +1150,12 @@ fn add_struct<S: Display>(
 ) {
     let derive = derive_str(types.get(struct_id), types, true);
     let pub_str = if is_tag_union_payload { "" } else { "pub " };
-    let mut buf = format!("{derive}\n#[repr(C)]\n{pub_str}struct {name} {{\n");
+    let repr = if fields.len() == 1 {
+        "transparent"
+    } else {
+        "C"
+    };
+    let mut buf = format!("{derive}\n#[repr({repr})]\n{pub_str}struct {name} {{\n");
 
     for (label, type_id) in fields {
         let type_str = type_name(*type_id, types);
@@ -1267,7 +1272,7 @@ fn add_nullable_unwrapped(
             ", Eq, Ord, Hash"
         };
         let body = format!(
-            r#"#[repr(C)]
+            r#"#[repr(transparent)]
 #[derive(PartialEq, PartialOrd{derive_extras})]
 pub struct {name} {{
     pointer: *mut core::mem::ManuallyDrop<{payload_type_name}>,
