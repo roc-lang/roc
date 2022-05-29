@@ -1255,6 +1255,52 @@ pub struct {name} {{
             ),
         );
 
+        let owned_ret_type;
+        let borrowed_ret_type;
+        let payload_args;
+        let args_to_payload;
+        let owned_ret;
+        let borrowed_ret;
+
+        match payload_type {
+            RocType::RocStr
+            | RocType::Bool
+            | RocType::Num(_)
+            | RocType::RocList(_)
+            | RocType::RocDict(_, _)
+            | RocType::RocSet(_)
+            | RocType::RocBox(_)
+            | RocType::TagUnion(_)
+            | RocType::RecursivePointer { .. } => {
+                owned_ret_type = type_name(non_null_payload, types);
+                borrowed_ret_type = format!("&{}", owned_ret_type);
+                payload_args = format!("arg: {owned_ret_type}");
+                args_to_payload = "arg".to_string();
+                owned_ret = "payload".to_string();
+                borrowed_ret = format!("&{owned_ret}");
+            }
+            RocType::Struct { fields, .. } => {
+                let answer = tag_union_struct_help(fields.iter(), non_null_payload, types, false);
+
+                payload_args = answer.payload_args;
+                args_to_payload = answer.args_to_payload;
+                owned_ret = answer.owned_ret;
+                borrowed_ret = answer.borrowed_ret;
+                owned_ret_type = answer.owned_ret_type;
+                borrowed_ret_type = answer.borrowed_ret_type;
+            }
+            RocType::TagUnionPayload { fields, .. } => {
+                let answer = tag_union_struct_help(fields.iter(), non_null_payload, types, true);
+
+                payload_args = answer.payload_args;
+                args_to_payload = answer.args_to_payload;
+                owned_ret = answer.owned_ret;
+                borrowed_ret = answer.borrowed_ret;
+                owned_ret_type = answer.owned_ret_type;
+                borrowed_ret_type = answer.borrowed_ret_type;
+            }
+        };
+
         // Add a convenience constructor function for the tag with the payload, e.g.
         //
         // /// Construct a tag named Cons, with the appropriate payload
@@ -1277,10 +1323,11 @@ pub struct {name} {{
             architecture,
             format!(
                 r#"/// Construct a tag named {non_null_tag}, with the appropriate payload
-    pub fn {non_null_tag}(payload: {payload_type_name}) -> Self {{
+    pub fn {non_null_tag}({payload_args}) -> Self {{
         let payload_align = core::mem::align_of::<{payload_type_name}>();
         let self_align = core::mem::align_of::<Self>();
         let size = self_align + core::mem::size_of::<{payload_type_name}>();
+        let payload = {args_to_payload};
 
         unsafe {{
             // Store the payload at `self_align` bytes after the allocation,
@@ -1288,7 +1335,7 @@ pub struct {name} {{
             let alloc_ptr = crate::roc_alloc(size, payload_align as u32);
             let payload_ptr = alloc_ptr.cast::<u8>().add(self_align).cast::<core::mem::ManuallyDrop<{payload_type_name}>>();
 
-            *payload_ptr = core::mem::ManuallyDrop::new(payload);
+            *payload_ptr = payload;
 
             // The reference count is stored immediately before the payload,
             // which isn't necessarily the same as alloc_ptr - e.g. when alloc_ptr
@@ -1317,14 +1364,14 @@ pub struct {name} {{
                     r#"/// Unsafely assume the given {name} has a .variant() of {non_null_tag} and convert it to {non_null_tag}'s payload.
     /// (Always examine .variant() first to make sure this is the correct variant!)
     /// Panics in debug builds if the .variant() doesn't return {non_null_tag}.
-    pub unsafe fn into_{non_null_tag}(self) -> {payload_type_name} {{
+    pub unsafe fn into_{non_null_tag}(self) -> {owned_ret_type} {{
         debug_assert_eq!(self.variant(), {discriminant_name}::{non_null_tag});
 
         let payload = {assign_payload};
 
         core::mem::drop::<Self>(self);
 
-        payload
+        {owned_ret}
     }}"#,
                 ),
             );
@@ -1338,9 +1385,12 @@ pub struct {name} {{
                 r#"/// Unsafely assume the given {name} has a .variant() of {non_null_tag} and return its payload.
     /// (Always examine .variant() first to make sure this is the correct variant!)
     /// Panics in debug builds if the .variant() doesn't return {non_null_tag}.
-    pub unsafe fn as_{non_null_tag}(&self) -> &{payload_type_name} {{
+    pub unsafe fn as_{non_null_tag}(&self) -> {borrowed_ret_type} {{
         debug_assert_eq!(self.variant(), {discriminant_name}::{non_null_tag});
-        &*self.pointer
+
+        let payload = &*self.pointer;
+
+        {borrowed_ret}
     }}"#,
             ),
         );
