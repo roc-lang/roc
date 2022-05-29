@@ -1662,7 +1662,7 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
 ) -> StructIngredients {
     let mut sorted_fields = fields.collect::<Vec<&(L, TypeId)>>();
 
-    sorted_fields.sort_by(|(label1, _), (label2, _)| label1.partial_cmp(&label2).unwrap());
+    sorted_fields.sort_by(|(label1, _), (label2, _)| label1.partial_cmp(label2).unwrap());
 
     let mut ret_types = Vec::new();
     let mut ret_values = Vec::new();
