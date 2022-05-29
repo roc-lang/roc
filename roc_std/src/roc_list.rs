@@ -4,6 +4,7 @@ use core::{
     cell::Cell,
     cmp::{self, Ordering},
     fmt::Debug,
+    hash::Hash,
     intrinsics::copy_nonoverlapping,
     mem::{self, ManuallyDrop},
     ops::Deref,
@@ -356,5 +357,21 @@ impl<T> Drop for IntoIter<T> {
                 mem::drop::<T>(unsafe { ManuallyDrop::take(&mut *elements.as_ptr().add(i)) })
             }
         }
+    }
+}
+
+impl<T: Hash> Hash for RocList<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // This is the same as Rust's Vec implementation, which
+        // just delegates to the slice implementation. It's a bit surprising
+        // that Hash::hash_slice doesn't automatically incorporate the length,
+        // but the slice implementation indeed does explicitly call self.len().hash(state);
+        //
+        // To verify, click the "source" links for:
+        //     Vec: https://doc.rust-lang.org/std/vec/struct.Vec.html#impl-Hash
+        //     slice: https://doc.rust-lang.org/std/primitive.slice.html#impl-Hash
+        self.len().hash(state);
+
+        Hash::hash_slice(self.as_slice(), state);
     }
 }
