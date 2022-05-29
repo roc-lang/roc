@@ -1510,6 +1510,41 @@ pub struct {name} {{
         let opt_impl = Some(format!("impl core::fmt::Debug for {name}"));
         let extra_deref = if has_pointer { "*" } else { "" };
 
+        let fields_str = match payload_type {
+            RocType::RocStr
+            | RocType::Bool
+            | RocType::Num(_)
+            | RocType::RocList(_)
+            | RocType::RocDict(_, _)
+            | RocType::RocSet(_)
+            | RocType::RocBox(_)
+            | RocType::TagUnion(_)
+            | RocType::RecursivePointer { .. } => {
+                format!(
+                    r#"f.debug_tuple("{non_null_tag}").field(&*{extra_deref}self.pointer).finish()"#
+                )
+            }
+            RocType::Struct { fields, .. } => {
+                let mut buf = Vec::new();
+
+                for (label, _) in fields {
+                    buf.push(format!(".field(&(&*{extra_deref}self.pointer).{label})"));
+                }
+
+                buf.join(&format!("\n{INDENT}{INDENT}{INDENT}{INDENT}{INDENT}"))
+            }
+            RocType::TagUnionPayload { fields, .. } => {
+                let mut buf = Vec::new();
+
+                for (label, _) in fields {
+                    // Needs an "f" prefix
+                    buf.push(format!(".field(&(&*{extra_deref}self.pointer).f{label})"));
+                }
+
+                buf.join(&format!("\n{INDENT}{INDENT}{INDENT}{INDENT}{INDENT}"))
+            }
+        };
+
         let body = format!(
             r#"fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
         if self.pointer.is_null() {{
@@ -1517,7 +1552,11 @@ pub struct {name} {{
         }} else {{
             f.write_str("{name}::")?;
 
-            unsafe {{ f.debug_tuple("{non_null_tag}").field(&*{extra_deref}self.pointer).finish() }}
+            unsafe {{
+                f.debug_tuple("{non_null_tag}")
+                    {fields_str}
+                    .finish()
+            }}
         }}
     }}"#
         );
