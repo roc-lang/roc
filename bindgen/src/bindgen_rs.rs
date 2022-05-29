@@ -205,16 +205,6 @@ fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut I
                 }
             }
         }
-        RocType::TypeAlias { name, aliasing } => {
-            let alias_name = type_name(*aliasing, types);
-
-            add_decl(
-                impls,
-                None,
-                architecture,
-                format!("pub type {name} = {alias_name};"),
-            );
-        }
         // These types don't need to be declared in Rust.
         RocType::Num(_)
         | RocType::Bool
@@ -571,7 +561,6 @@ pub struct {name} {{
                     | RocType::RocSet(_)
                     | RocType::RocBox(_)
                     | RocType::TagUnion(_)
-                    | RocType::TypeAlias { .. }
                     | RocType::RecursivePointer { .. } => {
                         owned_ret_type = type_name(*payload_id, types);
                         borrowed_ret_type = format!("&{}", owned_ret_type);
@@ -1028,7 +1017,6 @@ pub struct {name} {{
                         | RocType::RocSet(_)
                         | RocType::RocBox(_)
                         | RocType::TagUnion(_)
-                        | RocType::TypeAlias { .. }
                         | RocType::RecursivePointer { .. } => {
                             format!(".field({deref_str}{actual_self}.{tag_name})")
                         }
@@ -1209,8 +1197,7 @@ fn type_name(id: TypeId, types: &Types) -> String {
         RocType::RocSet(elem_id) => format!("roc_std::RocSet<{}>", type_name(*elem_id, types)),
         RocType::RocList(elem_id) => format!("roc_std::RocList<{}>", type_name(*elem_id, types)),
         RocType::RocBox(elem_id) => format!("roc_std::RocBox<{}>", type_name(*elem_id, types)),
-        RocType::TypeAlias { name, .. }
-        | RocType::Struct { name, .. }
+        RocType::Struct { name, .. }
         | RocType::TagUnionPayload { name, .. }
         | RocType::TagUnion(RocTagUnion::NonRecursive { name, .. })
         | RocType::TagUnion(RocTagUnion::Recursive { name, .. })
@@ -1333,7 +1320,6 @@ pub struct {name} {{
             | RocType::RocSet(_)
             | RocType::RocBox(_)
             | RocType::TagUnion(_)
-            | RocType::TypeAlias { .. }
             | RocType::RecursivePointer { .. } => {
                 owned_ret_type = type_name(non_null_payload, types);
                 borrowed_ret_type = format!("&{}", owned_ret_type);
@@ -1582,7 +1568,6 @@ pub struct {name} {{
             | RocType::RocSet(_)
             | RocType::RocBox(_)
             | RocType::TagUnion(_)
-            | RocType::TypeAlias { .. }
             | RocType::RecursivePointer { .. } => {
                 format!(
                     r#"f.debug_tuple("{non_null_tag}").field(&*{extra_deref}self.pointer).finish()"#

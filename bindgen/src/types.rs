@@ -142,10 +142,6 @@ pub enum RocType {
     /// this would be the field of Cons containing the (recursive) StrConsList type,
     /// and the TypeId is the TypeId of StrConsList itself.
     RecursivePointer(TypeId),
-    TypeAlias {
-        name: String,
-        aliasing: TypeId,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -237,7 +233,6 @@ impl RocType {
             RocType::TagUnionPayload { fields, .. } => fields
                 .iter()
                 .any(|(_, type_id)| types.get(*type_id).has_pointer(types)),
-            RocType::TypeAlias { aliasing, .. } => types.get(*aliasing).has_pointer(types),
         }
     }
 
@@ -303,9 +298,6 @@ impl RocType {
                     types.get(*content).has_float_help(types, &do_not_recurse)
                 }
             }
-            RocType::TypeAlias { aliasing, .. } => {
-                types.get(*aliasing).has_float_help(types, do_not_recurse)
-            }
         }
     }
 
@@ -327,7 +319,6 @@ impl RocType {
             RocType::TagUnionPayload { fields, .. } => fields
                 .iter()
                 .any(|(_, type_id)| types.get(*type_id).has_enumeration(types)),
-            RocType::TypeAlias { aliasing, .. } => types.get(*aliasing).has_enumeration(types),
         }
     }
 
@@ -394,7 +385,6 @@ impl RocType {
                 self.alignment(types, target_info),
             ),
             RocType::RecursivePointer { .. } => target_info.ptr_size(),
-            RocType::TypeAlias { aliasing, .. } => types.get(*aliasing).size(types, target_info),
         }
     }
 
@@ -475,9 +465,6 @@ impl RocType {
                     .unwrap()
             }
             RocType::RecursivePointer { .. } => target_info.ptr_alignment_bytes(),
-            RocType::TypeAlias { aliasing, .. } => {
-                types.get(*aliasing).alignment(types, target_info)
-            }
         }
     }
 }
