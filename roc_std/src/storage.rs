@@ -41,7 +41,8 @@ impl Storage {
                 if rc_as_isize == REFCOUNT_1 {
                     true
                 } else {
-                    *rc = NonZeroIsize::new(rc_as_isize - 1).unwrap();
+                    *rc = NonZeroIsize::new(rc_as_isize - 1).expect("A reference count was decremented all the way to zero, which should never happen.");
+
                     false
                 }
             }
