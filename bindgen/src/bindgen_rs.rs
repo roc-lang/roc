@@ -273,14 +273,14 @@ fn add_tag_union(
     let target_info = architecture.into();
     let discriminant_offset = RocTagUnion::discriminant_offset(tags, types, target_info);
     let size = typ.size(types, target_info);
-    let union_name = format!("union_{name}");
-    let (actual_self, actual_self_mut, actual_other) = match recursiveness {
+    let (actual_self, actual_self_mut, actual_other, union_name) = match recursiveness {
         Recursiveness::Recursive => (
             "(&*self.union_pointer())",
             "(&mut *self.union_pointer())",
             "(&*other.union_pointer())",
+            format!("union_{name}"),
         ),
-        Recursiveness::NonRecursive => ("self", "self", "other"),
+        Recursiveness::NonRecursive => ("self", "self", "other", name.to_string()),
     };
 
     {
@@ -534,17 +534,14 @@ pub struct {name} {{
                     Recursiveness::NonRecursive => {
                         if payload_type.has_pointer(types) {
                             owned_get_payload = format!(
-                                "unsafe {{ core::mem::ManuallyDrop::take(&mut (*self.pointer).{tag_name}) }}"
+                                "unsafe {{ core::mem::ManuallyDrop::take(&mut self.{tag_name}) }}"
                             );
-                            borrowed_get_payload =
-                                format!("unsafe {{ &(*self.pointer).{tag_name} }}");
+                            borrowed_get_payload = format!("unsafe {{ &self.{tag_name} }}");
                             // we need `mut self` for the argument because of ManuallyDrop
                             self_for_into = "mut self";
                         } else {
-                            owned_get_payload =
-                                format!("unsafe {{ core::ptr::read(self.pointer).{tag_name} }}");
-                            borrowed_get_payload =
-                                format!("unsafe {{ (&self.pointer).{tag_name} }}");
+                            owned_get_payload = format!("unsafe {{ self.{tag_name} }}");
+                            borrowed_get_payload = format!("unsafe {{ &self.{tag_name} }}");
                             // we don't need `mut self` unless we need ManuallyDrop
                             self_for_into = "self";
                         };
@@ -563,43 +560,45 @@ pub struct {name} {{
                     | RocType::RecursivePointer { .. } => {
                         owned_ret_type = type_name(*payload_id, types);
                         borrowed_ret_type = format!("&{}", owned_ret_type);
-                        payload_args = format!("arg: {owned_ret_type}");
-                        args_to_payload = "arg".to_string();
                         owned_ret = "payload".to_string();
                         borrowed_ret = format!("&{owned_ret}");
+                        payload_args = format!("arg: {owned_ret_type}");
+                        args_to_payload = if payload_type.has_pointer(types) {
+                            "core::mem::ManuallyDrop::new(arg)".to_string()
+                        } else {
+                            "arg".to_string()
+                        };
                     }
                     RocType::Struct { fields, .. } => {
                         let answer =
                             tag_union_struct_help(fields.iter(), *payload_id, types, false);
 
-                        payload_args = answer.payload_args;
-                        args_to_payload = answer.args_to_payload;
                         owned_ret = answer.owned_ret;
                         borrowed_ret = answer.borrowed_ret;
                         owned_ret_type = answer.owned_ret_type;
                         borrowed_ret_type = answer.borrowed_ret_type;
+                        payload_args = answer.payload_args;
+                        args_to_payload = answer.args_to_payload;
                     }
                     RocType::TagUnionPayload { fields, .. } => {
                         let answer = tag_union_struct_help(fields.iter(), *payload_id, types, true);
 
-                        payload_args = answer.payload_args;
-                        args_to_payload = answer.args_to_payload;
                         owned_ret = answer.owned_ret;
                         borrowed_ret = answer.borrowed_ret;
                         owned_ret_type = answer.owned_ret_type;
                         borrowed_ret_type = answer.borrowed_ret_type;
+                        payload_args = answer.payload_args;
+                        args_to_payload = answer.args_to_payload;
                     }
                 };
 
-                add_decl(
-                    impls,
-                    opt_impl.clone(),
-                    architecture,
-                    format!(
-                        r#"/// Construct a tag named {tag_name}, with the appropriate payload
-    pub fn {tag_name}({payload_args}) -> Self {{
+                {
+                    let body = match recursiveness {
+                        Recursiveness::Recursive => {
+                            format!(
+                                r#"
         let size = core::mem::size_of::<{union_name}>();
-        let align = core::mem::size_of::<{union_name}>() as u32;
+        let align = core::mem::align_of::<{union_name}>() as u32;
 
         unsafe {{
             let ptr = crate::roc_alloc(size, align) as *mut {union_name};
@@ -611,10 +610,34 @@ pub struct {name} {{
             Self {{
                 pointer: Self::tag_discriminant(ptr, {discriminant_name}::{tag_name}),
             }}
-        }}
+        }}"#
+                            )
+                        }
+                        Recursiveness::NonRecursive => {
+                            format!(
+                                r#"
+        let mut answer = Self {{
+            {tag_name}: {args_to_payload}
+        }};
+
+        answer.set_discriminant({discriminant_name}::{tag_name});
+
+        answer"#
+                            )
+                        }
+                    };
+
+                    add_decl(
+                        impls,
+                        opt_impl.clone(),
+                        architecture,
+                        format!(
+                            r#"/// Construct a tag named {tag_name}, with the appropriate payload
+    pub fn {tag_name}({payload_args}) -> Self {{{body}
     }}"#
-                    ),
-                );
+                        ),
+                    );
+                }
 
                 add_decl(
                     impls,
@@ -1665,30 +1688,30 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
         .collect::<Vec<String>>()
         .join(", ");
     let args_to_payload = format!(
-                            "core::mem::ManuallyDrop::new({payload_type_name} {{\n{}\n{INDENT}{INDENT}{INDENT}{INDENT}}})",
-                            sorted_fields
-                                .iter()
-                                .enumerate()
-                                .map(|(index, (label, _))| {
-                                    let mut indents = String::new();
+        "core::mem::ManuallyDrop::new({payload_type_name} {{\n{}\n{INDENT}{INDENT}{INDENT}{INDENT}}})",
+        sorted_fields
+            .iter()
+            .enumerate()
+            .map(|(index, (label, _))| {
+                let mut indents = String::new();
 
-                                    for _ in 0..5 {
-                                        indents.push_str(INDENT);
-                                    }
+                for _ in 0..5 {
+                    indents.push_str(INDENT);
+                }
 
-                                    let label = if is_tag_union_payload {
-                                        // Tag union payload fields need "f" prefix
-                                        // because they're numbers
-                                        format!("f{}", label)
-                                    } else {
-                                        format!("{}", label)
-                                    };
+                let label = if is_tag_union_payload {
+                    // Tag union payload fields need "f" prefix
+                    // because they're numbers
+                    format!("f{}", label)
+                } else {
+                    format!("{}", label)
+                };
 
-                                    format!("{indents}{label}: arg{index},")
-                                })
-                                .collect::<Vec<String>>()
-                                .join("\n")
-                        );
+                format!("{indents}{label}: arg{index},")
+            })
+            .collect::<Vec<String>>()
+            .join("\n")
+    );
     let owned_ret;
     let borrowed_ret;
     let owned_ret_type;
