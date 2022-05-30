@@ -26,8 +26,8 @@ pub struct Env<'a> {
     pub interns: &'a Interns,
     pub struct_names: Structs,
     pub enum_names: Enums,
-    pub pending_recursive_types: VecMap<TypeId, Variable>,
-    pub known_recursive_types: VecMap<Variable, TypeId>,
+    pub pending_recursive_types: VecMap<TypeId, Layout<'a>>,
+    pub known_recursive_types: VecMap<Layout<'a>, TypeId>,
 }
 
 impl<'a> Env<'a> {
@@ -59,11 +59,11 @@ impl<'a> Env<'a> {
         // TODO if VecMap gets a drain() method, use that instead of doing take() and into_iter
         let pending = core::mem::take(&mut self.pending_recursive_types);
 
-        for (type_id, var) in pending.into_iter() {
-            let actual_type_id = self.known_recursive_types.get(&var).unwrap_or_else(|| {
+        for (type_id, layout) in pending.into_iter() {
+            let actual_type_id = self.known_recursive_types.get(&layout).unwrap_or_else(|| {
                 unreachable!(
-                    "There was no known recursive TypeId for the pending recursive variable {:?}",
-                    var
+                    "There was no known recursive TypeId for the pending recursive type {:?}",
+                    layout
                 );
             });
 
@@ -184,8 +184,13 @@ fn add_type_help<'a>(
         Content::Error => todo!(),
         Content::RecursionVar { structure, .. } => {
             let type_id = types.add(RocType::RecursivePointer(TypeId::PENDING));
+            let structure_layout = env
+                .layout_cache
+                .from_var(env.arena, *structure, subs)
+                .unwrap();
 
-            env.pending_recursive_types.insert(type_id, *structure);
+            env.pending_recursive_types
+                .insert(type_id, structure_layout);
 
             type_id
         }
@@ -450,7 +455,7 @@ where
     let type_id = types.add(typ);
 
     if is_recursive {
-        env.known_recursive_types.insert(var, type_id);
+        env.known_recursive_types.insert(layout, type_id);
     }
 
     type_id
