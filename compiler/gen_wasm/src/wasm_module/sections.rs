@@ -1108,6 +1108,7 @@ impl<'a> Serialize for ElementSection<'a> {
 #[derive(Debug)]
 pub struct CodeSection<'a> {
     pub preloaded_count: u32,
+    pub preloaded_reloc_offset: u32,
     pub preloaded_bytes: Vec<'a, u8>,
     pub code_builders: Vec<'a, CodeBuilder<'a>>,
     dead_code_metadata: PreloadsCallGraph<'a>,
@@ -1146,11 +1147,28 @@ impl<'a> CodeSection<'a> {
         function_signatures: &[u32],
         indirect_callees: &[u32],
     ) -> Result<Self, ParseError> {
-        let (preloaded_count, range) = parse_section(SectionId::Code, module_bytes, cursor)?;
-        *cursor = range.end;
+        if module_bytes[*cursor] != SectionId::Code as u8 {
+            return Err(ParseError {
+                offset: *cursor,
+                message: "Missing code section!".into(),
+            });
+        }
+        *cursor += 1;
+        let section_size = u32::parse((), module_bytes, cursor)?;
+        let count_start = *cursor;
+        let count = u32::parse((), module_bytes, cursor)?;
+        let function_bodies_start = *cursor;
+        let next_section_start = count_start + section_size as usize;
+        *cursor = next_section_start;
 
-        let mut preloaded_bytes = Vec::with_capacity_in(range.len(), arena);
-        preloaded_bytes.extend_from_slice(&module_bytes[range]);
+        // Relocation offsets are based from the start of the section body, which includes function count
+        // But preloaded_bytes does not include the function count, only the function bodies!
+        // When we do relocations, we need to account for this
+        let preloaded_reloc_offset = (function_bodies_start - count_start) as u32;
+
+        let mut preloaded_bytes =
+            Vec::with_capacity_in(next_section_start - function_bodies_start, arena);
+        preloaded_bytes.extend_from_slice(&module_bytes[function_bodies_start..next_section_start]);
 
         let dead_code_metadata = parse_preloads_call_graph(
             arena,
@@ -1161,7 +1179,8 @@ impl<'a> CodeSection<'a> {
         )?;
 
         Ok(CodeSection {
-            preloaded_count,
+            preloaded_count: count,
+            preloaded_reloc_offset,
             preloaded_bytes,
             code_builders: Vec::with_capacity_in(0, arena),
             dead_code_metadata,

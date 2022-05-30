@@ -189,7 +189,11 @@ impl<'a> WasmModule<'a> {
             .find_symbol_by_name(sym_name, sym_type)
             .unwrap_or_else(|| panic!("Linking failed! Can't find symbol `{}`", sym_name));
 
-        self.reloc_code
-            .apply_relocs_u32(&mut self.code.preloaded_bytes, sym_index, value);
+        self.reloc_code.apply_relocs_u32(
+            &mut self.code.preloaded_bytes,
+            self.code.preloaded_reloc_offset,
+            sym_index,
+            value,
+        );
     }
 }

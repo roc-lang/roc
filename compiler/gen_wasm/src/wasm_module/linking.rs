@@ -183,7 +183,13 @@ pub struct RelocationSection<'a> {
 }
 
 impl<'a> RelocationSection<'a> {
-    pub fn apply_relocs_u32(&self, section_bytes: &mut [u8], sym_index: u32, value: u32) {
+    pub fn apply_relocs_u32(
+        &self,
+        section_bytes: &mut [u8],
+        section_bytes_offset: u32,
+        sym_index: u32,
+        value: u32,
+    ) {
         for entry in self.entries.iter() {
             match entry {
                 RelocationEntry::Index { symbol_index, .. } if *symbol_index == sym_index => {
@@ -197,11 +203,10 @@ impl<'a> RelocationSection<'a> {
                 } if *symbol_index == sym_index => {
                     use OffsetRelocType::*;
                     match type_id {
-                        MemoryAddrSleb => overwrite_padded_i32(
-                            section_bytes,
-                            *offset as usize,
-                            value as i32 + *addend,
-                        ),
+                        MemoryAddrSleb => {
+                            let idx = (*offset - section_bytes_offset) as usize;
+                            overwrite_padded_i32(section_bytes, idx, value as i32 + *addend);
+                        }
                         _ => todo!("Linking relocation type {:?}", type_id),
                     }
                 }
