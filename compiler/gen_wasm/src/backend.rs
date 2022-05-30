@@ -18,13 +18,15 @@ use crate::layout::{CallConv, ReturnMethod, WasmLayout};
 use crate::low_level::{call_higher_order_lowlevel, LowLevelCall};
 use crate::storage::{Storage, StoredValue, StoredValueKind};
 use crate::wasm_module::linking::{DataSymbol, LinkingSegment, SymType, WasmObjectSymbol};
-use crate::wasm_module::sections::{ConstExpr, DataMode, DataSegment, Global, GlobalType, Limits};
+use crate::wasm_module::sections::{
+    ConstExpr, DataMode, DataSegment, Export, Global, GlobalType, Limits, MemorySection,
+};
 use crate::wasm_module::{
     code_builder, CodeBuilder, ExportType, LocalId, Signature, SymInfo, ValueType, WasmModule,
 };
 use crate::{
-    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, DEBUG_LOG_SETTINGS, PTR_SIZE,
-    PTR_TYPE, TARGET_INFO,
+    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, DEBUG_LOG_SETTINGS, MEMORY_NAME,
+    PTR_SIZE, PTR_TYPE, TARGET_INFO,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -86,12 +88,12 @@ impl<'a> WasmBackend<'a> {
             }
         }
 
-        // TODO: get this from a CLI parameter with some default
-        const STACK_SIZE: u32 = 1024 * 1024;
-        Self::set_memory_layout(&mut module, STACK_SIZE);
-
         module.export.exports = app_exports;
         module.code.code_builders.reserve(proc_lookup.len());
+
+        // TODO: get this from a CLI parameter with some default
+        const STACK_SIZE: u32 = 1024 * 1024;
+        Self::set_memory_layout(env, &mut module, STACK_SIZE);
 
         WasmBackend {
             env,
@@ -119,8 +121,9 @@ impl<'a> WasmBackend<'a> {
     /// Since they're all in one block, they can't grow independently. Only the highest one can grow.
     /// Also, there's no "invalid region" below the stack, so stack overflow will overwrite constants!
     /// TODO: Detect stack overflow in function prologue... at least in Roc code...
-    fn set_memory_layout(module: &mut WasmModule<'a>, stack_size: u32) {
-        let stack_heap_boundary = module.data.end_addr + stack_size;
+    fn set_memory_layout(env: &'a Env<'a>, module: &mut WasmModule<'a>, stack_size: u32) {
+        let mut stack_heap_boundary = module.data.end_addr + stack_size;
+        stack_heap_boundary = round_up_to_alignment!(stack_heap_boundary, MemorySection::PAGE_SIZE);
 
         // Create a mutable global for __stack_pointer
         // We assume __stack_pointer is Global #0 in the host object file
@@ -132,6 +135,13 @@ impl<'a> WasmBackend<'a> {
                 is_mutable: true,
             },
             init: ConstExpr::I32(stack_heap_boundary as i32),
+        });
+
+        module.memory = MemorySection::new(env.arena, stack_heap_boundary);
+        module.export.append(Export {
+            name: MEMORY_NAME,
+            ty: ExportType::Mem,
+            index: 0,
         });
 
         module.relocate_preloaded_code("__heap_base", SymType::Data, stack_heap_boundary);

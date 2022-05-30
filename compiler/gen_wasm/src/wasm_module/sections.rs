@@ -385,7 +385,6 @@ impl<'a> ImportSection<'a> {
 
 impl<'a> Parse<&'a Bump> for ImportSection<'a> {
     fn parse(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
-        let start = *cursor;
         let (mut count, range) = parse_section(Self::ID, module_bytes, cursor)?;
         let mut bytes = Vec::with_capacity_in(range.len() * 2, arena);
         let mut fn_signatures = Vec::with_capacity_in(range.len() / 8, arena);
@@ -420,8 +419,6 @@ impl<'a> Parse<&'a Bump> for ImportSection<'a> {
                 }
             }
         }
-
-        dbg!(bytes.len(), end - start);
 
         Ok(ImportSection {
             count,
