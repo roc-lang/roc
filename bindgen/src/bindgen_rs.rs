@@ -397,12 +397,10 @@ pub struct {name} {{
                             r#"/// Internal helper
     fn tag_discriminant(pointer: *mut {union_name}, discriminant: {discriminant_name}) -> *mut {union_name} {{
         // The discriminant is stored in the unused bytes at the end of the union pointer
-        unsafe {{
-            let untagged = (pointer as usize) & (!{bitmask} as usize);
-            let tagged = untagged | (discriminant as usize);
+        let untagged = (pointer as usize) & (!{bitmask} as usize);
+        let tagged = untagged | (discriminant as usize);
 
-            tagged as *mut {union_name}
-        }}
+        tagged as *mut {union_name}
     }}"#
                         ),
                     );
@@ -506,14 +504,14 @@ pub struct {name} {{
                     Recursiveness::Recursive => {
                         if payload_type.has_pointer(types) {
                             owned_get_payload = format!(
-                                r#"unsafe {{
+                                r#"{{
             let ptr = (self.pointer as usize & !{bitmask}) as *mut {union_name};
 
             core::mem::ManuallyDrop::take(&mut (*ptr).{tag_name})
         }}"#
                             );
                             borrowed_get_payload = format!(
-                                r#"unsafe {{
+                                r#"{{
             let ptr = (self.pointer as usize & !{bitmask}) as *mut {union_name};
 
             &(*ptr).{tag_name}
@@ -523,14 +521,14 @@ pub struct {name} {{
                             self_for_into = "mut self";
                         } else {
                             owned_get_payload = format!(
-                                r#"unsafe {{
+                                r#"{{
             let ptr = (self.pointer as usize & !{bitmask}) as *mut {union_name};
 
             core::ptr::read(ptr).{tag_name}
         }}"#
                             );
                             borrowed_get_payload = format!(
-                                r#"unsafe {{
+                                r#"{{
             let ptr = (self.pointer as usize & !{bitmask}) as *mut {union_name};
 
             (&ptr).{tag_name}
@@ -542,15 +540,14 @@ pub struct {name} {{
                     }
                     Recursiveness::NonRecursive => {
                         if payload_type.has_pointer(types) {
-                            owned_get_payload = format!(
-                                "unsafe {{ core::mem::ManuallyDrop::take(&mut self.{tag_name}) }}"
-                            );
-                            borrowed_get_payload = format!("unsafe {{ &self.{tag_name} }}");
+                            owned_get_payload =
+                                format!("core::mem::ManuallyDrop::take(&mut self.{tag_name})");
+                            borrowed_get_payload = format!("&self.{tag_name}");
                             // we need `mut self` for the argument because of ManuallyDrop
                             self_for_into = "mut self";
                         } else {
-                            owned_get_payload = format!("unsafe {{ self.{tag_name} }}");
-                            borrowed_get_payload = format!("unsafe {{ &self.{tag_name} }}");
+                            owned_get_payload = format!("self.{tag_name}");
+                            borrowed_get_payload = format!("&self.{tag_name}");
                             // we don't need `mut self` unless we need ManuallyDrop
                             self_for_into = "self";
                         };
