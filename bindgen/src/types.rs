@@ -359,7 +359,9 @@ impl RocType {
                 }
                 RocTagUnion::NonNullableUnwrapped { .. } => todo!(),
                 RocTagUnion::NullableWrapped { .. } => todo!(),
-                RocTagUnion::NullableUnwrapped { .. } => todo!(),
+                RocTagUnion::NullableUnwrapped {
+                    non_null_payload, ..
+                } => types.get(*non_null_payload).size(types, target_info),
             },
             RocType::Struct { fields, .. } => struct_size(
                 fields.iter().map(|(_, type_id)| *type_id),
