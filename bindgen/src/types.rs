@@ -336,41 +336,25 @@ impl RocType {
                 RocTagUnion::Enumeration { tags, .. } => size_for_tag_count(tags.len()),
                 RocTagUnion::NonRecursive { tags, .. } | RocTagUnion::Recursive { tags, .. } => {
                     // The "unpadded" size (without taking alignment into account)
-                    // is the highest size among all the tags.
-                    let size_unpadded = tags.iter().fold(0, |highest, (_, opt_payload_id)| {
-                        if let Some(payload_id) = opt_payload_id {
-                            let payload = types.get(*payload_id);
-
-                            highest.max(payload.size(types, target_info))
-                        } else {
-                            highest
-                        }
-                    });
+                    // is the same as the offset of the discriminant.
+                    let size_unpadded = RocTagUnion::discriminant_offset(tags, types, target_info);
 
                     if tags.len() <= 1 {
                         // If there is no discriminant, then size equals unpadded size.
                         size_unpadded
                     } else {
+                        // Add in the size needed for the discriminant.
+                        let discriminant_size = size_for_tag_count(tags.len());
+                        let size_with_disc = size_unpadded + discriminant_size;
+
                         // Round up to the next multiple of alignment, to incorporate
                         // any necessary alignment padding.
-                        //
-                        // e.g. if we have a record with a Str and a U8, that would be a
-                        // size_unpadded of 25, because Str is three 8-byte pointers and U8 is 1 byte,
-                        // but the 8-byte alignment of the pointers means we'll round 25 up to 32.
                         let discriminant_align = align_for_tag_count(tags.len(), target_info);
                         let align = self.alignment(types, target_info).max(discriminant_align);
-                        let size_padded = (size_unpadded / align) * align;
 
-                        if size_unpadded == size_padded {
-                            // We don't have any alignment padding, which means we can't
-                            // put the discriminant in the padding and the compiler will
-                            // add extra space for it.
-                            let discriminant_size = size_for_tag_count(tags.len());
-
-                            size_padded + discriminant_size.max(align)
-                        } else {
-                            size_padded
-                        }
+                        // Use the "add denominator to numerator and subtract 1" technique
+                        // to do integer division that rounds up.
+                        ((size_with_disc + align - 1) / align) * align
                     }
                 }
                 RocTagUnion::NonNullableUnwrapped { .. } => todo!(),
