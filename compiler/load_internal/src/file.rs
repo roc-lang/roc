@@ -33,7 +33,7 @@ use roc_mono::ir::{
     UpdateModeIds,
 };
 use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
-use roc_parse::ast::{self, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
+use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
 use roc_parse::header::{HeaderFor, ModuleNameEnum, PackageName};
 use roc_parse::ident::UppercaseIdent;
@@ -616,7 +616,7 @@ struct ParsedModule<'a> {
     imported_modules: MutMap<ModuleId, Region>,
     exposed_ident_ids: IdentIds,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
-    parsed_defs: &'a [Loc<roc_parse::ast::Def<'a>>],
+    parsed_defs: Defs<'a>,
     module_name: ModuleNameEnum<'a>,
     symbols_from_requires: Vec<(Loc<Symbol>, Loc<TypeAnnotation<'a>>)>,
     header_for: HeaderFor<'a>,
@@ -3884,6 +3884,9 @@ fn canonicalize_and_constrain<'a>(
     // _before has an underscore because it's unused in --release builds
     let _before = roc_types::types::get_type_clone_count();
 
+    let parsed_defs_for_docs = parsed_defs.clone();
+    let parsed_defs = arena.alloc(parsed_defs);
+
     let mut var_store = VarStore::default();
     let module_output = canonicalize_module_defs(
         arena,
@@ -3925,7 +3928,7 @@ fn canonicalize_and_constrain<'a>(
             let docs = crate::docs::generate_module_docs(
                 module_output.scope.clone(),
                 name.as_str().into(),
-                parsed_defs,
+                &parsed_defs_for_docs,
             );
 
             Some(docs)
@@ -4024,8 +4027,6 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
             ));
         }
     };
-
-    let parsed_defs = parsed_defs.into_bump_slice();
 
     // Record the parse end time once, to avoid checking the time a second time
     // immediately afterward (for the beginning of canonicalization).
