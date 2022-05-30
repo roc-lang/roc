@@ -1428,6 +1428,8 @@ enum NameSubSections {
 }
 
 pub struct NameSection<'a> {
+    /// count may not be the same as functions.len() because of duplicates!
+    pub count: u32,
     pub bytes: Vec<'a, u8>,
     pub functions: MutMap<&'a str, u32>,
 }
@@ -1443,6 +1445,7 @@ impl<'a> NameSection<'a> {
     pub fn append_function(&mut self, index: u32, name: &'a str) {
         index.serialize(&mut self.bytes);
         name.serialize(&mut self.bytes);
+        self.count += 1; // always increment even for duplicate names
         self.functions.insert(name, index);
     }
 }
@@ -1452,6 +1455,7 @@ impl<'a> Parse<&'a Bump> for NameSection<'a> {
         // If we're already past the end of the preloaded file then there is no Name section
         if *cursor >= module_bytes.len() {
             return Ok(NameSection {
+                count: 0,
                 bytes: bumpalo::vec![in arena],
                 functions: MutMap::default(),
             });
@@ -1478,6 +1482,7 @@ impl<'a> Parse<&'a Bump> for NameSection<'a> {
         let section_end = *cursor + section_size;
 
         let mut section = NameSection {
+            count: 0,
             bytes: Vec::with_capacity_in(section_size, arena),
             functions: MutMap::default(),
         };
@@ -1521,9 +1526,9 @@ impl<'a> Parse<&'a Bump> for NameSection<'a> {
         }
 
         // Function names
-        let num_entries = u32::parse((), module_bytes, cursor)? as usize;
+        section.count = u32::parse((), module_bytes, cursor)?;
         let fn_names_start = *cursor;
-        for _ in 0..num_entries {
+        for _ in 0..section.count {
             let fn_index = u32::parse((), module_bytes, cursor)?;
             let name_bytes = <&'a str>::parse(arena, module_bytes, cursor)?;
             section.functions.insert(name_bytes, fn_index);
@@ -1551,8 +1556,7 @@ impl<'a> Serialize for NameSection<'a> {
             let subsection_byte_size = (MAX_SIZE_ENCODED_U32 + self.bytes.len()) as u32;
             subsection_byte_size.serialize(buffer);
 
-            let num_entries = self.functions.len() as u32;
-            buffer.encode_padded_u32(num_entries);
+            buffer.encode_padded_u32(self.count);
 
             buffer.append_slice(&self.bytes);
 
