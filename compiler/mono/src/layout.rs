@@ -846,51 +846,47 @@ impl<'a> LambdaSet<'a> {
         target_info: TargetInfo,
     ) -> Result<Self, LayoutProblem> {
         let mut tags = std::vec::Vec::new();
-        match roc_types::pretty_print::chase_ext_tag_union(subs, closure_var, &mut tags) {
-            Ok(()) | Err((_, Content::FlexVar(_))) if !tags.is_empty() => {
-                // sort the tags; make sure ordering stays intact!
-                tags.sort();
+        roc_types::pretty_print::resolve_lambda_set(subs, closure_var, &mut tags);
+        if !tags.is_empty() {
+            // sort the tags; make sure ordering stays intact!
+            tags.sort();
 
-                let mut set = Vec::with_capacity_in(tags.len(), arena);
+            let mut set = Vec::with_capacity_in(tags.len(), arena);
 
-                let mut env = Env {
-                    arena,
-                    subs,
-                    seen: Vec::new_in(arena),
-                    target_info,
-                };
+            let mut env = Env {
+                arena,
+                subs,
+                seen: Vec::new_in(arena),
+                target_info,
+            };
 
-                for (tag_name, variables) in tags.iter() {
-                    if let TagName::Closure(function_symbol) = tag_name {
-                        let mut arguments = Vec::with_capacity_in(variables.len(), arena);
+            for (tag_name, variables) in tags.iter() {
+                if let TagName::Closure(function_symbol) = tag_name {
+                    let mut arguments = Vec::with_capacity_in(variables.len(), arena);
 
-                        for var in variables {
-                            arguments.push(Layout::from_var(&mut env, *var)?);
-                        }
-
-                        set.push((*function_symbol, arguments.into_bump_slice()));
-                    } else {
-                        unreachable!("non-closure tag name in lambda set");
+                    for var in variables {
+                        arguments.push(Layout::from_var(&mut env, *var)?);
                     }
+
+                    set.push((*function_symbol, arguments.into_bump_slice()));
+                } else {
+                    unreachable!("non-closure tag name in lambda set");
                 }
-
-                let representation =
-                    arena.alloc(Self::make_representation(arena, subs, tags, target_info));
-
-                Ok(LambdaSet {
-                    set: set.into_bump_slice(),
-                    representation,
-                })
             }
 
-            Ok(()) | Err((_, Content::FlexVar(_))) => {
-                // this can happen when there is a type error somewhere
-                Ok(LambdaSet {
-                    set: &[],
-                    representation: arena.alloc(Layout::UNIT),
-                })
-            }
-            _ => panic!("called LambdaSet.from_var on invalid input"),
+            let representation =
+                arena.alloc(Self::make_representation(arena, subs, tags, target_info));
+
+            Ok(LambdaSet {
+                set: set.into_bump_slice(),
+                representation,
+            })
+        } else {
+            // this can happen when there is a type error somewhere
+            Ok(LambdaSet {
+                set: &[],
+                representation: arena.alloc(Layout::UNIT),
+            })
         }
     }
 

@@ -867,27 +867,34 @@ fn unify_lambda_set_help(
     }
 
     if joined_lambdas.len() == num_shared {
-        mismatch!(
-            "Problem with lambda sets: there should be {:?} matching lambda, but only found {:?}",
-            num_shared,
-            &joined_lambdas
-        )
-    } else {
+        let all_lambdas = joined_lambdas;
         let all_lambdas = merge_sorted(
-            joined_lambdas,
-            (only_in_1.into_iter())
-                .chain(only_in_2.into_iter())
-                .map(|(name, subs_slice)| {
-                    let vec = subs.get_subs_slice(subs_slice).to_vec();
+            all_lambdas,
+            only_in_1.into_iter().map(|(name, subs_slice)| {
+                let vec = subs.get_subs_slice(subs_slice).to_vec();
 
-                    (name, vec)
-                }),
+                (name, vec)
+            }),
+        );
+        let all_lambdas = merge_sorted(
+            all_lambdas,
+            only_in_2.into_iter().map(|(name, subs_slice)| {
+                let vec = subs.get_subs_slice(subs_slice).to_vec();
+
+                (name, vec)
+            }),
         );
 
         let new_solved = UnionTags::insert_into_subs(subs, all_lambdas);
         let new_lambda_set = Content::LambdaSet(LambdaSet { solved: new_solved });
 
         merge(subs, ctx, new_lambda_set)
+    } else {
+        mismatch!(
+            "Problem with lambda sets: there should be {:?} matching lambda, but only found {:?}",
+            num_shared,
+            &joined_lambdas
+        )
     }
 }
 
@@ -2165,9 +2172,7 @@ fn unify_function_or_tag_union_and_func(
     {
         let tag_name = TagName::Closure(tag_symbol);
         let union_tags = UnionTags::tag_without_arguments(subs, tag_name);
-
-        let lambda_set_ext = subs.fresh_unnamed_flex_var();
-        let lambda_set_content = Structure(FlatType::TagUnion(union_tags, lambda_set_ext));
+        let lambda_set_content = LambdaSet(self::LambdaSet { solved: union_tags });
 
         let tag_lambda_set = register(
             subs,

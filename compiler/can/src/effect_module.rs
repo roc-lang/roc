@@ -135,7 +135,6 @@ fn build_effect_always(
         Expr::Closure(ClosureData {
             function_type: var_store.fresh(),
             closure_type: var_store.fresh(),
-            closure_ext_var: var_store.fresh(),
             return_type: var_store.fresh(),
             name: inner_closure_symbol,
             captured_symbols: vec![(value_symbol, var_store.fresh())],
@@ -169,7 +168,6 @@ fn build_effect_always(
         let closure = Expr::Closure(ClosureData {
             function_type: function_var,
             closure_type: var_store.fresh(),
-            closure_ext_var: var_store.fresh(),
             return_type: var_store.fresh(),
             name: always_symbol,
             captured_symbols: Vec::new(),
@@ -291,7 +289,6 @@ fn build_effect_map(
         Expr::Closure(ClosureData {
             function_type: var_store.fresh(),
             closure_type: var_store.fresh(),
-            closure_ext_var: var_store.fresh(),
             return_type: var_store.fresh(),
             name: inner_closure_symbol,
             captured_symbols: vec![
@@ -346,7 +343,6 @@ fn build_effect_map(
     let map_closure = Expr::Closure(ClosureData {
         function_type: function_var,
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: var_store.fresh(),
         name: map_symbol,
         captured_symbols: Vec::new(),
@@ -498,7 +494,6 @@ fn build_effect_after(
     let after_closure = Expr::Closure(ClosureData {
         function_type: function_var,
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: var_store.fresh(),
         name: after_symbol,
         captured_symbols: Vec::new(),
@@ -594,7 +589,6 @@ fn wrap_in_effect_thunk(
         Expr::Closure(ClosureData {
             function_type: var_store.fresh(),
             closure_type: var_store.fresh(),
-            closure_ext_var: var_store.fresh(),
             return_type: var_store.fresh(),
             name: closure_name,
             // captured_symbols: vec![(value_symbol, var_store.fresh())],
@@ -739,7 +733,6 @@ fn build_effect_forever(
     let after_closure = Expr::Closure(ClosureData {
         function_type: var_store.fresh(),
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: var_store.fresh(),
         name: forever_symbol,
         captured_symbols: Vec::new(),
@@ -962,7 +955,6 @@ fn build_effect_loop(
     let after_closure = Expr::Closure(ClosureData {
         function_type: var_store.fresh(),
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: var_store.fresh(),
         name: loop_symbol,
         captured_symbols: Vec::new(),
@@ -1317,7 +1309,6 @@ pub fn build_host_exposed_def(
                 let effect_closure = Expr::Closure(ClosureData {
                     function_type: var_store.fresh(),
                     closure_type: var_store.fresh(),
-                    closure_ext_var: var_store.fresh(),
                     return_type: var_store.fresh(),
                     name: effect_closure_symbol,
                     captured_symbols,
@@ -1344,7 +1335,6 @@ pub fn build_host_exposed_def(
                 Expr::Closure(ClosureData {
                     function_type: var_store.fresh(),
                     closure_type: var_store.fresh(),
-                    closure_ext_var: var_store.fresh(),
                     return_type: var_store.fresh(),
                     name: symbol,
                     captured_symbols: std::vec::Vec::new(),
@@ -1379,7 +1369,6 @@ pub fn build_host_exposed_def(
                 let effect_closure = Expr::Closure(ClosureData {
                     function_type: var_store.fresh(),
                     closure_type: var_store.fresh(),
-                    closure_ext_var: var_store.fresh(),
                     return_type: var_store.fresh(),
                     name: effect_closure_symbol,
                     captured_symbols,

@@ -3,6 +3,7 @@ use crate::subs::{
 };
 use crate::types::{name_type_var, RecordField};
 use roc_collections::all::{MutMap, MutSet};
+use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 
@@ -894,6 +895,20 @@ fn write_flat_type<'a>(
     }
 }
 
+fn push_union_tags<'a>(
+    subs: &'a Subs,
+    tags: &UnionTags,
+    fields: &mut Vec<(TagName, Vec<Variable>)>,
+) {
+    for (name_index, slice_index) in tags.iter_all() {
+        let subs_slice = subs[slice_index];
+        let slice = subs.get_subs_slice(subs_slice);
+        let tag_name = subs[name_index].clone();
+
+        fields.push((tag_name, slice.to_vec()));
+    }
+}
+
 pub fn chase_ext_tag_union<'a>(
     subs: &'a Subs,
     var: Variable,
@@ -903,26 +918,12 @@ pub fn chase_ext_tag_union<'a>(
     match subs.get_content_without_compacting(var) {
         Content::Structure(EmptyTagUnion) => Ok(()),
         Content::Structure(TagUnion(tags, ext_var)) => {
-            for (name_index, slice_index) in tags.iter_all() {
-                let subs_slice = subs[slice_index];
-                let slice = subs.get_subs_slice(subs_slice);
-                let tag_name = subs[name_index].clone();
-
-                fields.push((tag_name, slice.to_vec()));
-            }
-
+            push_union_tags(subs, tags, fields);
             chase_ext_tag_union(subs, *ext_var, fields)
         }
 
         Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {
-            for (name_index, slice_index) in tags.iter_all() {
-                let subs_slice = subs[slice_index];
-                let slice = subs.get_subs_slice(subs_slice);
-                let tag_name = subs[name_index].clone();
-
-                fields.push((tag_name, slice.to_vec()));
-            }
-
+            push_union_tags(subs, tags, fields);
             chase_ext_tag_union(subs, *ext_var, fields)
         }
         Content::Structure(FunctionOrTagUnion(tag_name, _, ext_var)) => {
@@ -934,6 +935,19 @@ pub fn chase_ext_tag_union<'a>(
         Content::Alias(_, _, var, _) => chase_ext_tag_union(subs, *var, fields),
 
         content => Err((var, content)),
+    }
+}
+
+pub fn resolve_lambda_set<'a>(
+    subs: &'a Subs,
+    var: Variable,
+    fields: &mut Vec<(TagName, Vec<Variable>)>,
+) {
+    match subs.get_content_without_compacting(var) {
+        Content::LambdaSet(subs::LambdaSet { solved }) => {
+            push_union_tags(subs, solved, fields);
+        }
+        c => internal_error!("called with a non-lambda set {:?}", c),
     }
 }
 

@@ -1875,18 +1875,25 @@ fn type_to_variable<'a>(
                 register_with_known_var(subs, destination, rank, pools, content)
             }
 
-            ClosureTag {
-                name,
-                captures,
-                ext,
-            } => {
+            ClosureTag { name, captures } => {
                 let tag_name = TagName::Closure(*name);
                 let args = &*arena.alloc([(tag_name, captures.as_slice())]);
-                let ext = &*arena.alloc(TypeExtension::Open(Box::new(Type::Variable(*ext))));
-                let (union_tags, ext) =
-                    type_to_union_tags(subs, rank, pools, arena, args, ext, &mut stack);
+                let (solved, ext) = type_to_union_tags(
+                    subs,
+                    rank,
+                    pools,
+                    arena,
+                    args,
+                    &TypeExtension::Closed,
+                    &mut stack,
+                );
 
-                let content = Content::Structure(FlatType::TagUnion(union_tags, ext));
+                debug_assert!(matches!(
+                    subs.get_content_without_compacting(ext),
+                    Content::Structure(FlatType::EmptyTagUnion),
+                ));
+
+                let content = Content::LambdaSet(subs::LambdaSet { solved });
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }

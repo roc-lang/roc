@@ -3195,6 +3195,7 @@ fn alias_defined_out_of_order() {
 }
 
 #[test]
+#[ignore = "recursive lambda set"]
 #[cfg(any(feature = "gen-llvm"))]
 fn recursively_build_effect() {
     assert_evals_to!(

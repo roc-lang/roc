@@ -366,7 +366,6 @@ pub fn constrain_expr(
         Closure(ClosureData {
             function_type: fn_var,
             closure_type: closure_var,
-            closure_ext_var,
             return_type: ret_var,
             arguments,
             loc_body: boxed,
@@ -379,7 +378,6 @@ pub fn constrain_expr(
 
             let ret_var = *ret_var;
             let closure_var = *closure_var;
-            let closure_ext_var = *closure_ext_var;
 
             let closure_type = Type::Variable(closure_var);
             let return_type = Type::Variable(ret_var);
@@ -393,7 +391,6 @@ pub fn constrain_expr(
 
             vars.push(ret_var);
             vars.push(closure_var);
-            vars.push(closure_ext_var);
             vars.push(*fn_var);
 
             let body_type = NoExpectation(return_type);
@@ -418,7 +415,6 @@ pub fn constrain_expr(
                 region,
                 captured_symbols,
                 closure_var,
-                closure_ext_var,
                 &mut vars,
             );
 
@@ -836,7 +832,6 @@ pub fn constrain_expr(
             field,
             record_var,
             closure_var,
-            closure_ext_var,
             ext_var,
             field_var,
         }) => {
@@ -859,7 +854,6 @@ pub fn constrain_expr(
             let lambda_set = Type::ClosureTag {
                 name: *closure_name,
                 captures: vec![],
-                ext: *closure_ext_var,
             };
 
             let closure_type = Type::Variable(*closure_var);
@@ -888,14 +882,7 @@ pub fn constrain_expr(
             ];
 
             constraints.exists_many(
-                [
-                    *record_var,
-                    *function_var,
-                    *closure_var,
-                    *closure_ext_var,
-                    field_var,
-                    ext_var,
-                ],
+                [*record_var, *function_var, *closure_var, field_var, ext_var],
                 cons,
             )
         }
@@ -1409,7 +1396,6 @@ fn constrain_typed_def(
             Closure(ClosureData {
                 function_type: fn_var,
                 closure_type: closure_var,
-                closure_ext_var,
                 return_type: ret_var,
                 captured_symbols,
                 arguments,
@@ -1434,12 +1420,10 @@ fn constrain_typed_def(
             let mut vars = Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
             let ret_var = *ret_var;
             let closure_var = *closure_var;
-            let closure_ext_var = *closure_ext_var;
             let ret_type = *ret_type.clone();
 
             vars.push(ret_var);
             vars.push(closure_var);
-            vars.push(closure_ext_var);
 
             constrain_typed_function_arguments(
                 constraints,
@@ -1457,7 +1441,6 @@ fn constrain_typed_def(
                 region,
                 captured_symbols,
                 closure_var,
-                closure_ext_var,
                 &mut vars,
             );
 
@@ -1769,11 +1752,9 @@ fn constrain_closure_size(
     region: Region,
     captured_symbols: &[(Symbol, Variable)],
     closure_var: Variable,
-    closure_ext_var: Variable,
     variables: &mut Vec<Variable>,
 ) -> Constraint {
     debug_assert!(variables.iter().any(|s| *s == closure_var));
-    debug_assert!(variables.iter().any(|s| *s == closure_ext_var));
 
     let mut captured_types = Vec::with_capacity(captured_symbols.len());
     let mut captured_symbols_constraints = Vec::with_capacity(captured_symbols.len());
@@ -1797,7 +1778,6 @@ fn constrain_closure_size(
     let closure_type = Type::ClosureTag {
         name,
         captures: captured_types,
-        ext: closure_ext_var,
     };
 
     let finalizer = constraints.equal_types_var(
@@ -1971,7 +1951,6 @@ pub fn rec_defs_help(
                         Closure(ClosureData {
                             function_type: fn_var,
                             closure_type: closure_var,
-                            closure_ext_var,
                             return_type: ret_var,
                             captured_symbols,
                             arguments,
@@ -1997,12 +1976,10 @@ pub fn rec_defs_help(
                         let mut vars = Vec::with_capacity(state.vars.capacity() + 1);
                         let ret_var = *ret_var;
                         let closure_var = *closure_var;
-                        let closure_ext_var = *closure_ext_var;
                         let ret_type = *ret_type.clone();
 
                         vars.push(ret_var);
                         vars.push(closure_var);
-                        vars.push(closure_ext_var);
 
                         constrain_typed_function_arguments(
                             constraints,
@@ -2021,7 +1998,6 @@ pub fn rec_defs_help(
                             region,
                             captured_symbols,
                             closure_var,
-                            closure_ext_var,
                             &mut vars,
                         );
 

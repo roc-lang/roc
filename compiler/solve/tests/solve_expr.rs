@@ -6492,4 +6492,18 @@ mod solve_expr {
             &["Encoding#toEncoder : { a : A } -> Encoder fmt | fmt has EncoderFormatting"],
         )
     }
+
+    #[test]
+    fn it1() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = Result.mapErr
+                "#
+            ),
+            "",
+        );
+    }
 }

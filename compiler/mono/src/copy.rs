@@ -198,7 +198,6 @@ pub fn deep_copy_type_vars_into_expr<'a>(
             Closure(ClosureData {
                 function_type,
                 closure_type,
-                closure_ext_var,
                 return_type,
                 name,
                 captured_symbols,
@@ -208,7 +207,6 @@ pub fn deep_copy_type_vars_into_expr<'a>(
             }) => Closure(ClosureData {
                 function_type: sub!(*function_type),
                 closure_type: sub!(*closure_type),
-                closure_ext_var: sub!(*closure_ext_var),
                 return_type: sub!(*return_type),
                 name: *name,
                 captured_symbols: captured_symbols
@@ -270,7 +268,6 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 function_var,
                 record_var,
                 closure_var,
-                closure_ext_var,
                 ext_var,
                 field_var,
                 field,
@@ -279,7 +276,6 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 function_var: sub!(*function_var),
                 record_var: sub!(*record_var),
                 closure_var: sub!(*closure_var),
-                closure_ext_var: sub!(*closure_ext_var),
                 ext_var: sub!(*ext_var),
                 field_var: sub!(*field_var),
                 field: field.clone(),

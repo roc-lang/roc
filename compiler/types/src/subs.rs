@@ -781,10 +781,11 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
                 write!(f, "<{:?}>{:?},", *var, SubsFmtContent(content, subs))?;
             }
             let result_content = subs.get_content_without_compacting(*result);
+            let lambda_content = subs.get_content_without_compacting(*lambda_set);
             write!(
                 f,
                 "], {:?}, <{:?}>{:?})",
-                subs.get_root_key_without_compacting(*lambda_set),
+                SubsFmtContent(lambda_content, subs),
                 *result,
                 SubsFmtContent(result_content, subs)
             )
