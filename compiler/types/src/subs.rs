@@ -847,10 +847,6 @@ impl VarStore {
 
         Variable(answer)
     }
-
-    pub fn fresh_lambda_set(&mut self) -> LambdaSet {
-        LambdaSet(self.fresh())
-    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
@@ -1192,31 +1188,6 @@ impl UnifyKey for Variable {
 
     fn tag() -> &'static str {
         "Variable"
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct LambdaSet(pub Variable);
-
-impl fmt::Debug for LambdaSet {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "LambdaSet({})", self.0 .0)
-    }
-}
-
-impl LambdaSet {
-    pub fn into_inner(self) -> Variable {
-        self.0
-    }
-
-    pub fn as_inner(&self) -> &Variable {
-        &self.0
-    }
-}
-
-impl From<Variable> for LambdaSet {
-    fn from(variable: Variable) -> Self {
-        LambdaSet(variable)
     }
 }
 
