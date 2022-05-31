@@ -9,7 +9,7 @@ use roc_module::symbol::{Interns, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_target::{PtrWidth, TargetInfo};
 use roc_types::subs::{
-    Content, FlatType, RecordFields, Subs, UnionTags, UnsortedUnionTags, Variable,
+    self, Content, FlatType, RecordFields, Subs, UnionTags, UnsortedUnionTags, Variable,
 };
 use roc_types::types::{gather_fields_unsorted_iter, RecordField, RecordFieldsError};
 use std::cmp::Ordering;
@@ -79,6 +79,7 @@ impl<'a> RawFunctionLayout<'a> {
                 let structure_content = env.subs.get_content_without_compacting(structure);
                 Self::new_help(env, structure, *structure_content)
             }
+            LambdaSet(lset) => Self::layout_from_lambda_set(env, lset),
             Structure(flat_type) => Self::layout_from_flat_type(env, flat_type),
             RangedNumber(typ, _) => Self::from_var(env, typ),
 
@@ -149,6 +150,15 @@ impl<'a> RawFunctionLayout<'a> {
             Alias(_, _, var, _) => Self::from_var(env, var),
             Error => Err(LayoutProblem::Erroneous),
         }
+    }
+
+    fn layout_from_lambda_set(
+        env: &mut Env<'a, '_>,
+        lset: subs::LambdaSet,
+    ) -> Result<Self, LayoutProblem> {
+        // Lambda set is just a tag union from the layout's perspective.
+        let subs::LambdaSet { solved } = lset;
+        Self::layout_from_flat_type(env, FlatType::TagUnion(solved, Variable::EMPTY_TAG_UNION))
     }
 
     fn layout_from_flat_type(
@@ -1028,6 +1038,7 @@ impl<'a> Layout<'a> {
                 let structure_content = env.subs.get_content_without_compacting(structure);
                 Self::new_help(env, structure, *structure_content)
             }
+            LambdaSet(lset) => layout_from_lambda_set(env, lset),
             Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
             Alias(symbol, _args, actual_var, _) => {
@@ -1682,6 +1693,15 @@ impl<'a> Builtin<'a> {
 
         allocation.max(ptr_width)
     }
+}
+
+fn layout_from_lambda_set<'a>(
+    env: &mut Env<'a, '_>,
+    lset: subs::LambdaSet,
+) -> Result<Layout<'a>, LayoutProblem> {
+    // Lambda set is just a tag union from the layout's perspective.
+    let subs::LambdaSet { solved } = lset;
+    layout_from_flat_type(env, FlatType::TagUnion(solved, Variable::EMPTY_TAG_UNION))
 }
 
 fn layout_from_flat_type<'a>(
@@ -2750,7 +2770,7 @@ fn layout_from_num_content<'a>(
         Alias(_, _, _, _) => {
             todo!("TODO recursively resolve type aliases in num_from_content");
         }
-        Structure(_) | RangedNumber(..) => {
+        Structure(_) | RangedNumber(..) | LambdaSet(_) => {
             panic!("Invalid Num.Num type application: {:?}", content);
         }
         Error => Err(LayoutProblem::Erroneous),

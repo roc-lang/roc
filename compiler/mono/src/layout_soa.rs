@@ -4,7 +4,7 @@ use roc_collections::all::MutMap;
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_target::TargetInfo;
-use roc_types::subs::{Content, FlatType, Subs, Variable};
+use roc_types::subs::{self, Content, FlatType, Subs, Variable};
 use roc_types::types::RecordField;
 use std::collections::hash_map::Entry;
 
@@ -142,11 +142,26 @@ impl FunctionLayout {
             | Content::FlexAbleVar(_, _)
             | Content::RigidAbleVar(_, _) => Err(UnresolvedVariable(var)),
             Content::RecursionVar { .. } => Err(TypeError(())),
+            Content::LambdaSet(lset) => Self::from_lambda_set(layouts, subs, *lset),
             Content::Structure(flat_type) => Self::from_flat_type(layouts, subs, flat_type),
             Content::Alias(_, _, actual, _) => Self::from_var_help(layouts, subs, *actual),
             Content::RangedNumber(actual, _) => Self::from_var_help(layouts, subs, *actual),
             Content::Error => Err(TypeError(())),
         }
+    }
+
+    fn from_lambda_set(
+        layouts: &mut Layouts,
+        subs: &Subs,
+        lset: subs::LambdaSet,
+    ) -> Result<Self, LayoutError> {
+        // Lambda set is just a tag union from the layout's perspective.
+        let subs::LambdaSet { solved } = lset;
+        Self::from_flat_type(
+            layouts,
+            subs,
+            &FlatType::TagUnion(solved, Variable::EMPTY_TAG_UNION),
+        )
     }
 
     fn from_flat_type(
@@ -252,11 +267,26 @@ impl LambdaSet {
             Content::RecursionVar { .. } => {
                 unreachable!("lambda sets cannot currently be recursive")
             }
+            Content::LambdaSet(lset) => Self::from_lambda_set(layouts, subs, *lset),
             Content::Structure(flat_type) => Self::from_flat_type(layouts, subs, flat_type),
             Content::Alias(_, _, actual, _) => Self::from_var_help(layouts, subs, *actual),
             Content::RangedNumber(actual, _) => Self::from_var_help(layouts, subs, *actual),
             Content::Error => Err(TypeError(())),
         }
+    }
+
+    fn from_lambda_set(
+        layouts: &mut Layouts,
+        subs: &Subs,
+        lset: subs::LambdaSet,
+    ) -> Result<Self, LayoutError> {
+        // Lambda set is just a tag union from the layout's perspective.
+        let subs::LambdaSet { solved } = lset;
+        Self::from_flat_type(
+            layouts,
+            subs,
+            &FlatType::TagUnion(solved, Variable::EMPTY_TAG_UNION),
+        )
     }
 
     fn from_flat_type(
@@ -664,6 +694,8 @@ impl Layout {
                     }
                 }
             }
+            // Lambda set layout is same as tag union
+            Content::LambdaSet(lset) => Self::from_lambda_set(layouts, subs, *lset),
             Content::Structure(flat_type) => Self::from_flat_type(layouts, subs, flat_type),
             Content::Alias(symbol, _, actual, _) => {
                 let symbol = *symbol;
@@ -690,6 +722,20 @@ impl Layout {
             Content::RangedNumber(typ, _) => Self::from_var_help(layouts, subs, *typ),
             Content::Error => Err(TypeError(())),
         }
+    }
+
+    fn from_lambda_set(
+        layouts: &mut Layouts,
+        subs: &Subs,
+        lset: subs::LambdaSet,
+    ) -> Result<Layout, LayoutError> {
+        // Lambda set is just a tag union from the layout's perspective.
+        let subs::LambdaSet { solved } = lset;
+        Self::from_flat_type(
+            layouts,
+            subs,
+            &FlatType::TagUnion(solved, Variable::EMPTY_TAG_UNION),
+        )
     }
 
     fn from_flat_type(

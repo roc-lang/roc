@@ -231,9 +231,14 @@ pub enum Type {
     Record(SendMap<Lowercase, RecordField<Type>>, TypeExtension),
     TagUnion(Vec<(TagName, Vec<Type>)>, TypeExtension),
     FunctionOrTagUnion(TagName, Symbol, TypeExtension),
-    /// A function name that is used in our defunctionalization algorithm
+    /// A function name that is used in our defunctionalization algorithm. For example in
+    ///   g = \a ->
+    ///     f = \{} -> a
+    ///     f
+    /// the closure under "f" has name "f" and captures "a".
     ClosureTag {
         name: Symbol,
+        captures: Vec<Type>,
         ext: Variable,
     },
     DelayedAlias(AliasCommon),
@@ -289,8 +294,13 @@ impl Clone for Type {
             Self::FunctionOrTagUnion(arg0, arg1, arg2) => {
                 Self::FunctionOrTagUnion(arg0.clone(), *arg1, arg2.clone())
             }
-            Self::ClosureTag { name, ext } => Self::ClosureTag {
+            Self::ClosureTag {
+                name,
+                captures,
+                ext,
+            } => Self::ClosureTag {
                 name: *name,
+                captures: captures.clone(),
                 ext: *ext,
             },
             Self::DelayedAlias(arg0) => Self::DelayedAlias(arg0.clone()),
@@ -376,6 +386,28 @@ impl<'a> IntoIterator for &'a TypeExtension {
             TypeExtension::Closed => None.into_iter(),
         }
     }
+}
+
+fn write_tags<'a>(
+    f: &mut fmt::Formatter,
+    tags: impl ExactSizeIterator<Item = &'a (TagName, Vec<Type>)>,
+) -> fmt::Result {
+    write!(f, "[")?;
+
+    let mut it = tags.peekable();
+    while let Some((label, arguments)) = it.next() {
+        write!(f, "{:?}", label)?;
+
+        for argument in arguments {
+            write!(f, " {:?}", argument)?;
+        }
+
+        if it.peek().is_some() {
+            write!(f, ", ")?;
+        }
+    }
+
+    write!(f, "]")
 }
 
 impl fmt::Debug for Type {
@@ -531,30 +563,7 @@ impl fmt::Debug for Type {
                 }
             }
             Type::TagUnion(tags, ext) => {
-                write!(f, "[")?;
-
-                if !tags.is_empty() {
-                    write!(f, " ")?;
-                }
-
-                let mut it = tags.iter().peekable();
-                while let Some((label, arguments)) = it.next() {
-                    write!(f, "{:?}", label)?;
-
-                    for argument in arguments {
-                        write!(f, " {:?}", argument)?;
-                    }
-
-                    if it.peek().is_some() {
-                        write!(f, ", ")?;
-                    }
-                }
-
-                if !tags.is_empty() {
-                    write!(f, " ")?;
-                }
-
-                write!(f, "]")?;
+                write_tags(f, tags.iter())?;
 
                 match ext {
                     TypeExtension::Closed => {
@@ -591,40 +600,23 @@ impl fmt::Debug for Type {
                     }
                 }
             }
-            Type::ClosureTag { name, ext } => {
+            Type::ClosureTag {
+                name,
+                captures,
+                ext,
+            } => {
                 write!(f, "ClosureTag(")?;
 
-                name.fmt(f)?;
-                write!(f, ", ")?;
+                write!(f, "{:?}, ", name)?;
+                for capture in captures {
+                    write!(f, "{:?}, ", capture)?;
+                }
                 ext.fmt(f)?;
 
                 write!(f, ")")
             }
             Type::RecursiveTagUnion(rec, tags, ext) => {
-                write!(f, "[")?;
-
-                if !tags.is_empty() {
-                    write!(f, " ")?;
-                }
-
-                let mut it = tags.iter().peekable();
-                while let Some((label, arguments)) = it.next() {
-                    write!(f, "{:?}", label)?;
-
-                    for argument in arguments {
-                        write!(f, " {:?}", argument)?;
-                    }
-
-                    if it.peek().is_some() {
-                        write!(f, ", ")?;
-                    }
-                }
-
-                if !tags.is_empty() {
-                    write!(f, " ")?;
-                }
-
-                write!(f, "]")?;
+                write_tags(f, tags.iter())?;
 
                 match ext {
                     TypeExtension::Closed => {

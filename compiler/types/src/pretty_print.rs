@@ -1,5 +1,5 @@
 use crate::subs::{
-    AliasVariables, Content, FlatType, GetSubsSlice, Subs, SubsIndex, UnionTags, Variable,
+    self, AliasVariables, Content, FlatType, GetSubsSlice, Subs, SubsIndex, UnionTags, Variable,
 };
 use crate::types::{name_type_var, RecordField};
 use roc_collections::all::{MutMap, MutSet};
@@ -220,6 +220,7 @@ fn find_names_needed(
             // TODO should we also look in the actual variable?
             // find_names_needed(_actual, subs, roots, root_appearances, names_taken);
         }
+        LambdaSet(subs::LambdaSet { solved: _ }) => {}
         &RangedNumber(typ, _) => {
             find_names_needed(typ, subs, roots, root_appearances, names_taken);
         }
@@ -526,6 +527,9 @@ fn write_content<'a>(
                     });
                 }),
             }
+        }
+        LambdaSet(_) => {
+            // lambda sets never exposed to the user
         }
         RangedNumber(typ, _range_vars) => write_content(
             env,

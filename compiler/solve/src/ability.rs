@@ -569,6 +569,7 @@ impl ObligationCache<'_> {
                 RangedNumber(..) => {
                     // yes, all numbers can
                 }
+                LambdaSet(..) => return Err(var),
                 Error => {
                     return Err(var);
                 }

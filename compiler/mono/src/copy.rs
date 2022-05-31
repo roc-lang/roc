@@ -5,8 +5,8 @@ use roc_can::{
     expr::{AccessorData, ClosureData, Expr, Field, WhenBranch},
 };
 use roc_types::subs::{
-    AliasVariables, Descriptor, OptVariable, RecordFields, Subs, SubsSlice, UnionTags, Variable,
-    VariableSubsSlice,
+    self, AliasVariables, Descriptor, OptVariable, RecordFields, Subs, SubsSlice, UnionTags,
+    Variable, VariableSubsSlice,
 };
 
 /// Deep copies the type variables in the type hosted by [`var`] into [`expr`].
@@ -608,6 +608,29 @@ fn deep_copy_type_vars<'a>(
                     };
 
                     Alias(symbol, new_arguments, new_real_type_var, kind)
+                })
+            }
+
+            LambdaSet(subs::LambdaSet { solved }) => {
+                for variables_slice_index in solved.variables() {
+                    let variables_slice = subs[variables_slice_index];
+                    descend_slice!(variables_slice);
+                }
+
+                perform_clone!({
+                    let new_variable_slices =
+                        SubsSlice::reserve_variable_slices(subs, solved.len());
+                    let it = (new_variable_slices.indices()).zip(solved.variables());
+                    for (target_index, index) in it {
+                        let slice = subs[index];
+                        let new_variables = clone_var_slice!(slice);
+                        subs.variable_slices[target_index] = new_variables;
+                    }
+
+                    let new_solved =
+                        UnionTags::from_slices(solved.tag_names(), new_variable_slices);
+
+                    LambdaSet(subs::LambdaSet { solved: new_solved })
                 })
             }
 

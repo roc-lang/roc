@@ -13,7 +13,7 @@ use roc_can::expr::{AccessorData, AnnotatedMark, ClosureData, Field, WhenBranch}
 use roc_can::pattern::Pattern;
 use roc_can::traverse::symbols_introduced_from_pattern;
 use roc_collections::all::{HumanIndex, MutMap, SendMap};
-use roc_module::ident::{Lowercase, TagName};
+use roc_module::ident::Lowercase;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{IllegalCycleMark, Variable};
@@ -858,6 +858,7 @@ pub fn constrain_expr(
 
             let lambda_set = Type::ClosureTag {
                 name: *closure_name,
+                captures: vec![],
                 ext: *closure_ext_var,
             };
 
@@ -1774,7 +1775,7 @@ fn constrain_closure_size(
     debug_assert!(variables.iter().any(|s| *s == closure_var));
     debug_assert!(variables.iter().any(|s| *s == closure_ext_var));
 
-    let mut tag_arguments = Vec::with_capacity(captured_symbols.len());
+    let mut captured_types = Vec::with_capacity(captured_symbols.len());
     let mut captured_symbols_constraints = Vec::with_capacity(captured_symbols.len());
 
     for (symbol, var) in captured_symbols {
@@ -1782,7 +1783,7 @@ fn constrain_closure_size(
         variables.push(*var);
 
         // this symbol is captured, so it must be part of the closure type
-        tag_arguments.push(Type::Variable(*var));
+        captured_types.push(Type::Variable(*var));
 
         // make the variable equal to the looked-up type of symbol
         captured_symbols_constraints.push(constraints.lookup(
@@ -1793,17 +1794,10 @@ fn constrain_closure_size(
     }
 
     // pick a more efficient representation if we don't actually capture anything
-    let closure_type = if tag_arguments.is_empty() {
-        Type::ClosureTag {
-            name,
-            ext: closure_ext_var,
-        }
-    } else {
-        let tag_name = TagName::Closure(name);
-        Type::TagUnion(
-            vec![(tag_name, tag_arguments)],
-            TypeExtension::from_type(Type::Variable(closure_ext_var)),
-        )
+    let closure_type = Type::ClosureTag {
+        name,
+        captures: captured_types,
+        ext: closure_ext_var,
     };
 
     let finalizer = constraints.equal_types_var(

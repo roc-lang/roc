@@ -19,8 +19,8 @@ use roc_problem::can::CycleEntry;
 use roc_region::all::{Loc, Region};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{
-    AliasVariables, Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields, Subs,
-    SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
+    self, AliasVariables, Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields,
+    Subs, SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
@@ -1685,6 +1685,7 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
     }
 }
 
+use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::ops::ControlFlow;
 std::thread_local! {
@@ -1874,16 +1875,18 @@ fn type_to_variable<'a>(
                 register_with_known_var(subs, destination, rank, pools, content)
             }
 
-            ClosureTag { name, ext } => {
+            ClosureTag {
+                name,
+                captures,
+                ext,
+            } => {
                 let tag_name = TagName::Closure(*name);
-                let tag_names = SubsSlice::new(subs.tag_names.len() as u32, 1);
+                let args = &*arena.alloc([(tag_name, captures.as_slice())]);
+                let ext = &*arena.alloc(TypeExtension::Open(Box::new(Type::Variable(*ext))));
+                let (union_tags, ext) =
+                    type_to_union_tags(subs, rank, pools, arena, args, ext, &mut stack);
 
-                subs.tag_names.push(tag_name);
-
-                // the first VariableSubsSlice in the array is a zero-length slice
-                let union_tags = UnionTags::from_slices(tag_names, SubsSlice::new(0, 1));
-
-                let content = Content::Structure(FlatType::TagUnion(union_tags, *ext));
+                let content = Content::Structure(FlatType::TagUnion(union_tags, ext));
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
@@ -2378,11 +2381,12 @@ fn insert_tags_fast_path<'a>(
     rank: Rank,
     pools: &mut Pools,
     arena: &'_ bumpalo::Bump,
-    tags: &'a [(TagName, Vec<Type>)],
+    tags: &'a [(TagName, impl Borrow<[Type]>)],
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> UnionTags {
     if let [(TagName::Tag(tag_name), arguments)] = tags {
-        let variable_slice = register_tag_arguments(subs, rank, pools, arena, stack, arguments);
+        let variable_slice =
+            register_tag_arguments(subs, rank, pools, arena, stack, arguments.borrow());
         let new_variable_slices =
             SubsSlice::extend_new(&mut subs.variable_slices, [variable_slice]);
 
@@ -2409,7 +2413,7 @@ fn insert_tags_fast_path<'a>(
 
             for (variable_slice_index, (_, arguments)) in it {
                 subs.variable_slices[variable_slice_index] =
-                    register_tag_arguments(subs, rank, pools, arena, stack, arguments);
+                    register_tag_arguments(subs, rank, pools, arena, stack, arguments.borrow());
             }
 
             UnionTags::from_slices(new_tag_names, new_variable_slices)
@@ -2423,7 +2427,7 @@ fn insert_tags_fast_path<'a>(
 
             for ((variable_slice_index, tag_name_index), (tag_name, arguments)) in it {
                 subs.variable_slices[variable_slice_index] =
-                    register_tag_arguments(subs, rank, pools, arena, stack, arguments);
+                    register_tag_arguments(subs, rank, pools, arena, stack, arguments.borrow());
 
                 subs.tag_names[tag_name_index] = tag_name.clone();
             }
@@ -2438,11 +2442,12 @@ fn insert_tags_slow_path<'a>(
     rank: Rank,
     pools: &mut Pools,
     arena: &'_ bumpalo::Bump,
-    tags: &'a [(TagName, Vec<Type>)],
+    tags: &'a [(TagName, impl Borrow<[Type]>)],
     mut tag_vars: bumpalo::collections::Vec<(TagName, VariableSubsSlice)>,
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> UnionTags {
     for (tag, tag_argument_types) in tags {
+        let tag_argument_types: &[Type] = tag_argument_types.borrow();
         let new_slice = VariableSubsSlice::reserve_into_subs(subs, tag_argument_types.len());
 
         for (i, arg) in (new_slice.indices()).zip(tag_argument_types) {
@@ -2463,7 +2468,7 @@ fn type_to_union_tags<'a>(
     rank: Rank,
     pools: &mut Pools,
     arena: &'_ bumpalo::Bump,
-    tags: &'a [(TagName, Vec<Type>)],
+    tags: &'a [(TagName, impl Borrow<[Type]>)],
     ext: &'a TypeExtension,
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> (UnionTags, Variable) {
@@ -2863,6 +2868,20 @@ fn adjust_rank_content(
             rank
         }
 
+        LambdaSet(subs::LambdaSet { solved }) => {
+            let mut rank = group_rank;
+
+            for (_, index) in solved.iter_all() {
+                let slice = subs[index];
+                for var_index in slice {
+                    let var = subs[var_index];
+                    rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+                }
+            }
+
+            rank
+        }
+
         RangedNumber(typ, _) => adjust_rank(subs, young_mark, visit_mark, group_rank, *typ),
     }
 }
@@ -3015,6 +3034,12 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
 
                 stack.push(var);
             }
+            LambdaSet(subs::LambdaSet { solved }) => {
+                for slice_index in solved.variables() {
+                    let slice = subs.variable_slices[slice_index.index as usize];
+                    stack.extend(var_slice!(slice));
+                }
+            }
             &RangedNumber(typ, _) => {
                 stack.push(typ);
             }
@@ -3154,6 +3179,22 @@ fn deep_copy_var_help(
         }};
     }
 
+    macro_rules! copy_union_tags {
+        ($tags:expr) => {{
+            let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
+
+            let it = (new_variable_slices.indices()).zip(tags.variables());
+            for (target_index, index) in it {
+                let slice = subs[index];
+
+                let new_variables = copy_sequence!(slice.len(), slice);
+                subs.variable_slices[target_index] = new_variables;
+            }
+
+            UnionTags::from_slices(tags.tag_names(), new_variable_slices)
+        }};
+    }
+
     while let Some(DeepCopyVarWork { source: var, copy }) = stack.pop() {
         visited.push(var);
         pool.push(copy);
@@ -3200,19 +3241,7 @@ fn deep_copy_var_help(
                     }
 
                     TagUnion(tags, ext_var) => {
-                        let new_variable_slices =
-                            SubsSlice::reserve_variable_slices(subs, tags.len());
-
-                        let it = (new_variable_slices.indices()).zip(tags.variables());
-                        for (target_index, index) in it {
-                            let slice = subs[index];
-
-                            let new_variables = copy_sequence!(slice.len(), slice);
-                            subs.variable_slices[target_index] = new_variables;
-                        }
-
-                        let union_tags =
-                            UnionTags::from_slices(tags.tag_names(), new_variable_slices);
+                        let union_tags = copy_union_tags!(tags);
 
                         TagUnion(union_tags, work!(ext_var))
                     }
@@ -3222,19 +3251,7 @@ fn deep_copy_var_help(
                     }
 
                     RecursiveTagUnion(rec_var, tags, ext_var) => {
-                        let new_variable_slices =
-                            SubsSlice::reserve_variable_slices(subs, tags.len());
-
-                        let it = (new_variable_slices.indices()).zip(tags.variables());
-                        for (target_index, index) in it {
-                            let slice = subs[index];
-
-                            let new_variables = copy_sequence!(slice.len(), slice);
-                            subs.variable_slices[target_index] = new_variables;
-                        }
-
-                        let union_tags =
-                            UnionTags::from_slices(tags.tag_names(), new_variable_slices);
+                        let union_tags = copy_union_tags!(tags);
 
                         RecursiveTagUnion(work!(rec_var), union_tags, work!(ext_var))
                     }
@@ -3280,6 +3297,12 @@ fn deep_copy_var_help(
                 let new_content = Alias(symbol, new_arguments, new_real_type_var, kind);
 
                 subs.set_content_unchecked(copy, new_content);
+            }
+
+            LambdaSet(subs::LambdaSet { solved }) => {
+                let new_solved = copy_union_tags!(solved);
+
+                subs.set_content_unchecked(copy, LambdaSet(subs::LambdaSet { solved: new_solved }));
             }
 
             RangedNumber(typ, range) => {
