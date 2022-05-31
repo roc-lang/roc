@@ -5,7 +5,7 @@ use roc_builtins::bitcode::{
     FloatWidth::*,
     IntWidth::{self, *},
 };
-use roc_collections::{VecMap, VecSet};
+use roc_collections::VecMap;
 use roc_module::ident::TagName;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::layout::{
@@ -29,52 +29,38 @@ impl TypeId {
     pub(crate) const PENDING: Self = Self(usize::MAX);
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct Types {
-    targets: VecSet<TargetInfo>,
-
     // These are all indexed by TypeId
     types: Vec<RocType>,
-    sizes_per_target: Vec<Vec<u32>>,
-    aligns_per_target: Vec<Vec<u32>>,
+    sizes: Vec<u32>,
+    aligns: Vec<u32>,
 
     /// Dependencies - that is, which type depends on which other type.
     /// This is important for declaration order in C; we need to output a
     /// type declaration earlier in the file than where it gets referenced by another type.
     deps: VecMap<TypeId, Vec<TypeId>>,
+    target: TargetInfo,
 }
 
 impl Types {
-    pub fn with_capacity(cap: usize) -> Self {
+    pub fn with_capacity(cap: usize, target_info: TargetInfo) -> Self {
         Self {
-            targets: VecSet::default(),
+            target: target_info,
             types: Vec::with_capacity(cap),
-            sizes_per_target: Vec::new(),
-            aligns_per_target: Vec::new(),
+            sizes: Vec::new(),
+            aligns: Vec::new(),
             deps: VecMap::with_capacity(cap),
         }
     }
 
-    pub fn targets(&self) -> impl Iterator<Item = &TargetInfo> {
-        self.targets.iter()
-    }
-
     pub fn add(&mut self, typ: RocType, layout: Layout<'_>) -> TypeId {
         let id = TypeId(self.types.len());
-        let sizes_per_target = self
-            .targets
-            .iter()
-            .map(|target_info| layout.stack_size_without_alignment(*target_info))
-            .collect();
-        let aligns_per_target = self
-            .targets
-            .iter()
-            .map(|target_info| layout.alignment_bytes(*target_info))
-            .collect();
 
         self.types.push(typ);
-        self.sizes_per_target.push(sizes_per_target);
-        self.aligns_per_target.push(aligns_per_target);
+        self.sizes
+            .push(layout.stack_size_without_alignment(self.target));
+        self.aligns.push(layout.alignment_bytes(self.target));
 
         id
     }
@@ -91,40 +77,24 @@ impl Types {
     }
 
     /// Contrast this with the size_ignoring_alignment method
-    pub fn size_rounded_to_alignment(&self, id: TypeId, target_info: TargetInfo) -> u32 {
-        let size_ignoring_alignment = self.size_ignoring_alignment(id, target_info);
-        let alignment = self.get_align(id, target_info);
+    pub fn size_rounded_to_alignment(&self, id: TypeId) -> u32 {
+        let size_ignoring_alignment = self.size_ignoring_alignment(id);
+        let alignment = self.align(id);
 
         round_up_to_alignment(size_ignoring_alignment, alignment)
     }
 
     /// Contrast this with the size_rounded_to_alignment method
-    pub fn size_ignoring_alignment(&self, id: TypeId, target_info: TargetInfo) -> u32 {
-        match self.sizes_per_target.get(id.0) {
-            Some(sizes) => {
-                let target_index = self
-                    .targets
-                    .iter()
-                    .position(|info| *info == target_info)
-                    .unwrap();
-
-                (*sizes)[target_index]
-            }
+    pub fn size_ignoring_alignment(&self, id: TypeId) -> u32 {
+        match self.sizes.get(id.0) {
+            Some(size) => *size,
             None => unreachable!(),
         }
     }
 
-    pub fn get_align(&self, id: TypeId, target_info: TargetInfo) -> u32 {
-        match self.aligns_per_target.get(id.0) {
-            Some(aligns) => {
-                let target_index = self
-                    .targets
-                    .iter()
-                    .position(|info| *info == target_info)
-                    .unwrap();
-
-                (*aligns)[target_index]
-            }
+    pub fn align(&self, id: TypeId) -> u32 {
+        match self.aligns.get(id.0) {
+            Some(align) => *align,
             None => unreachable!(),
         }
     }
@@ -438,24 +408,37 @@ pub enum RocTagUnion {
 }
 
 pub struct Env<'a> {
-    pub arena: &'a Bump,
-    pub subs: &'a Subs,
-    pub layout_cache: &'a mut LayoutCache<'a>,
-    pub interns: &'a Interns,
-    pub struct_names: Structs,
-    pub enum_names: Enums,
-    pub pending_recursive_types: VecMap<TypeId, Layout<'a>>,
-    pub known_recursive_types: VecMap<Layout<'a>, TypeId>,
+    arena: &'a Bump,
+    subs: &'a Subs,
+    layout_cache: LayoutCache<'a>,
+    interns: &'a Interns,
+    struct_names: Structs,
+    enum_names: Enums,
+    pending_recursive_types: VecMap<TypeId, Layout<'a>>,
+    known_recursive_types: VecMap<Layout<'a>, TypeId>,
+    target: TargetInfo,
 }
 
 impl<'a> Env<'a> {
-    pub fn vars_to_types<I>(&mut self, variables: I, targets: VecSet<TargetInfo>) -> Types
+    pub fn new(arena: &'a Bump, subs: &'a Subs, interns: &'a Interns, target: TargetInfo) -> Self {
+        Env {
+            arena,
+            subs,
+            interns,
+            struct_names: Default::default(),
+            enum_names: Default::default(),
+            pending_recursive_types: Default::default(),
+            known_recursive_types: Default::default(),
+            layout_cache: LayoutCache::new(target),
+            target,
+        }
+    }
+
+    pub fn vars_to_types<I>(&mut self, variables: I) -> Types
     where
         I: Iterator<Item = Variable>,
     {
-        let mut types = Types::with_capacity(variables.size_hint().0);
-
-        types.targets = targets;
+        let mut types = Types::with_capacity(variables.size_hint().0, self.target);
 
         for var in variables {
             self.add_type(var, &mut types);

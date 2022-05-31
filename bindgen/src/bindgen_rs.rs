@@ -50,12 +50,12 @@ fn add_decl(impls: &mut Impls, opt_impl: Impl, target_info: TargetInfo, body: St
     targets.push(target_info);
 }
 
-pub fn emit(types: &Types) -> String {
+pub fn emit(types_and_targets: &[(Types, TargetInfo)]) -> String {
     let mut buf = String::new();
     let mut impls: Impls = IndexMap::default();
 
-    for id in types.sorted_ids() {
-        for target_info in types.targets() {
+    for (types, target_info) in types_and_targets {
+        for id in types.sorted_ids() {
             add_type(*target_info, id, types, &mut impls);
         }
     }
@@ -167,8 +167,8 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                         //
                         // Importantly, we should use the size *without* alignment rounding;
                         // otherwise, that might not be where the discriminant actually is!
-                        let discriminant_offset = types.size_ignoring_alignment(id, target_info)
-                            - discriminant_type.size();
+                        let discriminant_offset =
+                            types.size_ignoring_alignment(id) - discriminant_type.size();
 
                         add_tag_union(
                             Recursiveness::NonRecursive,
@@ -196,8 +196,8 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                         //
                         // Importantly, we should use the size *without* alignment rounding;
                         // otherwise, that might not be where the discriminant actually is!
-                        let discriminant_offset = types.size_ignoring_alignment(id, target_info)
-                            - discriminant_type.size();
+                        let discriminant_offset =
+                            types.size_ignoring_alignment(id) - discriminant_type.size();
 
                         add_tag_union(
                             Recursiveness::Recursive,
@@ -306,7 +306,7 @@ fn add_tag_union(
     let tag_names = tags.iter().map(|(name, _)| name).cloned().collect();
     let discriminant_name = add_discriminant(name, target_info, tag_names, types, impls);
     let typ = types.get_type(type_id);
-    let size_rounded_to_alignment = types.size_rounded_to_alignment(type_id, target_info);
+    let size_rounded_to_alignment = types.size_rounded_to_alignment(type_id);
     let (actual_self, actual_self_mut, actual_other, union_name) = match recursiveness {
         Recursiveness::Recursive => (
             "(&*self.union_pointer())",

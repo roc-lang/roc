@@ -4,9 +4,7 @@ use roc_can::{
     def::{Declaration, Def},
     pattern::Pattern,
 };
-use roc_collections::VecSet;
 use roc_load::{LoadedModule, Threading};
-use roc_mono::layout::LayoutCache;
 use roc_reporting::report::RenderTarget;
 use roc_target::{Architecture, TargetInfo};
 use std::io;
@@ -18,7 +16,7 @@ pub fn load_types(
     full_file_path: PathBuf,
     dir: &Path,
     threading: Threading,
-) -> Result<Types, io::Error> {
+) -> Result<Vec<(Types, TargetInfo)>, io::Error> {
     let target_info = (&Triple::host()).into();
 
     let arena = &Bump::new();
@@ -55,8 +53,6 @@ pub fn load_types(
             type_problems
         );
     }
-
-    let targets: VecSet<TargetInfo> = Architecture::iter().map(TargetInfo::from).collect();
 
     let defs_iter = decls.iter().flat_map(|decl| match decl {
         Declaration::Declare(def) => {
@@ -95,17 +91,14 @@ pub fn load_types(
         },
     );
 
-    let mut layout_cache = LayoutCache::new(target_info);
-    let mut env = Env {
-        arena,
-        layout_cache: &mut layout_cache,
-        interns: &interns,
-        subs,
-        struct_names: Default::default(),
-        enum_names: Default::default(),
-        pending_recursive_types: Default::default(),
-        known_recursive_types: Default::default(),
-    };
+    let types_and_targets = Architecture::iter()
+        .map(|arch| {
+            let target_info = arch.into();
+            let mut env = Env::new(arena, subs, &interns, target_info);
 
-    Ok(env.vars_to_types(vars_iter, targets))
+            (env.vars_to_types(vars_iter.clone()), target_info)
+        })
+        .collect();
+
+    Ok(types_and_targets)
 }
