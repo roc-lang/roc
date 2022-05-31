@@ -1,0 +1,25 @@
+on: [pull_request]
+
+name: Nix M1 cargo test
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_BACKTRACE: 1
+
+jobs:
+  nix-m1:
+    name: nix-m1
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 90
+    env:
+      FORCE_COLOR: 1
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          clean: "true"
+
+      - name: setup dependencies with nix, build and test
+        run: nix develop -c cargo test --locked --release --no-run

@@ -126,7 +126,7 @@ fn generate_bc_file(bitcode_path: &Path, zig_object: &str, file_name: &str) {
     );
 }
 
-fn run_command<S, I, P: AsRef<Path>>(path: P, command_str: &str, args: I)
+fn run_command<S, I: Copy, P: AsRef<Path> + Copy>(path: P, command_str: &str, args: I)
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -135,6 +135,7 @@ where
         .current_dir(path)
         .args(args)
         .output();
+
     match output_result {
         Ok(output) => match output.status.success() {
             true => (),
@@ -143,7 +144,13 @@ where
                     Ok(stderr) => stderr.to_string(),
                     Err(_) => format!("Failed to run \"{}\"", command_str),
                 };
-                panic!("{} failed: {}", command_str, error_str);
+
+                // flaky test error that only occurs sometimes inside MacOS ci run
+                if error_str.contains("unable to build stage1 zig object: FileNotFound") {
+                    run_command(path, command_str, args)
+                } else {
+                    panic!("{} failed: {}", command_str, error_str);
+                }
             }
         },
         Err(reason) => panic!("{} failed: {}", command_str, reason),
