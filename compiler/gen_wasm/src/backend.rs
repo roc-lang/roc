@@ -126,7 +126,8 @@ impl<'a> WasmBackend<'a> {
             init: ConstExpr::I32(stack_heap_boundary as i32),
         });
 
-        module.memory = MemorySection::new(env.arena, stack_heap_boundary);
+        module.memory =
+            MemorySection::new(env.arena, stack_heap_boundary + MemorySection::PAGE_SIZE);
         module.export.append(Export {
             name: MEMORY_NAME,
             ty: ExportType::Mem,
