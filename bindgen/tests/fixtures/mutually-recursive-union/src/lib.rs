@@ -21,6 +21,41 @@ pub extern "C" fn rust_main() -> i32 {
         ret.assume_init()
     };
 
+    // main = {
+    //     default: Job {
+    //         command: Command {
+    //             tool: SystemTool { name: "test", num: 42 }
+    //         },
+    //         inputFiles : ["foo"]
+    //     }
+    // }
+
+    unsafe {
+        dbg!(&tag_union.default.as_Job());
+    }
+
+    unsafe {
+        dbg!(&tag_union.default.as_Job().inputFiles);
+    }
+
+    // Tool : [
+    //     SystemTool { name : Str, num : U32 },
+    //     FromJob { job : Job, num : U32 }
+    // ]
+
+    // Command : [Command { tool : Tool }]
+
+    // Job : [
+    //     Job { command : Command, inputFiles : List Str },
+    //     Foo Str,
+    //     # WithTool Tool # Mutual recursion; Tool also references Job
+    // ]
+
+    // Rbt : { default: Job }
+
+    // mainForHost : Rbt
+    // mainForHost = main
+
     // Verify that it has all the expected traits.
 
     // assert!(tag_union == tag_union); // PartialEq

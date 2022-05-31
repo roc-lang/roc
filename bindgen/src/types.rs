@@ -1,10 +1,23 @@
-use core::mem::align_of;
-use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_collections::VecMap;
-use roc_mono::layout::UnionLayout;
-use roc_std::RocDec;
+use crate::enums::Enums;
+use crate::structs::Structs;
+use bumpalo::Bump;
+use roc_builtins::bitcode::{
+    FloatWidth::*,
+    IntWidth::{self, *},
+};
+use roc_collections::{VecMap, VecSet};
+use roc_module::ident::TagName;
+use roc_module::symbol::{Interns, Symbol};
+use roc_mono::layout::{
+    cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Layout, LayoutCache,
+    UnionLayout,
+};
 use roc_target::TargetInfo;
-use std::convert::TryInto;
+use roc_types::{
+    subs::{Content, FlatType, Subs, UnionTags, Variable},
+    types::RecordField,
+};
+use std::fmt::Display;
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeId(usize);
@@ -18,7 +31,12 @@ impl TypeId {
 
 #[derive(Default, Debug, Clone)]
 pub struct Types {
-    by_id: Vec<RocType>,
+    targets: VecSet<TargetInfo>,
+
+    // These are all indexed by TypeId
+    types: Vec<RocType>,
+    sizes_per_target: Vec<Vec<u32>>,
+    aligns_per_target: Vec<Vec<u32>>,
 
     /// Dependencies - that is, which type depends on which other type.
     /// This is important for declaration order in C; we need to output a
@@ -29,15 +47,34 @@ pub struct Types {
 impl Types {
     pub fn with_capacity(cap: usize) -> Self {
         Self {
-            by_id: Vec::with_capacity(cap),
+            targets: VecSet::default(),
+            types: Vec::with_capacity(cap),
+            sizes_per_target: Vec::new(),
+            aligns_per_target: Vec::new(),
             deps: VecMap::with_capacity(cap),
         }
     }
 
-    pub fn add(&mut self, typ: RocType) -> TypeId {
-        let id = TypeId(self.by_id.len());
+    pub fn targets(&self) -> impl Iterator<Item = &TargetInfo> {
+        self.targets.iter()
+    }
 
-        self.by_id.push(typ);
+    pub fn add(&mut self, typ: RocType, layout: Layout<'_>) -> TypeId {
+        let id = TypeId(self.types.len());
+        let sizes_per_target = self
+            .targets
+            .iter()
+            .map(|target_info| layout.stack_size_without_alignment(*target_info))
+            .collect();
+        let aligns_per_target = self
+            .targets
+            .iter()
+            .map(|target_info| layout.alignment_bytes(*target_info))
+            .collect();
+
+        self.types.push(typ);
+        self.sizes_per_target.push(sizes_per_target);
+        self.aligns_per_target.push(aligns_per_target);
 
         id
     }
@@ -46,27 +83,66 @@ impl Types {
         self.deps.get_or_insert(id, Vec::new).push(depends_on);
     }
 
-    pub fn get(&self, id: TypeId) -> &RocType {
-        match self.by_id.get(id.0) {
+    pub fn get_type(&self, id: TypeId) -> &RocType {
+        match self.types.get(id.0) {
             Some(typ) => typ,
             None => unreachable!(),
         }
     }
 
-    pub fn replace(&mut self, id: TypeId, typ: RocType) {
-        debug_assert!(self.by_id.get(id.0).is_some());
+    /// Contrast this with the size_ignoring_alignment method
+    pub fn size_rounded_to_alignment(&self, id: TypeId, target_info: TargetInfo) -> u32 {
+        let size_ignoring_alignment = self.size_ignoring_alignment(id, target_info);
+        let alignment = self.get_align(id, target_info);
 
-        self.by_id[id.0] = typ;
+        round_up_to_alignment(size_ignoring_alignment, alignment)
+    }
+
+    /// Contrast this with the size_rounded_to_alignment method
+    pub fn size_ignoring_alignment(&self, id: TypeId, target_info: TargetInfo) -> u32 {
+        match self.sizes_per_target.get(id.0) {
+            Some(sizes) => {
+                let target_index = self
+                    .targets
+                    .iter()
+                    .position(|info| *info == target_info)
+                    .unwrap();
+
+                (*sizes)[target_index]
+            }
+            None => unreachable!(),
+        }
+    }
+
+    pub fn get_align(&self, id: TypeId, target_info: TargetInfo) -> u32 {
+        match self.aligns_per_target.get(id.0) {
+            Some(aligns) => {
+                let target_index = self
+                    .targets
+                    .iter()
+                    .position(|info| *info == target_info)
+                    .unwrap();
+
+                (*aligns)[target_index]
+            }
+            None => unreachable!(),
+        }
+    }
+
+    pub fn replace(&mut self, id: TypeId, typ: RocType) {
+        debug_assert!(self.types.get(id.0).is_some());
+
+        self.types[id.0] = typ;
     }
 
     pub fn ids(&self) -> impl ExactSizeIterator<Item = TypeId> {
-        (0..self.by_id.len()).map(TypeId)
+        (0..self.types.len()).map(TypeId)
     }
 
     pub fn sorted_ids(&self) -> Vec<TypeId> {
         use roc_collections::{ReferenceMatrix, TopologicalSort};
 
-        let mut matrix = ReferenceMatrix::new(self.by_id.len());
+        let mut matrix = ReferenceMatrix::new(self.types.len());
 
         for type_id in self.ids() {
             for dep in self.deps.get(&type_id).iter().flat_map(|x| x.iter()) {
@@ -86,37 +162,6 @@ impl Types {
                 nodes_in_cycle,
             } => unreachable!("Cyclic type definitions: {:?}", nodes_in_cycle),
         }
-    }
-
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = &RocType> {
-        TypesIter {
-            types: self.by_id.as_slice(),
-            len: self.by_id.len(),
-        }
-    }
-}
-
-struct TypesIter<'a> {
-    types: &'a [RocType],
-    len: usize,
-}
-
-impl<'a> ExactSizeIterator for TypesIter<'a> {
-    fn len(&self) -> usize {
-        self.len
-    }
-}
-
-impl<'a> Iterator for TypesIter<'a> {
-    type Item = &'a RocType;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let len = self.len;
-        let answer = self.types.get(self.types.len() - len);
-
-        self.len = len.saturating_sub(1);
-
-        answer
     }
 }
 
@@ -144,7 +189,7 @@ pub enum RocType {
     RecursivePointer(TypeId),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum RocNum {
     I8,
     U8,
@@ -163,47 +208,28 @@ pub enum RocNum {
 }
 
 impl RocNum {
-    fn size(&self) -> usize {
+    /// These sizes don't vary by target.
+    pub fn size(&self) -> u32 {
         use core::mem::size_of;
-        use RocNum::*;
 
-        match self {
-            I8 => size_of::<i8>(),
-            U8 => size_of::<u8>(),
-            I16 => size_of::<i16>(),
-            U16 => size_of::<u16>(),
-            I32 => size_of::<i32>(),
-            U32 => size_of::<u32>(),
-            I64 => size_of::<i64>(),
-            U64 => size_of::<u64>(),
-            I128 => size_of::<roc_std::I128>(),
-            U128 => size_of::<roc_std::U128>(),
-            F32 => size_of::<f32>(),
-            F64 => size_of::<f64>(),
-            F128 => todo!(),
-            Dec => size_of::<roc_std::RocDec>(),
-        }
-    }
+        let answer = match self {
+            RocNum::I8 => size_of::<i8>(),
+            RocNum::U8 => size_of::<u8>(),
+            RocNum::I16 => size_of::<i16>(),
+            RocNum::U16 => size_of::<u16>(),
+            RocNum::I32 => size_of::<i32>(),
+            RocNum::U32 => size_of::<u32>(),
+            RocNum::I64 => size_of::<i64>(),
+            RocNum::U64 => size_of::<u64>(),
+            RocNum::I128 => size_of::<roc_std::I128>(),
+            RocNum::U128 => size_of::<roc_std::U128>(),
+            RocNum::F32 => size_of::<f32>(),
+            RocNum::F64 => size_of::<f64>(),
+            RocNum::F128 => todo!(),
+            RocNum::Dec => size_of::<roc_std::RocDec>(),
+        };
 
-    fn alignment(&self, target_info: TargetInfo) -> usize {
-        use RocNum::*;
-
-        match self {
-            I8 => IntWidth::I8.alignment_bytes(target_info) as usize,
-            U8 => IntWidth::U8.alignment_bytes(target_info) as usize,
-            I16 => IntWidth::I16.alignment_bytes(target_info) as usize,
-            U16 => IntWidth::U16.alignment_bytes(target_info) as usize,
-            I32 => IntWidth::I32.alignment_bytes(target_info) as usize,
-            U32 => IntWidth::U32.alignment_bytes(target_info) as usize,
-            I64 => IntWidth::I64.alignment_bytes(target_info) as usize,
-            U64 => IntWidth::U64.alignment_bytes(target_info) as usize,
-            I128 => IntWidth::I128.alignment_bytes(target_info) as usize,
-            U128 => IntWidth::U128.alignment_bytes(target_info) as usize,
-            F32 => FloatWidth::F32.alignment_bytes(target_info) as usize,
-            F64 => FloatWidth::F64.alignment_bytes(target_info) as usize,
-            F128 => FloatWidth::F128.alignment_bytes(target_info) as usize,
-            Dec => align_of::<RocDec>(),
-        }
+        answer as u32
     }
 }
 
@@ -224,15 +250,19 @@ impl RocType {
             | RocType::TagUnion(RocTagUnion::NullableWrapped { .. })
             | RocType::TagUnion(RocTagUnion::Recursive { .. })
             | RocType::RecursivePointer { .. } => true,
-            RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => tags
-                .iter()
-                .any(|(_, payloads)| payloads.iter().any(|id| types.get(*id).has_pointer(types))),
+            RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => {
+                tags.iter().any(|(_, payloads)| {
+                    payloads
+                        .iter()
+                        .any(|id| types.get_type(*id).has_pointer(types))
+                })
+            }
             RocType::Struct { fields, .. } => fields
                 .iter()
-                .any(|(_, type_id)| types.get(*type_id).has_pointer(types)),
+                .any(|(_, type_id)| types.get_type(*type_id).has_pointer(types)),
             RocType::TagUnionPayload { fields, .. } => fields
                 .iter()
-                .any(|(_, type_id)| types.get(*type_id).has_pointer(types)),
+                .any(|(_, type_id)| types.get_type(*type_id).has_pointer(types)),
         }
     }
 
@@ -255,31 +285,39 @@ impl RocType {
             | RocType::Bool
             | RocType::TagUnion(RocTagUnion::Enumeration { .. }) => false,
             RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
-                types.get(*id).has_float_help(types, do_not_recurse)
+                types.get_type(*id).has_float_help(types, do_not_recurse)
             }
             RocType::RocDict(key_id, val_id) => {
-                types.get(*key_id).has_float_help(types, do_not_recurse)
-                    || types.get(*val_id).has_float_help(types, do_not_recurse)
+                types
+                    .get_type(*key_id)
+                    .has_float_help(types, do_not_recurse)
+                    || types
+                        .get_type(*val_id)
+                        .has_float_help(types, do_not_recurse)
             }
-            RocType::Struct { fields, .. } => fields
-                .iter()
-                .any(|(_, type_id)| types.get(*type_id).has_float_help(types, do_not_recurse)),
-            RocType::TagUnionPayload { fields, .. } => fields
-                .iter()
-                .any(|(_, type_id)| types.get(*type_id).has_float_help(types, do_not_recurse)),
+            RocType::Struct { fields, .. } => fields.iter().any(|(_, type_id)| {
+                types
+                    .get_type(*type_id)
+                    .has_float_help(types, do_not_recurse)
+            }),
+            RocType::TagUnionPayload { fields, .. } => fields.iter().any(|(_, type_id)| {
+                types
+                    .get_type(*type_id)
+                    .has_float_help(types, do_not_recurse)
+            }),
             RocType::TagUnion(RocTagUnion::Recursive { tags, .. })
             | RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => {
                 tags.iter().any(|(_, payloads)| {
                     payloads
                         .iter()
-                        .any(|id| types.get(*id).has_float_help(types, do_not_recurse))
+                        .any(|id| types.get_type(*id).has_float_help(types, do_not_recurse))
                 })
             }
             RocType::TagUnion(RocTagUnion::NullableWrapped { non_null_tags, .. }) => {
                 non_null_tags.iter().any(|(_, _, payloads)| {
                     payloads
                         .iter()
-                        .any(|id| types.get(*id).has_float_help(types, do_not_recurse))
+                        .any(|id| types.get_type(*id).has_float_help(types, do_not_recurse))
                 })
             }
             RocType::TagUnion(RocTagUnion::NullableUnwrapped {
@@ -295,7 +333,9 @@ impl RocType {
 
                     do_not_recurse.push(*content);
 
-                    types.get(*content).has_float_help(types, &do_not_recurse)
+                    types
+                        .get_type(*content)
+                        .has_float_help(types, &do_not_recurse)
                 }
             }
         }
@@ -307,219 +347,36 @@ impl RocType {
             RocType::TagUnion { .. } | RocType::RecursivePointer { .. } => true,
             RocType::RocStr | RocType::Bool | RocType::Num(_) => false,
             RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
-                types.get(*id).has_enumeration(types)
+                types.get_type(*id).has_enumeration(types)
             }
             RocType::RocDict(key_id, val_id) => {
-                types.get(*key_id).has_enumeration(types)
-                    || types.get(*val_id).has_enumeration(types)
+                types.get_type(*key_id).has_enumeration(types)
+                    || types.get_type(*val_id).has_enumeration(types)
             }
             RocType::Struct { fields, .. } => fields
                 .iter()
-                .any(|(_, type_id)| types.get(*type_id).has_enumeration(types)),
+                .any(|(_, type_id)| types.get_type(*type_id).has_enumeration(types)),
             RocType::TagUnionPayload { fields, .. } => fields
                 .iter()
-                .any(|(_, type_id)| types.get(*type_id).has_enumeration(types)),
-        }
-    }
-
-    pub fn size(&self, types: &Types, target_info: TargetInfo) -> usize {
-        use std::mem::size_of;
-
-        match self {
-            RocType::Bool => size_of::<bool>(),
-            RocType::Num(num) => num.size(),
-            RocType::RocStr | RocType::RocList(_) | RocType::RocDict(_, _) | RocType::RocSet(_) => {
-                3 * target_info.ptr_size()
-            }
-            RocType::RocBox(_) => target_info.ptr_size(),
-            RocType::TagUnion(tag_union) => match tag_union {
-                RocTagUnion::Enumeration { tags, .. } => size_for_tag_count(tags.len()),
-                RocTagUnion::NonRecursive { tags, .. } | RocTagUnion::Recursive { tags, .. } => {
-                    // The "unpadded" size (without taking alignment into account)
-                    // is the same as the offset of the discriminant.
-                    let size_unpadded = RocTagUnion::discriminant_offset(tags, types, target_info);
-
-                    if tags.len() <= 1 {
-                        // If there is no discriminant, then size equals unpadded size.
-                        size_unpadded
-                    } else {
-                        // Add in the size needed for the discriminant.
-                        let discriminant_size = size_for_tag_count(tags.len());
-                        let size_with_disc = size_unpadded + discriminant_size;
-
-                        // Round up to the next multiple of alignment, to incorporate
-                        // any necessary alignment padding.
-                        let discriminant_align = align_for_tag_count(tags.len(), target_info);
-                        let align = self.alignment(types, target_info).max(discriminant_align);
-
-                        // Use the "add denominator to numerator and subtract 1" technique
-                        // to do integer division that rounds up.
-                        ((size_with_disc + align - 1) / align) * align
-                    }
-                }
-                RocTagUnion::NonNullableUnwrapped { .. } => todo!(),
-                RocTagUnion::NullableWrapped { .. } => todo!(),
-                RocTagUnion::NullableUnwrapped {
-                    non_null_payload, ..
-                } => types.get(*non_null_payload).size(types, target_info),
-            },
-            RocType::Struct { fields, .. } => struct_size(
-                fields.iter().map(|(_, type_id)| *type_id),
-                types,
-                target_info,
-                self.alignment(types, target_info),
-            ),
-            RocType::TagUnionPayload { fields, .. } => struct_size(
-                fields.iter().map(|(_, type_id)| *type_id),
-                types,
-                target_info,
-                self.alignment(types, target_info),
-            ),
-            RocType::RecursivePointer { .. } => target_info.ptr_size(),
-        }
-    }
-
-    pub fn alignment(&self, types: &Types, target_info: TargetInfo) -> usize {
-        match self {
-            RocType::RocStr
-            | RocType::RocList(_)
-            | RocType::RocDict(_, _)
-            | RocType::RocSet(_)
-            | RocType::RocBox(_) => target_info.ptr_alignment_bytes(),
-            RocType::Num(num) => num.alignment(target_info),
-            RocType::Bool => align_of::<bool>(),
-            RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => {
-                // The smallest alignment this could possibly have is based on the number of tags - e.g.
-                // 0 tags is an empty union (so, alignment 0), 1-255 tags has a u8 tag (so, alignment 1), etc.
-                let mut align = align_for_tag_count(tags.len(), target_info);
-
-                for (_, payloads) in tags {
-                    for id in payloads {
-                        align = align.max(types.get(*id).alignment(types, target_info));
-                    }
-                }
-
-                align
-            }
-            RocType::TagUnion(RocTagUnion::Recursive { tags, .. }) => {
-                // The smallest alignment this could possibly have is based on the number of tags - e.g.
-                // 0 tags is an empty union (so, alignment 0), 1-255 tags has a u8 tag (so, alignment 1), etc.
-                //
-                // Unlike a regular tag union, a recursive one also includes a pointer.
-                let ptr_align = target_info.ptr_alignment_bytes();
-                let mut align = ptr_align.max(align_for_tag_count(tags.len(), target_info));
-
-                for (_, payloads) in tags {
-                    for id in payloads {
-                        align = align.max(types.get(*id).alignment(types, target_info));
-                    }
-                }
-
-                align
-            }
-            RocType::TagUnion(RocTagUnion::NullableWrapped { non_null_tags, .. }) => {
-                // The smallest alignment this could possibly have is based on the number of tags - e.g.
-                // 0 tags is an empty union (so, alignment 0), 1-255 tags has a u8 tag (so, alignment 1), etc.
-                //
-                // Unlike a regular tag union, a recursive one also includes a pointer.
-                let ptr_align = target_info.ptr_alignment_bytes();
-                let mut align =
-                    ptr_align.max(align_for_tag_count(non_null_tags.len(), target_info));
-
-                for (_, _, payloads) in non_null_tags {
-                    for id in payloads {
-                        align = align.max(types.get(*id).alignment(types, target_info));
-                    }
-                }
-
-                align
-            }
-            RocType::Struct { fields, .. } => fields.iter().fold(0, |align, (_, field_id)| {
-                align.max(types.get(*field_id).alignment(types, target_info))
-            }),
-            RocType::TagUnionPayload { fields, .. } => {
-                fields.iter().fold(0, |align, (_, field_id)| {
-                    align.max(types.get(*field_id).alignment(types, target_info))
-                })
-            }
-            RocType::TagUnion(RocTagUnion::NullableUnwrapped {
-                non_null_payload: content,
-                ..
-            })
-            | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { content, .. }) => {
-                types.get(*content).alignment(types, target_info)
-            }
-            RocType::TagUnion(RocTagUnion::Enumeration { tags, .. }) => {
-                UnionLayout::discriminant_size(tags.len())
-                    .stack_size()
-                    .try_into()
-                    .unwrap()
-            }
-            RocType::RecursivePointer { .. } => target_info.ptr_alignment_bytes(),
+                .any(|(_, type_id)| types.get_type(*type_id).has_enumeration(types)),
         }
     }
 }
 
-fn struct_size(
-    fields: impl Iterator<Item = TypeId>,
-    types: &Types,
-    target_info: TargetInfo,
-    align: usize,
-) -> usize {
-    // The "unpadded" size (without taking alignment into account)
-    // is the sum of all the sizes of the fields.
-    let size_unpadded = fields.fold(0, |total, field_id| {
-        total + types.get(field_id).size(types, target_info)
-    });
-
-    // Round up to the next multiple of alignment, to incorporate
-    // any necessary alignment padding.
-    //
-    // e.g. if we have a record with a Str and a U8, that would be a
-    // size_unpadded of 25, because Str is three 8-byte pointers and U8 is 1 byte,
-    // but the 8-byte alignment of the pointers means we'll round 25 up to 32.
-    (size_unpadded / align) * align
-}
-
-fn size_for_tag_count(num_tags: usize) -> usize {
-    if num_tags == 0 {
-        // empty tag union
-        0
-    } else if num_tags < u8::MAX as usize {
-        IntWidth::U8.stack_size() as usize
-    } else if num_tags < u16::MAX as usize {
-        IntWidth::U16.stack_size() as usize
-    } else if num_tags < u32::MAX as usize {
-        IntWidth::U32.stack_size() as usize
-    } else if num_tags < u64::MAX as usize {
-        IntWidth::U64.stack_size() as usize
-    } else {
-        panic!(
-            "Too many tags. You can't have more than {} tags in a tag union!",
-            u64::MAX
-        );
-    }
-}
-
-/// Returns the alignment of the discriminant based on the target
-/// (e.g. on wasm, these are always 4)
-fn align_for_tag_count(num_tags: usize, target_info: TargetInfo) -> usize {
-    if num_tags == 0 {
-        // empty tag union
-        0
-    } else if num_tags < u8::MAX as usize {
-        IntWidth::U8.alignment_bytes(target_info) as usize
-    } else if num_tags < u16::MAX as usize {
-        IntWidth::U16.alignment_bytes(target_info) as usize
-    } else if num_tags < u32::MAX as usize {
-        IntWidth::U32.alignment_bytes(target_info) as usize
-    } else if num_tags < u64::MAX as usize {
-        IntWidth::U64.alignment_bytes(target_info) as usize
-    } else {
-        panic!(
-            "Too many tags. You can't have more than {} tags in a tag union!",
-            u64::MAX
-        );
+impl From<IntWidth> for RocNum {
+    fn from(width: IntWidth) -> Self {
+        match width {
+            IntWidth::U8 => RocNum::U8,
+            IntWidth::U16 => RocNum::U16,
+            IntWidth::U32 => RocNum::U32,
+            IntWidth::U64 => RocNum::U64,
+            IntWidth::U128 => RocNum::U128,
+            IntWidth::I8 => RocNum::I8,
+            IntWidth::I16 => RocNum::I16,
+            IntWidth::I32 => RocNum::I32,
+            IntWidth::I64 => RocNum::I64,
+            IntWidth::I128 => RocNum::I128,
+        }
     }
 }
 
@@ -534,12 +391,14 @@ pub enum RocTagUnion {
     NonRecursive {
         name: String,
         tags: Vec<(String, Option<TypeId>)>,
+        discriminant_type: RocNum,
     },
     /// A recursive tag union (general case)
     /// e.g. `Expr : [Sym Str, Add Expr Expr]`
     Recursive {
         name: String,
         tags: Vec<(String, Option<TypeId>)>,
+        discriminant_type: RocNum,
     },
     /// A recursive tag union with just one constructor
     /// Optimization: No need to store a tag ID (the payload is "unwrapped")
@@ -578,63 +437,495 @@ pub enum RocTagUnion {
     },
 }
 
-impl RocTagUnion {
-    /// The byte offset where the discriminant is located within the tag union's
-    /// in-memory representation. So if you take a pointer to the tag union itself,
-    /// and add discriminant_offset to it, you'll have a pointer to the discriminant.
-    ///
-    /// This is only useful when given tags from RocTagUnion::Recursive or
-    /// RocTagUnion::NonRecursive - other tag types do not store their discriminants
-    /// as plain numbers at a fixed offset!
-    pub fn discriminant_offset(
-        tags: &[(String, Option<TypeId>)],
-        types: &Types,
-        target_info: TargetInfo,
-    ) -> usize {
-        tags.iter()
-            .fold(0, |max_size, (_, opt_tag_id)| match opt_tag_id {
-                Some(tag_id) => {
-                    let size_unpadded = match types.get(*tag_id) {
-                        // For structs (that is, payloads), we actually want
-                        // to get the size *before* alignment padding is taken
-                        // into account, since the discriminant is
-                        // stored after those bytes.
-                        RocType::Struct { fields, .. } => {
-                            fields.iter().fold(0, |total, (_, field_id)| {
-                                total + types.get(*field_id).size(types, target_info)
-                            })
-                        }
-                        typ => max_size.max(typ.size(types, target_info)),
-                    };
+pub struct Env<'a> {
+    pub arena: &'a Bump,
+    pub subs: &'a Subs,
+    pub layout_cache: &'a mut LayoutCache<'a>,
+    pub interns: &'a Interns,
+    pub struct_names: Structs,
+    pub enum_names: Enums,
+    pub pending_recursive_types: VecMap<TypeId, Layout<'a>>,
+    pub known_recursive_types: VecMap<Layout<'a>, TypeId>,
+}
 
-                    max_size.max(size_unpadded)
-                }
+impl<'a> Env<'a> {
+    pub fn vars_to_types<I>(&mut self, variables: I, targets: VecSet<TargetInfo>) -> Types
+    where
+        I: Iterator<Item = Variable>,
+    {
+        let mut types = Types::with_capacity(variables.size_hint().0);
 
-                None => max_size,
-            })
+        types.targets = targets;
+
+        for var in variables {
+            self.add_type(var, &mut types);
+        }
+
+        self.resolve_pending_recursive_types(&mut types);
+
+        types
+    }
+
+    fn add_type(&mut self, var: Variable, types: &mut Types) -> TypeId {
+        let layout = self
+            .layout_cache
+            .from_var(self.arena, var, self.subs)
+            .expect("Something weird ended up in the content");
+
+        add_type_help(self, layout, var, None, types)
+    }
+
+    fn resolve_pending_recursive_types(&mut self, types: &mut Types) {
+        // TODO if VecMap gets a drain() method, use that instead of doing take() and into_iter
+        let pending = core::mem::take(&mut self.pending_recursive_types);
+
+        for (type_id, layout) in pending.into_iter() {
+            let actual_type_id = self.known_recursive_types.get(&layout).unwrap_or_else(|| {
+                unreachable!(
+                    "There was no known recursive TypeId for the pending recursive type {:?}",
+                    layout
+                );
+            });
+
+            debug_assert!(
+                matches!(types.get_type(type_id), RocType::RecursivePointer(TypeId::PENDING)),
+                "The TypeId {:?} was registered as a pending recursive pointer, but was not stored in Types as one.",
+                type_id
+            );
+
+            // size and alignment shouldn't change; this is still
+            // a RecursivePointer, it's just pointing to something else.
+            types.replace(type_id, RocType::RecursivePointer(*actual_type_id));
+        }
     }
 }
 
-#[test]
-fn sizes_agree_with_roc_std() {
-    use std::mem::size_of;
+fn add_type_help<'a>(
+    env: &mut Env<'a>,
+    layout: Layout<'a>,
+    var: Variable,
+    opt_name: Option<Symbol>,
+    types: &mut Types,
+) -> TypeId {
+    let subs = env.subs;
 
-    let target_info = TargetInfo::from(&target_lexicon::Triple::host());
-    let mut types = Types::default();
+    match subs.get_content_without_compacting(var) {
+        Content::FlexVar(_)
+        | Content::RigidVar(_)
+        | Content::FlexAbleVar(_, _)
+        | Content::RigidAbleVar(_, _) => {
+            todo!("TODO give a nice error message for a non-concrete type being passed to the host")
+        }
+        Content::Structure(FlatType::Record(fields, ext)) => {
+            let it = fields
+                .unsorted_iterator(subs, *ext)
+                .expect("something weird in content")
+                .flat_map(|(label, field)| {
+                    match field {
+                        RecordField::Required(field_var) | RecordField::Demanded(field_var) => {
+                            Some((label.to_string(), field_var))
+                        }
+                        RecordField::Optional(_) => {
+                            // drop optional fields
+                            None
+                        }
+                    }
+                });
 
-    assert_eq!(
-        RocType::RocStr.size(&types, target_info),
-        size_of::<roc_std::RocStr>(),
-    );
+            let name = match opt_name {
+                Some(sym) => sym.as_str(env.interns).to_string(),
+                None => env.struct_names.get_name(var),
+            };
 
-    assert_eq!(
-        RocType::RocList(types.add(RocType::RocStr)).size(&types, target_info),
-        size_of::<roc_std::RocList<()>>(),
-    );
+            add_struct(env, name, it, types, layout, |name, fields| {
+                RocType::Struct { name, fields }
+            })
+        }
+        Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
+            debug_assert!(ext_var_is_empty_tag_union(subs, *ext_var));
 
-    // TODO enable this once we have RocDict in roc_std
-    // assert_eq!(
-    //     RocType::RocDict.size(&types, target_info),
-    //     size_of::<roc_std::RocDict>(),
-    // );
+            add_tag_union(env, opt_name, tags, var, types, layout)
+        }
+        Content::Structure(FlatType::RecursiveTagUnion(_rec_var, tag_vars, ext_var)) => {
+            debug_assert!(ext_var_is_empty_tag_union(subs, *ext_var));
+
+            add_tag_union(env, opt_name, tag_vars, var, types, layout)
+        }
+        Content::Structure(FlatType::Apply(symbol, _)) => match layout {
+            Layout::Builtin(builtin) => {
+                add_builtin_type(env, builtin, var, opt_name, types, layout)
+            }
+            _ => {
+                if symbol.is_builtin() {
+                    todo!(
+                        "Handle Apply for builtin symbol {:?} and layout {:?}",
+                        symbol,
+                        layout
+                    )
+                } else {
+                    todo!(
+                        "Handle non-builtin Apply for symbol {:?} and layout {:?}",
+                        symbol,
+                        layout
+                    )
+                }
+            }
+        },
+        Content::Structure(FlatType::Func(_, _, _)) => {
+            todo!()
+        }
+        Content::Structure(FlatType::FunctionOrTagUnion(_, _, _)) => {
+            todo!()
+        }
+        Content::Structure(FlatType::Erroneous(_)) => todo!(),
+        Content::Structure(FlatType::EmptyRecord) => todo!(),
+        Content::Structure(FlatType::EmptyTagUnion) => {
+            // This can happen when unwrapping a tag union; don't do anything.
+            todo!()
+        }
+        Content::Alias(name, _, real_var, _) => {
+            if name.is_builtin() {
+                match layout {
+                    Layout::Builtin(builtin) => {
+                        add_builtin_type(env, builtin, var, opt_name, types, layout)
+                    }
+                    _ => {
+                        unreachable!()
+                    }
+                }
+            } else {
+                // If this was a non-builtin type alias, we can use that alias name
+                // in the generated bindings.
+                add_type_help(env, layout, *real_var, Some(*name), types)
+            }
+        }
+        Content::RangedNumber(_, _) => todo!(),
+        Content::Error => todo!(),
+        Content::RecursionVar { structure, .. } => {
+            let type_id = types.add(RocType::RecursivePointer(TypeId::PENDING), layout);
+            let structure_layout = env
+                .layout_cache
+                .from_var(env.arena, *structure, subs)
+                .unwrap();
+
+            env.pending_recursive_types
+                .insert(type_id, structure_layout);
+
+            type_id
+        }
+    }
+}
+
+fn add_builtin_type<'a>(
+    env: &mut Env<'a>,
+    builtin: Builtin<'a>,
+    var: Variable,
+    opt_name: Option<Symbol>,
+    types: &mut Types,
+    layout: Layout<'_>,
+) -> TypeId {
+    match builtin {
+        Builtin::Int(width) => match width {
+            U8 => types.add(RocType::Num(RocNum::U8), layout),
+            U16 => types.add(RocType::Num(RocNum::U16), layout),
+            U32 => types.add(RocType::Num(RocNum::U32), layout),
+            U64 => types.add(RocType::Num(RocNum::U64), layout),
+            U128 => types.add(RocType::Num(RocNum::U128), layout),
+            I8 => types.add(RocType::Num(RocNum::I8), layout),
+            I16 => types.add(RocType::Num(RocNum::I16), layout),
+            I32 => types.add(RocType::Num(RocNum::I32), layout),
+            I64 => types.add(RocType::Num(RocNum::I64), layout),
+            I128 => types.add(RocType::Num(RocNum::I128), layout),
+        },
+        Builtin::Float(width) => match width {
+            F32 => types.add(RocType::Num(RocNum::F32), layout),
+            F64 => types.add(RocType::Num(RocNum::F64), layout),
+            F128 => types.add(RocType::Num(RocNum::F128), layout),
+        },
+        Builtin::Decimal => types.add(RocType::Num(RocNum::Dec), layout),
+        Builtin::Bool => types.add(RocType::Bool, layout),
+        Builtin::Str => types.add(RocType::RocStr, layout),
+        Builtin::Dict(key_layout, val_layout) => {
+            // TODO FIXME this `var` is wrong - should have a different `var` for key and for val
+            let key_id = add_type_help(env, *key_layout, var, opt_name, types);
+            let val_id = add_type_help(env, *val_layout, var, opt_name, types);
+            let dict_id = types.add(RocType::RocDict(key_id, val_id), layout);
+
+            types.depends(dict_id, key_id);
+            types.depends(dict_id, val_id);
+
+            dict_id
+        }
+        Builtin::Set(elem_layout) => {
+            let elem_id = add_type_help(env, *elem_layout, var, opt_name, types);
+            let set_id = types.add(RocType::RocSet(elem_id), layout);
+
+            types.depends(set_id, elem_id);
+
+            set_id
+        }
+        Builtin::List(elem_layout) => {
+            let elem_id = add_type_help(env, *elem_layout, var, opt_name, types);
+            let list_id = types.add(RocType::RocList(elem_id), layout);
+
+            types.depends(list_id, elem_id);
+
+            list_id
+        }
+    }
+}
+
+fn add_struct<I, L, F>(
+    env: &mut Env<'_>,
+    name: String,
+    fields: I,
+    types: &mut Types,
+    layout: Layout<'_>,
+    to_type: F,
+) -> TypeId
+where
+    I: IntoIterator<Item = (L, Variable)>,
+    L: Display + Ord,
+    F: FnOnce(String, Vec<(L, TypeId)>) -> RocType,
+{
+    let subs = env.subs;
+    let fields_iter = &mut fields.into_iter();
+    let mut sortables =
+        bumpalo::collections::Vec::with_capacity_in(fields_iter.size_hint().0, env.arena);
+
+    for (label, field_var) in fields_iter {
+        sortables.push((
+            label,
+            field_var,
+            env.layout_cache
+                .from_var(env.arena, field_var, subs)
+                .unwrap(),
+        ));
+    }
+
+    sortables.sort_by(|(label1, _, layout1), (label2, _, layout2)| {
+        cmp_fields(
+            label1,
+            layout1,
+            label2,
+            layout2,
+            env.layout_cache.target_info,
+        )
+    });
+
+    let fields = sortables
+        .into_iter()
+        .map(|(label, field_var, field_layout)| {
+            let type_id = add_type_help(env, field_layout, field_var, None, types);
+
+            (label, type_id)
+        })
+        .collect::<Vec<(L, TypeId)>>();
+
+    types.add(to_type(name, fields), layout)
+}
+
+fn add_tag_union<'a>(
+    env: &mut Env<'a>,
+    opt_name: Option<Symbol>,
+    union_tags: &UnionTags,
+    var: Variable,
+    types: &mut Types,
+    layout: Layout<'a>,
+) -> TypeId {
+    let subs = env.subs;
+    let mut tags: Vec<(String, Vec<Variable>)> = union_tags
+        .iter_from_subs(subs)
+        .map(|(tag_name, payload_vars)| {
+            let name_str = match tag_name {
+                TagName::Tag(uppercase) => uppercase.as_str().to_string(),
+                TagName::Closure(_) => unreachable!(),
+            };
+
+            (name_str, payload_vars.to_vec())
+        })
+        .collect();
+
+    let name = match opt_name {
+        Some(sym) => sym.as_str(env.interns).to_string(),
+        None => env.enum_names.get_name(var),
+    };
+
+    // Sort tags alphabetically by tag name
+    tags.sort_by(|(name1, _), (name2, _)| name1.cmp(name2));
+
+    let is_recursive = is_recursive_tag_union(layout);
+
+    let mut tags: Vec<_> = tags
+        .into_iter()
+        .map(|(tag_name, payload_vars)| {
+            match struct_fields_needed(env, payload_vars.iter().copied()) {
+                0 => {
+                    // no payload
+                    (tag_name, None)
+                }
+                1 if !is_recursive => {
+                    // this isn't recursive and there's 1 payload item, so it doesn't
+                    // need its own struct - e.g. for `[Foo Str, Bar Str]` both of them
+                    // can have payloads of plain old Str, no struct wrapper needed.
+                    let payload_var = payload_vars.get(0).unwrap();
+                    let payload_layout = env
+                        .layout_cache
+                        .from_var(env.arena, *payload_var, env.subs)
+                        .expect("Something weird ended up in the content");
+                    let payload_id = add_type_help(env, payload_layout, *payload_var, None, types);
+
+                    (tag_name, Some(payload_id))
+                }
+                _ => {
+                    // create a RocType for the payload and save it
+                    let struct_name = format!("{}_{}", name, tag_name); // e.g. "MyUnion_MyVariant"
+                    let fields = payload_vars.iter().copied().enumerate();
+                    let struct_id =
+                        add_struct(env, struct_name, fields, types, layout, |name, fields| {
+                            RocType::TagUnionPayload { name, fields }
+                        });
+
+                    (tag_name, Some(struct_id))
+                }
+            }
+        })
+        .collect();
+
+    let typ = match layout {
+        Layout::Union(union_layout) => {
+            use UnionLayout::*;
+
+            match union_layout {
+                // A non-recursive tag union
+                // e.g. `Result ok err : [Ok ok, Err err]`
+                NonRecursive(_) => {
+                    let discriminant_type = UnionLayout::discriminant_size(tags.len()).into();
+
+                    RocType::TagUnion(RocTagUnion::NonRecursive {
+                        name,
+                        tags,
+                        discriminant_type,
+                    })
+                }
+                // A recursive tag union (general case)
+                // e.g. `Expr : [Sym Str, Add Expr Expr]`
+                Recursive(_) => {
+                    let discriminant_type = UnionLayout::discriminant_size(tags.len()).into();
+
+                    RocType::TagUnion(RocTagUnion::Recursive {
+                        name,
+                        tags,
+                        discriminant_type,
+                    })
+                }
+                // A recursive tag union with just one constructor
+                // Optimization: No need to store a tag ID (the payload is "unwrapped")
+                // e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
+                NonNullableUnwrapped(_) => {
+                    todo!()
+                }
+                // A recursive tag union that has an empty variant
+                // Optimization: Represent the empty variant as null pointer => no memory usage & fast comparison
+                // It has more than one other variant, so they need tag IDs (payloads are "wrapped")
+                // e.g. `FingerTree a : [Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a)]`
+                // see also: https://youtu.be/ip92VMpf_-A?t=164
+                NullableWrapped { .. } => {
+                    todo!()
+                }
+                // A recursive tag union with only two variants, where one is empty.
+                // Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.
+                // e.g. `ConsList a : [Nil, Cons a (ConsList a)]`
+                NullableUnwrapped {
+                    nullable_id: null_represents_first_tag,
+                    other_fields: _, // TODO use this!
+                } => {
+                    // NullableUnwrapped tag unions should always have exactly 2 tags.
+                    debug_assert_eq!(tags.len(), 2);
+
+                    let null_tag;
+                    let non_null;
+
+                    if null_represents_first_tag {
+                        // If nullable_id is true, then the null tag is second, which means
+                        // pop() will return it because it's at the end of the vec.
+                        null_tag = tags.pop().unwrap().0;
+                        non_null = tags.pop().unwrap();
+                    } else {
+                        // The null tag is first, which means the tag with the payload is second.
+                        non_null = tags.pop().unwrap();
+                        null_tag = tags.pop().unwrap().0;
+                    }
+
+                    let (non_null_tag, non_null_payload) = non_null;
+
+                    RocType::TagUnion(RocTagUnion::NullableUnwrapped {
+                        name,
+                        null_tag,
+                        non_null_tag,
+                        non_null_payload: non_null_payload.unwrap(),
+                        null_represents_first_tag,
+                    })
+                }
+            }
+        }
+        Layout::Builtin(Builtin::Int(_)) => RocType::TagUnion(RocTagUnion::Enumeration {
+            name,
+            tags: tags.into_iter().map(|(tag_name, _)| tag_name).collect(),
+        }),
+        Layout::Builtin(_)
+        | Layout::Struct { .. }
+        | Layout::Boxed(_)
+        | Layout::LambdaSet(_)
+        | Layout::RecursivePointer => {
+            // These must be single-tag unions. Bindgen ordinary nonrecursive
+            // tag unions for them, and let Rust do the unwrapping.
+            //
+            // This should be a very rare use case, and it's not worth overcomplicating
+            // the rest of bindgen to make it do something different.
+            RocType::TagUnion(RocTagUnion::NonRecursive {
+                name,
+                tags,
+                discriminant_type: RocNum::U8,
+            })
+        }
+    };
+
+    let type_id = types.add(typ, layout);
+
+    if is_recursive {
+        env.known_recursive_types.insert(layout, type_id);
+    }
+
+    type_id
+}
+
+fn is_recursive_tag_union(layout: Layout) -> bool {
+    use roc_mono::layout::UnionLayout::*;
+
+    match layout {
+        Layout::Union(tag_union) => match tag_union {
+            NonRecursive(_) => false,
+            Recursive(_)
+            | NonNullableUnwrapped(_)
+            | NullableWrapped { .. }
+            | NullableUnwrapped { .. } => true,
+        },
+        _ => false,
+    }
+}
+
+fn struct_fields_needed<I: IntoIterator<Item = Variable>>(env: &mut Env<'_>, vars: I) -> usize {
+    let subs = env.subs;
+    let arena = env.arena;
+
+    vars.into_iter().fold(0, |count, var| {
+        let layout = env.layout_cache.from_var(arena, var, subs).unwrap();
+
+        if layout.is_dropped_because_empty() {
+            count
+        } else {
+            count + 1
+        }
+    })
 }

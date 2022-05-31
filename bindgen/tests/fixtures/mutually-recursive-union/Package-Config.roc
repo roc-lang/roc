@@ -14,7 +14,7 @@ Command : [Command { tool : Tool }]
 
 Job : [
     Job { command : Command, inputFiles : List Str },
-    Foo,
+    Foo Str,
     # WithTool Tool # Mutual recursion; Tool also references Job
 ]
 
