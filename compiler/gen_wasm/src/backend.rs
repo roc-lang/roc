@@ -76,24 +76,13 @@ impl<'a> WasmBackend<'a> {
         fn_index_offset: u32,
         helper_proc_gen: CodeGenHelp<'a>,
     ) -> Self {
-        // The preloaded builtins object file exports all functions, but the final app binary doesn't.
-        // Remove the function exports and use them to populate the Name section (debug info)
-        let platform_and_builtins_exports =
-            std::mem::replace(&mut module.export.exports, bumpalo::vec![in env.arena]);
-        let mut app_exports = Vec::with_capacity_in(32, env.arena);
-        for ex in platform_and_builtins_exports.into_iter() {
-            match ex.ty {
-                ExportType::Func => module.names.append_function(ex.index, ex.name),
-                _ => app_exports.push(ex),
-            }
-        }
-
-        module.export.exports = app_exports;
-        module.code.code_builders.reserve(proc_lookup.len());
-
         // TODO: get this from a CLI parameter with some default
         const STACK_SIZE: u32 = 1024 * 1024;
         Self::set_memory_layout(env, &mut module, STACK_SIZE);
+
+        Self::export_globals(&mut module);
+
+        module.code.code_builders.reserve(proc_lookup.len());
 
         WasmBackend {
             env,
@@ -145,6 +134,42 @@ impl<'a> WasmBackend<'a> {
         });
 
         module.relocate_preloaded_code("__heap_base", SymType::Data, stack_heap_boundary);
+    }
+
+    /// If the host has some `extern` globals, we need to create them in the final binary
+    /// and make them visible to JavaScript by exporting them
+    fn export_globals(module: &mut WasmModule<'a>) {
+        for (sym_index, sym) in module.linking.symbol_table.iter().enumerate() {
+            match sym {
+                SymInfo::Data(DataSymbol::Imported { name, .. }) if *name != "__heap_base" => {
+                    let global_value_addr = module.data.end_addr;
+                    module.data.end_addr += PTR_SIZE;
+
+                    module.reloc_code.apply_relocs_u32(
+                        &mut module.code.preloaded_bytes,
+                        module.code.preloaded_reloc_offset,
+                        sym_index as u32,
+                        global_value_addr,
+                    );
+
+                    let global_index = module.global.count;
+                    module.global.append(Global {
+                        ty: GlobalType {
+                            value_type: ValueType::I32,
+                            is_mutable: false,
+                        },
+                        init: ConstExpr::I32(global_value_addr as i32),
+                    });
+
+                    module.export.append(Export {
+                        name,
+                        ty: ExportType::Global,
+                        index: global_index,
+                    });
+                }
+                _ => {}
+            }
+        }
     }
 
     pub fn get_helpers(&mut self) -> Vec<'a, Proc<'a>> {

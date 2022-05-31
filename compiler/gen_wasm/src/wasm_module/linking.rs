@@ -3,7 +3,7 @@ use bumpalo::Bump;
 
 use super::parse::parse_fixed_size_items;
 use super::sections::{update_section_size, write_custom_section_header, SectionId};
-use super::serialize::{overwrite_padded_i32, SerialBuffer, Serialize};
+use super::serialize::{overwrite_padded_i32, overwrite_padded_u32, SerialBuffer, Serialize};
 use crate::wasm_module::parse::{Parse, ParseError, SkipBytes};
 
 /*******************************************************************
@@ -203,6 +203,10 @@ impl<'a> RelocationSection<'a> {
                 } if *symbol_index == sym_index => {
                     use OffsetRelocType::*;
                     match type_id {
+                        MemoryAddrLeb => {
+                            let idx = (*offset - section_bytes_offset) as usize;
+                            overwrite_padded_u32(section_bytes, idx, value + *addend as u32);
+                        }
                         MemoryAddrSleb => {
                             let idx = (*offset - section_bytes_offset) as usize;
                             overwrite_padded_i32(section_bytes, idx, value as i32 + *addend);

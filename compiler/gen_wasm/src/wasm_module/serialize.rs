@@ -131,6 +131,15 @@ pub fn overwrite_padded_i32(buffer: &mut [u8], offset: usize, value: i32) {
     buffer[offset + 4] = (x & 0x7f) as u8;
 }
 
+pub fn overwrite_padded_u32(buffer: &mut [u8], offset: usize, value: u32) {
+    let mut x = value;
+    for byte in buffer.iter_mut().skip(offset).take(4) {
+        *byte = 0x80 | ((x & 0x7f) as u8);
+        x >>= 7;
+    }
+    buffer[offset + 4] = (x & 0x7f) as u8;
+}
+
 fn overwrite_padded_u32_help(buffer: &mut [u8], value: u32) {
     let mut x = value;
     for byte in buffer.iter_mut().take(4) {
