@@ -194,6 +194,10 @@ impl<'a> RemoveSpaces<'a> for Ast<'a> {
                     *value_def = value_def.remove_spaces(arena);
                 }
 
+                for region_def in defs.regions.iter_mut() {
+                    *region_def = region_def.remove_spaces(arena);
+                }
+
                 defs
             },
         }
@@ -278,6 +282,12 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                 },
             },
         }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for Region {
+    fn remove_spaces(&self, _arena: &'a Bump) -> Self {
+        Region::zero()
     }
 }
 
