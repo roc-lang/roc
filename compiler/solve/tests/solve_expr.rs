@@ -6492,48 +6492,4 @@ mod solve_expr {
             &["Encoding#toEncoder : { a : A } -> Encoder fmt | fmt has EncoderFormatting"],
         )
     }
-
-    #[test]
-    fn it1() {
-        infer_eq_without_problem(
-            indoc!(
-                r#"
-                app "test" provides [main] to "./platform"
-
-                greeting =
-                    hi = "Hello"
-                    name = "World"
-
-                    "\(hi), \(name)!"
-
-                main =
-                    when nestHelp 4 is
-                        _ -> greeting
-
-                nestHelp : I64 -> XEffect {}
-                nestHelp = \m ->
-                    when m is
-                        0 ->
-                            always {}
-
-                        _ ->
-                            always {} |> after \_ -> nestHelp (m - 1)
-
-
-                XEffect a := {} -> a
-
-                always : a -> XEffect a
-                always = \x -> @XEffect (\{} -> x)
-
-                after : XEffect a, (a -> XEffect b) -> XEffect b
-                after = \(@XEffect e), toB ->
-                    @XEffect \{} ->
-                        when toB (e {}) is
-                            @XEffect e2 ->
-                                e2 {}
-                "#
-            ),
-            "",
-        );
-    }
 }

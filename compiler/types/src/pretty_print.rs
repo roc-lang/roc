@@ -965,6 +965,7 @@ pub fn resolve_lambda_set<'a>(
         }) => {
             push_union_tags(subs, solved, fields);
         }
+        Content::RecursionVar { structure, .. } => resolve_lambda_set(subs, *structure, fields),
         c => internal_error!("called with a non-lambda set {:?}", c),
     }
 }

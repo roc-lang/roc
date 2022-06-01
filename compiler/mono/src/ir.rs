@@ -77,7 +77,6 @@ macro_rules! return_on_layout_error {
 
 macro_rules! return_on_layout_error_help {
     ($env:expr, $error:expr) => {{
-        dbg!('e');
         match $error {
             LayoutProblem::UnresolvedTypeVar(_) => {
                 return Stmt::RuntimeError($env.arena.alloc(format!(
@@ -2914,7 +2913,6 @@ fn specialize_external<'a>(
         fn_var,
         roc_unify::unify::Mode::EQ,
     );
-    dbg!(&_unified);
 
     // This will not hold for programs with type errors
     // let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));
@@ -2932,13 +2930,8 @@ fn specialize_external<'a>(
         }
     };
 
-    let specialized = dbg!(build_specialized_proc_from_var(
-        env,
-        layout_cache,
-        proc_name,
-        pattern_symbols,
-        fn_var
-    ))?;
+    let specialized =
+        build_specialized_proc_from_var(env, layout_cache, proc_name, pattern_symbols, fn_var)?;
 
     // determine the layout of aliases/rigids exposed to the host
     let host_exposed_layouts = if host_exposed_variables.is_empty() {
@@ -3243,7 +3236,6 @@ fn specialize_external<'a>(
                 None => None,
             };
 
-            // dbg!(proc_name, &proc_args, closure_data_layout);
             let proc = Proc {
                 name: proc_name,
                 args: proc_args.into_bump_slice(),
@@ -3546,7 +3538,6 @@ where
             Ok((proc, raw))
         }
         Err(error) => {
-            dbg!(&error);
             env.subs.rollback_to(snapshot);
             layout_cache.rollback_to(cache_snapshot);
 

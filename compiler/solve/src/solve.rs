@@ -2536,21 +2536,16 @@ fn check_for_infinite_type(
         // try to make a union recursive, see if that helps
         match subs.get_content_without_compacting(recursive) {
             &Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                dbg!(1);
                 subs.mark_tag_union_recursive(recursive, tags, ext_var);
             }
             &Content::LambdaSet(subs::LambdaSet {
                 solved,
                 recursion_var: _,
             }) => {
-                dbg!(2);
                 subs.mark_lambda_set_recursive(recursive, solved);
             }
 
-            _other => {
-                dbg!(3);
-                circular_error(subs, problems, symbol, &loc_var)
-            }
+            _other => circular_error(subs, problems, symbol, &loc_var),
         }
     }
 }

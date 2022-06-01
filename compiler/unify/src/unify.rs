@@ -771,9 +771,11 @@ fn unify_structure(
         },
         LambdaSet(..) => {
             mismatch!(
-                "Cannot unify structure {:?} with lambda set {:?}",
-                &flat_type,
-                other
+                "Cannot unify structure \n{:?} \nwith lambda set\n {:?}",
+                roc_types::subs::SubsFmtContent(&Content::Structure(*flat_type), subs),
+                roc_types::subs::SubsFmtContent(other, subs),
+                // &flat_type,
+                // other
             )
         }
         RangedNumber(other_real_var, other_range_vars) => {
@@ -799,11 +801,73 @@ fn unify_lambda_set(
     match other {
         FlexVar(_) => merge(subs, ctx, Content::LambdaSet(lambda_set)),
         Content::LambdaSet(other_lambda_set) => {
-            unify_lambda_set_help(subs, pool, ctx, lambda_set, *other_lambda_set)
+            let mut into_tag = |lset| match lset {
+                LambdaSet {
+                    solved,
+                    recursion_var,
+                } => {
+                    let ext = fresh(subs, pool, ctx, Content::FlexVar(None));
+                    match recursion_var.into_variable() {
+                        Some(rv) => FlatType::RecursiveTagUnion(rv, solved, ext),
+                        None => FlatType::TagUnion(solved, ext),
+                    }
+                }
+            };
+            let tag1 = into_tag(lambda_set);
+            let tag2 = into_tag(*other_lambda_set);
+            let outcome = unify_flat_type(subs, pool, ctx, &tag1, &tag2);
+            if outcome.mismatches.is_empty() {
+                let (solved, recursion_var) = match subs.get_content_without_compacting(ctx.first) {
+                    Content::Structure(FlatType::TagUnion(solved, e)) => {
+                        debug_assert!(matches!(
+                            subs.get_content_without_compacting(*e),
+                            Content::FlexVar(..)
+                        ));
+                        (*solved, OptVariable::NONE)
+                    }
+                    Content::Structure(FlatType::RecursiveTagUnion(rv, solved, e)) => {
+                        debug_assert!(matches!(
+                            subs.get_content_without_compacting(*e),
+                            Content::FlexVar(..)
+                        ));
+                        (*solved, OptVariable::from(*rv))
+                    }
+                    c => panic!(
+                        "not a union: {:?}",
+                        roc_types::subs::SubsFmtContent(c, subs)
+                    ),
+                };
+                let lset = Content::LambdaSet(self::LambdaSet {
+                    solved,
+                    recursion_var,
+                });
+                subs.set_content(ctx.first, lset);
+                subs.set_content(ctx.second, lset);
+            }
+            outcome
+            // unify_lambda_set_help(subs, pool, ctx, lambda_set, *other_lambda_set)
         }
         RecursionVar { structure, .. } => {
             // suppose that the recursion var is a lambda set
-            unify_pool(subs, pool, ctx.first, *structure, ctx.mode)
+            let outcome = unify_pool(subs, pool, ctx.first, *structure, ctx.mode);
+
+            if outcome.mismatches.is_empty() {
+                debug_assert!(matches!(
+                    subs.get_content_without_compacting(ctx.first),
+                    Content::LambdaSet(self::LambdaSet { recursion_var, .. }) if recursion_var.into_variable().is_some()
+                ));
+
+                let has_recursing_recursive_variable =
+                    subs.occurs_including_recursion_vars(ctx.first).is_err();
+
+                if !has_recursing_recursive_variable {
+                    merge(subs, ctx, *other)
+                } else {
+                    outcome
+                }
+            } else {
+                outcome
+            }
         }
         RigidVar(..) | RigidAbleVar(..) => mismatch!("Lambda sets never unify with rigid"),
         FlexAbleVar(..) => mismatch!("Lambda sets should never have abilities attached to them"),
@@ -814,7 +878,7 @@ fn unify_lambda_set(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(unused)]
 fn unify_lambda_set_help(
     subs: &mut Subs,
     pool: &mut Pool,
@@ -1552,7 +1616,7 @@ fn maybe_mark_union_recursive(subs: &mut Subs, union_var: Variable) {
                             solved,
                             recursion_var: OptVariable::NONE,
                         }) => {
-                            subs.mark_lambda_set_recursive(recursive, solved);
+                            subs.mark_lambda_set_recursive(*v, solved);
                             continue 'outer;
                         }
                         _ => { /* fall through */ }
