@@ -22,8 +22,42 @@ Defs {
             ),
             @11-115 SpaceBefore(
                 Defs(
-                    [
-                        @43-93 Value(
+                    Defs {
+                        tags: [
+                            Index(2147483649),
+                        ],
+                        regions: [
+                            @11-93,
+                        ],
+                        space_before: [
+                            Slice(start = 0, length = 0),
+                        ],
+                        space_after: [
+                            Slice(start = 0, length = 0),
+                        ],
+                        spaces: [],
+                        type_defs: [],
+                        value_defs: [
+                            Annotation(
+                                @11-23 Identifier(
+                                    "wrappedNotEq",
+                                ),
+                                @26-38 Function(
+                                    [
+                                        @26-27 BoundVariable(
+                                            "a",
+                                        ),
+                                        @29-30 BoundVariable(
+                                            "a",
+                                        ),
+                                    ],
+                                    @34-38 Apply(
+                                        "",
+                                        "Bool",
+                                        [],
+                                    ),
+                                ),
+                            ),
                             AnnotatedBody {
                                 ann_pattern: @11-23 Identifier(
                                     "wrappedNotEq",
@@ -78,8 +112,8 @@ Defs {
                                     ),
                                 ),
                             },
-                        ),
-                    ],
+                        ],
+                    },
                     @99-115 SpaceBefore(
                         Apply(
                             @99-111 Var {
