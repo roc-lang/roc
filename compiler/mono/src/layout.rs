@@ -2328,14 +2328,14 @@ where
 
                             WrappedVariant::NullableUnwrapped {
                                 nullable_id,
-                                nullable_name: nullable_name.into(),
+                                nullable_name,
                                 other_name,
                                 other_fields: other_arguments,
                             }
                         } else {
                             WrappedVariant::NullableWrapped {
                                 nullable_id,
-                                nullable_name: nullable_name.into(),
+                                nullable_name,
                                 sorted_tag_layouts: answer,
                             }
                         }
@@ -2510,8 +2510,8 @@ where
                     // type can be stored in a boolean
 
                     // tags_vec is sorted, and answer is sorted the same way
-                    let ttrue = answer.remove(1).0.into();
-                    let ffalse = answer.remove(0).0.into();
+                    let ttrue = answer.remove(1).0;
+                    let ffalse = answer.remove(0).0;
 
                     UnionVariant::BoolUnion { ffalse, ttrue }
                 }
@@ -2521,7 +2521,7 @@ where
                     let mut tag_names = Vec::with_capacity_in(answer.len(), arena);
 
                     for (tag_name, _) in answer {
-                        tag_names.push(tag_name.into());
+                        tag_names.push(tag_name);
                     }
 
                     UnionVariant::ByteUnion(tag_names)
@@ -2535,7 +2535,7 @@ where
                             WrappedVariant::NullableUnwrapped {
                                 nullable_id,
                                 nullable_name: nullable_name.into(),
-                                other_name: other_name.into(),
+                                other_name,
                                 other_fields: other_arguments,
                             }
                         } else {

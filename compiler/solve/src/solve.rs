@@ -2524,7 +2524,7 @@ fn create_union_lambda<'a>(
 
     let lambda_name_slice = SubsSlice::extend_new(&mut subs.closure_names, [closure]);
 
-    return UnionLambdas::from_slices(lambda_name_slice, new_variable_slices);
+    UnionLambdas::from_slices(lambda_name_slice, new_variable_slices)
 }
 
 fn check_for_infinite_type(
