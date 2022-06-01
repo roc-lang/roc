@@ -27,7 +27,6 @@ members = [
     "compiler/test_gen",
     "compiler/roc_target",
     "compiler/debug_flags",
-    "vendor/ena",
     "vendor/inkwell",
     "vendor/pathfinding",
     "vendor/pretty",
