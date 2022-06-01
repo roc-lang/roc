@@ -74,8 +74,6 @@ const TVAR1: VarId = VarId::from_u32(1);
 const TVAR2: VarId = VarId::from_u32(2);
 const TVAR3: VarId = VarId::from_u32(3);
 const TVAR4: VarId = VarId::from_u32(4);
-const TOP_LEVEL_CLOSURE_VAR: VarId = VarId::from_u32(10);
-
 pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     let mut types = HashMap::with_capacity_and_hasher(NUM_BUILTIN_IMPORTS, default_hasher());
 
@@ -102,14 +100,9 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
                 $symbol
             );
 
-            let ext = Box::new(SolvedType::Flex(TOP_LEVEL_CLOSURE_VAR));
-
             let typ = SolvedType::Func(
                 $arguments,
-                Box::new(SolvedType::TagUnion(
-                    vec![(TagName::Closure($symbol), vec![])],
-                    ext,
-                )),
+                Box::new(SolvedType::LambdaTag($symbol, vec![])),
                 $result,
             );
 

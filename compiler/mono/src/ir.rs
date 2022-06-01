@@ -76,7 +76,7 @@ macro_rules! return_on_layout_error {
 }
 
 macro_rules! return_on_layout_error_help {
-    ($env:expr, $error:expr) => {
+    ($env:expr, $error:expr) => {{
         match $error {
             LayoutProblem::UnresolvedTypeVar(_) => {
                 return Stmt::RuntimeError($env.arena.alloc(format!(
@@ -93,7 +93,7 @@ macro_rules! return_on_layout_error_help {
                 )));
             }
         }
-    };
+    }};
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2738,7 +2738,10 @@ fn generate_runtime_error_function<'a>(
     )
     .unwrap();
 
-    eprintln!("emitted runtime error function {:?}", &msg);
+    eprintln!(
+        "emitted runtime error function {:?} for layout {:?}",
+        &msg, layout
+    );
 
     let runtime_error = Stmt::RuntimeError(msg.into_bump_str());
 
@@ -3249,6 +3252,7 @@ fn specialize_external<'a>(
     }
 }
 
+#[derive(Debug)]
 enum SpecializedLayout<'a> {
     /// A body like `foo = \a,b,c -> ...`
     FunctionBody {
@@ -5771,7 +5775,6 @@ fn register_capturing_closure<'a>(
             function_type,
             return_type,
             closure_type,
-            closure_ext_var,
             recursive,
             arguments,
             loc_body: boxed_body,
@@ -5817,7 +5820,7 @@ fn register_capturing_closure<'a>(
                     &captured_symbols,
                     layout_cache.raw_from_var(env.arena, function_type, env.subs),
                     env.subs,
-                    (function_type, closure_type, closure_ext_var),
+                    (function_type, closure_type),
                 );
                 CapturedSymbols::None
             }

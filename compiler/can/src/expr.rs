@@ -299,7 +299,6 @@ impl AnnotatedMark {
 pub struct ClosureData {
     pub function_type: Variable,
     pub closure_type: Variable,
-    pub closure_ext_var: Variable,
     pub return_type: Variable,
     pub name: Symbol,
     pub captured_symbols: Vec<(Symbol, Variable)>,
@@ -320,7 +319,6 @@ pub struct AccessorData {
     pub function_var: Variable,
     pub record_var: Variable,
     pub closure_var: Variable,
-    pub closure_ext_var: Variable,
     pub ext_var: Variable,
     pub field_var: Variable,
     pub field: Lowercase,
@@ -333,7 +331,6 @@ impl AccessorData {
             function_var,
             record_var,
             closure_var,
-            closure_ext_var,
             ext_var,
             field_var,
             field,
@@ -365,7 +362,6 @@ impl AccessorData {
         ClosureData {
             function_type: function_var,
             closure_type: closure_var,
-            closure_ext_var,
             return_type: field_var,
             name,
             captured_symbols: vec![],
@@ -809,7 +805,6 @@ pub fn canonicalize_expr<'a>(
                 record_var: var_store.fresh(),
                 ext_var: var_store.fresh(),
                 closure_var: var_store.fresh(),
-                closure_ext_var: var_store.fresh(),
                 field_var: var_store.fresh(),
                 field: (*field).into(),
             }),
@@ -1134,7 +1129,6 @@ fn canonicalize_closure_body<'a>(
     let closure_data = ClosureData {
         function_type: var_store.fresh(),
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: var_store.fresh(),
         name: symbol,
         captured_symbols,
@@ -1576,7 +1570,6 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         Closure(ClosureData {
             function_type,
             closure_type,
-            closure_ext_var,
             return_type,
             recursive,
             name,
@@ -1593,7 +1586,6 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             Closure(ClosureData {
                 function_type,
                 closure_type,
-                closure_ext_var,
                 return_type,
                 recursive,
                 name,

@@ -9,8 +9,8 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{
-    AliasVariables, Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields, Subs,
-    SubsSlice, UnionTags, Variable, VariableSubsSlice,
+    self, AliasVariables, Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields,
+    Subs, SubsSlice, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{
     gather_fields_unsorted_iter, Alias, AliasKind, Category, ErrorType, PatternCategory,
@@ -1408,6 +1408,32 @@ fn adjust_rank_content(
             }
         }
 
+        LambdaSet(subs::LambdaSet {
+            solved,
+            recursion_var,
+        }) => {
+            let mut rank = group_rank;
+
+            for (_, index) in solved.iter_all() {
+                let slice = subs[index];
+                for var_index in slice {
+                    let var = subs[var_index];
+                    rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+                }
+            }
+
+            if let Some(rec_var) = recursion_var.into_variable() {
+                // THEORY: the recursion var has the same rank as the tag union itself
+                // all types it uses are also in the tags already, so it cannot influence the
+                // rank
+                debug_assert!(
+                    rank >= adjust_rank(subs, young_mark, visit_mark, group_rank, rec_var)
+                );
+            }
+
+            rank
+        }
+
         Alias(_, args, real_var, _) => {
             let mut rank = Rank::toplevel();
 
@@ -1580,6 +1606,23 @@ fn instantiate_rigids_help(
             }
 
             instantiate_rigids_help(subs, max_rank, pools, real_type_var);
+        }
+
+        LambdaSet(subs::LambdaSet {
+            solved,
+            recursion_var,
+        }) => {
+            if let Some(rec_var) = recursion_var.into_variable() {
+                instantiate_rigids_help(subs, max_rank, pools, rec_var);
+            }
+
+            for (_, index) in solved.iter_all() {
+                let slice = subs[index];
+                for var_index in slice {
+                    let var = subs[var_index];
+                    instantiate_rigids_help(subs, max_rank, pools, var);
+                }
+            }
         }
 
         RangedNumber(typ, _vars) => {
@@ -1842,6 +1885,48 @@ fn deep_copy_var_help(
 
             let new_real_type_var = deep_copy_var_help(subs, max_rank, pools, real_type_var);
             let new_content = Alias(symbol, args, new_real_type_var, kind);
+
+            subs.set(copy, make_descriptor(new_content));
+
+            copy
+        }
+
+        LambdaSet(subs::LambdaSet {
+            solved,
+            recursion_var,
+        }) => {
+            let mut new_variable_slices = Vec::with_capacity(solved.len());
+
+            let mut new_variables = Vec::new();
+            for index in solved.variables() {
+                let slice = subs[index];
+                for var_index in slice {
+                    let var = subs[var_index];
+                    let new_var = deep_copy_var_help(subs, max_rank, pools, var);
+                    new_variables.push(new_var);
+                }
+
+                let new_slice = VariableSubsSlice::insert_into_subs(subs, new_variables.drain(..));
+
+                new_variable_slices.push(new_slice);
+            }
+
+            let new_variables = {
+                let start = subs.variable_slices.len() as u32;
+                let length = new_variable_slices.len() as u16;
+                subs.variable_slices.extend(new_variable_slices);
+
+                SubsSlice::new(start, length)
+            };
+
+            let new_solved = UnionTags::from_slices(solved.tag_names(), new_variables);
+            let new_rec_var =
+                recursion_var.map(|rec_var| deep_copy_var_help(subs, max_rank, pools, rec_var));
+
+            let new_content = LambdaSet(subs::LambdaSet {
+                solved: new_solved,
+                recursion_var: new_rec_var,
+            });
 
             subs.set(copy, make_descriptor(new_content));
 

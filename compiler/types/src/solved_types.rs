@@ -47,6 +47,7 @@ pub enum SolvedType {
     },
     EmptyRecord,
     TagUnion(Vec<(TagName, Vec<SolvedType>)>, Box<SolvedType>),
+    LambdaTag(Symbol, Vec<SolvedType>),
     FunctionOrTagUnion(TagName, Symbol, Box<SolvedType>),
     RecursiveTagUnion(VarId, Vec<(TagName, Vec<SolvedType>)>, Box<SolvedType>),
     EmptyTagUnion,
@@ -175,6 +176,18 @@ pub fn to_type(
             };
 
             Type::TagUnion(new_tags, ext)
+        }
+        LambdaTag(name, args) => {
+            let mut new_args = Vec::with_capacity(args.len());
+
+            for arg in args.iter() {
+                new_args.push(to_type(arg, free_vars, var_store));
+            }
+
+            Type::ClosureTag {
+                name: *name,
+                captures: new_args,
+            }
         }
         FunctionOrTagUnion(tag_name, symbol, ext) => {
             let ext = match ext.as_ref() {

@@ -10066,7 +10066,7 @@ All branches in an `if` must have the same type!
     #[test]
     fn unbound_type_in_record_does_not_implement_encoding() {
         new_report_problem_as(
-            "cycle_through_non_function",
+            "unbound_type_in_record_does_not_implement_encoding",
             indoc!(
                 r#"
                 app "test" imports [Encode] provides [main] to "./platform"
@@ -10104,7 +10104,7 @@ All branches in an `if` must have the same type!
     #[test]
     fn nested_opaque_does_not_implement_encoding() {
         new_report_problem_as(
-            "cycle_through_non_function",
+            "nested_opaque_does_not_implement_encoding",
             indoc!(
                 r#"
                 app "test" imports [Encode] provides [main] to "./platform"
@@ -10143,7 +10143,7 @@ All branches in an `if` must have the same type!
     #[test]
     fn derive_non_builtin_ability() {
         new_report_problem_as(
-            "cycle_through_non_function",
+            "derive_non_builtin_ability",
             indoc!(
                 r#"
                 app "test" provides [A] to "./platform"

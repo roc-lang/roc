@@ -8,8 +8,9 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_target::{PtrWidth, TargetInfo};
+use roc_types::pretty_print::ResolvedLambdaSet;
 use roc_types::subs::{
-    Content, FlatType, RecordFields, Subs, UnionTags, UnsortedUnionTags, Variable,
+    self, Content, FlatType, RecordFields, Subs, UnionTags, UnsortedUnionTags, Variable,
 };
 use roc_types::types::{gather_fields_unsorted_iter, RecordField, RecordFieldsError};
 use std::cmp::Ordering;
@@ -79,6 +80,7 @@ impl<'a> RawFunctionLayout<'a> {
                 let structure_content = env.subs.get_content_without_compacting(structure);
                 Self::new_help(env, structure, *structure_content)
             }
+            LambdaSet(lset) => Self::layout_from_lambda_set(env, lset),
             Structure(flat_type) => Self::layout_from_flat_type(env, flat_type),
             RangedNumber(typ, _) => Self::from_var(env, typ),
 
@@ -149,6 +151,14 @@ impl<'a> RawFunctionLayout<'a> {
             Alias(_, _, var, _) => Self::from_var(env, var),
             Error => Err(LayoutProblem::Erroneous),
         }
+    }
+
+    fn layout_from_lambda_set(
+        env: &mut Env<'a, '_>,
+        lset: subs::LambdaSet,
+    ) -> Result<Self, LayoutProblem> {
+        // Lambda set is just a tag union from the layout's perspective.
+        Self::layout_from_flat_type(env, lset.as_tag_union())
     }
 
     fn layout_from_flat_type(
@@ -835,9 +845,8 @@ impl<'a> LambdaSet<'a> {
         closure_var: Variable,
         target_info: TargetInfo,
     ) -> Result<Self, LayoutProblem> {
-        let mut tags = std::vec::Vec::new();
-        match roc_types::pretty_print::chase_ext_tag_union(subs, closure_var, &mut tags) {
-            Ok(()) | Err((_, Content::FlexVar(_))) if !tags.is_empty() => {
+        match roc_types::pretty_print::resolve_lambda_set(subs, closure_var) {
+            ResolvedLambdaSet::Set(mut tags) => {
                 // sort the tags; make sure ordering stays intact!
                 tags.sort();
 
@@ -872,15 +881,14 @@ impl<'a> LambdaSet<'a> {
                     representation,
                 })
             }
-
-            Ok(()) | Err((_, Content::FlexVar(_))) => {
-                // this can happen when there is a type error somewhere
+            ResolvedLambdaSet::Unbound => {
+                // The lambda set is unbound which means it must be unused. Just give it the empty lambda set.
+                // See also https://github.com/rtfeldman/roc/issues/3163.
                 Ok(LambdaSet {
                     set: &[],
                     representation: arena.alloc(Layout::UNIT),
                 })
             }
-            _ => panic!("called LambdaSet.from_var on invalid input"),
         }
     }
 
@@ -1028,6 +1036,7 @@ impl<'a> Layout<'a> {
                 let structure_content = env.subs.get_content_without_compacting(structure);
                 Self::new_help(env, structure, *structure_content)
             }
+            LambdaSet(lset) => layout_from_lambda_set(env, lset),
             Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
             Alias(symbol, _args, actual_var, _) => {
@@ -1682,6 +1691,14 @@ impl<'a> Builtin<'a> {
 
         allocation.max(ptr_width)
     }
+}
+
+fn layout_from_lambda_set<'a>(
+    env: &mut Env<'a, '_>,
+    lset: subs::LambdaSet,
+) -> Result<Layout<'a>, LayoutProblem> {
+    // Lambda set is just a tag union from the layout's perspective.
+    layout_from_flat_type(env, lset.as_tag_union())
 }
 
 fn layout_from_flat_type<'a>(
@@ -2750,7 +2767,7 @@ fn layout_from_num_content<'a>(
         Alias(_, _, _, _) => {
             todo!("TODO recursively resolve type aliases in num_from_content");
         }
-        Structure(_) | RangedNumber(..) => {
+        Structure(_) | RangedNumber(..) | LambdaSet(_) => {
             panic!("Invalid Num.Num type application: {:?}", content);
         }
         Error => Err(LayoutProblem::Erroneous),

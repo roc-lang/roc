@@ -644,6 +644,12 @@ impl GetSubsSlice<Lowercase> for Subs {
     }
 }
 
+impl GetSubsSlice<TagName> for Subs {
+    fn get_subs_slice(&self, subs_slice: SubsSlice<TagName>) -> &[TagName] {
+        subs_slice.get_slice(&self.tag_names)
+    }
+}
+
 impl fmt::Debug for Subs {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f)?;
@@ -712,10 +718,47 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
                 SubsFmtContent(subs.get_content_without_compacting(*actual), subs)
             )
         }
+        Content::LambdaSet(LambdaSet {
+            solved,
+            recursion_var,
+        }) => {
+            write!(
+                f,
+                "LambdaSet({:?}, <{:?}>)",
+                SubsFmtUnionTags(solved, Variable::EMPTY_TAG_UNION, subs),
+                recursion_var
+            )
+        }
         Content::RangedNumber(typ, range) => {
             write!(f, "RangedNumber({:?}, {:?})", typ, range)
         }
         Content::Error => write!(f, "Error"),
+    }
+}
+
+pub struct SubsFmtUnionTags<'a>(pub &'a UnionTags, pub Variable, pub &'a Subs);
+
+impl<'a> fmt::Debug for SubsFmtUnionTags<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let SubsFmtUnionTags(tags, ext, subs) = &self;
+
+        write!(f, "[")?;
+
+        let (it, new_ext) = tags.sorted_iterator_and_ext(subs, *ext);
+        for (name, slice) in it {
+            write!(f, "{:?} ", name)?;
+            for var in slice {
+                write!(
+                    f,
+                    "<{:?}>{:?} ",
+                    var,
+                    SubsFmtContent(subs.get_content_without_compacting(*var), subs)
+                )?;
+            }
+            write!(f, ", ")?;
+        }
+
+        write!(f, "]<{:?}>", new_ext)
     }
 }
 
@@ -742,10 +785,13 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
                 write!(f, "<{:?}>{:?},", *var, SubsFmtContent(content, subs))?;
             }
             let result_content = subs.get_content_without_compacting(*result);
+            let lambda_content = subs.get_content_without_compacting(*lambda_set);
             write!(
                 f,
-                "], {:?}, <{:?}>{:?})",
+                "], <{:?}={:?}>{:?}, <{:?}>{:?})",
+                lambda_set,
                 subs.get_root_key_without_compacting(*lambda_set),
+                SubsFmtContent(lambda_content, subs),
                 *result,
                 SubsFmtContent(result_content, subs)
             )
@@ -766,23 +812,7 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
             write!(f, "}}<{:?}>", new_ext)
         }
         FlatType::TagUnion(tags, ext) => {
-            write!(f, "[")?;
-
-            let (it, new_ext) = tags.sorted_iterator_and_ext(subs, *ext);
-            for (name, slice) in it {
-                write!(f, "{:?} ", name)?;
-                for var in slice {
-                    write!(
-                        f,
-                        "<{:?}>{:?} ",
-                        var,
-                        SubsFmtContent(subs.get_content_without_compacting(*var), subs)
-                    )?;
-                }
-                write!(f, ", ")?;
-            }
-
-            write!(f, "]<{:?}>", new_ext)
+            write!(f, "{:?}", SubsFmtUnionTags(tags, *ext, subs))
         }
         FlatType::FunctionOrTagUnion(tagname_index, symbol, ext) => {
             let tagname: &TagName = &subs[*tagname_index];
@@ -847,10 +877,6 @@ impl VarStore {
 
         Variable(answer)
     }
-
-    pub fn fresh_lambda_set(&mut self) -> LambdaSet {
-        LambdaSet(self.fresh())
-    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
@@ -887,6 +913,16 @@ impl OptVariable {
         } else {
             Variable(self.0)
         }
+    }
+
+    pub fn map<F>(self, f: F) -> OptVariable
+    where
+        F: FnOnce(Variable) -> Variable,
+    {
+        self.into_variable()
+            .map(f)
+            .map(OptVariable::from)
+            .unwrap_or(OptVariable::NONE)
     }
 }
 
@@ -1192,31 +1228,6 @@ impl UnifyKey for Variable {
 
     fn tag() -> &'static str {
         "Variable"
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct LambdaSet(pub Variable);
-
-impl fmt::Debug for LambdaSet {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "LambdaSet({})", self.0 .0)
-    }
-}
-
-impl LambdaSet {
-    pub fn into_inner(self) -> Variable {
-        self.0
-    }
-
-    pub fn as_inner(&self) -> &Variable {
-        &self.0
-    }
-}
-
-impl From<Variable> for LambdaSet {
-    fn from(variable: Variable) -> Self {
-        LambdaSet(variable)
     }
 }
 
@@ -1747,10 +1758,20 @@ impl Subs {
         self.utable.is_redirect(var)
     }
 
+    /// Determines if there is any variable in [var] that occurs recursively.
+    ///
+    /// The [Err] variant returns the occurring variable and the chain of variables that led
+    /// to a recursive occurrence, in order of proximity. For example, if the type "r" has a
+    /// reference chain r -> t1 -> t2 -> r, [occurs] will return `Err(r, [t2, t1, r])`.
+    ///
+    /// This ignores [Content::RecursionVar]s that occur recursively, because those are
+    /// already priced in and expected to occur. Use [Subs::occurs_including_recursion_vars] if you
+    /// need to check for recursion var occurrence.
     pub fn occurs(&self, var: Variable) -> Result<(), (Variable, Vec<Variable>)> {
         occurs(self, &[], var, false)
     }
 
+    /// Like [Subs::occurs], but also errors when recursion vars occur.
     pub fn occurs_including_recursion_vars(
         &self,
         var: Variable,
@@ -1764,6 +1785,30 @@ impl Subs {
         tags: UnionTags,
         ext_var: Variable,
     ) {
+        let (rec_var, new_tags) = self.mark_union_recursive_help(recursive, tags);
+
+        let new_ext_var = self.explicit_substitute(recursive, rec_var, ext_var);
+        let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, new_ext_var);
+
+        self.set_content(recursive, Content::Structure(flat_type));
+    }
+
+    pub fn mark_lambda_set_recursive(&mut self, recursive: Variable, solved_lambdas: UnionTags) {
+        let (rec_var, new_tags) = self.mark_union_recursive_help(recursive, solved_lambdas);
+
+        let new_lambda_set = Content::LambdaSet(LambdaSet {
+            solved: new_tags,
+            recursion_var: OptVariable::from(rec_var),
+        });
+
+        self.set_content(recursive, new_lambda_set);
+    }
+
+    fn mark_union_recursive_help(
+        &mut self,
+        recursive: Variable,
+        tags: UnionTags,
+    ) -> (Variable, UnionTags) {
         let description = self.get(recursive);
 
         let rec_var = self.fresh_unnamed_flex_var();
@@ -1791,13 +1836,9 @@ impl Subs {
             self.variable_slices[variable_slice_index] = new_variables;
         }
 
-        let new_ext_var = self.explicit_substitute(recursive, rec_var, ext_var);
-
         let new_tags = UnionTags::from_slices(tags.tag_names(), new_variable_slices);
 
-        let flat_type = FlatType::RecursiveTagUnion(rec_var, new_tags, new_ext_var);
-
-        self.set_content(recursive, Content::Structure(flat_type));
+        (rec_var, new_tags)
     }
 
     pub fn explicit_substitute(
@@ -2007,10 +2048,63 @@ pub enum Content {
         structure: Variable,
         opt_name: Option<SubsIndex<Lowercase>>,
     },
+    LambdaSet(LambdaSet),
     Structure(FlatType),
     Alias(Symbol, AliasVariables, Variable, AliasKind),
     RangedNumber(Variable, crate::num::NumericRange),
     Error,
+}
+
+/// Stores the lambdas an arrow might pass through; for example
+///
+///   f : {} -> {}
+///   g : {} -> {}
+///   if b then f else g
+///
+/// has the type {} -[f, g]-> {} where [f, g] is the solved lambda set.
+#[derive(Clone, Copy, Debug)]
+pub struct LambdaSet {
+    /// The resolved lambda symbols we know.
+    pub solved: UnionTags,
+    /// Lambda sets may be recursive. For example, consider the annotated program
+    ///
+    /// ```text
+    /// XEffect : A -> B
+    ///                                                   
+    /// after : ({} -> XEffect) -> XEffect
+    /// after =
+    ///     \cont ->
+    ///         f = \A -[`f (typeof cont)]-> when cont {} is A -> B
+    ///         f
+    ///                                                   
+    /// nestForever : {} -> XEffect
+    /// nestForever = \{} -[`nestForever]-> after nestForever
+    /// ^^^^^^^^^^^ {} -[`nestForever]-> A -[`f ({} -[`nestForever]-> A -[`f ...]-> B)]-> B
+    /// ```
+    ///
+    /// where [`nestForever] and [`f ...] refer to the lambda sets of their respective arrows. `f`
+    /// captures `cont`. The usage of `after` in `nestForever` means that `nestForever` has type
+    /// ``nestForever : {} -[`nestForever]-> A -[`f (typeof cont)]-> B``. But also, `after` is called
+    /// with ``nestForever`, which means in this case `typeof cont = typeof nestForever``. So we see
+    /// that ``nestForever : {} -[`nestForever]-> A -[`f (typeof nestForever)]-> B``, and the lambda
+    /// set ``[`f (typeof nestForever)]`` is recursive.
+    ///
+    /// However, we don't know if a lambda set is recursive or not until type inference.
+    pub recursion_var: OptVariable,
+}
+
+impl LambdaSet {
+    /// For things like layout generation, we don't care about differentiating betweent lambda sets
+    /// and tag unions - this function normalizes lambda sets appropriately as a possibly-recursive
+    /// tag union.
+    pub fn as_tag_union(&self) -> FlatType {
+        match self.recursion_var.into_variable() {
+            Some(rec_var) => {
+                FlatType::RecursiveTagUnion(rec_var, self.solved, Variable::EMPTY_TAG_UNION)
+            }
+            None => FlatType::TagUnion(self.solved, Variable::EMPTY_TAG_UNION),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -2752,19 +2846,7 @@ fn occurs(
                         short_circuit(subs, root_var, &new_seen, it, include_recursion_var)
                     }
                     TagUnion(tags, ext_var) => {
-                        for slice_index in tags.variables() {
-                            let slice = subs[slice_index];
-                            for var_index in slice {
-                                let var = subs[var_index];
-                                short_circuit_help(
-                                    subs,
-                                    root_var,
-                                    &new_seen,
-                                    var,
-                                    include_recursion_var,
-                                )?;
-                            }
-                        }
+                        occurs_union_tags(subs, root_var, &new_seen, include_recursion_var, tags)?;
 
                         short_circuit_help(
                             subs,
@@ -2782,19 +2864,7 @@ fn occurs(
                         if include_recursion_var {
                             new_seen.push(subs.get_root_key_without_compacting(*rec_var));
                         }
-                        for slice_index in tags.variables() {
-                            let slice = subs[slice_index];
-                            for var_index in slice {
-                                let var = subs[var_index];
-                                short_circuit_help(
-                                    subs,
-                                    root_var,
-                                    &new_seen,
-                                    var,
-                                    include_recursion_var,
-                                )?;
-                            }
-                        }
+                        occurs_union_tags(subs, root_var, &new_seen, include_recursion_var, tags)?;
 
                         short_circuit_help(
                             subs,
@@ -2818,6 +2888,21 @@ fn occurs(
 
                 Ok(())
             }
+            LambdaSet(self::LambdaSet {
+                solved,
+                recursion_var,
+            }) => {
+                let mut new_seen = seen.to_owned();
+                new_seen.push(root_var);
+
+                if include_recursion_var {
+                    if let Some(v) = recursion_var.into_variable() {
+                        new_seen.push(subs.get_root_key_without_compacting(v));
+                    }
+                }
+
+                occurs_union_tags(subs, root_var, &new_seen, include_recursion_var, solved)
+            }
             RangedNumber(typ, _range_vars) => {
                 let mut new_seen = seen.to_owned();
                 new_seen.push(root_var);
@@ -2829,6 +2914,24 @@ fn occurs(
             }
         }
     }
+}
+
+#[inline(always)]
+fn occurs_union_tags(
+    subs: &Subs,
+    root_var: Variable,
+    seen: &[Variable],
+    include_recursion_var: bool,
+    tags: &UnionTags,
+) -> Result<(), (Variable, Vec<Variable>)> {
+    for slice_index in tags.variables() {
+        let slice = subs[slice_index];
+        for var_index in slice {
+            let var = subs[var_index];
+            short_circuit_help(subs, root_var, seen, var, include_recursion_var)?;
+        }
+    }
+    Ok(())
 }
 
 #[inline(always)]
@@ -2875,166 +2978,167 @@ fn explicit_substitute(
     use self::Content::*;
     use self::FlatType::*;
     let in_root = subs.get_root_key(in_var);
-    if seen.contains(&in_root) {
+    if subs.get_root_key(from) == in_root {
+        to
+    } else if seen.contains(&in_root) {
         in_var
     } else {
         seen.insert(in_root);
 
-        if subs.get_root_key(from) == subs.get_root_key(in_var) {
-            to
-        } else {
-            match subs.get(in_var).content {
-                FlexVar(_)
-                | RigidVar(_)
-                | FlexAbleVar(_, _)
-                | RigidAbleVar(_, _)
-                | RecursionVar { .. }
-                | Error => in_var,
+        match subs.get(in_var).content {
+            FlexVar(_)
+            | RigidVar(_)
+            | FlexAbleVar(_, _)
+            | RigidAbleVar(_, _)
+            | RecursionVar { .. }
+            | Error => in_var,
 
-                Structure(flat_type) => {
-                    match flat_type {
-                        Apply(symbol, args) => {
-                            for var_index in args.into_iter() {
-                                let var = subs[var_index];
-                                let answer = explicit_substitute(subs, from, to, var, seen);
-                                subs[var_index] = answer;
-                            }
-
-                            subs.set_content(in_var, Structure(Apply(symbol, args)));
-                        }
-                        Func(arg_vars, closure_var, ret_var) => {
-                            for var_index in arg_vars.into_iter() {
-                                let var = subs[var_index];
-                                let answer = explicit_substitute(subs, from, to, var, seen);
-                                subs[var_index] = answer;
-                            }
-
-                            let new_ret_var = explicit_substitute(subs, from, to, ret_var, seen);
-                            let new_closure_var =
-                                explicit_substitute(subs, from, to, closure_var, seen);
-
-                            subs.set_content(
-                                in_var,
-                                Structure(Func(arg_vars, new_closure_var, new_ret_var)),
-                            );
-                        }
-                        TagUnion(tags, ext_var) => {
-                            let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
-
-                            let mut new_slices = Vec::new();
-                            for slice_index in tags.variables() {
-                                let slice = subs[slice_index];
-
-                                let mut new_variables = Vec::new();
-                                for var_index in slice {
-                                    let var = subs[var_index];
-                                    let new_var = explicit_substitute(subs, from, to, var, seen);
-                                    new_variables.push(new_var);
-                                }
-
-                                let start = subs.variables.len() as u32;
-                                let length = new_variables.len() as u16;
-
-                                subs.variables.extend(new_variables);
-
-                                new_slices.push(VariableSubsSlice::new(start, length));
-                            }
-
-                            let start = subs.variable_slices.len() as u32;
-                            let length = new_slices.len();
-
-                            subs.variable_slices.extend(new_slices);
-
-                            let mut union_tags = tags;
-                            debug_assert_eq!(length, union_tags.len());
-                            union_tags.variables_start = start;
-
-                            subs.set_content(in_var, Structure(TagUnion(union_tags, new_ext_var)));
-                        }
-                        FunctionOrTagUnion(tag_name, symbol, ext_var) => {
-                            let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
-                            subs.set_content(
-                                in_var,
-                                Structure(FunctionOrTagUnion(tag_name, symbol, new_ext_var)),
-                            );
-                        }
-                        RecursiveTagUnion(rec_var, tags, ext_var) => {
-                            // NOTE rec_var is not substituted, verify that this is correct!
-                            let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
-
-                            let mut new_slices = Vec::new();
-                            for slice_index in tags.variables() {
-                                let slice = subs[slice_index];
-
-                                let mut new_variables = Vec::new();
-                                for var_index in slice {
-                                    let var = subs[var_index];
-                                    let new_var = explicit_substitute(subs, from, to, var, seen);
-                                    new_variables.push(new_var);
-                                }
-
-                                let start = subs.variables.len() as u32;
-                                let length = new_variables.len() as u16;
-
-                                subs.variables.extend(new_variables);
-
-                                new_slices.push(VariableSubsSlice::new(start, length));
-                            }
-
-                            let start = subs.variable_slices.len() as u32;
-                            let length = new_slices.len();
-
-                            subs.variable_slices.extend(new_slices);
-
-                            let mut union_tags = tags;
-                            debug_assert_eq!(length, union_tags.len());
-                            union_tags.variables_start = start;
-
-                            subs.set_content(
-                                in_var,
-                                Structure(RecursiveTagUnion(rec_var, union_tags, new_ext_var)),
-                            );
-                        }
-                        Record(vars_by_field, ext_var) => {
-                            let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
-
-                            for index in vars_by_field.iter_variables() {
-                                let var = subs[index];
-                                let new_var = explicit_substitute(subs, from, to, var, seen);
-                                subs[index] = new_var;
-                            }
-
-                            subs.set_content(in_var, Structure(Record(vars_by_field, new_ext_var)));
+            Structure(flat_type) => {
+                match flat_type {
+                    Apply(symbol, args) => {
+                        for var_index in args.into_iter() {
+                            let var = subs[var_index];
+                            let answer = explicit_substitute(subs, from, to, var, seen);
+                            subs[var_index] = answer;
                         }
 
-                        EmptyRecord | EmptyTagUnion | Erroneous(_) => {}
+                        subs.set_content(in_var, Structure(Apply(symbol, args)));
+                    }
+                    Func(arg_vars, closure_var, ret_var) => {
+                        for var_index in arg_vars.into_iter() {
+                            let var = subs[var_index];
+                            let answer = explicit_substitute(subs, from, to, var, seen);
+                            subs[var_index] = answer;
+                        }
+
+                        let new_ret_var = explicit_substitute(subs, from, to, ret_var, seen);
+                        let new_closure_var =
+                            explicit_substitute(subs, from, to, closure_var, seen);
+
+                        subs.set_content(
+                            in_var,
+                            Structure(Func(arg_vars, new_closure_var, new_ret_var)),
+                        );
+                    }
+                    TagUnion(tags, ext_var) => {
+                        let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
+
+                        let union_tags = explicit_substitute_union_tags(subs, from, to, tags, seen);
+
+                        subs.set_content(in_var, Structure(TagUnion(union_tags, new_ext_var)));
+                    }
+                    FunctionOrTagUnion(tag_name, symbol, ext_var) => {
+                        let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
+                        subs.set_content(
+                            in_var,
+                            Structure(FunctionOrTagUnion(tag_name, symbol, new_ext_var)),
+                        );
+                    }
+                    RecursiveTagUnion(rec_var, tags, ext_var) => {
+                        // NOTE rec_var is not substituted, verify that this is correct!
+                        let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
+
+                        let union_tags = explicit_substitute_union_tags(subs, from, to, tags, seen);
+
+                        subs.set_content(
+                            in_var,
+                            Structure(RecursiveTagUnion(rec_var, union_tags, new_ext_var)),
+                        );
+                    }
+                    Record(vars_by_field, ext_var) => {
+                        let new_ext_var = explicit_substitute(subs, from, to, ext_var, seen);
+
+                        for index in vars_by_field.iter_variables() {
+                            let var = subs[index];
+                            let new_var = explicit_substitute(subs, from, to, var, seen);
+                            subs[index] = new_var;
+                        }
+
+                        subs.set_content(in_var, Structure(Record(vars_by_field, new_ext_var)));
                     }
 
-                    in_var
+                    EmptyRecord | EmptyTagUnion | Erroneous(_) => {}
                 }
-                Alias(symbol, args, actual, kind) => {
-                    for index in args.into_iter() {
-                        let var = subs[index];
-                        let new_var = explicit_substitute(subs, from, to, var, seen);
-                        subs[index] = new_var;
-                    }
 
-                    let new_actual = explicit_substitute(subs, from, to, actual, seen);
-
-                    subs.set_content(in_var, Alias(symbol, args, new_actual, kind));
-
-                    in_var
+                in_var
+            }
+            Alias(symbol, args, actual, kind) => {
+                for index in args.into_iter() {
+                    let var = subs[index];
+                    let new_var = explicit_substitute(subs, from, to, var, seen);
+                    subs[index] = new_var;
                 }
-                RangedNumber(typ, range) => {
-                    let new_typ = explicit_substitute(subs, from, to, typ, seen);
 
-                    subs.set_content(in_var, RangedNumber(new_typ, range));
+                let new_actual = explicit_substitute(subs, from, to, actual, seen);
 
-                    in_var
-                }
+                subs.set_content(in_var, Alias(symbol, args, new_actual, kind));
+
+                in_var
+            }
+            LambdaSet(self::LambdaSet {
+                solved,
+                recursion_var,
+            }) => {
+                // NOTE recursion_var is not substituted, verify that this is correct!
+                let new_solved = explicit_substitute_union_tags(subs, from, to, solved, seen);
+
+                subs.set_content(
+                    in_var,
+                    LambdaSet(self::LambdaSet {
+                        solved: new_solved,
+                        recursion_var,
+                    }),
+                );
+
+                in_var
+            }
+            RangedNumber(typ, range) => {
+                let new_typ = explicit_substitute(subs, from, to, typ, seen);
+
+                subs.set_content(in_var, RangedNumber(new_typ, range));
+
+                in_var
             }
         }
     }
+}
+
+#[inline(always)]
+fn explicit_substitute_union_tags(
+    subs: &mut Subs,
+    from: Variable,
+    to: Variable,
+    tags: UnionTags,
+    seen: &mut ImSet<Variable>,
+) -> UnionTags {
+    let mut new_slices = Vec::new();
+    for slice_index in tags.variables() {
+        let slice = subs[slice_index];
+
+        let mut new_variables = Vec::new();
+        for var_index in slice {
+            let var = subs[var_index];
+            let new_var = explicit_substitute(subs, from, to, var, seen);
+            new_variables.push(new_var);
+        }
+
+        let start = subs.variables.len() as u32;
+        let length = new_variables.len() as u16;
+
+        subs.variables.extend(new_variables);
+
+        new_slices.push(VariableSubsSlice::new(start, length));
+    }
+
+    let start = subs.variable_slices.len() as u32;
+    let length = new_slices.len();
+
+    subs.variable_slices.extend(new_slices);
+
+    let mut union_tags = tags;
+    debug_assert_eq!(length, union_tags.len());
+    union_tags.variables_start = start;
+    union_tags
 }
 
 fn get_var_names(
@@ -3088,6 +3192,17 @@ fn get_var_names(
                 get_var_names(subs, subs[arg_var], answer)
             }),
 
+            LambdaSet(self::LambdaSet {
+                solved,
+                recursion_var,
+            }) => {
+                let taken_names = get_var_names_union_tags(subs, solved, taken_names);
+                match recursion_var.into_variable() {
+                    Some(v) => get_var_names(subs, v, taken_names),
+                    None => taken_names,
+                }
+            }
+
             RangedNumber(typ, _) => get_var_names(subs, typ, taken_names),
 
             Structure(flat_type) => match flat_type {
@@ -3128,17 +3243,8 @@ fn get_var_names(
                     accum
                 }
                 FlatType::TagUnion(tags, ext_var) => {
-                    let mut taken_names = get_var_names(subs, ext_var, taken_names);
-
-                    for slice_index in tags.variables() {
-                        let slice = subs[slice_index];
-                        for var_index in slice {
-                            let var = subs[var_index];
-                            taken_names = get_var_names(subs, var, taken_names)
-                        }
-                    }
-
-                    taken_names
+                    let taken_names = get_var_names(subs, ext_var, taken_names);
+                    get_var_names_union_tags(subs, tags, taken_names)
                 }
 
                 FlatType::FunctionOrTagUnion(_, _, ext_var) => {
@@ -3147,21 +3253,28 @@ fn get_var_names(
 
                 FlatType::RecursiveTagUnion(rec_var, tags, ext_var) => {
                     let taken_names = get_var_names(subs, ext_var, taken_names);
-                    let mut taken_names = get_var_names(subs, rec_var, taken_names);
-
-                    for slice_index in tags.variables() {
-                        let slice = subs[slice_index];
-                        for var_index in slice {
-                            let arg_var = subs[var_index];
-                            taken_names = get_var_names(subs, arg_var, taken_names)
-                        }
-                    }
-
-                    taken_names
+                    let taken_names = get_var_names(subs, rec_var, taken_names);
+                    get_var_names_union_tags(subs, tags, taken_names)
                 }
             },
         }
     }
+}
+
+#[inline(always)]
+fn get_var_names_union_tags(
+    subs: &mut Subs,
+    tags: UnionTags,
+    mut taken_names: ImMap<Lowercase, Variable>,
+) -> ImMap<Lowercase, Variable> {
+    for slice_index in tags.variables() {
+        let slice = subs[slice_index];
+        for var_index in slice {
+            let var = subs[var_index];
+            taken_names = get_var_names(subs, var, taken_names)
+        }
+    }
+    taken_names
 }
 
 fn add_name<F>(
@@ -3326,6 +3439,20 @@ fn content_to_err_type(
             ErrorType::Alias(symbol, err_args, Box::new(err_type), kind)
         }
 
+        LambdaSet(self::LambdaSet {
+            solved,
+            recursion_var,
+        }) => match recursion_var.into_variable() {
+            None => {
+                ErrorType::TagUnion(union_tags_to_err_tags(subs, state, solved), TypeExt::Closed)
+            }
+            Some(v) => ErrorType::RecursiveTagUnion(
+                Box::new(var_to_err_type(subs, state, v)),
+                union_tags_to_err_tags(subs, state, solved),
+                TypeExt::Closed,
+            ),
+        },
+
         RangedNumber(typ, range) => {
             let err_type = var_to_err_type(subs, state, typ);
 
@@ -3421,20 +3548,7 @@ fn flat_type_to_err_type(
         }
 
         TagUnion(tags, ext_var) => {
-            let mut err_tags = SendMap::default();
-
-            for (name_index, slice_index) in tags.iter_all() {
-                let mut err_vars = Vec::with_capacity(tags.len());
-
-                let slice = subs[slice_index];
-                for var_index in slice {
-                    let var = subs[var_index];
-                    err_vars.push(var_to_err_type(subs, state, var));
-                }
-
-                let tag = subs[name_index].clone();
-                err_tags.insert(tag, err_vars);
-            }
+            let err_tags = union_tags_to_err_tags(subs, state, tags);
 
             match var_to_err_type(subs, state, ext_var).unwrap_structural_alias() {
                 ErrorType::TagUnion(sub_tags, sub_ext) => {
@@ -3488,20 +3602,7 @@ fn flat_type_to_err_type(
         RecursiveTagUnion(rec_var, tags, ext_var) => {
             state.recursive_tag_unions_seen.push(rec_var);
 
-            let mut err_tags = SendMap::default();
-
-            for (name_index, slice_index) in tags.iter_all() {
-                let mut err_vars = Vec::with_capacity(tags.len());
-
-                let slice = subs[slice_index];
-                for var_index in slice {
-                    let var = subs[var_index];
-                    err_vars.push(var_to_err_type(subs, state, var));
-                }
-
-                let tag = subs[name_index].clone();
-                err_tags.insert(tag, err_vars);
-            }
+            let err_tags = union_tags_to_err_tags(subs, state, tags);
 
             let rec_error_type = Box::new(var_to_err_type(subs, state, rec_var));
 
@@ -3535,6 +3636,30 @@ fn flat_type_to_err_type(
             ErrorType::Error
         }
     }
+}
+
+#[inline(always)]
+fn union_tags_to_err_tags(
+    subs: &mut Subs,
+    state: &mut ErrorTypeState,
+    tags: UnionTags,
+) -> SendMap<TagName, Vec<ErrorType>> {
+    let mut err_tags = SendMap::default();
+
+    for (name_index, slice_index) in tags.iter_all() {
+        let mut err_vars = Vec::with_capacity(tags.len());
+
+        let slice = subs[slice_index];
+        for var_index in slice {
+            let var = subs[var_index];
+            err_vars.push(var_to_err_type(subs, state, var));
+        }
+
+        let tag = subs[name_index].clone();
+        err_tags.insert(tag, err_vars);
+    }
+
+    err_tags
 }
 
 fn get_fresh_var_name(state: &mut ErrorTypeState) -> Lowercase {
@@ -3630,6 +3755,20 @@ fn restore_help(subs: &mut Subs, initial: Variable) {
                 stack.extend(var_slice(args.all_variables()));
 
                 stack.push(*var);
+            }
+
+            LambdaSet(self::LambdaSet {
+                solved,
+                recursion_var,
+            }) => {
+                for slice_index in solved.variables() {
+                    let slice = variable_slices[slice_index.index as usize];
+                    stack.extend(var_slice(slice));
+                }
+
+                if let Some(v) = recursion_var.into_variable() {
+                    stack.push(v);
+                }
             }
 
             RangedNumber(typ, _vars) => {
@@ -3819,6 +3958,13 @@ impl StorageSubs {
                 Self::offset_variable(offsets, *actual),
                 *kind,
             ),
+            LambdaSet(self::LambdaSet {
+                solved,
+                recursion_var,
+            }) => LambdaSet(self::LambdaSet {
+                solved: Self::offset_union_tags(offsets, *solved),
+                recursion_var: recursion_var.map(|v| Self::offset_variable(offsets, v)),
+            }),
             RangedNumber(typ, range) => RangedNumber(Self::offset_variable(offsets, *typ), *range),
             Error => Content::Error,
         }
@@ -3953,6 +4099,40 @@ struct DeepCopyVarToEnv<'a> {
     max_rank: Rank,
 }
 
+#[inline(always)]
+fn deep_copy_union_tags(env: &mut DeepCopyVarToEnv<'_>, tags: UnionTags) -> UnionTags {
+    let new_variable_slices = SubsSlice::reserve_variable_slices(env.target, tags.len());
+
+    let it = (new_variable_slices.indices()).zip(tags.variables());
+    for (target_index, index) in it {
+        let slice = env.source[index];
+
+        let new_variables = SubsSlice::reserve_into_subs(env.target, slice.len());
+        let it = (new_variables.indices()).zip(slice);
+        for (target_index, var_index) in it {
+            let var = env.source[var_index];
+            let copy_var = deep_copy_var_to_help(env, var);
+            env.target.variables[target_index] = copy_var;
+        }
+
+        env.target.variable_slices[target_index] = new_variables;
+    }
+
+    let new_tag_names = {
+        let tag_names = tags.tag_names();
+        let slice = &env.source.tag_names[tag_names.indices()];
+
+        let start = env.target.tag_names.len() as u32;
+        let length = tag_names.len() as u16;
+
+        env.target.tag_names.extend(slice.iter().cloned());
+
+        SubsSlice::new(start, length)
+    };
+
+    UnionTags::from_slices(new_tag_names, new_variable_slices)
+}
+
 fn deep_copy_var_to_help(env: &mut DeepCopyVarToEnv<'_>, var: Variable) -> Variable {
     use Content::*;
     use FlatType::*;
@@ -4068,38 +4248,7 @@ fn deep_copy_var_to_help(env: &mut DeepCopyVarToEnv<'_>, var: Variable) -> Varia
 
                 TagUnion(tags, ext_var) => {
                     let new_ext = deep_copy_var_to_help(env, ext_var);
-
-                    let new_variable_slices =
-                        SubsSlice::reserve_variable_slices(env.target, tags.len());
-
-                    let it = (new_variable_slices.indices()).zip(tags.variables());
-                    for (target_index, index) in it {
-                        let slice = env.source[index];
-
-                        let new_variables = SubsSlice::reserve_into_subs(env.target, slice.len());
-                        let it = (new_variables.indices()).zip(slice);
-                        for (target_index, var_index) in it {
-                            let var = env.source[var_index];
-                            let copy_var = deep_copy_var_to_help(env, var);
-                            env.target.variables[target_index] = copy_var;
-                        }
-
-                        env.target.variable_slices[target_index] = new_variables;
-                    }
-
-                    let new_tag_names = {
-                        let tag_names = tags.tag_names();
-                        let slice = &env.source.tag_names[tag_names.indices()];
-
-                        let start = env.target.tag_names.len() as u32;
-                        let length = tag_names.len() as u16;
-
-                        env.target.tag_names.extend(slice.iter().cloned());
-
-                        SubsSlice::new(start, length)
-                    };
-
-                    let union_tags = UnionTags::from_slices(new_tag_names, new_variable_slices);
+                    let union_tags = deep_copy_union_tags(env, tags);
 
                     TagUnion(union_tags, new_ext)
                 }
@@ -4113,37 +4262,7 @@ fn deep_copy_var_to_help(env: &mut DeepCopyVarToEnv<'_>, var: Variable) -> Varia
                 }
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
-                    let new_variable_slices =
-                        SubsSlice::reserve_variable_slices(env.target, tags.len());
-
-                    let it = (new_variable_slices.indices()).zip(tags.variables());
-                    for (target_index, index) in it {
-                        let slice = env.source[index];
-
-                        let new_variables = SubsSlice::reserve_into_subs(env.target, slice.len());
-                        let it = (new_variables.indices()).zip(slice);
-                        for (target_index, var_index) in it {
-                            let var = env.source[var_index];
-                            let copy_var = deep_copy_var_to_help(env, var);
-                            env.target.variables[target_index] = copy_var;
-                        }
-
-                        env.target.variable_slices[target_index] = new_variables;
-                    }
-
-                    let new_tag_names = {
-                        let tag_names = tags.tag_names();
-                        let slice = &env.source.tag_names[tag_names.indices()];
-
-                        let start = env.target.tag_names.len() as u32;
-                        let length = tag_names.len() as u16;
-
-                        env.target.tag_names.extend(slice.iter().cloned());
-
-                        SubsSlice::new(start, length)
-                    };
-
-                    let union_tags = UnionTags::from_slices(new_tag_names, new_variable_slices);
+                    let union_tags = deep_copy_union_tags(env, tags);
 
                     let new_ext = deep_copy_var_to_help(env, ext_var);
                     let new_rec_var = deep_copy_var_to_help(env, rec_var);
@@ -4242,6 +4361,21 @@ fn deep_copy_var_to_help(env: &mut DeepCopyVarToEnv<'_>, var: Variable) -> Varia
 
             env.target.set(copy, make_descriptor(new_content));
 
+            copy
+        }
+
+        LambdaSet(self::LambdaSet {
+            solved,
+            recursion_var,
+        }) => {
+            let new_solved = deep_copy_union_tags(env, solved);
+            let new_rec_var = recursion_var.map(|v| deep_copy_var_to_help(env, v));
+
+            let new_content = LambdaSet(self::LambdaSet {
+                solved: new_solved,
+                recursion_var: new_rec_var,
+            });
+            env.target.set(copy, make_descriptor(new_content));
             copy
         }
 
@@ -4373,8 +4507,43 @@ fn is_registered(content: &Content) -> bool {
         | Content::RecursionVar { .. }
         | Content::Alias(_, _, _, _)
         | Content::RangedNumber(_, _)
-        | Content::Error => true,
+        | Content::Error
+        | Content::LambdaSet(_) => true,
     }
+}
+
+#[inline(always)]
+fn copy_union_tags(env: &mut CopyImportEnv<'_>, max_rank: Rank, tags: UnionTags) -> UnionTags {
+    let new_variable_slices = SubsSlice::reserve_variable_slices(env.target, tags.len());
+
+    let it = (new_variable_slices.indices()).zip(tags.variables());
+    for (target_index, index) in it {
+        let slice = env.source[index];
+
+        let new_variables = SubsSlice::reserve_into_subs(env.target, slice.len());
+        let it = (new_variables.indices()).zip(slice);
+        for (target_index, var_index) in it {
+            let var = env.source[var_index];
+            let copy_var = copy_import_to_help(env, max_rank, var);
+            env.target.variables[target_index] = copy_var;
+        }
+
+        env.target.variable_slices[target_index] = new_variables;
+    }
+
+    let new_tag_names = {
+        let tag_names = tags.tag_names();
+        let slice = &env.source.tag_names[tag_names.indices()];
+
+        let start = env.target.tag_names.len() as u32;
+        let length = tag_names.len() as u16;
+
+        env.target.tag_names.extend(slice.iter().cloned());
+
+        SubsSlice::new(start, length)
+    };
+
+    UnionTags::from_slices(new_tag_names, new_variable_slices)
 }
 
 fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variable) -> Variable {
@@ -4506,37 +4675,7 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
                 TagUnion(tags, ext_var) => {
                     let new_ext = copy_import_to_help(env, max_rank, ext_var);
 
-                    let new_variable_slices =
-                        SubsSlice::reserve_variable_slices(env.target, tags.len());
-
-                    let it = (new_variable_slices.indices()).zip(tags.variables());
-                    for (target_index, index) in it {
-                        let slice = env.source[index];
-
-                        let new_variables = SubsSlice::reserve_into_subs(env.target, slice.len());
-                        let it = (new_variables.indices()).zip(slice);
-                        for (target_index, var_index) in it {
-                            let var = env.source[var_index];
-                            let copy_var = copy_import_to_help(env, max_rank, var);
-                            env.target.variables[target_index] = copy_var;
-                        }
-
-                        env.target.variable_slices[target_index] = new_variables;
-                    }
-
-                    let new_tag_names = {
-                        let tag_names = tags.tag_names();
-                        let slice = &env.source.tag_names[tag_names.indices()];
-
-                        let start = env.target.tag_names.len() as u32;
-                        let length = tag_names.len() as u16;
-
-                        env.target.tag_names.extend(slice.iter().cloned());
-
-                        SubsSlice::new(start, length)
-                    };
-
-                    let union_tags = UnionTags::from_slices(new_tag_names, new_variable_slices);
+                    let union_tags = copy_union_tags(env, max_rank, tags);
 
                     TagUnion(union_tags, new_ext)
                 }
@@ -4554,37 +4693,7 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
                 }
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
-                    let new_variable_slices =
-                        SubsSlice::reserve_variable_slices(env.target, tags.len());
-
-                    let it = (new_variable_slices.indices()).zip(tags.variables());
-                    for (target_index, index) in it {
-                        let slice = env.source[index];
-
-                        let new_variables = SubsSlice::reserve_into_subs(env.target, slice.len());
-                        let it = (new_variables.indices()).zip(slice);
-                        for (target_index, var_index) in it {
-                            let var = env.source[var_index];
-                            let copy_var = copy_import_to_help(env, max_rank, var);
-                            env.target.variables[target_index] = copy_var;
-                        }
-
-                        env.target.variable_slices[target_index] = new_variables;
-                    }
-
-                    let new_tag_names = {
-                        let tag_names = tags.tag_names();
-                        let slice = &env.source.tag_names[tag_names.indices()];
-
-                        let start = env.target.tag_names.len() as u32;
-                        let length = tag_names.len() as u16;
-
-                        env.target.tag_names.extend(slice.iter().cloned());
-
-                        SubsSlice::new(start, length)
-                    };
-
-                    let union_tags = UnionTags::from_slices(new_tag_names, new_variable_slices);
+                    let union_tags = copy_union_tags(env, max_rank, tags);
 
                     let new_ext = copy_import_to_help(env, max_rank, ext_var);
                     let new_rec_var = copy_import_to_help(env, max_rank, rec_var);
@@ -4700,6 +4809,24 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
 
             let new_real_type_var = copy_import_to_help(env, max_rank, real_type_var);
             let new_content = Alias(symbol, new_arguments, new_real_type_var, kind);
+
+            env.target.set(copy, make_descriptor(new_content));
+
+            copy
+        }
+
+        LambdaSet(self::LambdaSet {
+            solved,
+            recursion_var,
+        }) => {
+            let new_solved = copy_union_tags(env, max_rank, solved);
+            let new_rec_var =
+                recursion_var.map(|rec_var| copy_import_to_help(env, max_rank, rec_var));
+
+            let new_content = LambdaSet(self::LambdaSet {
+                solved: new_solved,
+                recursion_var: new_rec_var,
+            });
 
             env.target.set(copy, make_descriptor(new_content));
 
