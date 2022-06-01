@@ -794,7 +794,6 @@ pub fn canonicalize_defs<'a>(
     loc_defs: &'a Defs<'a>,
     pattern_type: PatternType,
 ) -> (CanDefs, Scope, Output, MutMap<Symbol, Region>) {
-    /*
     // Canonicalizing defs while detecting shadowing involves a multi-step process:
     //
     // 1. Go through each of the patterns.
@@ -823,8 +822,13 @@ pub fn canonicalize_defs<'a>(
     // Canonicalize all the patterns, record shadowing problems, and store
     // the ast::Expr values in pending_exprs for further canonicalization
     // once we've finished assembling the entire scope.
-    for loc_def in loc_defs {
-        match to_pending_def(env, &loc_def.value, &mut scope, pattern_type) {
+    for loc_def in loc_defs.defs() {
+        let def = match loc_def {
+            Ok(type_def) => roc_parse::ast::Def::Type(type_def.clone()),
+            Err(value_def) => roc_parse::ast::Def::Value(value_def.clone()),
+        };
+
+        match to_pending_def(env, env.arena.alloc(def), &mut scope, pattern_type) {
             None => (),
             Some((new_output, pending_def)) => {
                 // store the top-level defs, used to ensure that closures won't capture them
@@ -917,9 +921,6 @@ pub fn canonicalize_defs<'a>(
         output,
         symbols_introduced,
     )
-        */
-
-    todo!()
 }
 
 // See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
