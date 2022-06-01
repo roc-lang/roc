@@ -1,4 +1,3 @@
-use bumpalo::collections::Vec as BumpVec;
 use bumpalo::Bump;
 use roc_module::ident::{Ident, IdentStr};
 use roc_parse::{ast::CommentOrNewline, parser::SyntaxError};
@@ -90,19 +89,6 @@ pub fn toplevel_defs_to_defs2<'a>(
     }
 
     result
-}
-
-pub fn defs_to_defs2<'a>(
-    arena: &'a Bump,
-    env: &mut Env<'a>,
-    scope: &mut Scope,
-    parsed_defs: &'a BumpVec<roc_region::all::Loc<roc_parse::ast::Def<'a>>>,
-    region: Region,
-) -> Vec<Def2> {
-    parsed_defs
-        .iter()
-        .map(|loc| def_to_def2(arena, env, scope, &loc.value, region))
-        .collect()
 }
 
 pub fn def_to_def2<'a>(
