@@ -915,6 +915,7 @@ fn push_union_tags<'a>(
     tags: &UnionTags,
     fields: &mut Vec<(TagName, Vec<Variable>)>,
 ) {
+    fields.reserve(tags.len());
     for (name_index, slice_index) in tags.iter_all() {
         let subs_slice = subs[slice_index];
         let slice = subs.get_subs_slice(subs_slice);
@@ -953,20 +954,31 @@ pub fn chase_ext_tag_union<'a>(
     }
 }
 
-pub fn resolve_lambda_set<'a>(
-    subs: &'a Subs,
-    var: Variable,
-    fields: &mut Vec<(TagName, Vec<Variable>)>,
-) {
-    match subs.get_content_without_compacting(var) {
-        Content::LambdaSet(subs::LambdaSet {
-            solved,
-            recursion_var: _,
-        }) => {
-            push_union_tags(subs, solved, fields);
+pub enum ResolvedLambdaSet {
+    Set(Vec<(TagName, Vec<Variable>)>),
+    /// TODO: figure out if this can happen in a correct program, or is the result of a bug in our
+    /// compiler. See https://github.com/rtfeldman/roc/issues/3163.
+    Unbound,
+}
+
+pub fn resolve_lambda_set<'a>(subs: &'a Subs, mut var: Variable) -> ResolvedLambdaSet {
+    let mut set = vec![];
+    loop {
+        match subs.get_content_without_compacting(var) {
+            Content::LambdaSet(subs::LambdaSet {
+                solved,
+                recursion_var: _,
+            }) => {
+                push_union_tags(subs, solved, &mut set);
+                return ResolvedLambdaSet::Set(set);
+            }
+            Content::RecursionVar { structure, .. } => {
+                var = *structure;
+            }
+            Content::FlexVar(_) => return ResolvedLambdaSet::Unbound,
+
+            c => internal_error!("called with a non-lambda set {:?}", c),
         }
-        Content::RecursionVar { structure, .. } => resolve_lambda_set(subs, *structure, fields),
-        c => internal_error!("called with a non-lambda set {:?}", c),
     }
 }
 

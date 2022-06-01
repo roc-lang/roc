@@ -8,6 +8,7 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_target::{PtrWidth, TargetInfo};
+use roc_types::pretty_print::ResolvedLambdaSet;
 use roc_types::subs::{
     self, Content, FlatType, RecordFields, Subs, UnionTags, UnsortedUnionTags, Variable,
 };
@@ -844,48 +845,50 @@ impl<'a> LambdaSet<'a> {
         closure_var: Variable,
         target_info: TargetInfo,
     ) -> Result<Self, LayoutProblem> {
-        let mut tags = std::vec::Vec::new();
-        roc_types::pretty_print::resolve_lambda_set(subs, closure_var, &mut tags);
-        if !tags.is_empty() {
-            // sort the tags; make sure ordering stays intact!
-            tags.sort();
+        match roc_types::pretty_print::resolve_lambda_set(subs, closure_var) {
+            ResolvedLambdaSet::Set(mut tags) => {
+                // sort the tags; make sure ordering stays intact!
+                tags.sort();
 
-            let mut set = Vec::with_capacity_in(tags.len(), arena);
+                let mut set = Vec::with_capacity_in(tags.len(), arena);
 
-            let mut env = Env {
-                arena,
-                subs,
-                seen: Vec::new_in(arena),
-                target_info,
-            };
+                let mut env = Env {
+                    arena,
+                    subs,
+                    seen: Vec::new_in(arena),
+                    target_info,
+                };
 
-            for (tag_name, variables) in tags.iter() {
-                if let TagName::Closure(function_symbol) = tag_name {
-                    let mut arguments = Vec::with_capacity_in(variables.len(), arena);
+                for (tag_name, variables) in tags.iter() {
+                    if let TagName::Closure(function_symbol) = tag_name {
+                        let mut arguments = Vec::with_capacity_in(variables.len(), arena);
 
-                    for var in variables {
-                        arguments.push(Layout::from_var(&mut env, *var)?);
+                        for var in variables {
+                            arguments.push(Layout::from_var(&mut env, *var)?);
+                        }
+
+                        set.push((*function_symbol, arguments.into_bump_slice()));
+                    } else {
+                        unreachable!("non-closure tag name in lambda set");
                     }
-
-                    set.push((*function_symbol, arguments.into_bump_slice()));
-                } else {
-                    unreachable!("non-closure tag name in lambda set");
                 }
+
+                let representation =
+                    arena.alloc(Self::make_representation(arena, subs, tags, target_info));
+
+                Ok(LambdaSet {
+                    set: set.into_bump_slice(),
+                    representation,
+                })
             }
-
-            let representation =
-                arena.alloc(Self::make_representation(arena, subs, tags, target_info));
-
-            Ok(LambdaSet {
-                set: set.into_bump_slice(),
-                representation,
-            })
-        } else {
-            // this can happen when there is a type error somewhere
-            Ok(LambdaSet {
-                set: &[],
-                representation: arena.alloc(Layout::UNIT),
-            })
+            ResolvedLambdaSet::Unbound => {
+                // The lambda set is unbound which means it must be unused. Just give it the empty lambda set.
+                // See also https://github.com/rtfeldman/roc/issues/3163.
+                Ok(LambdaSet {
+                    set: &[],
+                    representation: arena.alloc(Layout::UNIT),
+                })
+            }
         }
     }
 
