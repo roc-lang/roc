@@ -2646,7 +2646,7 @@ mod test_reporting {
 
                     [A, B, C]
 
-                Tip: Looks like a closed tag union does not have the `C` and `B` tags.
+                Tip: Looks like a closed tag union does not have the `B` and `C` tags.
 
                 Tip: Closed tag unions can't grow, because that might change the size
                 in memory. Can you use an open tag union?

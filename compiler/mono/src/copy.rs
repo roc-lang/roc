@@ -5,8 +5,8 @@ use roc_can::{
     expr::{AccessorData, ClosureData, Expr, Field, WhenBranch},
 };
 use roc_types::subs::{
-    self, AliasVariables, Descriptor, OptVariable, RecordFields, Subs, SubsSlice, UnionTags,
-    Variable, VariableSubsSlice,
+    self, AliasVariables, Descriptor, OptVariable, RecordFields, Subs, SubsSlice, UnionLambdas,
+    UnionTags, Variable, VariableSubsSlice,
 };
 
 /// Deep copies the type variables in the type hosted by [`var`] into [`expr`].
@@ -542,7 +542,7 @@ fn deep_copy_type_vars<'a>(
                         }
 
                         let new_union_tags =
-                            UnionTags::from_slices(tags.tag_names(), new_variable_slices);
+                            UnionTags::from_slices(tags.labels(), new_variable_slices);
 
                         Structure(TagUnion(new_union_tags, new_ext_var))
                     })
@@ -567,7 +567,7 @@ fn deep_copy_type_vars<'a>(
                         }
 
                         let new_union_tags =
-                            UnionTags::from_slices(tags.tag_names(), new_variable_slices);
+                            UnionTags::from_slices(tags.labels(), new_variable_slices);
 
                         Structure(RecursiveTagUnion(new_rec_var, new_union_tags, new_ext_var))
                     })
@@ -628,7 +628,7 @@ fn deep_copy_type_vars<'a>(
                     }
 
                     let new_solved =
-                        UnionTags::from_slices(solved.tag_names(), new_variable_slices);
+                        UnionLambdas::from_slices(solved.labels(), new_variable_slices);
 
                     LambdaSet(subs::LambdaSet {
                         solved: new_solved,

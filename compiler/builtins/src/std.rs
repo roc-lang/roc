@@ -124,7 +124,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     fn overflow() -> SolvedType {
         SolvedType::TagUnion(
-            vec![(TagName::Tag("Overflow".into()), vec![])],
+            vec![(TagName("Overflow".into()), vec![])],
             Box::new(SolvedType::Wildcard),
         )
     }
@@ -305,7 +305,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     );
 
     let div_by_zero = SolvedType::TagUnion(
-        vec![(TagName::Tag("DivByZero".into()), vec![])],
+        vec![(TagName("DivByZero".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 
@@ -469,7 +469,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     );
 
     let out_of_bounds = SolvedType::TagUnion(
-        vec![(TagName::Tag("OutOfBounds".into()), vec![])],
+        vec![(TagName("OutOfBounds".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 
@@ -544,7 +544,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     );
 
     let out_of_bounds = SolvedType::TagUnion(
-        vec![(TagName::Tag("OutOfBounds".into()), vec![])],
+        vec![(TagName("OutOfBounds".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 
@@ -685,7 +685,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // sqrtChecked : Frac a -> Result (Frac a) [SqrtOfNegative]*
     let sqrt_of_negative = SolvedType::TagUnion(
-        vec![(TagName::Tag("SqrtOfNegative".into()), vec![])],
+        vec![(TagName("SqrtOfNegative".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 
@@ -704,7 +704,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // logChecked : Frac a -> Result (Frac a) [LogNeedsPositive]*
     let log_needs_positive = SolvedType::TagUnion(
-        vec![(TagName::Tag("LogNeedsPositive".into()), vec![])],
+        vec![(TagName("LogNeedsPositive".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 
@@ -794,7 +794,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // bytesToU16 : List U8, Nat -> Result U16 [OutOfBounds]
     {
         let position_out_of_bounds = SolvedType::TagUnion(
-            vec![(TagName::Tag("OutOfBounds".into()), vec![])],
+            vec![(TagName("OutOfBounds".into()), vec![])],
             Box::new(SolvedType::Wildcard),
         );
         add_top_level_function_type!(
@@ -807,7 +807,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // bytesToU32 : List U8, Nat -> Result U32 [OutOfBounds]
     {
         let position_out_of_bounds = SolvedType::TagUnion(
-            vec![(TagName::Tag("OutOfBounds".into()), vec![])],
+            vec![(TagName("OutOfBounds".into()), vec![])],
             Box::new(SolvedType::Wildcard),
         );
         add_top_level_function_type!(
@@ -929,7 +929,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     {
         let bad_utf8 = SolvedType::TagUnion(
             vec![(
-                TagName::Tag("BadUtf8".into()),
+                TagName("BadUtf8".into()),
                 vec![str_utf8_byte_problem_type(), nat_type()],
             )],
             Box::new(SolvedType::Wildcard),
@@ -947,10 +947,10 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         let bad_utf8 = SolvedType::TagUnion(
             vec![
                 (
-                    TagName::Tag("BadUtf8".into()),
+                    TagName("BadUtf8".into()),
                     vec![str_utf8_byte_problem_type(), nat_type()],
                 ),
-                (TagName::Tag("OutOfBounds".into()), vec![]),
+                (TagName("OutOfBounds".into()), vec![]),
             ],
             Box::new(SolvedType::Wildcard),
         );
@@ -986,7 +986,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // `str_to_num` in can `builtins.rs`
     let invalid_str = || {
         SolvedType::TagUnion(
-            vec![(TagName::Tag("InvalidNumStr".into()), vec![])],
+            vec![(TagName("InvalidNumStr".into()), vec![])],
             Box::new(SolvedType::Wildcard),
         )
     };
@@ -1093,7 +1093,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // get : List elem, Nat -> Result elem [OutOfBounds]*
     let index_out_of_bounds = SolvedType::TagUnion(
-        vec![(TagName::Tag("OutOfBounds".into()), vec![])],
+        vec![(TagName("OutOfBounds".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 
@@ -1105,7 +1105,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // first : List elem -> Result elem [ListWasEmpty]*
     let list_was_empty = SolvedType::TagUnion(
-        vec![(TagName::Tag("ListWasEmpty".into()), vec![])],
+        vec![(TagName("ListWasEmpty".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 
@@ -1210,8 +1210,8 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         // [LT, EQ, GT]
         SolvedType::TagUnion(
             vec![
-                (TagName::Tag("Continue".into()), vec![content.clone()]),
-                (TagName::Tag("Stop".into()), vec![content]),
+                (TagName("Continue".into()), vec![content.clone()]),
+                (TagName("Stop".into()), vec![content]),
             ],
             Box::new(SolvedType::EmptyTagUnion),
         )
@@ -1572,7 +1572,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     // find : List elem, (elem -> Bool) -> Result elem [NotFound]*
     {
         let not_found = SolvedType::TagUnion(
-            vec![(TagName::Tag("NotFound".into()), vec![])],
+            vec![(TagName("NotFound".into()), vec![])],
             Box::new(SolvedType::Wildcard),
         );
         let (elem, cvar) = (TVAR1, TVAR2);
@@ -1614,7 +1614,7 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
 
     // get : Dict k v, k -> Result v [KeyNotFound]*
     let key_not_found = SolvedType::TagUnion(
-        vec![(TagName::Tag("KeyNotFound".into()), vec![])],
+        vec![(TagName("KeyNotFound".into()), vec![])],
         Box::new(SolvedType::Wildcard),
     );
 

@@ -20,7 +20,7 @@ use roc_region::all::{Loc, Region};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{
     self, AliasVariables, Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields,
-    Subs, SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
+    Subs, SubsIndex, SubsSlice, UnionLabels, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
@@ -1876,25 +1876,11 @@ fn type_to_variable<'a>(
             }
 
             ClosureTag { name, captures } => {
-                let tag_name = TagName::Closure(*name);
-                let args = &*arena.alloc([(tag_name, captures.as_slice())]);
-                let (solved, ext) = type_to_union_tags(
-                    subs,
-                    rank,
-                    pools,
-                    arena,
-                    args,
-                    &TypeExtension::Closed,
-                    &mut stack,
-                );
-
-                debug_assert!(matches!(
-                    subs.get_content_without_compacting(ext),
-                    Content::Structure(FlatType::EmptyTagUnion),
-                ));
+                let union_lambdas =
+                    create_union_lambda(subs, rank, pools, arena, *name, captures, &mut stack);
 
                 let content = Content::LambdaSet(subs::LambdaSet {
-                    solved,
+                    solved: union_lambdas,
                     // We may figure out the lambda set is recursive during solving, but it never
                     // is to begin with.
                     recursion_var: OptVariable::NONE,
@@ -2396,7 +2382,7 @@ fn insert_tags_fast_path<'a>(
     tags: &'a [(TagName, impl Borrow<[Type]>)],
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> UnionTags {
-    if let [(TagName::Tag(tag_name), arguments)] = tags {
+    if let [(TagName(tag_name), arguments)] = tags {
         let variable_slice =
             register_tag_arguments(subs, rank, pools, arena, stack, arguments.borrow());
         let new_variable_slices =
@@ -2522,6 +2508,23 @@ fn type_to_union_tags<'a>(
             (union_tags, ext)
         }
     }
+}
+
+fn create_union_lambda<'a>(
+    subs: &mut Subs,
+    rank: Rank,
+    pools: &mut Pools,
+    arena: &'_ bumpalo::Bump,
+    closure: Symbol,
+    capture_types: &'a [Type],
+    stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
+) -> UnionLambdas {
+    let variable_slice = register_tag_arguments(subs, rank, pools, arena, stack, capture_types);
+    let new_variable_slices = SubsSlice::extend_new(&mut subs.variable_slices, [variable_slice]);
+
+    let lambda_name_slice = SubsSlice::extend_new(&mut subs.closure_names, [closure]);
+
+    return UnionLambdas::from_slices(lambda_name_slice, new_variable_slices);
 }
 
 fn check_for_infinite_type(
@@ -3227,7 +3230,7 @@ fn deep_copy_var_help(
         }};
     }
 
-    macro_rules! copy_union_tags {
+    macro_rules! copy_union {
         ($tags:expr) => {{
             let new_variable_slices = SubsSlice::reserve_variable_slices(subs, $tags.len());
 
@@ -3239,7 +3242,7 @@ fn deep_copy_var_help(
                 subs.variable_slices[target_index] = new_variables;
             }
 
-            UnionTags::from_slices($tags.tag_names(), new_variable_slices)
+            UnionLabels::from_slices($tags.labels(), new_variable_slices)
         }};
     }
 
@@ -3289,7 +3292,7 @@ fn deep_copy_var_help(
                     }
 
                     TagUnion(tags, ext_var) => {
-                        let union_tags = copy_union_tags!(tags);
+                        let union_tags = copy_union!(tags);
 
                         TagUnion(union_tags, work!(ext_var))
                     }
@@ -3299,7 +3302,7 @@ fn deep_copy_var_help(
                     }
 
                     RecursiveTagUnion(rec_var, tags, ext_var) => {
-                        let union_tags = copy_union_tags!(tags);
+                        let union_tags = copy_union!(tags);
 
                         RecursiveTagUnion(work!(rec_var), union_tags, work!(ext_var))
                     }
@@ -3351,7 +3354,7 @@ fn deep_copy_var_help(
                 solved,
                 recursion_var,
             }) => {
-                let new_solved = copy_union_tags!(solved);
+                let new_solved = copy_union!(solved);
                 let new_rec_var = recursion_var.map(|v| work!(v));
 
                 subs.set_content_unchecked(
