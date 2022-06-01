@@ -1686,6 +1686,7 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
 }
 
 use std::cell::RefCell;
+use std::ops::ControlFlow;
 std::thread_local! {
     /// Scratchpad arena so we don't need to allocate a new one all the time
     static SCRATCHPAD: RefCell<Option<bumpalo::Bump>> = RefCell::new(Some(bumpalo::Bump::with_capacity(4 * 1024)));
@@ -3043,15 +3044,22 @@ fn deep_copy_var_in(
     let mut visited = bumpalo::collections::Vec::with_capacity_in(256, arena);
 
     let pool = pools.get_mut(rank);
-    let copy = deep_copy_var_help(subs, rank, pool, &mut visited, var);
 
-    // we have tracked all visited variables, and can now traverse them
-    // in one go (without looking at the UnificationTable) and clear the copy field
-    for var in visited {
-        subs.set_copy_unchecked(var, OptVariable::NONE);
+    let var = subs.get_root_key(var);
+    match deep_copy_var_decision(subs, rank, var) {
+        ControlFlow::Break(copy) => copy,
+        ControlFlow::Continue(copy) => {
+            deep_copy_var_help(subs, rank, pool, &mut visited, var, copy);
+
+            // we have tracked all visited variables, and can now traverse them
+            // in one go (without looking at the UnificationTable) and clear the copy field
+            for var in visited {
+                subs.set_copy_unchecked(var, OptVariable::NONE);
+            }
+
+            copy
+        }
     }
-
-    copy
 }
 
 #[inline]
@@ -3067,58 +3075,78 @@ fn has_trivial_copy(subs: &Subs, root_var: Variable) -> Option<Variable> {
     }
 }
 
+#[inline]
+fn deep_copy_var_decision(
+    subs: &mut Subs,
+    max_rank: Rank,
+    var: Variable,
+) -> ControlFlow<Variable, Variable> {
+    let var = subs.get_root_key(var);
+    if let Some(copy) = has_trivial_copy(subs, var) {
+        ControlFlow::Break(copy)
+    } else {
+        let copy_descriptor = Descriptor {
+            content: Content::Structure(FlatType::EmptyTagUnion),
+            rank: max_rank,
+            mark: Mark::NONE,
+            copy: OptVariable::NONE,
+        };
+
+        let copy = subs.fresh(copy_descriptor);
+
+        // Link the original variable to the new variable. This lets us
+        // avoid making multiple copies of the variable we are instantiating.
+        //
+        // Need to do this before recursively copying to avoid looping.
+        subs.set_mark_unchecked(var, Mark::NONE);
+        subs.set_copy_unchecked(var, copy.into());
+
+        ControlFlow::Continue(copy)
+    }
+}
+
 fn deep_copy_var_help(
     subs: &mut Subs,
     max_rank: Rank,
     pool: &mut Vec<Variable>,
     visited: &mut bumpalo::collections::Vec<'_, Variable>,
-    var: Variable,
+    initial_source: Variable,
+    initial_copy: Variable,
 ) -> Variable {
     use roc_types::subs::Content::*;
     use roc_types::subs::FlatType::*;
 
-    let subs_len = subs.len();
-    let var = subs.get_root_key(var);
-
-    // either this variable has been copied before, or does not have NONE rank
-    if let Some(copy) = has_trivial_copy(subs, var) {
-        return copy;
+    struct DeepCopyVarWork {
+        source: Variable,
+        copy: Variable,
     }
 
-    // Safety: Here we make a variable that is 1 position out of bounds.
-    // The reason is that we can now keep the mutable reference to `desc`
-    // Below, we actually push a new variable onto subs meaning the `copy`
-    // variable is in-bounds before it is ever used.
-    let copy = unsafe { Variable::from_index(subs_len as u32) };
-
-    visited.push(var);
-    pool.push(copy);
-
-    // Link the original variable to the new variable. This lets us
-    // avoid making multiple copies of the variable we are instantiating.
-    //
-    // Need to do this before recursively copying to avoid looping.
-    subs.set_mark_unchecked(var, Mark::NONE);
-    subs.set_copy_unchecked(var, copy.into());
-
-    let content = *subs.get_content_unchecked(var);
-
-    let copy_descriptor = Descriptor {
-        content,
-        rank: max_rank,
-        mark: Mark::NONE,
-        copy: OptVariable::NONE,
+    let initial = DeepCopyVarWork {
+        source: initial_source,
+        copy: initial_copy,
     };
+    let mut stack = vec![initial];
 
-    let actual_copy = subs.fresh(copy_descriptor);
-    debug_assert_eq!(copy, actual_copy);
+    macro_rules! work {
+        ($variable:expr) => {{
+            let var = subs.get_root_key($variable);
+            match deep_copy_var_decision(subs, max_rank, var) {
+                ControlFlow::Break(copy) => copy,
+                ControlFlow::Continue(copy) => {
+                    stack.push(DeepCopyVarWork { source: var, copy });
+
+                    copy
+                }
+            }
+        }};
+    }
 
     macro_rules! copy_sequence {
         ($length:expr, $variables:expr) => {{
             let new_variables = SubsSlice::reserve_into_subs(subs, $length as _);
             for (target_index, var_index) in (new_variables.indices()).zip($variables) {
                 let var = subs[var_index];
-                let copy_var = deep_copy_var_help(subs, max_rank, pool, visited, var);
+                let copy_var = work!(var);
                 subs.variables[target_index] = copy_var;
             }
 
@@ -3126,154 +3154,143 @@ fn deep_copy_var_help(
         }};
     }
 
-    // Now we recursively copy the content of the variable.
-    // We have already marked the variable as copied, so we
-    // will not repeat this work or crawl this variable again.
-    match content {
-        Structure(flat_type) => {
-            let new_flat_type = match flat_type {
-                Apply(symbol, arguments) => {
-                    let new_arguments = copy_sequence!(arguments.len(), arguments);
+    while let Some(DeepCopyVarWork { source: var, copy }) = stack.pop() {
+        visited.push(var);
+        pool.push(copy);
 
-                    Apply(symbol, new_arguments)
-                }
+        let content = *subs.get_content_unchecked(var);
 
-                Func(arguments, closure_var, ret_var) => {
-                    let new_ret_var = deep_copy_var_help(subs, max_rank, pool, visited, ret_var);
-                    let new_closure_var =
-                        deep_copy_var_help(subs, max_rank, pool, visited, closure_var);
+        // Now we recursively copy the content of the variable.
+        // We have already marked the variable as copied, so we
+        // will not repeat this work or crawl this variable again.
+        match content {
+            Structure(flat_type) => {
+                let new_flat_type = match flat_type {
+                    Apply(symbol, arguments) => {
+                        let new_arguments = copy_sequence!(arguments.len(), arguments);
 
-                    let new_arguments = copy_sequence!(arguments.len(), arguments);
+                        Apply(symbol, new_arguments)
+                    }
 
-                    Func(new_arguments, new_closure_var, new_ret_var)
-                }
+                    Func(arguments, closure_var, ret_var) => {
+                        let new_ret_var = work!(ret_var);
+                        let new_closure_var = work!(closure_var);
 
-                same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
+                        let new_arguments = copy_sequence!(arguments.len(), arguments);
 
-                Record(fields, ext_var) => {
-                    let record_fields = {
-                        let new_variables = copy_sequence!(fields.len(), fields.iter_variables());
+                        Func(new_arguments, new_closure_var, new_ret_var)
+                    }
 
-                        RecordFields {
-                            length: fields.length,
-                            field_names_start: fields.field_names_start,
-                            variables_start: new_variables.start,
-                            field_types_start: fields.field_types_start,
+                    same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
+
+                    Record(fields, ext_var) => {
+                        let record_fields = {
+                            let new_variables =
+                                copy_sequence!(fields.len(), fields.iter_variables());
+
+                            RecordFields {
+                                length: fields.length,
+                                field_names_start: fields.field_names_start,
+                                variables_start: new_variables.start,
+                                field_types_start: fields.field_types_start,
+                            }
+                        };
+
+                        Record(record_fields, work!(ext_var))
+                    }
+
+                    TagUnion(tags, ext_var) => {
+                        let new_variable_slices =
+                            SubsSlice::reserve_variable_slices(subs, tags.len());
+
+                        let it = (new_variable_slices.indices()).zip(tags.variables());
+                        for (target_index, index) in it {
+                            let slice = subs[index];
+
+                            let new_variables = copy_sequence!(slice.len(), slice);
+                            subs.variable_slices[target_index] = new_variables;
                         }
-                    };
 
-                    Record(
-                        record_fields,
-                        deep_copy_var_help(subs, max_rank, pool, visited, ext_var),
-                    )
-                }
+                        let union_tags =
+                            UnionTags::from_slices(tags.tag_names(), new_variable_slices);
 
-                TagUnion(tags, ext_var) => {
-                    let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
-
-                    let it = (new_variable_slices.indices()).zip(tags.variables());
-                    for (target_index, index) in it {
-                        let slice = subs[index];
-
-                        let new_variables = copy_sequence!(slice.len(), slice);
-                        subs.variable_slices[target_index] = new_variables;
+                        TagUnion(union_tags, work!(ext_var))
                     }
 
-                    let union_tags = UnionTags::from_slices(tags.tag_names(), new_variable_slices);
-
-                    let new_ext = deep_copy_var_help(subs, max_rank, pool, visited, ext_var);
-                    TagUnion(union_tags, new_ext)
-                }
-
-                FunctionOrTagUnion(tag_name, symbol, ext_var) => FunctionOrTagUnion(
-                    tag_name,
-                    symbol,
-                    deep_copy_var_help(subs, max_rank, pool, visited, ext_var),
-                ),
-
-                RecursiveTagUnion(rec_var, tags, ext_var) => {
-                    let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
-
-                    let it = (new_variable_slices.indices()).zip(tags.variables());
-                    for (target_index, index) in it {
-                        let slice = subs[index];
-
-                        let new_variables = copy_sequence!(slice.len(), slice);
-                        subs.variable_slices[target_index] = new_variables;
+                    FunctionOrTagUnion(tag_name, symbol, ext_var) => {
+                        FunctionOrTagUnion(tag_name, symbol, work!(ext_var))
                     }
 
-                    let union_tags = UnionTags::from_slices(tags.tag_names(), new_variable_slices);
+                    RecursiveTagUnion(rec_var, tags, ext_var) => {
+                        let new_variable_slices =
+                            SubsSlice::reserve_variable_slices(subs, tags.len());
 
-                    let new_ext = deep_copy_var_help(subs, max_rank, pool, visited, ext_var);
-                    let new_rec_var = deep_copy_var_help(subs, max_rank, pool, visited, rec_var);
+                        let it = (new_variable_slices.indices()).zip(tags.variables());
+                        for (target_index, index) in it {
+                            let slice = subs[index];
 
-                    RecursiveTagUnion(new_rec_var, union_tags, new_ext)
-                }
-            };
+                            let new_variables = copy_sequence!(slice.len(), slice);
+                            subs.variable_slices[target_index] = new_variables;
+                        }
 
-            subs.set_content_unchecked(copy, Structure(new_flat_type));
+                        let union_tags =
+                            UnionTags::from_slices(tags.tag_names(), new_variable_slices);
 
-            copy
-        }
+                        RecursiveTagUnion(work!(rec_var), union_tags, work!(ext_var))
+                    }
+                };
 
-        FlexVar(_) | FlexAbleVar(_, _) | Error => copy,
+                subs.set_content_unchecked(copy, Structure(new_flat_type));
+            }
 
-        RecursionVar {
-            opt_name,
-            structure,
-        } => {
-            let new_structure = deep_copy_var_help(subs, max_rank, pool, visited, structure);
+            FlexVar(_) | FlexAbleVar(_, _) | Error => {
+                subs.set_content_unchecked(copy, content);
+            }
 
-            let content = RecursionVar {
+            RecursionVar {
                 opt_name,
-                structure: new_structure,
-            };
+                structure,
+            } => {
+                let content = RecursionVar {
+                    opt_name,
+                    structure: work!(structure),
+                };
 
-            subs.set_content_unchecked(copy, content);
+                subs.set_content_unchecked(copy, content);
+            }
 
-            copy
-        }
+            RigidVar(name) => {
+                subs.set_content_unchecked(copy, FlexVar(Some(name)));
+            }
 
-        RigidVar(name) => {
-            subs.set_content_unchecked(copy, FlexVar(Some(name)));
+            RigidAbleVar(name, ability) => {
+                subs.set_content_unchecked(copy, FlexAbleVar(Some(name), ability));
+            }
 
-            copy
-        }
+            Alias(symbol, arguments, real_type_var, kind) => {
+                let new_variables =
+                    copy_sequence!(arguments.all_variables_len, arguments.all_variables());
 
-        RigidAbleVar(name, ability) => {
-            subs.set_content_unchecked(copy, FlexAbleVar(Some(name), ability));
+                let new_arguments = AliasVariables {
+                    variables_start: new_variables.start,
+                    ..arguments
+                };
 
-            copy
-        }
+                let new_real_type_var = work!(real_type_var);
+                let new_content = Alias(symbol, new_arguments, new_real_type_var, kind);
 
-        Alias(symbol, arguments, real_type_var, kind) => {
-            let new_variables =
-                copy_sequence!(arguments.all_variables_len, arguments.all_variables());
+                subs.set_content_unchecked(copy, new_content);
+            }
 
-            let new_arguments = AliasVariables {
-                variables_start: new_variables.start,
-                ..arguments
-            };
+            RangedNumber(typ, range) => {
+                let new_content = RangedNumber(work!(typ), range);
 
-            let new_real_type_var =
-                deep_copy_var_help(subs, max_rank, pool, visited, real_type_var);
-            let new_content = Alias(symbol, new_arguments, new_real_type_var, kind);
-
-            subs.set_content_unchecked(copy, new_content);
-
-            copy
-        }
-
-        RangedNumber(typ, range) => {
-            let new_type_var = deep_copy_var_help(subs, max_rank, pool, visited, typ);
-
-            let new_content = RangedNumber(new_type_var, range);
-
-            subs.set_content_unchecked(copy, new_content);
-
-            copy
+                subs.set_content_unchecked(copy, new_content);
+            }
         }
     }
+
+    initial_copy
 }
 
 #[inline(always)]

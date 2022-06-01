@@ -745,7 +745,7 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
             write!(
                 f,
                 "], {:?}, <{:?}>{:?})",
-                lambda_set,
+                subs.get_root_key_without_compacting(*lambda_set),
                 *result,
                 SubsFmtContent(result_content, subs)
             )
@@ -1133,6 +1133,7 @@ impl Variable {
         Variable(v)
     }
 
+    #[inline(always)]
     pub const fn index(&self) -> u32 {
         self.0
     }
