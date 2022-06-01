@@ -379,7 +379,7 @@ impl RocDec {
     pub fn to_str(&self) -> RocStr {
         let mut bytes = [0 as u8; Self::MAX_STR_LENGTH];
         let last_idx = self.to_str_helper(&mut bytes);
-        unsafe { RocStr::from_slice(&bytes[0..last_idx]) }
+        unsafe { RocStr::from_slice_unchecked(&bytes[0..last_idx]) }
     }
 }
 

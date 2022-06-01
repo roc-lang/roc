@@ -28,8 +28,8 @@ impl RocStr {
     /// # Safety
     ///
     /// `slice` must be valid UTF-8.
-    pub unsafe fn from_slice(slice: &[u8]) -> Self {
-        if let Some(small_string) = unsafe { SmallString::try_from(slice) } {
+    pub unsafe fn from_slice_unchecked(slice: &[u8]) -> Self {
+        if let Some(small_string) = unsafe { SmallString::try_from_utf8_bytes(slice) } {
             Self(RocStrInner { small_string })
         } else {
             let heap_allocated = RocList::from_slice(slice);
@@ -86,7 +86,7 @@ impl Default for RocStr {
 
 impl From<&str> for RocStr {
     fn from(s: &str) -> Self {
-        unsafe { Self::from_slice(s.as_bytes()) }
+        unsafe { Self::from_slice_unchecked(s.as_bytes()) }
     }
 }
 
@@ -168,7 +168,7 @@ impl SmallString {
     /// # Safety
     ///
     /// `slice` must be valid UTF-8.
-    unsafe fn try_from(slice: &[u8]) -> Option<Self> {
+    unsafe fn try_from_utf8_bytes(slice: &[u8]) -> Option<Self> {
         // Check the size of the slice.
         let len_as_u8 = u8::try_from(slice.len()).ok()?;
         if (len_as_u8 as usize) > Self::CAPACITY {

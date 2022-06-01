@@ -90,7 +90,7 @@ use roc_std::{RocList, RocStr};
 
 //                 "#
 //         ),
-//         RocStr::from_slice(b"JJJJJJJJJJJJJJJJJJJJJJJJJ"),
+//         RocStr::from_slice_unchecked(b"JJJJJJJJJJJJJJJJJJJJJJJJJ"),
 //         RocStr
 //     );
 // }
@@ -108,7 +108,7 @@ use roc_std::{RocList, RocStr};
 //                         _ -> ""
 //                 "#
 //         ),
-//         RocStr::from_slice(b"JJJ"),
+//         RocStr::from_slice_unchecked(b"JJJ"),
 //         RocStr
 //     );
 // }
@@ -122,8 +122,8 @@ use roc_std::{RocList, RocStr};
 //                 "#
 //         ),
 //         RocList::from_slice(&[
-//             RocStr::from_slice(b"01234567789abcdefghi"),
-//             RocStr::from_slice(b"01234567789abcdefghi")
+//             RocStr::from_slice_unchecked(b"01234567789abcdefghi"),
+//             RocStr::from_slice_unchecked(b"01234567789abcdefghi")
 //        ]),
 //         RocList<RocStr>
 //     );
@@ -135,8 +135,8 @@ use roc_std::{RocList, RocStr};
 //                 "#
 //         ),
 //         RocList::from_slice(&[
-//             RocStr::from_slice(b"01234567789abcdefghi "),
-//             RocStr::from_slice(b" 01234567789abcdefghi")
+//             RocStr::from_slice_unchecked(b"01234567789abcdefghi "),
+//             RocStr::from_slice_unchecked(b" 01234567789abcdefghi")
 //        ]),
 //         RocList<RocStr>
 //     );
@@ -151,9 +151,9 @@ use roc_std::{RocList, RocStr};
 //                 "#
 //         ),
 //         RocList::from_slice(&[
-//             RocStr::from_slice(b"J"),
-//             RocStr::from_slice(b"J"),
-//             RocStr::from_slice(b"J")
+//             RocStr::from_slice_unchecked(b"J"),
+//             RocStr::from_slice_unchecked(b"J"),
+//             RocStr::from_slice_unchecked(b"J")
 //        ]),
 //         RocList<RocStr>
 //     );
@@ -169,7 +169,7 @@ use roc_std::{RocList, RocStr};
 //                         "than the delimiter which happens to be very very long"
 //                 "#
 //         ),
-//         RocList::from_slice(&[RocStr::from_slice(b"string to split is shorter")]),
+//         RocList::from_slice(&[RocStr::from_slice_unchecked(b"string to split is shorter")]),
 //         RocList<RocStr>
 //     );
 // }
@@ -182,7 +182,7 @@ use roc_std::{RocList, RocStr};
 //                     Str.split "" ""
 //                 "#
 //         ),
-//         RocList::from_slice(&[RocStr::from_slice(b"")]),
+//         RocList::from_slice(&[RocStr::from_slice_unchecked(b"")]),
 //         RocList<RocStr>
 //     );
 // }
@@ -195,7 +195,7 @@ use roc_std::{RocList, RocStr};
 //                     Str.split "a," ","
 //                 "#
 //         ),
-//         RocList::from_slice(&[RocStr::from_slice(b"a"), RocStr::from_slice(b"")]),
+//         RocList::from_slice(&[RocStr::from_slice_unchecked(b"a"), RocStr::from_slice_unchecked(b"")]),
 //         RocList<RocStr>
 //     )
 // }
@@ -224,9 +224,9 @@ use roc_std::{RocList, RocStr};
 //                 "#
 //         ),
 //         RocList::from_slice(&[
-//             RocStr::from_slice(b"1"),
-//             RocStr::from_slice(b"2"),
-//             RocStr::from_slice(b"")
+//             RocStr::from_slice_unchecked(b"1"),
+//             RocStr::from_slice_unchecked(b"2"),
+//             RocStr::from_slice_unchecked(b"")
 //        ]),
 //         RocList<RocStr>
 //     );
@@ -243,9 +243,9 @@ use roc_std::{RocList, RocStr};
 //                 "#
 //         ),
 //         RocList::from_slice(&[
-//             RocStr::from_slice(b"3"),
-//             RocStr::from_slice(b"4"),
-//             RocStr::from_slice(b"")
+//             RocStr::from_slice_unchecked(b"3"),
+//             RocStr::from_slice_unchecked(b"4"),
+//             RocStr::from_slice_unchecked(b"")
 //        ]),
 //         RocList<RocStr>
 //     );
@@ -261,7 +261,7 @@ use roc_std::{RocList, RocStr};
 //                         "Second string that is also fairly long. Two long strings test things that might not appear with short strings."
 //                 "#
 //             ),
-//             RocStr::from_slice(b"First string that is fairly long. Longer strings make for different errors. Second string that is also fairly long. Two long strings test things that might not appear with short strings."),
+//             RocStr::from_slice_unchecked(b"First string that is fairly long. Longer strings make for different errors. Second string that is also fairly long. Two long strings test things that might not appear with short strings."),
 //             RocStr
 //         );
 // }
@@ -498,7 +498,7 @@ fn str_starts_with_false_small_str() {
 //                         Err _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("a".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("a".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -513,7 +513,7 @@ fn str_starts_with_false_small_str() {
 //                         Err _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("abc~".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("abc~".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -528,7 +528,7 @@ fn str_starts_with_false_small_str() {
 //                         Err _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("∆".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("∆".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -543,7 +543,7 @@ fn str_starts_with_false_small_str() {
 //                         Err _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("∆œ¬".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("∆œ¬".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -558,7 +558,7 @@ fn str_starts_with_false_small_str() {
 //                         Err _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("💖".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("💖".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -573,7 +573,7 @@ fn str_starts_with_false_small_str() {
 //                         Err _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("💖🤠🚀".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("💖🤠🚀".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -588,7 +588,7 @@ fn str_starts_with_false_small_str() {
 //                         Err _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("💖b∆".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("💖b∆".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -607,7 +607,7 @@ fn str_starts_with_false_small_str() {
 //                         _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("a".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("a".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -626,7 +626,7 @@ fn str_starts_with_false_small_str() {
 //                         _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("a".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("a".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -645,7 +645,7 @@ fn str_starts_with_false_small_str() {
 //                         _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("a".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("a".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -664,7 +664,7 @@ fn str_starts_with_false_small_str() {
 //                         _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("a".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("a".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -683,7 +683,7 @@ fn str_starts_with_false_small_str() {
 //                         _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("a".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("a".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -702,7 +702,7 @@ fn str_starts_with_false_small_str() {
 //                         _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("a".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("a".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -744,7 +744,7 @@ fn str_equality() {
 //                 printExpr expr
 //                 "#
 //         ),
-//         RocStr::from_slice(b"Add (Add (Val 3) (Val 1)) (Add (Val 1) (Var 1))"),
+//         RocStr::from_slice_unchecked(b"Add (Add (Val 3) (Val 1)) (Add (Val 1) (Var 1))"),
 //         RocStr
 //     );
 // }
