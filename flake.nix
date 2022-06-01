@@ -5,7 +5,7 @@
     nixpkgs.url = "github:nixos/nixpkgs/nixos-21.11";
     rust-overlay.url = "github:oxalica/rust-overlay"; # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
     zig.url = "github:roarkanize/zig-overlay"; # using an overlay allows for quick updates after zig releases
-    flake-utils.url = "github:numtide/flake-utils"; # to easily make configs for all architectures
+    flake-utils.url = "github:numtide/flake-utils"; # to easily make configs for multiple architectures
   };
 
   outputs = { self, nixpkgs, rust-overlay, zig, flake-utils }:
