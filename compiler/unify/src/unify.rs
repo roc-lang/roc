@@ -801,51 +801,7 @@ fn unify_lambda_set(
     match other {
         FlexVar(_) => merge(subs, ctx, Content::LambdaSet(lambda_set)),
         Content::LambdaSet(other_lambda_set) => {
-            let mut into_tag = |lset| match lset {
-                LambdaSet {
-                    solved,
-                    recursion_var,
-                } => {
-                    let ext = fresh(subs, pool, ctx, Content::FlexVar(None));
-                    match recursion_var.into_variable() {
-                        Some(rv) => FlatType::RecursiveTagUnion(rv, solved, ext),
-                        None => FlatType::TagUnion(solved, ext),
-                    }
-                }
-            };
-            let tag1 = into_tag(lambda_set);
-            let tag2 = into_tag(*other_lambda_set);
-            let outcome = unify_flat_type(subs, pool, ctx, &tag1, &tag2);
-            if outcome.mismatches.is_empty() {
-                let (solved, recursion_var) = match subs.get_content_without_compacting(ctx.first) {
-                    Content::Structure(FlatType::TagUnion(solved, e)) => {
-                        debug_assert!(matches!(
-                            subs.get_content_without_compacting(*e),
-                            Content::FlexVar(..)
-                        ));
-                        (*solved, OptVariable::NONE)
-                    }
-                    Content::Structure(FlatType::RecursiveTagUnion(rv, solved, e)) => {
-                        debug_assert!(matches!(
-                            subs.get_content_without_compacting(*e),
-                            Content::FlexVar(..)
-                        ));
-                        (*solved, OptVariable::from(*rv))
-                    }
-                    c => panic!(
-                        "not a union: {:?}",
-                        roc_types::subs::SubsFmtContent(c, subs)
-                    ),
-                };
-                let lset = Content::LambdaSet(self::LambdaSet {
-                    solved,
-                    recursion_var,
-                });
-                subs.set_content(ctx.first, lset);
-                subs.set_content(ctx.second, lset);
-            }
-            outcome
-            // unify_lambda_set_help(subs, pool, ctx, lambda_set, *other_lambda_set)
+            unify_lambda_set_help(subs, pool, ctx, lambda_set, *other_lambda_set)
         }
         RecursionVar { structure, .. } => {
             // suppose that the recursion var is a lambda set
@@ -860,7 +816,6 @@ fn unify_lambda_set(
     }
 }
 
-#[allow(unused)]
 fn unify_lambda_set_help(
     subs: &mut Subs,
     pool: &mut Pool,
