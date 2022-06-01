@@ -7,6 +7,9 @@ use std::path::Path;
 use std::process::Command;
 use std::str;
 
+#[cfg(target_os = "macos")]
+use tempfile::tempdir;
+
 /// To debug the zig code with debug prints, we need to disable the wasm code gen
 const DEBUG: bool = false;
 
@@ -24,6 +27,12 @@ fn main() {
     // dunce can be removed once ziglang/zig#5109 is fixed
     let build_script_dir_path = dunce::canonicalize(Path::new(".")).unwrap();
     let bitcode_path = build_script_dir_path.join("bitcode");
+
+    // workaround for github.com/ziglang/zig/issues/9711
+    #[cfg(target_os = "macos")]
+    let zig_cache_dir = tempdir().expect("Failed to create temp directory for zig cache");
+    #[cfg(target_os = "macos")]
+    std::env::set_var("ZIG_GLOBAL_CACHE_DIR", zig_cache_dir.path().as_os_str());
 
     // LLVM .bc FILES
 
@@ -66,6 +75,11 @@ fn main() {
         );
     })
     .unwrap();
+
+    #[cfg(target_os = "macos")]
+    zig_cache_dir
+        .close()
+        .expect("Failed to delete temp dir zig_cache_dir.");
 }
 
 fn generate_object_file(
