@@ -2917,7 +2917,7 @@ fn occurs(
 }
 
 #[inline(always)]
-fn occurs_union_tags<'a>(
+fn occurs_union_tags(
     subs: &Subs,
     root_var: Variable,
     seen: &[Variable],
@@ -2928,7 +2928,7 @@ fn occurs_union_tags<'a>(
         let slice = subs[slice_index];
         for var_index in slice {
             let var = subs[var_index];
-            short_circuit_help(subs, root_var, &seen, var, include_recursion_var)?;
+            short_circuit_help(subs, root_var, seen, var, include_recursion_var)?;
         }
     }
     Ok(())
@@ -3766,7 +3766,9 @@ fn restore_help(subs: &mut Subs, initial: Variable) {
                     stack.extend(var_slice(slice));
                 }
 
-                recursion_var.into_variable().map(|v| stack.push(v));
+                if let Some(v) = recursion_var.into_variable() {
+                    stack.push(v);
+                }
             }
 
             RangedNumber(typ, _vars) => {

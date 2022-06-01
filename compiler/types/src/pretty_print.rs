@@ -961,7 +961,7 @@ pub enum ResolvedLambdaSet {
     Unbound,
 }
 
-pub fn resolve_lambda_set<'a>(subs: &'a Subs, mut var: Variable) -> ResolvedLambdaSet {
+pub fn resolve_lambda_set(subs: &Subs, mut var: Variable) -> ResolvedLambdaSet {
     let mut set = vec![];
     loop {
         match subs.get_content_without_compacting(var) {
