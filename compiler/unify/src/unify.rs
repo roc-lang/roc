@@ -882,14 +882,7 @@ fn unify_lambda_set_help(
 
             let outcome = unify_pool(subs, pool, var1, var2, ctx.mode);
 
-            // TODO: i think we can get rid of this
-            // clearly, this is very suspicious: these variables have just been unified. And yet,
-            // not doing this leads to stack overflows
-            if rec2.is_some() {
-                if outcome.mismatches.is_empty() {
-                    matching_vars.push(var2);
-                }
-            } else if outcome.mismatches.is_empty() {
+            if outcome.mismatches.is_empty() {
                 matching_vars.push(var1);
             }
         }
