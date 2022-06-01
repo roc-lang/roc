@@ -710,47 +710,30 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
             )
         }
         Content::LambdaSet(LambdaSet {
-            solved: _,
+            solved,
             recursion_var,
         }) => {
-            write!(
-                f,
-                "LambdaSet({:?}, <{:?}>)",
-                "TODO",
-                // SubsFmtUnion(solved, Variable::EMPTY_TAG_UNION, subs),
-                recursion_var
-            )
+            write!(f, "LambdaSet([")?;
+
+            for (name, slice) in solved.iter_from_subs(subs) {
+                write!(f, "{:?} ", name)?;
+                for var in slice {
+                    write!(
+                        f,
+                        "<{:?}>{:?} ",
+                        var,
+                        SubsFmtContent(subs.get_content_without_compacting(*var), subs)
+                    )?;
+                }
+                write!(f, ", ")?;
+            }
+
+            write!(f, "<{:?}>])", recursion_var)
         }
         Content::RangedNumber(typ, range) => {
             write!(f, "RangedNumber({:?}, {:?})", typ, range)
         }
         Content::Error => write!(f, "Error"),
-    }
-}
-
-pub struct SubsFmtUnion<'a, L>(pub &'a UnionLabels<L>, pub Variable, pub &'a Subs);
-
-impl<'a> fmt::Debug for SubsFmtUnion<'a, TagName> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let SubsFmtUnion(tags, ext, subs) = &self;
-
-        write!(f, "[")?;
-
-        let (it, new_ext) = tags.sorted_iterator_and_ext(subs, *ext);
-        for (name, slice) in it {
-            write!(f, "{:?} ", name)?;
-            for var in slice {
-                write!(
-                    f,
-                    "<{:?}>{:?} ",
-                    var,
-                    SubsFmtContent(subs.get_content_without_compacting(*var), subs)
-                )?;
-            }
-            write!(f, ", ")?;
-        }
-
-        write!(f, "]<{:?}>", new_ext)
     }
 }
 
@@ -804,7 +787,23 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
             write!(f, "}}<{:?}>", new_ext)
         }
         FlatType::TagUnion(tags, ext) => {
-            write!(f, "{:?}", SubsFmtUnion(tags, *ext, subs))
+            write!(f, "[")?;
+
+            let (it, new_ext) = tags.sorted_iterator_and_ext(subs, *ext);
+            for (name, slice) in it {
+                write!(f, "{:?} ", name)?;
+                for var in slice {
+                    write!(
+                        f,
+                        "<{:?}>{:?} ",
+                        var,
+                        SubsFmtContent(subs.get_content_without_compacting(*var), subs)
+                    )?;
+                }
+                write!(f, ", ")?;
+            }
+
+            write!(f, "]<{:?}>", new_ext)
         }
         FlatType::FunctionOrTagUnion(tagname_index, symbol, ext) => {
             let tagname: &TagName = &subs[*tagname_index];
