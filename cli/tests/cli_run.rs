@@ -28,8 +28,12 @@ mod cli_run {
     const VALGRIND_FLAG: &str = concatcp!("--", roc_cli::FLAG_VALGRIND);
     const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER);
     const CHECK_FLAG: &str = concatcp!("--", roc_cli::FLAG_CHECK);
+    const PRECOMPILED_HOST: &str = concatcp!("--", roc_cli::FLAG_PRECOMPILED, "=true");
     #[allow(dead_code)]
     const TARGET_FLAG: &str = concatcp!("--", roc_cli::FLAG_TARGET);
+
+    use std::sync::Once;
+    static BENCHMARKS_BUILD_PLATFORM: Once = Once::new();
 
     #[derive(Debug, EnumIter)]
     enum CliMode {
@@ -545,22 +549,44 @@ mod cli_run {
                         _ => {}
                     }
 
-                    // Check with and without optimizations
-                    check_output_with_stdin(
-                        &file_name,
-                        benchmark.stdin,
-                        benchmark.executable_filename,
-                        &[],
-                        benchmark.input_file.and_then(|file| Some(examples_dir("benchmarks").join(file))),
-                        benchmark.expected_ending,
-                        benchmark.use_valgrind,
-                    );
+                    let mut ran_without_optimizations = false;
+
+                    BENCHMARKS_BUILD_PLATFORM.call_once( || {
+                        // Check with and without optimizations
+                        check_output_with_stdin(
+                            &file_name,
+                            benchmark.stdin,
+                            benchmark.executable_filename,
+                            &[],
+                            benchmark.input_file.and_then(|file| Some(examples_dir("benchmarks").join(file))),
+                            benchmark.expected_ending,
+                            benchmark.use_valgrind,
+                        );
+
+                        ran_without_optimizations = true;
+                    });
+
+                    // now we can pass the `PRECOMPILED_HOST` flag, because the `call_once` will
+                    // have compiled the host
+
+                    if !ran_without_optimizations {
+                        // Check with and without optimizations
+                        check_output_with_stdin(
+                            &file_name,
+                            benchmark.stdin,
+                            benchmark.executable_filename,
+                            &[PRECOMPILED_HOST],
+                            benchmark.input_file.and_then(|file| Some(examples_dir("benchmarks").join(file))),
+                            benchmark.expected_ending,
+                            benchmark.use_valgrind,
+                        );
+                    }
 
                     check_output_with_stdin(
                         &file_name,
                         benchmark.stdin,
                         benchmark.executable_filename,
-                        &[OPTIMIZE_FLAG],
+                        &[PRECOMPILED_HOST, OPTIMIZE_FLAG],
                         benchmark.input_file.and_then(|file| Some(examples_dir("benchmarks").join(file))),
                         benchmark.expected_ending,
                         benchmark.use_valgrind,
