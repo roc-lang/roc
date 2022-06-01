@@ -3,10 +3,10 @@
 use core::{
     convert::TryFrom,
     fmt::Debug,
+    hash::Hash,
     mem::{size_of, ManuallyDrop},
     ops::{Deref, DerefMut},
 };
-use std::hash::Hash;
 
 use crate::RocList;
 

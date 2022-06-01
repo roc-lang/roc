@@ -1,12 +1,13 @@
 #![crate_type = "lib"]
 // #![no_std]
+
+use core::cmp::Ordering;
 use core::ffi::c_void;
 use core::fmt::{self, Debug};
+use core::hash::{Hash, Hasher};
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Drop;
 use core::str;
-use std::hash::{Hash, Hasher};
-use std::io::Write;
 
 mod roc_list;
 mod roc_str;
@@ -402,52 +403,37 @@ impl From<I128> for i128 {
 
 impl fmt::Debug for I128 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let i128: i128 = (*self).into();
-
-        i128.fmt(f)
+        i128::from(*self).fmt(f)
     }
 }
 
 impl fmt::Display for I128 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let i128: i128 = (*self).into();
-
-        i128.fmt(f)
+        Debug::fmt(&i128::from(*self), f)
     }
 }
 
 impl PartialEq for I128 {
     fn eq(&self, other: &Self) -> bool {
-        let i128_self: i128 = (*self).into();
-        let i128_other: i128 = (*other).into();
-
-        i128_self.eq(&i128_other)
+        i128::from(*self).eq(&i128::from(*other))
     }
 }
 
 impl PartialOrd for I128 {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        let i128_self: i128 = (*self).into();
-        let i128_other: i128 = (*other).into();
-
-        i128_self.partial_cmp(&i128_other)
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        i128::from(*self).partial_cmp(&i128::from(*other))
     }
 }
 
 impl Ord for I128 {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let i128_self: i128 = (*self).into();
-        let i128_other: i128 = (*other).into();
-
-        i128_self.cmp(&i128_other)
+    fn cmp(&self, other: &Self) -> Ordering {
+        i128::from(*self).cmp(&i128::from(*other))
     }
 }
 
 impl Hash for I128 {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        let i128: i128 = (*self).into();
-
-        i128.hash(state);
+        i128::from(*self).hash(state);
     }
 }
 
@@ -469,51 +455,36 @@ impl From<U128> for u128 {
 
 impl fmt::Debug for U128 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let u128: u128 = (*self).into();
-
-        u128.fmt(f)
+        u128::from(*self).fmt(f)
     }
 }
 
 impl fmt::Display for U128 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let u128: u128 = (*self).into();
-
-        u128.fmt(f)
+        Debug::fmt(&u128::from(*self), f)
     }
 }
 
 impl PartialEq for U128 {
     fn eq(&self, other: &Self) -> bool {
-        let u128_self: u128 = (*self).into();
-        let u128_other: u128 = (*other).into();
-
-        u128_self.eq(&u128_other)
+        u128::from(*self).eq(&u128::from(*other))
     }
 }
 
 impl PartialOrd for U128 {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        let u128_self: u128 = (*self).into();
-        let u128_other: u128 = (*other).into();
-
-        u128_self.partial_cmp(&u128_other)
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        u128::from(*self).partial_cmp(&u128::from(*other))
     }
 }
 
 impl Ord for U128 {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let u128_self: u128 = (*self).into();
-        let u128_other: u128 = (*other).into();
-
-        u128_self.cmp(&u128_other)
+    fn cmp(&self, other: &Self) -> Ordering {
+        u128::from(*self).cmp(&u128::from(*other))
     }
 }
 
 impl Hash for U128 {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        let u128: u128 = (*self).into();
-
-        u128.hash(state);
+        u128::from(*self).hash(state);
     }
 }
