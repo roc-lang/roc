@@ -1758,10 +1758,20 @@ impl Subs {
         self.utable.is_redirect(var)
     }
 
+    /// Determines if there is any variable in [var] that occurs recursively.
+    ///
+    /// The [Err] variant returns the occuring variable and the chain of variables that led
+    /// to a recursive occurence, in order of proximity. For example, if the type "r" has a
+    /// reference chain r -> t1 -> t2 -> r, [occurs] will return `Err(r, [t2, t1, r])`.
+    ///
+    /// This ignores [Content::RecursionVar]s that occur recursively, because those are
+    /// already priced in and expected to occur. Use [Subs::occurs_including_recursion_vars] if you
+    /// need to check for recursion var occurence.
     pub fn occurs(&self, var: Variable) -> Result<(), (Variable, Vec<Variable>)> {
         occurs(self, &[], var, false)
     }
 
+    /// Like [Subs::occurs], but also errors when recursion vars occur.
     pub fn occurs_including_recursion_vars(
         &self,
         var: Variable,

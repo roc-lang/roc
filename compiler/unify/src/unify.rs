@@ -1528,50 +1528,37 @@ enum OtherTags2 {
 /// Promotes a non-recursive tag union or lambda set to its recursive variant, if it is found to be
 /// recursive.
 fn maybe_mark_union_recursive(subs: &mut Subs, union_var: Variable) {
-    'outer: while let Err((recursive, chain)) = subs.occurs(union_var) {
-        let description = subs.get(recursive);
-        match description.content {
-            Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                subs.mark_tag_union_recursive(recursive, tags, ext_var);
-            }
-            LambdaSet(self::LambdaSet {
-                solved,
-                recursion_var: OptVariable::NONE,
-            }) => {
-                subs.mark_lambda_set_recursive(recursive, solved);
-            }
-            _ => {
-                // walk the chain till we find a tag union or lambda set
-                for v in &chain[..chain.len() - 1] {
-                    let description = subs.get(*v);
-                    match description.content {
-                        Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                            subs.mark_tag_union_recursive(*v, tags, ext_var);
-                            continue 'outer;
-                        }
-                        LambdaSet(self::LambdaSet {
-                            solved,
-                            recursion_var: OptVariable::NONE,
-                        }) => {
-                            subs.mark_lambda_set_recursive(*v, solved);
-                            continue 'outer;
-                        }
-                        _ => { /* fall through */ }
-                    }
+    'outer: while let Err((_, chain)) = subs.occurs(union_var) {
+        // walk the chain till we find a tag union or lambda set, starting from the variable that
+        // occurred recursively, which is always at the end of the chain.
+        for &v in chain.iter().rev() {
+            let description = subs.get(v);
+            match description.content {
+                Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
+                    subs.mark_tag_union_recursive(v, tags, ext_var);
+                    continue 'outer;
                 }
+                LambdaSet(self::LambdaSet {
+                    solved,
+                    recursion_var: OptVariable::NONE,
+                }) => {
+                    subs.mark_lambda_set_recursive(v, solved);
+                    continue 'outer;
+                }
+                _ => { /* fall through */ }
+            }
+        }
 
-                // Might not be any tag union if we only pass through `Apply`s. Otherwise, we have a bug!
-                if chain.iter().all(|&v| {
-                    matches!(
-                        subs.get_content_without_compacting(v),
-                        Content::Structure(FlatType::Apply(..))
-                    )
-                }) {
-                    return;
-                } else {
-                    internal_error!("recursive loop does not contain a tag union")
-                }
-            }
+        // Might not be any tag union if we only pass through `Apply`s. Otherwise, we have a bug!
+        if chain.iter().all(|&v| {
+            matches!(
+                subs.get_content_without_compacting(v),
+                Content::Structure(FlatType::Apply(..))
+            )
+        }) {
+            return;
+        } else {
+            internal_error!("recursive loop does not contain a tag union")
         }
     }
 }
