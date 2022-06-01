@@ -25,6 +25,7 @@ use roc_module::symbol::ModuleId;
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
 use roc_parse::ast::AbilityMember;
+use roc_parse::ast::Defs;
 use roc_parse::ast::ExtractSpaces;
 use roc_parse::ast::TypeHeader;
 use roc_parse::pattern::PatternType;
@@ -1540,10 +1541,10 @@ pub fn can_defs_with_return<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
     scope: &mut Scope,
-    loc_defs: &'a [&'a Loc<ast::Def<'a>>],
+    loc_defs: &'a mut Defs<'a>,
     loc_ret: &'a Loc<ast::Expr<'a>>,
 ) -> (Expr, Output) {
-    let (unsorted, defs_output, symbols_introduced) = canonicalize_defs(
+    let (unsorted, defs_output, symbols_introduced) = canonicalize_toplevel_defs(
         env,
         Output::default(),
         var_store,

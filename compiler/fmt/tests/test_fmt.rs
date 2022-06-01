@@ -32,6 +32,8 @@ mod test_fmt {
 
                 let output = buf.as_str();
 
+                dbg!(output);
+
                 assert_multiline_str_eq!(expected, output);
 
                 let reparsed_ast = roc_parse::test_helpers::parse_expr_with(&arena, output).unwrap_or_else(|err| {
@@ -43,6 +45,9 @@ mod test_fmt {
 
                 let ast_normalized = actual.remove_spaces(&arena);
                 let reparsed_ast_normalized = reparsed_ast.remove_spaces(&arena);
+
+                dbg!(ast_normalized);
+                dbg!(reparsed_ast_normalized);
 
                 // HACK!
                 // We compare the debug format strings of the ASTs, because I'm finding in practice that _somewhere_ deep inside the ast,
@@ -2334,6 +2339,7 @@ mod test_fmt {
 
     #[test]
     fn def_closure() {
+        /*
         expr_formats_same(indoc!(
             r#"
             identity = \a -> a
@@ -2359,6 +2365,7 @@ mod test_fmt {
             identity 40
             "#
         ));
+        */
 
         expr_formats_to(
             indoc!(
@@ -2378,6 +2385,7 @@ mod test_fmt {
             ),
         );
 
+        /*
         expr_formats_to(
             indoc!(
                 r#"
@@ -2430,6 +2438,7 @@ mod test_fmt {
             identity 43
             "#
         ));
+            */
     }
 
     #[test]

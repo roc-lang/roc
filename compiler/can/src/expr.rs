@@ -15,7 +15,7 @@ use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{self, EscapedChar, StrLiteral};
+use roc_parse::ast::{self, Defs, EscapedChar, StrLiteral};
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
@@ -728,7 +728,8 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::Defs(loc_defs, loc_ret) => {
             // The body expression gets a new scope for canonicalization,
             scope.inner_scope(|inner_scope| {
-                can_defs_with_return(env, var_store, inner_scope, loc_defs, loc_ret)
+                let defs: Defs = (*loc_defs).clone();
+                can_defs_with_return(env, var_store, inner_scope, env.arena.alloc(defs), loc_ret)
             })
         }
         ast::Expr::Backpassing(_, _, _) => {

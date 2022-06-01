@@ -203,13 +203,7 @@ pub fn str_to_def2<'a>(
     region: Region,
 ) -> Result<Vec<Def2>, SyntaxError<'a>> {
     match roc_parse::test_helpers::parse_defs_with(arena, input.trim()) {
-        Ok(vec_loc_def) => Ok(defs_to_defs2(
-            arena,
-            env,
-            scope,
-            arena.alloc(vec_loc_def),
-            region,
-        )),
+        Ok(defs) => Ok(toplevel_defs_to_defs2(arena, env, scope, defs, region)),
         Err(fail) => Err(fail),
     }
 }

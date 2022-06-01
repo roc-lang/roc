@@ -16,7 +16,7 @@ use roc_collections::all::{default_hasher, ImMap, MutMap, MutSet, SendMap};
 use roc_error_macros::{todo_abilities, todo_opaques};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{self, TypeDef, TypeHeader, ValueDef as AstValueDef};
+use roc_parse::ast::{self, Defs, TypeDef, TypeHeader, ValueDef as AstValueDef};
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
@@ -791,9 +791,10 @@ pub fn canonicalize_defs<'a>(
     env: &mut Env<'a>,
     mut output: Output,
     original_scope: &Scope,
-    loc_defs: &'a [&'a Loc<ast::Def<'a>>],
+    loc_defs: &'a Defs<'a>,
     pattern_type: PatternType,
 ) -> (CanDefs, Scope, Output, MutMap<Symbol, Region>) {
+    /*
     // Canonicalizing defs while detecting shadowing involves a multi-step process:
     //
     // 1. Go through each of the patterns.
@@ -916,6 +917,9 @@ pub fn canonicalize_defs<'a>(
         output,
         symbols_introduced,
     )
+        */
+
+    todo!()
 }
 
 // See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.

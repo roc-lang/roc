@@ -175,7 +175,7 @@ pub fn canonicalize_module_defs<'a>(
 ) -> ModuleOutput {
     let mut can_exposed_imports = MutMap::default();
     let mut scope = Scope::new(home, exposed_ident_ids, imported_abilities_state);
-    let mut env = Env::new(home, dep_idents, module_ids);
+    let mut env = Env::new(arena, home, dep_idents, module_ids);
     let num_deps = dep_idents.len();
 
     for (name, alias) in aliases.into_iter() {

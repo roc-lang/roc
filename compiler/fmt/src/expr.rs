@@ -1,6 +1,6 @@
 use crate::annotation::{Formattable, Newlines, Parens};
 use crate::collection::{fmt_collection, Braces};
-use crate::def::fmt_def;
+use crate::def::{fmt_def, fmt_toplevel_defs};
 use crate::pattern::fmt_pattern;
 use crate::spaces::{count_leading_newlines, fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
@@ -322,9 +322,7 @@ impl<'a> Formattable for Expr<'a> {
                 // (Canonicalization can remove defs later, but that hasn't happened yet!)
                 debug_assert!(!defs.is_empty());
 
-                for loc_def in defs.iter() {
-                    fmt_def(buf, &loc_def.value, indent);
-                }
+                fmt_toplevel_defs(buf, defs, indent);
 
                 match &ret.value {
                     SpaceBefore(sub_expr, spaces) => {

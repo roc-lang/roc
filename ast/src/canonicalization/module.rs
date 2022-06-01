@@ -55,6 +55,7 @@ pub fn canonicalize_module_defs<'a>(
     mut exposed_symbols: MutSet<Symbol>,
     var_store: &mut VarStore,
 ) -> Result<ModuleOutput, RuntimeError> {
+    /*
     let mut pool = Pool::with_capacity(1 << 10);
     let mut can_exposed_imports = MutMap::default();
     let mut scope = Scope::new(home, &mut pool, var_store);
@@ -323,4 +324,6 @@ pub fn canonicalize_module_defs<'a>(
         }
         (Err(runtime_error), _) => Err(runtime_error),
     }
+    */
+    todo!()
 }

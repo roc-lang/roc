@@ -3,7 +3,7 @@ use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
-        AbilityMember, AssignedField, Collection, CommentOrNewline, Def, Derived, Expr, Has,
+        AbilityMember, AssignedField, Collection, CommentOrNewline, Def, Defs, Derived, Expr, Has,
         HasClause, Module, Pattern, Spaced, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef,
         TypeHeader, ValueDef, WhenBranch,
     },
@@ -607,7 +607,21 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
                 arena.alloc(b.remove_spaces(arena)),
             ),
             Expr::Defs(a, b) => {
-                Expr::Defs(a.remove_spaces(arena), arena.alloc(b.remove_spaces(arena)))
+                let mut defs = a.clone();
+                defs.space_before = vec![Default::default(); defs.len()];
+                defs.space_after = vec![Default::default(); defs.len()];
+                defs.regions = vec![Region::zero(); defs.len()];
+                defs.spaces.clear();
+
+                for type_def in defs.type_defs.iter_mut() {
+                    *type_def = type_def.remove_spaces(arena);
+                }
+
+                for value_def in defs.value_defs.iter_mut() {
+                    *value_def = value_def.remove_spaces(arena);
+                }
+
+                Expr::Defs(arena.alloc(defs), arena.alloc(b.remove_spaces(arena)))
             }
             Expr::Backpassing(a, b, c) => Expr::Backpassing(
                 arena.alloc(a.remove_spaces(arena)),

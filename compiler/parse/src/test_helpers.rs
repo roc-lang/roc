@@ -1,7 +1,7 @@
 use crate::ast;
 use crate::ast::Def;
-use crate::module::module_defs_help;
-// use crate::module::module_defs;
+use crate::ast::Defs;
+use crate::module::module_defs;
 use crate::parser::Parser;
 use crate::parser::SourceError;
 use crate::parser::SyntaxError;
@@ -32,13 +32,10 @@ pub fn parse_loc_with<'a>(
     }
 }
 
-pub fn parse_defs_with<'a>(
-    arena: &'a Bump,
-    input: &'a str,
-) -> Result<bumpalo::collections::Vec<'a, Loc<Def<'a>>>, SyntaxError<'a>> {
+pub fn parse_defs_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Defs<'a>, SyntaxError<'a>> {
     let state = State::new(input.trim().as_bytes());
 
-    match module_defs_help().parse(arena, state) {
+    match module_defs().parse(arena, state) {
         Ok(tuple) => Ok(tuple.1),
         Err(tuple) => Err(tuple.1),
     }
