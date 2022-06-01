@@ -74,7 +74,7 @@ check-clippy:
         cargo clippy --workspace --tests --release -- --deny warnings
 
 check-rustfmt:
-    FROM +build-rust-test
+    FROM +copy-dirs
     RUN cargo fmt --version
     RUN cargo fmt --all -- --check
 
@@ -125,8 +125,8 @@ verify-no-git-changes:
     RUN ! git ls-files --deleted --modified --others --exclude-standard | grep -E .
 
 test-all:
-    BUILD +test-zig
     BUILD +check-rustfmt
+    BUILD +test-zig
     BUILD +check-clippy
     BUILD +test-rust
     BUILD +verify-no-git-changes
