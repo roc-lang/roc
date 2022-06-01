@@ -115,8 +115,6 @@ impl<'a> WasmBackend<'a> {
         stack_heap_boundary = round_up_to_alignment!(stack_heap_boundary, MemorySection::PAGE_SIZE);
 
         // Create a mutable global for __stack_pointer
-        // We assume __stack_pointer is Global #0 in the host object file
-        // TODO: make this a bit more robust (though it's always valid in practice)
         debug_assert!(module.global.count == 0);
         module.global.append(Global {
             ty: GlobalType {

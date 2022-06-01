@@ -247,6 +247,10 @@ impl<'a> TypeSection<'a> {
 
         sig_id as u32
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
 }
 
 impl<'a> Section<'a> for TypeSection<'a> {
@@ -1163,9 +1167,12 @@ impl<'a> CodeSection<'a> {
         // When we do relocations, we need to account for this
         let preloaded_reloc_offset = (function_bodies_start - count_start) as u32;
 
-        let mut preloaded_bytes =
-            Vec::with_capacity_in(next_section_start - function_bodies_start, arena);
-        preloaded_bytes.extend_from_slice(&module_bytes[function_bodies_start..next_section_start]);
+        let preloaded_bytes = Vec::from_iter_in(
+            module_bytes[function_bodies_start..next_section_start]
+                .iter()
+                .copied(),
+            arena,
+        );
 
         let dead_code_metadata = parse_preloads_call_graph(
             arena,
@@ -1244,7 +1251,7 @@ pub enum DataMode {
 
 impl DataMode {
     const ACTIVE: u8 = 0;
-    const PASSIVE: u8 = 0;
+    const PASSIVE: u8 = 1;
 
     pub fn active_at(offset: u32) -> Self {
         DataMode::Active {

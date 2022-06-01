@@ -105,7 +105,6 @@ impl<'a> WasmModule<'a> {
         let function = FunctionSection::parse(arena, bytes, &mut cursor)?;
         let table = TableSection::parse((), bytes, &mut cursor)?;
         let memory = MemorySection::parse(arena, bytes, &mut cursor)?;
-        let global_start = cursor;
         let global = GlobalSection::parse(arena, bytes, &mut cursor)?;
         let export = ExportSection::parse(arena, bytes, &mut cursor)?;
         let start = OpaqueSection::parse((arena, SectionId::Start), bytes, &mut cursor)?;
@@ -128,10 +127,36 @@ impl<'a> WasmModule<'a> {
         let reloc_data = RelocationSection::parse((arena, "reloc.DATA"), bytes, &mut cursor)?;
         let names = NameSection::parse(arena, bytes, &mut cursor)?;
 
+        let mut module_errors = String::new();
+        if types.is_empty() {
+            module_errors.push_str("Missing Type section\n");
+        }
+        if function.signatures.is_empty() {
+            module_errors.push_str("Missing Function section\n");
+        }
+        if code.preloaded_bytes.is_empty() {
+            module_errors.push_str("Missing Code section\n");
+        }
+        if linking.symbol_table.is_empty() {
+            module_errors.push_str("Missing \"linking\" Custom section\n");
+        }
+        if reloc_code.entries.is_empty() {
+            module_errors.push_str("Missing \"reloc.CODE\" Custom section\n");
+        }
         if global.count != 0 {
+            let global_err_msg =
+                format!("All globals in a relocatable Wasm module should be imported, but found {} internally defined", global.count);
+            module_errors.push_str(&global_err_msg);
+        }
+
+        if !module_errors.is_empty() {
             return Err(ParseError {
-                offset: global_start,
-                message: format!("All globals in a relocatable Wasm module should be imported, but found {} internally defined", global.count),
+                offset: 0,
+                message: format!("{}\n{}\n{}",
+                    "The host file has the wrong structure. I need a relocatable WebAssembly binary file.",
+                    "If you're using wasm-ld, try the --relocatable option.",
+                    module_errors,
+                )
             });
         }
 

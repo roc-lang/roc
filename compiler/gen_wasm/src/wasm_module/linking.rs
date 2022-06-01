@@ -42,6 +42,24 @@ pub enum IndexRelocType {
     TableNumberLeb = 20,
 }
 
+impl IndexRelocType {
+    fn from_u8(x: u8) -> Option<IndexRelocType> {
+        match x {
+            0 => Some(Self::FunctionIndexLeb),
+            1 => Some(Self::TableIndexSleb),
+            2 => Some(Self::TableIndexI32),
+            6 => Some(Self::TypeIndexLeb),
+            7 => Some(Self::GlobalIndexLeb),
+            10 => Some(Self::EventIndexLeb),
+            13 => Some(Self::GlobalIndexI32),
+            18 => Some(Self::TableIndexSleb64),
+            19 => Some(Self::TableIndexI64),
+            20 => Some(Self::TableNumberLeb),
+            _ => None,
+        }
+    }
+}
+
 #[repr(u8)]
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum OffsetRelocType {
@@ -67,6 +85,22 @@ pub enum OffsetRelocType {
     /// the 64-bit counterpart of `R_WASM_MEMORY_ADDR`. A 64-bit linear memory index encoded as a [uint64],
     /// e.g. taking the 64-bit address of a C++ global in a static data initializer.
     MemoryAddrI64 = 16,
+}
+
+impl OffsetRelocType {
+    fn from_u8(x: u8) -> Option<OffsetRelocType> {
+        match x {
+            3 => Some(Self::MemoryAddrLeb),
+            4 => Some(Self::MemoryAddrSleb),
+            5 => Some(Self::MemoryAddrI32),
+            8 => Some(Self::FunctionOffsetI32),
+            9 => Some(Self::SectionOffsetI32),
+            14 => Some(Self::MemoryAddrLeb64),
+            15 => Some(Self::MemoryAddrSleb64),
+            16 => Some(Self::MemoryAddrI64),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -139,38 +173,33 @@ impl Serialize for RelocationEntry {
 
 impl Parse<()> for RelocationEntry {
     fn parse(_: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
-        use IndexRelocType::*;
-
-        let type_id = bytes[*cursor];
+        let type_id_byte = bytes[*cursor];
         *cursor += 1;
         let offset = u32::parse((), bytes, cursor)?;
         let symbol_index = u32::parse((), bytes, cursor)?;
 
-        if type_id == (FunctionIndexLeb as u8)
-            || type_id == (TableIndexSleb as u8)
-            || type_id == (TableIndexI32 as u8)
-            || type_id == (TypeIndexLeb as u8)
-            || type_id == (GlobalIndexLeb as u8)
-            || type_id == (EventIndexLeb as u8)
-            || type_id == (GlobalIndexI32 as u8)
-            || type_id == (TableIndexSleb64 as u8)
-            || type_id == (TableIndexI64 as u8)
-            || type_id == (TableNumberLeb as u8)
-        {
-            Ok(RelocationEntry::Index {
-                type_id: unsafe { std::mem::transmute(type_id) },
+        if let Some(type_id) = IndexRelocType::from_u8(type_id_byte) {
+            return Ok(RelocationEntry::Index {
+                type_id,
                 offset,
                 symbol_index,
-            })
-        } else {
+            });
+        }
+
+        if let Some(type_id) = OffsetRelocType::from_u8(type_id_byte) {
             let addend = i32::parse((), bytes, cursor)?;
-            Ok(RelocationEntry::Offset {
-                type_id: unsafe { std::mem::transmute(type_id) },
+            return Ok(RelocationEntry::Offset {
+                type_id,
                 offset,
                 symbol_index,
                 addend,
-            })
+            });
         }
+
+        Err(ParseError {
+            offset: *cursor,
+            message: format!("Unknown relocation type 0x{:2x}", type_id_byte),
+        })
     }
 }
 
@@ -183,6 +212,14 @@ pub struct RelocationSection<'a> {
 }
 
 impl<'a> RelocationSection<'a> {
+    fn new(arena: &'a Bump, name: &'a str) -> Self {
+        RelocationSection {
+            name,
+            target_section_index: 0,
+            entries: bumpalo::vec![in arena],
+        }
+    }
+
     pub fn apply_relocs_u32(
         &self,
         section_bytes: &mut [u8],
@@ -238,22 +275,16 @@ impl<'a> Parse<RelocCtx<'a>> for RelocationSection<'a> {
         let (arena, name) = ctx;
 
         if *cursor > bytes.len() || bytes[*cursor] != SectionId::Custom as u8 {
-            return Ok(RelocationSection {
-                name,
-                target_section_index: 0,
-                entries: bumpalo::vec![in arena],
-            });
+            // The section we're looking for is missing, which is the same as being empty.
+            return Ok(RelocationSection::new(arena, name));
         }
         *cursor += 1;
         u32::skip_bytes(bytes, cursor)?; // section body size
 
         let actual_name = <&'a str>::parse(arena, bytes, cursor)?;
         if actual_name != name {
-            return Ok(RelocationSection {
-                name,
-                target_section_index: 0,
-                entries: bumpalo::vec![in arena],
-            });
+            // The section we're looking for is missing, which is the same as being empty.
+            return Ok(RelocationSection::new(arena, name));
         }
 
         let target_section_index = u32::parse((), bytes, cursor)?;
