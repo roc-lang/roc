@@ -1,4 +1,4 @@
-use crate::ast::{Collection, CommentOrNewline, Def, Defs, Module, Spaced};
+use crate::ast::{Collection, CommentOrNewline, Defs, Module, Spaced};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::header::{
     package_entry, package_name, AppHeader, ExposedName, HostedHeader, ImportsEntry,
@@ -14,7 +14,6 @@ use crate::parser::{
 use crate::state::State;
 use crate::string_literal;
 use crate::type_annotation;
-use bumpalo::collections::Vec;
 use roc_region::all::{Loc, Position};
 
 fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {

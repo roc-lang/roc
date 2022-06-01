@@ -3,7 +3,7 @@ use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
-        AbilityMember, AssignedField, Collection, CommentOrNewline, Def, Defs, Derived, Expr, Has,
+        AbilityMember, AssignedField, Collection, CommentOrNewline, Def, Derived, Expr, Has,
         HasClause, Module, Pattern, Spaced, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef,
         TypeHeader, ValueDef, WhenBranch,
     },

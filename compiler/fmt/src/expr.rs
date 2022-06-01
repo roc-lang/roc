@@ -1,6 +1,6 @@
 use crate::annotation::{Formattable, Newlines, Parens};
 use crate::collection::{fmt_collection, Braces};
-use crate::def::{fmt_def, fmt_toplevel_defs};
+use crate::def::fmt_toplevel_defs;
 use crate::pattern::fmt_pattern;
 use crate::spaces::{count_leading_newlines, fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;

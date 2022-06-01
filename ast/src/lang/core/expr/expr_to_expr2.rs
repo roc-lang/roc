@@ -16,7 +16,6 @@ use crate::canonicalization::canonicalize::{
 };
 use crate::lang::core::declaration::decl_to_let;
 use crate::lang::core::def::def::{canonicalize_defs, sort_can_defs};
-use crate::lang::core::def::def_to_def2::defs_to_defs2;
 use crate::lang::core::expr::expr2::ClosureExtra;
 use crate::lang::core::pattern::to_pattern2;
 use crate::lang::core::str::flatten_str_literal;

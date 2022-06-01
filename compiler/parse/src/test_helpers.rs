@@ -1,5 +1,4 @@
 use crate::ast;
-use crate::ast::Def;
 use crate::ast::Defs;
 use crate::module::module_defs;
 use crate::parser::Parser;

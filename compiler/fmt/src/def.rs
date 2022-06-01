@@ -350,10 +350,6 @@ fn fmt_expect<'a, 'buf>(
     condition.format(buf, return_indent);
 }
 
-pub fn fmt_def<'a, 'buf>(buf: &mut Buf<'buf>, def: &Def<'a>, indent: u16) {
-    def.format(buf, indent);
-}
-
 pub fn fmt_value_def<'a, 'buf>(
     buf: &mut Buf<'buf>,
     def: &roc_parse::ast::ValueDef<'a>,
