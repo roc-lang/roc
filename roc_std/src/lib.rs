@@ -1,7 +1,7 @@
 #![crate_type = "lib"]
 // #![no_std]
 use core::ffi::c_void;
-use core::fmt;
+use core::fmt::{self, Debug};
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Drop;
 use core::str;
@@ -71,15 +71,23 @@ pub struct RocResult<T, E> {
     tag: RocResultTag,
 }
 
-impl<T, E> core::fmt::Debug for RocResult<T, E>
+impl<T, E> Debug for RocResult<T, E>
 where
-    T: core::fmt::Debug,
-    E: core::fmt::Debug,
+    T: Debug,
+    E: Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.as_result_of_refs() {
-            Ok(payload) => write!(f, "RocOk({:?})", payload),
-            Err(payload) => write!(f, "RocErr({:?})", payload),
+            Ok(payload) => {
+                f.write_str("RocOk(")?;
+                payload.fmt(f)?;
+                f.write_str(")")
+            }
+            Err(payload) => {
+                f.write_str("RocErr(")?;
+                payload.fmt(f)?;
+                f.write_str(")")
+            }
         }
     }
 }
