@@ -8,6 +8,9 @@ use core::{
     ops::{Deref, DerefMut},
 };
 
+#[cfg(not(feature = "no_std"))]
+use std::ffi::{CStr, CString};
+
 use crate::RocList;
 
 #[repr(transparent)]
@@ -75,6 +78,24 @@ impl Deref for RocStr {
             RocStrInnerRef::HeapAllocated(h) => unsafe { core::str::from_utf8_unchecked(&*h) },
             RocStrInnerRef::SmallString(s) => &*s,
         }
+    }
+}
+
+#[cfg(not(feature = "no_std"))]
+impl core::convert::TryFrom<&CStr> for RocStr {
+    type Error = core::str::Utf8Error;
+
+    fn try_from(c_str: &CStr) -> Result<Self, Self::Error> {
+        c_str.to_str().map(RocStr::from)
+    }
+}
+
+#[cfg(not(feature = "no_std"))]
+impl core::convert::TryFrom<CString> for RocStr {
+    type Error = core::str::Utf8Error;
+
+    fn try_from(c_string: CString) -> Result<Self, Self::Error> {
+        c_string.to_str().map(RocStr::from)
     }
 }
 
