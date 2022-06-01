@@ -3229,9 +3229,9 @@ fn deep_copy_var_help(
 
     macro_rules! copy_union_tags {
         ($tags:expr) => {{
-            let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
+            let new_variable_slices = SubsSlice::reserve_variable_slices(subs, $tags.len());
 
-            let it = (new_variable_slices.indices()).zip(tags.variables());
+            let it = (new_variable_slices.indices()).zip($tags.variables());
             for (target_index, index) in it {
                 let slice = subs[index];
 
@@ -3239,7 +3239,7 @@ fn deep_copy_var_help(
                 subs.variable_slices[target_index] = new_variables;
             }
 
-            UnionTags::from_slices(tags.tag_names(), new_variable_slices)
+            UnionTags::from_slices($tags.tag_names(), new_variable_slices)
         }};
     }
 
