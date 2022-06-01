@@ -568,7 +568,7 @@ fn numeric_negate_expression<'a, T>(
     }
 }
 
-fn parse_toplevel_defs_end<'a>(
+fn parse_defs_end<'a>(
     _options: ExprParseOptions,
     start_column: u32,
     mut defs: Defs<'a>,
@@ -908,7 +908,7 @@ fn parse_defs_expr<'a>(
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
     let min_indent = start_column;
 
-    match parse_toplevel_defs_end(options, start_column, defs, arena, state) {
+    match parse_defs_end(options, start_column, defs, arena, state) {
         Err(bad) => Err(bad),
         Ok((_, def_state, state)) => {
             // this is no def, because there is no `=` or `:`; parse as an expr
@@ -1875,8 +1875,7 @@ pub fn toplevel_defs<'a>(min_indent: u32) -> impl Parser<'a, Defs<'a>, EExpr<'a>
         let mut output = Defs::default();
         let before = Slice::extend_new(&mut output.spaces, initial_space.iter().copied());
 
-        let (_, mut output, state) =
-            parse_toplevel_defs_end(options, start_column, output, arena, state)?;
+        let (_, mut output, state) = parse_defs_end(options, start_column, output, arena, state)?;
 
         let (_, final_space, state) =
             space0_e(start_column, EExpr::IndentEnd).parse(arena, state)?;

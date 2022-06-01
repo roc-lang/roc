@@ -1,10 +1,10 @@
 use crate::abilities::AbilitiesStore;
 use crate::annotation::canonicalize_annotation;
-use crate::def::{canonicalize_toplevel_defs, sort_can_defs, Declaration, Def};
+use crate::def::{canonicalize_defs, sort_can_defs, Declaration, Def};
 use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
 use crate::expr::{ClosureData, Expr, Output, PendingDerives};
-use crate::operator::desugar_toplevel_defs;
+use crate::operator::desugar_defs;
 use crate::pattern::Pattern;
 use crate::scope::Scope;
 use bumpalo::Bump;
@@ -198,7 +198,7 @@ pub fn canonicalize_module_defs<'a>(
     // visited a BinOp node we'd recursively try to apply this to each of its nested
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
-    desugar_toplevel_defs(arena, loc_defs);
+    desugar_defs(arena, loc_defs);
 
     let mut lookups = Vec::with_capacity(num_deps);
     let mut rigid_variables = RigidVariables::default();
@@ -274,7 +274,7 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
-    let (defs, output, symbols_introduced) = canonicalize_toplevel_defs(
+    let (defs, output, symbols_introduced) = canonicalize_defs(
         &mut env,
         Output::default(),
         var_store,

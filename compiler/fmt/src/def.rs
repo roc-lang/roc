@@ -362,7 +362,7 @@ pub fn fmt_type_def<'a, 'buf>(buf: &mut Buf<'buf>, def: &roc_parse::ast::TypeDef
     def.format(buf, indent);
 }
 
-pub fn fmt_toplevel_defs<'a, 'buf>(buf: &mut Buf<'buf>, defs: &Defs<'a>, indent: u16) {
+pub fn fmt_defs<'a, 'buf>(buf: &mut Buf<'buf>, defs: &Defs<'a>, indent: u16) {
     dbg!(&defs);
     defs.format(buf, indent);
 }

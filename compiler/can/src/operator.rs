@@ -110,7 +110,7 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
     }
 }
 
-pub fn desugar_toplevel_defs<'a>(arena: &'a Bump, defs: &mut roc_parse::ast::Defs<'a>) {
+pub fn desugar_defs<'a>(arena: &'a Bump, defs: &mut roc_parse::ast::Defs<'a>) {
     for value_def in defs.value_defs.iter_mut() {
         *value_def = desugar_value_def(arena, arena.alloc(*value_def));
     }
@@ -234,7 +234,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
         BinOps(lefts, right) => desugar_bin_ops(arena, loc_expr.region, lefts, right),
         Defs(defs, loc_ret) => {
             let mut defs = (*defs).clone();
-            desugar_toplevel_defs(arena, &mut defs);
+            desugar_defs(arena, &mut defs);
 
             let loc_ret = desugar_expr(arena, loc_ret);
 

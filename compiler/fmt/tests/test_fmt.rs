@@ -7,7 +7,7 @@ extern crate roc_fmt;
 mod test_fmt {
     use bumpalo::Bump;
     use roc_fmt::annotation::{Formattable, Newlines, Parens};
-    use roc_fmt::def::fmt_toplevel_defs;
+    use roc_fmt::def::fmt_defs;
     use roc_fmt::module::fmt_module;
     use roc_fmt::Buf;
     use roc_parse::ast::Module;
@@ -93,7 +93,7 @@ mod test_fmt {
 
         match module_defs().parse(arena, state) {
             Ok((_, loc_defs, _)) => {
-                fmt_toplevel_defs(buf, &loc_defs, 0);
+                fmt_defs(buf, &loc_defs, 0);
             }
             Err(error) => panic!(
                 r"Unexpected parse failure when parsing this for defs formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n",

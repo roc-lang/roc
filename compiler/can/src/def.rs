@@ -424,7 +424,7 @@ fn canonicalize_opaque<'a>(
 }
 
 #[inline(always)]
-pub(crate) fn canonicalize_toplevel_defs<'a>(
+pub(crate) fn canonicalize_defs<'a>(
     env: &mut Env<'a>,
     mut output: Output,
     var_store: &mut VarStore,
@@ -1478,7 +1478,7 @@ pub fn can_defs_with_return<'a>(
     loc_defs: &'a mut Defs<'a>,
     loc_ret: &'a Loc<ast::Expr<'a>>,
 ) -> (Expr, Output) {
-    let (unsorted, defs_output, symbols_introduced) = canonicalize_toplevel_defs(
+    let (unsorted, defs_output, symbols_introduced) = canonicalize_defs(
         env,
         Output::default(),
         var_store,
