@@ -21,3 +21,4 @@ libc = "0.2.106"
 [features]
 default = ["platform"]
 platform = []
+no_std = []

@@ -1,5 +1,5 @@
 #![crate_type = "lib"]
-// #![no_std]
+#![cfg_attr(feature = "no_std", no_std)]
 
 use core::cmp::Ordering;
 use core::ffi::c_void;
@@ -315,19 +315,25 @@ impl RocDec {
         self.0
     }
 
+    #[cfg(not(feature = "no_std"))]
     fn to_str_helper(&self, bytes: &mut [u8; Self::MAX_STR_LENGTH]) -> usize {
+        // TODO there is probably some way to implement this logic without std::io::Write,
+        // which in turn would make this method work with no_std.
+        use std::io::Write;
+
         if self.as_i128() == 0 {
             write!(&mut bytes[..], "{}", "0").unwrap();
+
             return 1;
         }
 
         let is_negative = (self.as_i128() < 0) as usize;
 
-        static_assertions::const_assert!(Self::DECIMAL_PLACES + 1 == 19);
         // The :019 in the following write! is computed as Self::DECIMAL_PLACES + 1. If you change
         // Self::DECIMAL_PLACES, this assert should remind you to change that format string as
         // well.
-        //
+        static_assertions::const_assert!(Self::DECIMAL_PLACES + 1 == 19);
+
         // By using the :019 format, we're guaranteeing that numbers less than 1, say 0.01234
         // get their leading zeros placed in bytes for us. i.e. bytes = b"0012340000000000000"
         write!(&mut bytes[..], "{:019}", self.as_i128()).unwrap();
@@ -369,6 +375,7 @@ impl RocDec {
         ret + 1
     }
 
+    #[cfg(not(feature = "no_std"))] // to_str_helper currently uses std, but might not need to.
     pub fn to_str(&self) -> RocStr {
         let mut bytes = [0 as u8; Self::MAX_STR_LENGTH];
         let last_idx = self.to_str_helper(&mut bytes);
@@ -376,6 +383,7 @@ impl RocDec {
     }
 }
 
+#[cfg(not(feature = "no_std"))] // to_str_helper currently uses std, but might not need to.
 impl fmt::Display for RocDec {
     fn fmt(&self, fmtr: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut bytes = [0 as u8; Self::MAX_STR_LENGTH];
