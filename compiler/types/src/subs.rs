@@ -2082,20 +2082,6 @@ pub struct LambdaSet {
     pub recursion_var: OptVariable,
 }
 
-impl LambdaSet {
-    // For things like layout generation, we don't care about differentiating betweent lambda sets
-    // and tag unions - this function normalizes lambda sets appropriately as a possibly-recursive
-    // tag union.
-    // pub fn as_tag_union(&self) -> FlatType {
-    //     match self.recursion_var.into_variable() {
-    //         Some(rec_var) => {
-    //             FlatType::RecursiveTagUnion(rec_var, self.solved, Variable::EMPTY_TAG_UNION)
-    //         }
-    //         None => FlatType::TagUnion(self.solved, Variable::EMPTY_TAG_UNION),
-    //     }
-    // }
-}
-
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AliasVariables {
     pub variables_start: u32,
