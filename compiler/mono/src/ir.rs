@@ -2739,7 +2739,10 @@ fn generate_runtime_error_function<'a>(
     )
     .unwrap();
 
-    eprintln!("emitted runtime error function {:?}", &msg);
+    eprintln!(
+        "emitted runtime error function {:?} for layout {:?}",
+        &msg, layout
+    );
 
     let runtime_error = Stmt::RuntimeError(msg.into_bump_str());
 
@@ -2911,6 +2914,7 @@ fn specialize_external<'a>(
         fn_var,
         roc_unify::unify::Mode::EQ,
     );
+    dbg!(&_unified);
 
     // This will not hold for programs with type errors
     // let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));
@@ -2928,8 +2932,13 @@ fn specialize_external<'a>(
         }
     };
 
-    let specialized =
-        build_specialized_proc_from_var(env, layout_cache, proc_name, pattern_symbols, fn_var)?;
+    let specialized = dbg!(build_specialized_proc_from_var(
+        env,
+        layout_cache,
+        proc_name,
+        pattern_symbols,
+        fn_var
+    ))?;
 
     // determine the layout of aliases/rigids exposed to the host
     let host_exposed_layouts = if host_exposed_variables.is_empty() {
@@ -3537,6 +3546,7 @@ where
             Ok((proc, raw))
         }
         Err(error) => {
+            dbg!(&error);
             env.subs.rollback_to(snapshot);
             layout_cache.rollback_to(cache_snapshot);
 

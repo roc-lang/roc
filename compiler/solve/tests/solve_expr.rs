@@ -6500,7 +6500,37 @@ mod solve_expr {
                 r#"
                 app "test" provides [main] to "./platform"
 
-                main = Result.mapErr
+                greeting =
+                    hi = "Hello"
+                    name = "World"
+
+                    "\(hi), \(name)!"
+
+                main =
+                    when nestHelp 4 is
+                        _ -> greeting
+
+                nestHelp : I64 -> XEffect {}
+                nestHelp = \m ->
+                    when m is
+                        0 ->
+                            always {}
+
+                        _ ->
+                            always {} |> after \_ -> nestHelp (m - 1)
+
+
+                XEffect a := {} -> a
+
+                always : a -> XEffect a
+                always = \x -> @XEffect (\{} -> x)
+
+                after : XEffect a, (a -> XEffect b) -> XEffect b
+                after = \(@XEffect e), toB ->
+                    @XEffect \{} ->
+                        when toB (e {}) is
+                            @XEffect e2 ->
+                                e2 {}
                 "#
             ),
             "",

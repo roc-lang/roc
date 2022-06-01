@@ -156,12 +156,7 @@ impl FunctionLayout {
         lset: subs::LambdaSet,
     ) -> Result<Self, LayoutError> {
         // Lambda set is just a tag union from the layout's perspective.
-        let subs::LambdaSet { solved } = lset;
-        Self::from_flat_type(
-            layouts,
-            subs,
-            &FlatType::TagUnion(solved, Variable::EMPTY_TAG_UNION),
-        )
+        Self::from_flat_type(layouts, subs, &lset.as_tag_union())
     }
 
     fn from_flat_type(
@@ -281,12 +276,7 @@ impl LambdaSet {
         lset: subs::LambdaSet,
     ) -> Result<Self, LayoutError> {
         // Lambda set is just a tag union from the layout's perspective.
-        let subs::LambdaSet { solved } = lset;
-        Self::from_flat_type(
-            layouts,
-            subs,
-            &FlatType::TagUnion(solved, Variable::EMPTY_TAG_UNION),
-        )
+        Self::from_flat_type(layouts, subs, &lset.as_tag_union())
     }
 
     fn from_flat_type(
@@ -730,12 +720,7 @@ impl Layout {
         lset: subs::LambdaSet,
     ) -> Result<Layout, LayoutError> {
         // Lambda set is just a tag union from the layout's perspective.
-        let subs::LambdaSet { solved } = lset;
-        Self::from_flat_type(
-            layouts,
-            subs,
-            &FlatType::TagUnion(solved, Variable::EMPTY_TAG_UNION),
-        )
+        Self::from_flat_type(layouts, subs, &lset.as_tag_union())
     }
 
     fn from_flat_type(

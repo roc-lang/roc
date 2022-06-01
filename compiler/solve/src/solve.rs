@@ -1893,7 +1893,12 @@ fn type_to_variable<'a>(
                     Content::Structure(FlatType::EmptyTagUnion),
                 ));
 
-                let content = Content::LambdaSet(subs::LambdaSet { solved });
+                let content = Content::LambdaSet(subs::LambdaSet {
+                    solved,
+                    // We may figure out the lambda set is recursive during solving, but it never
+                    // is to begin with.
+                    recursion_var: OptVariable::NONE,
+                });
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
@@ -2528,13 +2533,24 @@ fn check_for_infinite_type(
     let var = loc_var.value;
 
     while let Err((recursive, _chain)) = subs.occurs(var) {
-        // try to make a tag union recursive, see if that helps
+        // try to make a union recursive, see if that helps
         match subs.get_content_without_compacting(recursive) {
             &Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
+                dbg!(1);
                 subs.mark_tag_union_recursive(recursive, tags, ext_var);
             }
+            &Content::LambdaSet(subs::LambdaSet {
+                solved,
+                recursion_var: _,
+            }) => {
+                dbg!(2);
+                subs.mark_lambda_set_recursive(recursive, solved);
+            }
 
-            _other => circular_error(subs, problems, symbol, &loc_var),
+            _other => {
+                dbg!(3);
+                circular_error(subs, problems, symbol, &loc_var)
+            }
         }
     }
 }
@@ -2875,7 +2891,10 @@ fn adjust_rank_content(
             rank
         }
 
-        LambdaSet(subs::LambdaSet { solved }) => {
+        LambdaSet(subs::LambdaSet {
+            solved,
+            recursion_var,
+        }) => {
             let mut rank = group_rank;
 
             for (_, index) in solved.iter_all() {
@@ -2884,6 +2903,26 @@ fn adjust_rank_content(
                     let var = subs[var_index];
                     rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
                 }
+            }
+
+            if let (true, Some(rec_var)) = (cfg!(debug_assertions), recursion_var.into_variable()) {
+                // THEORY: unlike the situation for recursion vars under recursive tag unions,
+                // recursive vars inside lambda sets can't escape into higher let-generalized regions
+                // because lambda sets aren't user-facing.
+                //
+                // So the recursion var should be fully accounted by everything else in the lambda set
+                // (since it appears in the lambda set), and if the rank is higher, it's either a
+                // bug or our theory is wrong and indeed they can escape into higher regions.
+                let rec_var_rank = adjust_rank(subs, young_mark, visit_mark, group_rank, rec_var);
+
+                debug_assert!(
+                    rank >= rec_var_rank,
+                    "rank was {:?} but recursion var <{:?}>{:?} has higher rank {:?}",
+                    rank,
+                    rec_var,
+                    subs.get_content_without_compacting(rec_var),
+                    rec_var_rank
+                );
             }
 
             rank
@@ -3041,10 +3080,17 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
 
                 stack.push(var);
             }
-            LambdaSet(subs::LambdaSet { solved }) => {
+            LambdaSet(subs::LambdaSet {
+                solved,
+                recursion_var,
+            }) => {
                 for slice_index in solved.variables() {
                     let slice = subs.variable_slices[slice_index.index as usize];
                     stack.extend(var_slice!(slice));
+                }
+
+                if let Some(rec_var) = recursion_var.into_variable() {
+                    stack.push(rec_var);
                 }
             }
             &RangedNumber(typ, _) => {
@@ -3306,10 +3352,20 @@ fn deep_copy_var_help(
                 subs.set_content_unchecked(copy, new_content);
             }
 
-            LambdaSet(subs::LambdaSet { solved }) => {
+            LambdaSet(subs::LambdaSet {
+                solved,
+                recursion_var,
+            }) => {
                 let new_solved = copy_union_tags!(solved);
+                let new_rec_var = recursion_var.map(|v| work!(v));
 
-                subs.set_content_unchecked(copy, LambdaSet(subs::LambdaSet { solved: new_solved }));
+                subs.set_content_unchecked(
+                    copy,
+                    LambdaSet(subs::LambdaSet {
+                        solved: new_solved,
+                        recursion_var: new_rec_var,
+                    }),
+                );
             }
 
             RangedNumber(typ, range) => {

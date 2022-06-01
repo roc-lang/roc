@@ -1408,7 +1408,10 @@ fn adjust_rank_content(
             }
         }
 
-        LambdaSet(subs::LambdaSet { solved }) => {
+        LambdaSet(subs::LambdaSet {
+            solved,
+            recursion_var,
+        }) => {
             let mut rank = group_rank;
 
             for (_, index) in solved.iter_all() {
@@ -1417,6 +1420,15 @@ fn adjust_rank_content(
                     let var = subs[var_index];
                     rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
                 }
+            }
+
+            if let Some(rec_var) = recursion_var.into_variable() {
+                // THEORY: the recursion var has the same rank as the tag union itself
+                // all types it uses are also in the tags already, so it cannot influence the
+                // rank
+                debug_assert!(
+                    rank >= adjust_rank(subs, young_mark, visit_mark, group_rank, rec_var)
+                );
             }
 
             rank
@@ -1596,7 +1608,14 @@ fn instantiate_rigids_help(
             instantiate_rigids_help(subs, max_rank, pools, real_type_var);
         }
 
-        LambdaSet(subs::LambdaSet { solved }) => {
+        LambdaSet(subs::LambdaSet {
+            solved,
+            recursion_var,
+        }) => {
+            if let Some(rec_var) = recursion_var.into_variable() {
+                instantiate_rigids_help(subs, max_rank, pools, rec_var);
+            }
+
             for (_, index) in solved.iter_all() {
                 let slice = subs[index];
                 for var_index in slice {
@@ -1872,7 +1891,10 @@ fn deep_copy_var_help(
             copy
         }
 
-        LambdaSet(subs::LambdaSet { solved }) => {
+        LambdaSet(subs::LambdaSet {
+            solved,
+            recursion_var,
+        }) => {
             let mut new_variable_slices = Vec::with_capacity(solved.len());
 
             let mut new_variables = Vec::new();
@@ -1898,7 +1920,13 @@ fn deep_copy_var_help(
             };
 
             let new_solved = UnionTags::from_slices(solved.tag_names(), new_variables);
-            let new_content = LambdaSet(subs::LambdaSet { solved: new_solved });
+            let new_rec_var =
+                recursion_var.map(|rec_var| deep_copy_var_help(subs, max_rank, pools, rec_var));
+
+            let new_content = LambdaSet(subs::LambdaSet {
+                solved: new_solved,
+                recursion_var: new_rec_var,
+            });
 
             subs.set(copy, make_descriptor(new_content));
 

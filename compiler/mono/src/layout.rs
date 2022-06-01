@@ -72,7 +72,7 @@ impl<'a> RawFunctionLayout<'a> {
         content: Content,
     ) -> Result<Self, LayoutProblem> {
         use roc_types::subs::Content::*;
-        match content {
+        match dbg!(content) {
             FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar(var)),
             FlexAbleVar(_, _) | RigidAbleVar(_, _) => todo_abilities!("Not reachable yet"),
             RecursionVar { structure, .. } => {
@@ -157,8 +157,9 @@ impl<'a> RawFunctionLayout<'a> {
         lset: subs::LambdaSet,
     ) -> Result<Self, LayoutProblem> {
         // Lambda set is just a tag union from the layout's perspective.
-        let subs::LambdaSet { solved } = lset;
-        Self::layout_from_flat_type(env, FlatType::TagUnion(solved, Variable::EMPTY_TAG_UNION))
+        dbg!(
+            Self::layout_from_flat_type(env, dbg!(lset.as_tag_union()))
+        )
     }
 
     fn layout_from_flat_type(
@@ -1696,8 +1697,7 @@ fn layout_from_lambda_set<'a>(
     lset: subs::LambdaSet,
 ) -> Result<Layout<'a>, LayoutProblem> {
     // Lambda set is just a tag union from the layout's perspective.
-    let subs::LambdaSet { solved } = lset;
-    layout_from_flat_type(env, FlatType::TagUnion(solved, Variable::EMPTY_TAG_UNION))
+    layout_from_flat_type(env, lset.as_tag_union())
 }
 
 fn layout_from_flat_type<'a>(

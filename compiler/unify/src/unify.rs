@@ -343,8 +343,8 @@ fn debug_print_unified_types(subs: &mut Subs, ctx: &Context, opt_outcome: Option
             "{}{}({:?}-{:?}): {:?} {:?} {} {:?} {:?}",
             " ".repeat(use_depth),
             prefix,
-            ctx.first,
-            ctx.second,
+            subs.get_root_key_without_compacting(ctx.first),
+            subs.get_root_key_without_compacting(ctx.second),
             ctx.first,
             SubsFmtContent(&content_1, subs),
             mode,
@@ -801,11 +801,14 @@ fn unify_lambda_set(
         Content::LambdaSet(other_lambda_set) => {
             unify_lambda_set_help(subs, pool, ctx, lambda_set, *other_lambda_set)
         }
+        RecursionVar { structure, .. } => {
+            // suppose that the recursion var is a lambda set
+            unify_pool(subs, pool, ctx.first, *structure, ctx.mode)
+        }
         RigidVar(..) | RigidAbleVar(..) => mismatch!("Lambda sets never unify with rigid"),
         FlexAbleVar(..) => mismatch!("Lambda sets should never have abilities attached to them"),
         Structure(..) => mismatch!("Lambda set cannot unify with non-lambda set structure"),
         RangedNumber(..) => mismatch!("Lambda sets are never numbers"),
-        RecursionVar { .. } => mismatch!("Lambda set not expected to be recursive!"),
         Alias(..) => mismatch!("Lambda set can never be directly under an alias!"),
         Error => merge(subs, ctx, Error),
     }
@@ -822,8 +825,21 @@ fn unify_lambda_set_help(
     // LambdaSets unify like TagUnions, but can grow unbounded regardless of the extension
     // variable.
 
-    let LambdaSet { solved: solved1 } = lset1;
-    let LambdaSet { solved: solved2 } = lset2;
+    let LambdaSet {
+        solved: solved1,
+        recursion_var: rec1,
+    } = lset1;
+    let LambdaSet {
+        solved: solved2,
+        recursion_var: rec2,
+    } = lset2;
+
+    debug_assert!(
+        (rec1.into_variable().into_iter())
+            .chain(rec2.into_variable().into_iter())
+            .all(|v| is_recursion_var(subs, v)),
+        "Recursion var is present, but it doesn't have a recursive content!"
+    );
 
     let (separate_solved, _, _) = separate_union_tags(
         subs,
@@ -843,7 +859,7 @@ fn unify_lambda_set_help(
 
     let mut joined_lambdas = vec![];
     for (tag_name, (vars1, vars2)) in in_both {
-        let mut joined_vars = vec![];
+        let mut matching_vars = vec![];
 
         if vars1.len() != vars2.len() {
             continue; // this is a type mismatch; not adding the tag will trigger it below.
@@ -853,16 +869,32 @@ fn unify_lambda_set_help(
         for (var1, var2) in (vars1.into_iter()).zip(vars2.into_iter()) {
             let (var1, var2) = (subs[var1], subs[var2]);
 
+            // Lambda sets are effectively tags under another name, and their usage can also result
+            // in the arguments of a lambda name being recursive. It very well may happen that
+            // during unification, a lambda set previously marked as not recursive becomes
+            // recursive. See the docs of [LambdaSet] for one example, or https://github.com/rtfeldman/roc/pull/2307.
+            //
+            // Like with tag unions, if it has, we'll always pass through this branch. So, take
+            // this opportunity to promote the lambda set to recursive if need be.
+            maybe_mark_union_recursive(subs, var1);
+            maybe_mark_union_recursive(subs, var2);
+
             let outcome = unify_pool(subs, pool, var1, var2, ctx.mode);
 
-            if outcome.mismatches.is_empty() {
-                // otherwise this is a type mismatch; not adding the variable will trigger it below.
-                joined_vars.push(var1);
+            // TODO: i think we can get rid of this
+            // clearly, this is very suspicious: these variables have just been unified. And yet,
+            // not doing this leads to stack overflows
+            if rec2.is_some() {
+                if outcome.mismatches.is_empty() {
+                    matching_vars.push(var2);
+                }
+            } else if outcome.mismatches.is_empty() {
+                matching_vars.push(var1);
             }
         }
 
-        if joined_vars.len() == num_vars {
-            joined_lambdas.push((tag_name, joined_vars));
+        if matching_vars.len() == num_vars {
+            joined_lambdas.push((tag_name, matching_vars));
         }
     }
 
@@ -885,8 +917,17 @@ fn unify_lambda_set_help(
             }),
         );
 
+        let recursion_var = match (rec1.into_variable(), rec2.into_variable()) {
+            // Prefer left when it's available.
+            (Some(rec), _) | (_, Some(rec)) => OptVariable::from(rec),
+            (None, None) => OptVariable::NONE,
+        };
+
         let new_solved = UnionTags::insert_into_subs(subs, all_lambdas);
-        let new_lambda_set = Content::LambdaSet(LambdaSet { solved: new_solved });
+        let new_lambda_set = Content::LambdaSet(LambdaSet {
+            solved: new_solved,
+            recursion_var,
+        });
 
         merge(subs, ctx, new_lambda_set)
     } else {
@@ -1483,31 +1524,52 @@ enum OtherTags2 {
     ),
 }
 
-fn maybe_mark_tag_union_recursive(subs: &mut Subs, tag_union_var: Variable) {
-    'outer: while let Err((recursive, chain)) = subs.occurs(tag_union_var) {
+/// Promotes a non-recursive tag union or lambda set to its recursive variant, if it is found to be
+/// recursive.
+fn maybe_mark_union_recursive(subs: &mut Subs, union_var: Variable) {
+    'outer: while let Err((recursive, chain)) = subs.occurs(union_var) {
         let description = subs.get(recursive);
-        if let Content::Structure(FlatType::TagUnion(tags, ext_var)) = description.content {
-            subs.mark_tag_union_recursive(recursive, tags, ext_var);
-        } else {
-            // walk the chain till we find a tag union
-            for v in &chain[..chain.len() - 1] {
-                let description = subs.get(*v);
-                if let Content::Structure(FlatType::TagUnion(tags, ext_var)) = description.content {
-                    subs.mark_tag_union_recursive(*v, tags, ext_var);
-                    continue 'outer;
-                }
+        match description.content {
+            Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
+                subs.mark_tag_union_recursive(recursive, tags, ext_var);
             }
+            LambdaSet(self::LambdaSet {
+                solved,
+                recursion_var: OptVariable::NONE,
+            }) => {
+                subs.mark_lambda_set_recursive(recursive, solved);
+            }
+            _ => {
+                // walk the chain till we find a tag union or lambda set
+                for v in &chain[..chain.len() - 1] {
+                    let description = subs.get(*v);
+                    match description.content {
+                        Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
+                            subs.mark_tag_union_recursive(*v, tags, ext_var);
+                            continue 'outer;
+                        }
+                        LambdaSet(self::LambdaSet {
+                            solved,
+                            recursion_var: OptVariable::NONE,
+                        }) => {
+                            subs.mark_lambda_set_recursive(recursive, solved);
+                            continue 'outer;
+                        }
+                        _ => { /* fall through */ }
+                    }
+                }
 
-            // Might not be any tag union if we only pass through `Apply`s. Otherwise, we have a bug!
-            if chain.iter().all(|&v| {
-                matches!(
-                    subs.get_content_without_compacting(v),
-                    Content::Structure(FlatType::Apply(..))
-                )
-            }) {
-                return;
-            } else {
-                internal_error!("recursive loop does not contain a tag union")
+                // Might not be any tag union if we only pass through `Apply`s. Otherwise, we have a bug!
+                if chain.iter().all(|&v| {
+                    matches!(
+                        subs.get_content_without_compacting(v),
+                        Content::Structure(FlatType::Apply(..))
+                    )
+                }) {
+                    return;
+                } else {
+                    internal_error!("recursive loop does not contain a tag union")
+                }
             }
         }
     }
@@ -1563,8 +1625,8 @@ fn unify_shared_tags_new(
             // since we're expanding tag unions to equal depths as described above,
             // we'll always pass through this branch. So, we promote tag unions to recursive
             // ones here if it turns out they are that.
-            maybe_mark_tag_union_recursive(subs, actual);
-            maybe_mark_tag_union_recursive(subs, expected);
+            maybe_mark_union_recursive(subs, actual);
+            maybe_mark_union_recursive(subs, expected);
 
             let mut outcome = Outcome::default();
 
@@ -2094,7 +2156,8 @@ fn unify_recursion(
         ),
 
         LambdaSet(..) => {
-            mismatch!("RecursionVar {:?} with LambdaSet {:?}", ctx.first, &other)
+            // suppose that the recursion var is a lambda set
+            unify_pool(subs, pool, structure, ctx.second, ctx.mode)
         }
 
         Error => merge(subs, ctx, Error),
@@ -2172,7 +2235,10 @@ fn unify_function_or_tag_union_and_func(
     {
         let tag_name = TagName::Closure(tag_symbol);
         let union_tags = UnionTags::tag_without_arguments(subs, tag_name);
-        let lambda_set_content = LambdaSet(self::LambdaSet { solved: union_tags });
+        let lambda_set_content = LambdaSet(self::LambdaSet {
+            solved: union_tags,
+            recursion_var: OptVariable::NONE,
+        });
 
         let tag_lambda_set = register(
             subs,

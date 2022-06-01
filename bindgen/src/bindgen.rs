@@ -118,9 +118,10 @@ fn add_type_help<'a>(
                 fields,
             })
         }
-        Content::LambdaSet(LambdaSet { solved }) => {
-            add_tag_union(env, opt_name, solved, var, types)
-        }
+        Content::LambdaSet(LambdaSet {
+            solved,
+            recursion_var: _,
+        }) => add_tag_union(env, opt_name, solved, var, types),
         Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, *ext_var));
 

@@ -607,7 +607,11 @@ fn deep_copy_type_vars<'a>(
                 })
             }
 
-            LambdaSet(subs::LambdaSet { solved }) => {
+            LambdaSet(subs::LambdaSet {
+                solved,
+                recursion_var,
+            }) => {
+                let new_rec_var = recursion_var.map(|var| descend_var!(var));
                 for variables_slice_index in solved.variables() {
                     let variables_slice = subs[variables_slice_index];
                     descend_slice!(variables_slice);
@@ -626,7 +630,10 @@ fn deep_copy_type_vars<'a>(
                     let new_solved =
                         UnionTags::from_slices(solved.tag_names(), new_variable_slices);
 
-                    LambdaSet(subs::LambdaSet { solved: new_solved })
+                    LambdaSet(subs::LambdaSet {
+                        solved: new_solved,
+                        recursion_var: new_rec_var,
+                    })
                 })
             }
 

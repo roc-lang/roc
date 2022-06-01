@@ -221,7 +221,22 @@ fn find_names_needed(
             // TODO should we also look in the actual variable?
             // find_names_needed(_actual, subs, roots, root_appearances, names_taken);
         }
-        LambdaSet(subs::LambdaSet { solved: _ }) => {}
+        LambdaSet(subs::LambdaSet {
+            solved,
+            recursion_var,
+        }) => {
+            for slice_index in solved.variables() {
+                let slice = subs[slice_index];
+                for var_index in slice {
+                    let var = subs[var_index];
+                    find_names_needed(var, subs, roots, root_appearances, names_taken);
+                }
+            }
+
+            if let Some(rec_var) = recursion_var.into_variable() {
+                find_names_needed(rec_var, subs, roots, root_appearances, names_taken);
+            }
+        }
         &RangedNumber(typ, _) => {
             find_names_needed(typ, subs, roots, root_appearances, names_taken);
         }
@@ -944,7 +959,10 @@ pub fn resolve_lambda_set<'a>(
     fields: &mut Vec<(TagName, Vec<Variable>)>,
 ) {
     match subs.get_content_without_compacting(var) {
-        Content::LambdaSet(subs::LambdaSet { solved }) => {
+        Content::LambdaSet(subs::LambdaSet {
+            solved,
+            recursion_var: _,
+        }) => {
             push_union_tags(subs, solved, fields);
         }
         c => internal_error!("called with a non-lambda set {:?}", c),
