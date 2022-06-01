@@ -849,25 +849,7 @@ fn unify_lambda_set(
         }
         RecursionVar { structure, .. } => {
             // suppose that the recursion var is a lambda set
-            let outcome = unify_pool(subs, pool, ctx.first, *structure, ctx.mode);
-
-            if outcome.mismatches.is_empty() {
-                debug_assert!(matches!(
-                    subs.get_content_without_compacting(ctx.first),
-                    Content::LambdaSet(self::LambdaSet { recursion_var, .. }) if recursion_var.into_variable().is_some()
-                ));
-
-                let has_recursing_recursive_variable =
-                    subs.occurs_including_recursion_vars(ctx.first).is_err();
-
-                if !has_recursing_recursive_variable {
-                    merge(subs, ctx, *other)
-                } else {
-                    outcome
-                }
-            } else {
-                outcome
-            }
+            unify_pool(subs, pool, ctx.first, *structure, ctx.mode)
         }
         RigidVar(..) | RigidAbleVar(..) => mismatch!("Lambda sets never unify with rigid"),
         FlexAbleVar(..) => mismatch!("Lambda sets should never have abilities attached to them"),
