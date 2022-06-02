@@ -240,15 +240,7 @@ pub enum Type {
         name: Symbol,
         captures: Vec<Type>,
     },
-    /// A lambda set under an arrow in a ability member signature. For example, in
-    ///   Default has default : {} -> a | a has Default
-    /// the unspecialized lambda set for the arrow "{} -> a" would be `a:default:1`.
-    ///
-    /// Lambda sets in member signatures are never known until those members are specialized at a
-    /// usage site. Unspecialized lambda sets aid us in recovering those lambda sets; when we
-    /// instantiate `a` with a proper type `T`, we'll know to resolve the lambda set by extracting
-    /// it at region "1" from the specialization of "default" for `T`.
-    UnspecializedLambdaSet(Variable, Symbol, u8),
+    UnspecializedLambdaSet(Uls),
     DelayedAlias(AliasCommon),
     Alias {
         symbol: Symbol,
@@ -272,6 +264,17 @@ pub enum Type {
     /// A type error, which will code gen to a runtime error
     Erroneous(Problem),
 }
+
+/// A lambda set under an arrow in a ability member signature. For example, in
+///   Default has default : {} -> a | a has Default
+/// the unspecialized lambda set for the arrow "{} -> a" would be `a:default:1`.
+///
+/// Lambda sets in member signatures are never known until those members are specialized at a
+/// usage site. Unspecialized lambda sets aid us in recovering those lambda sets; when we
+/// instantiate `a` with a proper type `T`, we'll know to resolve the lambda set by extracting
+/// it at region "1" from the specialization of "default" for `T`.
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub struct Uls(Variable, Symbol, u8);
 
 static mut TYPE_CLONE_COUNT: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
@@ -306,9 +309,7 @@ impl Clone for Type {
                 name: *name,
                 captures: captures.clone(),
             },
-            Self::UnspecializedLambdaSet(a, sym, region) => {
-                Self::UnspecializedLambdaSet(*a, *sym, *region)
-            }
+            Self::UnspecializedLambdaSet(uls) => Self::UnspecializedLambdaSet(*uls),
             Self::DelayedAlias(arg0) => Self::DelayedAlias(arg0.clone()),
             Self::Alias {
                 symbol,
@@ -652,7 +653,7 @@ impl fmt::Debug for Type {
             Type::RangedNumber(typ, range_vars) => {
                 write!(f, "Ranged({:?}, {:?})", typ, range_vars)
             }
-            Type::UnspecializedLambdaSet(a, mem, region) => {
+            Type::UnspecializedLambdaSet(Uls(a, mem, region)) => {
                 write!(f, "ULS({:?}:{:?}:{:?})", a, mem, region)
             }
         }
@@ -794,7 +795,7 @@ impl Type {
                 RangedNumber(typ, _) => {
                     stack.push(typ);
                 }
-                UnspecializedLambdaSet(v, _, _) => {
+                UnspecializedLambdaSet(Uls(v, _, _)) => {
                     debug_assert!(
                         substitutions.get(v).is_none(),
                         "unspecialized lambda sets should never be substituted before solving"
@@ -911,7 +912,7 @@ impl Type {
                 RangedNumber(typ, _) => {
                     stack.push(typ);
                 }
-                UnspecializedLambdaSet(v, _, _) => {
+                UnspecializedLambdaSet(Uls(v, _, _)) => {
                     debug_assert!(
                         substitutions.get(v).is_none(),
                         "unspecialized lambda sets should never be substituted before solving"
@@ -1071,7 +1072,7 @@ impl Type {
             Apply(symbol, _, _) if *symbol == rep_symbol => true,
             Apply(_, args, _) => args.iter().any(|arg| arg.contains_symbol(rep_symbol)),
             RangedNumber(typ, _) => typ.contains_symbol(rep_symbol),
-            UnspecializedLambdaSet(_, sym, _) => *sym == rep_symbol,
+            UnspecializedLambdaSet(Uls(_, sym, _)) => *sym == rep_symbol,
             EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => false,
         }
     }
@@ -1097,7 +1098,7 @@ impl Type {
             ClosureTag { name: _, captures } => {
                 captures.iter().any(|t| t.contains_variable(rep_variable))
             }
-            UnspecializedLambdaSet(v, _, _) => *v == rep_variable,
+            UnspecializedLambdaSet(Uls(v, _, _)) => *v == rep_variable,
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
                 Self::contains_variable_ext(ext, rep_variable)
                     || tags
@@ -1525,7 +1526,7 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
             RangedNumber(typ, _) => {
                 stack.push(typ);
             }
-            UnspecializedLambdaSet(_, _sym, _) => {
+            UnspecializedLambdaSet(Uls(_, _sym, _)) => {
                 // ignore the member symbol because unspecialized lambda sets are internal-only
             }
             EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
@@ -1575,7 +1576,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
                 variables_help(t, accum);
             }
         }
-        UnspecializedLambdaSet(v, _, _) => {
+        UnspecializedLambdaSet(Uls(v, _, _)) => {
             accum.insert(*v);
         }
         TagUnion(tags, ext) => {
@@ -1728,7 +1729,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
                 variables_help_detailed(ext, accum);
             }
         }
-        UnspecializedLambdaSet(var, _, _) => {
+        UnspecializedLambdaSet(Uls(var, _, _)) => {
             accum.type_variables.insert(*var);
         }
         RecursiveTagUnion(rec, tags, ext) => {
@@ -2739,7 +2740,7 @@ fn instantiate_lambda_sets_as_unspecialized(
 
     let mut new_uls = || {
         region += 1;
-        Type::UnspecializedLambdaSet(able_var, ability_member, region)
+        Type::UnspecializedLambdaSet(Uls(able_var, ability_member, region))
     };
 
     while let Some(typ) = stack.pop() {
@@ -2850,7 +2851,7 @@ mod test {
         macro_rules! check_uls {
             ($typ:expr, $region:literal) => {{
                 match $typ {
-                    Type::UnspecializedLambdaSet(var1, member1, $region) => {
+                    Type::UnspecializedLambdaSet(Uls(var1, member1, $region)) => {
                         assert!(var1 == able_var && member1 == member)
                     }
                     _ => assert!(false),
