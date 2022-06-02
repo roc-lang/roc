@@ -2,7 +2,7 @@ use crate::subs::{
     self, AliasVariables, Content, FlatType, GetSubsSlice, Label, Subs, SubsIndex, UnionLabels,
     UnionTags, Variable,
 };
-use crate::types::{name_type_var, RecordField};
+use crate::types::{name_type_var, RecordField, Uls};
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName};
@@ -234,6 +234,7 @@ fn find_names_needed(
         LambdaSet(subs::LambdaSet {
             solved,
             recursion_var,
+            unspecialized,
         }) => {
             for slice_index in solved.variables() {
                 let slice = subs[slice_index];
@@ -241,6 +242,11 @@ fn find_names_needed(
                     let var = subs[var_index];
                     find_names_needed(var, subs, roots, root_appearances, names_taken);
                 }
+            }
+
+            for uls_index in unspecialized.into_iter() {
+                let Uls(var, _, _) = subs[uls_index];
+                find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
 
             if let Some(rec_var) = recursion_var.into_variable() {
@@ -965,7 +971,12 @@ pub fn resolve_lambda_set(subs: &Subs, mut var: Variable) -> ResolvedLambdaSet {
             Content::LambdaSet(subs::LambdaSet {
                 solved,
                 recursion_var: _,
+                unspecialized,
             }) => {
+                debug_assert!(
+                    unspecialized.is_empty(),
+                    "unspecialized lambda sets left over during resolution"
+                );
                 push_union(subs, solved, &mut set);
                 return ResolvedLambdaSet::Set(set);
             }

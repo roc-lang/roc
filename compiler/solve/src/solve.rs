@@ -19,13 +19,14 @@ use roc_problem::can::CycleEntry;
 use roc_region::all::{Loc, Region};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{
-    self, AliasVariables, Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields,
-    Subs, SubsIndex, SubsSlice, UnionLabels, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
+    self, AliasVariables, Content, Descriptor, FlatType, GetSubsSlice, Mark, OptVariable, Rank,
+    RecordFields, Subs, SubsIndex, SubsSlice, UnionLabels, UnionLambdas, UnionTags, Variable,
+    VariableSubsSlice,
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
     gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, ErrorType, OptAbleType,
-    OptAbleVar, PatternCategory, Reason, TypeExtension,
+    OptAbleVar, PatternCategory, Reason, TypeExtension, Uls,
 };
 use roc_unify::unify::{unify, Mode, Obligated, Unified::*};
 
@@ -1883,17 +1884,20 @@ fn type_to_variable<'a>(
                     // We may figure out the lambda set is recursive during solving, but it never
                     // is to begin with.
                     recursion_var: OptVariable::NONE,
+                    unspecialized: SubsSlice::default(),
                 });
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
-            UnspecializedLambdaSet(..) => {
-                // TODO: instantiate properly!
-                let union_lambdas =
-                    UnionLambdas::from_slices(SubsSlice::new(0, 0), SubsSlice::new(0, 0));
+            UnspecializedLambdaSet(uls) => {
+                let unspecialized = SubsSlice::extend_new(
+                    &mut subs.unspecialized_lambda_sets,
+                    std::iter::once(*uls),
+                );
 
                 let content = Content::LambdaSet(subs::LambdaSet {
-                    solved: union_lambdas,
+                    unspecialized,
+                    solved: UnionLabels::default(),
                     recursion_var: OptVariable::NONE,
                 });
 
@@ -2555,8 +2559,9 @@ fn check_for_infinite_type(
             &Content::LambdaSet(subs::LambdaSet {
                 solved,
                 recursion_var: _,
+                unspecialized,
             }) => {
-                subs.mark_lambda_set_recursive(recursive, solved);
+                subs.mark_lambda_set_recursive(recursive, solved, unspecialized);
             }
 
             _other => circular_error(subs, problems, symbol, &loc_var),
@@ -2903,6 +2908,7 @@ fn adjust_rank_content(
         LambdaSet(subs::LambdaSet {
             solved,
             recursion_var,
+            unspecialized,
         }) => {
             let mut rank = group_rank;
 
@@ -2912,6 +2918,11 @@ fn adjust_rank_content(
                     let var = subs[var_index];
                     rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
                 }
+            }
+
+            for uls_index in *unspecialized {
+                let Uls(var, _, _) = subs[uls_index];
+                rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
             }
 
             if let (true, Some(rec_var)) = (cfg!(debug_assertions), recursion_var.into_variable()) {
@@ -3092,6 +3103,7 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
             LambdaSet(subs::LambdaSet {
                 solved,
                 recursion_var,
+                unspecialized,
             }) => {
                 for slice_index in solved.variables() {
                     let slice = subs.variable_slices[slice_index.index as usize];
@@ -3100,6 +3112,10 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
 
                 if let Some(rec_var) = recursion_var.into_variable() {
                     stack.push(rec_var);
+                }
+
+                for Uls(var, _, _) in subs.get_subs_slice(*unspecialized) {
+                    stack.push(*var);
                 }
             }
             &RangedNumber(typ, _) => {
@@ -3364,15 +3380,31 @@ fn deep_copy_var_help(
             LambdaSet(subs::LambdaSet {
                 solved,
                 recursion_var,
+                unspecialized,
             }) => {
                 let new_solved = copy_union!(solved);
                 let new_rec_var = recursion_var.map(|v| work!(v));
+                let new_unspecialized = SubsSlice::reserve_uls_slice(subs, unspecialized.len());
+
+                for (new_uls_index, uls_index) in
+                    (new_unspecialized.into_iter()).zip(unspecialized.into_iter())
+                {
+                    let Uls(var, sym, region) = subs[uls_index];
+                    let new_var = work!(var);
+
+                    deep_copy_uls_precondition(subs, var, new_var);
+
+                    subs[new_uls_index] = Uls(new_var, sym, region);
+
+                    // TODO: bookkeeping of new_var -> lambda set
+                }
 
                 subs.set_content_unchecked(
                     copy,
                     LambdaSet(subs::LambdaSet {
                         solved: new_solved,
                         recursion_var: new_rec_var,
+                        unspecialized: new_unspecialized,
                     }),
                 );
             }
@@ -3386,6 +3418,26 @@ fn deep_copy_var_help(
     }
 
     initial_copy
+}
+
+#[inline(always)]
+fn deep_copy_uls_precondition(subs: &Subs, original_var: Variable, new_var: Variable) {
+    if cfg!(debug_assertions) {
+        let content = subs.get_content_without_compacting(original_var);
+
+        debug_assert!(
+            matches!(
+                content,
+                Content::FlexAbleVar(..) | Content::RigidAbleVar(..)
+            ),
+            "var in unspecialized lamba set is not bound to an ability, it is {:?}",
+            roc_types::subs::SubsFmtContent(&content, subs)
+        );
+        debug_assert!(
+            original_var != new_var,
+            "unspecialized lamba set var was not instantiated"
+        );
+    }
 }
 
 #[inline(always)]

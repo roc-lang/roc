@@ -815,10 +815,12 @@ fn unify_lambda_set_help(
     let LambdaSet {
         solved: solved1,
         recursion_var: rec1,
+        unspecialized: uls1,
     } = lset1;
     let LambdaSet {
         solved: solved2,
         recursion_var: rec2,
+        unspecialized: uls2,
     } = lset2;
 
     debug_assert!(
@@ -893,10 +895,30 @@ fn unify_lambda_set_help(
             (None, None) => OptVariable::NONE,
         };
 
+        // Combine the unspecialized lambda sets as needed. Note that we don't need to update the
+        // bookkeeping of variable -> lambda set to be resolved, because if we had v1 -> lset1, and
+        // now lset1 ~ lset2, then afterward either lset1 still resolves to itself or re-points to
+        // lset2. In either case the merged unspecialized lambda sets will be there.
+        let merged_unspecialized = match (uls1.is_empty(), uls2.is_empty()) {
+            (true, true) => SubsSlice::default(),
+            (false, true) => uls1,
+            (true, false) => uls2,
+            (false, false) => {
+                let mut all_uls = (subs.get_subs_slice(uls1).iter())
+                    .chain(subs.get_subs_slice(uls2))
+                    .copied()
+                    .collect::<Vec<_>>();
+                all_uls.sort();
+                all_uls.dedup();
+                SubsSlice::extend_new(&mut subs.unspecialized_lambda_sets, all_uls)
+            }
+        };
+
         let new_solved = UnionLabels::insert_into_subs(subs, all_lambdas);
         let new_lambda_set = Content::LambdaSet(LambdaSet {
             solved: new_solved,
             recursion_var,
+            unspecialized: merged_unspecialized,
         });
 
         merge(subs, ctx, new_lambda_set)
@@ -1523,8 +1545,9 @@ fn maybe_mark_union_recursive(subs: &mut Subs, union_var: Variable) {
                 LambdaSet(self::LambdaSet {
                     solved,
                     recursion_var: OptVariable::NONE,
+                    unspecialized,
                 }) => {
-                    subs.mark_lambda_set_recursive(v, solved);
+                    subs.mark_lambda_set_recursive(v, solved, unspecialized);
                     continue 'outer;
                 }
                 _ => { /* fall through */ }
@@ -2246,6 +2269,7 @@ fn unify_function_or_tag_union_and_func(
         let lambda_set_content = LambdaSet(self::LambdaSet {
             solved: union_tags,
             recursion_var: OptVariable::NONE,
+            unspecialized: SubsSlice::default(),
         });
 
         let tag_lambda_set = register(

@@ -273,8 +273,14 @@ pub enum Type {
 /// usage site. Unspecialized lambda sets aid us in recovering those lambda sets; when we
 /// instantiate `a` with a proper type `T`, we'll know to resolve the lambda set by extracting
 /// it at region "1" from the specialization of "default" for `T`.
-#[derive(PartialEq, Eq, Clone, Copy)]
-pub struct Uls(Variable, Symbol, u8);
+#[derive(PartialEq, Eq, Clone, Copy, PartialOrd, Ord)]
+pub struct Uls(pub Variable, pub Symbol, pub u8);
+
+impl std::fmt::Debug for Uls {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Uls({:?}:{:?}:{:?})", self.0, self.1, self.2)
+    }
+}
 
 static mut TYPE_CLONE_COUNT: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
@@ -648,8 +654,8 @@ impl fmt::Debug for Type {
             Type::RangedNumber(typ, range_vars) => {
                 write!(f, "Ranged({:?}, {:?})", typ, range_vars)
             }
-            Type::UnspecializedLambdaSet(Uls(a, mem, region)) => {
-                write!(f, "ULS({:?}:{:?}:{:?})", a, mem, region)
+            Type::UnspecializedLambdaSet(uls) => {
+                write!(f, "{:?}", uls)
             }
         }
     }

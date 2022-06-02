@@ -4,9 +4,12 @@ use roc_can::{
     def::Def,
     expr::{AccessorData, ClosureData, Expr, Field, WhenBranch},
 };
-use roc_types::subs::{
-    self, AliasVariables, Descriptor, OptVariable, RecordFields, Subs, SubsSlice, UnionLambdas,
-    UnionTags, Variable, VariableSubsSlice,
+use roc_types::{
+    subs::{
+        self, AliasVariables, Descriptor, OptVariable, RecordFields, Subs, SubsSlice, UnionLambdas,
+        UnionTags, Variable, VariableSubsSlice,
+    },
+    types::Uls,
 };
 
 /// Deep copies the type variables in the type hosted by [`var`] into [`expr`].
@@ -610,11 +613,16 @@ fn deep_copy_type_vars<'a>(
             LambdaSet(subs::LambdaSet {
                 solved,
                 recursion_var,
+                unspecialized,
             }) => {
                 let new_rec_var = recursion_var.map(|var| descend_var!(var));
                 for variables_slice_index in solved.variables() {
                     let variables_slice = subs[variables_slice_index];
                     descend_slice!(variables_slice);
+                }
+                for uls_index in unspecialized {
+                    let Uls(var, _, _) = subs[uls_index];
+                    descend_var!(var);
                 }
 
                 perform_clone!({
@@ -630,9 +638,19 @@ fn deep_copy_type_vars<'a>(
                     let new_solved =
                         UnionLambdas::from_slices(solved.labels(), new_variable_slices);
 
+                    let new_unspecialized = SubsSlice::reserve_uls_slice(subs, unspecialized.len());
+                    for (target_index, uls_index) in
+                        (new_unspecialized.into_iter()).zip(unspecialized.into_iter())
+                    {
+                        let Uls(var, sym, region) = subs[uls_index];
+                        let copy_var = subs.get_copy(var).into_variable().unwrap_or(var);
+                        subs[target_index] = Uls(copy_var, sym, region);
+                    }
+
                     LambdaSet(subs::LambdaSet {
                         solved: new_solved,
                         recursion_var: new_rec_var,
+                        unspecialized: new_unspecialized,
                     })
                 })
             }
