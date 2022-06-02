@@ -28,6 +28,8 @@ extern "C" {
         alignment: u32,
     ) -> *mut c_void;
     pub fn roc_dealloc(ptr: *mut c_void, alignment: u32);
+    pub fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void;
+    pub fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut c_void;
 }
 
 /// # Safety
