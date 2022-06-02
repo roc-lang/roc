@@ -240,6 +240,15 @@ pub enum Type {
         name: Symbol,
         captures: Vec<Type>,
     },
+    /// A lambda set under an arrow in a ability member signature. For example, in
+    ///   Default has default : {} -> a | a has Default
+    /// the unspecialized lambda set for the arrow "{} -> a" would be `a:default:1`.
+    ///
+    /// Lambda sets in member signatures are never known until those members are specialized at a
+    /// usage site. Unspecialized lambda sets aid us in recovering those lambda sets; when we
+    /// instantiate `a` with a proper type `T`, we'll know to resolve the lambda set by extracting
+    /// it at region "1" from the specialization of "default" for `T`.
+    UnspecializedLambdaSet(Variable, Symbol, u8),
     DelayedAlias(AliasCommon),
     Alias {
         symbol: Symbol,
@@ -297,6 +306,9 @@ impl Clone for Type {
                 name: *name,
                 captures: captures.clone(),
             },
+            Self::UnspecializedLambdaSet(a, sym, region) => {
+                Self::UnspecializedLambdaSet(*a, *sym, *region)
+            }
             Self::DelayedAlias(arg0) => Self::DelayedAlias(arg0.clone()),
             Self::Alias {
                 symbol,
@@ -627,6 +639,9 @@ impl fmt::Debug for Type {
             Type::RangedNumber(typ, range_vars) => {
                 write!(f, "Ranged({:?}, {:?})", typ, range_vars)
             }
+            Type::UnspecializedLambdaSet(a, mem, region) => {
+                write!(f, "ULS({:?}:{:?}:{:?})", a, mem, region)
+            }
         }
     }
 }
@@ -766,6 +781,12 @@ impl Type {
                 RangedNumber(typ, _) => {
                     stack.push(typ);
                 }
+                UnspecializedLambdaSet(v, _, _) => {
+                    debug_assert!(
+                        substitutions.get(v).is_none(),
+                        "unspecialized lambda sets should never be substituted before solving"
+                    );
+                }
 
                 EmptyRec | EmptyTagUnion | Erroneous(_) => {}
             }
@@ -877,6 +898,12 @@ impl Type {
                 RangedNumber(typ, _) => {
                     stack.push(typ);
                 }
+                UnspecializedLambdaSet(v, _, _) => {
+                    debug_assert!(
+                        substitutions.get(v).is_none(),
+                        "unspecialized lambda sets should never be substituted before solving"
+                    );
+                }
 
                 EmptyRec | EmptyTagUnion | Erroneous(_) => {}
             }
@@ -974,6 +1001,7 @@ impl Type {
                 Ok(())
             }
             RangedNumber(typ, _) => typ.substitute_alias(rep_symbol, rep_args, actual),
+            UnspecializedLambdaSet(..) => Ok(()),
             EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => Ok(()),
         }
     }
@@ -1030,6 +1058,7 @@ impl Type {
             Apply(symbol, _, _) if *symbol == rep_symbol => true,
             Apply(_, args, _) => args.iter().any(|arg| arg.contains_symbol(rep_symbol)),
             RangedNumber(typ, _) => typ.contains_symbol(rep_symbol),
+            UnspecializedLambdaSet(_, sym, _) => *sym == rep_symbol,
             EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => false,
         }
     }
@@ -1055,6 +1084,7 @@ impl Type {
             ClosureTag { name: _, captures } => {
                 captures.iter().any(|t| t.contains_variable(rep_variable))
             }
+            UnspecializedLambdaSet(v, _, _) => *v == rep_variable,
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
                 Self::contains_variable_ext(ext, rep_variable)
                     || tags
@@ -1344,6 +1374,7 @@ impl Type {
             RangedNumber(typ, _) => {
                 typ.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
             }
+            UnspecializedLambdaSet(..) => {}
             EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
         }
     }
@@ -1473,6 +1504,9 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
             RangedNumber(typ, _) => {
                 stack.push(typ);
             }
+            UnspecializedLambdaSet(_, _sym, _) => {
+                // ignore the member symbol because unspecialized lambda sets are internal-only
+            }
             EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
         }
     }
@@ -1519,6 +1553,9 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             for t in captures {
                 variables_help(t, accum);
             }
+        }
+        UnspecializedLambdaSet(v, _, _) => {
+            accum.insert(*v);
         }
         TagUnion(tags, ext) => {
             for (_, args) in tags {
@@ -1669,6 +1706,9 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             if let TypeExtension::Open(ext) = ext {
                 variables_help_detailed(ext, accum);
             }
+        }
+        UnspecializedLambdaSet(var, _, _) => {
+            accum.type_variables.insert(*var);
         }
         RecursiveTagUnion(rec, tags, ext) => {
             for (_, args) in tags {
