@@ -122,25 +122,16 @@ macro_rules! write_unencoded {
 }
 
 /// For relocations
-pub fn overwrite_padded_i32(buffer: &mut [u8], offset: usize, value: i32) {
+pub fn overwrite_padded_i32(buffer: &mut [u8], value: i32) {
     let mut x = value;
-    for byte in buffer.iter_mut().skip(offset).take(4) {
+    for byte in buffer.iter_mut().take(4) {
         *byte = 0x80 | ((x & 0x7f) as u8);
         x >>= 7;
     }
-    buffer[offset + 4] = (x & 0x7f) as u8;
+    buffer[4] = (x & 0x7f) as u8;
 }
 
-pub fn overwrite_padded_u32(buffer: &mut [u8], offset: usize, value: u32) {
-    let mut x = value;
-    for byte in buffer.iter_mut().skip(offset).take(4) {
-        *byte = 0x80 | ((x & 0x7f) as u8);
-        x >>= 7;
-    }
-    buffer[offset + 4] = (x & 0x7f) as u8;
-}
-
-fn overwrite_padded_u32_help(buffer: &mut [u8], value: u32) {
+pub fn overwrite_padded_u32(buffer: &mut [u8], value: u32) {
     let mut x = value;
     for byte in buffer.iter_mut().take(4) {
         *byte = 0x80 | ((x & 0x7f) as u8);
@@ -200,11 +191,11 @@ impl SerialBuffer for std::vec::Vec<u8> {
         let index = self.len();
         let new_len = index + MAX_SIZE_ENCODED_U32;
         self.resize(new_len, 0);
-        overwrite_padded_u32_help(&mut self[index..new_len], value);
+        overwrite_padded_u32(&mut self[index..new_len], value);
         index
     }
     fn overwrite_padded_u32(&mut self, index: usize, value: u32) {
-        overwrite_padded_u32_help(&mut self[index..(index + MAX_SIZE_ENCODED_U32)], value);
+        overwrite_padded_u32(&mut self[index..(index + MAX_SIZE_ENCODED_U32)], value);
     }
 }
 
@@ -230,11 +221,11 @@ impl<'a> SerialBuffer for Vec<'a, u8> {
         let index = self.len();
         let new_len = index + MAX_SIZE_ENCODED_U32;
         self.resize(new_len, 0);
-        overwrite_padded_u32_help(&mut self[index..new_len], value);
+        overwrite_padded_u32(&mut self[index..new_len], value);
         index
     }
     fn overwrite_padded_u32(&mut self, index: usize, value: u32) {
-        overwrite_padded_u32_help(&mut self[index..(index + MAX_SIZE_ENCODED_U32)], value);
+        overwrite_padded_u32(&mut self[index..(index + MAX_SIZE_ENCODED_U32)], value);
     }
 }
 
@@ -332,16 +323,16 @@ mod tests {
     fn test_overwrite_u32_padded() {
         let mut buffer = [0, 0, 0, 0, 0];
 
-        overwrite_padded_u32_help(&mut buffer, u32::MAX);
+        overwrite_padded_u32(&mut buffer, u32::MAX);
         assert_eq!(buffer, [0xff, 0xff, 0xff, 0xff, 0x0f]);
 
-        overwrite_padded_u32_help(&mut buffer, 0);
+        overwrite_padded_u32(&mut buffer, 0);
         assert_eq!(buffer, [0x80, 0x80, 0x80, 0x80, 0x00]);
 
-        overwrite_padded_u32_help(&mut buffer, 127);
+        overwrite_padded_u32(&mut buffer, 127);
         assert_eq!(buffer, [0xff, 0x80, 0x80, 0x80, 0x00]);
 
-        overwrite_padded_u32_help(&mut buffer, 128);
+        overwrite_padded_u32(&mut buffer, 128);
         assert_eq!(buffer, [0x80, 0x81, 0x80, 0x80, 0x00]);
     }
 
@@ -371,7 +362,7 @@ mod tests {
 
     fn help_pad_i32(val: i32) -> [u8; MAX_SIZE_ENCODED_U32] {
         let mut buffer = [0; MAX_SIZE_ENCODED_U32];
-        overwrite_padded_i32(&mut buffer, 0, val);
+        overwrite_padded_i32(&mut buffer, val);
         buffer
     }
 
@@ -384,7 +375,7 @@ mod tests {
         assert_eq!(help_pad_i32(i32::MIN), [0x80, 0x80, 0x80, 0x80, 0x78]);
 
         let mut buffer = [0xff; 10];
-        overwrite_padded_i32(&mut buffer, 2, 0);
+        overwrite_padded_i32(&mut buffer[2..], 0);
         assert_eq!(
             buffer,
             [0xff, 0xff, 0x80, 0x80, 0x80, 0x80, 0x00, 0xff, 0xff, 0xff]

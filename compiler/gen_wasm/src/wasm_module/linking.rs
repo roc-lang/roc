@@ -242,11 +242,11 @@ impl<'a> RelocationSection<'a> {
                     match type_id {
                         MemoryAddrLeb => {
                             let idx = (*offset - section_bytes_offset) as usize;
-                            overwrite_padded_u32(section_bytes, idx, value + *addend as u32);
+                            overwrite_padded_u32(&mut section_bytes[idx..], value + *addend as u32);
                         }
                         MemoryAddrSleb => {
                             let idx = (*offset - section_bytes_offset) as usize;
-                            overwrite_padded_i32(section_bytes, idx, value as i32 + *addend);
+                            overwrite_padded_i32(&mut section_bytes[idx..], value as i32 + *addend);
                         }
                         _ => todo!("Linking relocation type {:?}", type_id),
                     }
