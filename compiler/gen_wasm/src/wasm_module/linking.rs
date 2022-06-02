@@ -471,9 +471,23 @@ pub enum SymInfo<'a> {
     Table(WasmObjectSymbol<'a>),
 }
 
+impl<'a> SymInfo<'a> {
+    pub fn name(&self) -> Option<&'a str> {
+        match self {
+            Self::Function(WasmObjectSymbol::Defined { name, .. }) => Some(name),
+            Self::Data(DataSymbol::Defined { name, .. }) => Some(name),
+            Self::Data(DataSymbol::Imported { name, .. }) => Some(name),
+            Self::Global(WasmObjectSymbol::Defined { name, .. }) => Some(name),
+            Self::Event(WasmObjectSymbol::Defined { name, .. }) => Some(name),
+            Self::Table(WasmObjectSymbol::Defined { name, .. }) => Some(name),
+            _ => None,
+        }
+    }
+}
+
 #[repr(u8)]
 #[derive(Debug)]
-pub enum SymType {
+enum SymType {
     Function = 0,
     Data = 1,
     Global = 2,
@@ -588,27 +602,14 @@ impl<'a> LinkingSection<'a> {
         }
     }
 
-    pub fn find_symbol_by_name(&self, sym_name: &str, sym_type: SymType) -> Option<u32> {
-        let found = match sym_type {
-            SymType::Data => self
-                .symbol_table
-                .iter()
-                .position(|sym_info| match sym_info {
-                    SymInfo::Data(DataSymbol::Imported { name, .. })
-                    | SymInfo::Data(DataSymbol::Defined { name, .. }) => *name == sym_name,
-                    _ => false,
-                }),
-            SymType::Function => self
-                .symbol_table
-                .iter()
-                .position(|sym_info| match sym_info {
-                    SymInfo::Function(WasmObjectSymbol::Defined { name, .. }) => *name == sym_name,
-                    _ => false,
-                }),
-            _ => unimplemented!("Finding {:?} symbols by name", sym_type),
-        };
-
-        found.map(|i| i as u32)
+    pub fn find_symbol_index(&self, target_name: &str) -> Option<u32> {
+        self.symbol_table
+            .iter()
+            .position(|sym| match sym.name() {
+                Some(name) if name == target_name => true,
+                _ => false,
+            })
+            .map(|x| x as u32)
     }
 
     pub fn name_index_map(&self, arena: &'a Bump, prefix: &str) -> Vec<'a, (&'a str, u32)> {

@@ -17,7 +17,7 @@ use roc_std::RocDec;
 use crate::layout::{CallConv, ReturnMethod, WasmLayout};
 use crate::low_level::{call_higher_order_lowlevel, LowLevelCall};
 use crate::storage::{Storage, StoredValue, StoredValueKind};
-use crate::wasm_module::linking::{DataSymbol, SymType, WasmObjectSymbol};
+use crate::wasm_module::linking::{DataSymbol, WasmObjectSymbol};
 use crate::wasm_module::sections::{
     ConstExpr, DataMode, DataSegment, Export, Global, GlobalType, Limits, MemorySection,
 };
@@ -136,7 +136,7 @@ impl<'a> WasmBackend<'a> {
             index: 0,
         });
 
-        module.relocate_preloaded_code("__heap_base", SymType::Data, stack_heap_boundary);
+        module.relocate_preloaded_code("__heap_base", stack_heap_boundary);
     }
 
     /// If the host has some `extern` globals, we need to create them in the final binary
