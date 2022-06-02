@@ -1881,10 +1881,6 @@ impl Subs {
         (var_to_err_type(self, &mut state, var), state.problems)
     }
 
-    pub fn restore(&mut self, var: Variable) {
-        restore_help(self, var)
-    }
-
     pub fn len(&self) -> usize {
         self.utable.len()
     }
@@ -3673,109 +3669,6 @@ fn get_fresh_var_name(state: &mut ErrorTypeState) -> Lowercase {
     state.taken.insert(name.clone());
 
     name
-}
-
-fn restore_help(subs: &mut Subs, initial: Variable) {
-    let mut stack = vec![initial];
-
-    let variable_slices = &subs.variable_slices;
-
-    let variables = &subs.variables;
-    let var_slice =
-        |variable_subs_slice: VariableSubsSlice| &variables[variable_subs_slice.indices()];
-
-    while let Some(var) = stack.pop() {
-        // let desc = &mut subs.utable.probe_value_ref_mut(var).value;
-
-        let copy = subs.utable.get_copy(var);
-
-        if copy.is_none() {
-            continue;
-        }
-
-        subs.utable.set_rank(var, Rank::NONE);
-        subs.utable.set_mark(var, Mark::NONE);
-        subs.utable.set_copy(var, OptVariable::NONE);
-
-        use Content::*;
-        use FlatType::*;
-
-        match subs.utable.get_content(var) {
-            FlexVar(_) | RigidVar(_) | FlexAbleVar(_, _) | RigidAbleVar(_, _) | Error => (),
-
-            RecursionVar { structure, .. } => {
-                stack.push(*structure);
-            }
-
-            Structure(flat_type) => match flat_type {
-                Apply(_, args) => {
-                    stack.extend(var_slice(*args));
-                }
-
-                Func(arg_vars, closure_var, ret_var) => {
-                    stack.extend(var_slice(*arg_vars));
-
-                    stack.push(*ret_var);
-                    stack.push(*closure_var);
-                }
-
-                EmptyRecord => (),
-                EmptyTagUnion => (),
-
-                Record(fields, ext_var) => {
-                    stack.extend(var_slice(fields.variables()));
-
-                    stack.push(*ext_var);
-                }
-                TagUnion(tags, ext_var) => {
-                    for slice_index in tags.variables() {
-                        let slice = variable_slices[slice_index.index as usize];
-                        stack.extend(var_slice(slice));
-                    }
-
-                    stack.push(*ext_var);
-                }
-                FunctionOrTagUnion(_, _, ext_var) => {
-                    stack.push(*ext_var);
-                }
-
-                RecursiveTagUnion(rec_var, tags, ext_var) => {
-                    for slice_index in tags.variables() {
-                        let slice = variable_slices[slice_index.index as usize];
-                        stack.extend(var_slice(slice));
-                    }
-
-                    stack.push(*ext_var);
-                    stack.push(*rec_var);
-                }
-
-                Erroneous(_) => (),
-            },
-            Alias(_, args, var, _) => {
-                stack.extend(var_slice(args.all_variables()));
-
-                stack.push(*var);
-            }
-
-            LambdaSet(self::LambdaSet {
-                solved,
-                recursion_var,
-            }) => {
-                for slice_index in solved.variables() {
-                    let slice = variable_slices[slice_index.index as usize];
-                    stack.extend(var_slice(slice));
-                }
-
-                if let Some(v) = recursion_var.into_variable() {
-                    stack.push(v);
-                }
-            }
-
-            RangedNumber(typ, _vars) => {
-                stack.push(*typ);
-            }
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
