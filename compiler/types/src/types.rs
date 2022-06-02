@@ -394,6 +394,19 @@ impl<'a> IntoIterator for &'a TypeExtension {
     }
 }
 
+impl<'a> IntoIterator for &'a mut TypeExtension {
+    type Item = &'a mut Type;
+
+    type IntoIter = std::option::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        match self {
+            TypeExtension::Open(ext) => Some(ext.as_mut()).into_iter(),
+            TypeExtension::Closed => None.into_iter(),
+        }
+    }
+}
+
 fn write_tags<'a>(
     f: &mut fmt::Formatter,
     tags: impl ExactSizeIterator<Item = &'a (TagName, Vec<Type>)>,
@@ -1377,6 +1390,14 @@ impl Type {
             UnspecializedLambdaSet(..) => {}
             EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
         }
+    }
+
+    pub fn instantiate_lambda_sets_as_unspecialized(
+        &mut self,
+        able_var: Variable,
+        ability_member: Symbol,
+    ) {
+        instantiate_lambda_sets_as_unspecialized(self, able_var, ability_member)
     }
 
     pub fn is_tag_union_like(&self) -> bool {
@@ -2703,5 +2724,99 @@ pub fn gather_tags(subs: &Subs, other_fields: UnionTags, var: Variable) -> TagUn
     TagUnionStructure {
         fields: result,
         ext,
+    }
+}
+
+fn instantiate_lambda_sets_as_unspecialized(
+    typ: &mut Type,
+    able_var: Variable,
+    ability_member: Symbol,
+) {
+    // We want to pop and assign lambda sets pre-order for readability, so types
+    // should be pushed onto the stack in post-order
+    let mut stack = vec![typ];
+    let mut region = 0;
+
+    let mut new_uls = || {
+        region += 1;
+        Type::UnspecializedLambdaSet(able_var, ability_member, region)
+    };
+
+    while let Some(typ) = stack.pop() {
+        match typ {
+            Type::EmptyRec => {}
+            Type::EmptyTagUnion => {}
+            Type::Function(args, lambda_set, ret) => {
+                debug_assert!(
+                    matches!(**lambda_set, Type::Variable(..)),
+                    "lambda set already bound"
+                );
+
+                **lambda_set = new_uls();
+                stack.push(ret);
+                stack.extend(args.iter_mut().rev());
+            }
+            Type::Record(fields, ext) => {
+                stack.extend(ext);
+                for (_, x) in fields.iter_mut() {
+                    stack.push(x.as_inner_mut());
+                }
+            }
+            Type::TagUnion(tags, ext) | Type::RecursiveTagUnion(_, tags, ext) => {
+                stack.extend(ext);
+                for (_, ts) in tags {
+                    for t in ts.iter_mut().rev() {
+                        stack.push(t);
+                    }
+                }
+            }
+            Type::FunctionOrTagUnion(_, _, ext) => {
+                stack.extend(ext);
+            }
+            Type::ClosureTag { name: _, captures } => {
+                stack.extend(captures.iter_mut().rev());
+            }
+            Type::UnspecializedLambdaSet(..) => {
+                internal_error!("attempting to re-instantiate ULS")
+            }
+            Type::DelayedAlias(AliasCommon {
+                symbol: _,
+                type_arguments,
+                lambda_set_variables,
+            }) => {
+                stack.extend(lambda_set_variables.iter_mut().rev().map(|ls| &mut ls.0));
+                stack.extend(type_arguments.iter_mut().rev());
+            }
+            Type::Alias {
+                symbol: _,
+                type_arguments,
+                lambda_set_variables,
+                actual,
+                kind: _,
+            } => {
+                stack.push(actual);
+                stack.extend(lambda_set_variables.iter_mut().rev().map(|ls| &mut ls.0));
+                stack.extend(type_arguments.iter_mut().rev().map(|t| &mut t.typ));
+            }
+            Type::HostExposedAlias {
+                name: _,
+                type_arguments,
+                lambda_set_variables,
+                actual_var: _,
+                actual,
+            } => {
+                stack.push(actual);
+                stack.extend(lambda_set_variables.iter_mut().rev().map(|ls| &mut ls.0));
+                stack.extend(type_arguments.iter_mut().rev());
+            }
+            Type::Apply(_sym, args, _region) => {
+                stack.extend(args.iter_mut().rev());
+            }
+            Type::Variable(_) => {}
+            Type::RangedNumber(t, _) => {
+                stack.push(t);
+            }
+            Type::Erroneous(_) => {}
+        }
     }
 }
