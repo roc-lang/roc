@@ -282,6 +282,7 @@ impl TryFrom<CString> for RocStr {
 #[cfg(not(feature = "no_std"))]
 /// Like https://doc.rust-lang.org/std/ffi/struct.NulError.html but
 /// only for interior nulls, not for missing null terminators.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InteriorNulError {
     pub pos: usize,
     pub roc_str: RocStr,
@@ -426,5 +427,41 @@ impl DerefMut for SmallString {
 impl Hash for RocStr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.as_str().hash(state)
+    }
+}
+
+#[cfg(test)]
+mod into_temp_c_str {
+    use super::RocStr;
+    use core::mem;
+
+    #[test]
+    fn empty_string() {
+        let is_empty = RocStr::empty().into_temp_c_str(|c_str| c_str.to_bytes().is_empty());
+
+        assert_eq!(Ok(true), is_empty);
+    }
+
+    #[test]
+    fn small_string_all_lengths() {
+        for len in 1..mem::size_of::<RocStr>() {
+            let bytes: Vec<u8> = (1..=len as u8).collect();
+
+            assert_eq!(bytes.len(), len);
+
+            // The bytes should contain no nul characters.
+            assert!(bytes.iter().all(|byte| *byte != 0));
+
+            // e.g. "1" or "12" or "12345" etc.
+            let string = String::from_utf8(bytes).unwrap();
+
+            let answer = RocStr::from(string.as_str()).into_temp_c_str(|c_str| {
+                assert_eq!(c_str.to_str(), Ok(string.as_str()));
+
+                42
+            });
+
+            assert_eq!(Ok(42), answer);
+        }
     }
 }
