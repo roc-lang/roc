@@ -93,8 +93,14 @@ impl RocStr {
         }
     }
 
-    /// Without allocating any new heap memory, destructively turn this RocStr into a
-    /// &CStr and then provide access to that &CStr for the duration of a given function.
+    // If the string is under this many bytes, the into_temp_c_str method will allocate the
+    // CStr on the stack when the RocStr is non-unique.
+    const TEMP_CSTR_MAX_STACK_BYTES: usize = 64;
+
+    /// Turn this RocStr into a &CStr and then provide access to that &CStr for the duration
+    /// of a given function. This does not allocate when given a small string or a string with
+    /// unique refcount, but may allocate when given a large string with non-unique refcount.
+    /// (It will do a stack allocation if the string is under 64 bytes.)
     ///
     /// Because this works on an owned RocStr, it's able to overwrite the underlying bytes
     /// to null-terminate the string in-place. Small strings have an extra byte at the end
@@ -108,71 +114,134 @@ impl RocStr {
     /// coincidentally be if it has excess capacity and the first byte of excess capacity is 0.
     #[cfg(not(feature = "no_std"))]
     pub fn into_temp_c_str<T, F: Fn(&CStr) -> T>(self, func: F) -> Result<T, InteriorNulError> {
-        let opt_first_nul_byte_pos = self.first_nul_byte();
+        use core::mem::MaybeUninit;
 
-        if let Some(pos) = opt_first_nul_byte_pos {
-            Err(InteriorNulError { pos, roc_str: self })
-        } else {
-            match self.as_enum_ref() {
-                RocStrInnerRef::HeapAllocated(roc_list) => {
-                    let len = roc_list.len();
+        use crate::{roc_alloc, roc_dealloc};
 
-                    unsafe {
-                        if len == 0 {
+        if let Some(pos) = self.first_nul_byte() {
+            return Err(InteriorNulError { pos, roc_str: self });
+        }
+
+        match self.as_enum_ref() {
+            RocStrInnerRef::HeapAllocated(roc_list) => {
+                unsafe {
+                    match roc_list.elements_and_storage() {
+                        Some((_, storage)) if storage.get().is_unique() => {
+                            // The backing RocList was unique, so we can mutate it in-place.
+                            let len = roc_list.len();
+
+                            if len < roc_list.capacity() {
+                                // We happen to have excess capacity, so write a null terminator
+                                // into the first byte of excess capacity.
+                                let ptr = roc_list.ptr_to_first_elem();
+
+                                *((ptr.add(len)) as *mut u8) = 0;
+
+                                let c_str =
+                                    CStr::from_bytes_with_nul_unchecked(roc_list.as_slice());
+
+                                Ok(func(c_str))
+                            } else {
+                                // We always have an allocation that's even bigger than necessary,
+                                // because the refcount bytes take up more than the 1B needed for
+                                // the \0 at the end. We just need to shift the bytes over on top
+                                // of the refcount.
+                                let alloc_ptr = roc_list.ptr_to_allocation() as *mut _;
+
+                                // First, copy the bytes over the original allocation - effectively
+                                // shifting everything over by one `usize`. Now we no longer have a
+                                // refcount (but the &CStr won't use that anyway), but we do have a
+                                // free `usize` at the end.
+                                //
+                                // IMPORTANT: Must use memmove instead of memcpy because the regions
+                                // overlap. Passing overlapping regions to memcpy is undefined!
+                                libc::memmove(alloc_ptr, roc_list.ptr_to_first_elem().cast(), len);
+
+                                let bytes = std::slice::from_raw_parts(alloc_ptr.cast(), len);
+                                let c_str = CStr::from_bytes_with_nul_unchecked(bytes);
+
+                                Ok(func(c_str))
+                            }
+                        }
+                        Some(_) => {
+                            use crate::roc_memcpy;
+
+                            // The backing list was not unique, so we can't mutate it in-place.
+                            let len = roc_list.len();
+
+                            if len < Self::TEMP_CSTR_MAX_STACK_BYTES {
+                                // TODO: once https://doc.rust-lang.org/std/mem/union.MaybeUninit.html#method.uninit_array
+                                // has become stabilized, use that here in order to do a precise
+                                // stack allocation instead of always over-allocating to 64B.
+                                let mut bytes: MaybeUninit<[u8; Self::TEMP_CSTR_MAX_STACK_BYTES]> =
+                                    MaybeUninit::uninit();
+                                let alloc_ptr = bytes.as_mut_ptr() as *mut u8;
+                                let elem_ptr = roc_list.ptr_to_first_elem() as *mut _;
+
+                                // memcpy the bytes into the stack allocation
+                                roc_memcpy(alloc_ptr.cast(), elem_ptr, len);
+
+                                // Null-terminate the new allocation.
+                                *(alloc_ptr.add(len)) = 0;
+
+                                // Convert the bytes to &CStr
+                                let bytes = std::slice::from_raw_parts(alloc_ptr.cast(), len);
+                                let c_str = CStr::from_bytes_with_nul_unchecked(bytes);
+
+                                Ok(func(c_str))
+                            } else {
+                                // The string is too long to stack-allocate, so
+                                // do a heap allocation and then free it afterwards.
+                                let align = core::mem::align_of::<u8>() as u32;
+                                let alloc_ptr = roc_alloc(len, align);
+                                let elem_ptr = roc_list.ptr_to_first_elem() as *mut _;
+
+                                // memcpy the bytes into the heap allocation
+                                roc_memcpy(alloc_ptr.cast(), elem_ptr, len);
+
+                                // Null-terminate the new allocation.
+                                *((alloc_ptr as *mut u8).add(len)) = 0;
+
+                                // Convert the bytes to &CStr
+                                let bytes = std::slice::from_raw_parts(alloc_ptr.cast(), len);
+                                let c_str = CStr::from_bytes_with_nul_unchecked(bytes);
+
+                                // Pass the &CStr to the function to get the answer.
+                                let answer = func(c_str);
+
+                                // Free the heap allocation.
+                                roc_dealloc(alloc_ptr, align);
+
+                                Ok(answer)
+                            }
+                        }
+                        None => {
+                            // The backing list was empty.
+                            //
                             // No need to do a heap allocation for an empty &CStr - we
                             // can just do a stack allocation that will live for the
                             // duration of the function.
                             let c_str = CStr::from_bytes_with_nul_unchecked(&[0]);
 
                             Ok(func(c_str))
-                        } else if len < roc_list.capacity() {
-                            // We happen to have excess capacity, so write a null terminator
-                            // into the first byte of excess capacity.
-                            let ptr = roc_list.ptr_to_first_elem();
-
-                            *((ptr.add(len)) as *mut u8) = 0;
-
-                            let c_str = CStr::from_bytes_with_nul_unchecked(roc_list.as_slice());
-
-                            Ok(func(c_str))
-                        } else {
-                            // We always have an allocation that's even bigger than necessary,
-                            // because the refcount bytes take up more than the 1B needed for
-                            // the \0 at the end. We just need to shift the bytes over on top
-                            // of the refcount.
-                            let alloc_ptr = roc_list.ptr_to_allocation() as *mut libc::c_void;
-
-                            // First, copy the bytes over the original allocation - effectively
-                            // shifting everything over by one `usize`. Now we no longer have a
-                            // refcount (but the &CStr won't use that anyway), but we do have a
-                            // free `usize` at the end.
-                            //
-                            // IMPORTANT: Must use memmove instead of memcpy because the regions
-                            // overlap. Passing overlapping regions to memcpy is undefined!
-                            libc::memmove(alloc_ptr, roc_list.ptr_to_first_elem().cast(), len);
-
-                            let bytes = std::slice::from_raw_parts(alloc_ptr.cast(), len);
-                            let c_str = CStr::from_bytes_with_nul_unchecked(bytes);
-
-                            Ok(func(c_str))
                         }
                     }
                 }
-                RocStrInnerRef::SmallString(small_str) => {
-                    // Set the length byte to 0 to guarantee null-termination.
-                    // We may alredy happen to be null-terminated if small_str.len() is
-                    // less than the maximum small string length, but we can't assume that,
-                    // and checking first would be more expensive than always writing the 0.
-                    unsafe {
-                        let mut bytes = small_str.bytes;
-                        let ptr = bytes.as_mut_ptr();
+            }
+            RocStrInnerRef::SmallString(small_str) => {
+                // Set the length byte to 0 to guarantee null-termination.
+                // We may alredy happen to be null-terminated if small_str.len() is
+                // less than the maximum small string length, but we can't assume that,
+                // and checking first would be more expensive than always writing the 0.
+                unsafe {
+                    let mut bytes = small_str.bytes;
+                    let ptr = bytes.as_mut_ptr();
 
-                        *((ptr.add(small_str.len())) as *mut u8) = 0;
+                    *((ptr.add(small_str.len())) as *mut u8) = 0;
 
-                        let c_str = CStr::from_bytes_with_nul_unchecked(&bytes);
+                    let c_str = CStr::from_bytes_with_nul_unchecked(&bytes);
 
-                        Ok(func(c_str))
-                    }
+                    Ok(func(c_str))
                 }
             }
         }

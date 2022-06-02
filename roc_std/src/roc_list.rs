@@ -55,7 +55,9 @@ impl<T> RocList<T> {
         &*self
     }
 
-    fn elements_and_storage(&self) -> Option<(NonNull<ManuallyDrop<T>>, &Cell<Storage>)> {
+    pub(crate) fn elements_and_storage(
+        &self,
+    ) -> Option<(NonNull<ManuallyDrop<T>>, &Cell<Storage>)> {
         let elements = self.elements?;
         let storage = unsafe { &*elements.as_ptr().cast::<Cell<Storage>>().sub(1) };
         Some((elements, storage))
