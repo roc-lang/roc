@@ -7,6 +7,8 @@ extern crate roc_std;
 
 use core::ffi::c_void;
 
+const ROC_SMALL_STR_CAPACITY: usize = core::mem::size_of::<roc_std::RocStr>() - 1;
+
 #[no_mangle]
 pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
     libc::malloc(size)
@@ -114,9 +116,9 @@ mod test_roc_std {
 
     #[test]
     fn empty_string_capacity() {
-        let string = RocStr::from("");
+        let string = RocStr::empty();
 
-        assert_eq!(string.capacity(), 0);
+        assert_eq!(string.capacity(), super::ROC_SMALL_STR_CAPACITY);
     }
 
     #[test]
@@ -170,7 +172,7 @@ mod into_temp_c_str {
 
     #[test]
     fn small_string_all_lengths() {
-        for len in 1..(core::mem::size_of::<RocStr>() - 1) {
+        for len in 1..super::ROC_SMALL_STR_CAPACITY {
             let bytes: Vec<u8> = (1..=len as u8).collect();
 
             assert_eq!(bytes.len(), len);
