@@ -1,5 +1,6 @@
 use crate::subs::{
-    self, AliasVariables, Content, FlatType, GetSubsSlice, Subs, SubsIndex, UnionTags, Variable,
+    self, AliasVariables, Content, FlatType, GetSubsSlice, Label, Subs, SubsIndex, UnionLabels,
+    UnionTags, Variable,
 };
 use crate::types::{name_type_var, RecordField};
 use roc_collections::all::{MutMap, MutSet};
@@ -675,13 +676,7 @@ fn write_sorted_tags2<'a>(
     let (tags, new_ext_var) = tags.unsorted_tags_and_ext(subs, ext_var);
     let mut sorted_fields = tags.tags;
 
-    let interns = &env.interns;
-    let home = env.home;
-
-    sorted_fields.sort_by(|(a, _), (b, _)| {
-        a.as_ident_str(interns, home)
-            .cmp(&b.as_ident_str(interns, home))
-    });
+    sorted_fields.sort_by(|(a, _), (b, _)| a.as_ident_str().cmp(&b.as_ident_str()));
 
     let mut any_written_yet = false;
 
@@ -692,7 +687,7 @@ fn write_sorted_tags2<'a>(
             any_written_yet = true;
         }
 
-        buf.push_str(label.as_ident_str(interns, home).as_str());
+        buf.push_str(label.as_ident_str().as_str());
 
         for var in vars {
             buf.push(' ');
@@ -734,13 +729,7 @@ fn write_sorted_tags<'a>(
         sorted_fields.push((tag_name, arguments));
     }
 
-    let interns = &env.interns;
-    let home = env.home;
-
-    sorted_fields.sort_by(|(a, _), (b, _)| {
-        a.as_ident_str(interns, home)
-            .cmp(&b.as_ident_str(interns, home))
-    });
+    sorted_fields.sort_by(|(a, _), (b, _)| a.as_ident_str().cmp(&b.as_ident_str()));
 
     let mut any_written_yet = false;
 
@@ -751,7 +740,7 @@ fn write_sorted_tags<'a>(
             any_written_yet = true;
         }
 
-        buf.push_str(label.as_ident_str(interns, home).as_str());
+        buf.push_str(label.as_ident_str().as_str());
 
         for var in vars {
             buf.push(' ');
@@ -910,16 +899,16 @@ fn write_flat_type<'a>(
     }
 }
 
-fn push_union_tags<'a>(
+fn push_union<'a, L: Label>(
     subs: &'a Subs,
-    tags: &UnionTags,
-    fields: &mut Vec<(TagName, Vec<Variable>)>,
+    tags: &UnionLabels<L>,
+    fields: &mut Vec<(L, Vec<Variable>)>,
 ) {
     fields.reserve(tags.len());
     for (name_index, slice_index) in tags.iter_all() {
         let subs_slice = subs[slice_index];
         let slice = subs.get_subs_slice(subs_slice);
-        let tag_name = subs[name_index].clone();
+        let tag_name = L::index_subs(subs, name_index).clone();
 
         fields.push((tag_name, slice.to_vec()));
     }
@@ -934,12 +923,12 @@ pub fn chase_ext_tag_union<'a>(
     match subs.get_content_without_compacting(var) {
         Content::Structure(EmptyTagUnion) => Ok(()),
         Content::Structure(TagUnion(tags, ext_var)) => {
-            push_union_tags(subs, tags, fields);
+            push_union(subs, tags, fields);
             chase_ext_tag_union(subs, *ext_var, fields)
         }
 
         Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {
-            push_union_tags(subs, tags, fields);
+            push_union(subs, tags, fields);
             chase_ext_tag_union(subs, *ext_var, fields)
         }
         Content::Structure(FunctionOrTagUnion(tag_name, _, ext_var)) => {
@@ -955,7 +944,7 @@ pub fn chase_ext_tag_union<'a>(
 }
 
 pub enum ResolvedLambdaSet {
-    Set(Vec<(TagName, Vec<Variable>)>),
+    Set(Vec<(Symbol, Vec<Variable>)>),
     /// TODO: figure out if this can happen in a correct program, or is the result of a bug in our
     /// compiler. See https://github.com/rtfeldman/roc/issues/3163.
     Unbound,
@@ -969,7 +958,7 @@ pub fn resolve_lambda_set(subs: &Subs, mut var: Variable) -> ResolvedLambdaSet {
                 solved,
                 recursion_var: _,
             }) => {
-                push_union_tags(subs, solved, &mut set);
+                push_union(subs, solved, &mut set);
                 return ResolvedLambdaSet::Set(set);
             }
             Content::RecursionVar { structure, .. } => {

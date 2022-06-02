@@ -310,8 +310,6 @@ fn gen_and_eval_llvm<'a>(
         main_fn_name,
         main_fn_layout,
         content,
-        &env.interns,
-        home,
         &subs,
         target_info,
     );

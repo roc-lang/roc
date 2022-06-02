@@ -244,8 +244,6 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         "", // main_fn_name is ignored (only passed to WasmReplApp methods)
         main_fn_layout,
         content,
-        &interns,
-        module_id,
         &subs,
         target_info,
     );

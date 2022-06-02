@@ -818,7 +818,7 @@ pub fn canonicalize_expr<'a>(
 
             (
                 ZeroArgumentTag {
-                    name: TagName::Tag((*tag).into()),
+                    name: TagName((*tag).into()),
                     variant_var,
                     closure_name: symbol,
                     ext_var,

@@ -1,4 +1,3 @@
-use crate::symbol::{Interns, ModuleId, Symbol};
 pub use roc_ident::IdentStr;
 use std::fmt;
 
@@ -47,33 +46,22 @@ pub struct ForeignSymbol(IdentStr);
 
 pub type TagIdIntType = u16;
 
+/// Tags have no module, but tend to be short strings (since they're
+/// never qualified), so we store them as ident strings.
+///
+/// This is allows canonicalization to happen in parallel without locks.
+/// If tags had a Symbol representation, then each module would have to
+/// deal with contention on a global mutex around translating tag strings
+/// into integers. (Record field labels work the same way, for the same reason.)
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum TagName {
-    /// Tags have no module, but tend to be short strings (since they're
-    /// never qualified), so we store them as ident strings.
-    ///
-    /// This is allows canonicalization to happen in parallel without locks.
-    /// If tags had a Symbol representation, then each module would have to
-    /// deal with contention on a global mutex around translating tag strings
-    /// into integers. (Record field labels work the same way, for the same reason.)
-    Tag(Uppercase),
+pub struct TagName(pub Uppercase);
 
-    /// Used to connect the closure size to the function it corresponds to
-    Closure(Symbol),
-}
-
-roc_error_macros::assert_sizeof_aarch64!(TagName, 24);
-roc_error_macros::assert_sizeof_wasm!(TagName, 12);
-roc_error_macros::assert_sizeof_default!(TagName, 24);
+roc_error_macros::assert_sizeof_non_wasm!(TagName, 16);
+roc_error_macros::assert_sizeof_wasm!(TagName, 8);
 
 impl TagName {
-    pub fn as_ident_str(&self, interns: &Interns, home: ModuleId) -> IdentStr {
-        match self {
-            TagName::Tag(uppercase) => uppercase.as_ident_str().clone(),
-            TagName::Closure(symbol) => {
-                symbol.fully_qualified(interns, home).as_ident_str().clone()
-            }
-        }
+    pub fn as_ident_str(&self) -> IdentStr {
+        self.0.as_ident_str().clone()
     }
 }
 

@@ -9,7 +9,8 @@ use roc_types::num::NumericRange;
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
     AliasVariables, Descriptor, ErrorTypeContext, FlatType, GetSubsSlice, LambdaSet, Mark,
-    OptVariable, RecordFields, Subs, SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
+    OptVariable, RecordFields, Subs, SubsIndex, SubsSlice, UnionLabels, UnionLambdas, UnionTags,
+    Variable, VariableSubsSlice,
 };
 use roc_types::types::{AliasKind, DoesNotImplementAbility, ErrorType, Mismatch, RecordField};
 
@@ -842,19 +843,11 @@ fn unify_lambda_set_help(
         "Recursion var is present, but it doesn't have a recursive content!"
     );
 
-    let (separate_solved, _, _) = separate_union_tags(
-        subs,
-        solved1,
-        Variable::EMPTY_TAG_UNION,
-        solved2,
-        Variable::EMPTY_TAG_UNION,
-    );
-
     let Separate {
         only_in_1,
         only_in_2,
         in_both,
-    } = separate_solved;
+    } = separate_union_lambdas(subs, solved1, solved2);
 
     let num_shared = in_both.len();
 
@@ -898,7 +891,6 @@ fn unify_lambda_set_help(
             all_lambdas,
             only_in_1.into_iter().map(|(name, subs_slice)| {
                 let vec = subs.get_subs_slice(subs_slice).to_vec();
-
                 (name, vec)
             }),
         );
@@ -906,7 +898,6 @@ fn unify_lambda_set_help(
             all_lambdas,
             only_in_2.into_iter().map(|(name, subs_slice)| {
                 let vec = subs.get_subs_slice(subs_slice).to_vec();
-
                 (name, vec)
             }),
         );
@@ -917,7 +908,7 @@ fn unify_lambda_set_help(
             (None, None) => OptVariable::NONE,
         };
 
-        let new_solved = UnionTags::insert_into_subs(subs, all_lambdas);
+        let new_solved = UnionLabels::insert_into_subs(subs, all_lambdas);
         let new_lambda_set = Content::LambdaSet(LambdaSet {
             solved: new_solved,
             recursion_var,
@@ -1328,6 +1319,19 @@ fn separate_union_tags(
     let (it2, new_ext2) = fields2.sorted_slices_iterator_and_ext(subs, ext2);
 
     (separate(it1, it2), new_ext1, new_ext2)
+}
+
+fn separate_union_lambdas(
+    subs: &Subs,
+    fields1: UnionLambdas,
+    fields2: UnionLambdas,
+) -> Separate<Symbol, VariableSubsSlice> {
+    debug_assert!(fields1.is_sorted_no_duplicates(subs));
+    debug_assert!(fields2.is_sorted_no_duplicates(subs));
+    let it1 = fields1.iter_all().map(|(s, vars)| (subs[s], subs[vars]));
+    let it2 = fields2.iter_all().map(|(s, vars)| (subs[s], subs[vars]));
+
+    separate(it1, it2)
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -2214,8 +2218,7 @@ fn unify_function_or_tag_union_and_func(
     };
 
     {
-        let tag_name = TagName::Closure(tag_symbol);
-        let union_tags = UnionTags::tag_without_arguments(subs, tag_name);
+        let union_tags = UnionLambdas::tag_without_arguments(subs, tag_symbol);
         let lambda_set_content = LambdaSet(self::LambdaSet {
             solved: union_tags,
             recursion_var: OptVariable::NONE,
