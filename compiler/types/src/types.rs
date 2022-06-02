@@ -2854,7 +2854,7 @@ mod test {
                     Type::UnspecializedLambdaSet(Uls(var1, member1, $region)) => {
                         assert!(var1 == able_var && member1 == member)
                     }
-                    _ => assert!(false),
+                    _ => panic!(),
                 }
             }};
         }
@@ -2869,7 +2869,7 @@ mod test {
                         assert!(args.is_empty());
                         assert!(matches!(**ret, Type::EmptyRec));
                     }
-                    _ => assert!(false),
+                    _ => panic!(),
                 }
 
                 match *ret {
@@ -2882,15 +2882,15 @@ mod test {
                                     assert!(args.is_empty());
                                     assert!(matches!(**ret, Type::EmptyRec));
                                 }
-                                _ => assert!(false),
+                                _ => panic!(),
                             }
                         }
-                        _ => assert!(false),
+                        _ => panic!(),
                     },
-                    _ => assert!(false),
+                    _ => panic!(),
                 }
             }
-            _ => assert!(false),
+            _ => panic!(),
         }
     }
 }
