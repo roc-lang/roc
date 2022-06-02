@@ -234,12 +234,13 @@ impl RocStr {
                 // less than the maximum small string length, but we can't assume that,
                 // and checking first would be more expensive than always writing the 0.
                 unsafe {
+                    let len = small_str.len();
                     let mut bytes = small_str.bytes;
                     let ptr = bytes.as_mut_ptr();
 
                     *((ptr.add(small_str.len())) as *mut u8) = 0;
 
-                    let c_str = CStr::from_bytes_with_nul_unchecked(&bytes);
+                    let c_str = CStr::from_bytes_with_nul_unchecked(&bytes[0..=len]);
 
                     Ok(func(c_str))
                 }
@@ -404,7 +405,13 @@ impl SmallString {
 
     /// Returns the index of the first interior \0 byte in the string, or None if there are none.
     fn first_nul_byte(&self) -> Option<usize> {
-        self.bytes.iter().position(|byte| *byte == 0)
+        for (index, byte) in self.bytes[0..self.len()].iter().enumerate() {
+            if *byte == 0 {
+                return Some(index);
+            }
+        }
+
+        None
     }
 }
 
