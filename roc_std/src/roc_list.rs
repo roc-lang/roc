@@ -53,7 +53,7 @@ impl<T> RocList<T> {
     }
 
     /// Useful for doing memcpy on the elements. Returns NULL if list is empty.
-    pub(crate) unsafe fn ptr_to_first_elem(&self) -> *const c_void {
+    pub(crate) unsafe fn ptr_to_first_elem(&self) -> *const T {
         unsafe { core::mem::transmute(self.elements) }
     }
 
