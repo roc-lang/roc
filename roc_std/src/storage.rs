@@ -4,7 +4,7 @@ use core::num::NonZeroIsize;
 ///
 /// isize::MIN is definitely not zero. This can become
 /// https://doc.rust-lang.org/std/num/struct.NonZeroIsize.html#associatedconstant.MIN
-/// once it has become stable.
+/// once it has been stabilized.
 const REFCOUNT_1: NonZeroIsize = unsafe { NonZeroIsize::new_unchecked(isize::MIN) };
 
 #[derive(Clone, Copy, Debug)]
@@ -54,5 +54,9 @@ impl Storage {
 
     pub fn is_readonly(&self) -> bool {
         matches!(self, Self::Readonly)
+    }
+
+    pub fn is_unique(&self) -> bool {
+        matches!(self, Self::ReferenceCounted(REFCOUNT_1))
     }
 }
