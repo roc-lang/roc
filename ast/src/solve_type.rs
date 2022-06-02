@@ -1636,8 +1636,6 @@ fn instantiate_rigids_help(
 fn deep_copy_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, var: Variable) -> Variable {
     let copy = deep_copy_var_help(subs, rank, pools, var);
 
-    subs.restore(var);
-
     copy
 }
 
