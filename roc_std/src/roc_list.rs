@@ -3,6 +3,7 @@
 use core::{
     cell::Cell,
     cmp::{self, Ordering},
+    ffi::c_void,
     fmt::Debug,
     intrinsics::copy_nonoverlapping,
     mem::{self, ManuallyDrop},
@@ -49,6 +50,16 @@ impl<T> RocList<T> {
         let elements = self.elements?;
         let storage = unsafe { &*elements.as_ptr().cast::<Cell<Storage>>().sub(1) };
         Some((elements, storage))
+    }
+
+    /// Useful for doing memcpy on the elements. Returns NULL if list is empty.
+    pub(crate) unsafe fn ptr_to_first_elem(&self) -> *const c_void {
+        unsafe { core::mem::transmute(self.elements) }
+    }
+
+    /// Useful for doing memcpy on the underlying allocation. Returns NULL if list is empty.
+    pub(crate) unsafe fn ptr_to_allocation(&self) -> *const c_void {
+        unsafe { (self.ptr_to_first_elem() as *const usize).sub(1).cast() }
     }
 }
 
