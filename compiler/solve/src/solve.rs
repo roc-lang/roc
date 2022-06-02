@@ -3382,6 +3382,8 @@ fn deep_copy_var_help(
                 recursion_var,
                 unspecialized,
             }) => {
+                let lambda_set_var = copy;
+
                 let new_solved = copy_union!(solved);
                 let new_rec_var = recursion_var.map(|v| work!(v));
                 let new_unspecialized = SubsSlice::reserve_uls_slice(subs, unspecialized.len());
@@ -3396,11 +3398,11 @@ fn deep_copy_var_help(
 
                     subs[new_uls_index] = Uls(new_var, sym, region);
 
-                    // TODO: bookkeeping of new_var -> lambda set
+                    subs.uls_of_var.add(new_var, lambda_set_var);
                 }
 
                 subs.set_content_unchecked(
-                    copy,
+                    lambda_set_var,
                     LambdaSet(subs::LambdaSet {
                         solved: new_solved,
                         recursion_var: new_rec_var,

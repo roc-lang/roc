@@ -3,6 +3,7 @@ use crate::types::{
     name_type_var, AliasKind, ErrorType, Problem, RecordField, RecordFieldsError, TypeExt, Uls,
 };
 use roc_collections::all::{ImMap, ImSet, MutSet, SendMap};
+use roc_collections::{VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName, Uppercase};
 use roc_module::symbol::Symbol;
@@ -241,6 +242,7 @@ impl Subs {
                 unspecialized_lambda_sets: unspecialized_lambda_sets.to_vec(),
                 tag_name_cache: Default::default(),
                 problems: Default::default(),
+                uls_of_var: Default::default(),
             },
             exposed_vars_by_symbol,
         )
@@ -306,6 +308,25 @@ impl Subs {
     }
 }
 
+/// Mapping of variables to [Content::LambdaSet]s containing unspecialized lambda sets depending on
+/// that variable.
+#[derive(Clone, Default)]
+pub struct UlsOfVar(VecMap<Variable, VecSet<Variable>>);
+
+impl UlsOfVar {
+    pub fn add(&mut self, var: Variable, dependent_lambda_set: Variable) -> bool {
+        let set = self.0.get_or_insert(var, Default::default);
+        set.insert(dependent_lambda_set)
+    }
+
+    pub fn remove_dependents(
+        &mut self,
+        var: Variable,
+    ) -> Option<impl IntoIterator<Item = Variable>> {
+        self.0.remove(&var).map(|(_, v)| v)
+    }
+}
+
 #[derive(Clone)]
 pub struct Subs {
     utable: UnificationTable,
@@ -318,6 +339,7 @@ pub struct Subs {
     pub unspecialized_lambda_sets: Vec<Uls>,
     pub tag_name_cache: TagNameCache,
     pub problems: Vec<Problem>,
+    pub uls_of_var: UlsOfVar,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1567,6 +1589,7 @@ impl Subs {
             unspecialized_lambda_sets: Vec::new(),
             tag_name_cache: Default::default(),
             problems: Vec::new(),
+            uls_of_var: Default::default(),
         };
 
         subs.utable.reserve(capacity);
