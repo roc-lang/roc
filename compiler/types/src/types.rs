@@ -2820,3 +2820,76 @@ fn instantiate_lambda_sets_as_unspecialized(
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn instantiate_lambda_sets_as_unspecialized() {
+        let mut var_store = VarStore::default();
+        let l1 = Box::new(Type::Variable(var_store.fresh()));
+        let l2 = Box::new(Type::Variable(var_store.fresh()));
+        let l3 = Box::new(Type::Variable(var_store.fresh()));
+        let mut typ = Type::Function(
+            vec![Type::Function(vec![], l2, Box::new(Type::EmptyRec))],
+            l1,
+            Box::new(Type::TagUnion(
+                vec![(
+                    TagName("A".into()),
+                    vec![Type::Function(vec![], l3, Box::new(Type::EmptyRec))],
+                )],
+                TypeExtension::Closed,
+            )),
+        );
+
+        let able_var = var_store.fresh();
+        let member = Symbol::UNDERSCORE;
+        typ.instantiate_lambda_sets_as_unspecialized(able_var, member);
+
+        macro_rules! check_uls {
+            ($typ:expr, $region:literal) => {{
+                match $typ {
+                    Type::UnspecializedLambdaSet(var1, member1, $region) => {
+                        assert!(var1 == able_var && member1 == member)
+                    }
+                    _ => assert!(false),
+                }
+            }};
+        }
+
+        match typ {
+            Type::Function(args, l1, ret) => {
+                check_uls!(*l1, 1);
+
+                match args.as_slice() {
+                    [Type::Function(args, l2, ret)] => {
+                        check_uls!(**l2, 2);
+                        assert!(args.is_empty());
+                        assert!(matches!(**ret, Type::EmptyRec));
+                    }
+                    _ => assert!(false),
+                }
+
+                match *ret {
+                    Type::TagUnion(tags, TypeExtension::Closed) => match tags.as_slice() {
+                        [(name, args)] => {
+                            assert_eq!(name.0.as_str(), "A");
+                            match args.as_slice() {
+                                [Type::Function(args, l3, ret)] => {
+                                    check_uls!(**l3, 3);
+                                    assert!(args.is_empty());
+                                    assert!(matches!(**ret, Type::EmptyRec));
+                                }
+                                _ => assert!(false),
+                            }
+                        }
+                        _ => assert!(false),
+                    },
+                    _ => assert!(false),
+                }
+            }
+            _ => assert!(false),
+        }
+    }
+}
