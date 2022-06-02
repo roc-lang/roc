@@ -1,4 +1,4 @@
-use crate::expr::{IntValue, WhenBranch};
+use crate::expr::{self, IntValue, WhenBranch};
 use crate::pattern::DestructType;
 use roc_collections::all::HumanIndex;
 use roc_error_macros::internal_error;
@@ -200,7 +200,7 @@ fn sketch_pattern(var: Variable, pattern: &crate::pattern::Pattern) -> SketchedP
 pub fn sketch_when_branches(
     target_var: Variable,
     region: Region,
-    patterns: &[WhenBranch],
+    patterns: &[expr::WhenBranch],
 ) -> SketchedRows {
     let mut rows: Vec<SketchedRow> = Vec::with_capacity(patterns.len());
 

@@ -2620,7 +2620,6 @@ fn list_intersperse(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let clos = Closure(ClosureData {
         function_type: clos_var,
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: clos_acc_var,
         name: clos_sym,
         recursive: Recursive::NotRecursive,
@@ -2712,7 +2711,6 @@ fn list_split(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let clos = Closure(ClosureData {
         function_type: clos_fun_var,
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: clos_ret_var,
         name: clos_sym,
         recursive: Recursive::NotRecursive,
@@ -2906,7 +2904,6 @@ fn list_drop_if(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let keep_predicate = Closure(ClosureData {
         function_type: t_keep_predicate,
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: Variable::BOOL,
         name: Symbol::LIST_DROP_IF_PREDICATE,
         recursive: Recursive::NotRecursive,
@@ -3093,7 +3090,6 @@ fn list_join_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let concat_clos = Closure(ClosureData {
         function_type: t_concat_clos,
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: list_after,
         name: Symbol::LIST_JOIN_MAP_CONCAT,
         recursive: Recursive::NotRecursive,
@@ -3632,7 +3628,6 @@ fn list_sort_desc(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let closure = Closure(ClosureData {
         function_type: closure_var,
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: compare_ret_var,
         name: Symbol::LIST_SORT_DESC_COMPARE,
         recursive: Recursive::NotRecursive,
@@ -4116,7 +4111,6 @@ fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let wrapper = Closure(ClosureData {
         function_type: wrapper_var,
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: accum_var,
         name: Symbol::SET_WALK_USER_FUNCTION,
         recursive: Recursive::NotRecursive,
@@ -5404,7 +5398,6 @@ fn defn_help(
     Closure(ClosureData {
         function_type: var_store.fresh(),
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: ret_var,
         name: fn_name,
         captured_symbols: Vec::new(),

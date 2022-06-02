@@ -19,8 +19,8 @@ use roc_problem::can::CycleEntry;
 use roc_region::all::{Loc, Region};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{
-    AliasVariables, Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields, Subs,
-    SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
+    self, AliasVariables, Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields,
+    Subs, SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
@@ -1685,7 +1685,9 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
     }
 }
 
+use std::borrow::Borrow;
 use std::cell::RefCell;
+use std::ops::ControlFlow;
 std::thread_local! {
     /// Scratchpad arena so we don't need to allocate a new one all the time
     static SCRATCHPAD: RefCell<Option<bumpalo::Bump>> = RefCell::new(Some(bumpalo::Bump::with_capacity(4 * 1024)));
@@ -1873,16 +1875,30 @@ fn type_to_variable<'a>(
                 register_with_known_var(subs, destination, rank, pools, content)
             }
 
-            ClosureTag { name, ext } => {
+            ClosureTag { name, captures } => {
                 let tag_name = TagName::Closure(*name);
-                let tag_names = SubsSlice::new(subs.tag_names.len() as u32, 1);
+                let args = &*arena.alloc([(tag_name, captures.as_slice())]);
+                let (solved, ext) = type_to_union_tags(
+                    subs,
+                    rank,
+                    pools,
+                    arena,
+                    args,
+                    &TypeExtension::Closed,
+                    &mut stack,
+                );
 
-                subs.tag_names.push(tag_name);
+                debug_assert!(matches!(
+                    subs.get_content_without_compacting(ext),
+                    Content::Structure(FlatType::EmptyTagUnion),
+                ));
 
-                // the first VariableSubsSlice in the array is a zero-length slice
-                let union_tags = UnionTags::from_slices(tag_names, SubsSlice::new(0, 1));
-
-                let content = Content::Structure(FlatType::TagUnion(union_tags, *ext));
+                let content = Content::LambdaSet(subs::LambdaSet {
+                    solved,
+                    // We may figure out the lambda set is recursive during solving, but it never
+                    // is to begin with.
+                    recursion_var: OptVariable::NONE,
+                });
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
@@ -2377,11 +2393,12 @@ fn insert_tags_fast_path<'a>(
     rank: Rank,
     pools: &mut Pools,
     arena: &'_ bumpalo::Bump,
-    tags: &'a [(TagName, Vec<Type>)],
+    tags: &'a [(TagName, impl Borrow<[Type]>)],
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> UnionTags {
     if let [(TagName::Tag(tag_name), arguments)] = tags {
-        let variable_slice = register_tag_arguments(subs, rank, pools, arena, stack, arguments);
+        let variable_slice =
+            register_tag_arguments(subs, rank, pools, arena, stack, arguments.borrow());
         let new_variable_slices =
             SubsSlice::extend_new(&mut subs.variable_slices, [variable_slice]);
 
@@ -2408,7 +2425,7 @@ fn insert_tags_fast_path<'a>(
 
             for (variable_slice_index, (_, arguments)) in it {
                 subs.variable_slices[variable_slice_index] =
-                    register_tag_arguments(subs, rank, pools, arena, stack, arguments);
+                    register_tag_arguments(subs, rank, pools, arena, stack, arguments.borrow());
             }
 
             UnionTags::from_slices(new_tag_names, new_variable_slices)
@@ -2422,7 +2439,7 @@ fn insert_tags_fast_path<'a>(
 
             for ((variable_slice_index, tag_name_index), (tag_name, arguments)) in it {
                 subs.variable_slices[variable_slice_index] =
-                    register_tag_arguments(subs, rank, pools, arena, stack, arguments);
+                    register_tag_arguments(subs, rank, pools, arena, stack, arguments.borrow());
 
                 subs.tag_names[tag_name_index] = tag_name.clone();
             }
@@ -2437,11 +2454,12 @@ fn insert_tags_slow_path<'a>(
     rank: Rank,
     pools: &mut Pools,
     arena: &'_ bumpalo::Bump,
-    tags: &'a [(TagName, Vec<Type>)],
+    tags: &'a [(TagName, impl Borrow<[Type]>)],
     mut tag_vars: bumpalo::collections::Vec<(TagName, VariableSubsSlice)>,
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> UnionTags {
     for (tag, tag_argument_types) in tags {
+        let tag_argument_types: &[Type] = tag_argument_types.borrow();
         let new_slice = VariableSubsSlice::reserve_into_subs(subs, tag_argument_types.len());
 
         for (i, arg) in (new_slice.indices()).zip(tag_argument_types) {
@@ -2462,7 +2480,7 @@ fn type_to_union_tags<'a>(
     rank: Rank,
     pools: &mut Pools,
     arena: &'_ bumpalo::Bump,
-    tags: &'a [(TagName, Vec<Type>)],
+    tags: &'a [(TagName, impl Borrow<[Type]>)],
     ext: &'a TypeExtension,
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> (UnionTags, Variable) {
@@ -2515,10 +2533,16 @@ fn check_for_infinite_type(
     let var = loc_var.value;
 
     while let Err((recursive, _chain)) = subs.occurs(var) {
-        // try to make a tag union recursive, see if that helps
+        // try to make a union recursive, see if that helps
         match subs.get_content_without_compacting(recursive) {
             &Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
                 subs.mark_tag_union_recursive(recursive, tags, ext_var);
+            }
+            &Content::LambdaSet(subs::LambdaSet {
+                solved,
+                recursion_var: _,
+            }) => {
+                subs.mark_lambda_set_recursive(recursive, solved);
             }
 
             _other => circular_error(subs, problems, symbol, &loc_var),
@@ -2862,6 +2886,43 @@ fn adjust_rank_content(
             rank
         }
 
+        LambdaSet(subs::LambdaSet {
+            solved,
+            recursion_var,
+        }) => {
+            let mut rank = group_rank;
+
+            for (_, index) in solved.iter_all() {
+                let slice = subs[index];
+                for var_index in slice {
+                    let var = subs[var_index];
+                    rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+                }
+            }
+
+            if let (true, Some(rec_var)) = (cfg!(debug_assertions), recursion_var.into_variable()) {
+                // THEORY: unlike the situation for recursion vars under recursive tag unions,
+                // recursive vars inside lambda sets can't escape into higher let-generalized regions
+                // because lambda sets aren't user-facing.
+                //
+                // So the recursion var should be fully accounted by everything else in the lambda set
+                // (since it appears in the lambda set), and if the rank is higher, it's either a
+                // bug or our theory is wrong and indeed they can escape into higher regions.
+                let rec_var_rank = adjust_rank(subs, young_mark, visit_mark, group_rank, rec_var);
+
+                debug_assert!(
+                    rank >= rec_var_rank,
+                    "rank was {:?} but recursion var <{:?}>{:?} has higher rank {:?}",
+                    rank,
+                    rec_var,
+                    subs.get_content_without_compacting(rec_var),
+                    rec_var_rank
+                );
+            }
+
+            rank
+        }
+
         RangedNumber(typ, _) => adjust_rank(subs, young_mark, visit_mark, group_rank, *typ),
     }
 }
@@ -3014,6 +3075,19 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
 
                 stack.push(var);
             }
+            LambdaSet(subs::LambdaSet {
+                solved,
+                recursion_var,
+            }) => {
+                for slice_index in solved.variables() {
+                    let slice = subs.variable_slices[slice_index.index as usize];
+                    stack.extend(var_slice!(slice));
+                }
+
+                if let Some(rec_var) = recursion_var.into_variable() {
+                    stack.push(rec_var);
+                }
+            }
             &RangedNumber(typ, _) => {
                 stack.push(typ);
             }
@@ -3043,15 +3117,22 @@ fn deep_copy_var_in(
     let mut visited = bumpalo::collections::Vec::with_capacity_in(256, arena);
 
     let pool = pools.get_mut(rank);
-    let copy = deep_copy_var_help(subs, rank, pool, &mut visited, var);
 
-    // we have tracked all visited variables, and can now traverse them
-    // in one go (without looking at the UnificationTable) and clear the copy field
-    for var in visited {
-        subs.set_copy_unchecked(var, OptVariable::NONE);
+    let var = subs.get_root_key(var);
+    match deep_copy_var_decision(subs, rank, var) {
+        ControlFlow::Break(copy) => copy,
+        ControlFlow::Continue(copy) => {
+            deep_copy_var_help(subs, rank, pool, &mut visited, var, copy);
+
+            // we have tracked all visited variables, and can now traverse them
+            // in one go (without looking at the UnificationTable) and clear the copy field
+            for var in visited {
+                subs.set_copy_unchecked(var, OptVariable::NONE);
+            }
+
+            copy
+        }
     }
-
-    copy
 }
 
 #[inline]
@@ -3067,58 +3148,78 @@ fn has_trivial_copy(subs: &Subs, root_var: Variable) -> Option<Variable> {
     }
 }
 
+#[inline]
+fn deep_copy_var_decision(
+    subs: &mut Subs,
+    max_rank: Rank,
+    var: Variable,
+) -> ControlFlow<Variable, Variable> {
+    let var = subs.get_root_key(var);
+    if let Some(copy) = has_trivial_copy(subs, var) {
+        ControlFlow::Break(copy)
+    } else {
+        let copy_descriptor = Descriptor {
+            content: Content::Structure(FlatType::EmptyTagUnion),
+            rank: max_rank,
+            mark: Mark::NONE,
+            copy: OptVariable::NONE,
+        };
+
+        let copy = subs.fresh(copy_descriptor);
+
+        // Link the original variable to the new variable. This lets us
+        // avoid making multiple copies of the variable we are instantiating.
+        //
+        // Need to do this before recursively copying to avoid looping.
+        subs.set_mark_unchecked(var, Mark::NONE);
+        subs.set_copy_unchecked(var, copy.into());
+
+        ControlFlow::Continue(copy)
+    }
+}
+
 fn deep_copy_var_help(
     subs: &mut Subs,
     max_rank: Rank,
     pool: &mut Vec<Variable>,
     visited: &mut bumpalo::collections::Vec<'_, Variable>,
-    var: Variable,
+    initial_source: Variable,
+    initial_copy: Variable,
 ) -> Variable {
     use roc_types::subs::Content::*;
     use roc_types::subs::FlatType::*;
 
-    let subs_len = subs.len();
-    let var = subs.get_root_key(var);
-
-    // either this variable has been copied before, or does not have NONE rank
-    if let Some(copy) = has_trivial_copy(subs, var) {
-        return copy;
+    struct DeepCopyVarWork {
+        source: Variable,
+        copy: Variable,
     }
 
-    // Safety: Here we make a variable that is 1 position out of bounds.
-    // The reason is that we can now keep the mutable reference to `desc`
-    // Below, we actually push a new variable onto subs meaning the `copy`
-    // variable is in-bounds before it is ever used.
-    let copy = unsafe { Variable::from_index(subs_len as u32) };
-
-    visited.push(var);
-    pool.push(copy);
-
-    // Link the original variable to the new variable. This lets us
-    // avoid making multiple copies of the variable we are instantiating.
-    //
-    // Need to do this before recursively copying to avoid looping.
-    subs.set_mark_unchecked(var, Mark::NONE);
-    subs.set_copy_unchecked(var, copy.into());
-
-    let content = *subs.get_content_unchecked(var);
-
-    let copy_descriptor = Descriptor {
-        content,
-        rank: max_rank,
-        mark: Mark::NONE,
-        copy: OptVariable::NONE,
+    let initial = DeepCopyVarWork {
+        source: initial_source,
+        copy: initial_copy,
     };
+    let mut stack = vec![initial];
 
-    let actual_copy = subs.fresh(copy_descriptor);
-    debug_assert_eq!(copy, actual_copy);
+    macro_rules! work {
+        ($variable:expr) => {{
+            let var = subs.get_root_key($variable);
+            match deep_copy_var_decision(subs, max_rank, var) {
+                ControlFlow::Break(copy) => copy,
+                ControlFlow::Continue(copy) => {
+                    stack.push(DeepCopyVarWork { source: var, copy });
+
+                    copy
+                }
+            }
+        }};
+    }
 
     macro_rules! copy_sequence {
         ($length:expr, $variables:expr) => {{
             let new_variables = SubsSlice::reserve_into_subs(subs, $length as _);
             for (target_index, var_index) in (new_variables.indices()).zip($variables) {
                 let var = subs[var_index];
-                let copy_var = deep_copy_var_help(subs, max_rank, pool, visited, var);
+                let copy_var = work!(var);
                 subs.variables[target_index] = copy_var;
             }
 
@@ -3126,154 +3227,151 @@ fn deep_copy_var_help(
         }};
     }
 
-    // Now we recursively copy the content of the variable.
-    // We have already marked the variable as copied, so we
-    // will not repeat this work or crawl this variable again.
-    match content {
-        Structure(flat_type) => {
-            let new_flat_type = match flat_type {
-                Apply(symbol, arguments) => {
-                    let new_arguments = copy_sequence!(arguments.len(), arguments);
+    macro_rules! copy_union_tags {
+        ($tags:expr) => {{
+            let new_variable_slices = SubsSlice::reserve_variable_slices(subs, $tags.len());
 
-                    Apply(symbol, new_arguments)
-                }
+            let it = (new_variable_slices.indices()).zip($tags.variables());
+            for (target_index, index) in it {
+                let slice = subs[index];
 
-                Func(arguments, closure_var, ret_var) => {
-                    let new_ret_var = deep_copy_var_help(subs, max_rank, pool, visited, ret_var);
-                    let new_closure_var =
-                        deep_copy_var_help(subs, max_rank, pool, visited, closure_var);
+                let new_variables = copy_sequence!(slice.len(), slice);
+                subs.variable_slices[target_index] = new_variables;
+            }
 
-                    let new_arguments = copy_sequence!(arguments.len(), arguments);
+            UnionTags::from_slices($tags.tag_names(), new_variable_slices)
+        }};
+    }
 
-                    Func(new_arguments, new_closure_var, new_ret_var)
-                }
+    while let Some(DeepCopyVarWork { source: var, copy }) = stack.pop() {
+        visited.push(var);
+        pool.push(copy);
 
-                same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
+        let content = *subs.get_content_unchecked(var);
 
-                Record(fields, ext_var) => {
-                    let record_fields = {
-                        let new_variables = copy_sequence!(fields.len(), fields.iter_variables());
+        // Now we recursively copy the content of the variable.
+        // We have already marked the variable as copied, so we
+        // will not repeat this work or crawl this variable again.
+        match content {
+            Structure(flat_type) => {
+                let new_flat_type = match flat_type {
+                    Apply(symbol, arguments) => {
+                        let new_arguments = copy_sequence!(arguments.len(), arguments);
 
-                        RecordFields {
-                            length: fields.length,
-                            field_names_start: fields.field_names_start,
-                            variables_start: new_variables.start,
-                            field_types_start: fields.field_types_start,
-                        }
-                    };
-
-                    Record(
-                        record_fields,
-                        deep_copy_var_help(subs, max_rank, pool, visited, ext_var),
-                    )
-                }
-
-                TagUnion(tags, ext_var) => {
-                    let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
-
-                    let it = (new_variable_slices.indices()).zip(tags.variables());
-                    for (target_index, index) in it {
-                        let slice = subs[index];
-
-                        let new_variables = copy_sequence!(slice.len(), slice);
-                        subs.variable_slices[target_index] = new_variables;
+                        Apply(symbol, new_arguments)
                     }
 
-                    let union_tags = UnionTags::from_slices(tags.tag_names(), new_variable_slices);
+                    Func(arguments, closure_var, ret_var) => {
+                        let new_ret_var = work!(ret_var);
+                        let new_closure_var = work!(closure_var);
 
-                    let new_ext = deep_copy_var_help(subs, max_rank, pool, visited, ext_var);
-                    TagUnion(union_tags, new_ext)
-                }
+                        let new_arguments = copy_sequence!(arguments.len(), arguments);
 
-                FunctionOrTagUnion(tag_name, symbol, ext_var) => FunctionOrTagUnion(
-                    tag_name,
-                    symbol,
-                    deep_copy_var_help(subs, max_rank, pool, visited, ext_var),
-                ),
-
-                RecursiveTagUnion(rec_var, tags, ext_var) => {
-                    let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
-
-                    let it = (new_variable_slices.indices()).zip(tags.variables());
-                    for (target_index, index) in it {
-                        let slice = subs[index];
-
-                        let new_variables = copy_sequence!(slice.len(), slice);
-                        subs.variable_slices[target_index] = new_variables;
+                        Func(new_arguments, new_closure_var, new_ret_var)
                     }
 
-                    let union_tags = UnionTags::from_slices(tags.tag_names(), new_variable_slices);
+                    same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
 
-                    let new_ext = deep_copy_var_help(subs, max_rank, pool, visited, ext_var);
-                    let new_rec_var = deep_copy_var_help(subs, max_rank, pool, visited, rec_var);
+                    Record(fields, ext_var) => {
+                        let record_fields = {
+                            let new_variables =
+                                copy_sequence!(fields.len(), fields.iter_variables());
 
-                    RecursiveTagUnion(new_rec_var, union_tags, new_ext)
-                }
-            };
+                            RecordFields {
+                                length: fields.length,
+                                field_names_start: fields.field_names_start,
+                                variables_start: new_variables.start,
+                                field_types_start: fields.field_types_start,
+                            }
+                        };
 
-            subs.set_content_unchecked(copy, Structure(new_flat_type));
+                        Record(record_fields, work!(ext_var))
+                    }
 
-            copy
-        }
+                    TagUnion(tags, ext_var) => {
+                        let union_tags = copy_union_tags!(tags);
 
-        FlexVar(_) | FlexAbleVar(_, _) | Error => copy,
+                        TagUnion(union_tags, work!(ext_var))
+                    }
 
-        RecursionVar {
-            opt_name,
-            structure,
-        } => {
-            let new_structure = deep_copy_var_help(subs, max_rank, pool, visited, structure);
+                    FunctionOrTagUnion(tag_name, symbol, ext_var) => {
+                        FunctionOrTagUnion(tag_name, symbol, work!(ext_var))
+                    }
 
-            let content = RecursionVar {
+                    RecursiveTagUnion(rec_var, tags, ext_var) => {
+                        let union_tags = copy_union_tags!(tags);
+
+                        RecursiveTagUnion(work!(rec_var), union_tags, work!(ext_var))
+                    }
+                };
+
+                subs.set_content_unchecked(copy, Structure(new_flat_type));
+            }
+
+            FlexVar(_) | FlexAbleVar(_, _) | Error => {
+                subs.set_content_unchecked(copy, content);
+            }
+
+            RecursionVar {
                 opt_name,
-                structure: new_structure,
-            };
+                structure,
+            } => {
+                let content = RecursionVar {
+                    opt_name,
+                    structure: work!(structure),
+                };
 
-            subs.set_content_unchecked(copy, content);
+                subs.set_content_unchecked(copy, content);
+            }
 
-            copy
-        }
+            RigidVar(name) => {
+                subs.set_content_unchecked(copy, FlexVar(Some(name)));
+            }
 
-        RigidVar(name) => {
-            subs.set_content_unchecked(copy, FlexVar(Some(name)));
+            RigidAbleVar(name, ability) => {
+                subs.set_content_unchecked(copy, FlexAbleVar(Some(name), ability));
+            }
 
-            copy
-        }
+            Alias(symbol, arguments, real_type_var, kind) => {
+                let new_variables =
+                    copy_sequence!(arguments.all_variables_len, arguments.all_variables());
 
-        RigidAbleVar(name, ability) => {
-            subs.set_content_unchecked(copy, FlexAbleVar(Some(name), ability));
+                let new_arguments = AliasVariables {
+                    variables_start: new_variables.start,
+                    ..arguments
+                };
 
-            copy
-        }
+                let new_real_type_var = work!(real_type_var);
+                let new_content = Alias(symbol, new_arguments, new_real_type_var, kind);
 
-        Alias(symbol, arguments, real_type_var, kind) => {
-            let new_variables =
-                copy_sequence!(arguments.all_variables_len, arguments.all_variables());
+                subs.set_content_unchecked(copy, new_content);
+            }
 
-            let new_arguments = AliasVariables {
-                variables_start: new_variables.start,
-                ..arguments
-            };
+            LambdaSet(subs::LambdaSet {
+                solved,
+                recursion_var,
+            }) => {
+                let new_solved = copy_union_tags!(solved);
+                let new_rec_var = recursion_var.map(|v| work!(v));
 
-            let new_real_type_var =
-                deep_copy_var_help(subs, max_rank, pool, visited, real_type_var);
-            let new_content = Alias(symbol, new_arguments, new_real_type_var, kind);
+                subs.set_content_unchecked(
+                    copy,
+                    LambdaSet(subs::LambdaSet {
+                        solved: new_solved,
+                        recursion_var: new_rec_var,
+                    }),
+                );
+            }
 
-            subs.set_content_unchecked(copy, new_content);
+            RangedNumber(typ, range) => {
+                let new_content = RangedNumber(work!(typ), range);
 
-            copy
-        }
-
-        RangedNumber(typ, range) => {
-            let new_type_var = deep_copy_var_help(subs, max_rank, pool, visited, typ);
-
-            let new_content = RangedNumber(new_type_var, range);
-
-            subs.set_content_unchecked(copy, new_content);
-
-            copy
+                subs.set_content_unchecked(copy, new_content);
+            }
         }
     }
+
+    initial_copy
 }
 
 #[inline(always)]

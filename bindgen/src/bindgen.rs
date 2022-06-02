@@ -12,7 +12,7 @@ use roc_module::symbol::{Interns, Symbol};
 use roc_mono::layout::{cmp_fields, ext_var_is_empty_tag_union, Builtin, Layout, LayoutCache};
 use roc_types::subs::UnionTags;
 use roc_types::{
-    subs::{Content, FlatType, Subs, Variable},
+    subs::{Content, FlatType, LambdaSet, Subs, Variable},
     types::RecordField,
 };
 use std::fmt::Display;
@@ -118,6 +118,10 @@ fn add_type_help<'a>(
                 fields,
             })
         }
+        Content::LambdaSet(LambdaSet {
+            solved,
+            recursion_var: _,
+        }) => add_tag_union(env, opt_name, solved, var, types),
         Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, *ext_var));
 

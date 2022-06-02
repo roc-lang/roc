@@ -1,8 +1,9 @@
 use crate::subs::{
-    AliasVariables, Content, FlatType, GetSubsSlice, Subs, SubsIndex, UnionTags, Variable,
+    self, AliasVariables, Content, FlatType, GetSubsSlice, Subs, SubsIndex, UnionTags, Variable,
 };
 use crate::types::{name_type_var, RecordField};
 use roc_collections::all::{MutMap, MutSet};
+use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 
@@ -219,6 +220,22 @@ fn find_names_needed(
             }
             // TODO should we also look in the actual variable?
             // find_names_needed(_actual, subs, roots, root_appearances, names_taken);
+        }
+        LambdaSet(subs::LambdaSet {
+            solved,
+            recursion_var,
+        }) => {
+            for slice_index in solved.variables() {
+                let slice = subs[slice_index];
+                for var_index in slice {
+                    let var = subs[var_index];
+                    find_names_needed(var, subs, roots, root_appearances, names_taken);
+                }
+            }
+
+            if let Some(rec_var) = recursion_var.into_variable() {
+                find_names_needed(rec_var, subs, roots, root_appearances, names_taken);
+            }
         }
         &RangedNumber(typ, _) => {
             find_names_needed(typ, subs, roots, root_appearances, names_taken);
@@ -526,6 +543,9 @@ fn write_content<'a>(
                     });
                 }),
             }
+        }
+        LambdaSet(_) => {
+            // lambda sets never exposed to the user
         }
         RangedNumber(typ, _range_vars) => write_content(
             env,
@@ -890,6 +910,21 @@ fn write_flat_type<'a>(
     }
 }
 
+fn push_union_tags<'a>(
+    subs: &'a Subs,
+    tags: &UnionTags,
+    fields: &mut Vec<(TagName, Vec<Variable>)>,
+) {
+    fields.reserve(tags.len());
+    for (name_index, slice_index) in tags.iter_all() {
+        let subs_slice = subs[slice_index];
+        let slice = subs.get_subs_slice(subs_slice);
+        let tag_name = subs[name_index].clone();
+
+        fields.push((tag_name, slice.to_vec()));
+    }
+}
+
 pub fn chase_ext_tag_union<'a>(
     subs: &'a Subs,
     var: Variable,
@@ -899,26 +934,12 @@ pub fn chase_ext_tag_union<'a>(
     match subs.get_content_without_compacting(var) {
         Content::Structure(EmptyTagUnion) => Ok(()),
         Content::Structure(TagUnion(tags, ext_var)) => {
-            for (name_index, slice_index) in tags.iter_all() {
-                let subs_slice = subs[slice_index];
-                let slice = subs.get_subs_slice(subs_slice);
-                let tag_name = subs[name_index].clone();
-
-                fields.push((tag_name, slice.to_vec()));
-            }
-
+            push_union_tags(subs, tags, fields);
             chase_ext_tag_union(subs, *ext_var, fields)
         }
 
         Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {
-            for (name_index, slice_index) in tags.iter_all() {
-                let subs_slice = subs[slice_index];
-                let slice = subs.get_subs_slice(subs_slice);
-                let tag_name = subs[name_index].clone();
-
-                fields.push((tag_name, slice.to_vec()));
-            }
-
+            push_union_tags(subs, tags, fields);
             chase_ext_tag_union(subs, *ext_var, fields)
         }
         Content::Structure(FunctionOrTagUnion(tag_name, _, ext_var)) => {
@@ -930,6 +951,34 @@ pub fn chase_ext_tag_union<'a>(
         Content::Alias(_, _, var, _) => chase_ext_tag_union(subs, *var, fields),
 
         content => Err((var, content)),
+    }
+}
+
+pub enum ResolvedLambdaSet {
+    Set(Vec<(TagName, Vec<Variable>)>),
+    /// TODO: figure out if this can happen in a correct program, or is the result of a bug in our
+    /// compiler. See https://github.com/rtfeldman/roc/issues/3163.
+    Unbound,
+}
+
+pub fn resolve_lambda_set(subs: &Subs, mut var: Variable) -> ResolvedLambdaSet {
+    let mut set = vec![];
+    loop {
+        match subs.get_content_without_compacting(var) {
+            Content::LambdaSet(subs::LambdaSet {
+                solved,
+                recursion_var: _,
+            }) => {
+                push_union_tags(subs, solved, &mut set);
+                return ResolvedLambdaSet::Set(set);
+            }
+            Content::RecursionVar { structure, .. } => {
+                var = *structure;
+            }
+            Content::FlexVar(_) => return ResolvedLambdaSet::Unbound,
+
+            c => internal_error!("called with a non-lambda set {:?}", c),
+        }
     }
 }
 

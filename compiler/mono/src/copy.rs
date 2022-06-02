@@ -5,8 +5,8 @@ use roc_can::{
     expr::{AccessorData, ClosureData, Expr, Field, WhenBranch},
 };
 use roc_types::subs::{
-    AliasVariables, Descriptor, OptVariable, RecordFields, Subs, SubsSlice, UnionTags, Variable,
-    VariableSubsSlice,
+    self, AliasVariables, Descriptor, OptVariable, RecordFields, Subs, SubsSlice, UnionTags,
+    Variable, VariableSubsSlice,
 };
 
 /// Deep copies the type variables in the type hosted by [`var`] into [`expr`].
@@ -198,7 +198,6 @@ pub fn deep_copy_type_vars_into_expr<'a>(
             Closure(ClosureData {
                 function_type,
                 closure_type,
-                closure_ext_var,
                 return_type,
                 name,
                 captured_symbols,
@@ -208,7 +207,6 @@ pub fn deep_copy_type_vars_into_expr<'a>(
             }) => Closure(ClosureData {
                 function_type: sub!(*function_type),
                 closure_type: sub!(*closure_type),
-                closure_ext_var: sub!(*closure_ext_var),
                 return_type: sub!(*return_type),
                 name: *name,
                 captured_symbols: captured_symbols
@@ -270,7 +268,6 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 function_var,
                 record_var,
                 closure_var,
-                closure_ext_var,
                 ext_var,
                 field_var,
                 field,
@@ -279,7 +276,6 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 function_var: sub!(*function_var),
                 record_var: sub!(*record_var),
                 closure_var: sub!(*closure_var),
-                closure_ext_var: sub!(*closure_ext_var),
                 ext_var: sub!(*ext_var),
                 field_var: sub!(*field_var),
                 field: field.clone(),
@@ -608,6 +604,36 @@ fn deep_copy_type_vars<'a>(
                     };
 
                     Alias(symbol, new_arguments, new_real_type_var, kind)
+                })
+            }
+
+            LambdaSet(subs::LambdaSet {
+                solved,
+                recursion_var,
+            }) => {
+                let new_rec_var = recursion_var.map(|var| descend_var!(var));
+                for variables_slice_index in solved.variables() {
+                    let variables_slice = subs[variables_slice_index];
+                    descend_slice!(variables_slice);
+                }
+
+                perform_clone!({
+                    let new_variable_slices =
+                        SubsSlice::reserve_variable_slices(subs, solved.len());
+                    let it = (new_variable_slices.indices()).zip(solved.variables());
+                    for (target_index, index) in it {
+                        let slice = subs[index];
+                        let new_variables = clone_var_slice!(slice);
+                        subs.variable_slices[target_index] = new_variables;
+                    }
+
+                    let new_solved =
+                        UnionTags::from_slices(solved.tag_names(), new_variable_slices);
+
+                    LambdaSet(subs::LambdaSet {
+                        solved: new_solved,
+                        recursion_var: new_rec_var,
+                    })
                 })
             }
 

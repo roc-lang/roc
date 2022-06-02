@@ -3562,6 +3562,7 @@ dependencies = [
  "roc_region",
  "roc_target",
  "roc_types",
+ "tempfile",
 ]
 
 [[package]]

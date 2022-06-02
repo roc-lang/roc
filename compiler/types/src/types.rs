@@ -231,10 +231,14 @@ pub enum Type {
     Record(SendMap<Lowercase, RecordField<Type>>, TypeExtension),
     TagUnion(Vec<(TagName, Vec<Type>)>, TypeExtension),
     FunctionOrTagUnion(TagName, Symbol, TypeExtension),
-    /// A function name that is used in our defunctionalization algorithm
+    /// A function name that is used in our defunctionalization algorithm. For example in
+    ///   g = \a ->
+    ///     f = \{} -> a
+    ///     f
+    /// the closure under "f" has name "f" and captures "a".
     ClosureTag {
         name: Symbol,
-        ext: Variable,
+        captures: Vec<Type>,
     },
     DelayedAlias(AliasCommon),
     Alias {
@@ -289,9 +293,9 @@ impl Clone for Type {
             Self::FunctionOrTagUnion(arg0, arg1, arg2) => {
                 Self::FunctionOrTagUnion(arg0.clone(), *arg1, arg2.clone())
             }
-            Self::ClosureTag { name, ext } => Self::ClosureTag {
+            Self::ClosureTag { name, captures } => Self::ClosureTag {
                 name: *name,
-                ext: *ext,
+                captures: captures.clone(),
             },
             Self::DelayedAlias(arg0) => Self::DelayedAlias(arg0.clone()),
             Self::Alias {
@@ -376,6 +380,28 @@ impl<'a> IntoIterator for &'a TypeExtension {
             TypeExtension::Closed => None.into_iter(),
         }
     }
+}
+
+fn write_tags<'a>(
+    f: &mut fmt::Formatter,
+    tags: impl ExactSizeIterator<Item = &'a (TagName, Vec<Type>)>,
+) -> fmt::Result {
+    write!(f, "[")?;
+
+    let mut it = tags.peekable();
+    while let Some((label, arguments)) = it.next() {
+        write!(f, "{:?}", label)?;
+
+        for argument in arguments {
+            write!(f, " {:?}", argument)?;
+        }
+
+        if it.peek().is_some() {
+            write!(f, ", ")?;
+        }
+    }
+
+    write!(f, "]")
 }
 
 impl fmt::Debug for Type {
@@ -531,30 +557,7 @@ impl fmt::Debug for Type {
                 }
             }
             Type::TagUnion(tags, ext) => {
-                write!(f, "[")?;
-
-                if !tags.is_empty() {
-                    write!(f, " ")?;
-                }
-
-                let mut it = tags.iter().peekable();
-                while let Some((label, arguments)) = it.next() {
-                    write!(f, "{:?}", label)?;
-
-                    for argument in arguments {
-                        write!(f, " {:?}", argument)?;
-                    }
-
-                    if it.peek().is_some() {
-                        write!(f, ", ")?;
-                    }
-                }
-
-                if !tags.is_empty() {
-                    write!(f, " ")?;
-                }
-
-                write!(f, "]")?;
+                write_tags(f, tags.iter())?;
 
                 match ext {
                     TypeExtension::Closed => {
@@ -591,40 +594,18 @@ impl fmt::Debug for Type {
                     }
                 }
             }
-            Type::ClosureTag { name, ext } => {
+            Type::ClosureTag { name, captures } => {
                 write!(f, "ClosureTag(")?;
 
-                name.fmt(f)?;
-                write!(f, ", ")?;
-                ext.fmt(f)?;
+                write!(f, "{:?}, ", name)?;
+                for capture in captures {
+                    write!(f, "{:?}, ", capture)?;
+                }
 
                 write!(f, ")")
             }
             Type::RecursiveTagUnion(rec, tags, ext) => {
-                write!(f, "[")?;
-
-                if !tags.is_empty() {
-                    write!(f, " ")?;
-                }
-
-                let mut it = tags.iter().peekable();
-                while let Some((label, arguments)) = it.next() {
-                    write!(f, "{:?}", label)?;
-
-                    for argument in arguments {
-                        write!(f, " {:?}", argument)?;
-                    }
-
-                    if it.peek().is_some() {
-                        write!(f, ", ")?;
-                    }
-                }
-
-                if !tags.is_empty() {
-                    write!(f, " ")?;
-                }
-
-                write!(f, "]")?;
+                write_tags(f, tags.iter())?;
 
                 match ext {
                     TypeExtension::Closed => {
@@ -691,7 +672,7 @@ impl Type {
 
         while let Some(typ) = stack.pop() {
             match typ {
-                ClosureTag { ext: v, .. } | Variable(v) => {
+                Variable(v) => {
                     if let Some(replacement) = substitutions.get(v) {
                         *typ = replacement.clone();
                     }
@@ -701,6 +682,7 @@ impl Type {
                     stack.push(closure);
                     stack.push(ret);
                 }
+                ClosureTag { name: _, captures } => stack.extend(captures),
                 TagUnion(tags, ext) => {
                     for (_, args) in tags {
                         stack.extend(args.iter_mut());
@@ -797,7 +779,7 @@ impl Type {
 
         while let Some(typ) = stack.pop() {
             match typ {
-                ClosureTag { ext: v, .. } | Variable(v) => {
+                Variable(v) => {
                     if let Some(replacement) = substitutions.get(v) {
                         *v = *replacement;
                     }
@@ -806,6 +788,9 @@ impl Type {
                     stack.extend(args);
                     stack.push(closure);
                     stack.push(ret);
+                }
+                ClosureTag { name: _, captures } => {
+                    stack.extend(captures);
                 }
                 TagUnion(tags, ext) => {
                     for (_, args) in tags {
@@ -1060,13 +1045,16 @@ impl Type {
         use Type::*;
 
         match self {
-            ClosureTag { ext: v, .. } | Variable(v) => *v == rep_variable,
+            Variable(v) => *v == rep_variable,
             Function(args, closure, ret) => {
                 ret.contains_variable(rep_variable)
                     || closure.contains_variable(rep_variable)
                     || args.iter().any(|arg| arg.contains_variable(rep_variable))
             }
             FunctionOrTagUnion(_, _, ext) => Self::contains_variable_ext(ext, rep_variable),
+            ClosureTag { name: _, captures } => {
+                captures.iter().any(|t| t.contains_variable(rep_variable))
+            }
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
                 Self::contains_variable_ext(ext, rep_variable)
                     || tags
@@ -1501,7 +1489,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
     match tipe {
         EmptyRec | EmptyTagUnion | Erroneous(_) => (),
 
-        ClosureTag { ext: v, .. } | Variable(v) => {
+        Variable(v) => {
             accum.insert(*v);
         }
 
@@ -1525,6 +1513,11 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
 
             if let TypeExtension::Open(ext) = ext {
                 variables_help(ext, accum);
+            }
+        }
+        ClosureTag { name: _, captures } => {
+            for t in captures {
+                variables_help(t, accum);
             }
         }
         TagUnion(tags, ext) => {
@@ -1625,7 +1618,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
     match tipe {
         EmptyRec | EmptyTagUnion | Erroneous(_) => (),
 
-        ClosureTag { ext: v, .. } | Variable(v) => {
+        Variable(v) => {
             accum.type_variables.insert(*v);
         }
 
@@ -1654,6 +1647,11 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
 
             if let TypeExtension::Open(ext) = ext {
                 variables_help_detailed(ext, accum);
+            }
+        }
+        ClosureTag { name: _, captures } => {
+            for t in captures {
+                variables_help_detailed(t, accum);
             }
         }
         TagUnion(tags, ext) => {
