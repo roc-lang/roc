@@ -18,7 +18,7 @@ pub use roc_str::RocStr;
 pub use storage::Storage;
 
 // A list of C functions that are being imported
-#[cfg(all(feature = "platform", not(test)))]
+#[cfg(feature = "platform")]
 extern "C" {
     pub fn roc_alloc(size: usize, alignment: u32) -> *mut c_void;
     pub fn roc_realloc(
@@ -33,57 +33,6 @@ extern "C" {
     pub fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut c_void;
 }
 
-#[cfg(test)]
-#[no_mangle]
-pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
-    return libc::malloc(size);
-}
-
-#[cfg(test)]
-#[no_mangle]
-pub unsafe extern "C" fn roc_realloc(
-    c_ptr: *mut c_void,
-    new_size: usize,
-    _old_size: usize,
-    _alignment: u32,
-) -> *mut c_void {
-    return libc::realloc(c_ptr, new_size);
-}
-
-#[cfg(test)]
-#[no_mangle]
-pub unsafe extern "C" fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
-    return libc::free(c_ptr);
-}
-
-#[cfg(test)]
-#[no_mangle]
-pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
-    use std::ffi::CStr;
-    use std::os::raw::c_char;
-
-    match tag_id {
-        0 => {
-            let c_str = CStr::from_ptr(c_ptr as *const c_char);
-            let string = c_str.to_str().unwrap();
-            panic!("roc_panic during test: {}", string);
-        }
-        _ => todo!(),
-    }
-}
-
-#[cfg(test)]
-#[no_mangle]
-pub unsafe extern "C" fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void {
-    libc::memcpy(dst, src, n)
-}
-
-#[cfg(test)]
-#[no_mangle]
-pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut c_void {
-    libc::memset(dst, c, n)
-}
-
 /// # Safety
 /// This is only marked unsafe to typecheck without warnings in the rest of the code here.
 #[cfg(not(feature = "platform"))]
@@ -91,6 +40,7 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 pub unsafe extern "C" fn roc_alloc(_size: usize, _alignment: u32) -> *mut c_void {
     unimplemented!("It is not valid to call roc alloc from within the compiler. Please use the \"platform\" feature if this is a platform.")
 }
+
 /// # Safety
 /// This is only marked unsafe to typecheck without warnings in the rest of the code here.
 #[cfg(not(feature = "platform"))]
