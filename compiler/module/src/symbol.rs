@@ -1,10 +1,9 @@
 use crate::ident::{Ident, ModuleName};
 use crate::module_err::{IdentIdNotFound, ModuleIdNotFound, ModuleResult};
-use roc_collections::{default_hasher, MutMap, SendMap, SmallStringInterner, VecMap};
+use roc_collections::{SendMap, SmallStringInterner, VecMap};
 use roc_ident::IdentStr;
 use roc_region::all::Region;
 use snafu::OptionExt;
-use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::{fmt, u32};
 
@@ -434,29 +433,23 @@ impl<'a, T> PackageQualified<'a, T> {
 
 #[derive(Debug, Clone)]
 pub struct PackageModuleIds<'a> {
-    by_name: MutMap<PQModuleName<'a>, ModuleId>,
     by_id: Vec<PQModuleName<'a>>,
 }
 
 impl<'a> PackageModuleIds<'a> {
     pub fn get_or_insert(&mut self, module_name: &PQModuleName<'a>) -> ModuleId {
-        match self.by_name.get(module_name) {
-            Some(id) => *id,
-            None => {
-                let by_id = &mut self.by_id;
-                let module_id = ModuleId::from_zero_indexed(by_id.len());
-
-                by_id.push(module_name.clone());
-
-                self.by_name.insert(module_name.clone(), module_id);
-
-                if cfg!(debug_assertions) {
-                    Self::insert_debug_name(module_id, module_name);
-                }
-
-                module_id
-            }
+        if let Some(module_id) = self.get_id(module_name) {
+            return module_id;
         }
+
+        // didn't find it, so we'll add it
+        let module_id = ModuleId::from_zero_indexed(self.by_id.len());
+        self.by_id.push(module_name.clone());
+        if cfg!(debug_assertions) {
+            Self::insert_debug_name(module_id, module_name);
+        }
+
+        module_id
     }
 
     pub fn into_module_ids(self) -> ModuleIds {
@@ -490,8 +483,14 @@ impl<'a> PackageModuleIds<'a> {
         // By design, this is a no-op in release builds!
     }
 
-    pub fn get_id(&self, module_name: &PQModuleName<'a>) -> Option<&ModuleId> {
-        self.by_name.get(module_name)
+    pub fn get_id(&self, module_name: &PQModuleName<'a>) -> Option<ModuleId> {
+        for (index, name) in self.by_id.iter().enumerate() {
+            if name == module_name {
+                return Some(ModuleId::from_zero_indexed(index));
+            }
+        }
+
+        None
     }
 
     pub fn get_name(&self, id: ModuleId) -> Option<&PQModuleName> {
@@ -512,10 +511,8 @@ pub struct ModuleIds {
 
 impl ModuleIds {
     pub fn get_or_insert(&mut self, module_name: &ModuleName) -> ModuleId {
-        for (index, name) in self.by_id.iter().enumerate() {
-            if name == module_name {
-                return ModuleId::from_zero_indexed(index);
-            }
+        if let Some(module_id) = self.get_id(module_name) {
+            return module_id;
         }
 
         // didn't find it, so we'll add it
@@ -887,7 +884,6 @@ macro_rules! define_builtins {
                 // +1 because the user will be compiling at least 1 non-builtin module!
                 let capacity = $total + 1;
 
-                let mut by_name = HashMap::with_capacity_and_hasher(capacity, default_hasher());
                 let mut by_id = Vec::with_capacity(capacity);
 
                 let mut insert_both = |id: ModuleId, name_str: &'static str| {
@@ -898,7 +894,6 @@ macro_rules! define_builtins {
                         Self::insert_debug_name(id, &name);
                     }
 
-                    by_name.insert(name.clone(), id);
                     by_id.push(name);
                 };
 
@@ -906,7 +901,7 @@ macro_rules! define_builtins {
                     insert_both(ModuleId::$module_const, $module_name);
                 )+
 
-                PackageModuleIds { by_name, by_id }
+                PackageModuleIds { by_id }
             }
         }
 
