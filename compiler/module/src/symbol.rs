@@ -597,10 +597,10 @@ impl IdentIds {
         IdentId(self.interner.duplicate(ident_id.0 as usize) as u32)
     }
 
-    pub fn get_or_insert(&mut self, name: &Ident) -> IdentId {
-        match self.get_id(name.as_str()) {
+    pub fn get_or_insert(&mut self, name: &str) -> IdentId {
+        match self.get_id(name) {
             Some(id) => id,
-            None => self.add_str(name.as_str()),
+            None => self.add_str(name),
         }
     }
 

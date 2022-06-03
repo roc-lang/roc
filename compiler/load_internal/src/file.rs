@@ -3152,7 +3152,7 @@ fn send_header<'a>(
             let ident_ids = ident_ids_by_module.get_or_insert(module_id);
 
             for ident in exposed_idents {
-                let ident_id = ident_ids.get_or_insert(&ident);
+                let ident_id = ident_ids.get_or_insert(ident.as_str());
                 let symbol = Symbol::new(module_id, ident_id);
 
                 // Since this value is exposed, add it to our module's default scope.
@@ -3178,7 +3178,7 @@ fn send_header<'a>(
             // For example, if module A has [B.{ foo }], then
             // when we get here for B, `foo` will already have
             // an IdentId. We must reuse that!
-            let ident_id = ident_ids.get_or_insert(&loc_exposed.value.as_str().into());
+            let ident_id = ident_ids.get_or_insert(&loc_exposed.value.as_str());
             let symbol = Symbol::new(home, ident_id);
 
             exposed.push(symbol);
@@ -3361,7 +3361,7 @@ fn send_header_two<'a>(
             let ident_ids = ident_ids_by_module.get_or_insert(module_id);
 
             for ident in exposed_idents {
-                let ident_id = ident_ids.get_or_insert(&ident);
+                let ident_id = ident_ids.get_or_insert(ident.as_str());
                 let symbol = Symbol::new(module_id, ident_id);
 
                 // Since this value is exposed, add it to our module's default scope.
@@ -3385,7 +3385,7 @@ fn send_header_two<'a>(
             for entry in requires {
                 let entry = entry.value;
                 let ident: Ident = entry.ident.value.into();
-                let ident_id = ident_ids.get_or_insert(&ident);
+                let ident_id = ident_ids.get_or_insert(&entry.ident.value);
                 let symbol = Symbol::new(module_id, ident_id);
 
                 // Since this value is exposed, add it to our module's default scope.
@@ -3398,11 +3398,11 @@ fn send_header_two<'a>(
             for entry in requires_types {
                 let string: &str = entry.value.into();
                 let ident: Ident = string.into();
-                let ident_id = ident_ids.get_or_insert(&ident);
+                let ident_id = ident_ids.get_or_insert(string);
                 let symbol = Symbol::new(module_id, ident_id);
 
                 // Since this value is exposed, add it to our module's default scope.
-                debug_assert!(!scope.contains_key(&ident.clone()));
+                debug_assert!(!scope.contains_key(&ident));
                 scope.insert(ident, (symbol, entry.region));
             }
         }
@@ -3423,7 +3423,7 @@ fn send_header_two<'a>(
             // For example, if module A has [B.{ foo }], then
             // when we get here for B, `foo` will already have
             // an IdentId. We must reuse that!
-            let ident_id = ident_ids.get_or_insert(&loc_exposed.value.as_str().into());
+            let ident_id = ident_ids.get_or_insert(&loc_exposed.value.as_str());
             let symbol = Symbol::new(home, ident_id);
 
             exposed.push(symbol);
@@ -3450,8 +3450,7 @@ fn send_header_two<'a>(
     let module_name = ModuleNameEnum::PkgConfig;
 
     let main_for_host = {
-        let ident_str: Ident = provides[0].value.as_str().into();
-        let ident_id = ident_ids.get_or_insert(&ident_str);
+        let ident_id = ident_ids.get_or_insert(provides[0].value.as_str());
 
         Symbol::new(home, ident_id)
     };
