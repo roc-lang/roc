@@ -17,6 +17,35 @@ use crate::RocList;
 #[repr(transparent)]
 pub struct RocStr(RocStrInner);
 
+macro_rules! with_stack_bytes {
+    ($len:expr, $align_type:ty, $closure:expr) => {
+        {
+            use $crate::RocStr;
+
+            if $len < RocStr::TEMP_CSTR_MAX_STACK_BYTES {
+                // TODO: once https://doc.rust-lang.org/std/mem/union.MaybeUninit.html#method.uninit_array
+                // has become stabilized, use that here in order to do a precise
+                // stack allocation instead of always over-allocating to 64B.
+                let mut bytes: MaybeUninit<[u8; RocStr::TEMP_CSTR_MAX_STACK_BYTES]> =
+                    MaybeUninit::uninit();
+
+                $closure(bytes.as_mut_ptr() as *mut u8)
+            } else {
+                let align = core::mem::align_of::<$align_type>() as u32;
+                // The string is too long to stack-allocate, so
+                // do a heap allocation and then free it afterwards.
+                let ptr = roc_alloc($len, align) as *mut u8;
+                let answer = $closure(ptr);
+
+                // Free the heap allocation.
+                roc_dealloc(ptr.cast(), align);
+
+                answer
+            }
+        }
+    };
+}
+
 impl RocStr {
     pub const SIZE: usize = core::mem::size_of::<Self>();
     pub const MASK: u8 = 0b1000_0000;
@@ -95,7 +124,7 @@ impl RocStr {
     }
 
     // If the string is under this many bytes, the into_temp_c_str method will allocate the
-    // CStr on the stack when the RocStr is non-unique.
+    // C string on the stack when the RocStr is non-unique.
     const TEMP_CSTR_MAX_STACK_BYTES: usize = 64;
 
     /// Turn this RocStr into a nul-terminated UTF-8 `*mut i8` and then provide access to that
@@ -122,7 +151,7 @@ impl RocStr {
     ///
     /// This operation can fail because a RocStr may contain \0 characters, which a
     /// nul-terminated string must not.
-    pub fn temp_c_utf8<T, F: Fn(*const i8, usize) -> T>(
+    pub fn temp_c_utf8<T, F: Fn(*mut i8, usize) -> T>(
         self,
         func: F,
     ) -> Result<T, InteriorNulError> {
@@ -154,7 +183,7 @@ impl RocStr {
 
                                 // First, copy the bytes over the original allocation - effectively
                                 // shifting everything over by one `usize`. Now we no longer have a
-                                // refcount (but the &CStr won't use that anyway), but we do have a
+                                // refcount (but the C string won't use that anyway), but we do have a
                                 // free `usize` at the end.
                                 //
                                 // IMPORTANT: Must use ptr::copy instead of ptr::copy_nonoverlapping
@@ -170,16 +199,12 @@ impl RocStr {
                             Ok(func(ptr, len))
                         }
                         Some(_) => {
-                            // The backing list was not unique, so we can't mutate it in-place.
                             let len = roc_list.len();
 
-                            if len < Self::TEMP_CSTR_MAX_STACK_BYTES {
-                                // TODO: once https://doc.rust-lang.org/std/mem/union.MaybeUninit.html#method.uninit_array
-                                // has become stabilized, use that here in order to do a precise
-                                // stack allocation instead of always over-allocating to 64B.
-                                let mut bytes: MaybeUninit<[i8; Self::TEMP_CSTR_MAX_STACK_BYTES]> =
-                                    MaybeUninit::uninit();
-                                let alloc_ptr = bytes.as_mut_ptr() as *mut i8;
+                            // The backing list was not unique, so we can't mutate it in-place.
+                            // The backing list was not unique, so we can't mutate it in-place.
+                            with_stack_bytes!(len, i8, |alloc_ptr| {
+                                let alloc_ptr = alloc_ptr as *mut i8;
                                 let elem_ptr = roc_list.ptr_to_first_elem() as *mut i8;
 
                                 // memcpy the bytes into the stack allocation
@@ -188,30 +213,8 @@ impl RocStr {
                                 // nul-terminate the new allocation.
                                 *(alloc_ptr.add(len)) = 0;
 
-                                // Convert the bytes to &CStr
-
                                 Ok(func(alloc_ptr, len))
-                            } else {
-                                // The string is too long to stack-allocate, so
-                                // do a heap allocation and then free it afterwards.
-                                let align = core::mem::align_of::<i8>() as u32;
-                                let alloc_ptr = roc_alloc(len, align) as *mut i8;
-                                let elem_ptr = roc_list.ptr_to_first_elem() as *mut i8;
-
-                                // memcpy the bytes into the heap allocation
-                                ptr::copy_nonoverlapping(elem_ptr, alloc_ptr, len);
-
-                                // nul-terminate the new allocation.
-                                *(alloc_ptr.add(len)) = 0;
-
-                                // Pass the &CStr to the function to get the answer.
-                                let answer = func(alloc_ptr, len);
-
-                                // Free the heap allocation.
-                                roc_dealloc(alloc_ptr.cast(), align);
-
-                                Ok(answer)
-                            }
+                            })
                         }
                         None => {
                             // The backing list was empty.
@@ -239,6 +242,145 @@ impl RocStr {
                     Ok(func(ptr, len))
                 }
             }
+        }
+    }
+
+    /// Turn this RocStr into a nul-terminated UTF-16 `*mut u16` and then provide access to
+    /// that `*mut u16` (as well as its length) for the duration of a given function. This is
+    /// designed to be an efficient way to turn a RocStr received from an application into
+    /// the nul-terminated UTF-16 `wchar_t*` needed by Windows API calls.
+    ///
+    /// **NOTE:** The length passed to the function is the same value that `RocStr::len` will
+    /// return; it does not count the nul terminator. So to convert it to a nul-terminated
+    /// slice of Rust bytes, call `slice::from_raw_parts` passing the given length + 1.
+    ///
+    /// This operation achieves efficiency by reusing allocated bytes from the RocStr itself,
+    /// and sometimes allocating on the stack. It does not allocate on the heap when given a
+    /// a small string or a string with unique refcount, but may allocate when given a large
+    /// string with non-unique refcount. (It will do a stack allocation if the string is under
+    /// 64 bytes; the stack allocation will only live for the duration of the called function.)
+    ///
+    /// Because this works on an owned RocStr, it's able to overwrite the underlying bytes
+    /// to nul-terminate the string in-place. Small strings have an extra byte at the end
+    /// where the length is stored, which can become 0 for nul-termination. Heap-allocated
+    /// strings can have excess capacity which can hold a nul termiator, or if they have no
+    /// excess capacity, all the bytes can be shifted over the refcount in order to free up
+    /// a `usize` worth of free space at the end - which can easily fit a nul terminator.
+    ///
+    /// This operation can fail because a RocStr may contain \0 characters, which a
+    /// nul-terminated string must not.
+    pub fn temp_c_utf16<T, F: Fn(*mut u16, usize) -> T>(
+        self,
+        func: F,
+    ) -> Result<T, InteriorNulError> {
+        use crate::{roc_alloc, roc_dealloc, Storage};
+        use core::mem::{align_of, MaybeUninit};
+
+        if let Some(pos) = self.first_nul_byte() {
+            return Err(InteriorNulError { pos, roc_str: self });
+        }
+
+        // When we don't have an existing allocation that can work, fall back on this.
+        // It uses either a stack allocation, or, if that would be too big, a heap allocation.
+        macro_rules! fallback {
+            ($len:expr) => {
+                with_stack_bytes!($len, u16, |alloc_ptr| {
+                    let alloc_ptr = alloc_ptr as *mut u16;
+
+                    self.write_utf16_c(alloc_ptr);
+
+                    Ok(func(alloc_ptr, $len))
+                })
+            };
+        }
+
+        match self.as_enum_ref() {
+            RocStrInnerRef::HeapAllocated(roc_list) => {
+                let len = roc_list.len();
+
+                unsafe {
+                    match roc_list.elements_and_storage() {
+                        Some((_, storage)) if storage.get().is_unique() => {
+                            // The backing RocList was unique, so we can mutate it in-place.
+
+                            // We need 1 extra u16 for the nul terminator. It must be a u16,
+                            // not a u8, because we'll be providing a pointer to u16s.
+                            let needed_bytes = (len + 1) * size_of::<u16>();
+
+                            // We can use not only the capacity on the heap, but also
+                            // the bytes originally used for the refcount.
+                            let available_bytes = roc_list.capacity() + size_of::<Storage>();
+
+                            if needed_bytes < available_bytes {
+                                debug_assert!(align_of::<Storage>() >= align_of::<u16>());
+
+                                // We happen to have sufficient excess capacity already,
+                                // so we will be able to write the UTF-16 chars as well as
+                                // the nul terminator into the existing allocation.
+                                let ptr = roc_list.ptr_to_allocation() as *mut u16;
+
+                                self.write_utf16_c(ptr);
+
+                                Ok(func(ptr, len))
+                            } else {
+                                // We didn't have sufficient excess capacity already,
+                                // so we need to do either a new stack allocation or a new
+                                // heap allocation.
+                                fallback!(len)
+                            }
+                        }
+                        Some(_) => {
+                            // The backing list was not unique, so we can't mutate it in-place.
+                            fallback!(len)
+                        }
+                        None => {
+                            // The backing list was empty.
+                            //
+                            // No need to do a heap allocation for an empty string - we
+                            // can just do a stack allocation that will live for the
+                            // duration of the function.
+                            Ok(func([0u16].as_mut_ptr(), 0))
+                        }
+                    }
+                }
+            }
+            RocStrInnerRef::SmallString(small_str) => {
+                let len = small_str.len();
+
+                // We need 1 extra u16 for the nul terminator. It must be a u16,
+                // not a u8, because we'll be providing a pointer to u16s.
+                let needed_bytes = (len + 1) * size_of::<u16>();
+                let available_bytes = size_of::<SmallString>();
+
+                unsafe {
+                    if needed_bytes < available_bytes {
+                        let mut bytes = small_str.bytes;
+                        let ptr = bytes.as_mut_ptr() as *mut u16;
+
+                        self.write_utf16_c(ptr);
+
+                        Ok(func(ptr, len))
+                    } else {
+                        fallback!(len)
+                    }
+                }
+            }
+        }
+    }
+
+    unsafe fn write_utf16_c(&self, dest_ptr: *mut u16) {
+        let str_slice = self.as_str();
+
+        // Write the UTF-8 source bytes into UTF-16 destination bytes.
+        for (index, wchar) in str_slice.encode_utf16().enumerate() {
+            unsafe {
+                *(dest_ptr.add(index)) = wchar;
+            }
+        }
+
+        // nul-terminate
+        unsafe {
+            *(dest_ptr.add(str_slice.len())) = 0;
         }
     }
 }
