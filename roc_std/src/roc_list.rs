@@ -22,7 +22,10 @@ pub struct RocList<T> {
 }
 
 impl<T> RocList<T> {
-    const ALLOC_ALIGNMENT: usize = mem::align_of::<T>().max(mem::align_of::<Storage>());
+    #[inline(always)]
+    fn alloc_alignment() -> usize {
+        mem::align_of::<T>().max(mem::align_of::<Storage>())
+    }
 
     pub fn empty() -> Self {
         RocList {
@@ -57,12 +60,16 @@ impl<T> RocList<T> {
         &*self
     }
 
-    pub(crate) fn elements_and_storage(
-        &self,
-    ) -> Option<(NonNull<ManuallyDrop<T>>, &Cell<Storage>)> {
+    #[inline(always)]
+    fn elements_and_storage(&self) -> Option<(NonNull<ManuallyDrop<T>>, &Cell<Storage>)> {
         let elements = self.elements?;
         let storage = unsafe { &*elements.as_ptr().cast::<Cell<Storage>>().sub(1) };
         Some((elements, storage))
+    }
+
+    pub(crate) fn storage(&self) -> Option<Storage> {
+        self.elements_and_storage()
+            .map(|(_, storage)| storage.get())
     }
 
     /// Useful for doing memcpy on the elements. Returns NULL if list is empty.
@@ -93,7 +100,7 @@ where
             return;
         }
 
-        let alignment = Self::ALLOC_ALIGNMENT;
+        let alignment = Self::alloc_alignment();
         let elements_offset = alignment;
 
         let new_size = elements_offset + mem::size_of::<T>() * (self.len() + slice.len());
@@ -309,7 +316,7 @@ impl<T> Drop for RocList<T> {
                         mem::drop::<T>(ManuallyDrop::take(&mut *elem_ptr));
                     }
 
-                    let alignment = Self::ALLOC_ALIGNMENT;
+                    let alignment = Self::alloc_alignment();
 
                     // Release the memory.
                     roc_dealloc(
