@@ -99,13 +99,6 @@ bitflags! {
         ///
         /// For example, t1 += [A Str] says we should "add" the tag "A Str" to the type of "t1".
         const PRESENT = 1 << 1;
-        /// Instructs the unifier to treat rigids exactly like flex vars.
-        /// Usually rigids can only unify with flex vars, because rigids are named and bound
-        /// explicitly.
-        /// However, when checking type ranges, as we do for `RangedNumber` types, we must loosen
-        /// this restriction because otherwise an admissible range will appear inadmissible.
-        /// For example, Int * is in the range <I8, U8, ...>.
-        const RIGID_AS_FLEX = 1 << 2;
     }
 }
 
@@ -126,11 +119,7 @@ impl Mode {
 
     #[cfg(debug_assertions)]
     fn pretty_print(&self) -> &str {
-        if self.contains(Mode::EQ | Mode::RIGID_AS_FLEX) {
-            "~*"
-        } else if self.contains(Mode::PRESENT | Mode::RIGID_AS_FLEX) {
-            "+=*"
-        } else if self.contains(Mode::EQ) {
+        if self.contains(Mode::EQ) {
             "~"
         } else if self.contains(Mode::PRESENT) {
             "+="
@@ -1929,19 +1918,6 @@ fn unify_rigid(
         }
 
         RigidVar(_)
-        | RecursionVar { .. }
-        | Structure(_)
-        | Alias(_, _, _, _)
-        | RangedNumber(..)
-        | LambdaSet(..)
-            if ctx.mode.contains(Mode::RIGID_AS_FLEX) =>
-        {
-            // Usually rigids can only unify with flex, but the mode indicates we are treating
-            // rigid vars as flex, so admit this.
-            merge(subs, ctx, *other)
-        }
-
-        RigidVar(_)
         | RigidAbleVar(..)
         | RecursionVar { .. }
         | Structure(_)
@@ -1987,40 +1963,6 @@ fn unify_rigid_able(
                     ability,
                     other_ability
                 )
-            }
-        }
-
-        RigidVar(_)
-        | RecursionVar { .. }
-        | Structure(_)
-        | Alias(_, _, _, _)
-        | RangedNumber(..)
-        | LambdaSet(..)
-            if ctx.mode.contains(Mode::RIGID_AS_FLEX) =>
-        {
-            // Usually rigids can only unify with flex, but the mode indicates we are treating
-            // rigid vars as flex, so admit this.
-            match other {
-                Alias(opaque_name, vars, _real_var, AliasKind::Opaque) if vars.is_empty() => {
-                    let mut output = merge(subs, ctx, *other);
-                    let must_implement_ability = MustImplementAbility {
-                        typ: Obligated::Opaque(*opaque_name),
-                        ability,
-                    };
-                    output.must_implement_ability.push(must_implement_ability);
-                    output
-                }
-
-                // these have underscores because they're unused in --release builds
-                _other => {
-                    // For now, only allow opaque types with no type variables to implement abilities.
-                    mismatch!(
-                        %not_able, ctx.second, ability,
-                        "RigidAble {:?} with non-opaque or opaque with type variables {:?}",
-                        ctx.first,
-                        &_other
-                    )
-                }
             }
         }
 
