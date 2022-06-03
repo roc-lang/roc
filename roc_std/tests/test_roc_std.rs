@@ -156,23 +156,50 @@ mod test_roc_std {
 }
 
 #[cfg(test)]
-mod into_temp_c_str {
+mod temp_c_str {
     use core::slice;
     use roc_std::RocStr;
     use std::ffi::CStr;
 
+    fn verify_temp_c(string: &str) {
+        // temp_c_utf8
+        {
+            let roc_str = RocStr::from(string);
+            let answer = roc_str.temp_c_utf8(|ptr, len| {
+                let bytes = unsafe { slice::from_raw_parts(ptr.cast(), len + 1) };
+                let c_str = CStr::from_bytes_with_nul(bytes).unwrap();
+
+                assert_eq!(c_str.to_str(), Ok(string));
+
+                42
+            });
+
+            assert_eq!(Ok(42), answer);
+        }
+
+        // temp_c_utf16
+        {
+            let roc_str = RocStr::from(string);
+            let answer = roc_str.temp_c_utf16(|ptr, len| {
+                let bytes = unsafe { slice::from_raw_parts(ptr.cast(), len + 1) };
+
+                // Verify that it's nul-terminated
+                assert_eq!(bytes[len], 0);
+
+                let string = String::from_utf16(&bytes[0..len]).unwrap();
+
+                assert_eq!(string.as_str(), string);
+
+                42
+            });
+
+            assert_eq!(Ok(42), answer);
+        }
+    }
+
     #[test]
     fn empty_string() {
-        let answer = RocStr::empty().temp_c_utf8(|ptr, len| {
-            let bytes = unsafe { slice::from_raw_parts(ptr.cast(), len + 1) };
-            let c_str = CStr::from_bytes_with_nul(bytes).unwrap();
-
-            assert_eq!(c_str.to_str(), Ok(""));
-
-            42
-        });
-
-        assert_eq!(Ok(42), answer);
+        verify_temp_c("");
     }
 
     /// e.g. "1" or "12" or "12345" etc.
@@ -188,21 +215,18 @@ mod into_temp_c_str {
     }
 
     #[test]
-    fn no_excess_capacity() {
-        // Test all the small strings, and also one large string
-        for len in 1..=(super::ROC_SMALL_STR_CAPACITY + 1) {
-            let string = string_for_len(len);
-
-            let answer = RocStr::from(string.as_str()).temp_c_utf8(|ptr, len| {
-                let bytes = unsafe { slice::from_raw_parts(ptr.cast(), len + 1) };
-                let c_str = CStr::from_bytes_with_nul(bytes).unwrap();
-
-                assert_eq!(c_str.to_str(), Ok(string.as_str()));
-
-                42
-            });
-
-            assert_eq!(Ok(42), answer);
+    fn small_strings() {
+        for len in 1..=super::ROC_SMALL_STR_CAPACITY {
+            verify_temp_c(&string_for_len(len));
         }
+    }
+
+    #[test]
+    fn no_excess_capacity() {
+        // This is small enough that it should be a stack allocation for UTF-8
+        verify_temp_c(&string_for_len(33));
+
+        // This is big enough that it should be a heap allocation for UTF-8 and UTF-16
+        verify_temp_c(&string_for_len(65));
     }
 }
