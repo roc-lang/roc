@@ -22,6 +22,8 @@ pub struct RocList<T> {
 }
 
 impl<T> RocList<T> {
+    const ALLOC_ALIGNMENT: usize = mem::align_of::<T>().max(mem::align_of::<Storage>());
+
     pub fn empty() -> Self {
         RocList {
             elements: None,
@@ -91,7 +93,7 @@ where
             return;
         }
 
-        let alignment = cmp::max(mem::align_of::<T>(), mem::align_of::<Storage>());
+        let alignment = Self::ALLOC_ALIGNMENT;
         let elements_offset = alignment;
 
         let new_size = elements_offset + mem::size_of::<T>() * (self.len() + slice.len());
@@ -307,7 +309,7 @@ impl<T> Drop for RocList<T> {
                         mem::drop::<T>(ManuallyDrop::take(&mut *elem_ptr));
                     }
 
-                    let alignment = cmp::max(mem::align_of::<T>(), mem::align_of::<Storage>());
+                    let alignment = Self::ALLOC_ALIGNMENT;
 
                     // Release the memory.
                     roc_dealloc(
