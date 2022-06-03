@@ -175,18 +175,23 @@ mod into_temp_c_str {
         assert_eq!(Ok(42), answer);
     }
 
+    /// e.g. "1" or "12" or "12345" etc.
+    fn string_for_len(len: usize) -> String {
+        let bytes: Vec<u8> = (1..=len as u8).collect();
+
+        assert_eq!(bytes.len(), len);
+
+        // The bytes should contain no nul characters.
+        assert!(bytes.iter().all(|byte| *byte != 0));
+
+        String::from_utf8(bytes).unwrap()
+    }
+
     #[test]
-    fn small_string_all_lengths() {
-        for len in 1..super::ROC_SMALL_STR_CAPACITY {
-            let bytes: Vec<u8> = (1..=len as u8).collect();
-
-            assert_eq!(bytes.len(), len);
-
-            // The bytes should contain no nul characters.
-            assert!(bytes.iter().all(|byte| *byte != 0));
-
-            // e.g. "1" or "12" or "12345" etc.
-            let string = String::from_utf8(bytes).unwrap();
+    fn no_excess_capacity() {
+        // Test all the small strings, and also one large string
+        for len in 1..=(super::ROC_SMALL_STR_CAPACITY + 1) {
+            let string = string_for_len(len);
 
             let answer = RocStr::from(string.as_str()).temp_c_utf8(|ptr, len| {
                 let bytes = unsafe { slice::from_raw_parts(ptr.cast(), len + 1) };
