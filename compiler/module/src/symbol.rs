@@ -1,6 +1,6 @@
 use crate::ident::{Ident, ModuleName};
 use crate::module_err::{IdentIdNotFound, ModuleIdNotFound, ModuleResult};
-use roc_collections::{SendMap, SmallStringInterner, VecMap};
+use roc_collections::{SmallStringInterner, VecMap};
 use roc_ident::IdentStr;
 use roc_region::all::Region;
 use snafu::OptionExt;
@@ -916,8 +916,8 @@ macro_rules! define_builtins {
             /// and what symbols they should resolve to.
             ///
             /// This is for type aliases like `Int` and `Str` and such.
-            pub fn default_in_scope() -> SendMap<Ident, (Symbol, Region)> {
-                let mut scope = SendMap::default();
+            pub fn default_in_scope() -> VecMap<Ident, (Symbol, Region)> {
+                let mut scope = VecMap::default();
 
                 $(
                     $(
