@@ -379,9 +379,9 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
             *structure,
             &ctx.second_desc.content,
         ),
-        RigidVar(name) => unify_rigid(subs, &ctx, name, None, &ctx.second_desc.content),
+        RigidVar(name) => unify_rigid(subs, &ctx, name, &ctx.second_desc.content),
         RigidAbleVar(name, ability) => {
-            unify_rigid(subs, &ctx, name, Some(*ability), &ctx.second_desc.content)
+            unify_rigid_able(subs, &ctx, name, *ability, &ctx.second_desc.content)
         }
         Structure(flat_type) => {
             unify_structure(subs, pool, &ctx, flat_type, &ctx.second_desc.content)
@@ -1912,7 +1912,6 @@ fn unify_rigid(
     subs: &mut Subs,
     ctx: &Context,
     name: &SubsIndex<Lowercase>,
-    opt_able_bound: Option<Symbol>,
     other: &Content,
 ) -> Outcome {
     match other {
@@ -1921,31 +1920,73 @@ fn unify_rigid(
             merge(subs, ctx, RigidVar(*name))
         }
         FlexAbleVar(_, other_ability) => {
-            match opt_able_bound {
-                Some(ability) => {
-                    if ability == *other_ability {
-                        // The ability bounds are the same, so rigid wins!
-                        merge(subs, ctx, RigidAbleVar(*name, ability))
-                    } else {
-                        // Mismatch for now.
-                        // TODO check ability hierarchies.
-                        mismatch!(
-                            %not_able, ctx.second, ability,
-                            "RigidAble {:?} with ability {:?} not compatible with ability {:?}",
-                            ctx.first,
-                            ability,
-                            other_ability
-                        )
-                    }
-                }
-                None => {
-                    // Mismatch - Rigid can unify with FlexAble only when the Rigid has an ability
-                    // bound as well, otherwise the user failed to correctly annotate the bound.
-                    mismatch!(
-                        %not_able, ctx.first, *other_ability,
-                        "Rigid {:?} with FlexAble {:?}", ctx.first, other
-                    )
-                }
+            // Mismatch - Rigid can unify with FlexAble only when the Rigid has an ability
+            // bound as well, otherwise the user failed to correctly annotate the bound.
+            mismatch!(
+                %not_able, ctx.first, *other_ability,
+                "Rigid {:?} with FlexAble {:?}", ctx.first, other
+            )
+        }
+
+        RigidVar(_)
+        | RecursionVar { .. }
+        | Structure(_)
+        | Alias(_, _, _, _)
+        | RangedNumber(..)
+        | LambdaSet(..)
+            if ctx.mode.contains(Mode::RIGID_AS_FLEX) =>
+        {
+            // Usually rigids can only unify with flex, but the mode indicates we are treating
+            // rigid vars as flex, so admit this.
+            merge(subs, ctx, *other)
+        }
+
+        RigidVar(_)
+        | RigidAbleVar(..)
+        | RecursionVar { .. }
+        | Structure(_)
+        | Alias(..)
+        | RangedNumber(..)
+        | LambdaSet(..) => {
+            // Type mismatch! Rigid can only unify with flex, even if the
+            // rigid names are the same.
+            mismatch!("Rigid {:?} with {:?}", ctx.first, &other)
+        }
+
+        Error => {
+            // Error propagates.
+            merge(subs, ctx, Error)
+        }
+    }
+}
+
+#[inline(always)]
+fn unify_rigid_able(
+    subs: &mut Subs,
+    ctx: &Context,
+    name: &SubsIndex<Lowercase>,
+    ability: Symbol,
+    other: &Content,
+) -> Outcome {
+    match other {
+        FlexVar(_) => {
+            // If the other is flex, rigid wins!
+            merge(subs, ctx, RigidVar(*name))
+        }
+        FlexAbleVar(_, other_ability) => {
+            if ability == *other_ability {
+                // The ability bounds are the same, so rigid wins!
+                merge(subs, ctx, RigidAbleVar(*name, ability))
+            } else {
+                // Mismatch for now.
+                // TODO check ability hierarchies.
+                mismatch!(
+                    %not_able, ctx.second, ability,
+                    "RigidAble {:?} with ability {:?} not compatible with ability {:?}",
+                    ctx.first,
+                    ability,
+                    other_ability
+                )
             }
         }
 
@@ -1959,11 +2000,8 @@ fn unify_rigid(
         {
             // Usually rigids can only unify with flex, but the mode indicates we are treating
             // rigid vars as flex, so admit this.
-            match (opt_able_bound, other) {
-                (None, other) => merge(subs, ctx, *other),
-                (Some(ability), Alias(opaque_name, vars, _real_var, AliasKind::Opaque))
-                    if vars.is_empty() =>
-                {
+            match other {
+                Alias(opaque_name, vars, _real_var, AliasKind::Opaque) if vars.is_empty() => {
                     let mut output = merge(subs, ctx, *other);
                     let must_implement_ability = MustImplementAbility {
                         typ: Obligated::Opaque(*opaque_name),
@@ -1974,10 +2012,10 @@ fn unify_rigid(
                 }
 
                 // these have underscores because they're unused in --release builds
-                (Some(_ability), _other) => {
+                _other => {
                     // For now, only allow opaque types with no type variables to implement abilities.
                     mismatch!(
-                        %not_able, ctx.second, _ability,
+                        %not_able, ctx.second, ability,
                         "RigidAble {:?} with non-opaque or opaque with type variables {:?}",
                         ctx.first,
                         &_other
