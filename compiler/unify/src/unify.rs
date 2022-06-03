@@ -364,14 +364,10 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
     // This #[allow] is needed in release builds, where `result` is no longer used.
     #[allow(clippy::let_and_return)]
     let result = match &ctx.first_desc.content {
-        FlexVar(opt_name) => unify_flex(subs, &ctx, opt_name, None, &ctx.second_desc.content),
-        FlexAbleVar(opt_name, ability) => unify_flex(
-            subs,
-            &ctx,
-            opt_name,
-            Some(*ability),
-            &ctx.second_desc.content,
-        ),
+        FlexVar(opt_name) => unify_flex(subs, &ctx, opt_name, &ctx.second_desc.content),
+        FlexAbleVar(opt_name, ability) => {
+            unify_flex_able(subs, &ctx, opt_name, *ability, &ctx.second_desc.content)
+        }
         RecursionVar {
             opt_name,
             structure,
@@ -2014,45 +2010,19 @@ fn unify_flex(
     subs: &mut Subs,
     ctx: &Context,
     opt_name: &Option<SubsIndex<Lowercase>>,
-    opt_able_bound: Option<Symbol>,
     other: &Content,
 ) -> Outcome {
     match other {
         FlexVar(other_opt_name) => {
             // Prefer using right's name.
             let opt_name = opt_name.or(*other_opt_name);
-            match opt_able_bound {
-                Some(ability) => merge(subs, ctx, FlexAbleVar(opt_name, ability)),
-                None => merge(subs, ctx, FlexVar(opt_name)),
-            }
+            merge(subs, ctx, FlexVar(opt_name))
         }
 
-        FlexAbleVar(opt_other_name, other_ability) => {
-            // Prefer the right's name when possible.
+        FlexAbleVar(opt_other_name, ability) => {
+            // Prefer using right's name.
             let opt_name = (opt_other_name).or(*opt_name);
-
-            match opt_able_bound {
-                Some(ability) => {
-                    if ability == *other_ability {
-                        // The ability bounds are the same! Keep the name around if it exists.
-                        merge(subs, ctx, FlexAbleVar(opt_name, ability))
-                    } else {
-                        // Ability names differ; mismatch for now.
-                        // TODO check ability hierarchies.
-                        mismatch!(
-                            %not_able, ctx.second, ability,
-                            "FlexAble {:?} with ability {:?} not compatible with ability {:?}",
-                            ctx.first,
-                            ability,
-                            other_ability
-                        )
-                    }
-                }
-                None => {
-                    // Right has an ability bound, but left might have the name. Combine them.
-                    merge(subs, ctx, FlexAbleVar(opt_name, *other_ability))
-                }
-            }
+            merge(subs, ctx, FlexAbleVar(opt_name, *ability))
         }
 
         RigidVar(_)
@@ -2065,6 +2035,80 @@ fn unify_flex(
             // TODO special-case boolean here
             // In all other cases, if left is flex, defer to right.
             merge(subs, ctx, *other)
+        }
+
+        Error => merge(subs, ctx, Error),
+    }
+}
+
+#[inline(always)]
+fn unify_flex_able(
+    subs: &mut Subs,
+    ctx: &Context,
+    opt_name: &Option<SubsIndex<Lowercase>>,
+    ability: Symbol,
+    other: &Content,
+) -> Outcome {
+    match other {
+        FlexVar(opt_other_name) => {
+            // Prefer using right's name.
+            let opt_name = (opt_other_name).or(*opt_name);
+            merge(subs, ctx, FlexAbleVar(opt_name, ability))
+        }
+
+        FlexAbleVar(opt_other_name, other_ability) => {
+            // Prefer the right's name when possible.
+            let opt_name = (opt_other_name).or(*opt_name);
+
+            if ability == *other_ability {
+                merge(subs, ctx, FlexAbleVar(opt_name, ability))
+            } else {
+                // Ability names differ; mismatch for now.
+                // TODO check ability hierarchies.
+                mismatch!(
+                    %not_able, ctx.second, ability,
+                    "FlexAble {:?} with ability {:?} not compatible with ability {:?}",
+                    ctx.first,
+                    ability,
+                    other_ability
+                )
+            }
+        }
+
+        RigidAbleVar(_, other_ability) => {
+            if ability == *other_ability {
+                merge(subs, ctx, *other)
+            } else {
+                mismatch!(%not_able, ctx.second, ability, "RigidAble {:?} vs {:?}", ability, other_ability)
+            }
+        }
+
+        RigidVar(_) => mismatch!("FlexAble can never unify with non-able Rigid"),
+        RecursionVar { .. } => mismatch!("FlexAble with RecursionVar"),
+        LambdaSet(..) => mismatch!("FlexAble with LambdaSet"),
+
+        Alias(name, args, _real_var, AliasKind::Opaque) => {
+            if args.is_empty() {
+                // Opaque type wins
+                let mut outcome = merge(subs, ctx, *other);
+                outcome.must_implement_ability.push(MustImplementAbility {
+                    typ: Obligated::Opaque(*name),
+                    ability,
+                });
+                outcome
+            } else {
+                mismatch!("FlexAble vs Opaque with type vars")
+            }
+        }
+
+        Structure(_) | Alias(_, _, _, AliasKind::Structural) | RangedNumber(..) => {
+            // Structural type wins.
+            let mut outcome = merge(subs, ctx, *other);
+            outcome.must_implement_ability.push(MustImplementAbility {
+                typ: Obligated::Adhoc(ctx.second),
+                ability,
+            });
+            outcome
         }
 
         Error => merge(subs, ctx, Error),
