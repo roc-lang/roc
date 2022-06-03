@@ -1735,14 +1735,12 @@ fn find_specializaton_lambda_sets(
                 uls_before.into_iter().chain(uls_after.into_iter()).copied(),
             );
 
-            subs.set_content(
-                lambda_set,
-                Content::LambdaSet(LambdaSet {
-                    solved,
-                    recursion_var,
-                    unspecialized: new_unspecialized,
-                }),
-            );
+            let new_lambda_set_content = Content::LambdaSet(LambdaSet {
+                solved,
+                recursion_var,
+                unspecialized: new_unspecialized,
+            });
+            subs.set_content(lambda_set, new_lambda_set_content);
 
             let old_specialized =
                 specialization_lambda_sets.insert(specialized_lset_region, lambda_set);
@@ -1812,6 +1810,7 @@ fn compact_lambda_set(
                 //
                 //   {a, b} = default {}
                 //   #        ^^^^^^^ {} -[{a: t1, b: t2}:default:1]
+                new_unspecialized.push(uls);
                 continue;
             }
             Alias(opaque, _, _, AliasKind::Opaque) => opaque,

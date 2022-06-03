@@ -277,7 +277,7 @@ mod solve_expr {
             let var = find_type_at(region, &decls)
                 .unwrap_or_else(|| panic!("No type for {} ({:?})!", &text, region));
 
-            let actual_str = name_and_print_var(var, subs, home, &interns, PrintLambdaSets::No);
+            let actual_str = name_and_print_var(var, subs, home, &interns, PrintLambdaSets::Yes);
 
             let elaborated = match find_ability_member_at(region, &decls) {
                 Some((member, specialization_id)) => {
@@ -6318,8 +6318,8 @@ mod solve_expr {
                 "#
             ),
             &[
-                "u8 : U8 -> Encoder Linear",
-                "toEncoder : MyU8 -> Encoder fmt | fmt has Format",
+                "u8 : U8 -[[u8(22)]]-> Encoder Linear",
+                "toEncoder : MyU8 -[[toEncoder(23)]]-> Encoder fmt | fmt has Format",
                 "myU8Bytes : List U8",
             ],
         )
@@ -6426,7 +6426,7 @@ mod solve_expr {
                     a
                 "#
             ),
-            &["A#default : {} -> A"],
+            &["A#default : {} -[[default(5)]]-> A"],
         )
     }
 
@@ -6469,7 +6469,9 @@ mod solve_expr {
                      # ^^^^^^^^^
                 "#
             ),
-            &["Encoding#toEncoder : { a : Str } -> Encoder fmt | fmt has EncoderFormatting"],
+            &[
+                "Encoding#toEncoder : { a : Str } -[[] + { a : Str }:toEncoder(2):1]-> Encoder fmt | fmt has EncoderFormatting",
+            ],
         )
     }
 
@@ -6489,7 +6491,7 @@ mod solve_expr {
                      # ^^^^^^^^^
                 "#
             ),
-            &["Encoding#toEncoder : { a : A } -> Encoder fmt | fmt has EncoderFormatting"],
+            &["Encoding#toEncoder : { a : A } -[[] + { a : A }:toEncoder(2):1]-> Encoder fmt | fmt has EncoderFormatting"],
         )
     }
 }

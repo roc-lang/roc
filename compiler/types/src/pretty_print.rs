@@ -585,13 +585,21 @@ fn write_content<'a>(
         }) => {
             buf.push_str("[[");
 
+            let print_symbol = |symbol: &Symbol| {
+                format!(
+                    "{}({})",
+                    symbol.as_str(&env.interns),
+                    symbol.ident_id().index(),
+                )
+            };
+
             write_sorted_tags2(
                 env,
                 ctx,
                 subs,
                 buf,
                 solved.unsorted_lambdas(subs),
-                |symbol| symbol.as_str(&env.interns),
+                print_symbol,
             );
 
             buf.push(']');
@@ -619,7 +627,7 @@ fn write_content<'a>(
                     Parens::Unnecessary,
                 );
                 buf.push(':');
-                buf.push_str(member.as_str(&env.interns));
+                buf.push_str(&print_symbol(member));
                 buf.push(':');
                 buf.push_str(&region.to_string());
             }
@@ -743,13 +751,13 @@ fn write_ext_content<'a>(
     }
 }
 
-fn write_sorted_tags2<'a, 'b, L: 'b>(
-    env: &'b Env,
+fn write_sorted_tags2<'a, L>(
+    env: &Env,
     ctx: &mut Context<'a>,
     subs: &'a Subs,
     buf: &mut String,
-    tags: UnsortedUnionLabels<'b, L>,
-    label_to_string: impl Fn(&'b L) -> &'b str,
+    tags: UnsortedUnionLabels<L>,
+    label_to_string: impl Fn(&L) -> String,
 ) where
     L: Label + Ord,
 {
@@ -766,7 +774,7 @@ fn write_sorted_tags2<'a, 'b, L: 'b>(
             any_written_yet = true;
         }
 
-        buf.push_str(label_to_string(label));
+        buf.push_str(&label_to_string(label));
 
         for var in vars {
             buf.push(' ');
@@ -935,7 +943,7 @@ fn write_flat_type<'a>(
 
             // Sort the fields so they always end up in the same order.
             let (tags, new_ext_var) = tags.unsorted_tags_and_ext(subs, *ext_var);
-            write_sorted_tags2(env, ctx, subs, buf, tags, |tag| tag.0.as_str());
+            write_sorted_tags2(env, ctx, subs, buf, tags, |tag| tag.0.as_str().to_string());
 
             buf.push(']');
 
@@ -965,7 +973,7 @@ fn write_flat_type<'a>(
             buf.push('[');
 
             let (tags, new_ext_var) = tags.unsorted_tags_and_ext(subs, *ext_var);
-            write_sorted_tags2(env, ctx, subs, buf, tags, |tag| tag.0.as_str());
+            write_sorted_tags2(env, ctx, subs, buf, tags, |tag| tag.0.as_str().to_string());
 
             buf.push(']');
 
@@ -1196,7 +1204,7 @@ fn write_fn<'a>(
                 buf,
                 parens,
             );
-            buf.push_str("->");
+            buf.push_str("-> ");
         }
     }
 

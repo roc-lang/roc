@@ -2162,11 +2162,10 @@ fn merge_flex_able_with_concrete(
     //
     // If we ever organize ability implementations so that they are well-known before any other
     // unification is done, they can be solved in-band here!
-    if let Some(uls_of_concrete) = subs.uls_of_var.remove_dependents(flex_able_var) {
-        outcome
-            .lambda_sets_to_specialize
-            .extend(flex_able_var, uls_of_concrete);
-    }
+    let uls_of_concrete = subs.remove_dependent_unspecialized_lambda_sets(flex_able_var);
+    outcome
+        .lambda_sets_to_specialize
+        .extend(flex_able_var, uls_of_concrete);
 
     outcome
 }

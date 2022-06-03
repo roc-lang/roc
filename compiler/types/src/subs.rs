@@ -315,7 +315,8 @@ pub struct UlsOfVar(VecMap<Variable, VecSet<Variable>>);
 
 impl UlsOfVar {
     pub fn add(&mut self, var: Variable, dependent_lambda_set: Variable) -> bool {
-        // TODO: should we be checking root key here?
+        // NOTE: this adds the var directly without following unification links.
+        // [Subs::remove_dependent_unspecialized_lambda_sets] follows unifications when removing.
         let set = self.0.get_or_insert(var, Default::default);
         set.insert(dependent_lambda_set)
     }
@@ -325,7 +326,8 @@ impl UlsOfVar {
         var: Variable,
         dependent_lambda_sets: impl IntoIterator<Item = Variable>,
     ) {
-        // TODO: should we be checking root key here?
+        // NOTE: this adds the var directly without following unification links.
+        // [Subs::remove_dependent_unspecialized_lambda_sets] follows unifications when removing.
         let set = self.0.get_or_insert(var, Default::default);
         set.extend(dependent_lambda_sets);
     }
@@ -344,6 +346,7 @@ impl UlsOfVar {
         self.0.remove(&var).map(|(_, v)| v)
     }
 
+    /// NOTE: this does not follow unification links.
     pub fn drain(self) -> impl Iterator<Item = (Variable, impl Iterator<Item = Variable>)> {
         self.0
             .into_iter()
@@ -1990,6 +1993,21 @@ impl Subs {
             Content::LambdaSet(lambda_set) => *lambda_set,
             _ => internal_error!("not a lambda set"),
         }
+    }
+
+    pub fn remove_dependent_unspecialized_lambda_sets(
+        &mut self,
+        var: Variable,
+    ) -> impl Iterator<Item = Variable> + '_ {
+        let utable = &self.utable;
+        let root_var = utable.root_key_without_compacting(var);
+
+        self.uls_of_var
+            .0
+            .drain_filter(move |cand_var, _| {
+                utable.root_key_without_compacting(*cand_var) == root_var
+            })
+            .flat_map(|(_, lambda_set_vars)| lambda_set_vars.into_iter())
     }
 }
 
