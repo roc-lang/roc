@@ -109,7 +109,7 @@ impl<'a> Env<'a> {
         let module_name: ModuleName = module_name.into();
 
         match self.module_ids.get_id(&module_name) {
-            Some(&module_id) => {
+            Some(module_id) => {
                 let ident: Ident = ident.into();
 
                 // You can do qualified lookups on your own module, e.g.
