@@ -3528,7 +3528,11 @@ impl<'a> BuildTask<'a> {
                 ..
             } = exposed;
             for ((member, typ), specialization) in solved_specializations.iter() {
-                abilities_store.register_specialization_for_type(*member, *typ, *specialization);
+                abilities_store.register_specialization_for_type(
+                    *member,
+                    *typ,
+                    specialization.clone(),
+                );
             }
         }
 
@@ -3685,6 +3689,7 @@ fn run_solve_solve(
                 // module.
                 member.module_id() == module_id || typ.module_id() == module_id
             })
+            .map(|(key, specialization)| (key, specialization.clone()))
             .collect();
 
         let is_specialization_symbol =

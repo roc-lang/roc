@@ -310,20 +310,48 @@ impl Subs {
 
 /// Mapping of variables to [Content::LambdaSet]s containing unspecialized lambda sets depending on
 /// that variable.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct UlsOfVar(VecMap<Variable, VecSet<Variable>>);
 
 impl UlsOfVar {
     pub fn add(&mut self, var: Variable, dependent_lambda_set: Variable) -> bool {
+        // TODO: should we be checking root key here?
         let set = self.0.get_or_insert(var, Default::default);
         set.insert(dependent_lambda_set)
+    }
+
+    pub fn extend(
+        &mut self,
+        var: Variable,
+        dependent_lambda_sets: impl IntoIterator<Item = Variable>,
+    ) {
+        // TODO: should we be checking root key here?
+        let set = self.0.get_or_insert(var, Default::default);
+        set.extend(dependent_lambda_sets);
+    }
+
+    pub fn union(&mut self, other: Self) {
+        for (key, lset) in other.drain() {
+            self.extend(key, lset);
+        }
     }
 
     pub fn remove_dependents(
         &mut self,
         var: Variable,
     ) -> Option<impl IntoIterator<Item = Variable>> {
+        // TODO: should we be checking root key here?
         self.0.remove(&var).map(|(_, v)| v)
+    }
+
+    pub fn drain(self) -> impl Iterator<Item = (Variable, impl Iterator<Item = Variable>)> {
+        self.0
+            .into_iter()
+            .map(|(v, set): (Variable, VecSet<Variable>)| (v, set.into_iter()))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 
@@ -1955,6 +1983,13 @@ impl Subs {
 
     pub fn vars_since_snapshot(&mut self, snapshot: &Snapshot) -> core::ops::Range<Variable> {
         self.utable.vars_since_snapshot(snapshot)
+    }
+
+    pub fn get_lambda_set(&self, lambda_set: Variable) -> LambdaSet {
+        match self.get_content_without_compacting(lambda_set) {
+            Content::LambdaSet(lambda_set) => *lambda_set,
+            _ => internal_error!("not a lambda set"),
+        }
     }
 }
 

@@ -50,10 +50,29 @@ impl AbilityMemberData {
 pub type SolvedSpecializations = VecMap<(Symbol, Symbol), MemberSpecialization>;
 
 /// A particular specialization of an ability member.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct MemberSpecialization {
     pub symbol: Symbol,
-    pub region: Region,
+
+    /// Solved lambda sets for an ability member specialization. For example, if we have
+    ///
+    ///   Default has default : {} -[[] + a:default:1]-> a | a has Default
+    ///   
+    ///   A := {}
+    ///   default = \{} -[[closA]]-> @A {}
+    ///
+    /// and this [MemberSpecialization] is for `A`, then there is a mapping of
+    /// `1` to the variable representing `[[closA]]`.
+    specialization_lambda_sets: VecMap<u8, Variable>,
+}
+
+impl MemberSpecialization {
+    pub fn new(symbol: Symbol, specialization_lambda_sets: VecMap<u8, Variable>) -> Self {
+        Self {
+            symbol,
+            specialization_lambda_sets,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -199,13 +218,13 @@ impl AbilitiesStore {
     /// "ability member" has a "specialization" for type "type".
     pub fn iter_specializations(
         &self,
-    ) -> impl Iterator<Item = ((Symbol, Symbol), MemberSpecialization)> + '_ {
-        self.declared_specializations.iter().map(|(k, v)| (*k, *v))
+    ) -> impl Iterator<Item = ((Symbol, Symbol), &MemberSpecialization)> + '_ {
+        self.declared_specializations.iter().map(|(k, v)| (*k, v))
     }
 
     /// Retrieves the specialization of `member` for `typ`, if it exists.
-    pub fn get_specialization(&self, member: Symbol, typ: Symbol) -> Option<MemberSpecialization> {
-        self.declared_specializations.get(&(member, typ)).copied()
+    pub fn get_specialization(&self, member: Symbol, typ: Symbol) -> Option<&MemberSpecialization> {
+        self.declared_specializations.get(&(member, typ))
     }
 
     pub fn members_of_ability(&self, ability: Symbol) -> Option<&[Symbol]> {
@@ -298,9 +317,9 @@ impl AbilitiesStore {
             declared_specializations
                 .iter()
                 .filter(|((member, _), _)| members.contains(member))
-                .for_each(|(&(member, typ), &specialization)| {
+                .for_each(|(&(member, typ), specialization)| {
                     new.register_specializing_symbol(specialization.symbol, member);
-                    new.register_specialization_for_type(member, typ, specialization);
+                    new.register_specialization_for_type(member, typ, specialization.clone());
                 });
         }
 
@@ -338,9 +357,10 @@ impl AbilitiesStore {
         for ((member, typ), specialization) in declared_specializations.into_iter() {
             let old_specialization = self
                 .declared_specializations
-                .insert((member, typ), specialization);
+                .insert((member, typ), specialization.clone());
             debug_assert!(
-                old_specialization.is_none() || old_specialization.unwrap() == specialization
+                old_specialization.is_none()
+                    || old_specialization.unwrap().symbol == specialization.symbol
             );
         }
 
@@ -359,5 +379,16 @@ impl AbilitiesStore {
             }
             _ => internal_error!("{:?} is not imported!", member),
         }
+    }
+
+    pub fn get_specializaton_lambda_set(
+        &self,
+        opaque: Symbol,
+        ability_member: Symbol,
+        region: u8,
+    ) -> Option<Variable> {
+        self.get_specialization(ability_member, opaque)
+            .and_then(|spec| spec.specialization_lambda_sets.get(&region))
+            .copied()
     }
 }

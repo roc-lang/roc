@@ -9,6 +9,7 @@ use roc_can::constraint::{Constraints, Cycle, LetConstraint, OpportunisticResolv
 use roc_can::expected::{Expected, PExpected};
 use roc_can::expr::PendingDerives;
 use roc_collections::all::MutMap;
+use roc_collections::{VecMap, VecSet};
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
@@ -19,9 +20,9 @@ use roc_problem::can::CycleEntry;
 use roc_region::all::{Loc, Region};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{
-    self, AliasVariables, Content, Descriptor, FlatType, GetSubsSlice, Mark, OptVariable, Rank,
-    RecordFields, Subs, SubsIndex, SubsSlice, UnionLabels, UnionLambdas, UnionTags, Variable,
-    VariableSubsSlice,
+    self, AliasVariables, Content, Descriptor, FlatType, GetSubsSlice, LambdaSet, Mark,
+    OptVariable, Rank, RecordFields, Subs, SubsIndex, SubsSlice, UlsOfVar, UnionLabels,
+    UnionLambdas, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
@@ -527,6 +528,10 @@ fn run_in_place(
     let pending_derives = PendingDerivesTable::new(subs, aliases, pending_derives);
     let mut deferred_obligations = DeferredObligations::new(pending_derives);
 
+    // Because we don't know what ability specializations are available until the entire module is
+    // solved, we must wait to solve unspecialized lambda sets then.
+    let mut deferred_uls_to_resolve = UlsOfVar::default();
+
     let state = solve(
         &arena,
         constraints,
@@ -539,6 +544,7 @@ fn run_in_place(
         constraint,
         abilities_store,
         &mut deferred_obligations,
+        &mut deferred_uls_to_resolve,
     );
 
     // Now that the module has been solved, we can run through and check all
@@ -546,6 +552,8 @@ fn run_in_place(
     // are legal, which we need to register.
     let (obligation_problems, _derived) = deferred_obligations.check_all(subs, abilities_store);
     problems.extend(obligation_problems);
+
+    compact_deferred_lambda_sets(subs, &mut pools, abilities_store, deferred_uls_to_resolve);
 
     state.env
 }
@@ -599,6 +607,7 @@ fn solve(
     constraint: &Constraint,
     abilities_store: &mut AbilitiesStore,
     deferred_obligations: &mut DeferredObligations,
+    deferred_uls_to_resolve: &mut UlsOfVar,
 ) -> State {
     let initial = Work::Constraint {
         env: &Env::default(),
@@ -659,6 +668,7 @@ fn solve(
                         abilities_store,
                         problems,
                         deferred_obligations,
+                        deferred_uls_to_resolve,
                         *symbol,
                         *loc_var,
                     );
@@ -764,6 +774,7 @@ fn solve(
                         abilities_store,
                         problems,
                         deferred_obligations,
+                        deferred_uls_to_resolve,
                         *symbol,
                         *loc_var,
                     );
@@ -815,6 +826,7 @@ fn solve(
                     Success {
                         vars,
                         must_implement_ability,
+                        lambda_sets_to_specialize,
                     } => {
                         introduce(subs, rank, pools, &vars);
                         if !must_implement_ability.is_empty() {
@@ -823,6 +835,7 @@ fn solve(
                                 AbilityImplError::BadExpr(*region, category.clone(), actual),
                             );
                         }
+                        deferred_uls_to_resolve.union(lambda_sets_to_specialize);
 
                         state
                     }
@@ -867,8 +880,11 @@ fn solve(
                         vars,
                         // ERROR NOT REPORTED
                         must_implement_ability: _,
+                        lambda_sets_to_specialize,
                     } => {
                         introduce(subs, rank, pools, &vars);
+
+                        deferred_uls_to_resolve.union(lambda_sets_to_specialize);
 
                         state
                     }
@@ -922,6 +938,7 @@ fn solve(
                             Success {
                                 vars,
                                 must_implement_ability,
+                                lambda_sets_to_specialize,
                             } => {
                                 introduce(subs, rank, pools, &vars);
                                 if !must_implement_ability.is_empty() {
@@ -934,6 +951,7 @@ fn solve(
                                         ),
                                     );
                                 }
+                                deferred_uls_to_resolve.union(lambda_sets_to_specialize);
 
                                 state
                             }
@@ -999,6 +1017,7 @@ fn solve(
                     Success {
                         vars,
                         must_implement_ability,
+                        lambda_sets_to_specialize,
                     } => {
                         introduce(subs, rank, pools, &vars);
                         if !must_implement_ability.is_empty() {
@@ -1007,6 +1026,7 @@ fn solve(
                                 AbilityImplError::BadPattern(*region, category.clone(), actual),
                             );
                         }
+                        deferred_uls_to_resolve.union(lambda_sets_to_specialize);
 
                         state
                     }
@@ -1161,6 +1181,7 @@ fn solve(
                     Success {
                         vars,
                         must_implement_ability,
+                        lambda_sets_to_specialize,
                     } => {
                         introduce(subs, rank, pools, &vars);
                         if !must_implement_ability.is_empty() {
@@ -1173,6 +1194,7 @@ fn solve(
                                 ),
                             );
                         }
+                        deferred_uls_to_resolve.union(lambda_sets_to_specialize);
 
                         state
                     }
@@ -1265,6 +1287,7 @@ fn solve(
                     Success {
                         vars,
                         must_implement_ability,
+                        lambda_sets_to_specialize,
                     } => {
                         subs.commit_snapshot(snapshot);
 
@@ -1272,6 +1295,8 @@ fn solve(
                         if !must_implement_ability.is_empty() {
                             internal_error!("Didn't expect ability vars to land here");
                         }
+
+                        deferred_uls_to_resolve.union(lambda_sets_to_specialize);
 
                         // Case 1: unify error types, but don't check exhaustiveness.
                         // Case 2: run exhaustiveness to check for redundant branches.
@@ -1493,16 +1518,17 @@ fn check_ability_specialization(
     abilities_store: &mut AbilitiesStore,
     problems: &mut Vec<TypeError>,
     deferred_obligations: &mut DeferredObligations,
+    deferred_uls_to_resolve: &mut UlsOfVar,
     symbol: Symbol,
     symbol_loc_var: Loc<Variable>,
 ) {
     // If the symbol specializes an ability member, we need to make sure that the
     // inferred type for the specialization actually aligns with the expected
     // implementation.
-    if let Some((root_symbol, root_data)) = abilities_store.root_name_and_def(symbol) {
-        let root_signature_var = root_data
-            .signature_var()
-            .unwrap_or_else(|| internal_error!("Signature var not resolved for {:?}", root_symbol));
+    if let Some((ability_member, root_data)) = abilities_store.root_name_and_def(symbol) {
+        let root_signature_var = root_data.signature_var().unwrap_or_else(|| {
+            internal_error!("Signature var not resolved for {:?}", ability_member)
+        });
         let parent_ability = root_data.parent_ability;
 
         // Check if they unify - if they don't, then the claimed specialization isn't really one,
@@ -1521,6 +1547,7 @@ fn check_ability_specialization(
             Success {
                 vars,
                 must_implement_ability,
+                lambda_sets_to_specialize,
             } => {
                 let specialization_type =
                     type_implementing_specialization(&must_implement_ability, parent_ability);
@@ -1532,13 +1559,20 @@ fn check_ability_specialization(
                         subs.commit_snapshot(snapshot);
                         introduce(subs, rank, pools, &vars);
 
+                        let (other_lambda_sets_to_specialize, specialization_lambda_sets) =
+                            find_specializaton_lambda_sets(
+                                subs,
+                                opaque,
+                                ability_member,
+                                lambda_sets_to_specialize,
+                            );
+                        deferred_uls_to_resolve.union(other_lambda_sets_to_specialize);
+
                         let specialization_region = symbol_loc_var.region;
-                        let specialization = MemberSpecialization {
-                            symbol,
-                            region: specialization_region,
-                        };
+                        let specialization =
+                            MemberSpecialization::new(symbol, specialization_lambda_sets);
                         abilities_store.register_specialization_for_type(
-                            root_symbol,
+                            ability_member,
                             opaque,
                             specialization,
                         );
@@ -1568,7 +1602,7 @@ fn check_ability_specialization(
                             region: symbol_loc_var.region,
                             typ,
                             ability: parent_ability,
-                            member: root_symbol,
+                            member: ability_member,
                         };
 
                         problems.push(problem);
@@ -1586,13 +1620,13 @@ fn check_ability_specialization(
                         let (actual_type, _problems) = subs.var_to_error_type(symbol_loc_var.value);
 
                         let reason = Reason::GeneralizedAbilityMemberSpecialization {
-                            member_name: root_symbol,
+                            member_name: ability_member,
                             def_region: root_data.region,
                         };
 
                         let problem = TypeError::BadExpr(
                             symbol_loc_var.region,
-                            Category::AbilityMemberSpecialization(root_symbol),
+                            Category::AbilityMemberSpecialization(ability_member),
                             actual_type,
                             Expected::ForReason(reason, expected_type, symbol_loc_var.region),
                         );
@@ -1607,14 +1641,14 @@ fn check_ability_specialization(
                 introduce(subs, rank, pools, &vars);
 
                 let reason = Reason::InvalidAbilityMemberSpecialization {
-                    member_name: root_symbol,
+                    member_name: ability_member,
                     def_region: root_data.region,
                     unimplemented_abilities,
                 };
 
                 let problem = TypeError::BadExpr(
                     symbol_loc_var.region,
-                    Category::AbilityMemberSpecialization(root_symbol),
+                    Category::AbilityMemberSpecialization(ability_member),
                     actual_type,
                     Expected::ForReason(reason, expected_type, symbol_loc_var.region),
                 );
@@ -1628,6 +1662,206 @@ fn check_ability_specialization(
                 problems.push(TypeError::BadType(problem));
             }
         }
+    }
+}
+
+/// Finds the lambda sets in an ability member specialization.
+///
+/// Suppose we have
+///
+///   Default has default : {} -[[] + a:default:1]-> a | a has Default
+///   
+///   A := {}
+///   default = \{} -[[closA]]-> @A {}
+///
+/// Now after solving the `default` specialization we have unified it with the ability signature,
+/// yielding
+///   
+///   {} -[[closA] + A:default:1]-> A
+///
+/// But really, what we want is to only keep around the original lambda sets, and associate
+/// `A:default:1` to resolve to the lambda set `[[closA]]`. There might be other unspecialized lambda
+/// sets in the lambda sets for this implementation, which we need to account for as well; that is,
+/// it may really be `[[closA] + v123:otherAbilityMember:4 + ...]`.
+#[inline(always)]
+fn find_specializaton_lambda_sets(
+    subs: &mut Subs,
+    opaque: Symbol,
+    ability_member: Symbol,
+    uls: UlsOfVar,
+) -> (UlsOfVar, VecMap<u8, Variable>) {
+    // unspecialized lambda sets that don't belong to our specialization, and should be resolved
+    // later.
+    let mut leftover_uls = UlsOfVar::default();
+    let mut specialization_lambda_sets: VecMap<u8, Variable> = VecMap::default();
+
+    for (spec_var, lambda_sets) in uls.drain() {
+        if !matches!(subs.get_content_without_compacting(spec_var), Content::Alias(name, _, _, AliasKind::Opaque) if *name == opaque)
+        {
+            // These lambda sets aren't resolved to the current specialization, they need to be
+            // solved at a later time.
+            leftover_uls.extend(spec_var, lambda_sets);
+            continue;
+        }
+
+        for lambda_set in lambda_sets {
+            let &LambdaSet {
+                solved,
+                recursion_var,
+                unspecialized,
+            } = match subs.get_content_without_compacting(lambda_set) {
+                Content::LambdaSet(lambda_set) => lambda_set,
+                _ => internal_error!("Not a lambda set"),
+            };
+
+            // Figure out the unspecailized lambda set that corresponds to our specialization
+            // (`A:default:1` in the example), and those that need to stay part of the lambda set.
+            let mut split_index_and_region = None;
+            let uls_slice = subs.get_subs_slice(unspecialized).to_owned();
+            for (i, &Uls(var, _sym, region)) in uls_slice.iter().enumerate() {
+                if var == spec_var {
+                    debug_assert!(split_index_and_region.is_none());
+                    debug_assert!(_sym == ability_member, "unspecialized lambda set var is the same as the specialization, but points to a different ability member");
+                    split_index_and_region = Some((i, region));
+                }
+            }
+
+            let (split_index, specialized_lset_region) =
+                split_index_and_region.expect("no unspecialization lambda set found");
+            let (uls_before, uls_after) =
+                (&uls_slice[0..split_index], &uls_slice[split_index + 1..]);
+            let new_unspecialized = SubsSlice::extend_new(
+                &mut subs.unspecialized_lambda_sets,
+                uls_before.into_iter().chain(uls_after.into_iter()).copied(),
+            );
+
+            subs.set_content(
+                lambda_set,
+                Content::LambdaSet(LambdaSet {
+                    solved,
+                    recursion_var,
+                    unspecialized: new_unspecialized,
+                }),
+            );
+
+            let old_specialized =
+                specialization_lambda_sets.insert(specialized_lset_region, lambda_set);
+            debug_assert!(
+                old_specialized.is_none(),
+                "Specialization of lambda set already exists"
+            );
+        }
+    }
+
+    (leftover_uls, specialization_lambda_sets)
+}
+
+fn compact_deferred_lambda_sets(
+    subs: &mut Subs,
+    pools: &mut Pools,
+    abilities_store: &AbilitiesStore,
+    uls_of_var: UlsOfVar,
+) {
+    let mut seen = VecSet::default();
+    for (_, lambda_sets) in uls_of_var.drain() {
+        for lset in lambda_sets {
+            let root_lset = subs.get_root_key_without_compacting(lset);
+            if seen.contains(&root_lset) {
+                continue;
+            }
+
+            compact_lambda_set(subs, pools, abilities_store, root_lset);
+            seen.insert(root_lset);
+        }
+    }
+}
+
+fn compact_lambda_set(
+    subs: &mut Subs,
+    pools: &mut Pools,
+    abilities_store: &AbilitiesStore,
+    lambda_set: Variable,
+) {
+    let LambdaSet {
+        solved,
+        recursion_var,
+        unspecialized,
+    } = subs.get_lambda_set(lambda_set);
+
+    if unspecialized.is_empty() {
+        return;
+    }
+
+    let mut new_unspecialized = vec![];
+    let mut specialized_to_unify_with = Vec::with_capacity(1);
+    for uls_index in unspecialized.into_iter() {
+        let uls @ Uls(var, member, region) = subs[uls_index];
+
+        use Content::*;
+        let opaque = match subs.get_content_without_compacting(var) {
+            FlexAbleVar(_, _) => {
+                /* not specialized yet */
+                new_unspecialized.push(uls);
+                continue;
+            }
+            Structure(_) | Alias(_, _, _, AliasKind::Structural) => {
+                // TODO: figure out a convention for references to structural types in the
+                // unspecialized lambda set. This may very well happen, for example
+                //
+                //   Default has default : {} -> a | a has Default
+                //
+                //   {a, b} = default {}
+                //   #        ^^^^^^^ {} -[{a: t1, b: t2}:default:1]
+                continue;
+            }
+            Alias(opaque, _, _, AliasKind::Opaque) => opaque,
+            Error => {
+                /* skip */
+                continue;
+            }
+            RigidVar(..)
+            | RigidAbleVar(..)
+            | FlexVar(..)
+            | RecursionVar { .. }
+            | LambdaSet(..)
+            | RangedNumber(_, _) => {
+                internal_error!("unexpected")
+            }
+        };
+
+        let specialized_lambda_set = abilities_store
+            .get_specializaton_lambda_set(*opaque, member, region)
+            .expect("lambda set not resolved, or opaque doesn't specialize");
+
+        compact_lambda_set(subs, pools, abilities_store, specialized_lambda_set);
+
+        specialized_to_unify_with.push(specialized_lambda_set);
+    }
+
+    let new_unspecialized_slice =
+        SubsSlice::extend_new(&mut subs.unspecialized_lambda_sets, new_unspecialized);
+    let partial_compacted_lambda_set = Content::LambdaSet(LambdaSet {
+        solved,
+        recursion_var,
+        unspecialized: new_unspecialized_slice,
+    });
+    subs.set_content(lambda_set, partial_compacted_lambda_set);
+
+    for other_specialized in specialized_to_unify_with.into_iter() {
+        let (vars, must_implement_ability, lambda_sets_to_specialize) =
+            unify(subs, lambda_set, other_specialized, Mode::EQ)
+                .expect_success("lambda sets don't unify");
+
+        introduce(subs, subs.get_rank(lambda_set), pools, &vars);
+
+        debug_assert!(
+            must_implement_ability.is_empty(),
+            "didn't expect abilities instantiated in this position"
+        );
+        debug_assert!(
+            lambda_sets_to_specialize.is_empty(),
+            "didn't expect more lambda sets in this position"
+        );
     }
 }
 

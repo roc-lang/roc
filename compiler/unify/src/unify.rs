@@ -9,8 +9,8 @@ use roc_types::num::NumericRange;
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
     AliasVariables, Descriptor, ErrorTypeContext, FlatType, GetSubsSlice, LambdaSet, Mark,
-    OptVariable, RecordFields, Subs, SubsIndex, SubsSlice, UnionLabels, UnionLambdas, UnionTags,
-    Variable, VariableSubsSlice,
+    OptVariable, RecordFields, Subs, SubsIndex, SubsSlice, UlsOfVar, UnionLabels, UnionLambdas,
+    UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{AliasKind, DoesNotImplementAbility, ErrorType, Mismatch, RecordField};
 
@@ -143,18 +143,23 @@ pub enum Unified {
     Success {
         vars: Pool,
         must_implement_ability: MustImplementConstraints,
+        lambda_sets_to_specialize: UlsOfVar,
     },
     Failure(Pool, ErrorType, ErrorType, DoesNotImplementAbility),
     BadType(Pool, roc_types::types::Problem),
 }
 
 impl Unified {
-    pub fn expect_success(self, err_msg: &'static str) -> (Pool, MustImplementConstraints) {
+    pub fn expect_success(
+        self,
+        err_msg: &'static str,
+    ) -> (Pool, MustImplementConstraints, UlsOfVar) {
         match self {
             Unified::Success {
                 vars,
                 must_implement_ability,
-            } => (vars, must_implement_ability),
+                lambda_sets_to_specialize,
+            } => (vars, must_implement_ability, lambda_sets_to_specialize),
             _ => internal_error!("{}", err_msg),
         }
     }
@@ -212,6 +217,9 @@ pub struct Outcome {
     /// We defer these checks until the end of a solving phase.
     /// NOTE: this vector is almost always empty!
     must_implement_ability: MustImplementConstraints,
+    /// We defer resolution of these lambda sets to the caller of [unify].
+    /// See also [merge_flex_able_with_concrete].
+    lambda_sets_to_specialize: UlsOfVar,
 }
 
 impl Outcome {
@@ -219,6 +227,8 @@ impl Outcome {
         self.mismatches.extend(other.mismatches);
         self.must_implement_ability
             .extend(other.must_implement_ability);
+        self.lambda_sets_to_specialize
+            .union(other.lambda_sets_to_specialize);
     }
 }
 
@@ -228,12 +238,14 @@ pub fn unify(subs: &mut Subs, var1: Variable, var2: Variable, mode: Mode) -> Uni
     let Outcome {
         mismatches,
         must_implement_ability,
+        lambda_sets_to_specialize,
     } = unify_pool(subs, &mut vars, var1, var2, mode);
 
     if mismatches.is_empty() {
         Unified::Success {
             vars,
             must_implement_ability,
+            lambda_sets_to_specialize,
         }
     } else {
         let error_context = if mismatches.contains(&Mismatch::TypeNotInRange) {
@@ -450,6 +462,7 @@ fn check_valid_range(subs: &mut Subs, var: Variable, range: NumericRange) -> Out
                     let outcome = Outcome {
                         mismatches: vec![Mismatch::TypeNotInRange],
                         must_implement_ability: Default::default(),
+                        lambda_sets_to_specialize: Default::default(),
                     };
 
                     return outcome;
@@ -595,12 +608,14 @@ fn unify_opaque(
         }
         FlexAbleVar(_, ability) if args.is_empty() => {
             // Opaque type wins
-            let mut outcome = merge(subs, ctx, Alias(symbol, args, real_var, kind));
-            outcome.must_implement_ability.push(MustImplementAbility {
-                typ: Obligated::Opaque(symbol),
-                ability: *ability,
-            });
-            outcome
+            merge_flex_able_with_concrete(
+                subs,
+                ctx,
+                ctx.second,
+                *ability,
+                Alias(symbol, args, real_var, kind),
+                Obligated::Opaque(symbol),
+            )
         }
         Alias(_, _, other_real_var, AliasKind::Structural) => {
             unify_pool(subs, pool, ctx.first, *other_real_var, ctx.mode)
@@ -673,13 +688,15 @@ fn unify_structure(
             outcome
         }
         FlexAbleVar(_, ability) => {
-            let mut outcome = merge(subs, ctx, Structure(*flat_type));
-            let must_implement_ability = MustImplementAbility {
-                typ: Obligated::Adhoc(ctx.first),
-                ability: *ability,
-            };
-            outcome.must_implement_ability.push(must_implement_ability);
-            outcome
+            // Structure wins
+            merge_flex_able_with_concrete(
+                subs,
+                ctx,
+                ctx.second,
+                *ability,
+                Structure(*flat_type),
+                Obligated::Adhoc(ctx.first),
+            )
         }
         // _name has an underscore because it's unused in --release builds
         RigidVar(_name) => {
@@ -2028,6 +2045,7 @@ fn unify_flex(
             merge(subs, ctx, FlexAbleVar(opt_name, *ability))
         }
 
+        // TODO: not accounting for ability bound here!
         RigidVar(_)
         | RigidAbleVar(_, _)
         | RecursionVar { .. }
@@ -2093,12 +2111,14 @@ fn unify_flex_able(
         Alias(name, args, _real_var, AliasKind::Opaque) => {
             if args.is_empty() {
                 // Opaque type wins
-                let mut outcome = merge(subs, ctx, *other);
-                outcome.must_implement_ability.push(MustImplementAbility {
-                    typ: Obligated::Opaque(*name),
+                merge_flex_able_with_concrete(
+                    subs,
+                    ctx,
+                    ctx.first,
                     ability,
-                });
-                outcome
+                    *other,
+                    Obligated::Opaque(*name),
+                )
             } else {
                 mismatch!("FlexAble vs Opaque with type vars")
             }
@@ -2106,16 +2126,49 @@ fn unify_flex_able(
 
         Structure(_) | Alias(_, _, _, AliasKind::Structural) | RangedNumber(..) => {
             // Structural type wins.
-            let mut outcome = merge(subs, ctx, *other);
-            outcome.must_implement_ability.push(MustImplementAbility {
-                typ: Obligated::Adhoc(ctx.second),
+            merge_flex_able_with_concrete(
+                subs,
+                ctx,
+                ctx.first,
                 ability,
-            });
-            outcome
+                *other,
+                Obligated::Adhoc(ctx.second),
+            )
         }
 
         Error => merge(subs, ctx, Error),
     }
+}
+
+fn merge_flex_able_with_concrete(
+    subs: &mut Subs,
+    ctx: &Context,
+    flex_able_var: Variable,
+    ability: Symbol,
+    concrete_content: Content,
+    concrete_obligation: Obligated,
+) -> Outcome {
+    let mut outcome = merge(subs, ctx, concrete_content);
+    let must_implement_ability = MustImplementAbility {
+        typ: concrete_obligation,
+        ability,
+    };
+    outcome.must_implement_ability.push(must_implement_ability);
+
+    // Figure which, if any, lambda sets should be specialized thanks to the flex able var
+    // being instantiated. Now as much as I would love to do that here, we don't, because we might
+    // be in the middle of solving a module and not resolved all available ability implementations
+    // yet! Instead we chuck it up in the [Outcome] and let our caller do the resolution.
+    //
+    // If we ever organize ability implementations so that they are well-known before any other
+    // unification is done, they can be solved in-band here!
+    if let Some(uls_of_concrete) = subs.uls_of_var.remove_dependents(flex_able_var) {
+        outcome
+            .lambda_sets_to_specialize
+            .extend(flex_able_var, uls_of_concrete);
+    }
+
+    outcome
 }
 
 #[inline(always)]
