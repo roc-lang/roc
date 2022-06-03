@@ -6,9 +6,10 @@
     rust-overlay.url = "github:oxalica/rust-overlay"; # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
     zig.url = "github:roarkanize/zig-overlay"; # using an overlay allows for quick updates after zig releases
     flake-utils.url = "github:numtide/flake-utils"; # to easily make configs for all architectures
+    naersk.url = "github:nix-community/naersk"; # to easily build rust crates with nix
   };
 
-  outputs = { self, nixpkgs, rust-overlay, zig, flake-utils }:
+  outputs = { self, nixpkgs, rust-overlay, zig, flake-utils, naersk }:
     let
       supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-linux" "aarch64-darwin"];
     in
@@ -23,6 +24,12 @@
           # get current working directory
           cwd = builtins.toString ./.;
           rust = pkgs.rust-bin.fromRustupToolchainFile "${cwd}/rust-toolchain.toml";
+
+          # make naersk use our rust version
+          naersk-lib = naersk.lib."${system}".override {
+            cargo = rust;
+            rustc = rust;
+          };
 
           linuxInputs = with pkgs;
             lib.optionals stdenv.isLinux [
@@ -98,10 +105,12 @@
             debugir
             rust
           ]);
-        in {
+
+          allBuildInputs = sharedInputs ++ darwinInputs ++ linuxInputs;
+        in rec {
 
           devShell = pkgs.mkShell {
-            buildInputs = sharedInputs ++ darwinInputs ++ linuxInputs;
+            buildInputs = allBuildInputs;
 
             LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
             NIX_GLIBC_PATH = if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";
@@ -110,6 +119,13 @@
               ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ] ++ linuxInputs);
             NIXPKGS_ALLOW_UNFREE = 1; # to run the editor with NVIDIA's closed source drivers
           };
+
+          # nix build
+          packages.roc = naersk-lib.buildPackage {
+            pname = "roc";
+            root = ./.;
+          };
+          defaultPackage = packages.roc;
 
       }
     );
