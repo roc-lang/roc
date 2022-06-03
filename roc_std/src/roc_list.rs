@@ -35,6 +35,32 @@ impl<T> RocList<T> {
         }
     }
 
+    /// Create an empty RocList with enough space preallocated to store
+    /// the requested number of elements.
+    pub fn with_capacity(elems: usize) -> Self {
+        let alignment = Self::alloc_alignment();
+
+        // Allocate new memory.
+        let non_null_elements = unsafe {
+            let ptr = roc_alloc(elems, alignment as u32);
+            let elements = ptr.cast::<u8>().add(alignment).cast::<ManuallyDrop<T>>();
+
+            // Initialize the reference count.
+            let storage_ptr = elements.cast::<Storage>().sub(1);
+            storage_ptr.write(Storage::new_reference_counted());
+
+            NonNull::new(elements).unwrap_or_else(|| {
+                todo!("Call roc_panic with the info that an allocation failed.");
+            })
+        };
+
+        RocList {
+            elements: Some(non_null_elements),
+            length: 0,
+            capacity: elems,
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.length
     }
