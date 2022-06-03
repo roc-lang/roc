@@ -19,7 +19,7 @@ mod solve_expr {
     use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Region};
     use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
     use roc_solve::solve::TypeError;
-    use roc_types::pretty_print::name_and_print_var;
+    use roc_types::pretty_print::{name_and_print_var, PrintLambdaSets};
     use std::path::PathBuf;
 
     // HELPERS
@@ -177,7 +177,7 @@ mod solve_expr {
 
         debug_assert!(exposed_to_host.len() == 1);
         let (_symbol, variable) = exposed_to_host.into_iter().next().unwrap();
-        let actual_str = name_and_print_var(variable, subs, home, &interns);
+        let actual_str = name_and_print_var(variable, subs, home, &interns, PrintLambdaSets::No);
 
         Ok((type_problems, can_problems, actual_str))
     }
@@ -277,7 +277,7 @@ mod solve_expr {
             let var = find_type_at(region, &decls)
                 .unwrap_or_else(|| panic!("No type for {} ({:?})!", &text, region));
 
-            let actual_str = name_and_print_var(var, subs, home, &interns);
+            let actual_str = name_and_print_var(var, subs, home, &interns, PrintLambdaSets::No);
 
             let elaborated = match find_ability_member_at(region, &decls) {
                 Some((member, specialization_id)) => {

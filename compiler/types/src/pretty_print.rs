@@ -1,6 +1,6 @@
 use crate::subs::{
     self, AliasVariables, Content, FlatType, GetSubsSlice, Label, Subs, SubsIndex, UnionLabels,
-    UnionTags, Variable,
+    UnionTags, UnsortedUnionLabels, Variable,
 };
 use crate::types::{name_type_var, RecordField, Uls};
 use roc_collections::all::MutMap;
@@ -48,9 +48,15 @@ macro_rules! write_parens {
     };
 }
 
+pub enum PrintLambdaSets {
+    Yes,
+    No,
+}
+
 struct Env<'a> {
     home: ModuleId,
     interns: &'a Interns,
+    print_lambda_sets: PrintLambdaSets,
 }
 
 /// How many times a root variable appeared in Subs.
@@ -370,9 +376,14 @@ fn content_to_string(
     home: ModuleId,
     interns: &Interns,
     named_result: NamedResult,
+    print_lambda_sets: PrintLambdaSets,
 ) -> String {
     let mut buf = String::new();
-    let env = Env { home, interns };
+    let env = Env {
+        home,
+        interns,
+        print_lambda_sets,
+    };
     let mut ctx = Context {
         able_variables: vec![],
         recursion_structs_to_expand: named_result.recursion_structs_to_expand,
@@ -397,10 +408,18 @@ pub fn name_and_print_var(
     subs: &mut Subs,
     home: ModuleId,
     interns: &Interns,
+    print_lambda_sets: PrintLambdaSets,
 ) -> String {
     let named_result = name_all_type_vars(var, subs);
     let content = subs.get_content_without_compacting(var);
-    content_to_string(content, subs, home, interns, named_result)
+    content_to_string(
+        content,
+        subs,
+        home,
+        interns,
+        named_result,
+        print_lambda_sets,
+    )
 }
 
 pub fn get_single_arg<'a>(subs: &'a Subs, args: &'a AliasVariables) -> &'a Content {
@@ -559,7 +578,53 @@ fn write_content<'a>(
                 }),
             }
         }
-        LambdaSet(_) => {
+        LambdaSet(subs::LambdaSet {
+            solved,
+            recursion_var,
+            unspecialized,
+        }) => {
+            buf.push_str("[[");
+
+            write_sorted_tags2(
+                env,
+                ctx,
+                subs,
+                buf,
+                solved.unsorted_lambdas(subs),
+                |symbol| symbol.as_str(&env.interns),
+            );
+
+            buf.push(']');
+
+            if let Some(rec_var) = recursion_var.into_variable() {
+                buf.push_str(" as ");
+                write_content(
+                    env,
+                    ctx,
+                    subs.get_content_without_compacting(rec_var),
+                    subs,
+                    buf,
+                    parens,
+                )
+            }
+
+            for Uls(var, member, region) in subs.get_subs_slice(*unspecialized) {
+                buf.push_str(" + ");
+                write_content(
+                    env,
+                    ctx,
+                    subs.get_content_without_compacting(*var),
+                    subs,
+                    buf,
+                    Parens::Unnecessary,
+                );
+                buf.push(':');
+                buf.push_str(member.as_str(&env.interns));
+                buf.push(':');
+                buf.push_str(&region.to_string());
+            }
+
+            buf.push(']');
             // lambda sets never exposed to the user
         }
         RangedNumber(typ, _range_vars) => write_content(
@@ -678,19 +743,19 @@ fn write_ext_content<'a>(
     }
 }
 
-fn write_sorted_tags2<'a>(
-    env: &Env,
+fn write_sorted_tags2<'a, 'b, L: 'b>(
+    env: &'b Env,
     ctx: &mut Context<'a>,
     subs: &'a Subs,
     buf: &mut String,
-    tags: &UnionTags,
-    ext_var: Variable,
-) -> ExtContent<'a> {
-    // Sort the fields so they always end up in the same order.
-    let (tags, new_ext_var) = tags.unsorted_tags_and_ext(subs, ext_var);
+    tags: UnsortedUnionLabels<'b, L>,
+    label_to_string: impl Fn(&'b L) -> &'b str,
+) where
+    L: Label + Ord,
+{
     let mut sorted_fields = tags.tags;
 
-    sorted_fields.sort_by(|(a, _), (b, _)| a.as_ident_str().cmp(&b.as_ident_str()));
+    sorted_fields.sort_by(|(a, _), (b, _)| a.cmp(&b));
 
     let mut any_written_yet = false;
 
@@ -701,7 +766,7 @@ fn write_sorted_tags2<'a>(
             any_written_yet = true;
         }
 
-        buf.push_str(label.as_ident_str().as_str());
+        buf.push_str(label_to_string(label));
 
         for var in vars {
             buf.push(' ');
@@ -715,8 +780,6 @@ fn write_sorted_tags2<'a>(
             );
         }
     }
-
-    ExtContent::from_var(subs, new_ext_var)
 }
 
 fn write_sorted_tags<'a>(
@@ -794,10 +857,11 @@ fn write_flat_type<'a>(
         ),
         EmptyRecord => buf.push_str(EMPTY_RECORD),
         EmptyTagUnion => buf.push_str(EMPTY_TAG_UNION),
-        Func(args, _closure, ret) => write_fn(
+        Func(args, closure, ret) => write_fn(
             env,
             ctx,
             subs.get_subs_slice(*args),
+            *closure,
             *ret,
             subs,
             buf,
@@ -869,11 +933,20 @@ fn write_flat_type<'a>(
         TagUnion(tags, ext_var) => {
             buf.push('[');
 
-            let ext_content = write_sorted_tags2(env, ctx, subs, buf, tags, *ext_var);
+            // Sort the fields so they always end up in the same order.
+            let (tags, new_ext_var) = tags.unsorted_tags_and_ext(subs, *ext_var);
+            write_sorted_tags2(env, ctx, subs, buf, tags, |tag| tag.0.as_str());
 
             buf.push(']');
 
-            write_ext_content(env, ctx, subs, buf, ext_content, parens)
+            write_ext_content(
+                env,
+                ctx,
+                subs,
+                buf,
+                ExtContent::from_var(subs, new_ext_var),
+                parens,
+            )
         }
 
         FunctionOrTagUnion(tag_name, _, ext_var) => {
@@ -891,11 +964,19 @@ fn write_flat_type<'a>(
         RecursiveTagUnion(rec_var, tags, ext_var) => {
             buf.push('[');
 
-            let ext_content = write_sorted_tags2(env, ctx, subs, buf, tags, *ext_var);
+            let (tags, new_ext_var) = tags.unsorted_tags_and_ext(subs, *ext_var);
+            write_sorted_tags2(env, ctx, subs, buf, tags, |tag| tag.0.as_str());
 
             buf.push(']');
 
-            write_ext_content(env, ctx, subs, buf, ext_content, parens);
+            write_ext_content(
+                env,
+                ctx,
+                subs,
+                buf,
+                ExtContent::from_var(subs, new_ext_var),
+                parens,
+            );
 
             buf.push_str(" as ");
             write_content(
@@ -1071,6 +1152,7 @@ fn write_fn<'a>(
     env: &Env,
     ctx: &mut Context<'a>,
     args: &[Variable],
+    closure: Variable,
     ret: Variable,
     subs: &'a Subs,
     buf: &mut String,
@@ -1100,7 +1182,24 @@ fn write_fn<'a>(
         );
     }
 
-    buf.push_str(" -> ");
+    match env.print_lambda_sets {
+        PrintLambdaSets::No => {
+            buf.push_str(" -> ");
+        }
+        PrintLambdaSets::Yes => {
+            buf.push_str(" -");
+            write_content(
+                env,
+                ctx,
+                subs.get_content_without_compacting(closure),
+                subs,
+                buf,
+                parens,
+            );
+            buf.push_str("->");
+        }
+    }
+
     write_content(
         env,
         ctx,

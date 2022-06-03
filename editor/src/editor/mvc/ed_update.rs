@@ -60,6 +60,7 @@ use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::pretty_print::name_and_print_var;
+use roc_types::pretty_print::PrintLambdaSets;
 use roc_types::solved_types::Solved;
 use roc_types::subs::{Subs, VarStore, Variable};
 use snafu::OptionExt;
@@ -462,8 +463,13 @@ impl<'a> EdModel<'a> {
 
         let subs = solved.inner_mut();
 
-        let pretty_var =
-            name_and_print_var(var, subs, self.module.env.home, &self.loaded_module.interns);
+        let pretty_var = name_and_print_var(
+            var,
+            subs,
+            self.module.env.home,
+            &self.loaded_module.interns,
+            PrintLambdaSets::No,
+        );
 
         PoolStr::new(&pretty_var, self.module.env.pool)
     }
