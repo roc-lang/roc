@@ -2593,20 +2593,32 @@ fn generalize(
     // Start at low ranks so we only have to pass over the information once.
     for (index, table) in rank_table.iter().enumerate() {
         for &var in table.iter() {
-            adjust_rank(subs, young_mark, visit_mark, Rank::from(index), var);
+            adjust_rank(
+                subs,
+                young_mark,
+                visit_mark,
+                Rank::from(index),
+                young_rank,
+                var,
+            );
         }
     }
 
     let (mut last_pool, all_but_last_pool) = rank_table.split_last();
 
     // For variables that have rank lowerer than young_rank, register them in
-    // the appropriate old pool if they are not redundant.
+    // the appropriate old pool if they are not redundant. Note that there might have been
+    // variables that were lifted to the young rank, if they contained able variables.
     for vars in all_but_last_pool {
         for var in vars {
             if !subs.redundant(var) {
                 let rank = subs.get_rank(var);
 
-                pools.get_mut(rank).push(var);
+                if rank < young_rank {
+                    pools.get_mut(rank).push(var);
+                } else {
+                    subs.set_rank(var, Rank::NONE);
+                }
             }
         }
     }
@@ -2615,10 +2627,10 @@ fn generalize(
     // otherwise generalize
     for var in last_pool.drain(..) {
         if !subs.redundant(var) {
-            let desc_rank = subs.get_rank(var);
+            let rank = subs.get_rank(var);
 
-            if desc_rank < young_rank {
-                pools.get_mut(desc_rank).push(var);
+            if rank < young_rank {
+                pools.get_mut(rank).push(var);
             } else {
                 subs.set_rank(var, Rank::NONE);
             }
@@ -2671,6 +2683,7 @@ fn adjust_rank(
     young_mark: Mark,
     visit_mark: Mark,
     group_rank: Rank,
+    young_rank: Rank,
     var: Variable,
 ) -> Rank {
     let var = subs.get_root_key(var);
@@ -2687,7 +2700,9 @@ fn adjust_rank(
         // Mark the variable as visited before adjusting content, as it may be cyclic.
         subs.set_mark_unchecked(var, visit_mark);
 
-        let max_rank = adjust_rank_content(subs, young_mark, visit_mark, group_rank, content);
+        let max_rank = adjust_rank_content(
+            subs, young_mark, visit_mark, group_rank, young_rank, content,
+        );
 
         subs.set_rank_unchecked(var, max_rank);
         subs.set_mark_unchecked(var, visit_mark);
@@ -2713,13 +2728,37 @@ fn adjust_rank_content(
     young_mark: Mark,
     visit_mark: Mark,
     group_rank: Rank,
+    young_rank: Rank,
     content: &Content,
 ) -> Rank {
     use roc_types::subs::Content::*;
     use roc_types::subs::FlatType::*;
 
     match content {
-        FlexVar(_) | RigidVar(_) | FlexAbleVar(_, _) | RigidAbleVar(_, _) | Error => group_rank,
+        // NOTE: this is what it's all about. At a given group rank, an unbound variable is at that
+        // group rank. For example if `{} -> a` is at group rank 1, `a` is pulled into rank 1. This
+        // is required to prevent polymorphic recursion and higher-kinded polymorphism. For
+        // example,
+        //
+        // foo : { foo : a } -> a
+        // foo = \arg ->
+        //     x : F _
+        //     x = arg
+        //     x.foo
+        //
+        // the inferred variable `_` for "x" will be in the same rank group as "a", and it must
+        // stay there.
+        //
+        // But this is not the case for able variables.
+        FlexVar(_) | RigidVar(_) | Error => group_rank,
+        // THEORY: unlike flex/rigid variables, unbound able variables do escape their group ranks
+        // and are always generalized to the young rank.
+        // This allows us to treat a signature like `{} -> a | a has Default` polymorphically
+        // anywhere it is used. If that signature is at a lower group rank due to the empty record
+        // being at a lower rank, the able variable escapes into the young rank so that we can
+        // generalize the whole signature. I believe this is okay because able variables are only
+        // ad-hoc polymorphic, and are thus more strictly specified than flex/rigid vars.
+        FlexAbleVar(_, _) | RigidAbleVar(_, _) => young_rank,
 
         RecursionVar { .. } => group_rank,
 
@@ -2730,14 +2769,18 @@ fn adjust_rank_content(
 
                     for var_index in args.into_iter() {
                         let var = subs[var_index];
-                        rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+                        rank = rank.max(adjust_rank(
+                            subs, young_mark, visit_mark, group_rank, young_rank, var,
+                        ));
                     }
 
                     rank
                 }
 
                 Func(arg_vars, closure_var, ret_var) => {
-                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ret_var);
+                    let mut rank = adjust_rank(
+                        subs, young_mark, visit_mark, group_rank, young_rank, *ret_var,
+                    );
 
                     // TODO investigate further.
                     //
@@ -2750,13 +2793,16 @@ fn adjust_rank_content(
                             young_mark,
                             visit_mark,
                             group_rank,
+                            young_rank,
                             *closure_var,
                         ));
                     }
 
                     for index in arg_vars.into_iter() {
                         let var = subs[index];
-                        rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+                        rank = rank.max(adjust_rank(
+                            subs, young_mark, visit_mark, group_rank, young_rank, var,
+                        ));
                     }
 
                     rank
@@ -2770,18 +2816,24 @@ fn adjust_rank_content(
                 EmptyTagUnion => Rank::toplevel(),
 
                 Record(fields, ext_var) => {
-                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
+                    let mut rank = adjust_rank(
+                        subs, young_mark, visit_mark, group_rank, young_rank, *ext_var,
+                    );
 
                     for index in fields.iter_variables() {
                         let var = subs[index];
-                        rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+                        rank = rank.max(adjust_rank(
+                            subs, young_mark, visit_mark, group_rank, young_rank, var,
+                        ));
                     }
 
                     rank
                 }
 
                 TagUnion(tags, ext_var) => {
-                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
+                    let mut rank = adjust_rank(
+                        subs, young_mark, visit_mark, group_rank, young_rank, *ext_var,
+                    );
                     // For performance reasons, we only keep one representation of empty tag unions
                     // in subs. That representation exists at rank 0, which we don't always want to
                     // reflect the whole tag union as, because doing so may over-generalize free
@@ -2805,27 +2857,31 @@ fn adjust_rank_content(
                         let slice = subs[index];
                         for var_index in slice {
                             let var = subs[var_index];
-                            rank = rank
-                                .max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+                            rank = rank.max(adjust_rank(
+                                subs, young_mark, visit_mark, group_rank, young_rank, var,
+                            ));
                         }
                     }
 
                     rank
                 }
 
-                FunctionOrTagUnion(_, _, ext_var) => {
-                    adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var)
-                }
+                FunctionOrTagUnion(_, _, ext_var) => adjust_rank(
+                    subs, young_mark, visit_mark, group_rank, young_rank, *ext_var,
+                ),
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
-                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
+                    let mut rank = adjust_rank(
+                        subs, young_mark, visit_mark, group_rank, young_rank, *ext_var,
+                    );
 
                     for (_, index) in tags.iter_all() {
                         let slice = subs[index];
                         for var_index in slice {
                             let var = subs[var_index];
-                            rank = rank
-                                .max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+                            rank = rank.max(adjust_rank(
+                                subs, young_mark, visit_mark, group_rank, young_rank, var,
+                            ));
                         }
                     }
 
@@ -2863,8 +2919,9 @@ fn adjust_rank_content(
                             Content::Error | Content::FlexVar(..)
                         )
                     {
-                        let rec_var_rank =
-                            adjust_rank(subs, young_mark, visit_mark, group_rank, *rec_var);
+                        let rec_var_rank = adjust_rank(
+                            subs, young_mark, visit_mark, group_rank, young_rank, *rec_var,
+                        );
 
                         debug_assert!(
                             rank >= rec_var_rank,
@@ -2888,13 +2945,15 @@ fn adjust_rank_content(
 
             for var_index in args.all_variables() {
                 let var = subs[var_index];
-                rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+                rank = rank.max(adjust_rank(
+                    subs, young_mark, visit_mark, group_rank, young_rank, var,
+                ));
             }
 
             // from elm-compiler: THEORY: anything in the real_var would be Rank::toplevel()
             // this theory is not true in Roc! aliases of function types capture the closure var
             rank = rank.max(adjust_rank(
-                subs, young_mark, visit_mark, group_rank, *real_var,
+                subs, young_mark, visit_mark, group_rank, young_rank, *real_var,
             ));
 
             rank
@@ -2910,7 +2969,9 @@ fn adjust_rank_content(
                 let slice = subs[index];
                 for var_index in slice {
                     let var = subs[var_index];
-                    rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+                    rank = rank.max(adjust_rank(
+                        subs, young_mark, visit_mark, group_rank, young_rank, var,
+                    ));
                 }
             }
 
@@ -2922,7 +2983,9 @@ fn adjust_rank_content(
                 // So the recursion var should be fully accounted by everything else in the lambda set
                 // (since it appears in the lambda set), and if the rank is higher, it's either a
                 // bug or our theory is wrong and indeed they can escape into higher regions.
-                let rec_var_rank = adjust_rank(subs, young_mark, visit_mark, group_rank, rec_var);
+                let rec_var_rank = adjust_rank(
+                    subs, young_mark, visit_mark, group_rank, young_rank, rec_var,
+                );
 
                 debug_assert!(
                     rank >= rec_var_rank,
@@ -2937,7 +3000,9 @@ fn adjust_rank_content(
             rank
         }
 
-        RangedNumber(typ, _) => adjust_rank(subs, young_mark, visit_mark, group_rank, *typ),
+        RangedNumber(typ, _) => {
+            adjust_rank(subs, young_mark, visit_mark, group_rank, young_rank, *typ)
+        }
     }
 }
 

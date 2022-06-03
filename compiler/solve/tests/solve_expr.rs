@@ -6492,4 +6492,30 @@ mod solve_expr {
             &["Encoding#toEncoder : { a : A } -> Encoder fmt | fmt has EncoderFormatting"],
         )
     }
+
+    #[test]
+    fn generalized_ability_alias_with_deep_able_var() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Default has default : {} -> a | a has Default
+
+                A := {}
+                default = \{} -> @A {}
+
+                main =
+                    alias1 = default
+                    alias2 = alias1
+
+                    a : A
+                    a = alias2 {}
+
+                    {a, alias1, alias2}
+                "#
+            ),
+            "{ a : A, alias1 : {} -> a, alias2 : {} -> b } | a has Default, b has Default",
+        )
+    }
 }
