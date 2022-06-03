@@ -269,7 +269,7 @@ impl Interns {
         let ident: Ident = ident.into();
 
         match self.all_ident_ids.get(&module_id) {
-            Some(ident_ids) => match ident_ids.get_id(&ident) {
+            Some(ident_ids) => match ident_ids.get_id(ident.as_str()) {
                 Some(ident_id) => Symbol::new(module_id, ident_id),
                 None => {
                     panic!("Interns::symbol could not find ident entry for {:?} for module {:?} in Interns {:?}", ident, module_id, self);
@@ -598,7 +598,7 @@ impl IdentIds {
     }
 
     pub fn get_or_insert(&mut self, name: &Ident) -> IdentId {
-        match self.get_id(name) {
+        match self.get_id(name.as_str()) {
             Some(id) => id,
             None => self.add_str(name.as_str()),
         }
@@ -625,9 +625,9 @@ impl IdentIds {
     }
 
     #[inline(always)]
-    pub fn get_id(&self, ident_name: &Ident) -> Option<IdentId> {
+    pub fn get_id(&self, ident_name: &str) -> Option<IdentId> {
         self.interner
-            .find_index(ident_name.as_str())
+            .find_index(ident_name)
             .map(|i| IdentId(i as u32))
     }
 

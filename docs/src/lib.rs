@@ -772,7 +772,7 @@ fn doc_url<'a>(
                     // This is not the home module
                     match dep_idents
                         .get(&module_id)
-                        .and_then(|exposed_ids| exposed_ids.get_id(&ident.into()))
+                        .and_then(|exposed_ids| exposed_ids.get_id(ident))
                     {
                         Some(_) => {
                             // This is a valid symbol for this dependency,
