@@ -113,7 +113,7 @@ impl<'a> Env<'a> {
                 // You can do qualified lookups on your own module, e.g.
                 // if I'm in the Foo module, I can do a `Foo.bar` lookup.
                 if module_id == self.home {
-                    match self.ident_ids.get_id(&ident) {
+                    match self.ident_ids.get_id(ident) {
                         Some(ident_id) => {
                             let symbol = Symbol::new(module_id, ident_id);
 
@@ -134,7 +134,7 @@ impl<'a> Env<'a> {
                     }
                 } else {
                     match self.dep_idents.get(&module_id) {
-                        Some(exposed_ids) => match exposed_ids.get_id(&ident) {
+                        Some(exposed_ids) => match exposed_ids.get_id(ident) {
                             Some(ident_id) => {
                                 let symbol = Symbol::new(module_id, ident_id);
 

@@ -3178,7 +3178,7 @@ fn send_header<'a>(
             // For example, if module A has [B.{ foo }], then
             // when we get here for B, `foo` will already have
             // an IdentId. We must reuse that!
-            let ident_id = ident_ids.get_or_insert(&loc_exposed.value.as_str());
+            let ident_id = ident_ids.get_or_insert(loc_exposed.value.as_str());
             let symbol = Symbol::new(home, ident_id);
 
             exposed.push(symbol);
@@ -3385,7 +3385,7 @@ fn send_header_two<'a>(
             for entry in requires {
                 let entry = entry.value;
                 let ident: Ident = entry.ident.value.into();
-                let ident_id = ident_ids.get_or_insert(&entry.ident.value);
+                let ident_id = ident_ids.get_or_insert(entry.ident.value);
                 let symbol = Symbol::new(module_id, ident_id);
 
                 // Since this value is exposed, add it to our module's default scope.
@@ -3423,7 +3423,7 @@ fn send_header_two<'a>(
             // For example, if module A has [B.{ foo }], then
             // when we get here for B, `foo` will already have
             // an IdentId. We must reuse that!
-            let ident_id = ident_ids.get_or_insert(&loc_exposed.value.as_str());
+            let ident_id = ident_ids.get_or_insert(loc_exposed.value.as_str());
             let symbol = Symbol::new(home, ident_id);
 
             exposed.push(symbol);
