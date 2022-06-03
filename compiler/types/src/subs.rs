@@ -1205,31 +1205,6 @@ impl fmt::Debug for Variable {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct LambdaSet(pub Variable);
-
-impl fmt::Debug for LambdaSet {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "LambdaSet({})", self.0 .0)
-    }
-}
-
-impl LambdaSet {
-    pub fn into_inner(self) -> Variable {
-        self.0
-    }
-
-    pub fn as_inner(&self) -> &Variable {
-        &self.0
-    }
-}
-
-impl From<Variable> for LambdaSet {
-    fn from(variable: Variable) -> Self {
-        LambdaSet(variable)
-    }
-}
-
 /// Used in SolvedType
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct VarId(u32);
