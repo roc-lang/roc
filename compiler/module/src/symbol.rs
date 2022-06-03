@@ -589,10 +589,6 @@ impl IdentIds {
             .map(|(index, ident)| (IdentId(index as u32), ident))
     }
 
-    pub fn add_ident(&mut self, ident_name: &Ident) -> IdentId {
-        self.add_str(ident_name.as_str())
-    }
-
     pub fn add_str(&mut self, ident_name: &str) -> IdentId {
         IdentId(self.interner.insert(ident_name) as u32)
     }
