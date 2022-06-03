@@ -282,12 +282,60 @@ impl RocStr {
         })
     }
 
-    /// Generic version of temp_c_utf8 and temp_c_utf16.
+    pub fn temp_c_windows_path<T, F: Fn(*mut u16, usize) -> T>(
+        self,
+        func: F,
+    ) -> Result<T, InteriorNulError> {
+        self.temp_nul_terminated(|dest_ptr: *mut u16, str_slice: &str| {
+            // Translate UTF-8 source bytes into UTF-16 and write them into the destination.
+            for (index, mut wchar) in str_slice.encode_utf16().enumerate() {
+                // Replace slashes with backslashes
+                if wchar == '/' as u16 {
+                    wchar = '\\' as u16
+                };
+
+                unsafe {
+                    *(dest_ptr.add(index)) = wchar;
+                }
+            }
+
+            func(dest_ptr, str_slice.len())
+        })
+    }
+
+    /// Generic version of temp_c_utf8 and temp_c_utf16. The given function will be
+    /// passed a pointer to elements of type E. The number of elements will be equal to
+    /// the length of the `&str` given as the other parameter. There will be a `0` element
+    /// at the end of those elements, even if there are no elements (in which case the
+    /// `&str` argument will be empty and the `*mut E` will point to a `0`).
     ///
     /// One use for this is to convert slashes to backslashes in Windows paths;
     /// this function provides the most efficient way to do that, because no extra
     /// iteration pass is necessary; the conversion can be done after each translation
-    /// of a UTF-8 character to UTF-16.
+    /// of a UTF-8 character to UTF-16. Here's how that would look:
+    ///
+    ///     use roc_std::{RocStr, InteriorNulError};
+    ///
+    ///     pub fn temp_windows_path<T, F: Fn(*mut u16, usize) -> T>(
+    ///         roc_str: RocStr,
+    ///         func: F,
+    ///     ) -> Result<T, InteriorNulError> {
+    ///         roc_str.temp_nul_terminated(|dest_ptr: *mut u16, str_slice: &str| {
+    ///             // Translate UTF-8 source bytes into UTF-16 and write them into the destination.
+    ///             for (index, mut wchar) in str_slice.encode_utf16().enumerate() {
+    ///                 // Replace slashes with backslashes
+    ///                 if wchar == '/' as u16 {
+    ///                     wchar = '\\' as u16
+    ///                 };
+    ///
+    ///                 unsafe {
+    ///                     *(dest_ptr.add(index)) = wchar;
+    ///                 }
+    ///             }
+    ///
+    ///             func(dest_ptr, str_slice.len())
+    ///         })
+    ///     }
     pub fn temp_nul_terminated<E: UnicodeCodePoint, A, F: Fn(*mut E, &str) -> A>(
         self,
         func: F,
