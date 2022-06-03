@@ -361,11 +361,12 @@ pub fn build_swift_host_native(
         unimplemented!("Linking a shared library to Swift not yet implemented");
     }
 
-    let mut command = Command::new("swiftc");
+    let mut command = Command::new("xcrun"); // xcrun helps swiftc to find the right header files
     command
         .env_clear()
         .env("PATH", &env_path)
         .env("HOME", &env_home)
+        .arg("swiftc")
         .args(sources)
         .arg("-emit-object")
         .arg("-parse-as-library")
