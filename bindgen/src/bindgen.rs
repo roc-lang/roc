@@ -9,8 +9,10 @@ use roc_builtins::bitcode::{FloatWidth::*, IntWidth::*};
 use roc_collections::VecMap;
 use roc_module::ident::TagName;
 use roc_module::symbol::{Interns, Symbol};
-use roc_mono::layout::{cmp_fields, ext_var_is_empty_tag_union, Builtin, Layout, LayoutCache};
-use roc_types::subs::UnionTags;
+use roc_mono::layout::{
+    cmp_fields, ext_var_is_empty_tag_union, Builtin, Layout, LayoutCache, TagOrClosure,
+};
+use roc_types::subs::{Label, UnionLabels};
 use roc_types::{
     subs::{Content, FlatType, LambdaSet, Subs, Variable},
     types::RecordField,
@@ -121,16 +123,16 @@ fn add_type_help<'a>(
         Content::LambdaSet(LambdaSet {
             solved,
             recursion_var: _,
-        }) => add_tag_union(env, opt_name, solved, var, types),
+        }) => add_union(env, opt_name, solved, var, types),
         Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, *ext_var));
 
-            add_tag_union(env, opt_name, tags, var, types)
+            add_union(env, opt_name, tags, var, types)
         }
         Content::Structure(FlatType::RecursiveTagUnion(_rec_var, tag_vars, ext_var)) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, *ext_var));
 
-            add_tag_union(env, opt_name, tag_vars, var, types)
+            add_union(env, opt_name, tag_vars, var, types)
         }
         Content::Structure(FlatType::Apply(symbol, _)) => match layout {
             Layout::Builtin(builtin) => add_builtin_type(env, builtin, var, opt_name, types),
@@ -297,20 +299,23 @@ where
     types.add(to_type(name, fields))
 }
 
-fn add_tag_union(
+fn add_union<L>(
     env: &mut Env<'_>,
     opt_name: Option<Symbol>,
-    union_tags: &UnionTags,
+    union_tags: &UnionLabels<L>,
     var: Variable,
     types: &mut Types,
-) -> TypeId {
+) -> TypeId
+where
+    L: Label + Into<TagOrClosure>,
+{
     let subs = env.subs;
     let mut tags: Vec<(String, Vec<Variable>)> = union_tags
         .iter_from_subs(subs)
-        .map(|(tag_name, payload_vars)| {
-            let name_str = match tag_name {
-                TagName::Tag(uppercase) => uppercase.as_str().to_string(),
-                TagName::Closure(_) => unreachable!(),
+        .map(|(label, payload_vars)| {
+            let name_str = match label.clone().into() {
+                TagOrClosure::Tag(TagName(uppercase)) => uppercase.as_str().to_string(),
+                TagOrClosure::Closure(_) => unreachable!(),
             };
 
             (name_str, payload_vars.to_vec())

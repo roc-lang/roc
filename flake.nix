@@ -109,7 +109,6 @@
               lib.makeLibraryPath
               ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ] ++ linuxInputs);
             NIXPKGS_ALLOW_UNFREE = 1; # to run the editor with NVIDIA's closed source drivers
-            ZIG_GLOBAL_CACHE_DIR = if pkgs.stdenv.isDarwin then "${builtins.getEnv "TMPDIR"}" else ""; # workaround for github.com/ziglang/zig/issues/9711
           };
 
       }

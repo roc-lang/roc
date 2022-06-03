@@ -10,7 +10,7 @@ use roc_region::all::{Loc, Region};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{
     self, AliasVariables, Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields,
-    Subs, SubsSlice, UnionTags, Variable, VariableSubsSlice,
+    Subs, SubsSlice, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{
     gather_fields_unsorted_iter, Alias, AliasKind, Category, ErrorType, PatternCategory,
@@ -1636,8 +1636,6 @@ fn instantiate_rigids_help(
 fn deep_copy_var(subs: &mut Subs, rank: Rank, pools: &mut Pools, var: Variable) -> Variable {
     let copy = deep_copy_var_help(subs, rank, pools, var);
 
-    subs.restore(var);
-
     copy
 }
 
@@ -1790,7 +1788,7 @@ fn deep_copy_var_help(
                         SubsSlice::new(start, length)
                     };
 
-                    let union_tags = UnionTags::from_slices(tags.tag_names(), new_variables);
+                    let union_tags = UnionTags::from_slices(tags.labels(), new_variables);
 
                     let new_ext = deep_copy_var_help(subs, max_rank, pools, ext_var);
                     TagUnion(union_tags, new_ext)
@@ -1828,7 +1826,7 @@ fn deep_copy_var_help(
                         SubsSlice::new(start, length)
                     };
 
-                    let union_tags = UnionTags::from_slices(tags.tag_names(), new_variables);
+                    let union_tags = UnionTags::from_slices(tags.labels(), new_variables);
 
                     let new_ext = deep_copy_var_help(subs, max_rank, pools, ext_var);
                     let new_rec_var = deep_copy_var_help(subs, max_rank, pools, rec_var);
@@ -1919,7 +1917,7 @@ fn deep_copy_var_help(
                 SubsSlice::new(start, length)
             };
 
-            let new_solved = UnionTags::from_slices(solved.tag_names(), new_variables);
+            let new_solved = UnionLambdas::from_slices(solved.labels(), new_variables);
             let new_rec_var =
                 recursion_var.map(|rec_var| deep_copy_var_help(subs, max_rank, pools, rec_var));
 

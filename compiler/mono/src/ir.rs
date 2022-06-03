@@ -2,7 +2,7 @@
 
 use crate::layout::{
     Builtin, ClosureRepresentation, LambdaSet, Layout, LayoutCache, LayoutProblem,
-    RawFunctionLayout, TagIdIntType, UnionLayout, WrappedVariant,
+    RawFunctionLayout, TagIdIntType, TagOrClosure, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
@@ -1636,7 +1636,7 @@ pub enum Expr<'a> {
 
     Tag {
         tag_layout: UnionLayout<'a>,
-        tag_name: TagName,
+        tag_name: TagOrClosure,
         tag_id: TagIdIntType,
         arguments: &'a [Symbol],
     },
@@ -1680,7 +1680,7 @@ pub enum Expr<'a> {
         update_mode: UpdateModeId,
         // normal Tag fields
         tag_layout: UnionLayout<'a>,
-        tag_name: TagName,
+        tag_name: TagOrClosure,
         tag_id: TagIdIntType,
         arguments: &'a [Symbol],
     },
@@ -1768,8 +1768,8 @@ impl<'a> Expr<'a> {
                 ..
             } => {
                 let doc_tag = match tag_name {
-                    TagName::Tag(s) => alloc.text(s.as_str()),
-                    TagName::Closure(s) => alloc
+                    TagOrClosure::Tag(TagName(s)) => alloc.text(s.as_str()),
+                    TagOrClosure::Closure(s) => alloc
                         .text("ClosureTag(")
                         .append(symbol_to_doc(alloc, *s))
                         .append(")"),
@@ -1789,8 +1789,8 @@ impl<'a> Expr<'a> {
                 ..
             } => {
                 let doc_tag = match tag_name {
-                    TagName::Tag(s) => alloc.text(s.as_str()),
-                    TagName::Closure(s) => alloc
+                    TagOrClosure::Tag(TagName(s)) => alloc.text(s.as_str()),
+                    TagOrClosure::Closure(s) => alloc
                         .text("ClosureTag(")
                         .append(symbol_to_doc(alloc, *s))
                         .append(")"),
@@ -5269,7 +5269,7 @@ where
         ClosureRepresentation::Union {
             tag_id,
             alphabetic_order_fields: field_layouts,
-            tag_name,
+            closure_name: tag_name,
             union_layout,
         } => {
             // captured variables are in symbol-alphabetic order, but now we want
@@ -5294,7 +5294,7 @@ where
             let expr = Expr::Tag {
                 tag_id,
                 tag_layout: union_layout,
-                tag_name,
+                tag_name: tag_name.into(),
                 arguments: symbols,
             };
 
@@ -5398,12 +5398,14 @@ fn convert_tag_union<'a>(
         Unit | UnitWithArguments => Stmt::Let(assigned, Expr::Struct(&[]), Layout::UNIT, hole),
         BoolUnion { ttrue, .. } => Stmt::Let(
             assigned,
-            Expr::Literal(Literal::Bool(tag_name == ttrue)),
+            Expr::Literal(Literal::Bool(&tag_name == ttrue.expect_tag_ref())),
             Layout::Builtin(Builtin::Bool),
             hole,
         ),
         ByteUnion(tag_names) => {
-            let opt_tag_id = tag_names.iter().position(|key| key == &tag_name);
+            let opt_tag_id = tag_names
+                .iter()
+                .position(|key| key.expect_tag_ref() == &tag_name);
 
             match opt_tag_id {
                 Some(tag_id) => Stmt::Let(
@@ -5484,7 +5486,7 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name,
+                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -5495,7 +5497,7 @@ fn convert_tag_union<'a>(
                     tag_name: wrapped_tag_name,
                     ..
                 } => {
-                    debug_assert_eq!(tag_name, wrapped_tag_name);
+                    debug_assert_eq!(TagOrClosure::Tag(tag_name.clone()), wrapped_tag_name);
 
                     field_symbols = {
                         let mut temp = Vec::with_capacity_in(field_symbols_temp.len(), arena);
@@ -5507,7 +5509,7 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name,
+                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -5532,7 +5534,7 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name,
+                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -5559,7 +5561,7 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name,
+                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -5577,7 +5579,7 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name,
+                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -8288,36 +8290,39 @@ fn from_can_pattern_help<'a>(
                         }],
                     },
                 },
-                BoolUnion { ttrue, ffalse } => Pattern::BitLiteral {
-                    value: tag_name == &ttrue,
-                    tag_name: tag_name.clone(),
-                    union: Union {
-                        render_as: RenderAs::Tag,
-                        alternatives: vec![
-                            Ctor {
-                                tag_id: TagId(0),
-                                name: CtorName::Tag(ffalse),
-                                arity: 0,
-                            },
-                            Ctor {
-                                tag_id: TagId(1),
-                                name: CtorName::Tag(ttrue),
-                                arity: 0,
-                            },
-                        ],
-                    },
-                },
+                BoolUnion { ttrue, ffalse } => {
+                    let (ttrue, ffalse) = (ttrue.expect_tag(), ffalse.expect_tag());
+                    Pattern::BitLiteral {
+                        value: tag_name == &ttrue,
+                        tag_name: tag_name.clone(),
+                        union: Union {
+                            render_as: RenderAs::Tag,
+                            alternatives: vec![
+                                Ctor {
+                                    tag_id: TagId(0),
+                                    name: CtorName::Tag(ffalse),
+                                    arity: 0,
+                                },
+                                Ctor {
+                                    tag_id: TagId(1),
+                                    name: CtorName::Tag(ttrue),
+                                    arity: 0,
+                                },
+                            ],
+                        },
+                    }
+                }
                 ByteUnion(tag_names) => {
                     let tag_id = tag_names
                         .iter()
-                        .position(|key| key == tag_name)
+                        .position(|key| tag_name == key.expect_tag_ref())
                         .expect("tag must be in its own type");
 
                     let mut ctors = std::vec::Vec::with_capacity(tag_names.len());
                     for (i, tag_name) in tag_names.into_iter().enumerate() {
                         ctors.push(Ctor {
                             tag_id: TagId(i as _),
-                            name: CtorName::Tag(tag_name),
+                            name: CtorName::Tag(tag_name.expect_tag()),
                             arity: 0,
                         })
                     }
@@ -8414,7 +8419,7 @@ fn from_can_pattern_help<'a>(
                             for (i, (tag_name, args)) in tags.iter().enumerate() {
                                 ctors.push(Ctor {
                                     tag_id: TagId(i as _),
-                                    name: CtorName::Tag(tag_name.clone()),
+                                    name: CtorName::Tag(tag_name.expect_tag_ref().clone()),
                                     arity: args.len(),
                                 })
                             }
@@ -8466,7 +8471,7 @@ fn from_can_pattern_help<'a>(
                             for (i, (tag_name, args)) in tags.iter().enumerate() {
                                 ctors.push(Ctor {
                                     tag_id: TagId(i as _),
-                                    name: CtorName::Tag(tag_name.clone()),
+                                    name: CtorName::Tag(tag_name.expect_tag_ref().clone()),
                                     // don't include tag discriminant in arity
                                     arity: args.len() - 1,
                                 })
@@ -8508,7 +8513,7 @@ fn from_can_pattern_help<'a>(
                             tag_name: w_tag_name,
                             fields,
                         } => {
-                            debug_assert_eq!(&w_tag_name, tag_name);
+                            debug_assert_eq!(w_tag_name.expect_tag_ref(), tag_name);
 
                             ctors.push(Ctor {
                                 tag_id: TagId(0),
@@ -8560,7 +8565,7 @@ fn from_can_pattern_help<'a>(
                                 if i == nullable_id as usize {
                                     ctors.push(Ctor {
                                         tag_id: TagId(i as _),
-                                        name: CtorName::Tag(nullable_name.clone()),
+                                        name: CtorName::Tag(nullable_name.expect_tag_ref().clone()),
                                         // don't include tag discriminant in arity
                                         arity: 0,
                                     });
@@ -8570,7 +8575,7 @@ fn from_can_pattern_help<'a>(
 
                                 ctors.push(Ctor {
                                     tag_id: TagId(i as _),
-                                    name: CtorName::Tag(tag_name.clone()),
+                                    name: CtorName::Tag(tag_name.expect_tag_ref().clone()),
                                     // don't include tag discriminant in arity
                                     arity: args.len() - 1,
                                 });
@@ -8581,7 +8586,7 @@ fn from_can_pattern_help<'a>(
                             if i == nullable_id as usize {
                                 ctors.push(Ctor {
                                     tag_id: TagId(i as _),
-                                    name: CtorName::Tag(nullable_name.clone()),
+                                    name: CtorName::Tag(nullable_name.expect_tag_ref().clone()),
                                     // don't include tag discriminant in arity
                                     arity: 0,
                                 });
@@ -8594,7 +8599,7 @@ fn from_can_pattern_help<'a>(
 
                             let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
 
-                            let it = if tag_name == &nullable_name {
+                            let it = if tag_name == nullable_name.expect_tag_ref() {
                                 [].iter()
                             } else {
                                 argument_layouts.iter()
@@ -8632,13 +8637,13 @@ fn from_can_pattern_help<'a>(
 
                             ctors.push(Ctor {
                                 tag_id: TagId(nullable_id as _),
-                                name: CtorName::Tag(nullable_name.clone()),
+                                name: CtorName::Tag(nullable_name.expect_tag_ref().clone()),
                                 arity: 0,
                             });
 
                             ctors.push(Ctor {
                                 tag_id: TagId(!nullable_id as _),
-                                name: CtorName::Tag(nullable_name.clone()),
+                                name: CtorName::Tag(nullable_name.expect_tag_ref().clone()),
                                 // FIXME drop tag
                                 arity: other_fields.len() - 1,
                             });
@@ -8650,7 +8655,7 @@ fn from_can_pattern_help<'a>(
 
                             let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
 
-                            let it = if tag_name == &nullable_name {
+                            let it = if tag_name == nullable_name.expect_tag_ref() {
                                 [].iter()
                             } else {
                                 // FIXME drop tag

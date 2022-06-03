@@ -251,7 +251,7 @@ pub fn constrain_expr<'a>(
             name,
             arguments,
         } => {
-            let tag_name = TagName::Tag(name.as_str(env.pool).into());
+            let tag_name = TagName(name.as_str(env.pool).into());
 
             constrain_tag(
                 arena,
@@ -1610,7 +1610,7 @@ pub fn constrain_pattern<'a>(
             tag_name: name,
             arguments,
         } => {
-            let tag_name = TagName::Tag(name.as_str(env.pool).into());
+            let tag_name = TagName(name.as_str(env.pool).into());
 
             constrain_tag_pattern(
                 arena,
@@ -1761,7 +1761,7 @@ fn constrain_untyped_args<'a>(
 fn constrain_closure_size<'a>(
     arena: &'a Bump,
     env: &mut Env,
-    name: Symbol,
+    _name: Symbol,
     region: Region,
     captured_symbols: &PoolVec<(Symbol, Variable)>,
     closure_var: Variable,
@@ -1798,7 +1798,8 @@ fn constrain_closure_size<'a>(
         ));
     }
 
-    let tag_name = TagName::Closure(name);
+    // This is incorrect, but the editor will be using the Can AST soon, so disregarding for now.
+    let tag_name = TagName("FAKE CLOSURE".into());
     let closure_type = Type2::TagUnion(
         PoolVec::new(vec![(tag_name, tag_arguments)].into_iter(), env.pool),
         env.pool.add(Type2::Variable(closure_ext_var)),
