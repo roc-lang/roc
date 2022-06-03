@@ -1828,9 +1828,16 @@ fn compact_lambda_set(
             }
         };
 
-        let specialized_lambda_set = abilities_store
-            .get_specializaton_lambda_set(*opaque, member, region)
-            .expect("lambda set not resolved, or opaque doesn't specialize");
+        let specialized_lambda_set = match abilities_store.get_specialization(member, *opaque) {
+            None => {
+                // doesn't specialize, we'll have reported an error for this
+                continue;
+            }
+            Some(specialization) => *specialization
+                .specialization_lambda_sets
+                .get(&region)
+                .expect("lambda set region not resolved"),
+        };
 
         compact_lambda_set(subs, pools, abilities_store, specialized_lambda_set);
 

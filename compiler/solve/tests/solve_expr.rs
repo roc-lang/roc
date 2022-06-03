@@ -281,19 +281,34 @@ mod solve_expr {
 
             let elaborated = match find_ability_member_at(region, &decls) {
                 Some((member, specialization_id)) => {
-                    let qual = match abilities_store.get_resolved(specialization_id) {
+                    match abilities_store.get_resolved(specialization_id) {
                         Some(specialization) => {
-                            abilities_store
+                            let spec_type = abilities_store
                                 .iter_specializations()
                                 .find(|(_, ms)| ms.symbol == specialization)
                                 .unwrap()
                                 .0
-                                 .1
+                                 .1;
+                            let spec_type_str = spec_type.as_str(&interns);
+                            format!(
+                                "{}#{}({}) : {}",
+                                spec_type_str,
+                                text,
+                                specialization.ident_id().index(),
+                                actual_str
+                            )
                         }
-                        None => abilities_store.member_def(member).unwrap().parent_ability,
-                    };
-                    let qual_str = qual.as_str(&interns);
-                    format!("{}#{} : {}", qual_str, text, actual_str)
+                        None => {
+                            let parent_ability =
+                                abilities_store.member_def(member).unwrap().parent_ability;
+                            format!(
+                                "{}#{} : {}",
+                                parent_ability.as_str(&&interns),
+                                text,
+                                actual_str
+                            )
+                        }
+                    }
                 }
                 None => format!("{} : {}", text, actual_str),
             };
@@ -6426,7 +6441,7 @@ mod solve_expr {
                     a
                 "#
             ),
-            &["A#default : {} -[[default(5)]]-> A"],
+            &["A#default(5) : {} -[[default(5)]]-> A"],
         )
     }
 

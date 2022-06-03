@@ -63,7 +63,7 @@ pub struct MemberSpecialization {
     ///
     /// and this [MemberSpecialization] is for `A`, then there is a mapping of
     /// `1` to the variable representing `[[closA]]`.
-    specialization_lambda_sets: VecMap<u8, Variable>,
+    pub specialization_lambda_sets: VecMap<u8, Variable>,
 }
 
 impl MemberSpecialization {
@@ -84,6 +84,8 @@ impl Default for SpecializationId {
         Self(0)
     }
 }
+
+pub enum SpecializationLambdaSetError {}
 
 /// Stores information about what abilities exist in a scope, what it means to implement an
 /// ability, and what types implement them.
@@ -379,16 +381,5 @@ impl AbilitiesStore {
             }
             _ => internal_error!("{:?} is not imported!", member),
         }
-    }
-
-    pub fn get_specializaton_lambda_set(
-        &self,
-        opaque: Symbol,
-        ability_member: Symbol,
-        region: u8,
-    ) -> Option<Variable> {
-        self.get_specialization(ability_member, opaque)
-            .and_then(|spec| spec.specialization_lambda_sets.get(&region))
-            .copied()
     }
 }
