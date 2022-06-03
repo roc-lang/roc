@@ -1888,6 +1888,18 @@ fn type_to_variable<'a>(
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
+            UnspecializedLambdaSet(..) => {
+                // TODO: instantiate properly!
+                let union_lambdas =
+                    UnionLambdas::from_slices(SubsSlice::new(0, 0), SubsSlice::new(0, 0));
+
+                let content = Content::LambdaSet(subs::LambdaSet {
+                    solved: union_lambdas,
+                    recursion_var: OptVariable::NONE,
+                });
+
+                register_with_known_var(subs, destination, rank, pools, content)
+            }
             // This case is important for the rank of boolean variables
             Function(arguments, closure_type, ret_type) => {
                 let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
