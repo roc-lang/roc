@@ -3156,7 +3156,7 @@ fn send_header<'a>(
                 let symbol = Symbol::new(module_id, ident_id);
 
                 // Since this value is exposed, add it to our module's default scope.
-                debug_assert!(!scope.contains_key(&ident.clone()));
+                debug_assert!(!scope.contains_key(&ident));
 
                 scope.insert(ident, (symbol, region));
             }
