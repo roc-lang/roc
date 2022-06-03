@@ -9,7 +9,10 @@
   };
 
   outputs = { self, nixpkgs, cargo2nix, zig, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
+    let
+      supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-linux" "aarch64-darwin" ];
+    in
+    flake-utils.lib.eachSystem supportedSystems (system:
       let
         pkgs = import nixpkgs {
           inherit system;
@@ -76,24 +79,10 @@
           ];
         };
 
-        linuxInputs = with pkgs; [
-          valgrind # used in cli tests, see cli/tests/cli_run.rs
-          vulkan-headers
-          vulkan-loader
-          vulkan-tools
-          vulkan-validation-layers
-          xorg.libX11
-          xorg.libXcursor
-          xorg.libXrandr
-          xorg.libXi
-          xorg.libxcb
-          alsa-lib
-        ];
-
         workspaceShell = rustPkgs.workspaceShell {
           NIXPKGS_ALLOW_UNFREE = 1; # to run the editor with NVIDIA's closed source drivers
           LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
-          NIX_GLIBC_PATH = if pkgs.stdenv.isLinux then "${pkgs.glibc_multi.out}/lib" else ""; # see https://github.com/rtfeldman/roc/pull/1841
+          NIX_GLIBC_PATH = if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else ""; # see https://github.com/rtfeldman/roc/pull/1841
           LD_LIBRARY_PATH = with pkgs;
             lib.makeLibraryPath
             ([ 
@@ -115,6 +104,8 @@
 
         # nix build
         defaultPackage = packages.roc;
+
+        formatter = pkgs.nixpkgs-fmt;
     }
   );
 }
