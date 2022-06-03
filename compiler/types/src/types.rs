@@ -380,6 +380,14 @@ impl TypeExtension {
             TypeExtension::Closed => true,
         }
     }
+
+    #[inline(always)]
+    fn iter_mut(&mut self) -> impl Iterator<Item = &mut Type> {
+        match self {
+            TypeExtension::Open(ext) => Some(ext.as_mut()).into_iter(),
+            TypeExtension::Closed => None.into_iter(),
+        }
+    }
 }
 
 impl<'a> IntoIterator for &'a TypeExtension {
@@ -390,19 +398,6 @@ impl<'a> IntoIterator for &'a TypeExtension {
     fn into_iter(self) -> Self::IntoIter {
         match self {
             TypeExtension::Open(ext) => Some(ext.as_ref()).into_iter(),
-            TypeExtension::Closed => None.into_iter(),
-        }
-    }
-}
-
-impl<'a> IntoIterator for &'a mut TypeExtension {
-    type Item = &'a mut Type;
-
-    type IntoIter = std::option::IntoIter<Self::Item>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        match self {
-            TypeExtension::Open(ext) => Some(ext.as_mut()).into_iter(),
             TypeExtension::Closed => None.into_iter(),
         }
     }
@@ -2758,13 +2753,13 @@ fn instantiate_lambda_sets_as_unspecialized(
                 stack.extend(args.iter_mut().rev());
             }
             Type::Record(fields, ext) => {
-                stack.extend(ext);
+                stack.extend(ext.iter_mut());
                 for (_, x) in fields.iter_mut() {
                     stack.push(x.as_inner_mut());
                 }
             }
             Type::TagUnion(tags, ext) | Type::RecursiveTagUnion(_, tags, ext) => {
-                stack.extend(ext);
+                stack.extend(ext.iter_mut());
                 for (_, ts) in tags {
                     for t in ts.iter_mut().rev() {
                         stack.push(t);
@@ -2772,7 +2767,7 @@ fn instantiate_lambda_sets_as_unspecialized(
                 }
             }
             Type::FunctionOrTagUnion(_, _, ext) => {
-                stack.extend(ext);
+                stack.extend(ext.iter_mut());
             }
             Type::ClosureTag { name: _, captures } => {
                 stack.extend(captures.iter_mut().rev());
