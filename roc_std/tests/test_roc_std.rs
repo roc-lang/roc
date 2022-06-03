@@ -157,11 +157,16 @@ mod test_roc_std {
 
 #[cfg(test)]
 mod into_temp_c_str {
+    use core::slice;
     use roc_std::RocStr;
+    use std::ffi::CStr;
 
     #[test]
     fn empty_string() {
-        let answer = RocStr::empty().into_temp_c_str(|c_str| {
+        let answer = RocStr::empty().temp_c_utf8(|ptr, len| {
+            let bytes = unsafe { slice::from_raw_parts(ptr.cast(), len + 1) };
+            let c_str = CStr::from_bytes_with_nul(bytes).unwrap();
+
             assert_eq!(c_str.to_str(), Ok(""));
 
             42
@@ -183,7 +188,10 @@ mod into_temp_c_str {
             // e.g. "1" or "12" or "12345" etc.
             let string = String::from_utf8(bytes).unwrap();
 
-            let answer = RocStr::from(string.as_str()).into_temp_c_str(|c_str| {
+            let answer = RocStr::from(string.as_str()).temp_c_utf8(|ptr, len| {
+                let bytes = unsafe { slice::from_raw_parts(ptr.cast(), len + 1) };
+                let c_str = CStr::from_bytes_with_nul(bytes).unwrap();
+
                 assert_eq!(c_str.to_str(), Ok(string.as_str()));
 
                 42
