@@ -1,4 +1,5 @@
 use super::serialize::MAX_SIZE_ENCODED_U32;
+use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
 /// Parse serialized bytes into a data structure
@@ -46,6 +47,43 @@ impl Parse<()> for u32 {
     }
 }
 
+/// Decode a signed 32-bit integer from the provided buffer in LEB-128 format
+/// Return the integer itself and the offset after it ends
+fn decode_i32(bytes: &[u8]) -> Result<(i32, usize), ()> {
+    let mut value = 0;
+    let mut shift = 0;
+    for (i, byte) in bytes.iter().take(MAX_SIZE_ENCODED_U32).enumerate() {
+        value |= ((byte & 0x7f) as i32) << shift;
+        if (byte & 0x80) == 0 {
+            let is_negative = byte & 0x40 != 0;
+            if shift < MAX_SIZE_ENCODED_U32 && is_negative {
+                value |= -1 << shift;
+            }
+            return Ok((value, i + 1));
+        }
+        shift += 7;
+    }
+    Err(())
+}
+
+impl Parse<()> for i32 {
+    fn parse(_ctx: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        match decode_i32(&bytes[*cursor..]) {
+            Ok((value, len)) => {
+                *cursor += len;
+                Ok(value)
+            }
+            Err(()) => Err(ParseError {
+                offset: *cursor,
+                message: format!(
+                    "Failed to decode i32 as LEB-128 from bytes: {:2x?}",
+                    &bytes[*cursor..][..MAX_SIZE_ENCODED_U32]
+                ),
+            }),
+        }
+    }
+}
+
 impl<'a> Parse<&'a Bump> for &'a str {
     fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
         let len = u32::parse((), bytes, cursor)?;
@@ -56,6 +94,40 @@ impl<'a> Parse<&'a Bump> for &'a str {
         *cursor = end;
         Ok(s)
     }
+}
+
+pub fn parse_variable_size_items<'a, T>(
+    arena: &'a Bump,
+    bytes: &[u8],
+    cursor: &mut usize,
+) -> Result<Vec<'a, T>, ParseError>
+where
+    T: Parse<&'a Bump>,
+{
+    let len = u32::parse((), bytes, cursor)?;
+    let mut vector: Vec<'a, T> = Vec::with_capacity_in(len as usize, arena);
+    for _ in 0..len {
+        let item = T::parse(arena, bytes, cursor)?;
+        vector.push(item);
+    }
+    Ok(vector)
+}
+
+pub fn parse_fixed_size_items<'a, T>(
+    arena: &'a Bump,
+    bytes: &[u8],
+    cursor: &mut usize,
+) -> Result<Vec<'a, T>, ParseError>
+where
+    T: Parse<()>,
+{
+    let len = u32::parse((), bytes, cursor)?;
+    let mut vector: Vec<'a, T> = Vec::with_capacity_in(len as usize, arena);
+    for _ in 0..len {
+        let item = T::parse((), bytes, cursor)?;
+        vector.push(item);
+    }
+    Ok(vector)
 }
 
 /// Skip over serialized bytes for a type

@@ -8,7 +8,7 @@ pub mod serialize;
 
 use bumpalo::{collections::Vec, Bump};
 pub use code_builder::{Align, CodeBuilder, LocalId, ValueType, VmSymbolState};
-pub use linking::SymInfo;
+pub use linking::{OffsetRelocType, RelocationEntry, SymInfo, SymType};
 pub use sections::{ConstExpr, Export, ExportType, Global, GlobalType, Signature};
 
 use self::linking::{LinkingSection, RelocationSection};
@@ -24,7 +24,6 @@ use self::serialize::{SerialBuffer, Serialize};
 /// https://webassembly.github.io/spec/core/binary/modules.html
 #[derive(Debug)]
 pub struct WasmModule<'a> {
-    pub data_end: u32,
     pub types: TypeSection<'a>,
     pub import: ImportSection<'a>,
     pub function: FunctionSection<'a>,
@@ -36,9 +35,10 @@ pub struct WasmModule<'a> {
     pub element: ElementSection<'a>,
     pub code: CodeSection<'a>,
     pub data: DataSection<'a>,
-    pub names: NameSection<'a>,
     pub linking: LinkingSection<'a>,
-    pub relocations: RelocationSection<'a>,
+    pub reloc_code: RelocationSection<'a>,
+    pub reloc_data: RelocationSection<'a>,
+    pub names: NameSection<'a>,
 }
 
 impl<'a> WasmModule<'a> {
@@ -122,13 +122,45 @@ impl<'a> WasmModule<'a> {
 
         let data = DataSection::parse(arena, bytes, &mut cursor)?;
 
-        // Metadata sections
+        let linking = LinkingSection::parse(arena, bytes, &mut cursor)?;
+        let reloc_code = RelocationSection::parse((arena, "reloc.CODE"), bytes, &mut cursor)?;
+        let reloc_data = RelocationSection::parse((arena, "reloc.DATA"), bytes, &mut cursor)?;
         let names = NameSection::parse(arena, bytes, &mut cursor)?;
-        let linking = LinkingSection::new(arena);
-        let relocations = RelocationSection::new(arena, "reloc.CODE");
 
-        let mut module = WasmModule {
-            data_end: 0,
+        let mut module_errors = String::new();
+        if types.is_empty() {
+            module_errors.push_str("Missing Type section\n");
+        }
+        if function.signatures.is_empty() {
+            module_errors.push_str("Missing Function section\n");
+        }
+        if code.preloaded_bytes.is_empty() {
+            module_errors.push_str("Missing Code section\n");
+        }
+        if linking.symbol_table.is_empty() {
+            module_errors.push_str("Missing \"linking\" Custom section\n");
+        }
+        if reloc_code.entries.is_empty() {
+            module_errors.push_str("Missing \"reloc.CODE\" Custom section\n");
+        }
+        if global.count != 0 {
+            let global_err_msg =
+                format!("All globals in a relocatable Wasm module should be imported, but found {} internally defined", global.count);
+            module_errors.push_str(&global_err_msg);
+        }
+
+        if !module_errors.is_empty() {
+            return Err(ParseError {
+                offset: 0,
+                message: format!("{}\n{}\n{}",
+                    "The host file has the wrong structure. I need a relocatable WebAssembly binary file.",
+                    "If you're using wasm-ld, try the --relocatable option.",
+                    module_errors,
+                )
+            });
+        }
+
+        Ok(WasmModule {
             types,
             import,
             function,
@@ -140,18 +172,11 @@ impl<'a> WasmModule<'a> {
             element,
             code,
             data,
-            names,
             linking,
-            relocations,
-        };
-
-        if let Some(data_end) = module.get_exported_global_u32("__data_end") {
-            module.data_end = data_end;
-            Ok(module)
-        } else {
-            let message = "The Wasm module must export the __data_end global so that I know where its constant data ends (including zero data)".into();
-            Err(ParseError { offset: 0, message })
-        }
+            reloc_code,
+            reloc_data,
+            names,
+        })
     }
 
     pub fn remove_dead_preloads<T: IntoIterator<Item = u32>>(
@@ -181,5 +206,19 @@ impl<'a> WasmModule<'a> {
             .iter()
             .find(|ex| ex.name == name)
             .and_then(|ex| self.global.parse_u32_at_index(ex.index).ok())
+    }
+
+    pub fn relocate_preloaded_code(&mut self, sym_name: &str, sym_type: SymType, value: u32) {
+        let sym_index = self
+            .linking
+            .find_symbol_by_name(sym_name, sym_type)
+            .unwrap_or_else(|| panic!("Linking failed! Can't find symbol `{}`", sym_name));
+
+        self.reloc_code.apply_relocs_u32(
+            &mut self.code.preloaded_bytes,
+            self.code.preloaded_reloc_offset,
+            sym_index,
+            value,
+        );
     }
 }

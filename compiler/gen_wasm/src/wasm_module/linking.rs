@@ -1,9 +1,10 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
-use super::sections::{update_section_size, write_custom_section_header};
-use super::serialize::{SerialBuffer, Serialize};
-use super::Align;
+use super::parse::parse_fixed_size_items;
+use super::sections::{update_section_size, write_custom_section_header, SectionId};
+use super::serialize::{overwrite_padded_i32, overwrite_padded_u32, SerialBuffer, Serialize};
+use crate::wasm_module::parse::{Parse, ParseError, SkipBytes};
 
 /*******************************************************************
  *
@@ -41,6 +42,24 @@ pub enum IndexRelocType {
     TableNumberLeb = 20,
 }
 
+impl IndexRelocType {
+    fn from_u8(x: u8) -> Option<IndexRelocType> {
+        match x {
+            0 => Some(Self::FunctionIndexLeb),
+            1 => Some(Self::TableIndexSleb),
+            2 => Some(Self::TableIndexI32),
+            6 => Some(Self::TypeIndexLeb),
+            7 => Some(Self::GlobalIndexLeb),
+            10 => Some(Self::EventIndexLeb),
+            13 => Some(Self::GlobalIndexI32),
+            18 => Some(Self::TableIndexSleb64),
+            19 => Some(Self::TableIndexI64),
+            20 => Some(Self::TableNumberLeb),
+            _ => None,
+        }
+    }
+}
+
 #[repr(u8)]
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum OffsetRelocType {
@@ -66,6 +85,22 @@ pub enum OffsetRelocType {
     /// the 64-bit counterpart of `R_WASM_MEMORY_ADDR`. A 64-bit linear memory index encoded as a [uint64],
     /// e.g. taking the 64-bit address of a C++ global in a static data initializer.
     MemoryAddrI64 = 16,
+}
+
+impl OffsetRelocType {
+    fn from_u8(x: u8) -> Option<OffsetRelocType> {
+        match x {
+            3 => Some(Self::MemoryAddrLeb),
+            4 => Some(Self::MemoryAddrSleb),
+            5 => Some(Self::MemoryAddrI32),
+            8 => Some(Self::FunctionOffsetI32),
+            9 => Some(Self::SectionOffsetI32),
+            14 => Some(Self::MemoryAddrLeb64),
+            15 => Some(Self::MemoryAddrSleb64),
+            16 => Some(Self::MemoryAddrI64),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -136,20 +171,88 @@ impl Serialize for RelocationEntry {
     }
 }
 
+impl Parse<()> for RelocationEntry {
+    fn parse(_: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let type_id_byte = bytes[*cursor];
+        *cursor += 1;
+        let offset = u32::parse((), bytes, cursor)?;
+        let symbol_index = u32::parse((), bytes, cursor)?;
+
+        if let Some(type_id) = IndexRelocType::from_u8(type_id_byte) {
+            return Ok(RelocationEntry::Index {
+                type_id,
+                offset,
+                symbol_index,
+            });
+        }
+
+        if let Some(type_id) = OffsetRelocType::from_u8(type_id_byte) {
+            let addend = i32::parse((), bytes, cursor)?;
+            return Ok(RelocationEntry::Offset {
+                type_id,
+                offset,
+                symbol_index,
+                addend,
+            });
+        }
+
+        Err(ParseError {
+            offset: *cursor,
+            message: format!("Unknown relocation type 0x{:2x}", type_id_byte),
+        })
+    }
+}
+
 #[derive(Debug)]
 pub struct RelocationSection<'a> {
     pub name: &'a str,
     /// The *index* (not ID!) of the target section in the module
-    pub target_section_index: Option<u32>,
+    pub target_section_index: u32,
     pub entries: Vec<'a, RelocationEntry>,
 }
 
 impl<'a> RelocationSection<'a> {
-    pub fn new(arena: &'a Bump, name: &'a str) -> Self {
+    fn new(arena: &'a Bump, name: &'a str) -> Self {
         RelocationSection {
             name,
-            target_section_index: None,
-            entries: Vec::with_capacity_in(64, arena),
+            target_section_index: 0,
+            entries: bumpalo::vec![in arena],
+        }
+    }
+
+    pub fn apply_relocs_u32(
+        &self,
+        section_bytes: &mut [u8],
+        section_bytes_offset: u32,
+        sym_index: u32,
+        value: u32,
+    ) {
+        for entry in self.entries.iter() {
+            match entry {
+                RelocationEntry::Index { symbol_index, .. } if *symbol_index == sym_index => {
+                    todo!("Linking RelocationEntry {:?}", entry)
+                }
+                RelocationEntry::Offset {
+                    type_id,
+                    offset,
+                    symbol_index,
+                    addend,
+                } if *symbol_index == sym_index => {
+                    use OffsetRelocType::*;
+                    match type_id {
+                        MemoryAddrLeb => {
+                            let idx = (*offset - section_bytes_offset) as usize;
+                            overwrite_padded_u32(&mut section_bytes[idx..], value + *addend as u32);
+                        }
+                        MemoryAddrSleb => {
+                            let idx = (*offset - section_bytes_offset) as usize;
+                            overwrite_padded_i32(&mut section_bytes[idx..], value as i32 + *addend);
+                        }
+                        _ => todo!("Linking relocation type {:?}", type_id),
+                    }
+                }
+                _ => {}
+            }
         }
     }
 }
@@ -158,10 +261,39 @@ impl<'a> Serialize for RelocationSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         if !self.entries.is_empty() {
             let header_indices = write_custom_section_header(buffer, self.name);
-            buffer.encode_u32(self.target_section_index.unwrap());
+            buffer.encode_u32(self.target_section_index);
             self.entries.serialize(buffer);
             update_section_size(buffer, header_indices);
         }
+    }
+}
+
+type RelocCtx<'a> = (&'a Bump, &'static str);
+
+impl<'a> Parse<RelocCtx<'a>> for RelocationSection<'a> {
+    fn parse(ctx: RelocCtx<'a>, bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let (arena, name) = ctx;
+
+        if *cursor > bytes.len() || bytes[*cursor] != SectionId::Custom as u8 {
+            // The section we're looking for is missing, which is the same as being empty.
+            return Ok(RelocationSection::new(arena, name));
+        }
+        *cursor += 1;
+        u32::skip_bytes(bytes, cursor)?; // section body size
+
+        let actual_name = <&'a str>::parse(arena, bytes, cursor)?;
+        if actual_name != name {
+            // The section we're looking for is missing, which is the same as being empty.
+            return Ok(RelocationSection::new(arena, name));
+        }
+
+        let target_section_index = u32::parse((), bytes, cursor)?;
+        let entries = parse_fixed_size_items(arena, bytes, cursor)?;
+        Ok(RelocationSection {
+            name,
+            target_section_index,
+            entries,
+        })
     }
 }
 
@@ -177,7 +309,7 @@ impl<'a> Serialize for RelocationSection<'a> {
 #[derive(Debug)]
 pub struct LinkingSegment<'a> {
     pub name: &'a str,
-    pub alignment: Align,
+    pub align_bytes_pow2: u32,
     pub flags: u32,
 }
 
@@ -185,9 +317,21 @@ impl<'a> Serialize for LinkingSegment<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         buffer.encode_u32(self.name.len() as u32);
         buffer.append_slice(self.name.as_bytes());
-        let align_bytes_pow2 = self.alignment as u32;
-        buffer.encode_u32(align_bytes_pow2);
+        buffer.encode_u32(self.align_bytes_pow2);
         buffer.encode_u32(self.flags);
+    }
+}
+
+impl<'a> Parse<&'a Bump> for LinkingSegment<'a> {
+    fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let name = <&'a str>::parse(arena, bytes, cursor)?;
+        let align_bytes_pow2 = u32::parse((), bytes, cursor)?;
+        let flags = u32::parse((), bytes, cursor)?;
+        Ok(LinkingSegment {
+            name,
+            align_bytes_pow2,
+            flags,
+        })
     }
 }
 
@@ -200,7 +344,7 @@ pub struct LinkingInitFunc {
 
 impl Serialize for LinkingInitFunc {
     fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
-        todo!();
+        unimplemented!(); // not todo, since we are not planning to do it!
     }
 }
 
@@ -227,7 +371,7 @@ pub struct ComdatSym {
 
 impl Serialize for ComdatSym {
     fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
-        todo!();
+        unimplemented!(); // not todo, since we are not planning to do it!
     }
 }
 
@@ -245,7 +389,7 @@ pub struct LinkingComdat<'a> {
 
 impl<'a> Serialize for LinkingComdat<'a> {
     fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
-        todo!();
+        unimplemented!(); // not todo, since we are not planning to do it!
     }
 }
 
@@ -321,6 +465,27 @@ impl<'a> Serialize for WasmObjectSymbol<'a> {
     }
 }
 
+impl<'a> Parse<&'a Bump> for WasmObjectSymbol<'a> {
+    fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let flags = u32::parse((), bytes, cursor)?;
+        let index = u32::parse((), bytes, cursor)?;
+
+        // If a symbol refers to an import, then we already have the name in the import section.
+        // The linking section doesn't repeat it, unless the "explicit name" flag is set (used for renaming).
+        // ("Undefined symbol" is linker jargon, and "import" is Wasm jargon. For functions, they're equivalent.)
+        let is_import = (flags & WASM_SYM_UNDEFINED) != 0;
+        let external_syms_have_explicit_names = (flags & WASM_SYM_EXPLICIT_NAME) != 0;
+        let has_explicit_name = !is_import || external_syms_have_explicit_names;
+
+        if has_explicit_name {
+            let name = <&'a str>::parse(arena, bytes, cursor)?;
+            Ok(Self::Defined { flags, index, name })
+        } else {
+            Ok(Self::Imported { flags, index })
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum DataSymbol<'a> {
     Defined {
@@ -362,6 +527,29 @@ impl<'a> Serialize for DataSymbol<'a> {
     }
 }
 
+impl<'a> Parse<&'a Bump> for DataSymbol<'a> {
+    fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let flags = u32::parse((), bytes, cursor)?;
+        let name = <&'a str>::parse(arena, bytes, cursor)?;
+
+        if (flags & WASM_SYM_UNDEFINED) != 0 {
+            Ok(Self::Imported { flags, name })
+        } else {
+            let segment_index = u32::parse((), bytes, cursor)?;
+            let segment_offset = u32::parse((), bytes, cursor)?;
+            let size = u32::parse((), bytes, cursor)?;
+
+            Ok(Self::Defined {
+                flags,
+                name,
+                segment_index,
+                segment_offset,
+                size,
+            })
+        }
+    }
+}
+
 /// section index (not section id!)
 #[derive(Clone, Debug)]
 pub struct SectionSymbol {
@@ -376,6 +564,14 @@ impl Serialize for SectionSymbol {
     }
 }
 
+impl Parse<()> for SectionSymbol {
+    fn parse(_: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let flags = u32::parse((), bytes, cursor)?;
+        let index = u32::parse((), bytes, cursor)?;
+        Ok(SectionSymbol { flags, index })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum SymInfo<'a> {
     Function(WasmObjectSymbol<'a>),
@@ -384,6 +580,37 @@ pub enum SymInfo<'a> {
     Section(SectionSymbol),
     Event(WasmObjectSymbol<'a>),
     Table(WasmObjectSymbol<'a>),
+}
+
+#[repr(u8)]
+#[derive(Debug)]
+pub enum SymType {
+    Function = 0,
+    Data = 1,
+    Global = 2,
+    Section = 3,
+    Event = 4,
+    Table = 5,
+}
+
+impl Parse<()> for SymType {
+    fn parse(_: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let offset = *cursor;
+        let type_id = bytes[offset];
+        *cursor += 1;
+        match type_id {
+            0 => Ok(Self::Function),
+            1 => Ok(Self::Data),
+            2 => Ok(Self::Global),
+            3 => Ok(Self::Section),
+            4 => Ok(Self::Event),
+            5 => Ok(Self::Table),
+            x => Err(ParseError {
+                offset,
+                message: format!("Invalid symbol info type in linking section: {}", x),
+            }),
+        }
+    }
 }
 
 impl<'a> SymInfo<'a> {
@@ -398,14 +625,16 @@ impl<'a> SymInfo<'a> {
 
 impl<'a> Serialize for SymInfo<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        buffer.append_u8(match self {
-            Self::Function(_) => 0,
-            Self::Data(_) => 1,
-            Self::Global(_) => 2,
-            Self::Section(_) => 3,
-            Self::Event(_) => 4,
-            Self::Table(_) => 5,
-        });
+        let type_id = match self {
+            Self::Function(_) => SymType::Function,
+            Self::Data(_) => SymType::Data,
+            Self::Global(_) => SymType::Global,
+            Self::Section(_) => SymType::Section,
+            Self::Event(_) => SymType::Event,
+            Self::Table(_) => SymType::Table,
+        };
+        buffer.append_u8(type_id as u8);
+
         match self {
             Self::Function(x) => x.serialize(buffer),
             Self::Data(x) => x.serialize(buffer),
@@ -414,6 +643,20 @@ impl<'a> Serialize for SymInfo<'a> {
             Self::Event(x) => x.serialize(buffer),
             Self::Table(x) => x.serialize(buffer),
         };
+    }
+}
+
+impl<'a> Parse<&'a Bump> for SymInfo<'a> {
+    fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let type_id = SymType::parse((), bytes, cursor)?;
+        match type_id {
+            SymType::Function => WasmObjectSymbol::parse(arena, bytes, cursor).map(Self::Function),
+            SymType::Data => DataSymbol::parse(arena, bytes, cursor).map(Self::Data),
+            SymType::Global => WasmObjectSymbol::parse(arena, bytes, cursor).map(Self::Global),
+            SymType::Section => SectionSymbol::parse((), bytes, cursor).map(Self::Section),
+            SymType::Event => WasmObjectSymbol::parse(arena, bytes, cursor).map(Self::Event),
+            SymType::Table => WasmObjectSymbol::parse(arena, bytes, cursor).map(Self::Table),
+        }
     }
 }
 
@@ -447,6 +690,24 @@ fn serialize_subsection<I: Serialize, T: SerialBuffer>(
     }
 }
 
+impl Parse<()> for SubSectionId {
+    fn parse(_: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let id = bytes[*cursor];
+        let offset = *cursor;
+        *cursor += 1;
+        match id {
+            5 => Ok(Self::SegmentInfo),
+            6 => Ok(Self::InitFuncs),
+            7 => Ok(Self::ComdatInfo),
+            8 => Ok(Self::SymbolTable),
+            x => Err(ParseError {
+                offset,
+                message: format!("Invalid linking subsection ID {}", x),
+            }),
+        }
+    }
+}
+
 //----------------------------------------------------------------
 //  Linking metadata section
 //----------------------------------------------------------------
@@ -457,6 +718,7 @@ const LINKING_VERSION: u8 = 2;
 /// They call it an "array" of subsections with different variants, BUT this "array"
 /// has an implicit length, and none of the items can be repeated, so a struct is better.
 /// No point writing code to "find" the symbol table, when we know there's exactly one.
+/// The only one we really use is the symbol table
 #[derive(Debug)]
 pub struct LinkingSection<'a> {
     pub symbol_table: Vec<'a, SymInfo<'a>>,
@@ -466,6 +728,8 @@ pub struct LinkingSection<'a> {
 }
 
 impl<'a> LinkingSection<'a> {
+    const NAME: &'static str = "linking";
+
     pub fn new(arena: &'a Bump) -> Self {
         LinkingSection {
             symbol_table: Vec::with_capacity_in(16, arena),
@@ -473,6 +737,29 @@ impl<'a> LinkingSection<'a> {
             init_funcs: Vec::with_capacity_in(0, arena),
             comdat_info: Vec::with_capacity_in(0, arena),
         }
+    }
+
+    pub fn find_symbol_by_name(&self, sym_name: &str, sym_type: SymType) -> Option<u32> {
+        let found = match sym_type {
+            SymType::Data => self
+                .symbol_table
+                .iter()
+                .position(|sym_info| match sym_info {
+                    SymInfo::Data(DataSymbol::Imported { name, .. })
+                    | SymInfo::Data(DataSymbol::Defined { name, .. }) => *name == sym_name,
+                    _ => false,
+                }),
+            SymType::Function => self
+                .symbol_table
+                .iter()
+                .position(|sym_info| match sym_info {
+                    SymInfo::Function(WasmObjectSymbol::Defined { name, .. }) => *name == sym_name,
+                    _ => false,
+                }),
+            _ => unimplemented!("Finding {:?} symbols by name", sym_type),
+        };
+
+        found.map(|i| i as u32)
     }
 }
 
@@ -487,5 +774,65 @@ impl<'a> Serialize for LinkingSection<'a> {
         serialize_subsection(buffer, SubSectionId::ComdatInfo, &self.comdat_info);
 
         update_section_size(buffer, header_indices);
+    }
+}
+
+impl<'a> Parse<&'a Bump> for LinkingSection<'a> {
+    fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        if *cursor > bytes.len() || bytes[*cursor] != SectionId::Custom as u8 {
+            return Ok(LinkingSection::new(arena));
+        }
+        *cursor += 1;
+        let body_size = u32::parse((), bytes, cursor)?;
+        let section_end = *cursor + body_size as usize;
+
+        // Don't fail if it's the wrong section. Let the WasmModule validate presence/absence of sections
+        let actual_name = <&'a str>::parse(arena, bytes, cursor)?;
+        if actual_name != Self::NAME {
+            return Ok(LinkingSection::new(arena));
+        }
+
+        let linking_version = bytes[*cursor];
+        if linking_version != LINKING_VERSION {
+            return Err(ParseError {
+                offset: *cursor,
+                message: format!(
+                    "This file uses version {} of Wasm linking data, but only version {} is supported.",
+                    linking_version, LINKING_VERSION
+                ),
+            });
+        }
+        *cursor += 1;
+
+        // Linking section is encoded as an array of subsections, but we prefer a struct internally.
+        // The order is not defined in the spec, so we loop over them and organise them into our struct.
+        // In theory, there could even be more than one of each. That would be weird, but easy to handle.
+        let mut section = LinkingSection::new(arena);
+        while *cursor < section_end {
+            let subsection_id = SubSectionId::parse((), bytes, cursor)?;
+            let len = u32::parse((), bytes, cursor)?; // bytes in the subsection
+            match subsection_id {
+                SubSectionId::SymbolTable => {
+                    let count = u32::parse((), bytes, cursor)?;
+                    for _ in 0..count {
+                        let item = SymInfo::parse(arena, bytes, cursor)?;
+                        section.symbol_table.push(item);
+                    }
+                }
+                SubSectionId::SegmentInfo => {
+                    let count = u32::parse((), bytes, cursor)?;
+                    for _ in 0..count {
+                        let item = LinkingSegment::parse(arena, bytes, cursor)?;
+                        section.segment_info.push(item);
+                    }
+                }
+                SubSectionId::InitFuncs | SubSectionId::ComdatInfo => {
+                    // We don't use these sections, just skip over them.
+                    *cursor += len as usize;
+                }
+            }
+        }
+
+        Ok(section)
     }
 }

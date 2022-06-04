@@ -17,14 +17,16 @@ use roc_std::RocDec;
 use crate::layout::{CallConv, ReturnMethod, WasmLayout};
 use crate::low_level::{call_higher_order_lowlevel, LowLevelCall};
 use crate::storage::{Storage, StoredValue, StoredValueKind};
-use crate::wasm_module::linking::{DataSymbol, LinkingSegment, WasmObjectSymbol};
-use crate::wasm_module::sections::{DataMode, DataSegment, Limits};
+use crate::wasm_module::linking::{DataSymbol, LinkingSegment, SymType, WasmObjectSymbol};
+use crate::wasm_module::sections::{
+    ConstExpr, DataMode, DataSegment, Export, Global, GlobalType, Limits, MemorySection,
+};
 use crate::wasm_module::{
     code_builder, CodeBuilder, ExportType, LocalId, Signature, SymInfo, ValueType, WasmModule,
 };
 use crate::{
-    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, DEBUG_LOG_SETTINGS, PTR_SIZE,
-    PTR_TYPE, TARGET_INFO,
+    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, DEBUG_LOG_SETTINGS, MEMORY_NAME,
+    PTR_SIZE, PTR_TYPE, TARGET_INFO,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -74,19 +76,12 @@ impl<'a> WasmBackend<'a> {
         fn_index_offset: u32,
         helper_proc_gen: CodeGenHelp<'a>,
     ) -> Self {
-        // The preloaded builtins object file exports all functions, but the final app binary doesn't.
-        // Remove the function exports and use them to populate the Name section (debug info)
-        let platform_and_builtins_exports =
-            std::mem::replace(&mut module.export.exports, bumpalo::vec![in env.arena]);
-        let mut app_exports = Vec::with_capacity_in(32, env.arena);
-        for ex in platform_and_builtins_exports.into_iter() {
-            match ex.ty {
-                ExportType::Func => module.names.append_function(ex.index, ex.name),
-                _ => app_exports.push(ex),
-            }
-        }
+        // TODO: get this from a CLI parameter with some default
+        const STACK_SIZE: u32 = 1024 * 1024;
+        Self::set_memory_layout(env, &mut module, STACK_SIZE);
 
-        module.export.exports = app_exports;
+        Self::export_globals(&mut module);
+
         module.code.code_builders.reserve(proc_lookup.len());
 
         WasmBackend {
@@ -107,6 +102,72 @@ impl<'a> WasmBackend<'a> {
             joinpoint_label_map: MutMap::default(),
             code_builder: CodeBuilder::new(env.arena),
             storage: Storage::new(env.arena),
+        }
+    }
+
+    /// A Wasm module's memory is all in one contiguous block, unlike native executables.
+    /// The standard layout is: constant data, then stack, then heap.
+    /// Since they're all in one block, they can't grow independently. Only the highest one can grow.
+    /// Also, there's no "invalid region" below the stack, so stack overflow will overwrite constants!
+    /// TODO: Detect stack overflow in function prologue... at least in Roc code...
+    fn set_memory_layout(env: &'a Env<'a>, module: &mut WasmModule<'a>, stack_size: u32) {
+        let mut stack_heap_boundary = module.data.end_addr + stack_size;
+        stack_heap_boundary = round_up_to_alignment!(stack_heap_boundary, MemorySection::PAGE_SIZE);
+
+        // Create a mutable global for __stack_pointer
+        debug_assert!(module.global.count == 0);
+        module.global.append(Global {
+            ty: GlobalType {
+                value_type: ValueType::I32,
+                is_mutable: true,
+            },
+            init: ConstExpr::I32(stack_heap_boundary as i32),
+        });
+
+        module.memory =
+            MemorySection::new(env.arena, stack_heap_boundary + MemorySection::PAGE_SIZE);
+        module.export.append(Export {
+            name: MEMORY_NAME,
+            ty: ExportType::Mem,
+            index: 0,
+        });
+
+        module.relocate_preloaded_code("__heap_base", SymType::Data, stack_heap_boundary);
+    }
+
+    /// If the host has some `extern` globals, we need to create them in the final binary
+    /// and make them visible to JavaScript by exporting them
+    fn export_globals(module: &mut WasmModule<'a>) {
+        for (sym_index, sym) in module.linking.symbol_table.iter().enumerate() {
+            match sym {
+                SymInfo::Data(DataSymbol::Imported { name, .. }) if *name != "__heap_base" => {
+                    let global_value_addr = module.data.end_addr;
+                    module.data.end_addr += PTR_SIZE;
+
+                    module.reloc_code.apply_relocs_u32(
+                        &mut module.code.preloaded_bytes,
+                        module.code.preloaded_reloc_offset,
+                        sym_index as u32,
+                        global_value_addr,
+                    );
+
+                    let global_index = module.global.count;
+                    module.global.append(Global {
+                        ty: GlobalType {
+                            value_type: ValueType::I32,
+                            is_mutable: false,
+                        },
+                        init: ConstExpr::I32(global_value_addr as i32),
+                    });
+
+                    module.export.append(Export {
+                        name,
+                        ty: ExportType::Global,
+                        index: global_index,
+                    });
+                }
+                _ => {}
+            }
         }
     }
 
@@ -916,10 +977,10 @@ impl<'a> WasmBackend<'a> {
     /// Return the data we need for code gen: linker symbol index and memory address
     fn store_bytes_in_data_section(&mut self, bytes: &[u8], sym: Symbol) -> (u32, u32) {
         // Place the segment at a 4-byte aligned offset
-        let segment_addr = round_up_to_alignment!(self.module.data_end, PTR_SIZE);
+        let segment_addr = round_up_to_alignment!(self.module.data.end_addr, PTR_SIZE);
         let elements_addr = segment_addr + PTR_SIZE;
         let length_with_refcount = 4 + bytes.len();
-        self.module.data_end = segment_addr + length_with_refcount as u32;
+        self.module.data.end_addr = segment_addr + length_with_refcount as u32;
 
         let mut segment = DataSegment {
             mode: DataMode::active_at(segment_addr),
@@ -951,7 +1012,7 @@ impl<'a> WasmBackend<'a> {
         // Ensure the linker keeps the segment aligned when relocating it
         self.module.linking.segment_info.push(LinkingSegment {
             name,
-            alignment: Align::Bytes4,
+            align_bytes_pow2: Align::Bytes4 as u32,
             flags: 0,
         });
 

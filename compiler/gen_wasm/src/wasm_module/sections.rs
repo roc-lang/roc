@@ -136,15 +136,10 @@ fn parse_section(
             message: "End of file".into(),
         });
     }
+
+    // If we see the wrong section ID, assume the one we were looking for is just empty
     if module_bytes[*cursor] != expected_id as u8 {
-        let actual_id: SectionId = unsafe { std::mem::transmute(module_bytes[*cursor]) };
-        return Err(ParseError {
-            offset: *cursor,
-            message: format!(
-                "Expected section '{:?}', but found '{:?}'",
-                expected_id, actual_id
-            ),
-        });
+        return Ok((0, *cursor..*cursor));
     }
     *cursor += 1;
 
@@ -251,6 +246,10 @@ impl<'a> TypeSection<'a> {
         self.bytes.extend_from_slice(&sig_bytes);
 
         sig_id as u32
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
     }
 }
 
@@ -390,14 +389,14 @@ impl<'a> ImportSection<'a> {
 
 impl<'a> Parse<&'a Bump> for ImportSection<'a> {
     fn parse(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
-        let (count, range) = parse_section(Self::ID, module_bytes, cursor)?;
+        let (mut count, range) = parse_section(Self::ID, module_bytes, cursor)?;
         let mut bytes = Vec::with_capacity_in(range.len() * 2, arena);
         let mut fn_signatures = Vec::with_capacity_in(range.len() / 8, arena);
 
         let end = range.end;
-        bytes.extend_from_slice(&module_bytes[range]);
 
         while *cursor < end {
+            let import_start = *cursor;
             String::skip_bytes(module_bytes, cursor)?; // import namespace
             String::skip_bytes(module_bytes, cursor)?; // import name
 
@@ -408,15 +407,19 @@ impl<'a> Parse<&'a Bump> for ImportSection<'a> {
                 ImportTypeId::Func => {
                     let sig = u32::parse((), module_bytes, cursor)?;
                     fn_signatures.push(sig);
+                    bytes.extend_from_slice(&module_bytes[import_start..*cursor]);
                 }
                 ImportTypeId::Table => {
                     TableType::skip_bytes(module_bytes, cursor)?;
+                    count -= 1;
                 }
                 ImportTypeId::Mem => {
                     Limits::skip_bytes(module_bytes, cursor)?;
+                    count -= 1;
                 }
                 ImportTypeId::Global => {
                     GlobalType::skip_bytes(module_bytes, cursor)?;
+                    count -= 1;
                 }
             }
         }
@@ -1106,7 +1109,8 @@ impl<'a> Serialize for ElementSection<'a> {
 #[derive(Debug)]
 pub struct CodeSection<'a> {
     pub preloaded_count: u32,
-    pub preloaded_bytes: &'a [u8],
+    pub preloaded_reloc_offset: u32,
+    pub preloaded_bytes: Vec<'a, u8>,
     pub code_builders: Vec<'a, CodeBuilder<'a>>,
     dead_code_metadata: PreloadsCallGraph<'a>,
 }
@@ -1144,20 +1148,43 @@ impl<'a> CodeSection<'a> {
         function_signatures: &[u32],
         indirect_callees: &[u32],
     ) -> Result<Self, ParseError> {
-        let (preloaded_count, range) = parse_section(SectionId::Code, module_bytes, cursor)?;
-        *cursor = range.end;
-        let preloaded_bytes = arena.alloc_slice_copy(&module_bytes[range]);
+        if module_bytes[*cursor] != SectionId::Code as u8 {
+            return Err(ParseError {
+                offset: *cursor,
+                message: "Missing code section!".into(),
+            });
+        }
+        *cursor += 1;
+        let section_size = u32::parse((), module_bytes, cursor)?;
+        let count_start = *cursor;
+        let count = u32::parse((), module_bytes, cursor)?;
+        let function_bodies_start = *cursor;
+        let next_section_start = count_start + section_size as usize;
+        *cursor = next_section_start;
+
+        // Relocation offsets are based from the start of the section body, which includes function count
+        // But preloaded_bytes does not include the function count, only the function bodies!
+        // When we do relocations, we need to account for this
+        let preloaded_reloc_offset = (function_bodies_start - count_start) as u32;
+
+        let preloaded_bytes = Vec::from_iter_in(
+            module_bytes[function_bodies_start..next_section_start]
+                .iter()
+                .copied(),
+            arena,
+        );
 
         let dead_code_metadata = parse_preloads_call_graph(
             arena,
-            preloaded_bytes,
+            &preloaded_bytes,
             import_signatures,
             function_signatures,
             indirect_callees,
         )?;
 
         Ok(CodeSection {
-            preloaded_count,
+            preloaded_count: count,
+            preloaded_reloc_offset,
             preloaded_bytes,
             code_builders: Vec::with_capacity_in(0, arena),
             dead_code_metadata,
@@ -1184,12 +1211,12 @@ impl<'a> CodeSection<'a> {
             arena,
             &mut buffer,
             &self.dead_code_metadata,
-            self.preloaded_bytes,
+            &self.preloaded_bytes,
             import_fn_count,
             live_ext_fn_indices,
         );
 
-        self.preloaded_bytes = buffer.into_bump_slice();
+        self.preloaded_bytes = buffer;
     }
 }
 
@@ -1198,7 +1225,7 @@ impl<'a> Serialize for CodeSection<'a> {
         let header_indices = write_section_header(buffer, SectionId::Code);
         buffer.encode_u32(self.preloaded_count + self.code_builders.len() as u32);
 
-        buffer.append_slice(self.preloaded_bytes);
+        buffer.append_slice(&self.preloaded_bytes);
 
         for code_builder in self.code_builders.iter() {
             code_builder.serialize(buffer);
@@ -1223,9 +1250,47 @@ pub enum DataMode {
 }
 
 impl DataMode {
+    const ACTIVE: u8 = 0;
+    const PASSIVE: u8 = 1;
+
     pub fn active_at(offset: u32) -> Self {
         DataMode::Active {
             offset: ConstExpr::I32(offset as i32),
+        }
+    }
+}
+
+impl Serialize for DataMode {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        match self {
+            Self::Active { offset } => {
+                buffer.append_u8(Self::ACTIVE);
+                offset.serialize(buffer);
+            }
+            Self::Passive => {
+                buffer.append_u8(Self::PASSIVE);
+            }
+        }
+    }
+}
+
+impl Parse<()> for DataMode {
+    fn parse(_: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let variant_id = bytes[*cursor];
+        *cursor += 1;
+
+        if variant_id == Self::ACTIVE {
+            let offset = ConstExpr::parse_u32(bytes, cursor)?;
+            Ok(DataMode::Active {
+                offset: ConstExpr::I32(offset as i32),
+            })
+        } else if variant_id == Self::PASSIVE {
+            Ok(DataMode::Passive)
+        } else {
+            Err(ParseError {
+                offset: *cursor - 1,
+                message: format!("Data section: invalid DataMode variant 0x{:x}", variant_id),
+            })
         }
     }
 }
@@ -1238,27 +1303,25 @@ pub struct DataSegment<'a> {
 
 impl Serialize for DataSegment<'_> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        match &self.mode {
-            DataMode::Active { offset } => {
-                buffer.append_u8(0); // variant ID
-                offset.serialize(buffer);
-            }
-            DataMode::Passive => {
-                buffer.append_u8(1); // variant ID
-            }
-        }
-
+        self.mode.serialize(buffer);
         self.init.serialize(buffer);
     }
 }
 
 #[derive(Debug)]
 pub struct DataSection<'a> {
+    pub end_addr: u32,
     count: u32,
-    pub bytes: Vec<'a, u8>, // public so backend.rs can calculate addr of first string
+    bytes: Vec<'a, u8>,
 }
 
 impl<'a> DataSection<'a> {
+    const ID: SectionId = SectionId::Data;
+
+    pub fn size(&self) -> usize {
+        MAX_SIZE_SECTION_HEADER + self.bytes.len()
+    }
+
     pub fn append_segment(&mut self, segment: DataSegment<'a>) -> u32 {
         let index = self.count;
         self.count += 1;
@@ -1267,7 +1330,44 @@ impl<'a> DataSection<'a> {
     }
 }
 
-section_impl!(DataSection, SectionId::Data);
+impl<'a> Parse<&'a Bump> for DataSection<'a> {
+    fn parse(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let (count, range) = parse_section(Self::ID, module_bytes, cursor)?;
+
+        let end = range.end;
+        let mut bytes = Vec::<u8>::with_capacity_in(range.len() * 2, arena);
+        bytes.extend_from_slice(&module_bytes[range]);
+
+        let mut end_addr = 0;
+        for _ in 0..count {
+            let mode = DataMode::parse((), module_bytes, cursor)?;
+            match mode {
+                DataMode::Active {
+                    offset: ConstExpr::I32(offset_addr),
+                } if offset_addr > end_addr => {
+                    end_addr = offset_addr;
+                }
+                _ => {}
+            }
+            let segment_bytes_len = u32::parse((), module_bytes, cursor)?;
+            *cursor += segment_bytes_len as usize;
+        }
+
+        debug_assert_eq!(*cursor, end);
+
+        Ok(DataSection {
+            end_addr: end_addr as u32,
+            count,
+            bytes,
+        })
+    }
+}
+
+impl<'a> Serialize for DataSection<'a> {
+    fn serialize<B: SerialBuffer>(&self, buffer: &mut B) {
+        serialize_bytes_section(Self::ID, self.count, &self.bytes, buffer);
+    }
+}
 
 /*******************************************************************
  *
@@ -1335,6 +1435,8 @@ enum NameSubSections {
 }
 
 pub struct NameSection<'a> {
+    /// count may not be the same as functions.len() because of duplicates!
+    pub count: u32,
     pub bytes: Vec<'a, u8>,
     pub functions: MutMap<&'a str, u32>,
 }
@@ -1350,6 +1452,7 @@ impl<'a> NameSection<'a> {
     pub fn append_function(&mut self, index: u32, name: &'a str) {
         index.serialize(&mut self.bytes);
         name.serialize(&mut self.bytes);
+        self.count += 1; // always increment even for duplicate names
         self.functions.insert(name, index);
     }
 }
@@ -1359,6 +1462,7 @@ impl<'a> Parse<&'a Bump> for NameSection<'a> {
         // If we're already past the end of the preloaded file then there is no Name section
         if *cursor >= module_bytes.len() {
             return Ok(NameSection {
+                count: 0,
                 bytes: bumpalo::vec![in arena],
                 functions: MutMap::default(),
             });
@@ -1385,6 +1489,7 @@ impl<'a> Parse<&'a Bump> for NameSection<'a> {
         let section_end = *cursor + section_size;
 
         let mut section = NameSection {
+            count: 0,
             bytes: Vec::with_capacity_in(section_size, arena),
             functions: MutMap::default(),
         };
@@ -1428,9 +1533,9 @@ impl<'a> Parse<&'a Bump> for NameSection<'a> {
         }
 
         // Function names
-        let num_entries = u32::parse((), module_bytes, cursor)? as usize;
+        section.count = u32::parse((), module_bytes, cursor)?;
         let fn_names_start = *cursor;
-        for _ in 0..num_entries {
+        for _ in 0..section.count {
             let fn_index = u32::parse((), module_bytes, cursor)?;
             let name_bytes = <&'a str>::parse(arena, module_bytes, cursor)?;
             section.functions.insert(name_bytes, fn_index);
@@ -1458,8 +1563,7 @@ impl<'a> Serialize for NameSection<'a> {
             let subsection_byte_size = (MAX_SIZE_ENCODED_U32 + self.bytes.len()) as u32;
             subsection_byte_size.serialize(buffer);
 
-            let num_entries = self.functions.len() as u32;
-            buffer.encode_padded_u32(num_entries);
+            buffer.encode_padded_u32(self.count);
 
             buffer.append_slice(&self.bytes);
 
