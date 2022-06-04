@@ -442,8 +442,8 @@ impl<'a> Parse<&'a Bump> for DataSymbol<'a> {
     }
 }
 
-/// We don't use this. I'm not sure what you'd use it for.
-/// But if we ever do, note that it uses section index, not section id.
+/// We don't use this, but we need it in the symbol table so the indices are correct!
+/// If we ever use it, note that it refers to section index, not section id.
 #[derive(Clone, Debug)]
 pub struct SectionSymbol {
     _flags: u32,
