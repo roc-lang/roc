@@ -3,7 +3,7 @@ use crate::subs::{
     UnionTags, Variable,
 };
 use crate::types::{name_type_var, RecordField};
-use roc_collections::all::{MutMap, MutSet};
+use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -58,6 +58,7 @@ struct Env<'a> {
 /// We only care about whether it was a single time or multiple times,
 /// because single appearances get a wildcard (*) and multiple times
 /// get a generated letter ("a" etc).
+#[derive(Debug)]
 enum Appearances {
     Single,
     Multiple,
@@ -75,7 +76,7 @@ fn find_names_needed(
     subs: &mut Subs,
     roots: &mut Vec<Variable>,
     root_appearances: &mut MutMap<Variable, Appearances>,
-    names_taken: &mut MutSet<Lowercase>,
+    names_taken: &mut MutMap<Lowercase, Variable>,
 ) {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
@@ -151,19 +152,27 @@ fn find_names_needed(
             ..
         }
         | FlexVar(Some(name_index))
-        | FlexAbleVar(Some(name_index), _) => {
-            // This root already has a name. Nothing more to do here!
+        | FlexAbleVar(Some(name_index), _)
+        | RigidVar(name_index)
+        | RigidAbleVar(name_index, _) => {
+            let root = subs.get_root_key_without_compacting(variable);
 
             // User-defined names are already taken.
             // We must not accidentally generate names that collide with them!
             let name = subs.field_names[name_index.index as usize].clone();
-            names_taken.insert(name);
-        }
-        RigidVar(name_index) | RigidAbleVar(name_index, _) => {
-            // User-defined names are already taken.
-            // We must not accidentally generate names that collide with them!
-            let name = subs.field_names[name_index.index as usize].clone();
-            names_taken.insert(name);
+            match names_taken.get(&name) {
+                Some(var) if *var == root => {}
+                Some(_) => {
+                    if !root_appearances.contains_key(&root) {
+                        roots.push(root);
+                    }
+                    // We want a name, but the default name is already taken by another root.
+                    root_appearances.insert(root, Appearances::Multiple);
+                }
+                None => {
+                    names_taken.insert(name, root);
+                }
+            }
         }
         Structure(Apply(_, args)) => {
             for index in args.into_iter() {
@@ -255,7 +264,7 @@ fn name_all_type_vars(variable: Variable, subs: &mut Subs) -> NamedResult {
     let mut roots = Vec::new();
     let mut letters_used = 0;
     let mut appearances = MutMap::default();
-    let mut taken = MutSet::default();
+    let mut taken = MutMap::default();
 
     // Populate names_needed
     find_names_needed(variable, subs, &mut roots, &mut appearances, &mut taken);
@@ -290,14 +299,14 @@ fn name_root(
     letters_used: u32,
     root: Variable,
     subs: &mut Subs,
-    taken: &mut MutSet<Lowercase>,
+    taken: &mut MutMap<Lowercase, Variable>,
 ) -> u32 {
     let (generated_name, new_letters_used) =
-        name_type_var(letters_used, &mut taken.iter(), |var, str| {
+        name_type_var(letters_used, &mut taken.keys(), |var, str| {
             var.as_str() == str
         });
 
-    taken.insert(generated_name.clone());
+    taken.insert(generated_name.clone(), root);
 
     set_root_name(root, generated_name, subs);
 
@@ -310,12 +319,12 @@ fn set_root_name(root: Variable, name: Lowercase, subs: &mut Subs) {
     let old_content = subs.get_content_without_compacting(root);
 
     match old_content {
-        FlexVar(None) => {
+        FlexVar(_) => {
             let name_index = SubsIndex::push_new(&mut subs.field_names, name);
             let content = FlexVar(Some(name_index));
             subs.set_content(root, content);
         }
-        &FlexAbleVar(None, ability) => {
+        &FlexAbleVar(_, ability) => {
             let name_index = SubsIndex::push_new(&mut subs.field_names, name);
             let content = FlexAbleVar(Some(name_index), ability);
             subs.set_content(root, content);
@@ -335,8 +344,7 @@ fn set_root_name(root: Variable, name: Lowercase, subs: &mut Subs) {
         RecursionVar {
             opt_name: Some(_existing),
             ..
-        }
-        | FlexVar(Some(_existing)) => {
+        } => {
             panic!("TODO FIXME - make sure the generated name does not clash with any bound vars! In other words, if the user decided to name a type variable 'a', make sure we don't generate 'a' to name a different one!");
         }
 
