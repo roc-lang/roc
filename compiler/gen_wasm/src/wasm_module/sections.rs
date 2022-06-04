@@ -9,7 +9,6 @@ use super::dead_code::{
     copy_preloads_shrinking_dead_fns, parse_preloads_call_graph, trace_call_graph,
     PreloadsCallGraph,
 };
-use super::linking::RelocationEntry;
 use super::opcodes::OpCode;
 use super::parse::{Parse, ParseError, SkipBytes};
 use super::serialize::{SerialBuffer, Serialize, MAX_SIZE_ENCODED_U32};
@@ -1116,24 +1115,6 @@ pub struct CodeSection<'a> {
 }
 
 impl<'a> CodeSection<'a> {
-    /// Serialize the code builders for all functions, and get code relocations with final offsets
-    pub fn serialize_with_relocs<T: SerialBuffer>(
-        &self,
-        buffer: &mut T,
-        relocations: &mut Vec<'a, RelocationEntry>,
-    ) -> usize {
-        let header_indices = write_section_header(buffer, SectionId::Code);
-        buffer.encode_u32(self.preloaded_count + self.code_builders.len() as u32);
-
-        for code_builder in self.code_builders.iter() {
-            code_builder.serialize_with_relocs(buffer, relocations, header_indices.body_index);
-        }
-
-        let code_section_body_index = header_indices.body_index;
-        update_section_size(buffer, header_indices);
-        code_section_body_index
-    }
-
     pub fn size(&self) -> usize {
         let builders_size: usize = self.code_builders.iter().map(|cb| cb.size()).sum();
 

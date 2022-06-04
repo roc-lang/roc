@@ -17,7 +17,7 @@ use roc_std::RocDec;
 use crate::layout::{CallConv, ReturnMethod, WasmLayout};
 use crate::low_level::{call_higher_order_lowlevel, LowLevelCall};
 use crate::storage::{Storage, StoredValue, StoredValueKind};
-use crate::wasm_module::linking::{DataSymbol, LinkingSegment, SymType, WasmObjectSymbol};
+use crate::wasm_module::linking::{DataSymbol, SymType, WasmObjectSymbol};
 use crate::wasm_module::sections::{
     ConstExpr, DataMode, DataSegment, Export, Global, GlobalType, Limits, MemorySection,
 };
@@ -41,7 +41,6 @@ pub enum ProcSource {
 pub struct ProcLookupData<'a> {
     pub name: Symbol,
     pub layout: ProcLayout<'a>,
-    pub linker_index: u32,
     pub source: ProcSource,
 }
 
@@ -183,7 +182,6 @@ impl<'a> WasmBackend<'a> {
     ) -> u32 {
         let proc_index = self.proc_lookup.len();
         let wasm_fn_index = self.fn_index_offset + proc_index as u32;
-        let linker_sym_index = self.module.linking.symbol_table.len() as u32;
 
         let name = self
             .layout_ids
@@ -194,7 +192,6 @@ impl<'a> WasmBackend<'a> {
         self.proc_lookup.push(ProcLookupData {
             name: symbol,
             layout,
-            linker_index: linker_sym_index,
             source,
         });
 
@@ -450,15 +447,10 @@ impl<'a> WasmBackend<'a> {
         }
 
         // Call the wrapped inner function
-        let lookup = &self.proc_lookup[inner_lookup_idx];
         let inner_wasm_fn_index = self.fn_index_offset + inner_lookup_idx as u32;
         let has_return_val = ret_type_and_size.is_some();
-        self.code_builder.call(
-            inner_wasm_fn_index,
-            lookup.linker_index,
-            n_inner_wasm_args,
-            has_return_val,
-        );
+        self.code_builder
+            .call(inner_wasm_fn_index, n_inner_wasm_args, has_return_val);
 
         // If the inner function returns a primitive, store it to the address we loaded at the very beginning
         if let Some((ty, size)) = ret_type_and_size {
@@ -787,13 +779,11 @@ impl<'a> WasmBackend<'a> {
         bytes.push(0);
 
         // Store it in the app's data section
-        let sym = self.create_symbol(msg);
-        let (linker_sym_index, elements_addr) = self.store_bytes_in_data_section(&bytes, sym);
+        let elements_addr = self.store_bytes_in_data_section(&bytes);
 
         // Pass its address to roc_panic
         let tag_id = 0;
-        self.code_builder
-            .i32_const_mem_addr(elements_addr, linker_sym_index);
+        self.code_builder.i32_const(elements_addr as i32);
         self.code_builder.i32_const(tag_id);
         self.call_zig_builtin_after_loading_args("roc_panic", 2, false);
 
@@ -808,7 +798,7 @@ impl<'a> WasmBackend<'a> {
 
     fn expr(&mut self, sym: Symbol, expr: &Expr<'a>, layout: &Layout<'a>, storage: &StoredValue) {
         match expr {
-            Expr::Literal(lit) => self.expr_literal(lit, storage, sym),
+            Expr::Literal(lit) => self.expr_literal(lit, storage),
 
             Expr::Call(roc_mono::ir::Call {
                 call_type,
@@ -870,7 +860,7 @@ impl<'a> WasmBackend<'a> {
      * Literals
      *******************************************************************/
 
-    fn expr_literal(&mut self, lit: &Literal<'a>, storage: &StoredValue, sym: Symbol) {
+    fn expr_literal(&mut self, lit: &Literal<'a>, storage: &StoredValue) {
         let invalid_error =
             || internal_error!("Literal value {:?} has invalid storage {:?}", lit, storage);
 
@@ -945,13 +935,11 @@ impl<'a> WasmBackend<'a> {
                             self.code_builder.i32_store(Align::Bytes4, offset + 8);
                         } else {
                             let bytes = string.as_bytes();
-                            let (linker_sym_index, elements_addr) =
-                                self.store_bytes_in_data_section(bytes, sym);
+                            let elements_addr = self.store_bytes_in_data_section(bytes);
 
                             // ptr
                             self.code_builder.get_local(local_id);
-                            self.code_builder
-                                .i32_const_mem_addr(elements_addr, linker_sym_index);
+                            self.code_builder.i32_const(elements_addr as i32);
                             self.code_builder.i32_store(Align::Bytes4, offset);
 
                             // len
@@ -975,7 +963,7 @@ impl<'a> WasmBackend<'a> {
 
     /// Create a string constant in the module data section
     /// Return the data we need for code gen: linker symbol index and memory address
-    fn store_bytes_in_data_section(&mut self, bytes: &[u8], sym: Symbol) -> (u32, u32) {
+    fn store_bytes_in_data_section(&mut self, bytes: &[u8]) -> u32 {
         // Place the segment at a 4-byte aligned offset
         let segment_addr = round_up_to_alignment!(self.module.data.end_addr, PTR_SIZE);
         let elements_addr = segment_addr + PTR_SIZE;
@@ -992,34 +980,9 @@ impl<'a> WasmBackend<'a> {
         segment.init.extend_from_slice(&refcount_max_bytes);
         segment.init.extend_from_slice(bytes);
 
-        let segment_index = self.module.data.append_segment(segment);
+        self.module.data.append_segment(segment);
 
-        // Generate linker symbol
-        let name = self
-            .layout_ids
-            .get(sym, &Layout::Builtin(Builtin::Str))
-            .to_symbol_string(sym, self.interns);
-        let name = String::from_str_in(&name, self.env.arena).into_bump_str();
-
-        let linker_symbol = SymInfo::Data(DataSymbol::Defined {
-            flags: 0,
-            name,
-            segment_index,
-            segment_offset: 4,
-            size: bytes.len() as u32,
-        });
-
-        // Ensure the linker keeps the segment aligned when relocating it
-        self.module.linking.segment_info.push(LinkingSegment {
-            name,
-            align_bytes_pow2: Align::Bytes4 as u32,
-            flags: 0,
-        });
-
-        let linker_sym_index = self.module.linking.symbol_table.len();
-        self.module.linking.symbol_table.push(linker_symbol);
-
-        (linker_sym_index as u32, elements_addr)
+        elements_addr
     }
 
     /*******************************************************************
@@ -1096,31 +1059,23 @@ impl<'a> WasmBackend<'a> {
             );
         debug_assert!(!ret_zig_packed_struct);
 
-        for (roc_proc_index, lookup) in self.proc_lookup.iter().enumerate() {
-            let ProcLookupData {
-                name: ir_sym,
-                layout: pl,
-                linker_index: linker_sym_index,
-                ..
-            } = lookup;
-            if *ir_sym == func_sym && pl == proc_layout {
-                let wasm_fn_index = self.fn_index_offset + roc_proc_index as u32;
-                self.code_builder.call(
-                    wasm_fn_index,
-                    *linker_sym_index,
-                    num_wasm_args,
-                    has_return_val,
+        let roc_proc_index = self
+            .proc_lookup
+            .iter()
+            .position(|lookup| lookup.name == func_sym && &lookup.layout == proc_layout)
+            .unwrap_or_else(|| {
+                internal_error!(
+                    "Could not find procedure {:?} with proc_layout:\n{:#?}\nKnown procedures:\n{:#?}",
+                    func_sym,
+                    proc_layout,
+                    self.proc_lookup
                 );
-                return;
-            }
-        }
+            });
 
-        internal_error!(
-            "Could not find procedure {:?} with proc_layout:\n{:#?}\nKnown procedures:\n{:#?}",
-            func_sym,
-            proc_layout,
-            self.proc_lookup
-        );
+        let wasm_fn_index = self.fn_index_offset + roc_proc_index as u32;
+
+        self.code_builder
+            .call(wasm_fn_index, num_wasm_args, has_return_val);
     }
 
     fn expr_call_low_level(
@@ -1152,10 +1107,8 @@ impl<'a> WasmBackend<'a> {
     ) {
         let fn_index = self.module.names.functions[name];
         self.called_preload_fns.push(fn_index);
-        let linker_symbol_index = u32::MAX;
-
         self.code_builder
-            .call(fn_index, linker_symbol_index, num_wasm_args, has_return_val);
+            .call(fn_index, num_wasm_args, has_return_val);
     }
 
     /// Call a helper procedure that implements `==` for a data structure (not numbers or Str)
