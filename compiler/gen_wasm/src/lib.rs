@@ -91,7 +91,7 @@ pub fn build_app_module<'a>(
 
     // Adjust Wasm function indices to account for functions from the object file
     let fn_index_offset: u32 =
-        host_module.import.fn_signatures.len() as u32 + host_module.code.preloaded_count;
+        host_module.import.function_signature_count() as u32 + host_module.code.preloaded_count;
 
     // Collect the symbols & names for the procedures,
     // and filter out procs we're going to inline

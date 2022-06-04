@@ -111,11 +111,12 @@ impl<'a> WasmModule<'a> {
         let element = ElementSection::parse(arena, bytes, &mut cursor)?;
         let indirect_callees = element.indirect_callees(arena);
 
+        let imported_fn_signatures = import.function_signatures(arena);
         let code = CodeSection::parse(
             arena,
             bytes,
             &mut cursor,
-            &import.fn_signatures,
+            &imported_fn_signatures,
             &function.signatures,
             &indirect_callees,
         )?;
@@ -194,7 +195,7 @@ impl<'a> WasmModule<'a> {
 
         self.code.remove_dead_preloads(
             arena,
-            self.import.fn_signatures.len(),
+            self.import.function_signature_count(),
             &function_indices,
             called_preload_fns,
         )
