@@ -9,6 +9,7 @@ use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Drop;
 use core::str;
 
+mod roc_box;
 mod roc_list;
 mod roc_str;
 mod storage;

@@ -1,0 +1,171 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
+use core::{
+    cell::Cell,
+    cmp::{self, Ordering},
+    fmt::Debug,
+    mem::{self, ManuallyDrop},
+    ops::Deref,
+    ptr::{self, NonNull},
+};
+
+use crate::{roc_alloc, roc_dealloc, storage::Storage};
+
+#[repr(C)]
+pub struct RocBox<T> {
+    contents: NonNull<ManuallyDrop<T>>,
+}
+
+impl<T> RocBox<T> {
+    pub fn init(contents: T) -> Self {
+        let alignment = Self::alloc_alignment();
+        let bytes = mem::size_of_val(&contents) + alignment;
+
+        let ptr = unsafe { roc_alloc(bytes, alignment as u32) };
+
+        // Initialize the reference count.
+        unsafe {
+            let storage_ptr = ptr.cast::<Storage>();
+
+            storage_ptr.write(Storage::new_reference_counted());
+        }
+
+        let contents = unsafe {
+            let contents_ptr = ptr.cast::<u8>().add(alignment).cast::<ManuallyDrop<T>>();
+
+            *contents_ptr = ManuallyDrop::new(contents);
+
+            if true {
+                todo!("Increment the refcount of `contents`, and also do that in RocList extend_from_slice.");
+            }
+
+            NonNull::new(contents_ptr).unwrap_or_else(|| {
+                todo!("Call roc_panic with the info that an allocation failed.");
+            })
+        };
+
+        Self { contents }
+    }
+
+    #[inline(always)]
+    fn alloc_alignment() -> usize {
+        mem::align_of::<T>().max(mem::align_of::<Storage>())
+    }
+
+    pub fn into_inner(self) -> T {
+        unsafe { ptr::read(self.contents.as_ptr() as *mut T) }
+    }
+
+    fn storage(&self) -> &Cell<Storage> {
+        unsafe {
+            &*self
+                .contents
+                .as_ptr()
+                .cast::<u8>()
+                .sub(mem::size_of::<T>())
+                .cast::<Cell<Storage>>()
+        }
+    }
+}
+
+impl<T> Deref for RocBox<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { self.contents.as_ref() }
+    }
+}
+
+impl<T, U> PartialEq<RocBox<U>> for RocBox<T>
+where
+    T: PartialEq<U>,
+{
+    fn eq(&self, other: &RocBox<U>) -> bool {
+        self.deref() == other.deref()
+    }
+}
+
+impl<T> Eq for RocBox<T> where T: Eq {}
+
+impl<T, U> PartialOrd<RocBox<U>> for RocBox<T>
+where
+    T: PartialOrd<U>,
+{
+    fn partial_cmp(&self, other: &RocBox<U>) -> Option<cmp::Ordering> {
+        let self_contents = unsafe { self.contents.as_ref() };
+        let other_contents = unsafe { other.contents.as_ref() };
+
+        self_contents.partial_cmp(other_contents)
+    }
+}
+
+impl<T> Ord for RocBox<T>
+where
+    T: Ord,
+{
+    fn cmp(&self, other: &Self) -> Ordering {
+        let self_contents = unsafe { self.contents.as_ref() };
+        let other_contents = unsafe { other.contents.as_ref() };
+
+        self_contents.cmp(other_contents)
+    }
+}
+
+impl<T> Debug for RocBox<T>
+where
+    T: Debug,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.deref().fmt(f)
+    }
+}
+
+impl<T> Clone for RocBox<T> {
+    fn clone(&self) -> Self {
+        let storage = self.storage();
+        let mut new_storage = storage.get();
+
+        // Increment the reference count
+        if !new_storage.is_readonly() {
+            new_storage.increment_reference_count();
+            storage.set(new_storage);
+        }
+
+        Self {
+            contents: self.contents,
+        }
+    }
+}
+
+impl<T> Drop for RocBox<T> {
+    fn drop(&mut self) {
+        let storage = self.storage();
+        let contents = self.contents;
+
+        // Decrease the list's reference count.
+        let mut new_storage = storage.get();
+        let needs_dealloc = new_storage.decrease();
+
+        if needs_dealloc {
+            unsafe {
+                // Drop the stored contents.
+                let contents_ptr = contents.as_ptr();
+
+                mem::drop::<T>(ManuallyDrop::take(&mut *contents_ptr));
+
+                let alignment = Self::alloc_alignment();
+
+                // Release the memory.
+                roc_dealloc(
+                    contents.as_ptr().cast::<u8>().sub(alignment).cast(),
+                    alignment as u32,
+                );
+            }
+        } else {
+            if !new_storage.is_readonly() {
+                // Write the storage back.
+                storage.set(new_storage);
+            }
+        }
+    }
+}
