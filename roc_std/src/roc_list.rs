@@ -48,22 +48,29 @@ impl<T> RocList<T> {
         let alignment = Self::alloc_alignment();
         let alloc_ptr = unsafe { roc_alloc(elems * mem::size_of::<T>(), alignment as u32) };
 
-        Self::elems_from_allocation(alloc_ptr)
+        Self::elems_from_allocation(NonNull::new(alloc_ptr).unwrap_or_else(|| {
+            todo!("Call roc_panic with the info that an allocation failed.");
+        }))
     }
 
-    fn elems_from_allocation(ptr: *mut c_void) -> NonNull<ManuallyDrop<T>> {
+    fn elems_from_allocation(allocation: NonNull<c_void>) -> NonNull<ManuallyDrop<T>> {
         let alignment = Self::alloc_alignment();
+        let alloc_ptr = allocation.as_ptr();
 
         unsafe {
-            let elements = ptr.cast::<u8>().add(alignment).cast::<ManuallyDrop<T>>();
+            let elem_ptr = alloc_ptr
+                .cast::<u8>()
+                .add(alignment)
+                .cast::<ManuallyDrop<T>>();
 
             // Initialize the reference count.
-            let storage_ptr = elements.cast::<Storage>().sub(1);
-            storage_ptr.write(Storage::new_reference_counted());
+            alloc_ptr
+                .cast::<Storage>()
+                .write(Storage::new_reference_counted());
 
-            NonNull::new(elements).unwrap_or_else(|| {
-                todo!("Call roc_panic with the info that an allocation failed.");
-            })
+            // The original alloc pointer was non-null, and this one is the alloc pointer
+            // with `alignment` bytes added to it, so it should be non-null too.
+            NonNull::new_unchecked(elem_ptr)
         }
     }
 
@@ -143,14 +150,16 @@ where
                         if new_ptr == original_ptr as *mut _ {
                             // We successfully reallocated in-place; we're done!
                             return self;
-                        } else if new_ptr.is_null() {
-                            todo!("Reallocation failed");
                         } else {
                             // We got back a different allocation; copy the existing elements
                             // into it. We don't need to increment their refcounts because
                             // The existing allocation that references to them is now gone and
                             // no longer referencing them.
-                            new_elems = Self::elems_from_allocation(new_ptr);
+                            new_elems = Self::elems_from_allocation(
+                                NonNull::new(new_ptr).unwrap_or_else(|| {
+                                    todo!("Reallocation failed");
+                                }),
+                            );
                             old_elements_ptr = elements.as_ptr();
                         }
 
@@ -243,7 +252,9 @@ where
                     roc_realloc(ptr, new_size, old_size, alignment as u32).cast()
                 };
 
-                Self::elems_from_allocation(new_ptr)
+                Self::elems_from_allocation(NonNull::new(new_ptr).unwrap_or_else(|| {
+                    todo!("Reallocation failed");
+                }))
             } else {
                 if !copy.is_readonly() {
                     // Write the decremented reference count back.

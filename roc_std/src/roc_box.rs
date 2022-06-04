@@ -17,7 +17,7 @@ pub struct RocBox<T> {
 }
 
 impl<T> RocBox<T> {
-    pub fn init(contents: T) -> Self {
+    pub fn new(contents: T) -> Self {
         let alignment = Self::alloc_alignment();
         let bytes = mem::size_of_val(&contents) + alignment;
 
@@ -39,9 +39,10 @@ impl<T> RocBox<T> {
                 todo!("Increment the refcount of `contents`, and also do that in RocList extend_from_slice.");
             }
 
-            NonNull::new(contents_ptr).unwrap_or_else(|| {
-                todo!("Call roc_panic with the info that an allocation failed.");
-            })
+            // We already verified that the original alloc pointer was non-null,
+            // and this one is the alloc pointer with `alignment` bytes added to it,
+            // so it should be non-null too.
+            NonNull::new_unchecked(contents_ptr)
         };
 
         Self { contents }
