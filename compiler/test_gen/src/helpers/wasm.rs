@@ -40,6 +40,7 @@ pub fn compile_and_load<'a, T: Wasm32Result>(
 ) -> wasmer::Instance {
     let platform_path = get_preprocessed_host_path();
     let platform_bytes = std::fs::read(&platform_path).unwrap();
+    println!("Loading test host {}", platform_path.display());
 
     let compiled_bytes =
         compile_roc_to_wasm_bytes(arena, &platform_bytes, src, test_wrapper_type_info);
