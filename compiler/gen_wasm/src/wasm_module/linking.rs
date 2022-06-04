@@ -761,6 +761,22 @@ impl<'a> LinkingSection<'a> {
 
         found.map(|i| i as u32)
     }
+
+    pub fn name_index_map(&self, arena: &'a Bump, prefix: &str) -> Vec<'a, (&'a str, u32)> {
+        let iter = self
+            .symbol_table
+            .iter()
+            .filter_map(|sym_info| match sym_info {
+                SymInfo::Function(WasmObjectSymbol::Defined { flags, index, name })
+                    if flags & WASM_SYM_BINDING_LOCAL == 0 && name.starts_with(prefix) =>
+                {
+                    Some((*name, *index))
+                }
+                _ => None,
+            });
+
+        Vec::from_iter_in(iter, arena)
+    }
 }
 
 impl<'a> Serialize for LinkingSection<'a> {

@@ -54,6 +54,7 @@ pub struct WasmBackend<'a> {
     pub fn_index_offset: u32,
     called_preload_fns: Vec<'a, u32>,
     pub proc_lookup: Vec<'a, ProcLookupData<'a>>,
+    host_lookup: Vec<'a, (&'a str, u32)>,
     helper_proc_gen: CodeGenHelp<'a>,
 
     // Function-level data
@@ -83,6 +84,9 @@ impl<'a> WasmBackend<'a> {
 
         module.code.code_builders.reserve(proc_lookup.len());
 
+        let symbol_prefix = "roc_"; // The app only links to roc_builtins.*, roc_alloc, etc.
+        let host_lookup = module.linking.name_index_map(env.arena, symbol_prefix);
+
         WasmBackend {
             env,
             interns,
@@ -94,6 +98,7 @@ impl<'a> WasmBackend<'a> {
             fn_index_offset,
             called_preload_fns: Vec::with_capacity_in(2, env.arena),
             proc_lookup,
+            host_lookup,
             helper_proc_gen,
 
             // Function-level data
@@ -1105,10 +1110,20 @@ impl<'a> WasmBackend<'a> {
         num_wasm_args: usize,
         has_return_val: bool,
     ) {
-        let fn_index = self.module.names.functions[name];
-        self.called_preload_fns.push(fn_index);
+        let (_, fn_index) = self
+            .host_lookup
+            .iter()
+            .find(|(fn_name, _)| *fn_name == name)
+            .unwrap_or_else(|| {
+                panic!(
+                    "I can't find the builtin function `{}` in the preprocessed host file.",
+                    name
+                )
+            });
+
+        self.called_preload_fns.push(*fn_index);
         self.code_builder
-            .call(fn_index, num_wasm_args, has_return_val);
+            .call(*fn_index, num_wasm_args, has_return_val);
     }
 
     /// Call a helper procedure that implements `==` for a data structure (not numbers or Str)
