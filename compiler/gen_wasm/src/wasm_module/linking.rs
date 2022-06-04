@@ -202,8 +202,20 @@ impl<'a> RelocationSection<'a> {
     ) {
         for entry in self.entries.iter() {
             match entry {
-                RelocationEntry::Index { symbol_index, .. } if *symbol_index == sym_index => {
-                    todo!("Linking RelocationEntry {:?}", entry)
+                RelocationEntry::Index {
+                    type_id,
+                    offset,
+                    symbol_index,
+                } if *symbol_index == sym_index => {
+                    use IndexRelocType::*;
+                    let idx = (*offset - section_bytes_offset) as usize;
+                    match type_id {
+                        FunctionIndexLeb | TypeIndexLeb | GlobalIndexLeb | EventIndexLeb
+                        | TableNumberLeb => {
+                            overwrite_padded_u32(&mut section_bytes[idx..], value);
+                        }
+                        _ => todo!("Linking relocation type {:?}", type_id),
+                    }
                 }
                 RelocationEntry::Offset {
                     type_id,
@@ -212,13 +224,12 @@ impl<'a> RelocationSection<'a> {
                     addend,
                 } if *symbol_index == sym_index => {
                     use OffsetRelocType::*;
+                    let idx = (*offset - section_bytes_offset) as usize;
                     match type_id {
                         MemoryAddrLeb => {
-                            let idx = (*offset - section_bytes_offset) as usize;
                             overwrite_padded_u32(&mut section_bytes[idx..], value + *addend as u32);
                         }
                         MemoryAddrSleb => {
-                            let idx = (*offset - section_bytes_offset) as usize;
                             overwrite_padded_i32(&mut section_bytes[idx..], value as i32 + *addend);
                         }
                         _ => todo!("Linking relocation type {:?}", type_id),
