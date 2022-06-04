@@ -8,8 +8,7 @@ use core::{
     intrinsics::copy_nonoverlapping,
     mem::{self, ManuallyDrop},
     ops::Deref,
-    ptr,
-    ptr::NonNull,
+    ptr::{self, NonNull},
 };
 
 use crate::{roc_alloc, roc_dealloc, roc_realloc, storage::Storage};
@@ -28,7 +27,7 @@ impl<T> RocList<T> {
     }
 
     pub fn empty() -> Self {
-        RocList {
+        Self {
             elements: None,
             length: 0,
             capacity: 0,
@@ -38,11 +37,24 @@ impl<T> RocList<T> {
     /// Create an empty RocList with enough space preallocated to store
     /// the requested number of elements.
     pub fn with_capacity(elems: usize) -> Self {
+        Self {
+            elements: Some(Self::elems_with_capacity(elems)),
+            length: 0,
+            capacity: elems,
+        }
+    }
+
+    fn elems_with_capacity(elems: usize) -> NonNull<ManuallyDrop<T>> {
+        let alignment = Self::alloc_alignment();
+        let alloc_ptr = unsafe { roc_alloc(elems * mem::size_of::<T>(), alignment as u32) };
+
+        Self::elems_from_allocation(alloc_ptr)
+    }
+
+    fn elems_from_allocation(ptr: *mut c_void) -> NonNull<ManuallyDrop<T>> {
         let alignment = Self::alloc_alignment();
 
-        // Allocate new memory.
-        let non_null_elements = unsafe {
-            let ptr = roc_alloc(elems, alignment as u32);
+        unsafe {
             let elements = ptr.cast::<u8>().add(alignment).cast::<ManuallyDrop<T>>();
 
             // Initialize the reference count.
@@ -52,12 +64,6 @@ impl<T> RocList<T> {
             NonNull::new(elements).unwrap_or_else(|| {
                 todo!("Call roc_panic with the info that an allocation failed.");
             })
-        };
-
-        RocList {
-            elements: Some(non_null_elements),
-            length: 0,
-            capacity: elems,
         }
     }
 
@@ -113,6 +119,97 @@ impl<T> RocList<T>
 where
     T: Clone,
 {
+    /// Increase a RocList's capacity by at least the requested number of elements (possibly more).
+    ///
+    /// May return a new RocList, if the provided one was not unique.
+    pub fn reserve(self, num_elems: usize) -> Self {
+        let new_elems;
+        let old_elements_ptr;
+
+        match self.elements_and_storage() {
+            Some((elements, storage)) => {
+                if storage.get().is_unique() {
+                    unsafe {
+                        let original_ptr = self.ptr_to_allocation();
+
+                        // Try to reallocate in-place.
+                        let new_ptr = roc_realloc(
+                            original_ptr as *mut _,
+                            num_elems,
+                            self.length,
+                            Self::alloc_alignment() as u32,
+                        );
+
+                        if new_ptr == original_ptr as *mut _ {
+                            // We successfully reallocated in-place; we're done!
+                            return self;
+                        } else if new_ptr.is_null() {
+                            todo!("Reallocation failed");
+                        } else {
+                            // We got back a different allocation; copy the existing elements
+                            // into it. We don't need to increment their refcounts because
+                            // The existing allocation that references to them is now gone and
+                            // no longer referencing them.
+                            new_elems = Self::elems_from_allocation(new_ptr);
+                            old_elements_ptr = elements.as_ptr();
+                        }
+
+                        // Note that realloc automatically deallocates the old allocation,
+                        // so we don't need to call roc_dealloc here.
+                    }
+                } else {
+                    // Make a new allocation
+                    new_elems = Self::elems_with_capacity(num_elems);
+                    old_elements_ptr = elements.as_ptr();
+
+                    // Decrease the current allocation's reference count.
+                    let mut new_storage = storage.get();
+                    let needs_dealloc = new_storage.decrease();
+
+                    if needs_dealloc {
+                        let alignment = Self::alloc_alignment();
+
+                        // Unlike in Drop, do *not* decrement the refcounts of all the elements!
+                        // The new allocation is referencing them, so instead of incrementing them all
+                        // all just to decrement them again here, we neither increment nor decrement them.
+                        unsafe {
+                            // Release the memory.
+                            roc_dealloc(
+                                old_elements_ptr.cast::<u8>().sub(alignment).cast(),
+                                alignment as u32,
+                            );
+                        }
+                    } else {
+                        if !new_storage.is_readonly() {
+                            // Write the storage back.
+                            storage.set(new_storage);
+                        }
+                    }
+                }
+            }
+            None => {
+                // This is an empty list, so `reserve` is the same as `with_capacity`.
+                return Self::with_capacity(num_elems);
+            }
+        }
+
+        unsafe {
+            // Copy the old elements to the new allocation.
+            copy_nonoverlapping(old_elements_ptr, new_elems.as_ptr(), self.length);
+        }
+
+        let length = self.length;
+
+        // We already manually cleaned up `self` by now, so don't let its Drop run too.
+        mem::forget(self);
+
+        Self {
+            elements: Some(new_elems),
+            length,
+            capacity: num_elems,
+        }
+    }
+
     pub fn from_slice(slice: &[T]) -> Self {
         let mut list = Self::empty();
         list.extend_from_slice(slice);
@@ -131,18 +228,22 @@ where
 
         let new_size = elements_offset + mem::size_of::<T>() * (self.len() + slice.len());
 
-        let new_ptr = if let Some((elements, storage)) = self.elements_and_storage() {
+        let non_null_elements = if let Some((elements, storage)) = self.elements_and_storage() {
             // Decrement the list's refence count.
             let mut copy = storage.get();
             let is_unique = copy.decrease();
 
             if is_unique {
                 // If the memory is not shared, we can reuse the memory.
-                let old_size = elements_offset + mem::size_of::<T>() * self.len();
-                unsafe {
+                let old_size = elements_offset + (mem::size_of::<T>() * self.len());
+
+                let new_ptr = unsafe {
                     let ptr = elements.as_ptr().cast::<u8>().sub(alignment).cast();
+
                     roc_realloc(ptr, new_size, old_size, alignment as u32).cast()
-                }
+                };
+
+                Self::elems_from_allocation(new_ptr)
             } else {
                 if !copy.is_readonly() {
                     // Write the decremented reference count back.
@@ -150,49 +251,19 @@ where
                 }
 
                 // Allocate new memory.
-                let new_ptr = unsafe { roc_alloc(new_size, alignment as u32) };
-                let new_elements = unsafe {
-                    new_ptr
-                        .cast::<u8>()
-                        .add(alignment)
-                        .cast::<ManuallyDrop<T>>()
-                };
-
-                // Initialize the reference count.
-                unsafe {
-                    let storage_ptr = new_elements.cast::<Storage>().sub(1);
-                    storage_ptr.write(Storage::new_reference_counted());
-                }
+                let new_elements = Self::elems_with_capacity(new_size);
 
                 // Copy the old elements to the new allocation.
                 unsafe {
-                    copy_nonoverlapping(elements.as_ptr(), new_elements, self.length);
+                    copy_nonoverlapping(elements.as_ptr(), new_elements.as_ptr(), self.length);
                 }
 
-                new_ptr
+                new_elements
             }
         } else {
-            // Allocate new memory.
-            let new_ptr = unsafe { roc_alloc(new_size, alignment as u32) };
-            let new_elements = unsafe { new_ptr.cast::<u8>().add(elements_offset).cast::<T>() };
-
-            // Initialize the reference count.
-            unsafe {
-                let storage_ptr = new_elements.cast::<Storage>().sub(1);
-                storage_ptr.write(Storage::new_reference_counted());
-            }
-
-            new_ptr
+            Self::elems_with_capacity(new_size)
         };
 
-        let elements = unsafe {
-            new_ptr
-                .cast::<u8>()
-                .add(elements_offset)
-                .cast::<ManuallyDrop<T>>()
-        };
-
-        let non_null_elements = NonNull::new(elements).unwrap();
         self.elements = Some(non_null_elements);
 
         let elements = self.elements.unwrap().as_ptr();
