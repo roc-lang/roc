@@ -602,7 +602,7 @@ impl<'a> LinkingSection<'a> {
         }
     }
 
-    pub fn find_symbol_index(&self, target_name: &str) -> Option<u32> {
+    pub fn find_internal_symbol(&self, target_name: &str) -> Option<u32> {
         self.symbol_table
             .iter()
             .position(|sym| match sym.name() {
@@ -610,6 +610,16 @@ impl<'a> LinkingSection<'a> {
                 _ => false,
             })
             .map(|x| x as u32)
+    }
+
+    pub fn find_imported_function_symbol(&self, fn_index: u32) -> Option<u32> {
+        self.symbol_table
+            .iter()
+            .position(|sym| match sym {
+                SymInfo::Function(WasmObjectSymbol::Imported { index, .. }) => *index == fn_index,
+                _ => false,
+            })
+            .map(|sym_index| sym_index as u32)
     }
 
     pub fn name_index_map(&self, arena: &'a Bump, prefix: &str) -> Vec<'a, (&'a str, u32)> {

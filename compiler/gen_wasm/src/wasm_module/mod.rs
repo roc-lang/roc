@@ -15,8 +15,8 @@ use self::linking::{LinkingSection, RelocationSection};
 use self::parse::{Parse, ParseError};
 use self::sections::{
     CodeSection, DataSection, ElementSection, ExportSection, FunctionSection, GlobalSection,
-    ImportSection, MemorySection, NameSection, OpaqueSection, Section, SectionId, TableSection,
-    TypeSection,
+    ImportDesc, ImportSection, MemorySection, NameSection, OpaqueSection, Section, SectionId,
+    TableSection, TypeSection,
 };
 use self::serialize::{SerialBuffer, Serialize};
 
@@ -191,12 +191,12 @@ impl<'a> WasmModule<'a> {
             .iter()
             .filter(|ex| ex.ty == ExportType::Func)
             .map(|ex| ex.index);
-        let function_indices = Vec::from_iter_in(exported_fn_iter, arena);
+        let exported_fn_indices = Vec::from_iter_in(exported_fn_iter, arena);
 
         self.code.remove_dead_preloads(
             arena,
             self.import.function_signature_count(),
-            &function_indices,
+            &exported_fn_indices,
             called_preload_fns,
         )
     }
@@ -209,10 +209,10 @@ impl<'a> WasmModule<'a> {
             .and_then(|ex| self.global.parse_u32_at_index(ex.index).ok())
     }
 
-    pub fn relocate_preloaded_code(&mut self, sym_name: &str, value: u32) -> u32 {
+    pub fn relocate_internal_symbol(&mut self, sym_name: &str, value: u32) -> u32 {
         let sym_index = self
             .linking
-            .find_symbol_index(sym_name)
+            .find_internal_symbol(sym_name)
             .unwrap_or_else(|| panic!("Linking failed! Can't find host symbol `{}`", sym_name));
 
         self.reloc_code.apply_relocs_u32(
@@ -223,5 +223,61 @@ impl<'a> WasmModule<'a> {
         );
 
         sym_index
+    }
+
+    /// The host defines things like `roc__mainForHost_1_exposed` as Wasm Imports,
+    /// as if they were external JS functions. But when we link the host and app,
+    /// it becomes an internal function, not an import.
+    ///
+    /// We need to do the following:
+    /// - Remove the import from the Import section
+    /// - Update all call sites to the old function index with the new index
+    /// - Make sure calls to other functions _between_ the old and new indices, are still valid!
+    ///   - All imported functions _above_ the one we removed will have their index shifted
+    ///   - We can avoid shifting internally-defined functions by inserting a dummy function
+    ///     in front. This only adds 4 bytes to the binary, and saves a lot of linking time.
+    pub fn link_host_to_app_calls(&mut self, fn_name: &str, new_fn_index: u32) {
+        // Look up the old imported function by name
+        // Not all imports are functions, so the function index and import index may be different
+        let (old_fn_index, import_index) = self
+            .import
+            .imports
+            .iter()
+            .enumerate()
+            .filter(|(_import_index, import)| matches!(import.description, ImportDesc::Func { .. }))
+            .enumerate()
+            .find_map(|(fn_index, (import_index, import))| {
+                if import.module == "env" && import.name == fn_name {
+                    Some((fn_index, import_index))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| {
+                panic!("Linking failed! Can't find `{}` in host imports", fn_name);
+            });
+
+        // Remove the import
+        // Also record that we need to insert a dummy before all internally-defined functions.
+        // This avoids shifting all function indices in the host, which saves linking work.
+        self.import.imports.remove(import_index);
+        self.code.prepended_dummy_count += 1;
+
+        let sym_index = self
+            .linking
+            .find_imported_function_symbol(old_fn_index as u32)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Linking failed! Can't find `{}` in host symbol table",
+                    fn_name
+                )
+            });
+
+        self.reloc_code.apply_relocs_u32(
+            &mut self.code.preloaded_bytes,
+            self.code.preloaded_reloc_offset,
+            sym_index,
+            new_fn_index,
+        );
     }
 }

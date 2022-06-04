@@ -208,11 +208,9 @@ pub fn copy_preloads_shrinking_dead_fns<'a, T: SerialBuffer>(
     let preload_idx_start = import_fn_count;
 
     // Create a dummy function with just a single `unreachable` instruction
-    let mut dummy_builder = CodeBuilder::new(arena);
-    dummy_builder.unreachable_();
-    dummy_builder.build_fn_header_and_footer(&[], 0, None);
-    let mut dummy_bytes = Vec::with_capacity_in(dummy_builder.size(), arena);
-    dummy_builder.serialize(&mut dummy_bytes);
+    let builder = CodeBuilder::dummy(arena);
+    let mut dummy_bytes = Vec::with_capacity_in(builder.size(), arena);
+    builder.serialize(&mut dummy_bytes);
 
     live_preload_indices.sort_unstable();
     live_preload_indices.dedup();

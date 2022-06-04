@@ -1179,6 +1179,8 @@ pub struct CodeSection<'a> {
     pub preloaded_count: u32,
     pub preloaded_reloc_offset: u32,
     pub preloaded_bytes: Vec<'a, u8>,
+    /// Number of dummy functions prepended to the CodeSection to replace relocated imports. See also WasmModule::relocate_imported_function
+    pub prepended_dummy_count: u32,
     pub code_builders: Vec<'a, CodeBuilder<'a>>,
     dead_code_metadata: PreloadsCallGraph<'a>,
 }
@@ -1236,6 +1238,7 @@ impl<'a> CodeSection<'a> {
             preloaded_count: count,
             preloaded_reloc_offset,
             preloaded_bytes,
+            prepended_dummy_count: 0,
             code_builders: Vec::with_capacity_in(0, arena),
             dead_code_metadata,
         })
@@ -1273,7 +1276,15 @@ impl<'a> CodeSection<'a> {
 impl<'a> Serialize for CodeSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         let header_indices = write_section_header(buffer, SectionId::Code);
-        buffer.encode_u32(self.preloaded_count + self.code_builders.len() as u32);
+        buffer.encode_u32(
+            self.prepended_dummy_count + self.preloaded_count + self.code_builders.len() as u32,
+        );
+
+        let arena = self.code_builders[0].arena;
+        let dummy = CodeBuilder::dummy(arena);
+        for _ in 0..self.prepended_dummy_count {
+            dummy.serialize(buffer);
+        }
 
         buffer.append_slice(&self.preloaded_bytes);
 

@@ -93,8 +93,10 @@ pub fn build_app_module<'a>(
     let fn_index_offset: u32 =
         host_module.import.function_signature_count() as u32 + host_module.code.preloaded_count;
 
-    // Collect the symbols & names for the procedures,
-    // and filter out procs we're going to inline
+    // Pre-pass over the procedure names & layouts
+    // - Gather some data for lookups
+    // - Filter out procs we're going to inline
+    // - Link host-to-app calls
     let mut fn_index: u32 = fn_index_offset;
     for ((sym, proc_layout), proc) in procedures.into_iter() {
         if matches!(
@@ -111,10 +113,11 @@ pub fn build_app_module<'a>(
             // Assumption: there is only one specialization of a host-exposed function
             let ident_string = sym.as_str(interns);
             let c_function_name = format!("roc__{}_1_exposed", ident_string);
-            host_module.relocate_preloaded_code(&c_function_name, fn_index);
-        };
 
-        // linker_sym_index is redundant for these procs from user code, but needed for generated helpers!
+            // This function was considered an import in the host binary, but now it becomes internal
+            host_module.link_host_to_app_calls(&c_function_name, fn_index);
+        }
+
         proc_lookup.push(ProcLookupData {
             name: sym,
             layout: proc_layout,

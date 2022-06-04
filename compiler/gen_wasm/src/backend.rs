@@ -136,7 +136,7 @@ impl<'a> WasmBackend<'a> {
             index: 0,
         });
 
-        module.relocate_preloaded_code("__heap_base", stack_heap_boundary);
+        module.relocate_internal_symbol("__heap_base", stack_heap_boundary);
     }
 
     /// If the host has some `extern` globals, we need to create them in the final binary
