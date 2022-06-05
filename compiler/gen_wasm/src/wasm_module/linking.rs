@@ -2,8 +2,8 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
 use super::parse::parse_fixed_size_items;
-use super::sections::{update_section_size, write_custom_section_header, SectionId};
-use super::serialize::{overwrite_padded_i32, overwrite_padded_u32, SerialBuffer, Serialize};
+use super::sections::SectionId;
+use super::serialize::{overwrite_padded_i32, overwrite_padded_u32};
 use crate::wasm_module::parse::{Parse, ParseError, SkipBytes};
 
 /*******************************************************************
@@ -144,33 +144,6 @@ impl RelocationEntry {
     }
 }
 
-impl Serialize for RelocationEntry {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        match self {
-            Self::Index {
-                type_id,
-                offset,
-                symbol_index,
-            } => {
-                buffer.append_u8(*type_id as u8);
-                buffer.encode_u32(*offset);
-                buffer.encode_u32(*symbol_index);
-            }
-            Self::Offset {
-                type_id,
-                offset,
-                symbol_index,
-                addend,
-            } => {
-                buffer.append_u8(*type_id as u8);
-                buffer.encode_u32(*offset);
-                buffer.encode_u32(*symbol_index);
-                buffer.encode_i32(*addend);
-            }
-        }
-    }
-}
-
 impl Parse<()> for RelocationEntry {
     fn parse(_: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
         let type_id_byte = bytes[*cursor];
@@ -257,17 +230,6 @@ impl<'a> RelocationSection<'a> {
     }
 }
 
-impl<'a> Serialize for RelocationSection<'a> {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        if !self.entries.is_empty() {
-            let header_indices = write_custom_section_header(buffer, self.name);
-            buffer.encode_u32(self.target_section_index);
-            self.entries.serialize(buffer);
-            update_section_size(buffer, header_indices);
-        }
-    }
-}
-
 type RelocCtx<'a> = (&'a Bump, &'static str);
 
 impl<'a> Parse<RelocCtx<'a>> for RelocationSection<'a> {
@@ -313,15 +275,6 @@ pub struct LinkingSegment<'a> {
     pub flags: u32,
 }
 
-impl<'a> Serialize for LinkingSegment<'a> {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        buffer.encode_u32(self.name.len() as u32);
-        buffer.append_slice(self.name.as_bytes());
-        buffer.encode_u32(self.align_bytes_pow2);
-        buffer.encode_u32(self.flags);
-    }
-}
-
 impl<'a> Parse<&'a Bump> for LinkingSegment<'a> {
     fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
         let name = <&'a str>::parse(arena, bytes, cursor)?;
@@ -340,12 +293,6 @@ impl<'a> Parse<&'a Bump> for LinkingSegment<'a> {
 pub struct LinkingInitFunc {
     pub priority: u32,
     pub symbol_index: u32, // index in the symbol table, not the function index
-}
-
-impl Serialize for LinkingInitFunc {
-    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
-        unimplemented!(); // not todo, since we are not planning to do it!
-    }
 }
 
 //------------------------------------------------
@@ -369,12 +316,6 @@ pub struct ComdatSym {
     pub index: u32,
 }
 
-impl Serialize for ComdatSym {
-    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
-        unimplemented!(); // not todo, since we are not planning to do it!
-    }
-}
-
 /// Linking metadata for common data
 /// A COMDAT group may contain one or more functions, data segments, and/or custom sections.
 /// The linker will include all of these elements with a given group name from one object file,
@@ -385,12 +326,6 @@ pub struct LinkingComdat<'a> {
     name: &'a str,
     flags: u32,
     syms: Vec<'a, ComdatSym>,
-}
-
-impl<'a> Serialize for LinkingComdat<'a> {
-    fn serialize<T: SerialBuffer>(&self, _buffer: &mut T) {
-        unimplemented!(); // not todo, since we are not planning to do it!
-    }
 }
 
 //------------------------------------------------
@@ -448,23 +383,6 @@ pub enum WasmObjectSymbol<'a> {
     },
 }
 
-impl<'a> Serialize for WasmObjectSymbol<'a> {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        match self {
-            Self::Defined { flags, index, name } => {
-                buffer.encode_u32(*flags);
-                buffer.encode_u32(*index);
-                buffer.encode_u32(name.len() as u32);
-                buffer.append_slice(name.as_bytes());
-            }
-            Self::Imported { flags, index } => {
-                buffer.encode_u32(*flags);
-                buffer.encode_u32(*index);
-            }
-        }
-    }
-}
-
 impl<'a> Parse<&'a Bump> for WasmObjectSymbol<'a> {
     fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
         let flags = u32::parse((), bytes, cursor)?;
@@ -501,32 +419,6 @@ pub enum DataSymbol<'a> {
     },
 }
 
-impl<'a> Serialize for DataSymbol<'a> {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        match self {
-            Self::Defined {
-                flags,
-                name,
-                segment_index,
-                segment_offset,
-                size,
-            } => {
-                buffer.encode_u32(*flags);
-                buffer.encode_u32(name.len() as u32);
-                buffer.append_slice(name.as_bytes());
-                buffer.encode_u32(*segment_index);
-                buffer.encode_u32(*segment_offset);
-                buffer.encode_u32(*size);
-            }
-            Self::Imported { flags, name } => {
-                buffer.encode_u32(*flags);
-                buffer.encode_u32(name.len() as u32);
-                buffer.append_slice(name.as_bytes());
-            }
-        }
-    }
-}
-
 impl<'a> Parse<&'a Bump> for DataSymbol<'a> {
     fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
         let flags = u32::parse((), bytes, cursor)?;
@@ -550,25 +442,22 @@ impl<'a> Parse<&'a Bump> for DataSymbol<'a> {
     }
 }
 
-/// section index (not section id!)
+/// We don't use this, but we need it in the symbol table so the indices are correct!
+/// If we ever use it, note that it refers to section index, not section id.
 #[derive(Clone, Debug)]
 pub struct SectionSymbol {
-    flags: u32,
-    index: u32,
-}
-
-impl Serialize for SectionSymbol {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        self.flags.serialize(buffer);
-        self.index.serialize(buffer);
-    }
+    _flags: u32,
+    _index: u32,
 }
 
 impl Parse<()> for SectionSymbol {
     fn parse(_: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
         let flags = u32::parse((), bytes, cursor)?;
         let index = u32::parse((), bytes, cursor)?;
-        Ok(SectionSymbol { flags, index })
+        Ok(SectionSymbol {
+            _flags: flags,
+            _index: index,
+        })
     }
 }
 
@@ -623,29 +512,6 @@ impl<'a> SymInfo<'a> {
     }
 }
 
-impl<'a> Serialize for SymInfo<'a> {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        let type_id = match self {
-            Self::Function(_) => SymType::Function,
-            Self::Data(_) => SymType::Data,
-            Self::Global(_) => SymType::Global,
-            Self::Section(_) => SymType::Section,
-            Self::Event(_) => SymType::Event,
-            Self::Table(_) => SymType::Table,
-        };
-        buffer.append_u8(type_id as u8);
-
-        match self {
-            Self::Function(x) => x.serialize(buffer),
-            Self::Data(x) => x.serialize(buffer),
-            Self::Global(x) => x.serialize(buffer),
-            Self::Section(x) => x.serialize(buffer),
-            Self::Event(x) => x.serialize(buffer),
-            Self::Table(x) => x.serialize(buffer),
-        };
-    }
-}
-
 impl<'a> Parse<&'a Bump> for SymInfo<'a> {
     fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
         let type_id = SymType::parse((), bytes, cursor)?;
@@ -671,23 +537,6 @@ enum SubSectionId {
     InitFuncs = 6,
     ComdatInfo = 7,
     SymbolTable = 8,
-}
-
-fn serialize_subsection<I: Serialize, T: SerialBuffer>(
-    buffer: &mut T,
-    id: SubSectionId,
-    items: &[I],
-) {
-    if !items.is_empty() {
-        buffer.append_u8(id as u8);
-        let payload_len_index = buffer.reserve_padded_u32();
-        let payload_start_index = buffer.size();
-        items.serialize(buffer);
-        buffer.overwrite_padded_u32(
-            payload_len_index,
-            (buffer.size() - payload_start_index) as u32,
-        );
-    }
 }
 
 impl Parse<()> for SubSectionId {
@@ -761,19 +610,21 @@ impl<'a> LinkingSection<'a> {
 
         found.map(|i| i as u32)
     }
-}
 
-impl<'a> Serialize for LinkingSection<'a> {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        let header_indices = write_custom_section_header(buffer, "linking");
-        buffer.append_u8(LINKING_VERSION);
+    pub fn name_index_map(&self, arena: &'a Bump, prefix: &str) -> Vec<'a, (&'a str, u32)> {
+        let iter = self
+            .symbol_table
+            .iter()
+            .filter_map(|sym_info| match sym_info {
+                SymInfo::Function(WasmObjectSymbol::Defined { flags, index, name })
+                    if flags & WASM_SYM_BINDING_LOCAL == 0 && name.starts_with(prefix) =>
+                {
+                    Some((*name, *index))
+                }
+                _ => None,
+            });
 
-        serialize_subsection(buffer, SubSectionId::SymbolTable, &self.symbol_table);
-        serialize_subsection(buffer, SubSectionId::SegmentInfo, &self.segment_info);
-        serialize_subsection(buffer, SubSectionId::InitFuncs, &self.init_funcs);
-        serialize_subsection(buffer, SubSectionId::ComdatInfo, &self.comdat_info);
-
-        update_section_size(buffer, header_indices);
+        Vec::from_iter_in(iter, arena)
     }
 }
 

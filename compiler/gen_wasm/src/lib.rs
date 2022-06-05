@@ -21,9 +21,7 @@ use roc_target::TargetInfo;
 use wasm_module::parse::ParseError;
 
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
-use crate::wasm_module::{
-    Align, CodeBuilder, Export, ExportType, LocalId, SymInfo, ValueType, WasmModule,
-};
+use crate::wasm_module::{Align, CodeBuilder, Export, ExportType, LocalId, ValueType, WasmModule};
 
 const TARGET_INFO: TargetInfo = TargetInfo::default_wasm32();
 const PTR_SIZE: u32 = {
@@ -89,7 +87,6 @@ pub fn build_app_module<'a>(
     let mut layout_ids = LayoutIds::default();
     let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
     let mut proc_lookup = Vec::with_capacity_in(procedures.len() * 2, env.arena);
-    let mut linker_symbols = Vec::with_capacity_in(procedures.len() * 2, env.arena);
     let mut exports = Vec::with_capacity_in(4, env.arena);
     let mut maybe_main_fn_index = None;
 
@@ -119,17 +116,12 @@ pub fn build_app_module<'a>(
             });
         }
 
-        let linker_sym = SymInfo::for_function(fn_index, name);
-        let linker_sym_index = linker_symbols.len() as u32;
-
         // linker_sym_index is redundant for these procs from user code, but needed for generated helpers!
         proc_lookup.push(ProcLookupData {
             name: sym,
             layout: proc_layout,
-            linker_index: linker_sym_index,
             source: ProcSource::Roc,
         });
-        linker_symbols.push(linker_sym);
 
         fn_index += 1;
     }
