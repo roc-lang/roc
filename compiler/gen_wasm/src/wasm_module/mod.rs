@@ -225,59 +225,103 @@ impl<'a> WasmModule<'a> {
         sym_index
     }
 
-    /// The host defines things like `roc__mainForHost_1_exposed` as Wasm Imports,
-    /// as if they were external JS functions. But when we link the host and app,
-    /// it becomes an internal function, not an import.
-    ///
-    /// We need to do the following:
-    /// - Remove the import from the Import section
-    /// - Update all call sites to the old function index with the new index
-    /// - Make sure calls to other functions _between_ the old and new indices, are still valid!
-    ///   - All imported functions _above_ the one we removed will have their index shifted
-    ///   - We can avoid shifting internally-defined functions by inserting a dummy function
-    ///     in front. This only adds 4 bytes to the binary, and saves a lot of linking time.
-    pub fn link_host_to_app_calls(&mut self, fn_name: &str, new_fn_index: u32) {
-        // Look up the old imported function by name
-        // Not all imports are functions, so the function index and import index may be different
-        let (old_fn_index, import_index) = self
-            .import
-            .imports
-            .iter()
-            .enumerate()
-            .filter(|(_import_index, import)| matches!(import.description, ImportDesc::Func { .. }))
-            .enumerate()
-            .find_map(|(fn_index, (import_index, import))| {
-                if import.module == "env" && import.name == fn_name {
-                    Some((fn_index, import_index))
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| {
-                panic!("Linking failed! Can't find `{}` in host imports", fn_name);
-            });
+    /// Linking steps for host-to-app functions like `roc__mainForHost_1_exposed`
+    /// (See further explanation in the gen_wasm README)
+    /// - Remove the target function from the ImportSection. It's not a JS import but the host declared it as one.
+    /// - Update all of its call sites to the new index in the app
+    /// - Swap the _last_ JavaScript import into the slot we just vacated
+    /// - Update all call sites for the swapped JS function
+    /// - Update the FunctionSection to show the correct type signature for the swapped JS function
+    /// - Insert a dummy function in the CodeSection, at the same index as the swapped JS function
+    pub fn link_host_to_app_calls(&mut self, arena: &'a Bump, host_to_app_map: &[(String, u32)]) {
+        let dummy_function = CodeBuilder::dummy(arena);
+        let mut dummy_function_bytes = Vec::with_capacity_in(dummy_function.size(), arena);
+        dummy_function.serialize(&mut dummy_function_bytes);
 
-        // Remove the import
-        // Also record that we need to insert a dummy before all internally-defined functions.
-        // This avoids shifting all function indices in the host, which saves linking work.
-        self.import.imports.remove(import_index);
-        self.code.prepended_dummy_count += 1;
+        for (app_fn_name, app_fn_index) in host_to_app_map.iter() {
+            println!("Linking {:?}", app_fn_name);
 
-        let sym_index = self
-            .linking
-            .find_imported_function_symbol(old_fn_index as u32)
-            .unwrap_or_else(|| {
+            // Find the host import, and the last imported function to swap with it.
+            // Not all imports are functions, so the function index and import index may be different
+            let mut host_fn = None;
+            let mut swap_fn = None;
+            self.import
+                .imports
+                .iter()
+                .enumerate()
+                .filter(|(_import_index, import)| {
+                    matches!(import.description, ImportDesc::Func { .. })
+                })
+                .enumerate()
+                .for_each(|(fn_index, (import_index, import))| {
+                    swap_fn = Some((import_index, fn_index));
+                    if import.name == app_fn_name {
+                        host_fn = Some((import_index, fn_index));
+                    }
+                });
+
+            let (host_import_index, host_fn_index) = host_fn.unwrap_or_else(|| {
                 panic!(
-                    "Linking failed! Can't find `{}` in host symbol table",
-                    fn_name
+                    "Linking failed! Can't find `{}` in host imports",
+                    app_fn_name
                 )
             });
+            let (swap_import_index, swap_fn_index) = swap_fn.unwrap();
 
-        self.reloc_code.apply_relocs_u32(
-            &mut self.code.preloaded_bytes,
-            self.code.preloaded_reloc_offset,
-            sym_index,
-            new_fn_index,
-        );
+            // Note: swap_remove will not work, because some imports may not be functions.
+            let swap_import = self.import.imports.remove(swap_import_index);
+            if swap_import_index != host_import_index {
+                self.import.imports[host_import_index] = swap_import;
+            }
+
+            // Find the symbol for the app function
+            let app_sym_index = self
+                .linking
+                .find_imported_function_symbol(host_fn_index as u32)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Linking failed! Can't find `{}` (fn #{}) in host symbol table",
+                        app_fn_name, host_fn_index
+                    )
+                });
+
+            // Find the symbol for the swapped JS import
+            let swap_sym_index = self
+                .linking
+                .find_imported_function_symbol(swap_fn_index as u32)
+                .unwrap_or_else(|| {
+                    // get the name using the old host import index because we already swapped it!
+                    let name = self.import.imports[host_import_index].name;
+                    panic!(
+                        "Linking failed! Can't find `{}` (fn #{}) in host symbol table",
+                        name, swap_fn_index
+                    )
+                });
+
+            // Update calls to use the app function instead of the host import
+            self.reloc_code.apply_relocs_u32(
+                &mut self.code.preloaded_bytes,
+                self.code.preloaded_reloc_offset,
+                app_sym_index,
+                *app_fn_index,
+            );
+
+            // Update calls to the swapped JS import
+            self.reloc_code.apply_relocs_u32(
+                &mut self.code.preloaded_bytes,
+                self.code.preloaded_reloc_offset,
+                swap_sym_index,
+                host_fn_index as u32,
+            );
+
+            // Remember to insert a dummy function at the index where the JS import used to be
+            // (which is at the beginning of the internally-defined functions)
+            self.code.linking_dummy_count += 1;
+
+            // Insert any type signature for the dummy. Signature index 0 will do.
+            self.function.signatures.insert(0, 0);
+
+            // TODO: update debug info too
+        }
     }
 }

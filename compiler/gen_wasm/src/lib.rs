@@ -87,6 +87,7 @@ pub fn build_app_module<'a>(
     let layout_ids = LayoutIds::default();
     let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
     let mut proc_lookup = Vec::with_capacity_in(procedures.len() * 2, env.arena);
+    let mut host_to_app_map = Vec::with_capacity_in(env.exposed_to_host.len(), env.arena);
     let mut maybe_main_fn_index = None;
 
     // Adjust Wasm function indices to account for functions from the object file
@@ -114,8 +115,7 @@ pub fn build_app_module<'a>(
             let ident_string = sym.as_str(interns);
             let c_function_name = format!("roc__{}_1_exposed", ident_string);
 
-            // This function was considered an import in the host binary, but now it becomes internal
-            host_module.link_host_to_app_calls(&c_function_name, fn_index);
+            host_to_app_map.push((c_function_name, fn_index));
         }
 
         proc_lookup.push(ProcLookupData {
@@ -126,6 +126,8 @@ pub fn build_app_module<'a>(
 
         fn_index += 1;
     }
+
+    host_module.link_host_to_app_calls(env.arena, &host_to_app_map);
 
     let mut backend = WasmBackend::new(
         env,
