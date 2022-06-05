@@ -2504,7 +2504,7 @@ mod solve_expr {
                     { numIdentity, x : numIdentity 42, y }
                 "#
             ),
-            "{ numIdentity : Num a -> Num a, x : Num a, y : Float * }",
+            "{ numIdentity : Num a -> Num a, x : Num b, y : Float * }",
         );
     }
 
@@ -3395,7 +3395,7 @@ mod solve_expr {
                 { id1, id2 }
                 "#
             ),
-            "{ id1 : q -> q, id2 : q -> q }",
+            "{ id1 : q -> q, id2 : a -> a }",
         );
     }
 
@@ -3910,7 +3910,7 @@ mod solve_expr {
                     { a, b }
                 "#
             ),
-            "{ a : { x : I64, y : I64, z : Num c }, b : { blah : Str, x : I64, y : I64, z : Num c } }",
+            "{ a : { x : I64, y : I64, z : Num c }, b : { blah : Str, x : I64, y : I64, z : Num a } }",
         );
     }
 
@@ -3941,7 +3941,7 @@ mod solve_expr {
                     { a, b }
                 "#
             ),
-            "{ a : { x : Num a, y : Float *, z : c }, b : { blah : Str, x : Num a, y : Float *, z : c } }",
+            "{ a : { x : Num a, y : Float *, z : c }, b : { blah : Str, x : Num b, y : Float *, z : d } }",
         );
     }
 
@@ -6100,7 +6100,7 @@ mod solve_expr {
                 hashEq = \x, y -> hash x == hash y
                 "#
             ),
-            "a, a -> Bool | a has Hash",
+            "a, b -> Bool | a has Hash, b has Hash",
         )
     }
 
