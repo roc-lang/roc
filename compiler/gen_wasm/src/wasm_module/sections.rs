@@ -486,44 +486,41 @@ impl<'a> Serialize for ImportSection<'a> {
 #[derive(Debug)]
 pub struct FunctionSection<'a> {
     pub signatures: Vec<'a, u32>,
-    pub bytes: Vec<'a, u8>,
 }
 
 impl<'a> FunctionSection<'a> {
     pub fn add_sig(&mut self, sig_id: u32) {
-        self.bytes.encode_u32(sig_id);
         self.signatures.push(sig_id);
     }
 }
 
 impl<'a> Parse<&'a Bump> for FunctionSection<'a> {
     fn parse(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
-        let (count, range) = parse_section(SectionId::Function, module_bytes, cursor)?;
-        let end = range.end;
-
-        let mut bytes = Vec::<u8>::with_capacity_in(range.len() * 2, arena);
-        bytes.extend_from_slice(&module_bytes[range]);
+        let (count, _) = parse_section(SectionId::Function, module_bytes, cursor)?;
 
         let mut signatures = Vec::with_capacity_in(count as usize, arena);
         for _ in 0..count {
             signatures.push(u32::parse((), module_bytes, cursor)?);
         }
 
-        *cursor = end;
-        Ok(FunctionSection { signatures, bytes })
+        Ok(FunctionSection { signatures })
     }
 }
 
 impl<'a> Section<'a> for FunctionSection<'a> {
     const ID: SectionId = SectionId::Function;
     fn size(&self) -> usize {
-        MAX_SIZE_SECTION_HEADER + self.bytes.len()
+        MAX_SIZE_SECTION_HEADER + self.signatures.len() * MAX_SIZE_ENCODED_U32
     }
 }
 
 impl<'a> Serialize for FunctionSection<'a> {
     fn serialize<B: SerialBuffer>(&self, buffer: &mut B) {
-        serialize_bytes_section(Self::ID, self.signatures.len() as u32, &self.bytes, buffer);
+        if !self.signatures.is_empty() {
+            let header_indices = write_section_header(buffer, Self::ID);
+            self.signatures.serialize(buffer);
+            update_section_size(buffer, header_indices);
+        }
     }
 }
 
