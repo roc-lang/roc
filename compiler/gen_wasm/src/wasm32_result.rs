@@ -103,7 +103,7 @@ fn insert_wrapper_metadata<'a>(
         index,
     });
 
-    let linker_symbol = SymInfo::Function(WasmObjectSymbol::Defined {
+    let linker_symbol = SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed {
         flags: 0,
         index,
         name: wrapper_name,

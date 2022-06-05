@@ -357,12 +357,12 @@ pub const WASM_SYM_NO_STRIP: u32 = 0x80;
 
 #[derive(Clone, Debug)]
 pub enum WasmObjectSymbol<'a> {
-    Defined {
+    ExplicitlyNamed {
         flags: u32,
         index: u32,
         name: &'a str,
     },
-    Imported {
+    ImplicitlyNamed {
         flags: u32,
         index: u32,
     },
@@ -382,9 +382,9 @@ impl<'a> Parse<&'a Bump> for WasmObjectSymbol<'a> {
 
         if has_explicit_name {
             let name = <&'a str>::parse(arena, bytes, cursor)?;
-            Ok(Self::Defined { flags, index, name })
+            Ok(Self::ExplicitlyNamed { flags, index, name })
         } else {
-            Ok(Self::Imported { flags, index })
+            Ok(Self::ImplicitlyNamed { flags, index })
         }
     }
 }
@@ -459,12 +459,12 @@ pub enum SymInfo<'a> {
 impl<'a> SymInfo<'a> {
     pub fn name(&self) -> Option<&'a str> {
         match self {
-            Self::Function(WasmObjectSymbol::Defined { name, .. }) => Some(name),
+            Self::Function(WasmObjectSymbol::ExplicitlyNamed { name, .. }) => Some(name),
             Self::Data(DataSymbol::Defined { name, .. }) => Some(name),
             Self::Data(DataSymbol::Imported { name, .. }) => Some(name),
-            Self::Global(WasmObjectSymbol::Defined { name, .. }) => Some(name),
-            Self::Event(WasmObjectSymbol::Defined { name, .. }) => Some(name),
-            Self::Table(WasmObjectSymbol::Defined { name, .. }) => Some(name),
+            Self::Global(WasmObjectSymbol::ExplicitlyNamed { name, .. }) => Some(name),
+            Self::Event(WasmObjectSymbol::ExplicitlyNamed { name, .. }) => Some(name),
+            Self::Table(WasmObjectSymbol::ExplicitlyNamed { name, .. }) => Some(name),
             _ => None,
         }
     }
@@ -591,7 +591,10 @@ impl<'a> LinkingSection<'a> {
         self.symbol_table
             .iter()
             .position(|sym| match sym {
-                SymInfo::Function(WasmObjectSymbol::Imported { index, .. }) => *index == fn_index,
+                SymInfo::Function(WasmObjectSymbol::ImplicitlyNamed { flags, index, .. })
+                | SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { flags, index, .. }) => {
+                    flags & WASM_SYM_UNDEFINED != 0 && *index == fn_index
+                }
                 _ => false,
             })
             .map(|sym_index| sym_index as u32)
@@ -602,7 +605,7 @@ impl<'a> LinkingSection<'a> {
             .symbol_table
             .iter()
             .filter_map(|sym_info| match sym_info {
-                SymInfo::Function(WasmObjectSymbol::Defined { flags, index, name })
+                SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { flags, index, name })
                     if flags & WASM_SYM_BINDING_LOCAL == 0 && name.starts_with(prefix) =>
                 {
                     Some((*name, *index))

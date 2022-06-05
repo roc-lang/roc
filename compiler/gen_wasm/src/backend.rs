@@ -200,7 +200,7 @@ impl<'a> WasmBackend<'a> {
             source,
         });
 
-        let linker_symbol = SymInfo::Function(WasmObjectSymbol::Defined {
+        let linker_symbol = SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed {
             flags: 0,
             index: wasm_fn_index,
             name,
