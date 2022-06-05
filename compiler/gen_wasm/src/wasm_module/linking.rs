@@ -118,32 +118,6 @@ pub enum RelocationEntry {
     },
 }
 
-impl RelocationEntry {
-    pub fn offset(&self) -> u32 {
-        match self {
-            Self::Index { offset, .. } => *offset,
-            Self::Offset { offset, .. } => *offset,
-        }
-    }
-
-    pub fn offset_mut(&mut self) -> &mut u32 {
-        match self {
-            Self::Index { offset, .. } => offset,
-            Self::Offset { offset, .. } => offset,
-        }
-    }
-}
-
-impl RelocationEntry {
-    pub fn for_function_call(offset: u32, symbol_index: u32) -> Self {
-        RelocationEntry::Index {
-            type_id: IndexRelocType::FunctionIndexLeb,
-            offset,
-            symbol_index,
-        }
-    }
-}
-
 impl Parse<()> for RelocationEntry {
     fn parse(_: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
         let type_id_byte = bytes[*cursor];
@@ -527,16 +501,6 @@ impl Parse<()> for SymType {
     }
 }
 
-impl<'a> SymInfo<'a> {
-    pub fn for_function(wasm_function_index: u32, name: &'a str) -> Self {
-        SymInfo::Function(WasmObjectSymbol::Defined {
-            flags: 0,
-            index: wasm_function_index,
-            name,
-        })
-    }
-}
-
 impl<'a> Parse<&'a Bump> for SymInfo<'a> {
     fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
         let type_id = SymType::parse((), bytes, cursor)?;
@@ -700,7 +664,7 @@ impl<'a> Parse<&'a Bump> for LinkingSection<'a> {
                     }
                 }
                 SubSectionId::InitFuncs | SubSectionId::ComdatInfo => {
-                    // We don't use these sections, just skip over them.
+                    // We don't use these subsections, just skip over them.
                     *cursor += len as usize;
                 }
             }
