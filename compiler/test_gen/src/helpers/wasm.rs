@@ -137,7 +137,14 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
     T::insert_wrapper(arena, &mut module, TEST_WRAPPER_NAME, main_fn_index);
 
     // Export the initialiser function for refcount tests
-    let init_refcount_idx = module.names.functions[INIT_REFCOUNT_NAME];
+    let init_refcount_idx = module
+        .names
+        .function_names
+        .iter()
+        .filter(|(_, name)| *name == INIT_REFCOUNT_NAME)
+        .map(|(i, _)| *i)
+        .next()
+        .unwrap();
     module.export.append(Export {
         name: INIT_REFCOUNT_NAME,
         ty: ExportType::Func,

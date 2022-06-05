@@ -2,7 +2,6 @@ use std::fmt::{Debug, Formatter};
 
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
 
 use super::dead_code::{
@@ -1496,10 +1495,7 @@ enum NameSubSections {
 }
 
 pub struct NameSection<'a> {
-    /// count may not be the same as functions.len() because of duplicates!
-    pub count: u32,
-    pub bytes: Vec<'a, u8>,
-    pub functions: MutMap<&'a str, u32>,
+    pub function_names: Vec<'a, (u32, &'a str)>,
 }
 
 impl<'a> NameSection<'a> {
@@ -1507,14 +1503,14 @@ impl<'a> NameSection<'a> {
     const NAME: &'static str = "name";
 
     pub fn size(&self) -> usize {
-        self.bytes.len()
+        self.function_names
+            .iter()
+            .map(|(_, s)| MAX_SIZE_ENCODED_U32 + s.len())
+            .sum()
     }
 
     pub fn append_function(&mut self, index: u32, name: &'a str) {
-        index.serialize(&mut self.bytes);
-        name.serialize(&mut self.bytes);
-        self.count += 1; // always increment even for duplicate names
-        self.functions.insert(name, index);
+        self.function_names.push((index, name));
     }
 }
 
@@ -1523,9 +1519,7 @@ impl<'a> Parse<&'a Bump> for NameSection<'a> {
         // If we're already past the end of the preloaded file then there is no Name section
         if *cursor >= module_bytes.len() {
             return Ok(NameSection {
-                count: 0,
-                bytes: bumpalo::vec![in arena],
-                functions: MutMap::default(),
+                function_names: bumpalo::vec![in arena],
             });
         }
 
@@ -1548,12 +1542,6 @@ impl<'a> Parse<&'a Bump> for NameSection<'a> {
         // Section size
         let section_size = u32::parse((), module_bytes, cursor)? as usize;
         let section_end = *cursor + section_size;
-
-        let mut section = NameSection {
-            count: 0,
-            bytes: Vec::with_capacity_in(section_size, arena),
-            functions: MutMap::default(),
-        };
 
         let section_name = <&'a str>::parse(arena, module_bytes, cursor)?;
         if section_name != Self::NAME {
@@ -1593,19 +1581,17 @@ impl<'a> Parse<&'a Bump> for NameSection<'a> {
             });
         }
 
-        // Function names
-        section.count = u32::parse((), module_bytes, cursor)?;
-        let fn_names_start = *cursor;
-        for _ in 0..section.count {
-            let fn_index = u32::parse((), module_bytes, cursor)?;
-            let name_bytes = <&'a str>::parse(arena, module_bytes, cursor)?;
-            section.functions.insert(name_bytes, fn_index);
-        }
+        let count = u32::parse((), module_bytes, cursor)?;
+        let mut section = NameSection {
+            function_names: Vec::with_capacity_in(count as usize, arena),
+        };
 
-        // Copy only the bytes for the function names segment
-        section
-            .bytes
-            .extend_from_slice(&module_bytes[fn_names_start..*cursor]);
+        // Function names
+        for _ in 0..count {
+            let index = u32::parse((), module_bytes, cursor)?;
+            let name = <&'a str>::parse(arena, module_bytes, cursor)?;
+            section.function_names.push((index, name));
+        }
 
         *cursor = section_end;
 
@@ -1615,18 +1601,21 @@ impl<'a> Parse<&'a Bump> for NameSection<'a> {
 
 impl<'a> Serialize for NameSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        if !self.bytes.is_empty() {
+        if !self.function_names.is_empty() {
             let header_indices = write_custom_section_header(buffer, Self::NAME);
 
             let subsection_id = NameSubSections::FunctionNames as u8;
             subsection_id.serialize(buffer);
 
-            let subsection_byte_size = (MAX_SIZE_ENCODED_U32 + self.bytes.len()) as u32;
-            subsection_byte_size.serialize(buffer);
+            let subsection_size_index = buffer.encode_padded_u32(0);
+            let subsection_start = buffer.size();
 
-            buffer.encode_padded_u32(self.count);
+            self.function_names.serialize(buffer);
 
-            buffer.append_slice(&self.bytes);
+            buffer.overwrite_padded_u32(
+                subsection_size_index,
+                (buffer.size() - subsection_start) as u32,
+            );
 
             update_section_size(buffer, header_indices);
         }
@@ -1637,15 +1626,7 @@ impl<'a> Debug for NameSection<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "NameSection")?;
 
-        // We want to display index->name because it matches the binary format and looks nicer.
-        // But our hashmap is name->index because that's what code gen wants to look up.
-        let mut by_index = std::vec::Vec::with_capacity(self.functions.len());
-        for (name, index) in self.functions.iter() {
-            by_index.push((*index, name));
-        }
-        by_index.sort_unstable();
-
-        for (index, name) in by_index.iter() {
+        for (index, name) in self.function_names.iter() {
             writeln!(f, "  {:4}: {}", index, name)?;
         }
 
