@@ -64,7 +64,7 @@ fn zig_executable() -> String {
     }
 }
 
-fn run_command<S, I, P: AsRef<Path>>(path: P, command_str: &str, args: I) -> String
+fn run_command<S, I: std::fmt::Debug + Copy, P: AsRef<Path>>(path: P, command_str: &str, args: I) -> String
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -84,6 +84,6 @@ where
                 panic!("{} failed: {}", command_str, error_str);
             }
         },
-        Err(reason) => panic!("{} failed: {}", command_str, reason),
+        Err(reason) => panic!("{} failed: {}\nprovided arguments were: {:?}", command_str, reason, &args),
     }
 }

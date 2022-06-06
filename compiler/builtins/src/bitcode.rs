@@ -425,3 +425,8 @@ pub const NUM_INT_TO_INT_CHECKING_MAX: IntToIntrinsicName =
     int_to_int_intrinsic!("roc_builtins.num.int_to_", "_checking_max");
 pub const NUM_INT_TO_INT_CHECKING_MAX_AND_MIN: IntToIntrinsicName =
     int_to_int_intrinsic!("roc_builtins.num.int_to_", "_checking_max_and_min");
+
+pub const BUILTINS_HOST_BC: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/builtins-host.bc"));
+pub const BUILTINS_WASM32_BC: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/builtins-wasm32.bc"));
+pub const BUILTINS_I386_BC: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/builtins-i386.bc"));
+pub const BUILTINS_X86_64_BC: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/builtins-x86_64.bc"));

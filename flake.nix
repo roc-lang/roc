@@ -124,6 +124,8 @@
           packages.roc = naersk-lib.buildPackage {
             pname = "roc";
             root = ./.;
+            singleStep = true;
+            buildInputs = [zig-toolchain];
           };
           defaultPackage = packages.roc;
 
