@@ -195,7 +195,7 @@ impl<'a> WasmModule<'a> {
 
         self.code.remove_dead_preloads(
             arena,
-            self.import.function_signature_count(),
+            self.import.function_count(),
             &exported_fn_indices,
             called_preload_fns,
         )

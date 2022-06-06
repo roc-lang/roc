@@ -434,7 +434,7 @@ impl<'a> ImportSection<'a> {
         Vec::from_iter_in(sig_iter, arena)
     }
 
-    pub fn function_signature_count(&self) -> usize {
+    pub fn function_count(&self) -> usize {
         self.imports
             .iter()
             .filter(|imp| matches!(imp.description, ImportDesc::Func { .. }))

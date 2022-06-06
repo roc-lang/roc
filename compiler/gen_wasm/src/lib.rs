@@ -92,12 +92,10 @@ pub fn build_app_module<'a>(
 
     // Adjust Wasm function indices to account for functions from the object file
     let fn_index_offset: u32 =
-        host_module.import.function_signature_count() as u32 + host_module.code.preloaded_count;
+        host_module.import.function_count() as u32 + host_module.code.preloaded_count;
 
     // Pre-pass over the procedure names & layouts
-    // - Gather some data for lookups
-    // - Filter out procs we're going to inline
-    // - Link host-to-app calls
+    // Filter out procs we're going to inline & gather some data for lookups
     let mut fn_index: u32 = fn_index_offset;
     for ((sym, proc_layout), proc) in procedures.into_iter() {
         if matches!(

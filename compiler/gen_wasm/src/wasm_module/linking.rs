@@ -465,7 +465,7 @@ impl<'a> SymInfo<'a> {
             Self::Global(WasmObjectSymbol::ExplicitlyNamed { name, .. }) => Some(name),
             Self::Event(WasmObjectSymbol::ExplicitlyNamed { name, .. }) => Some(name),
             Self::Table(WasmObjectSymbol::ExplicitlyNamed { name, .. }) => Some(name),
-            _ => None,
+            _ => None, // ImplicitlyNamed or SectionSymbols
         }
     }
 }
