@@ -68,6 +68,7 @@ pub struct WasmBackend<'a> {
 }
 
 impl<'a> WasmBackend<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         env: &'a Env<'a>,
         interns: &'a mut Interns,

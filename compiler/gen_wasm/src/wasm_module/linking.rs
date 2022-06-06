@@ -580,10 +580,7 @@ impl<'a> LinkingSection<'a> {
     pub fn find_internal_symbol(&self, target_name: &str) -> Option<u32> {
         self.symbol_table
             .iter()
-            .position(|sym| match sym.name() {
-                Some(name) if name == target_name => true,
-                _ => false,
-            })
+            .position(|sym| sym.name() == Some(target_name))
             .map(|x| x as u32)
     }
 
