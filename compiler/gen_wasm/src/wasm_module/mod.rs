@@ -233,14 +233,8 @@ impl<'a> WasmModule<'a> {
     /// - Update all call sites for the swapped JS function
     /// - Update the FunctionSection to show the correct type signature for the swapped JS function
     /// - Insert a dummy function in the CodeSection, at the same index as the swapped JS function
-    pub fn link_host_to_app_calls(&mut self, arena: &'a Bump, host_to_app_map: &[(String, u32)]) {
-        let dummy_function = CodeBuilder::dummy(arena);
-        let mut dummy_function_bytes = Vec::with_capacity_in(dummy_function.size(), arena);
-        dummy_function.serialize(&mut dummy_function_bytes);
-
+    pub fn link_host_to_app_calls(&mut self, host_to_app_map: &[(String, u32)]) {
         for (app_fn_name, app_fn_index) in host_to_app_map.iter() {
-            println!("Linking {:?}", app_fn_name);
-
             // Find the host import, and the last imported function to swap with it.
             // Not all imports are functions, so the function index and import index may be different
             let mut host_fn = None;
@@ -285,19 +279,6 @@ impl<'a> WasmModule<'a> {
                     )
                 });
 
-            // Find the symbol for the swapped JS import
-            let swap_sym_index = self
-                .linking
-                .find_imported_function_symbol(swap_fn_index as u32)
-                .unwrap_or_else(|| {
-                    // get the name using the old host import index because we already swapped it!
-                    let name = self.import.imports[host_import_index].name;
-                    panic!(
-                        "Linking failed! Can't find `{}` (fn #{}) in host symbol table",
-                        name, swap_fn_index
-                    )
-                });
-
             // Update calls to use the app function instead of the host import
             self.reloc_code.apply_relocs_u32(
                 &mut self.code.preloaded_bytes,
@@ -306,22 +287,55 @@ impl<'a> WasmModule<'a> {
                 *app_fn_index,
             );
 
-            // Update calls to the swapped JS import
-            self.reloc_code.apply_relocs_u32(
-                &mut self.code.preloaded_bytes,
-                self.code.preloaded_reloc_offset,
-                swap_sym_index,
-                host_fn_index as u32,
-            );
+            if swap_import_index != host_import_index {
+                // Find the symbol for the swapped JS import
+                let swap_sym_index = self
+                    .linking
+                    .find_imported_function_symbol(swap_fn_index as u32)
+                    .unwrap_or_else(|| {
+                        // get the name using the old host import index because we already swapped it!
+                        let name = self.import.imports[host_import_index].name;
+                        panic!(
+                            "Linking failed! Can't find `{}` (fn #{}) in host symbol table",
+                            name, swap_fn_index
+                        )
+                    });
+                let swap_fn_sym = &self.linking.symbol_table[swap_sym_index as usize];
+                let swap_fn_name = swap_fn_sym.name().unwrap();
 
-            // Remember to insert a dummy function at the index where the JS import used to be
-            // (which is at the beginning of the internally-defined functions)
+                // Update calls to the swapped JS import
+                self.reloc_code.apply_relocs_u32(
+                    &mut self.code.preloaded_bytes,
+                    self.code.preloaded_reloc_offset,
+                    swap_sym_index,
+                    host_fn_index as u32,
+                );
+
+                // Update the name in the debug info
+                let (_, debug_name) = self
+                    .names
+                    .function_names
+                    .iter_mut()
+                    .find(|(i, _)| *i as usize == host_fn_index)
+                    .unwrap();
+                debug_name.clone_from(&swap_fn_name);
+            }
+
+            // Remember to insert a dummy function at the beginning of the code section
+            // to compensate for having one less import, so that function indices don't change.
             self.code.linking_dummy_count += 1;
 
             // Insert any type signature for the dummy. Signature index 0 will do.
             self.function.signatures.insert(0, 0);
 
-            // TODO: update debug info too
+            // Update the debug name for the dummy
+            let (_, debug_name) = self
+                .names
+                .function_names
+                .iter_mut()
+                .find(|(i, _)| *i as usize == swap_fn_index)
+                .unwrap();
+            debug_name.clone_from(&"linking_dummy");
         }
     }
 }
