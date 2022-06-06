@@ -275,14 +275,14 @@ impl<'a> WasmModule<'a> {
                 self.import.imports[host_import_index] = swap_import;
             }
 
-            // Find the symbol for the app function
-            let app_sym_index = self
+            // Find the host's symbol for the function we're linking
+            let host_sym_index = self
                 .linking
                 .find_imported_function_symbol(host_fn_index as u32)
                 .unwrap_or_else(|| {
                     panic!(
-                        "Linking failed! Can't find `{}` (fn #{}) in host symbol table",
-                        app_fn_name, host_fn_index
+                        "Linking failed! Can't find fn #{} ({}) in host symbol table",
+                        host_fn_index, app_fn_name
                     )
                 });
 
@@ -290,25 +290,24 @@ impl<'a> WasmModule<'a> {
             self.reloc_code.apply_relocs_u32(
                 &mut self.code.preloaded_bytes,
                 self.code.preloaded_reloc_offset,
-                app_sym_index,
+                host_sym_index,
                 app_fn_index,
             );
 
             if swap_import_index != host_import_index {
+                // get the name using the old host import index because we already swapped it!
+                let swap_fn_name = self.import.imports[host_import_index].name;
+
                 // Find the symbol for the swapped JS import
                 let swap_sym_index = self
                     .linking
                     .find_imported_function_symbol(swap_fn_index as u32)
                     .unwrap_or_else(|| {
-                        // get the name using the old host import index because we already swapped it!
-                        let name = self.import.imports[host_import_index].name;
                         panic!(
-                            "Linking failed! Can't find `{}` (fn #{}) in host symbol table",
-                            name, swap_fn_index
+                            "Linking failed! Can't find fn #{} ({}) in host symbol table",
+                            swap_fn_index, swap_fn_name
                         )
                     });
-                let swap_fn_sym = &self.linking.symbol_table[swap_sym_index as usize];
-                let swap_fn_name = swap_fn_sym.name().unwrap();
 
                 // Update calls to the swapped JS import
                 self.reloc_code.apply_relocs_u32(
