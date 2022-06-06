@@ -263,12 +263,6 @@ impl UnificationTable {
         self.ranks[index]
     }
 
-    // TODO remove
-    #[inline(always)]
-    pub fn inlined_get_root_key(&mut self, key: Variable) -> Variable {
-        self.root_key(key)
-    }
-
     /// NOTE: assumes variables are root
     pub fn unify_roots(&mut self, to: Variable, from: Variable, desc: Descriptor) {
         let from_index = from.index() as usize;

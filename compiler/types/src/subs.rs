@@ -1601,8 +1601,8 @@ impl Subs {
 
     /// Unions two keys without the possibility of failure.
     pub fn union(&mut self, left: Variable, right: Variable, desc: Descriptor) {
-        let l_root = self.utable.inlined_get_root_key(left);
-        let r_root = self.utable.inlined_get_root_key(right);
+        let l_root = self.utable.root_key(left);
+        let r_root = self.utable.root_key(right);
 
         // NOTE this swapping is intentional! most of our unifying commands are based on the elm
         // source, but unify_roots is from `ena`, not the elm source. Turns out that they have
@@ -1657,7 +1657,7 @@ impl Subs {
 
     #[inline(always)]
     pub fn get_root_key(&mut self, key: Variable) -> Variable {
-        self.utable.inlined_get_root_key(key)
+        self.utable.root_key(key)
     }
 
     #[inline(always)]
@@ -1667,7 +1667,7 @@ impl Subs {
 
     #[inline(always)]
     pub fn set(&mut self, key: Variable, r_value: Descriptor) {
-        let l_key = self.utable.inlined_get_root_key(key);
+        let l_key = self.utable.root_key(key);
 
         // self.utable.update_value(l_key, |node| node.value = r_value);
         self.utable.set_descriptor(l_key, r_value)
