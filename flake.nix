@@ -125,7 +125,10 @@
             pname = "roc";
             root = ./.;
             singleStep = true;
-            buildInputs = [zig-toolchain];
+            buildInputs = with pkgs; [ zig-toolchain libffi libxml2 ncurses zlib libxkbcommon xorg.libX11 xorg.libXcursor xorg.libXrandr];
+            RUST_BACKTRACE = "1";
+            XDG_CACHE_HOME = "xdg_cache"; # Workaround for zig issue github.com/ziglang/zig/issues/6810
+            LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
           };
           defaultPackage = packages.roc;
 

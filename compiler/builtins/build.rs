@@ -140,6 +140,28 @@ fn generate_bc_file(output_path: &Path, zig_object: &str, file_name: &str) {
     let dest_bc_64bit = bc_path.to_str().expect("Invalid dest bc path");
     println!("Compiling 64-bit bitcode to: {}", dest_bc_64bit);
 
+    let no_args: &[&str;0] = &[];
+    run_command(
+        &output_path,
+        "whoami",
+        no_args
+    );
+    run_command(
+        &output_path,
+        "pwd",
+        &["-P"]
+    );
+    run_command(
+        &output_path,
+        "ls",
+        &["-a"]
+    );
+    run_command(
+        &output_path,
+        "ls",
+        &["-la"]
+    );
+
     run_command(
         &output_path,
         &zig_executable(),
@@ -152,7 +174,7 @@ fn generate_bc_file(output_path: &Path, zig_object: &str, file_name: &str) {
     );
 }
 
-fn run_command<S, I: Copy, P: AsRef<Path> + Copy>(path: P, command_str: &str, args: I)
+fn run_command<S, I: Copy + std::fmt::Debug, P: AsRef<Path> + Copy>(path: P, command_str: &str, args: I)
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -175,11 +197,11 @@ where
                 if error_str.contains("unable to build stage1 zig object: FileNotFound") {
                     run_command(path, command_str, args)
                 } else {
-                    panic!("{} failed: {}", command_str, error_str);
+                    panic!("{} failed: {}\nfull output:{:?}\narguments:{:?}", command_str, error_str, output, args);
                 }
             }
         },
-        Err(reason) => panic!("{} failed: {}", command_str, reason),
+        Err(reason) => panic!("{} failed: {}\narguments:{:?}", command_str, reason, args),
     }
 }
 
