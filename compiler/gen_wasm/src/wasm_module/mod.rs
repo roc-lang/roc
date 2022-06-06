@@ -264,7 +264,7 @@ impl<'a> WasmModule<'a> {
                         ty: ExportType::Func,
                         index: app_fn_index,
                     });
-                    return;
+                    continue;
                 }
             };
             let (swap_import_index, swap_fn_index) = swap_fn.unwrap();
