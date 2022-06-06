@@ -43,8 +43,6 @@ fn build_wasm() {
         "-lc",
         "-o",
         &format!("{}/{}.o", out_dir, PLATFORM_FILENAME),
-        "--export",
-        "dummy_call_main",
         "--no-entry",
         "--relocatable",
     ];

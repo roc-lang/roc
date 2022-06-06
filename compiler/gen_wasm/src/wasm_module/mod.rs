@@ -233,10 +233,11 @@ impl<'a> WasmModule<'a> {
     /// - Update all call sites for the swapped JS function
     /// - Update the FunctionSection to show the correct type signature for the swapped JS function
     /// - Insert a dummy function in the CodeSection, at the same index as the swapped JS function
-    pub fn link_host_to_app_calls(&mut self, host_to_app_map: &[(String, u32)]) {
-        for (app_fn_name, app_fn_index) in host_to_app_map.iter() {
+    pub fn link_host_to_app_calls(&mut self, host_to_app_map: Vec<'a, (&'a str, u32)>) {
+        for (app_fn_name, app_fn_index) in host_to_app_map.into_iter() {
             // Find the host import, and the last imported function to swap with it.
             // Not all imports are functions, so the function index and import index may be different
+            // (We could support imported globals if we relocated them, although we don't at the time of this comment)
             let mut host_fn = None;
             let mut swap_fn = None;
             self.import
@@ -254,12 +255,18 @@ impl<'a> WasmModule<'a> {
                     }
                 });
 
-            let (host_import_index, host_fn_index) = host_fn.unwrap_or_else(|| {
-                panic!(
-                    "Linking failed! Can't find `{}` in host imports",
-                    app_fn_name
-                )
-            });
+            let (host_import_index, host_fn_index) = match host_fn {
+                Some(x) => x,
+                None => {
+                    // The Wasm host doesn't call our app function, so it must be called from JS. Export it.
+                    self.export.append(Export {
+                        name: app_fn_name,
+                        ty: ExportType::Func,
+                        index: app_fn_index,
+                    });
+                    return;
+                }
+            };
             let (swap_import_index, swap_fn_index) = swap_fn.unwrap();
 
             // Note: swap_remove will not work, because some imports may not be functions.
@@ -284,7 +291,7 @@ impl<'a> WasmModule<'a> {
                 &mut self.code.preloaded_bytes,
                 self.code.preloaded_reloc_offset,
                 app_sym_index,
-                *app_fn_index,
+                app_fn_index,
             );
 
             if swap_import_index != host_import_index {

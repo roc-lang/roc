@@ -113,9 +113,8 @@ pub fn build_app_module<'a>(
 
             // Assumption: there is only one specialization of a host-exposed function
             let ident_string = sym.as_str(interns);
-            let c_function_name = format!("roc__{}_1_exposed", ident_string);
-
-            host_to_app_map.push((c_function_name, fn_index));
+            let c_function_name = bumpalo::format!(in env.arena, "roc__{}_1_exposed", ident_string);
+            host_to_app_map.push((c_function_name.into_bump_str(), fn_index));
         }
 
         proc_lookup.push(ProcLookupData {
@@ -132,7 +131,7 @@ pub fn build_app_module<'a>(
         interns,
         layout_ids,
         proc_lookup,
-        &host_to_app_map,
+        host_to_app_map,
         host_module,
         fn_index_offset,
         CodeGenHelp::new(env.arena, TargetInfo::default_wasm32(), env.module_id),

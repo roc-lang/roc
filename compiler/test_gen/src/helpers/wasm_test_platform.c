@@ -150,8 +150,3 @@ void *roc_memset(void *str, int c, size_t n)
 {
     return memset(str, c, n);
 }
-
-long long roc__main_1_exposed();
-void dummy_call_main() {
-    roc__main_1_exposed();
-}

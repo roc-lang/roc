@@ -73,7 +73,7 @@ impl<'a> WasmBackend<'a> {
         interns: &'a mut Interns,
         layout_ids: LayoutIds<'a>,
         proc_lookup: Vec<'a, ProcLookupData<'a>>,
-        host_to_app_map: &[(std::string::String, u32)],
+        host_to_app_map: Vec<'a, (&'a str, u32)>,
         mut module: WasmModule<'a>,
         fn_index_offset: u32,
         helper_proc_gen: CodeGenHelp<'a>,
@@ -92,7 +92,7 @@ impl<'a> WasmBackend<'a> {
             )
         });
 
-        module.link_host_to_app_calls(&host_to_app_map);
+        module.link_host_to_app_calls(host_to_app_map);
 
         module.code.code_builders.reserve(proc_lookup.len());
 
