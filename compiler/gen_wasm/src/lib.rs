@@ -81,7 +81,7 @@ pub fn build_app_binary<'a>(
 pub fn build_app_module<'a>(
     env: &'a Env<'a>,
     interns: &'a mut Interns,
-    mut host_module: WasmModule<'a>,
+    host_module: WasmModule<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> (WasmModule<'a>, Vec<'a, u32>, u32) {
     let layout_ids = LayoutIds::default();
@@ -127,13 +127,12 @@ pub fn build_app_module<'a>(
         fn_index += 1;
     }
 
-    host_module.link_host_to_app_calls(env.arena, &host_to_app_map);
-
     let mut backend = WasmBackend::new(
         env,
         interns,
         layout_ids,
         proc_lookup,
+        &host_to_app_map,
         host_module,
         fn_index_offset,
         CodeGenHelp::new(env.arena, TargetInfo::default_wasm32(), env.module_id),
