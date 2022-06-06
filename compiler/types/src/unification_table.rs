@@ -3,23 +3,42 @@ use crate::subs::{Content, Descriptor, Mark, OptVariable, Rank, Variable, Variab
 #[derive(Clone, Default)]
 pub struct UnificationTable {
     contents: Vec<Content>,
-    ranks: Vec<Rank>,
-    marks: Vec<Mark>,
-    copies: Vec<OptVariable>,
-    redirects: Vec<OptVariable>,
+    metadata: Vec<Combine>,
+    //    ranks: Vec<Rank>,
+    //    marks: Vec<Mark>,
+    //    copies: Vec<OptVariable>,
+    //    redirects: Vec<OptVariable>,
 }
 
 pub struct Snapshot(UnificationTable);
+
+#[derive(Debug, Clone, Copy)]
+struct Combine {
+    redirect: OptVariable,
+    rank: Rank,
+    mark: Mark,
+    copy: OptVariable,
+}
+
+impl Combine {
+    const NONE: Self = Self {
+        redirect: OptVariable::NONE,
+        rank: Rank::NONE,
+        mark: Mark::NONE,
+        copy: OptVariable::NONE,
+    };
+}
 
 impl UnificationTable {
     #[allow(unused)]
     pub fn with_capacity(cap: usize) -> Self {
         Self {
             contents: Vec::with_capacity(cap),  // vec![Content::Error; cap],
-            ranks: Vec::with_capacity(cap),     // vec![Rank::NONE; cap],
-            marks: Vec::with_capacity(cap),     // vec![Mark::NONE; cap],
-            copies: Vec::with_capacity(cap),    // vec![OptVariable::NONE; cap],
-            redirects: Vec::with_capacity(cap), // vec![OptVariable::NONE; cap],
+            metadata: Vec::with_capacity(cap)
+//            ranks: Vec::with_capacity(cap),     // vec![Rank::NONE; cap],
+//            marks: Vec::with_capacity(cap),     // vec![Mark::NONE; cap],
+//            copies: Vec::with_capacity(cap),    // vec![OptVariable::NONE; cap],
+//            redirects: Vec::with_capacity(cap), // vec![OptVariable::NONE; cap],
         }
     }
 
@@ -38,12 +57,8 @@ impl UnificationTable {
 
         self.contents
             .extend(repeat(Content::FlexVar(None)).take(extra_length));
-        self.ranks.extend(repeat(Rank::NONE).take(extra_length));
-        self.marks.extend(repeat(Mark::NONE).take(extra_length));
-        self.copies
-            .extend(repeat(OptVariable::NONE).take(extra_length));
-        self.redirects
-            .extend(repeat(OptVariable::NONE).take(extra_length));
+        self.metadata
+            .extend(repeat(Combine::NONE).take(extra_length));
 
         VariableSubsSlice::new(start as _, extra_length as _)
     }
@@ -58,10 +73,15 @@ impl UnificationTable {
         let variable = unsafe { Variable::from_index(self.len() as _) };
 
         self.contents.push(content);
-        self.ranks.push(rank);
-        self.marks.push(mark);
-        self.copies.push(copy);
-        self.redirects.push(OptVariable::NONE);
+
+        let combine = Combine {
+            redirect: OptVariable::NONE,
+            rank,
+            mark,
+            copy,
+        };
+
+        self.metadata.push(combine);
 
         variable
     }
@@ -75,33 +95,51 @@ impl UnificationTable {
         mark: Mark,
         copy: OptVariable,
     ) {
-        let index = self.root_key(key).index() as usize;
+        let root = self.root_key(key);
+        self.set_unchecked(root, content, rank, mark, copy)
+    }
+
+    pub fn set_unchecked(
+        &mut self,
+        key: Variable,
+        content: Content,
+        rank: Rank,
+        mark: Mark,
+        copy: OptVariable,
+    ) {
+        let index = key.index() as usize;
 
         self.contents[index] = content;
-        self.ranks[index] = rank;
-        self.marks[index] = mark;
-        self.copies[index] = copy;
+
+        let combine = Combine {
+            redirect: OptVariable::NONE,
+            rank,
+            mark,
+            copy,
+        };
+
+        self.metadata[index] = combine;
     }
 
     pub fn modify<F, T>(&mut self, key: Variable, mapper: F) -> T
     where
         F: FnOnce(&mut Descriptor) -> T,
     {
-        let index = self.root_key(key).index() as usize;
+        let root = self.root_key(key);
+        let index = root.index() as usize;
+
+        let combine = self.metadata[index];
 
         let mut desc = Descriptor {
             content: self.contents[index],
-            rank: self.ranks[index],
-            mark: self.marks[index],
-            copy: self.copies[index],
+            rank: combine.rank,
+            mark: combine.mark,
+            copy: combine.copy,
         };
 
         let result = mapper(&mut desc);
 
-        self.contents[index] = desc.content;
-        self.ranks[index] = desc.rank;
-        self.marks[index] = desc.mark;
-        self.copies[index] = desc.copy;
+        self.set_unchecked(key, desc.content, desc.rank, desc.mark, desc.copy);
 
         result
     }
@@ -110,18 +148,18 @@ impl UnificationTable {
 
     #[inline(always)]
     pub fn get_rank_unchecked(&self, key: Variable) -> Rank {
-        self.ranks[key.index() as usize]
+        self.metadata[key.index() as usize].rank
     }
 
     #[inline(always)]
     pub fn get_mark_unchecked(&self, key: Variable) -> Mark {
-        self.marks[key.index() as usize]
+        self.metadata[key.index() as usize].mark
     }
 
     #[allow(unused)]
     #[inline(always)]
     pub fn get_copy_unchecked(&self, key: Variable) -> OptVariable {
-        self.copies[key.index() as usize]
+        self.metadata[key.index() as usize].copy
     }
 
     #[inline(always)]
@@ -133,18 +171,18 @@ impl UnificationTable {
 
     #[inline(always)]
     pub fn get_rank(&self, key: Variable) -> Rank {
-        self.ranks[self.root_key_without_compacting(key).index() as usize]
+        self.metadata[self.root_key_without_compacting(key).index() as usize].rank
     }
 
     #[inline(always)]
     pub fn get_mark(&self, key: Variable) -> Mark {
-        self.marks[self.root_key_without_compacting(key).index() as usize]
+        self.metadata[self.root_key_without_compacting(key).index() as usize].mark
     }
 
     #[inline(always)]
     pub fn get_copy(&self, key: Variable) -> OptVariable {
         let index = self.root_key_without_compacting(key).index() as usize;
-        self.copies[index]
+        self.metadata[index].copy
     }
 
     #[inline(always)]
@@ -156,18 +194,18 @@ impl UnificationTable {
 
     #[inline(always)]
     pub fn set_rank_unchecked(&mut self, key: Variable, value: Rank) {
-        self.ranks[key.index() as usize] = value;
+        self.metadata[key.index() as usize].rank = value;
     }
 
     #[inline(always)]
     pub fn set_mark_unchecked(&mut self, key: Variable, value: Mark) {
-        self.marks[key.index() as usize] = value;
+        self.metadata[key.index() as usize].mark = value;
     }
 
     #[allow(unused)]
     #[inline(always)]
     pub fn set_copy_unchecked(&mut self, key: Variable, value: OptVariable) {
-        self.copies[key.index() as usize] = value;
+        self.metadata[key.index() as usize].copy = value;
     }
 
     #[allow(unused)]
@@ -181,19 +219,19 @@ impl UnificationTable {
     #[inline(always)]
     pub fn set_rank(&mut self, key: Variable, value: Rank) {
         let index = self.root_key(key).index() as usize;
-        self.ranks[index] = value;
+        self.metadata[index].rank = value;
     }
 
     #[inline(always)]
     pub fn set_mark(&mut self, key: Variable, value: Mark) {
         let index = self.root_key(key).index() as usize;
-        self.marks[index] = value;
+        self.metadata[index].mark = value;
     }
 
     #[inline(always)]
     pub fn set_copy(&mut self, key: Variable, value: OptVariable) {
         let index = self.root_key(key).index() as usize;
-        self.copies[index] = value;
+        self.metadata[index].copy = value;
     }
 
     #[inline(always)]
@@ -208,12 +246,12 @@ impl UnificationTable {
     pub fn root_key(&mut self, mut key: Variable) -> Variable {
         let index = key.index() as usize;
 
-        while let Some(redirect) = self.redirects[key.index() as usize].into_variable() {
+        while let Some(redirect) = self.metadata[key.index() as usize].redirect.into_variable() {
             key = redirect;
         }
 
         if index != key.index() as usize {
-            self.redirects[index] = OptVariable::from(key);
+            self.metadata[index].redirect = OptVariable::from(key);
         }
 
         key
@@ -221,7 +259,7 @@ impl UnificationTable {
 
     #[inline(always)]
     pub fn root_key_without_compacting(&self, mut key: Variable) -> Variable {
-        while let Some(redirect) = self.redirects[key.index() as usize].into_variable() {
+        while let Some(redirect) = self.metadata[key.index() as usize].redirect.into_variable() {
             key = redirect;
         }
 
@@ -246,7 +284,7 @@ impl UnificationTable {
     }
 
     pub fn is_redirect(&self, key: Variable) -> bool {
-        self.redirects[key.index() as usize].is_some()
+        self.metadata[key.index() as usize].redirect.is_some()
     }
 
     pub fn unioned(&mut self, a: Variable, b: Variable) -> bool {
@@ -257,10 +295,10 @@ impl UnificationTable {
     #[inline(always)]
     pub fn get_rank_set_mark(&mut self, key: Variable, mark: Mark) -> Rank {
         let index = self.root_key(key).index() as usize;
+        let metadata = &mut self.metadata[index];
 
-        self.marks[index] = mark;
-
-        self.ranks[index]
+        metadata.mark = mark;
+        metadata.rank
     }
 
     /// NOTE: assumes variables are root
@@ -270,34 +308,27 @@ impl UnificationTable {
 
         // redirect from -> to
         if from_index != to_index {
-            self.redirects[from_index] = OptVariable::from(to);
+            self.metadata[from_index].redirect = OptVariable::from(to);
         }
 
         // update to's Descriptor
-        self.contents[to_index] = desc.content;
-        self.ranks[to_index] = desc.rank;
-        self.marks[to_index] = desc.mark;
-        self.copies[to_index] = desc.copy;
+        self.set_unchecked(to, desc.content, desc.rank, desc.mark, desc.copy);
     }
 
     pub fn get_descriptor(&self, key: Variable) -> Descriptor {
         let index = self.root_key_without_compacting(key).index() as usize;
+        let metadata = self.metadata[index];
 
         Descriptor {
             content: self.contents[index],
-            rank: self.ranks[index],
-            mark: self.marks[index],
-            copy: self.copies[index],
+            rank: metadata.rank,
+            mark: metadata.mark,
+            copy: metadata.copy,
         }
     }
 
     pub fn set_descriptor(&mut self, key: Variable, desc: Descriptor) {
-        let index = self.root_key(key).index() as usize;
-
-        self.contents[index] = desc.content;
-        self.ranks[index] = desc.rank;
-        self.marks[index] = desc.mark;
-        self.copies[index] = desc.copy;
+        self.set(key, desc.content, desc.rank, desc.mark, desc.copy);
     }
 
     pub(crate) fn serialize(
@@ -308,10 +339,23 @@ impl UnificationTable {
         use crate::subs::Subs;
 
         written = Subs::serialize_slice(&self.contents, writer, written)?;
-        written = Subs::serialize_slice(&self.ranks, writer, written)?;
-        written = Subs::serialize_slice(&self.marks, writer, written)?;
-        written = Subs::serialize_slice(&self.copies, writer, written)?;
-        written = Subs::serialize_slice(&self.redirects, writer, written)?;
+
+        let mut ranks = Vec::new();
+        let mut marks = Vec::new();
+        let mut copies = Vec::new();
+        let mut redirects = Vec::new();
+
+        for c in self.metadata.iter() {
+            ranks.push(c.rank);
+            marks.push(c.mark);
+            copies.push(c.copy);
+            redirects.push(c.redirect);
+        }
+
+        written = Subs::serialize_slice(&ranks, writer, written)?;
+        written = Subs::serialize_slice(&marks, writer, written)?;
+        written = Subs::serialize_slice(&copies, writer, written)?;
+        written = Subs::serialize_slice(&redirects, writer, written)?;
 
         Ok(written)
     }
@@ -325,12 +369,25 @@ impl UnificationTable {
         let (copies, offset) = Subs::deserialize_slice::<OptVariable>(bytes, length, offset);
         let (redirects, offset) = Subs::deserialize_slice::<OptVariable>(bytes, length, offset);
 
+        let mut metadata = Vec::with_capacity(ranks.len());
+
+        let it = ranks
+            .iter()
+            .zip(marks.iter())
+            .zip(copies.iter())
+            .zip(redirects.iter());
+        for (((rank, mark), copy), redirect) in it {
+            metadata.push(Combine {
+                redirect: *redirect,
+                rank: *rank,
+                mark: *mark,
+                copy: *copy,
+            });
+        }
+
         let this = Self {
             contents: contents.to_vec(),
-            ranks: ranks.to_vec(),
-            marks: marks.to_vec(),
-            copies: copies.to_vec(),
-            redirects: redirects.to_vec(),
+            metadata,
         };
 
         (this, offset)
