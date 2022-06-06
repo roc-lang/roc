@@ -385,12 +385,14 @@ name = "cli_utils"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
+ "const_format",
  "criterion",
  "rlimit",
  "roc_cli",
  "roc_collections",
  "roc_load",
  "roc_module",
+ "roc_reporting",
  "serde",
  "serde-xml-rs",
  "strip-ansi-escapes",
@@ -482,9 +484,9 @@ dependencies = [
 
 [[package]]
 name = "const_format"
-version = "0.2.22"
+version = "0.2.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22bc6cd49b0ec407b680c3e380182b6ac63b73991cb7602de350352fc309b614"
+checksum = "e6a1316fa6a23fea1ee41cb80321590385e5f3e575e99f77c4d918ce5d44379d"
 dependencies = [
  "const_format_proc_macros",
 ]
@@ -956,6 +958,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "errno"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f639046355ee4f37944e44f60642c6f3a7efa3cf6b78c78a0d989a8ce6c396a1"
+dependencies = [
+ "errno-dragonfly",
+ "libc",
+ "winapi",
+]
+
+[[package]]
+name = "errno-dragonfly"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa68f1b12764fab894d2755d2518754e71b4fd80ecfb822714a1206c2aab39bf"
+dependencies = [
+ "cc",
+ "libc",
+]
+
+[[package]]
 name = "error-code"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1295,6 +1318,12 @@ dependencies = [
  "ahash 0.7.6",
  "bumpalo",
 ]
+
+[[package]]
+name = "heck"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2540771e65fc8cb83cd6e8a237f70c319bd5c29f78ed1084ba5d50eeac86f7f9"
 
 [[package]]
 name = "hermit-abi"
@@ -2487,9 +2516,9 @@ dependencies = [
 
 [[package]]
 name = "regex"
-version = "1.5.4"
+version = "1.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d07a8629359eb56f1e2fb1652bb04212c072a87ba68546a04065d525673ac461"
+checksum = "d83f127d94bdbcda4c8cc2e50f6f84f4b611f69c902699ca385a39c3a75f9ff1"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -2504,9 +2533,9 @@ checksum = "6c230d73fb8d8c1b9c0b3135c5142a8acee3a0558fb8db5cf1cb65f8d7862132"
 
 [[package]]
 name = "regex-syntax"
-version = "0.6.25"
+version = "0.6.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f497285884f3fcff424ffc933e56d7cbca511def0c9831a7f9b5f6153e3cc89b"
+checksum = "49b3de9ec5dc0a3417da371aab17d729997c15010e7fd24ff707773a33bddb64"
 
 [[package]]
 name = "remove_dir_all"
@@ -2613,6 +2642,7 @@ dependencies = [
  "roc_region",
  "roc_target",
  "roc_types",
+ "tempfile",
 ]
 
 [[package]]
@@ -2639,6 +2669,8 @@ dependencies = [
  "bumpalo",
  "clap 3.1.17",
  "const_format",
+ "errno",
+ "libc",
  "mimalloc",
  "roc_build",
  "roc_builtins",
@@ -2679,6 +2711,7 @@ dependencies = [
 name = "roc_collections"
 version = "0.1.0"
 dependencies = [
+ "bitvec 1.0.0",
  "bumpalo",
  "hashbrown 0.11.2",
  "im",
@@ -2903,7 +2936,6 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "crossbeam",
- "num_cpus",
  "parking_lot 0.12.0",
  "roc_builtins",
  "roc_can",
@@ -2959,7 +2991,6 @@ dependencies = [
  "roc_types",
  "roc_unify",
  "static_assertions 1.1.0",
- "ven_graph",
  "ven_pretty",
 ]
 
@@ -3051,6 +3082,7 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_solve",
+ "roc_std",
  "roc_types",
  "ven_pretty",
 ]
@@ -3067,6 +3099,7 @@ dependencies = [
  "roc_error_macros",
  "roc_exhaustive",
  "roc_module",
+ "roc_problem",
  "roc_region",
  "roc_types",
  "roc_unify",
@@ -3083,6 +3116,8 @@ dependencies = [
 name = "roc_target"
 version = "0.1.0"
 dependencies = [
+ "strum",
+ "strum_macros",
  "target-lexicon",
 ]
 
@@ -3097,7 +3132,6 @@ dependencies = [
  "roc_module",
  "roc_region",
  "static_assertions 1.1.0",
- "ven_ena",
 ]
 
 [[package]]
@@ -3149,6 +3183,12 @@ dependencies = [
  "ab_glyph_rasterizer",
  "owned_ttf_parser 0.6.0",
 ]
+
+[[package]]
+name = "rustversion"
+version = "1.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2cc38e8fa666e2de3c4aba7edeb5ffc5246c1c2ed0e3d17e560aeeba736b23f"
 
 [[package]]
 name = "rustyline"
@@ -3479,6 +3519,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
 
 [[package]]
+name = "strum"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e96acfc1b70604b8b2f1ffa4c57e59176c7dbb05d556c71ecd2f5498a1dee7f8"
+
+[[package]]
+name = "strum_macros"
+version = "0.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6878079b17446e4d3eba6192bb0a2950d5b14f0ed8424b852310e5a94345d0ef"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "rustversion",
+ "syn",
+]
+
+[[package]]
 name = "syn"
 version = "1.0.81"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3660,13 +3719,6 @@ name = "utf8parse"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "936e4b492acfd135421d8dca4b1aa80a7bfc26e702ef3af710e0752684df5372"
-
-[[package]]
-name = "ven_ena"
-version = "0.13.1"
-dependencies = [
- "log",
-]
 
 [[package]]
 name = "ven_graph"
