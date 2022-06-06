@@ -1685,7 +1685,6 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
     }
 }
 
-use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::ops::ControlFlow;
 std::thread_local! {
@@ -1883,6 +1882,18 @@ fn type_to_variable<'a>(
                     solved: union_lambdas,
                     // We may figure out the lambda set is recursive during solving, but it never
                     // is to begin with.
+                    recursion_var: OptVariable::NONE,
+                });
+
+                register_with_known_var(subs, destination, rank, pools, content)
+            }
+            UnspecializedLambdaSet(..) => {
+                // TODO: instantiate properly!
+                let union_lambdas =
+                    UnionLambdas::from_slices(SubsSlice::new(0, 0), SubsSlice::new(0, 0));
+
+                let content = Content::LambdaSet(subs::LambdaSet {
+                    solved: union_lambdas,
                     recursion_var: OptVariable::NONE,
                 });
 
@@ -2379,12 +2390,12 @@ fn insert_tags_fast_path<'a>(
     rank: Rank,
     pools: &mut Pools,
     arena: &'_ bumpalo::Bump,
-    tags: &'a [(TagName, impl Borrow<[Type]>)],
+    tags: &'a [(TagName, Vec<Type>)],
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> UnionTags {
     if let [(TagName(tag_name), arguments)] = tags {
         let variable_slice =
-            register_tag_arguments(subs, rank, pools, arena, stack, arguments.borrow());
+            register_tag_arguments(subs, rank, pools, arena, stack, arguments.as_slice());
         let new_variable_slices =
             SubsSlice::extend_new(&mut subs.variable_slices, [variable_slice]);
 
@@ -2411,7 +2422,7 @@ fn insert_tags_fast_path<'a>(
 
             for (variable_slice_index, (_, arguments)) in it {
                 subs.variable_slices[variable_slice_index] =
-                    register_tag_arguments(subs, rank, pools, arena, stack, arguments.borrow());
+                    register_tag_arguments(subs, rank, pools, arena, stack, arguments.as_slice());
             }
 
             UnionTags::from_slices(new_tag_names, new_variable_slices)
@@ -2425,7 +2436,7 @@ fn insert_tags_fast_path<'a>(
 
             for ((variable_slice_index, tag_name_index), (tag_name, arguments)) in it {
                 subs.variable_slices[variable_slice_index] =
-                    register_tag_arguments(subs, rank, pools, arena, stack, arguments.borrow());
+                    register_tag_arguments(subs, rank, pools, arena, stack, arguments.as_slice());
 
                 subs.tag_names[tag_name_index] = tag_name.clone();
             }
@@ -2440,12 +2451,12 @@ fn insert_tags_slow_path<'a>(
     rank: Rank,
     pools: &mut Pools,
     arena: &'_ bumpalo::Bump,
-    tags: &'a [(TagName, impl Borrow<[Type]>)],
+    tags: &'a [(TagName, Vec<Type>)],
     mut tag_vars: bumpalo::collections::Vec<(TagName, VariableSubsSlice)>,
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> UnionTags {
     for (tag, tag_argument_types) in tags {
-        let tag_argument_types: &[Type] = tag_argument_types.borrow();
+        let tag_argument_types: &[Type] = tag_argument_types.as_slice();
         let new_slice = VariableSubsSlice::reserve_into_subs(subs, tag_argument_types.len());
 
         for (i, arg) in (new_slice.indices()).zip(tag_argument_types) {
@@ -2466,7 +2477,7 @@ fn type_to_union_tags<'a>(
     rank: Rank,
     pools: &mut Pools,
     arena: &'_ bumpalo::Bump,
-    tags: &'a [(TagName, impl Borrow<[Type]>)],
+    tags: &'a [(TagName, Vec<Type>)],
     ext: &'a TypeExtension,
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> (UnionTags, Variable) {

@@ -8,7 +8,6 @@ use roc_module::ident::{Lowercase, TagName, Uppercase};
 use roc_module::symbol::Symbol;
 use std::fmt;
 use std::iter::{once, Iterator, Map};
-use ven_ena::unify::UnifyKey;
 
 use crate::unification_table::{Snapshot, UnificationTable};
 
@@ -1203,22 +1202,6 @@ impl From<Variable> for OptVariable {
 impl fmt::Debug for Variable {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.0.fmt(f)
-    }
-}
-
-impl UnifyKey for Variable {
-    type Value = Descriptor;
-
-    fn index(&self) -> u32 {
-        self.0
-    }
-
-    fn from_index(index: u32) -> Self {
-        Variable(index)
-    }
-
-    fn tag() -> &'static str {
-        "Variable"
     }
 }
 

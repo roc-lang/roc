@@ -867,43 +867,41 @@ fn resolve_abilities<'a>(
                 .iter()
                 .partition(|av| av.ability == loc_ability_name.value);
 
-            let mut bad_has_clauses = false;
-
-            if variables_bound_to_ability.is_empty() {
-                // There are no variables bound to the parent ability - then this member doesn't
-                // need to be a part of the ability.
-                env.problem(Problem::AbilityMemberMissingHasClause {
-                    member: member_sym,
-                    ability: loc_ability_name.value,
-                    region: name_region,
-                });
-                bad_has_clauses = true;
-            }
-
-            if variables_bound_to_ability.len() > 1 {
-                // There is more than one variable bound to the member signature, so something like
-                //   Eq has eq : a, b -> Bool | a has Eq, b has Eq
-                // We have no way of telling what type implements a particular instance of Eq in
-                // this case (a or b?), so disallow it.
-                let span_has_clauses =
-                    Region::across_all(variables_bound_to_ability.iter().map(|v| &v.first_seen));
-                let bound_var_names = variables_bound_to_ability
-                    .iter()
-                    .map(|v| v.name.clone())
-                    .collect();
-                env.problem(Problem::AbilityMemberMultipleBoundVars {
-                    member: member_sym,
-                    ability: loc_ability_name.value,
-                    span_has_clauses,
-                    bound_var_names,
-                });
-                bad_has_clauses = true;
-            }
-
-            if bad_has_clauses {
-                // Pretend the member isn't a part of the ability
-                continue;
-            }
+            let var_bound_to_ability = match variables_bound_to_ability.as_slice() {
+                [one] => one.variable,
+                [] => {
+                    // There are no variables bound to the parent ability - then this member doesn't
+                    // need to be a part of the ability.
+                    env.problem(Problem::AbilityMemberMissingHasClause {
+                        member: member_sym,
+                        ability: loc_ability_name.value,
+                        region: name_region,
+                    });
+                    // Pretend the member isn't a part of the ability
+                    continue;
+                }
+                [..] => {
+                    // There is more than one variable bound to the member signature, so something like
+                    //   Eq has eq : a, b -> Bool | a has Eq, b has Eq
+                    // We have no way of telling what type implements a particular instance of Eq in
+                    // this case (a or b?), so disallow it.
+                    let span_has_clauses = Region::across_all(
+                        variables_bound_to_ability.iter().map(|v| &v.first_seen),
+                    );
+                    let bound_var_names = variables_bound_to_ability
+                        .iter()
+                        .map(|v| v.name.clone())
+                        .collect();
+                    env.problem(Problem::AbilityMemberMultipleBoundVars {
+                        member: member_sym,
+                        ability: loc_ability_name.value,
+                        span_has_clauses,
+                        bound_var_names,
+                    });
+                    // Pretend the member isn't a part of the ability
+                    continue;
+                }
+            };
 
             // The introduced variables are good; add them to the output.
             output
@@ -918,6 +916,13 @@ fn resolve_abilities<'a>(
                 flex_vars: iv.collect_flex(),
             };
 
+            let signature = {
+                let mut signature = member_annot.typ;
+                signature
+                    .instantiate_lambda_sets_as_unspecialized(var_bound_to_ability, member_sym);
+                signature
+            };
+
             can_members.push((
                 member_sym,
                 AbilityMemberData {
@@ -925,7 +930,7 @@ fn resolve_abilities<'a>(
                     region: name_region,
                     typ: MemberTypeInfo::Local {
                         variables,
-                        signature: member_annot.typ,
+                        signature,
                         signature_var: var_store.fresh(),
                     },
                 },
