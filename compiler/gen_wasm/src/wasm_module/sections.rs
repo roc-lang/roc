@@ -1260,7 +1260,7 @@ impl<'a> CodeSection<'a> {
             &mut buffer,
             &self.dead_code_metadata,
             &self.preloaded_bytes,
-            import_fn_count,
+            import_fn_count + self.linking_dummy_count as usize,
             live_ext_fn_indices,
         );
 
