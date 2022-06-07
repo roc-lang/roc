@@ -23,6 +23,10 @@ impl<T> RocBox<T> {
 
         let ptr = unsafe { roc_alloc(bytes, alignment as u32) };
 
+        if ptr.is_null() {
+            todo!("Call roc_panic with the info that an allocation failed.");
+        }
+
         // Initialize the reference count.
         unsafe {
             let storage_ptr = ptr.cast::<Storage>();
