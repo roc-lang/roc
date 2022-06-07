@@ -427,7 +427,7 @@ impl Env {
 const DEFAULT_POOLS: usize = 8;
 
 #[derive(Clone, Debug)]
-pub(crate) struct Pools(Vec<Vec<Variable>>);
+pub struct Pools(Vec<Vec<Variable>>);
 
 impl Default for Pools {
     fn default() -> Self {
@@ -553,7 +553,7 @@ fn run_in_place(
     let (obligation_problems, _derived) = deferred_obligations.check_all(subs, abilities_store);
     problems.extend(obligation_problems);
 
-    compact_deferred_lambda_sets(
+    compact_lambda_sets_of_vars(
         subs,
         &arena,
         &mut pools,
@@ -1761,7 +1761,7 @@ fn find_specialization_lambda_sets(
     (leftover_uls, specialization_lambda_sets)
 }
 
-fn compact_deferred_lambda_sets(
+pub fn compact_lambda_sets_of_vars(
     subs: &mut Subs,
     arena: &Bump,
     pools: &mut Pools,

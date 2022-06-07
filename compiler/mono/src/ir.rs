@@ -30,7 +30,6 @@ use roc_types::subs::{
     Content, ExhaustiveMark, FlatType, RedundantMark, StorageSubs, Subs, Variable,
     VariableSubsSlice,
 };
-use roc_unify::unify::Mode;
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
@@ -1268,6 +1267,35 @@ impl<'a, 'i> Env<'a, 'i> {
     pub fn is_imported_symbol(&self, symbol: Symbol) -> bool {
         symbol.module_id() != self.home
     }
+
+    /// Unifies two variables and performs lambda set compaction.
+    /// Use this rather than [roc_unify::unify] directly!
+    fn unify(&mut self, left: Variable, right: Variable) -> Result<(), ()> {
+        use roc_solve::solve::{compact_lambda_sets_of_vars, Pools};
+        use roc_unify::unify::{unify, Mode, Unified};
+
+        let unified = unify(self.subs, left, right, Mode::EQ);
+        match unified {
+            Unified::Success {
+                vars: _,
+                must_implement_ability: _,
+                lambda_sets_to_specialize,
+            } => {
+                let mut pools = Pools::default();
+                compact_lambda_sets_of_vars(
+                    self.subs,
+                    self.arena,
+                    &mut pools,
+                    self.abilities_store,
+                    lambda_sets_to_specialize,
+                );
+                // pools don't matter because we don't care about ranks here
+
+                Ok(())
+            }
+            Unified::Failure(..) | Unified::BadType(..) => Err(()),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Copy, Eq, Hash)]
@@ -2246,7 +2274,7 @@ fn from_can_let<'a>(
                             needed_specializations.next().unwrap();
 
                         // Unify the expr_var with the requested specialization once.
-                        let _res = roc_unify::unify::unify(env.subs, var, def.expr_var, Mode::EQ);
+                        let _res = env.unify(var, def.expr_var);
 
                         resolve_abilities_in_specialized_body(
                             env,
@@ -2285,8 +2313,7 @@ fn from_can_let<'a>(
                             "expr marked as having specializations, but it has no type variables!",
                         );
 
-                            let _res =
-                                roc_unify::unify::unify(env.subs, var, new_def_expr_var, Mode::EQ);
+                            let _res = env.unify(var, new_def_expr_var);
 
                             resolve_abilities_in_specialized_body(
                                 env,
@@ -2780,16 +2807,14 @@ fn resolve_abilities_in_specialized_body<'a>(
 ) -> std::vec::Vec<SpecializationId> {
     use roc_can::expr::Expr;
     use roc_can::traverse::{walk_expr, Visitor};
-    use roc_unify::unify::unify;
 
-    struct Resolver<'a> {
-        subs: &'a mut Subs,
-        procs: &'a Procs<'a>,
-        abilities_store: &'a mut AbilitiesStore,
+    struct Resolver<'a, 'b, 'borrow> {
+        env: &'borrow mut Env<'a, 'b>,
+        procs: &'borrow Procs<'a>,
         seen_defs: MutSet<Symbol>,
         specialized: std::vec::Vec<SpecializationId>,
     }
-    impl Visitor for Resolver<'_> {
+    impl Visitor for Resolver<'_, '_, '_> {
         fn visit_expr(&mut self, expr: &Expr, _region: Region, var: Variable) {
             match expr {
                 Expr::Closure(..) => {
@@ -2805,6 +2830,7 @@ fn resolve_abilities_in_specialized_body<'a>(
                 }
                 Expr::AbilityMember(member_sym, specialization_id, _specialization_var) => {
                     let (specialization, specialization_def) = match self
+                        .env
                         .abilities_store
                         .get_resolved(*specialization_id)
                     {
@@ -2823,8 +2849,8 @@ fn resolve_abilities_in_specialized_body<'a>(
                         ),
                         None => {
                             let specialization = resolve_ability_specialization(
-                                self.subs,
-                                self.abilities_store,
+                                self.env.subs,
+                                self.env.abilities_store,
                                 *member_sym,
                                 var,
                             )
@@ -2837,7 +2863,8 @@ fn resolve_abilities_in_specialized_body<'a>(
                                 }
                             };
 
-                            self.abilities_store
+                            self.env
+                                .abilities_store
                                 .insert_resolved(*specialization_id, specialization);
 
                             debug_assert!(!self.specialized.contains(specialization_id));
@@ -2854,8 +2881,8 @@ fn resolve_abilities_in_specialized_body<'a>(
                                 .expect("Specialization found, but it's not in procs");
                             let specialization_var = specialization_def.annotation;
 
-                            let unified = unify(self.subs, var, specialization_var, Mode::EQ);
-                            unified.expect_success(
+                            let unified = self.env.unify(var, specialization_var);
+                            unified.expect(
                                 "Specialization does not unify - this is a typechecker bug!",
                             );
 
@@ -2880,9 +2907,8 @@ fn resolve_abilities_in_specialized_body<'a>(
     }
 
     let mut resolver = Resolver {
-        subs: env.subs,
+        env,
         procs,
-        abilities_store: env.abilities_store,
         seen_defs: MutSet::default(),
         specialized: vec![],
     };
@@ -2907,12 +2933,7 @@ fn specialize_external<'a>(
     let snapshot = env.subs.snapshot();
     let cache_snapshot = layout_cache.snapshot();
 
-    let _unified = roc_unify::unify::unify(
-        env.subs,
-        partial_proc.annotation,
-        fn_var,
-        roc_unify::unify::Mode::EQ,
-    );
+    let _unified = env.unify(partial_proc.annotation, fn_var);
 
     // This will not hold for programs with type errors
     // let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));
