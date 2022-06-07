@@ -10,7 +10,7 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_can::abilities::{AbilitiesStore, SpecializationId};
 use roc_can::expr::{AnnotatedMark, ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
-use roc_collections::{MutSet, VecMap};
+use roc_collections::VecMap;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::{
@@ -2267,13 +2267,6 @@ fn from_can_let<'a>(
                         // Unify the expr_var with the requested specialization once.
                         let _res = env.unify(var, def.expr_var);
 
-                        resolve_abilities_in_specialized_body(
-                            env,
-                            procs,
-                            &def.loc_expr.value,
-                            def.expr_var,
-                        );
-
                         with_hole(
                             env,
                             def.loc_expr.value,
@@ -2305,13 +2298,6 @@ fn from_can_let<'a>(
                         );
 
                             let _res = env.unify(var, new_def_expr_var);
-
-                            resolve_abilities_in_specialized_body(
-                                env,
-                                procs,
-                                &def.loc_expr.value,
-                                def.expr_var,
-                            );
 
                             stmt = with_hole(
                                 env,
@@ -2367,8 +2353,6 @@ fn from_can_let<'a>(
     } else {
         let outer_symbol = env.unique_symbol();
         stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt);
-
-        resolve_abilities_in_specialized_body(env, procs, &def.loc_expr.value, def.expr_var);
 
         // convert the def body, store in outer_symbol
         with_hole(
@@ -2790,124 +2774,6 @@ fn generate_runtime_error_function<'a>(
     }
 }
 
-fn resolve_abilities_in_specialized_body<'a>(
-    env: &mut Env<'a, '_>,
-    procs: &Procs<'a>,
-    specialized_body: &roc_can::expr::Expr,
-    body_var: Variable,
-) -> std::vec::Vec<SpecializationId> {
-    use roc_can::expr::Expr;
-    use roc_can::traverse::{walk_expr, Visitor};
-
-    struct Resolver<'a, 'b, 'borrow> {
-        env: &'borrow mut Env<'a, 'b>,
-        procs: &'borrow Procs<'a>,
-        seen_defs: MutSet<Symbol>,
-        specialized: std::vec::Vec<SpecializationId>,
-    }
-    impl Visitor for Resolver<'_, '_, '_> {
-        fn visit_expr(&mut self, expr: &Expr, _region: Region, var: Variable) {
-            match expr {
-                Expr::Closure(..) => {
-                    // Don't walk down closure bodies. They will have their types refined when they
-                    // are themselves specialized, so we'll handle ability resolution in them at
-                    // that time too.
-                }
-                Expr::LetRec(..) | Expr::LetNonRec(..) => {
-                    // Also don't walk down let-bindings. These may be generalized and we won't
-                    // know their specializations until we collect them while building up the def.
-                    // So, we'll resolve any nested abilities when we know their specialized type
-                    // during def construction.
-                }
-                Expr::AbilityMember(member_sym, specialization_id, _specialization_var) => {
-                    let (specialization, specialization_def) = match self
-                        .env
-                        .abilities_store
-                        .get_resolved(*specialization_id)
-                    {
-                        Some(specialization) => (
-                            specialization,
-                            // If we know the specialization at this point, the specialization must
-                            // be static. That means the relevant type state was populated during
-                            // solving, so we don't need additional unification here.
-                            //
-                            // However, we do need to walk the specialization def, because it may
-                            // itself contain unspecialized defs.
-                            self.procs
-                                .partial_procs
-                                .get_symbol(specialization)
-                                .expect("Specialization found, but it's not in procs"),
-                        ),
-                        None => {
-                            let specialization = resolve_ability_specialization(
-                                self.env.subs,
-                                self.env.abilities_store,
-                                *member_sym,
-                                var,
-                            )
-                            .expect("Ability specialization is unknown - code generation cannot proceed!");
-
-                            let specialization = match specialization {
-                                Resolved::Specialization(symbol) => symbol,
-                                Resolved::NeedsGenerated => {
-                                    todo_abilities!("Generate impls for structural types")
-                                }
-                            };
-
-                            self.env
-                                .abilities_store
-                                .insert_resolved(*specialization_id, specialization);
-
-                            debug_assert!(!self.specialized.contains(specialization_id));
-                            self.specialized.push(*specialization_id);
-
-                            // We must now refine the current type state to account for this specialization,
-                            // since `var` may only have partial specialization information - enough to
-                            // figure out what specialization we need, but not the types of all arguments
-                            // and return types. So, unify with the variable with the specialization's type.
-                            let specialization_def = self
-                                .procs
-                                .partial_procs
-                                .get_symbol(specialization)
-                                .expect("Specialization found, but it's not in procs");
-                            let specialization_var = specialization_def.annotation;
-
-                            let unified = self.env.unify(var, specialization_var);
-                            unified.expect(
-                                "Specialization does not unify - this is a typechecker bug!",
-                            );
-
-                            (specialization, specialization_def)
-                        }
-                    };
-
-                    // Now walk the specialization def to pick up any more needed types. Of course,
-                    // we only want to pass through it once to avoid unbounded recursion.
-                    if !self.seen_defs.contains(&specialization) {
-                        self.visit_expr(
-                            &specialization_def.body,
-                            Region::zero(),
-                            specialization_def.body_var,
-                        );
-                        self.seen_defs.insert(specialization);
-                    }
-                }
-                _ => walk_expr(self, expr, var),
-            }
-        }
-    }
-
-    let mut resolver = Resolver {
-        env,
-        procs,
-        seen_defs: MutSet::default(),
-        specialized: vec![],
-    };
-    resolver.visit_expr(specialized_body, Region::zero(), body_var);
-
-    resolver.specialized
-}
-
 fn specialize_external<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
@@ -3038,16 +2904,8 @@ fn specialize_external<'a>(
     };
 
     let body = partial_proc.body.clone();
-    let resolved_ability_specializations =
-        resolve_abilities_in_specialized_body(env, procs, &body, partial_proc.body_var);
 
     let mut specialized_body = from_can(env, partial_proc.body_var, body, procs, layout_cache);
-
-    // reset the resolved ability specializations so as not to interfere with other specializations
-    // of this proc.
-    resolved_ability_specializations
-        .into_iter()
-        .for_each(|sid| env.abilities_store.remove_resolved(sid));
 
     match specialized {
         SpecializedLayout::FunctionPointerBody {
@@ -3872,7 +3730,7 @@ pub fn with_hole<'a>(
         Var(mut symbol) => {
             // If this symbol is a raw value, find the real name we gave to its specialized usage.
             if let ReuseSymbol::Value(_symbol) =
-                can_reuse_symbol(env, procs, &roc_can::expr::Expr::Var(symbol))
+                can_reuse_symbol(env, procs, &roc_can::expr::Expr::Var(symbol), variable)
             {
                 let real_symbol =
                     procs
@@ -3969,7 +3827,7 @@ pub fn with_hole<'a>(
         OpaqueRef { argument, .. } => {
             let (arg_var, loc_arg_expr) = *argument;
 
-            match can_reuse_symbol(env, procs, &loc_arg_expr.value) {
+            match can_reuse_symbol(env, procs, &loc_arg_expr.value, arg_var) {
                 // Opaques decay to their argument.
                 ReuseSymbol::Value(symbol) => {
                     let real_name = procs.symbol_specializations.get_or_insert(
@@ -4024,26 +3882,30 @@ pub fn with_hole<'a>(
                 // TODO how should function pointers be handled here?
                 use ReuseSymbol::*;
                 match fields.remove(&label) {
-                    Some(field) => match can_reuse_symbol(env, procs, &field.loc_expr.value) {
-                        Imported(symbol) | LocalFunction(symbol) | UnspecializedExpr(symbol) => {
-                            field_symbols.push(symbol);
-                            can_fields.push(Field::Function(symbol, variable));
+                    Some(field) => {
+                        match can_reuse_symbol(env, procs, &field.loc_expr.value, field.var) {
+                            Imported(symbol)
+                            | LocalFunction(symbol)
+                            | UnspecializedExpr(symbol) => {
+                                field_symbols.push(symbol);
+                                can_fields.push(Field::Function(symbol, variable));
+                            }
+                            Value(symbol) => {
+                                let reusable = procs.symbol_specializations.get_or_insert(
+                                    env,
+                                    layout_cache,
+                                    symbol,
+                                    field.var,
+                                );
+                                field_symbols.push(reusable);
+                                can_fields.push(Field::ValueSymbol);
+                            }
+                            NotASymbol => {
+                                field_symbols.push(env.unique_symbol());
+                                can_fields.push(Field::Field(field));
+                            }
                         }
-                        Value(symbol) => {
-                            let reusable = procs.symbol_specializations.get_or_insert(
-                                env,
-                                layout_cache,
-                                symbol,
-                                field.var,
-                            );
-                            field_symbols.push(reusable);
-                            can_fields.push(Field::ValueSymbol);
-                        }
-                        NotASymbol => {
-                            field_symbols.push(env.unique_symbol());
-                            can_fields.push(Field::Field(field));
-                        }
-                    },
+                    }
                     None => {
                         // this field was optional, but not given
                         continue;
@@ -4757,16 +4619,15 @@ pub fn with_hole<'a>(
                         hole,
                     )
                 }
-                roc_can::expr::Expr::AbilityMember(_, specialization_id, _) => {
-                    let proc_name = env.abilities_store.get_resolved(specialization_id).expect(
-                        "Ability specialization is unknown - code generation cannot proceed!",
-                    );
+                roc_can::expr::Expr::AbilityMember(member, specialization_id, _) => {
+                    let specialization_proc_name =
+                        late_resolve_ability_specialization(env, member, specialization_id, fn_var);
 
                     call_by_name(
                         env,
                         procs,
                         fn_var,
-                        proc_name,
+                        specialization_proc_name,
                         loc_args,
                         layout_cache,
                         assigned,
@@ -4813,7 +4674,7 @@ pub fn with_hole<'a>(
                     // re-use that symbol, and don't define its value again
                     let mut result;
                     use ReuseSymbol::*;
-                    match can_reuse_symbol(env, procs, &loc_expr.value) {
+                    match can_reuse_symbol(env, procs, &loc_expr.value, fn_var) {
                         LocalFunction(_) => {
                             unreachable!("if this was known to be a function, we would not be here")
                         }
@@ -4857,6 +4718,15 @@ pub fn with_hole<'a>(
                             }
                         }
                         Value(function_symbol) => {
+                            dbg!((
+                                function_symbol,
+                                fn_var,
+                                roc_types::subs::SubsFmtContent(
+                                    env.subs.get_content_without_compacting(fn_var),
+                                    env.subs
+                                )
+                            ));
+
                             let function_symbol = procs.symbol_specializations.get_or_insert(
                                 env,
                                 layout_cache,
@@ -5256,6 +5126,51 @@ pub fn with_hole<'a>(
         }
         TypedHole(_) => Stmt::RuntimeError("Hit a blank"),
         RuntimeError(e) => Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e))),
+    }
+}
+
+#[inline(always)]
+fn late_resolve_ability_specialization<'a>(
+    env: &mut Env<'a, '_>,
+    member: Symbol,
+    specialization_id: SpecializationId,
+    specialization_var: Variable,
+) -> Symbol {
+    if let Some(spec_symbol) = env.abilities_store.get_resolved(specialization_id) {
+        // Fast path: specialization is monomorphic, was found during solving.
+        spec_symbol
+    } else if let Content::Structure(FlatType::Func(_, lambda_set, _)) =
+        env.subs.get_content_without_compacting(specialization_var)
+    {
+        // Fast path: the member is a function, so the lambda set will tell us the
+        // specialization.
+        use roc_types::subs::LambdaSet;
+        let LambdaSet {
+            solved,
+            unspecialized,
+            recursion_var: _,
+        } = env.subs.get_lambda_set(*lambda_set);
+        debug_assert!(unspecialized.is_empty());
+        let mut iter_lambda_set = solved.iter_all();
+        debug_assert_eq!(iter_lambda_set.len(), 1);
+        let spec_symbol_index = iter_lambda_set.next().unwrap().0;
+        env.subs[spec_symbol_index]
+    } else {
+        // Otherwise, resolve by checking the able var.
+        let specialization = resolve_ability_specialization(
+            env.subs,
+            env.abilities_store,
+            member,
+            specialization_var,
+        )
+        .expect("Ability specialization is unknown - code generation cannot proceed!");
+
+        match specialization {
+            Resolved::Specialization(symbol) => symbol,
+            Resolved::NeedsGenerated => {
+                todo_abilities!("Generate impls for structural types")
+            }
+        }
     }
 }
 
@@ -7013,15 +6928,15 @@ fn can_reuse_symbol<'a>(
     env: &mut Env<'a, '_>,
     procs: &Procs<'a>,
     expr: &roc_can::expr::Expr,
+    expr_var: Variable,
 ) -> ReuseSymbol {
     use roc_can::expr::Expr::*;
     use ReuseSymbol::*;
 
     let symbol = match expr {
-        AbilityMember(_, specialization_id, _) => env
-            .abilities_store
-            .get_resolved(*specialization_id)
-            .expect("Specialization must be known!"),
+        AbilityMember(member, specialization_id, _) => {
+            late_resolve_ability_specialization(env, *member, *specialization_id, expr_var)
+        }
         Var(symbol) => *symbol,
         _ => return NotASymbol,
     };
@@ -7056,7 +6971,7 @@ fn possible_reuse_symbol_or_specialize<'a>(
     expr: &roc_can::expr::Expr,
     var: Variable,
 ) -> Symbol {
-    match can_reuse_symbol(env, procs, expr) {
+    match can_reuse_symbol(env, procs, expr, var) {
         ReuseSymbol::Value(symbol) => {
             procs
                 .symbol_specializations
@@ -7368,7 +7283,7 @@ fn assign_to_symbol<'a>(
     result: Stmt<'a>,
 ) -> Stmt<'a> {
     use ReuseSymbol::*;
-    match can_reuse_symbol(env, procs, &loc_arg.value) {
+    match can_reuse_symbol(env, procs, &loc_arg.value, arg_var) {
         Imported(original) | LocalFunction(original) | UnspecializedExpr(original) => {
             // for functions we must make sure they are specialized correctly
             specialize_symbol(
