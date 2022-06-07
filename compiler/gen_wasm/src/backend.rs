@@ -17,9 +17,10 @@ use roc_std::RocDec;
 use crate::layout::{CallConv, ReturnMethod, WasmLayout};
 use crate::low_level::{call_higher_order_lowlevel, LowLevelCall};
 use crate::storage::{Storage, StoredValue, StoredValueKind};
-use crate::wasm_module::linking::{DataSymbol, SymType, WasmObjectSymbol};
+use crate::wasm_module::linking::{self, DataSymbol, WasmObjectSymbol};
 use crate::wasm_module::sections::{
-    ConstExpr, DataMode, DataSegment, Export, Global, GlobalType, Limits, MemorySection,
+    ConstExpr, DataMode, DataSegment, Export, Global, GlobalType, Import, ImportDesc, Limits,
+    MemorySection,
 };
 use crate::wasm_module::{
     code_builder, CodeBuilder, ExportType, LocalId, Signature, SymInfo, ValueType, WasmModule,
@@ -67,11 +68,13 @@ pub struct WasmBackend<'a> {
 }
 
 impl<'a> WasmBackend<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         env: &'a Env<'a>,
         interns: &'a mut Interns,
         layout_ids: LayoutIds<'a>,
         proc_lookup: Vec<'a, ProcLookupData<'a>>,
+        host_to_app_map: Vec<'a, (&'a str, u32)>,
         mut module: WasmModule<'a>,
         fn_index_offset: u32,
         helper_proc_gen: CodeGenHelp<'a>,
@@ -81,6 +84,16 @@ impl<'a> WasmBackend<'a> {
         Self::set_memory_layout(env, &mut module, STACK_SIZE);
 
         Self::export_globals(&mut module);
+
+        // We don't want to import any Memory or Tables
+        module.import.imports.retain(|import| {
+            !matches!(
+                import.description,
+                ImportDesc::Mem { .. } | ImportDesc::Table { .. }
+            )
+        });
+
+        module.link_host_to_app_calls(host_to_app_map);
 
         module.code.code_builders.reserve(proc_lookup.len());
 
@@ -118,28 +131,60 @@ impl<'a> WasmBackend<'a> {
         let mut stack_heap_boundary = module.data.end_addr + stack_size;
         stack_heap_boundary = round_up_to_alignment!(stack_heap_boundary, MemorySection::PAGE_SIZE);
 
-        // Create a mutable global for __stack_pointer
-        debug_assert!(module.global.count == 0);
+        // Stack pointer
+        // This should be an imported global in the host
+        // In the final binary, it's an internally defined global
+        let sp_type = GlobalType {
+            value_type: ValueType::I32,
+            is_mutable: true,
+        };
+        {
+            // Check that __stack_pointer is the only imported global
+            // If there were more, we'd have to relocate them, and we don't
+            let imported_globals = Vec::from_iter_in(
+                module
+                    .import
+                    .imports
+                    .iter()
+                    .filter(|import| matches!(import.description, ImportDesc::Global { .. })),
+                env.arena,
+            );
+            if imported_globals.len() != 1
+                || imported_globals[0]
+                    != &(Import {
+                        module: "env",
+                        name: "__stack_pointer",
+                        description: ImportDesc::Global { ty: sp_type },
+                    })
+            {
+                panic!("I can't link this host file. I expected it to have one imported Global called env.__stack_pointer")
+            }
+        }
+        module
+            .import
+            .imports
+            .retain(|import| !matches!(import.description, ImportDesc::Global { .. }));
         module.global.append(Global {
-            ty: GlobalType {
-                value_type: ValueType::I32,
-                is_mutable: true,
-            },
+            ty: sp_type,
             init: ConstExpr::I32(stack_heap_boundary as i32),
         });
 
+        // Set the initial size of the memory
         module.memory =
             MemorySection::new(env.arena, stack_heap_boundary + MemorySection::PAGE_SIZE);
+
+        // Export the memory so that JS can interact with it
         module.export.append(Export {
             name: MEMORY_NAME,
             ty: ExportType::Mem,
             index: 0,
         });
 
-        module.relocate_preloaded_code("__heap_base", SymType::Data, stack_heap_boundary);
+        // Set the constant that malloc uses to know where the heap begins
+        module.relocate_internal_symbol("__heap_base", stack_heap_boundary);
     }
 
-    /// If the host has some `extern` globals, we need to create them in the final binary
+    /// If the host has some `extern` global variables, we need to create them in the final binary
     /// and make them visible to JavaScript by exporting them
     fn export_globals(module: &mut WasmModule<'a>) {
         for (sym_index, sym) in module.linking.symbol_table.iter().enumerate() {
@@ -200,7 +245,7 @@ impl<'a> WasmBackend<'a> {
             source,
         });
 
-        let linker_symbol = SymInfo::Function(WasmObjectSymbol::Defined {
+        let linker_symbol = SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed {
             flags: 0,
             index: wasm_fn_index,
             name,
@@ -211,9 +256,51 @@ impl<'a> WasmBackend<'a> {
     }
 
     pub fn finalize(mut self) -> (WasmModule<'a>, Vec<'a, u32>) {
+        self.maybe_call_host_main();
         let fn_table_size = 1 + self.module.element.max_table_index();
         self.module.table.function_table.limits = Limits::MinMax(fn_table_size, fn_table_size);
         (self.module, self.called_preload_fns)
+    }
+
+    /// If the host has a `main` function then we need to insert a `_start` to call it.
+    /// This is something linkers do, and this backend is also a linker!
+    fn maybe_call_host_main(&mut self) {
+        let main_symbol_index = if let Some(i) = self.module.linking.find_internal_symbol("main") {
+            i as usize
+        } else {
+            return;
+        };
+
+        let main_fn_index: u32 = match &self.module.linking.symbol_table[main_symbol_index] {
+            SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { flags, index, .. })
+                if flags & linking::WASM_SYM_BINDING_LOCAL == 0 =>
+            {
+                *index
+            }
+            _ => {
+                return;
+            }
+        };
+
+        self.module.add_function_signature(Signature {
+            param_types: bumpalo::vec![in self.env.arena],
+            ret_type: None,
+        });
+
+        self.module.export.append(Export {
+            name: "_start",
+            ty: ExportType::Func,
+            index: self.fn_index_offset + self.module.code.code_builders.len() as u32,
+        });
+
+        self.code_builder.i32_const(0); // argc=0
+        self.code_builder.i32_const(0); // argv=NULL
+        self.code_builder.call(main_fn_index, 2, true);
+        self.code_builder.drop_();
+        self.code_builder.build_fn_header_and_footer(&[], 0, None);
+        self.reset();
+
+        self.called_preload_fns.push(main_fn_index);
     }
 
     /// Register the debug names of Symbols in a global lookup table

@@ -18,6 +18,13 @@ impl Serialize for str {
     }
 }
 
+impl Serialize for &str {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.encode_u32(self.len() as u32);
+        buffer.append_slice(self.as_bytes());
+    }
+}
+
 impl Serialize for u8 {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         buffer.append_u8(*self);
@@ -64,6 +71,13 @@ impl<S: Serialize> Serialize for Option<S> {
                 buffer.append_u8(0);
             }
         }
+    }
+}
+
+impl<A: Serialize, B: Serialize> Serialize for (A, B) {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        self.0.serialize(buffer);
+        self.1.serialize(buffer);
     }
 }
 

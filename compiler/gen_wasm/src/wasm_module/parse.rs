@@ -47,6 +47,14 @@ impl Parse<()> for u32 {
     }
 }
 
+impl Parse<()> for u8 {
+    fn parse(_ctx: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let byte = bytes[*cursor];
+        *cursor += 1;
+        Ok(byte)
+    }
+}
+
 /// Decode a signed 32-bit integer from the provided buffer in LEB-128 format
 /// Return the integer itself and the offset after it ends
 fn decode_i32(bytes: &[u8]) -> Result<(i32, usize), ()> {

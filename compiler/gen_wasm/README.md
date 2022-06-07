@@ -226,3 +226,28 @@ The Module is a _specification_ for how to create an Instance of the program. Th
 A WebAssembly module is equivalent to an executable file. It doesn't normally need relocations since at the WebAssembly layer, there is no Address Space Layout Randomisation. If it has relocations then it's an object file.
 
 The [official spec](https://webassembly.github.io/spec/core/binary/modules.html#sections) lists the sections that are part of the final module. It doesn't mention any sections for relocations or symbol names, but it does support "custom" sections. Conventions to use those for linking are documented in the WebAssembly `tool-conventions` repo [here](https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md) and it mentions that LLVM is using those conventions.
+
+## Linking host-to-app calls
+
+We implement a few linking operations in the Wasm backend. The most important are host-to-app calls.
+
+In the host .wasm file, `roc__mainForHost_1_exposed` is defined as a Wasm Import, as if it were an external JavaScript function. But when we link the host and app, we need to make it an internal function instead.
+
+There are a few important facts to note about the Wasm binary format:
+- Function calls refer to the callee by its function index in the file.
+- If we move a function from one index to another, all of its call sites need to be updated. So we want to minimise this to make linking fast.
+- If we _remove_ a function, then all functions above it will implicitly have their indices shifted down by 1! This is not good for speed. We should try to _swap_ rather than remove.
+- JavaScript imports always get the lower indices.
+
+With that background, here are the linking steps for a single app function that gets called by the host:
+- Remove `roc__mainForHost_1_exposed` from the imports, updating all call sites to the new index, which is somewhere in the app.
+- Swap the _last_ JavaScript import into the slot where `roc__mainForHost_1_exposed` was, updating all of its call sites in the host.
+- Insert an internally-defined dummy function at the index where the last JavaScript import used to be.
+
+The diagram below illustrates this process.
+
+> The diagram has a tiny number of functions just to make it easier to draw! Our mock host for integration tests has 48 imports and 648 defined functions.
+
+&nbsp;
+
+![Diagram showing how host-to-app calls are linked.](./docs/host-to-app-calls.svg)

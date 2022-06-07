@@ -40,6 +40,7 @@ pub fn compile_and_load<'a, T: Wasm32Result>(
 ) -> wasmer::Instance {
     let platform_path = get_preprocessed_host_path();
     let platform_bytes = std::fs::read(&platform_path).unwrap();
+    println!("Loading test host {}", platform_path.display());
 
     let compiled_bytes =
         compile_roc_to_wasm_bytes(arena, &platform_bytes, src, test_wrapper_type_info);
@@ -136,7 +137,14 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
     T::insert_wrapper(arena, &mut module, TEST_WRAPPER_NAME, main_fn_index);
 
     // Export the initialiser function for refcount tests
-    let init_refcount_idx = module.names.functions[INIT_REFCOUNT_NAME];
+    let init_refcount_idx = module
+        .names
+        .function_names
+        .iter()
+        .filter(|(_, name)| *name == INIT_REFCOUNT_NAME)
+        .map(|(i, _)| *i)
+        .next()
+        .unwrap();
     module.export.append(Export {
         name: INIT_REFCOUNT_NAME,
         ty: ExportType::Func,
