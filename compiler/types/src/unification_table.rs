@@ -233,18 +233,14 @@ impl UnificationTable {
     // ROOT KEY
 
     #[inline(always)]
-    pub fn root_key(&mut self, mut key: Variable) -> Variable {
-        let index = key.index() as usize;
+    pub fn root_key(&mut self, key: Variable) -> Variable {
+        let root = self.root_key_without_compacting(key);
 
-        while let Some(redirect) = self.metadata[key.index() as usize].redirect.into_variable() {
-            key = redirect;
+        if root != key {
+            self.metadata[key.index() as usize].redirect = OptVariable::from(root);
         }
 
-        if index != key.index() as usize {
-            self.metadata[index].redirect = OptVariable::from(key);
-        }
-
-        key
+        root
     }
 
     #[inline(always)]
