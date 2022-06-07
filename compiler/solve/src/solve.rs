@@ -553,7 +553,13 @@ fn run_in_place(
     let (obligation_problems, _derived) = deferred_obligations.check_all(subs, abilities_store);
     problems.extend(obligation_problems);
 
-    compact_deferred_lambda_sets(subs, &mut pools, abilities_store, deferred_uls_to_resolve);
+    compact_deferred_lambda_sets(
+        subs,
+        &arena,
+        &mut pools,
+        abilities_store,
+        deferred_uls_to_resolve,
+    );
 
     state.env
 }
@@ -1756,6 +1762,7 @@ fn find_specializaton_lambda_sets(
 
 fn compact_deferred_lambda_sets(
     subs: &mut Subs,
+    arena: &Bump,
     pools: &mut Pools,
     abilities_store: &AbilitiesStore,
     uls_of_var: UlsOfVar,
@@ -1768,7 +1775,7 @@ fn compact_deferred_lambda_sets(
                 continue;
             }
 
-            compact_lambda_set(subs, pools, abilities_store, root_lset);
+            compact_lambda_set(subs, arena, pools, abilities_store, root_lset);
             seen.insert(root_lset);
         }
     }
@@ -1776,6 +1783,7 @@ fn compact_deferred_lambda_sets(
 
 fn compact_lambda_set(
     subs: &mut Subs,
+    arena: &Bump,
     pools: &mut Pools,
     abilities_store: &AbilitiesStore,
     lambda_set: Variable,
@@ -1785,6 +1793,7 @@ fn compact_lambda_set(
         recursion_var,
         unspecialized,
     } = subs.get_lambda_set(lambda_set);
+    let target_rank = subs.get_rank(lambda_set);
 
     if unspecialized.is_empty() {
         return;
@@ -1839,9 +1848,15 @@ fn compact_lambda_set(
                 .expect("lambda set region not resolved"),
         };
 
-        compact_lambda_set(subs, pools, abilities_store, specialized_lambda_set);
+        // Ensure the specialization lambda set is already compacted.
+        compact_lambda_set(subs, arena, pools, abilities_store, specialized_lambda_set);
 
-        specialized_to_unify_with.push(specialized_lambda_set);
+        // Ensure the specialization lambda set we'll unify with is not a generalized one, but one
+        // at the rank of the lambda set being compacted.
+        let copy_specialized_lambda_set =
+            deep_copy_var_in(subs, target_rank, pools, specialized_lambda_set, arena);
+
+        specialized_to_unify_with.push(copy_specialized_lambda_set);
     }
 
     let new_unspecialized_slice =

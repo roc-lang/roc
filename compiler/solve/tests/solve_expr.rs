@@ -6564,8 +6564,7 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore = "First inferred lambda set is incorrect!"]
-    fn resolve_lambda_set_branches() {
+    fn resolve_lambda_set_branches_ability_vs_non_ability() {
         infer_queries(
             indoc!(
                 r#"
@@ -6578,6 +6577,7 @@ mod solve_expr {
                 #^^{-1}
 
                 idNotAbility = \x -> x
+                #^^^^^^^^^^^^{-1}
 
                 main =
                     choice : [T, U]
@@ -6593,7 +6593,8 @@ mod solve_expr {
                 "#
             ),
             &[
-                "A#id(5) : A -[[id(5), idNotAbility(6)]]-> A",
+                "A#id(5) : A -[[id(5)]]-> A",
+                "idNotAbility : a -[[idNotAbility(6)]]-> a",
                 "idChoice : a -[[idNotAbility(6)] + a:id(4):1]-> a | a has Id",
                 "idChoice : A -[[id(5), idNotAbility(6)]]-> A",
             ],
