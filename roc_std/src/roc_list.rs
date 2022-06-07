@@ -102,7 +102,13 @@ impl<T> RocList<T> {
     #[inline(always)]
     fn elements_and_storage(&self) -> Option<(NonNull<ManuallyDrop<T>>, &Cell<Storage>)> {
         let elements = self.elements?;
-        let storage = unsafe { &*elements.as_ptr().cast::<Cell<Storage>>().sub(1) };
+        let storage = unsafe {
+            &*elements
+                .as_ptr()
+                .cast::<u8>()
+                .sub(Self::alloc_alignment())
+                .cast::<Cell<Storage>>()
+        };
         Some((elements, storage))
     }
 
@@ -118,7 +124,11 @@ impl<T> RocList<T> {
 
     /// Useful for doing memcpy on the underlying allocation. Returns NULL if list is empty.
     pub(crate) unsafe fn ptr_to_allocation(&self) -> *const c_void {
-        unsafe { (self.ptr_to_first_elem() as *const usize).sub(1).cast() }
+        unsafe {
+            (self.ptr_to_first_elem() as *const u8)
+                .sub(Self::alloc_alignment())
+                .cast()
+        }
     }
 }
 
