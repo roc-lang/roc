@@ -1566,7 +1566,7 @@ fn check_ability_specialization(
                         introduce(subs, rank, pools, &vars);
 
                         let (other_lambda_sets_to_specialize, specialization_lambda_sets) =
-                            find_specializaton_lambda_sets(
+                            find_specialization_lambda_sets(
                                 subs,
                                 opaque,
                                 ability_member,
@@ -1690,7 +1690,7 @@ fn check_ability_specialization(
 /// sets in the lambda sets for this implementation, which we need to account for as well; that is,
 /// it may really be `[[closA] + v123:otherAbilityMember:4 + ...]`.
 #[inline(always)]
-fn find_specializaton_lambda_sets(
+fn find_specialization_lambda_sets(
     subs: &mut Subs,
     opaque: Symbol,
     ability_member: Symbol,
