@@ -1703,7 +1703,7 @@ fn find_specialization_lambda_sets(
     // unspecialized lambda sets that don't belong to our specialization, and should be resolved
     // later.
     let mut leftover_uls = UlsOfVar::default();
-    let mut specialization_lambda_sets: VecMap<u8, Variable> = VecMap::default();
+    let mut specialization_lambda_sets: VecMap<u8, Variable> = VecMap::with_capacity(uls.len());
 
     for (spec_var, lambda_sets) in uls.drain() {
         if !matches!(subs.get_content_without_compacting(spec_var), Content::Alias(name, _, _, AliasKind::Opaque) if *name == opaque)
