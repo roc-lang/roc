@@ -583,6 +583,8 @@ fn write_content<'a>(
             recursion_var,
             unspecialized,
         }) => {
+            debug_assert!(matches!(env.print_lambda_sets, PrintLambdaSets::Yes));
+
             buf.push_str("[[");
 
             let print_symbol = |symbol: &Symbol| {
@@ -633,7 +635,6 @@ fn write_content<'a>(
             }
 
             buf.push(']');
-            // lambda sets never exposed to the user
         }
         RangedNumber(typ, _range_vars) => write_content(
             env,

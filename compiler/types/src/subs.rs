@@ -338,14 +338,6 @@ impl UlsOfVar {
         }
     }
 
-    pub fn remove_dependents(
-        &mut self,
-        var: Variable,
-    ) -> Option<impl IntoIterator<Item = Variable>> {
-        // TODO: should we be checking root key here?
-        self.0.remove(&var).map(|(_, v)| v)
-    }
-
     /// NOTE: this does not follow unification links.
     pub fn drain(self) -> impl Iterator<Item = (Variable, impl Iterator<Item = Variable>)> {
         self.0

@@ -1301,7 +1301,7 @@ where
     let input1_len = it1.size_hint().0;
     let input2_len = it2.size_hint().0;
 
-    let max_common = input1_len.min(input2_len);
+    let max_common = std::cmp::min(input1_len, input2_len);
 
     let mut result = Separate {
         only_in_1: Vec::with_capacity(input1_len),
@@ -2049,7 +2049,6 @@ fn unify_flex(
             merge(subs, ctx, FlexAbleVar(opt_name, *ability))
         }
 
-        // TODO: not accounting for ability bound here!
         RigidVar(_)
         | RigidAbleVar(_, _)
         | RecursionVar { .. }

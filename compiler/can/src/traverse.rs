@@ -98,7 +98,6 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
         }
         Expr::LetNonRec(def, body) => {
             visitor.visit_def(def);
-            // dbg!(&body.value, body.region.start(), body.region.end());
             visitor.visit_expr(&body.value, body.region, var);
         }
         Expr::Call(f, args, _called_via) => {
