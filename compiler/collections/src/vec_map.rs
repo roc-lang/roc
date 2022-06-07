@@ -260,12 +260,12 @@ mod test_drain_filter {
         map.extend(vec![(1, 2), (2, 4), (3, 6), (4, 8), (5, 10)]);
 
         let mut drained: Vec<_> = map.drain_filter(|k, _| k % 2 == 0).collect();
-        drained.sort();
+        drained.sort_unstable();
         assert_eq!(drained, vec![(2, 4), (4, 8)]);
 
         assert_eq!(map.len(), 3);
         let mut rest: Vec<_> = map.into_iter().collect();
-        rest.sort();
+        rest.sort_unstable();
         assert_eq!(rest, vec![(1, 2), (3, 6), (5, 10)]);
     }
 }
