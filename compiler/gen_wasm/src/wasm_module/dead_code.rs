@@ -192,6 +192,8 @@ pub fn trace_call_graph<'a, Indices: IntoIterator<Item = u32>>(
         next_trace.clear();
     }
 
+    live_fn_indices.sort_unstable();
+    live_fn_indices.dedup();
     live_fn_indices
 }
 

@@ -11,6 +11,9 @@ pub use code_builder::{Align, CodeBuilder, LocalId, ValueType, VmSymbolState};
 pub use linking::{OffsetRelocType, RelocationEntry, SymInfo};
 pub use sections::{ConstExpr, Export, ExportType, Global, GlobalType, Signature};
 
+use self::dead_code::{
+    copy_preloads_shrinking_dead_fns, parse_preloads_call_graph, trace_call_graph,
+};
 use self::linking::{LinkingSection, RelocationSection};
 use self::parse::{Parse, ParseError};
 use self::sections::{
@@ -109,20 +112,8 @@ impl<'a> WasmModule<'a> {
         let export = ExportSection::parse(arena, bytes, &mut cursor)?;
         let start = OpaqueSection::parse((arena, SectionId::Start), bytes, &mut cursor)?;
         let element = ElementSection::parse(arena, bytes, &mut cursor)?;
-        let indirect_callees = element.indirect_callees(arena);
-
-        let imported_fn_signatures = import.function_signatures(arena);
-        let code = CodeSection::parse(
-            arena,
-            bytes,
-            &mut cursor,
-            &imported_fn_signatures,
-            &function.signatures,
-            &indirect_callees,
-        )?;
-
+        let code = CodeSection::parse(arena, bytes, &mut cursor)?;
         let data = DataSection::parse(arena, bytes, &mut cursor)?;
-
         let linking = LinkingSection::parse(arena, bytes, &mut cursor)?;
         let reloc_code = RelocationSection::parse((arena, "reloc.CODE"), bytes, &mut cursor)?;
         let reloc_data = RelocationSection::parse((arena, "reloc.DATA"), bytes, &mut cursor)?;
@@ -180,14 +171,29 @@ impl<'a> WasmModule<'a> {
         })
     }
 
-    pub fn remove_dead_preloads<T: IntoIterator<Item = u32>>(
+    pub fn eliminate_dead_code<T: IntoIterator<Item = u32>>(
         &mut self,
         arena: &'a Bump,
         called_preload_fns: T,
     ) {
-        let host_import_count =
-            self.import.imports.len() + self.code.dead_import_dummy_count as usize;
+        //
+        // Parse the host's call graph
+        //
+        let indirect_callees = self.element.indirect_callees(arena);
+        let import_signatures = self.import.function_signatures(arena);
+        let preloads_call_graph = parse_preloads_call_graph(
+            arena,
+            &self.code.preloaded_bytes,
+            &import_signatures,
+            &self.function.signatures,
+            &indirect_callees,
+        )
+        .unwrap();
 
+        //
+        // Trace all live host functions, using the call graph
+        // Start with the functions called from Roc, and those exported to JS
+        //
         let exported_fn_iter = self
             .export
             .exports
@@ -195,17 +201,29 @@ impl<'a> WasmModule<'a> {
             .filter(|ex| ex.ty == ExportType::Func)
             .map(|ex| ex.index);
         let exported_fn_indices = Vec::from_iter_in(exported_fn_iter, arena);
-
-        let live_import_fns = self.code.remove_dead_preloads(
+        let live_preload_fns = trace_call_graph(
             arena,
-            self.import.function_count(),
+            &preloads_call_graph,
             &exported_fn_indices,
             called_preload_fns,
-            &self.reloc_code,
-            &self.linking,
         );
 
-        // Retain any imported functions whose index appears in live_import_fns
+        //
+        // Categorise the live functions as either imports from JS, or internal Wasm functions
+        //
+        let host_import_count =
+            self.import.imports.len() + self.code.dead_import_dummy_count as usize;
+        let split_at = live_preload_fns
+            .iter()
+            .position(|f| *f as usize >= host_import_count)
+            .unwrap_or(live_preload_fns.len());
+        let mut live_import_fns = live_preload_fns;
+        let live_wasm_fns = live_import_fns.split_off(split_at);
+
+        //
+        // Remove all unused JS imports
+        // We don't want to force the web page to provide dummy JS functions, it's a pain!
+        //
         let mut fn_index = 0;
         let mut live_index = 0;
         self.import.imports.retain(|import| {
@@ -223,21 +241,66 @@ impl<'a> WasmModule<'a> {
             }
         });
 
-        // Update function signatures
+        //
+        // Update function signatures & debug names for imports that changed index
+        //
         for (new_index, old_index) in live_import_fns.iter().enumerate() {
             // Safe because `old_index >= new_index`
             self.function.signatures[new_index] = self.function.signatures[*old_index as usize];
-        }
-
-        // Update debug names
-        for (new_index, old_index) in live_import_fns.iter().enumerate() {
-            // Safe because `old_index >= new_index`
             self.names.function_names[new_index] = self.names.function_names[*old_index as usize];
         }
         let first_dead_import_index = live_import_fns.last().map(|x| x + 1).unwrap_or(0) as usize;
         for i in first_dead_import_index..host_import_count {
             self.names.function_names[i] = (i as u32, "unused_host_import");
         }
+
+        //
+        // Relocate Wasm calls to JS imports
+        // This must happen *before* we run dead code elimination on the code section,
+        // so that the host's linking data will still be valid.
+        //
+        for (new_index, old_index) in live_import_fns.iter().enumerate() {
+            if new_index == *old_index as usize {
+                continue;
+            }
+            let sym_index = self
+                .linking
+                .find_imported_function_symbol(*old_index)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Linking failed! Can't find fn #{} in host symbol table",
+                        old_index
+                    )
+                });
+            self.reloc_code.apply_relocs_u32(
+                &mut self.code.preloaded_bytes,
+                self.code.preloaded_reloc_offset,
+                sym_index,
+                new_index as u32,
+            );
+        }
+
+        //
+        // For every eliminated JS import, insert a dummy Wasm function at the same index.
+        // This avoids shifting the indices of Wasm functions, which would require more linking work.
+        //
+        let dead_import_count = host_import_count - live_import_fns.len();
+        self.code.dead_import_dummy_count += dead_import_count as u32;
+
+        //
+        // Dead code elimination. Replace dead functions with tiny dummies.
+        // This avoids changing function indices, which would require more linking work.
+        //
+        let mut buffer = Vec::with_capacity_in(self.code.preloaded_bytes.len(), arena);
+        copy_preloads_shrinking_dead_fns(
+            arena,
+            &mut buffer,
+            &preloads_call_graph,
+            &self.code.preloaded_bytes,
+            host_import_count,
+            live_wasm_fns,
+        );
+        self.code.preloaded_bytes = buffer;
     }
 
     pub fn get_exported_global_u32(&self, name: &str) -> Option<u32> {

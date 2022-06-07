@@ -4,11 +4,6 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_error_macros::internal_error;
 
-use super::dead_code::{
-    copy_preloads_shrinking_dead_fns, parse_preloads_call_graph, trace_call_graph,
-    PreloadsCallGraph,
-};
-use super::linking::{LinkingSection, RelocationSection};
 use super::opcodes::OpCode;
 use super::parse::{Parse, ParseError, SkipBytes};
 use super::serialize::{SerialBuffer, Serialize, MAX_SIZE_ENCODED_U32};
@@ -1179,7 +1174,6 @@ pub struct CodeSection<'a> {
     /// Dead imports are replaced with dummy functions in CodeSection
     pub dead_import_dummy_count: u32,
     pub code_builders: Vec<'a, CodeBuilder<'a>>,
-    dead_code_metadata: PreloadsCallGraph<'a>,
 }
 
 impl<'a> CodeSection<'a> {
@@ -1193,9 +1187,6 @@ impl<'a> CodeSection<'a> {
         arena: &'a Bump,
         module_bytes: &[u8],
         cursor: &mut usize,
-        import_signatures: &[u32],
-        function_signatures: &[u32],
-        indirect_callees: &[u32],
     ) -> Result<Self, ParseError> {
         if module_bytes[*cursor] != SectionId::Code as u8 {
             return Err(ParseError {
@@ -1211,9 +1202,8 @@ impl<'a> CodeSection<'a> {
         let next_section_start = count_start + section_size as usize;
         *cursor = next_section_start;
 
-        // Relocation offsets are based from the start of the section body, which includes function count
-        // But preloaded_bytes does not include the function count, only the function bodies!
-        // When we do relocations, we need to account for this
+        // `preloaded_bytes` is offset from the start of the section, since we skip the function count.
+        // When we do relocations, we need to account for this offset, so let's record it here.
         let preloaded_reloc_offset = (function_bodies_start - count_start) as u32;
 
         let preloaded_bytes = Vec::from_iter_in(
@@ -1223,86 +1213,13 @@ impl<'a> CodeSection<'a> {
             arena,
         );
 
-        let dead_code_metadata = parse_preloads_call_graph(
-            arena,
-            &preloaded_bytes,
-            import_signatures,
-            function_signatures,
-            indirect_callees,
-        )?;
-
         Ok(CodeSection {
             preloaded_count: count,
             preloaded_reloc_offset,
             preloaded_bytes,
             dead_import_dummy_count: 0,
             code_builders: Vec::with_capacity_in(0, arena),
-            dead_code_metadata,
         })
-    }
-
-    pub(super) fn remove_dead_preloads<T: IntoIterator<Item = u32>>(
-        &mut self,
-        arena: &'a Bump,
-        import_fn_count: usize,
-        exported_fns: &[u32],
-        called_preload_fns: T,
-        reloc_code: &RelocationSection<'a>,
-        linking: &LinkingSection<'a>,
-    ) -> Vec<u32> {
-        let mut live_preload_fns = trace_call_graph(
-            arena,
-            &self.dead_code_metadata,
-            exported_fns,
-            called_preload_fns,
-        );
-        live_preload_fns.sort_unstable();
-        live_preload_fns.dedup();
-
-        let host_import_count = import_fn_count + self.dead_import_dummy_count as usize;
-        let split_at = live_preload_fns
-            .iter()
-            .position(|f| *f as usize >= host_import_count)
-            .unwrap_or(live_preload_fns.len());
-        let mut live_import_fns = live_preload_fns;
-        let live_defined_fns = live_import_fns.split_off(split_at);
-
-        let dead_import_count = host_import_count - live_import_fns.len();
-        self.dead_import_dummy_count += dead_import_count as u32;
-        for (new_index, old_index) in live_import_fns.iter().enumerate() {
-            if new_index == *old_index as usize {
-                continue;
-            }
-            let sym_index = linking
-                .find_imported_function_symbol(*old_index)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Linking failed! Can't find fn #{} in host symbol table",
-                        old_index
-                    )
-                });
-            reloc_code.apply_relocs_u32(
-                &mut self.preloaded_bytes,
-                self.preloaded_reloc_offset,
-                sym_index,
-                new_index as u32,
-            );
-        }
-
-        let mut buffer = Vec::with_capacity_in(self.preloaded_bytes.len(), arena);
-
-        copy_preloads_shrinking_dead_fns(
-            arena,
-            &mut buffer,
-            &self.dead_code_metadata,
-            &self.preloaded_bytes,
-            host_import_count,
-            live_defined_fns,
-        );
-
-        self.preloaded_bytes = buffer;
-
-        live_import_fns
     }
 }
 

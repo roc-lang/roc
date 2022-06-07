@@ -67,7 +67,7 @@ pub fn build_app_binary<'a>(
     let (mut wasm_module, called_preload_fns, _) =
         build_app_module(env, interns, host_module, procedures);
 
-    wasm_module.remove_dead_preloads(env.arena, called_preload_fns);
+    wasm_module.eliminate_dead_code(env.arena, called_preload_fns);
 
     let mut buffer = std::vec::Vec::with_capacity(wasm_module.size());
     wasm_module.serialize(&mut buffer);

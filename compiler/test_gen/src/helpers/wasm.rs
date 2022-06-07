@@ -151,7 +151,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         index: init_refcount_idx,
     });
 
-    module.remove_dead_preloads(env.arena, called_preload_fns);
+    module.eliminate_dead_code(env.arena, called_preload_fns);
 
     let mut app_module_bytes = std::vec::Vec::with_capacity(module.size());
     module.serialize(&mut app_module_bytes);
