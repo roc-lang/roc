@@ -356,8 +356,6 @@ impl RocDec {
             return "0";
         }
 
-        let is_negative = (self.as_i128() < 0) as usize;
-
         // The :019 in the following write! is computed as Self::DECIMAL_PLACES + 1. If you change
         // Self::DECIMAL_PLACES, this assert should remind you to change that format string as
         // well.
@@ -370,16 +368,17 @@ impl RocDec {
         // If self represents 1234.5678, then bytes is b"1234567800000000000000".
         let mut i = Self::MAX_STR_LENGTH - 1;
         // Find the last place where we have actual data.
-        while bytes[i] == b'0' {
+        while bytes[i] == 0 {
             i -= 1;
         }
         // At this point i is 21 because bytes[21] is the final '0' in b"1234567800000000000000".
 
-        let decimal_location = i - Self::DECIMAL_PLACES + 1 + is_negative;
+        let is_negative = self.as_i128() < 0;
+        let decimal_location = i - Self::DECIMAL_PLACES + 1 + (is_negative as usize);
         // decimal_location = 4
 
-        while bytes[i] == 0 && i >= decimal_location {
-            bytes[i] = 0;
+        while bytes[i] == b'0' && i >= decimal_location {
+            bytes[i] = b'0';
             i -= 1;
         }
         // Now i = 7, because bytes[7] = '8', and bytes = b"12345678"
