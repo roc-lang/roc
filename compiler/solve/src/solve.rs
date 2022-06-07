@@ -1736,9 +1736,10 @@ fn find_specializaton_lambda_sets(
                 split_index_and_region.expect("no unspecialization lambda set found");
             let (uls_before, uls_after) =
                 (&uls_slice[0..split_index], &uls_slice[split_index + 1..]);
+
             let new_unspecialized = SubsSlice::extend_new(
                 &mut subs.unspecialized_lambda_sets,
-                uls_before.into_iter().chain(uls_after.into_iter()).copied(),
+                uls_before.iter().chain(uls_after.iter()).copied(),
             );
 
             let new_lambda_set_content = Content::LambdaSet(LambdaSet {
@@ -3688,7 +3689,7 @@ fn deep_copy_uls_precondition(subs: &Subs, original_var: Variable, new_var: Vari
                 Content::FlexAbleVar(..) | Content::RigidAbleVar(..)
             ),
             "var in unspecialized lamba set is not bound to an ability, it is {:?}",
-            roc_types::subs::SubsFmtContent(&content, subs)
+            roc_types::subs::SubsFmtContent(content, subs)
         );
         debug_assert!(
             original_var != new_var,

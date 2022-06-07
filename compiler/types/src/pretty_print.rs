@@ -588,7 +588,7 @@ fn write_content<'a>(
             let print_symbol = |symbol: &Symbol| {
                 format!(
                     "{}({})",
-                    symbol.as_str(&env.interns),
+                    symbol.as_str(env.interns),
                     symbol.ident_id().index(),
                 )
             };
@@ -763,7 +763,7 @@ fn write_sorted_tags2<'a, L>(
 {
     let mut sorted_fields = tags.tags;
 
-    sorted_fields.sort_by(|(a, _), (b, _)| a.cmp(&b));
+    sorted_fields.sort_by(|(a, _), (b, _)| a.cmp(b));
 
     let mut any_written_yet = false;
 
@@ -1156,6 +1156,7 @@ fn write_apply<'a>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_fn<'a>(
     env: &Env,
     ctx: &mut Context<'a>,

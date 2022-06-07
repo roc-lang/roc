@@ -941,7 +941,7 @@ impl std::fmt::Debug for DebugUtable<'_> {
             let root = self.0.utable.root_key_without_compacting(var);
             if root == var {
                 let desc = self.0.utable.get_descriptor(root);
-                let fmt_content = crate::subs::SubsFmtContent(&desc.content, &self.0);
+                let fmt_content = crate::subs::SubsFmtContent(&desc.content, self.0);
                 f.write_fmt(format_args!("{:?} at {}\n", fmt_content, desc.rank))?;
             } else {
                 f.write_fmt(format_args!("{}\n", root.index()))?;
