@@ -928,6 +928,29 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
     }
 }
 
+#[cfg(debug_assertions)]
+pub struct DebugUtable<'a>(pub &'a Subs);
+
+#[cfg(debug_assertions)]
+impl std::fmt::Debug for DebugUtable<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("UnificationTable {\n")?;
+        for v in 0..self.0.utable.len() {
+            f.write_fmt(format_args!("  {} => ", v))?;
+            let var = unsafe { Variable::from_index(v as u32) };
+            let root = self.0.utable.root_key_without_compacting(var);
+            if root == var {
+                let desc = self.0.utable.get_descriptor(root);
+                let fmt_content = crate::subs::SubsFmtContent(&desc.content, &self.0);
+                f.write_fmt(format_args!("{:?} at {}\n", fmt_content, desc.rank))?;
+            } else {
+                f.write_fmt(format_args!("{}\n", root.index()))?;
+            }
+        }
+        f.write_str("}")
+    }
+}
+
 #[derive(Debug)]
 pub struct VarStore {
     next: u32,
