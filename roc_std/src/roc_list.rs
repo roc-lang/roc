@@ -235,34 +235,39 @@ where
 
     pub fn extend_from_slice(&mut self, slice: &[T]) {
         // TODO: Can we do better for ZSTs? Alignment might be a problem.
-
         if slice.is_empty() {
             return;
         }
 
         let alignment = Self::alloc_alignment();
         let elements_offset = alignment;
-
         let new_size = elements_offset + mem::size_of::<T>() * (self.len() + slice.len());
-
         let non_null_elements = if let Some((elements, storage)) = self.elements_and_storage() {
             // Decrement the list's refence count.
             let mut copy = storage.get();
             let is_unique = copy.decrease();
 
             if is_unique {
-                // If the memory is not shared, we can reuse the memory.
-                let old_size = elements_offset + (mem::size_of::<T>() * self.len());
+                // If we have enough capacity, we can add to the existing elements in-place.
+                if self.capacity() >= new_size {
+                    elements
+                } else {
+                    // There wasn't enough capacity, so we need a new allocation.
+                    // Since this is a unique RocList, we can use realloc here.
+                    let old_size = elements_offset + (mem::size_of::<T>() * self.len());
 
-                let new_ptr = unsafe {
-                    let ptr = elements.as_ptr().cast::<u8>().sub(alignment).cast();
+                    let new_ptr = unsafe {
+                        let ptr = elements.as_ptr().cast::<u8>().sub(alignment).cast();
 
-                    roc_realloc(ptr, new_size, old_size, alignment as u32).cast()
-                };
+                        roc_realloc(ptr, new_size, old_size, alignment as u32).cast()
+                    };
 
-                Self::elems_from_allocation(NonNull::new(new_ptr).unwrap_or_else(|| {
-                    todo!("Reallocation failed");
-                }))
+                    self.capacity = new_size;
+
+                    Self::elems_from_allocation(NonNull::new(new_ptr).unwrap_or_else(|| {
+                        todo!("Reallocation failed");
+                    }))
+                }
             } else {
                 if !copy.is_readonly() {
                     // Write the decremented reference count back.
