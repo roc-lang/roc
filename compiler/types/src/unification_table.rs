@@ -29,7 +29,7 @@ impl UnificationTable {
     #[allow(unused)]
     pub fn with_capacity(cap: usize) -> Self {
         Self {
-            contents: Vec::with_capacity(cap), // vec![Content::Error; cap],
+            contents: Vec::with_capacity(cap),
             metadata: Vec::with_capacity(cap),
         }
     }
@@ -129,7 +129,7 @@ impl UnificationTable {
 
         let result = mapper(&mut desc);
 
-        self.set_unchecked(key, desc.content, desc.rank, desc.mark, desc.copy);
+        self.set_unchecked(root, desc.content, desc.rank, desc.mark, desc.copy);
 
         result
     }
