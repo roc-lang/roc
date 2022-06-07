@@ -1289,7 +1289,10 @@ impl<'a, 'i> Env<'a, 'i> {
                     self.abilities_store,
                     lambda_sets_to_specialize,
                 );
-                // pools don't matter because we don't care about ranks here
+                // Pools are only used to keep track of variable ranks for generalization purposes.
+                // Since we break generalization during monomorphization, `pools` is irrelevant
+                // here. We only need it for `compact_lambda_sets_of_vars`, which is also used in a
+                // solving context where pools are relevant.
 
                 Ok(())
             }
