@@ -233,11 +233,19 @@ impl UnificationTable {
     // ROOT KEY
 
     #[inline(always)]
-    pub fn root_key(&mut self, key: Variable) -> Variable {
+    pub fn root_key(&mut self, mut key: Variable) -> Variable {
         let root = self.root_key_without_compacting(key);
 
-        if root != key {
-            self.metadata[key.index() as usize].redirect = OptVariable::from(root);
+        while root != key {
+            let next_key = std::mem::replace(
+                &mut self.metadata[key.index() as usize].redirect,
+                OptVariable::from(root),
+            );
+
+            match next_key.into_variable() {
+                Some(redirect) => key = redirect,
+                None => break, // no redirect; we've found the root
+            }
         }
 
         root
