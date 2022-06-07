@@ -12,7 +12,7 @@ use roc_types::subs::{
     OptVariable, RecordFields, Subs, SubsIndex, SubsSlice, UlsOfVar, UnionLabels, UnionLambdas,
     UnionTags, Variable, VariableSubsSlice,
 };
-use roc_types::types::{AliasKind, DoesNotImplementAbility, ErrorType, Mismatch, RecordField};
+use roc_types::types::{AliasKind, DoesNotImplementAbility, ErrorType, Mismatch, RecordField, Uls};
 
 macro_rules! mismatch {
     () => {{
@@ -923,10 +923,14 @@ fn unify_lambda_set_help(
             (false, false) => {
                 let mut all_uls = (subs.get_subs_slice(uls1).iter())
                     .chain(subs.get_subs_slice(uls2))
-                    .copied()
+                    .map(|&Uls(var, sym, region)| {
+                        // Take the root key to deduplicate
+                        Uls(subs.get_root_key_without_compacting(var), sym, region)
+                    })
                     .collect::<Vec<_>>();
                 all_uls.sort();
                 all_uls.dedup();
+
                 SubsSlice::extend_new(&mut subs.unspecialized_lambda_sets, all_uls)
             }
         };

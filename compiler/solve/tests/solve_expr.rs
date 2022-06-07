@@ -6600,4 +6600,38 @@ mod solve_expr {
             ],
         )
     }
+
+    #[test]
+    fn resolve_lambda_set_branches_same_ability() {
+        infer_queries(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Id has id : a -> a | a has Id
+
+                A := {}
+                id = \@A {} -> @A {}
+                #^^{-1}
+
+                main =
+                    choice : [T, U]
+
+                    idChoice =
+                    #^^^^^^^^{-1}
+                        when choice is
+                            T -> id
+                            U -> id
+
+                    idChoice (@A {})
+                    #^^^^^^^^{-1}
+                "#
+            ),
+            &[
+                "A#id(5) : A -[[id(5)]]-> A",
+                "idChoice : a -[[] + a:id(4):1]-> a | a has Id",
+                "idChoice : A -[[id(5)]]-> A",
+            ],
+        )
+    }
 }
