@@ -4,10 +4,6 @@ use crate::subs::{Content, Descriptor, Mark, OptVariable, Rank, Variable, Variab
 pub struct UnificationTable {
     contents: Vec<Content>,
     metadata: Vec<Combine>,
-    //    ranks: Vec<Rank>,
-    //    marks: Vec<Mark>,
-    //    copies: Vec<OptVariable>,
-    //    redirects: Vec<OptVariable>,
 }
 
 pub struct Snapshot(UnificationTable);
@@ -33,12 +29,8 @@ impl UnificationTable {
     #[allow(unused)]
     pub fn with_capacity(cap: usize) -> Self {
         Self {
-            contents: Vec::with_capacity(cap),  // vec![Content::Error; cap],
-            metadata: Vec::with_capacity(cap)
-//            ranks: Vec::with_capacity(cap),     // vec![Rank::NONE; cap],
-//            marks: Vec::with_capacity(cap),     // vec![Mark::NONE; cap],
-//            copies: Vec::with_capacity(cap),    // vec![OptVariable::NONE; cap],
-//            redirects: Vec::with_capacity(cap), // vec![OptVariable::NONE; cap],
+            contents: Vec::with_capacity(cap), // vec![Content::Error; cap],
+            metadata: Vec::with_capacity(cap),
         }
     }
 
@@ -111,14 +103,12 @@ impl UnificationTable {
 
         self.contents[index] = content;
 
-        let combine = Combine {
+        self.metadata[index] = Combine {
             redirect: OptVariable::NONE,
             rank,
             mark,
             copy,
         };
-
-        self.metadata[index] = combine;
     }
 
     pub fn modify<F, T>(&mut self, key: Variable, mapper: F) -> T
@@ -128,7 +118,7 @@ impl UnificationTable {
         let root = self.root_key(key);
         let index = root.index() as usize;
 
-        let combine = self.metadata[index];
+        let combine = &self.metadata[index];
 
         let mut desc = Descriptor {
             content: self.contents[index],
