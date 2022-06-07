@@ -22,11 +22,11 @@ macro_rules! with_stack_bytes {
         {
             use $crate::RocStr;
 
-            if $len < RocStr::TEMP_CSTR_MAX_STACK_BYTES {
+            if $len < RocStr::TEMP_STR_MAX_STACK_BYTES {
                 // TODO: once https://doc.rust-lang.org/std/mem/union.MaybeUninit.html#method.uninit_array
                 // has become stabilized, use that here in order to do a precise
                 // stack allocation instead of always over-allocating to 64B.
-                let mut bytes: MaybeUninit<[u8; RocStr::TEMP_CSTR_MAX_STACK_BYTES]> =
+                let mut bytes: MaybeUninit<[u8; RocStr::TEMP_STR_MAX_STACK_BYTES]> =
                     MaybeUninit::uninit();
 
                 $closure(bytes.as_mut_ptr() as *mut $elem_type)
@@ -168,9 +168,10 @@ impl RocStr {
         }
     }
 
-    // If the string is under this many bytes, the into_temp_c_str method will allocate the
-    // C string on the stack when the RocStr is non-unique.
-    const TEMP_CSTR_MAX_STACK_BYTES: usize = 64;
+    // If the string is under this many bytes, the with_terminator family
+    // of methods will allocate the terminated string on the stack when
+    // the RocStr is non-unique.
+    const TEMP_STR_MAX_STACK_BYTES: usize = 64;
 
     /// Like with_utf8_terminator, except it can fail because a RocStr may
     /// contain \0 characters, which a nul-terminated string must not.
