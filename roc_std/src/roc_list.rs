@@ -139,7 +139,7 @@ where
     /// Increase a RocList's capacity by at least the requested number of elements (possibly more).
     ///
     /// May return a new RocList, if the provided one was not unique.
-    pub fn reserve(self, num_elems: usize) -> Self {
+    pub fn reserve(&mut self, num_elems: usize) {
         let new_elems;
         let old_elements_ptr;
 
@@ -159,7 +159,7 @@ where
 
                         if new_ptr == original_ptr as *mut _ {
                             // We successfully reallocated in-place; we're done!
-                            return self;
+                            return;
                         } else {
                             // We got back a different allocation; copy the existing elements
                             // into it. We don't need to increment their refcounts because
@@ -206,7 +206,9 @@ where
             }
             None => {
                 // This is an empty list, so `reserve` is the same as `with_capacity`.
-                return Self::with_capacity(num_elems);
+                *self = Self::with_capacity(num_elems);
+
+                return;
             }
         }
 
@@ -215,16 +217,11 @@ where
             copy_nonoverlapping(old_elements_ptr, new_elems.as_ptr(), self.length);
         }
 
-        let length = self.length;
-
-        // We already manually cleaned up `self` by now, so don't let its Drop run too.
-        mem::forget(self);
-
-        Self {
+        *self = Self {
             elements: Some(new_elems),
-            length,
+            length: self.length,
             capacity: num_elems,
-        }
+        };
     }
 
     pub fn from_slice(slice: &[T]) -> Self {

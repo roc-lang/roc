@@ -133,30 +133,29 @@ impl RocStr {
     /// Increase a RocStr's capacity by at least the requested number of bytes (possibly more).
     ///
     /// May return a new RocStr, if the provided one was not unique.
-    pub fn reserve(mut self, bytes: usize) -> Self {
+    pub fn reserve(&mut self, bytes: usize) {
         if self.is_small_str() {
             let small_str = unsafe { self.0.small_string };
             let target_cap = small_str.len() + bytes;
 
-            if target_cap <= SmallString::CAPACITY {
-                // The small string already has enough capacity; return it unmodified.
-                self
-            } else {
+            if target_cap > SmallString::CAPACITY {
                 // The requested capacity won't fit in a small string; we need to go big.
                 let mut roc_list = RocList::with_capacity(target_cap);
 
-                roc_list.extend_from_slice(&small_str.bytes);
+                roc_list.extend_from_slice(&small_str.as_bytes());
 
-                RocStr(RocStrInner {
+                *self = RocStr(RocStrInner {
                     heap_allocated: ManuallyDrop::new(roc_list),
-                })
+                });
             }
         } else {
-            let roc_list = unsafe { ManuallyDrop::take(&mut self.0.heap_allocated) };
+            let mut roc_list = unsafe { ManuallyDrop::take(&mut self.0.heap_allocated) };
 
-            RocStr(RocStrInner {
-                heap_allocated: ManuallyDrop::new(roc_list.reserve(bytes)),
-            })
+            roc_list.reserve(bytes);
+
+            *self = RocStr(RocStrInner {
+                heap_allocated: ManuallyDrop::new(roc_list),
+            });
         }
     }
 

@@ -122,6 +122,15 @@ mod test_roc_std {
     }
 
     #[test]
+    fn reserve() {
+        let mut roc_str = RocStr::empty();
+
+        roc_str.reserve(42);
+
+        assert_eq!(roc_str.capacity(), 42);
+    }
+
+    #[test]
     fn roc_result_to_rust_result() {
         let greeting = "Hello, World!";
         let roc_result: RocResult<String, ()> = RocResult::ok(greeting.into());
@@ -156,16 +165,21 @@ mod test_roc_std {
 }
 
 #[cfg(test)]
-mod temp_c_str {
+mod with_terminator {
     use core::slice;
     use roc_std::RocStr;
     use std::ffi::CStr;
 
-    fn verify_temp_c(string: &str) {
-        // temp_c_utf8
+    fn verify_temp_c(string: &str, excess_capacity: usize) {
+        let mut roc_str = RocStr::from(string);
+
+        if excess_capacity > 0 {
+            roc_str.reserve(excess_capacity);
+        }
+
+        // utf8_nul_terminated
         {
-            let roc_str = RocStr::from(string);
-            let answer = roc_str.utf8_nul_terminated(|ptr, len| {
+            let answer = roc_str.clone().utf8_nul_terminated(|ptr, len| {
                 let bytes = unsafe { slice::from_raw_parts(ptr.cast(), len + 1) };
                 let c_str = CStr::from_bytes_with_nul(bytes).unwrap();
 
@@ -177,9 +191,8 @@ mod temp_c_str {
             assert_eq!(Ok(42), answer);
         }
 
-        // temp_c_utf16
+        // utf16_nul_terminated
         {
-            let roc_str = RocStr::from(string);
             let answer = roc_str.utf16_nul_terminated(|ptr, len| {
                 let bytes = unsafe { slice::from_raw_parts(ptr.cast(), len + 1) };
 
@@ -199,7 +212,7 @@ mod temp_c_str {
 
     #[test]
     fn empty_string() {
-        verify_temp_c("");
+        verify_temp_c("", 0);
     }
 
     /// e.g. "1" or "12" or "12345" etc.
@@ -217,16 +230,16 @@ mod temp_c_str {
     #[test]
     fn small_strings() {
         for len in 1..=super::ROC_SMALL_STR_CAPACITY {
-            verify_temp_c(&string_for_len(len));
+            verify_temp_c(&string_for_len(len), 0);
         }
     }
 
     #[test]
     fn no_excess_capacity() {
         // This is small enough that it should be a stack allocation for UTF-8
-        verify_temp_c(&string_for_len(33));
+        verify_temp_c(&string_for_len(33), 0);
 
         // This is big enough that it should be a heap allocation for UTF-8 and UTF-16
-        verify_temp_c(&string_for_len(65));
+        verify_temp_c(&string_for_len(65), 0);
     }
 }
