@@ -1791,14 +1791,14 @@ fn compact_lambda_set(
     arena: &Bump,
     pools: &mut Pools,
     abilities_store: &AbilitiesStore,
-    lambda_set: Variable,
+    this_lambda_set: Variable,
 ) {
     let LambdaSet {
         solved,
         recursion_var,
         unspecialized,
-    } = subs.get_lambda_set(lambda_set);
-    let target_rank = subs.get_rank(lambda_set);
+    } = subs.get_lambda_set(this_lambda_set);
+    let target_rank = subs.get_rank(this_lambda_set);
 
     if unspecialized.is_empty() {
         return;
@@ -1854,7 +1854,9 @@ fn compact_lambda_set(
         };
 
         // Ensure the specialization lambda set is already compacted.
-        compact_lambda_set(subs, arena, pools, abilities_store, specialized_lambda_set);
+        if subs.get_root_key(specialized_lambda_set) != subs.get_root_key(this_lambda_set) {
+            compact_lambda_set(subs, arena, pools, abilities_store, specialized_lambda_set);
+        }
 
         // Ensure the specialization lambda set we'll unify with is not a generalized one, but one
         // at the rank of the lambda set being compacted.
@@ -1871,14 +1873,14 @@ fn compact_lambda_set(
         recursion_var,
         unspecialized: new_unspecialized_slice,
     });
-    subs.set_content(lambda_set, partial_compacted_lambda_set);
+    subs.set_content(this_lambda_set, partial_compacted_lambda_set);
 
     for other_specialized in specialized_to_unify_with.into_iter() {
         let (vars, must_implement_ability, lambda_sets_to_specialize) =
-            unify(subs, lambda_set, other_specialized, Mode::EQ)
+            unify(subs, this_lambda_set, other_specialized, Mode::EQ)
                 .expect_success("lambda sets don't unify");
 
-        introduce(subs, subs.get_rank(lambda_set), pools, &vars);
+        introduce(subs, subs.get_rank(this_lambda_set), pools, &vars);
 
         debug_assert!(
             must_implement_ability.is_empty(),

@@ -6717,4 +6717,35 @@ mod solve_expr {
             print_only_under_alias = true,
         )
     }
+
+    #[test]
+    fn resolve_two_unspecialized_lambda_sets_in_one_lambda_set() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Thunk a : {} -> a
+
+                Id has id : a -> Thunk a | a has Id
+
+                A := {}
+                id = \@A {} -> \{} -> @A {}
+                #^^{-1}
+
+                main =
+                    a : A
+                    a = (id (@A {})) {}
+                    #    ^^
+
+                    a
+                "#
+            ),
+            &[
+                "A#id(7) : {} -[[id(7)]]-> ({} -[[8(8)]]-> {})",
+                "A#id(7) : {} -[[id(7)]]-> ({} -[[8(8)]]-> {})",
+            ],
+            print_only_under_alias = true,
+        )
+    }
 }
