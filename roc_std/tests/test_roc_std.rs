@@ -165,7 +165,7 @@ mod temp_c_str {
         // temp_c_utf8
         {
             let roc_str = RocStr::from(string);
-            let answer = roc_str.temp_c_utf8(|ptr, len| {
+            let answer = roc_str.utf8_nul_terminated(|ptr, len| {
                 let bytes = unsafe { slice::from_raw_parts(ptr.cast(), len + 1) };
                 let c_str = CStr::from_bytes_with_nul(bytes).unwrap();
 
@@ -180,7 +180,7 @@ mod temp_c_str {
         // temp_c_utf16
         {
             let roc_str = RocStr::from(string);
-            let answer = roc_str.temp_c_utf16(|ptr, len| {
+            let answer = roc_str.utf16_nul_terminated(|ptr, len| {
                 let bytes = unsafe { slice::from_raw_parts(ptr.cast(), len + 1) };
 
                 // Verify that it's nul-terminated
