@@ -166,11 +166,9 @@ impl<T> Drop for RocBox<T> {
                     alignment as u32,
                 );
             }
-        } else {
-            if !new_storage.is_readonly() {
-                // Write the storage back.
-                storage.set(new_storage);
-            }
+        } else if !new_storage.is_readonly() {
+            // Write the storage back.
+            storage.set(new_storage);
         }
     }
 }

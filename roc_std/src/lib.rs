@@ -347,13 +347,13 @@ impl RocDec {
     }
 
     #[cfg(not(feature = "no_std"))]
-    fn to_str_helper(&self, bytes: &mut [u8; Self::MAX_STR_LENGTH]) -> usize {
+    fn to_str_helper(self, bytes: &mut [u8; Self::MAX_STR_LENGTH]) -> usize {
         // TODO there is probably some way to implement this logic without std::io::Write,
         // which in turn would make this method work with no_std.
         use std::io::Write;
 
         if self.as_i128() == 0 {
-            write!(&mut bytes[..], "{}", "0").unwrap();
+            write!(&mut bytes[..], "0").unwrap();
 
             return 1;
         }
@@ -372,17 +372,17 @@ impl RocDec {
         // If self represents 1234.5678, then bytes is b"1234567800000000000000".
         let mut i = Self::MAX_STR_LENGTH - 1;
         // Find the last place where we have actual data.
-        while bytes[i] == 0 {
-            i = i - 1;
+        while bytes[i] == b'0' {
+            i -= 1;
         }
         // At this point i is 21 because bytes[21] is the final '0' in b"1234567800000000000000".
 
         let decimal_location = i - Self::DECIMAL_PLACES + 1 + is_negative;
         // decimal_location = 4
 
-        while bytes[i] == ('0' as u8) && i >= decimal_location {
+        while bytes[i] == 0 && i >= decimal_location {
             bytes[i] = 0;
-            i = i - 1;
+            i -= 1;
         }
         // Now i = 7, because bytes[7] = '8', and bytes = b"12345678"
 
@@ -395,12 +395,12 @@ impl RocDec {
         let ret = i + 1;
         while i >= decimal_location {
             bytes[i + 1] = bytes[i];
-            i = i - 1;
+            i -= 1;
         }
         bytes[i + 1] = bytes[i];
         // Now i = 4, and bytes = b"123455678"
 
-        bytes[decimal_location] = '.' as u8;
+        bytes[decimal_location] = b'.';
         // Finally bytes = b"1234.5678"
 
         ret + 1
@@ -408,7 +408,7 @@ impl RocDec {
 
     #[cfg(not(feature = "no_std"))] // to_str_helper currently uses std, but might not need to.
     pub fn to_str(&self) -> RocStr {
-        let mut bytes = [0 as u8; Self::MAX_STR_LENGTH];
+        let mut bytes = [0; Self::MAX_STR_LENGTH];
         let last_idx = self.to_str_helper(&mut bytes);
         unsafe { RocStr::from_slice_unchecked(&bytes[0..last_idx]) }
     }
@@ -417,7 +417,7 @@ impl RocDec {
 #[cfg(not(feature = "no_std"))] // to_str_helper currently uses std, but might not need to.
 impl fmt::Display for RocDec {
     fn fmt(&self, fmtr: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut bytes = [0 as u8; Self::MAX_STR_LENGTH];
+        let mut bytes = [0; Self::MAX_STR_LENGTH];
         let last_idx = self.to_str_helper(&mut bytes);
         let result = unsafe { str::from_utf8_unchecked(&bytes[0..last_idx]) };
         write!(fmtr, "{}", result)
