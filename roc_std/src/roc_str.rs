@@ -173,8 +173,9 @@ impl RocStr {
     // the RocStr is non-unique.
     const TEMP_STR_MAX_STACK_BYTES: usize = 64;
 
-    /// Like with_utf8_terminator, except it can fail because a RocStr may
-    /// contain \0 characters, which a nul-terminated string must not.
+    /// Like calling with_utf8_terminator passing \0 for the terminator,
+    /// except it can fail because a RocStr may contain \0 characters,
+    /// which a nul-terminated string must not.
     pub fn utf8_nul_terminated<T, F: Fn(*mut u8, usize) -> T>(
         self,
         func: F,
@@ -187,7 +188,7 @@ impl RocStr {
     }
 
     /// Turn this RocStr into a UTF-8 `*mut u8`, terminate it with the given character
-    /// (almost always either `b'\n'` or b`\0`) and then provide access to that
+    /// (commonly either `b'\n'` or b`\0`) and then provide access to that
     /// `*mut u8` (as well as its length) for the duration of a given function. This is
     /// designed to be an efficient way to turn a `RocStr` received from an application into
     /// either the nul-terminated UTF-8 `char*` needed by UNIX syscalls, or into a
@@ -203,10 +204,10 @@ impl RocStr {
     /// string with non-unique refcount. (It will do a stack allocation if the string is under
     /// 64 bytes; the stack allocation will only live for the duration of the called function.)
     ///
-    /// Because this works on an owned RocStr, it's able to overwrite the underlying bytes
-    /// to nul-terminate the string in-place. Small strings have an extra byte at the end
+    /// If the given (owned) RocStr is unique, this can overwrite the underlying bytes
+    /// to terminate the string in-place. Small strings have an extra byte at the end
     /// where the length is stored, which can be replaced with the terminator. Heap-allocated
-    /// strings can have excess capacity which can hold a termiator, or if they have no
+    /// strings can have excess capacity which can hold a terminator, or if they have no
     /// excess capacity, all the bytes can be shifted over the refcount in order to free up
     /// a `usize` worth of free space at the end - which can easily fit a 1-byte terminator.
     pub fn with_utf8_terminator<T, F: Fn(*mut u8, usize) -> T>(self, terminator: u8, func: F) -> T {
@@ -244,8 +245,8 @@ impl RocStr {
 
                                 // First, copy the bytes over the original allocation - effectively
                                 // shifting everything over by one `usize`. Now we no longer have a
-                                // refcount (but the C string won't use that anyway), but we do have a
-                                // free `usize` at the end.
+                                // refcount (but the terminated won't use that anyway), but we do
+                                // have a free `usize` at the end.
                                 //
                                 // IMPORTANT: Must use ptr::copy instead of ptr::copy_nonoverlapping
                                 // because the regions definitely overlap!
@@ -259,7 +260,6 @@ impl RocStr {
                         Some(_) => {
                             let len = roc_list.len();
 
-                            // The backing list was not unique, so we can't mutate it in-place.
                             // The backing list was not unique, so we can't mutate it in-place.
                             with_stack_bytes!(len, u8, |alloc_ptr| {
                                 let alloc_ptr = alloc_ptr as *mut u8;
@@ -286,14 +286,15 @@ impl RocStr {
                 let mut bytes = small_str.bytes;
 
                 // Even if the small string is at capacity, there will be room to write
-                // a nul terminator in the byte that's used to store the length.
+                // a terminator in the byte that's used to store the length.
                 terminate(bytes.as_mut_ptr() as *mut u8, small_str.len())
             }
         }
     }
 
-    /// Like with_utf16_terminator, except it can fail because a RocStr may
-    /// contain \0 characters, which a nul-terminated string must not.
+    /// Like calling with_utf16_terminator passing \0 for the terminator,
+    /// except it can fail because a RocStr may contain \0 characters,
+    /// which a nul-terminated string must not.
     pub fn utf16_nul_terminated<T, F: Fn(*mut u16, usize) -> T>(
         self,
         func: F,
@@ -311,7 +312,7 @@ impl RocStr {
     /// the nul-terminated UTF-16 `wchar_t*` needed by Windows API calls.
     ///
     /// **NOTE:** The length passed to the function is the same value that `RocStr::len` will
-    /// return; it does not count the nul terminator. So to convert it to a nul-terminated
+    /// return; it does not count the terminator. So to convert it to a nul-terminated
     /// slice of Rust bytes, call `slice::from_raw_parts` passing the given length + 1.
     ///
     /// This operation achieves efficiency by reusing allocated bytes from the RocStr itself,
@@ -323,9 +324,9 @@ impl RocStr {
     /// Because this works on an owned RocStr, it's able to overwrite the underlying bytes
     /// to nul-terminate the string in-place. Small strings have an extra byte at the end
     /// where the length is stored, which can become 0 for nul-termination. Heap-allocated
-    /// strings can have excess capacity which can hold a nul termiator, or if they have no
+    /// strings can have excess capacity which can hold a termiator, or if they have no
     /// excess capacity, all the bytes can be shifted over the refcount in order to free up
-    /// a `usize` worth of free space at the end - which can easily fit a nul terminator.
+    /// a `usize` worth of free space at the end - which can easily fit a terminator.
     ///
     /// This operation can fail because a RocStr may contain \0 characters, which a
     /// nul-terminated string must not.
@@ -437,7 +438,7 @@ impl RocStr {
                         Some(storage) if storage.is_unique() => {
                             // The backing RocList was unique, so we can mutate it in-place.
 
-                            // We need 1 extra elem for the nul terminator. It must be an elem,
+                            // We need 1 extra elem for the terminator. It must be an elem,
                             // not a byte, because we'll be providing a pointer to elems.
                             let needed_bytes = (len + 1) * size_of::<E>();
 
@@ -450,7 +451,7 @@ impl RocStr {
 
                                 // We happen to have sufficient excess capacity already,
                                 // so we will be able to write the UTF-16 chars as well as
-                                // the nul terminator into the existing allocation.
+                                // the terminator into the existing allocation.
                                 let ptr = roc_list.ptr_to_allocation() as *mut E;
 
                                 terminate(ptr, self.as_str())
@@ -479,7 +480,7 @@ impl RocStr {
             RocStrInnerRef::SmallString(small_str) => {
                 let len = small_str.len();
 
-                // We need 1 extra elem for the nul terminator. It must be an elem,
+                // We need 1 extra elem for the terminator. It must be an elem,
                 // not a byte, because we'll be providing a pointer to elems.
                 let needed_bytes = (len + 1) * size_of::<E>();
                 let available_bytes = size_of::<SmallString>();
@@ -527,7 +528,7 @@ impl TryFrom<CString> for RocStr {
 
 #[cfg(not(feature = "no_std"))]
 /// Like https://doc.rust-lang.org/std/ffi/struct.NulError.html but
-/// only for interior nulls, not for missing nul terminators.
+/// only for interior nuls, not for missing nul terminators.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InteriorNulError {
     pub pos: usize,
