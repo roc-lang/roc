@@ -18,7 +18,9 @@ use roc_debug_flags::{
 };
 use roc_error_macros::todo_abilities;
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
-use roc_late_solve::{instantiate_rigids, resolve_ability_specialization, Resolved};
+use roc_late_solve::{
+    instantiate_rigids, resolve_ability_specialization, Resolved, UnificationFailed,
+};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -1270,7 +1272,7 @@ impl<'a, 'i> Env<'a, 'i> {
 
     /// Unifies two variables and performs lambda set compaction.
     /// Use this rather than [roc_unify::unify] directly!
-    fn unify(&mut self, left: Variable, right: Variable) -> Result<(), ()> {
+    fn unify(&mut self, left: Variable, right: Variable) -> Result<(), UnificationFailed> {
         roc_late_solve::unify(self.arena, self.subs, self.abilities_store, left, right)
     }
 }

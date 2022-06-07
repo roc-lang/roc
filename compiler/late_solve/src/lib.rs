@@ -7,6 +7,9 @@ use roc_solve::solve::{compact_lambda_sets_of_vars, Pools};
 use roc_types::subs::{Subs, Variable};
 use roc_unify::unify::{unify as unify_unify, Mode, Unified};
 
+#[derive(Debug)]
+pub struct UnificationFailed;
+
 /// Unifies two variables and performs lambda set compaction.
 /// Ranks and other ability demands are disregarded.
 pub fn unify(
@@ -15,7 +18,7 @@ pub fn unify(
     abilities_store: &AbilitiesStore,
     left: Variable,
     right: Variable,
-) -> Result<(), ()> {
+) -> Result<(), UnificationFailed> {
     let unified = unify_unify(subs, left, right, Mode::EQ);
     match unified {
         Unified::Success {
@@ -38,7 +41,7 @@ pub fn unify(
 
             Ok(())
         }
-        Unified::Failure(..) | Unified::BadType(..) => Err(()),
+        Unified::Failure(..) | Unified::BadType(..) => Err(UnificationFailed),
     }
 }
 
