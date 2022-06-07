@@ -347,15 +347,13 @@ impl RocDec {
     }
 
     #[cfg(not(feature = "no_std"))]
-    fn to_str_helper(self, bytes: &mut [u8; Self::MAX_STR_LENGTH]) -> usize {
+    fn to_str_helper(self, bytes: &mut [u8; Self::MAX_STR_LENGTH]) -> &str {
         // TODO there is probably some way to implement this logic without std::io::Write,
         // which in turn would make this method work with no_std.
         use std::io::Write;
 
         if self.as_i128() == 0 {
-            write!(&mut bytes[..], "0").unwrap();
-
-            return 1;
+            return "0";
         }
 
         let is_negative = (self.as_i128() < 0) as usize;
@@ -389,7 +387,7 @@ impl RocDec {
         if i < decimal_location {
             // This means that we've removed trailing zeros and are left with an integer. Our
             // convention is to print these without a decimal point or trailing zeros, so we're done.
-            return i + 1;
+            return unsafe { str::from_utf8_unchecked(&bytes[0..i + 1]) };
         }
 
         let ret = i + 1;
@@ -403,24 +401,23 @@ impl RocDec {
         bytes[decimal_location] = b'.';
         // Finally bytes = b"1234.5678"
 
-        ret + 1
+        unsafe { str::from_utf8_unchecked(&bytes[0..ret + 1]) }
     }
 
     #[cfg(not(feature = "no_std"))] // to_str_helper currently uses std, but might not need to.
     pub fn to_str(&self) -> RocStr {
         let mut bytes = [0; Self::MAX_STR_LENGTH];
-        let last_idx = self.to_str_helper(&mut bytes);
-        unsafe { RocStr::from_slice_unchecked(&bytes[0..last_idx]) }
+
+        RocStr::from(self.to_str_helper(&mut bytes))
     }
 }
 
 #[cfg(not(feature = "no_std"))] // to_str_helper currently uses std, but might not need to.
 impl fmt::Display for RocDec {
-    fn fmt(&self, fmtr: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut bytes = [0; Self::MAX_STR_LENGTH];
-        let last_idx = self.to_str_helper(&mut bytes);
-        let result = unsafe { str::from_utf8_unchecked(&bytes[0..last_idx]) };
-        write!(fmtr, "{}", result)
+
+        f.write_str(self.to_str_helper(&mut bytes))
     }
 }
 
