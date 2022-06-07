@@ -48,15 +48,22 @@ macro_rules! write_parens {
     };
 }
 
-pub enum PrintLambdaSets {
-    Yes,
-    No,
+pub struct DebugPrint {
+    pub print_lambda_sets: bool,
+    pub print_only_under_alias: bool,
+}
+
+impl DebugPrint {
+    pub const NOTHING: DebugPrint = DebugPrint {
+        print_lambda_sets: false,
+        print_only_under_alias: false,
+    };
 }
 
 struct Env<'a> {
     home: ModuleId,
     interns: &'a Interns,
-    print_lambda_sets: PrintLambdaSets,
+    debug: DebugPrint,
 }
 
 /// How many times a root variable appeared in Subs.
@@ -376,13 +383,13 @@ fn content_to_string(
     home: ModuleId,
     interns: &Interns,
     named_result: NamedResult,
-    print_lambda_sets: PrintLambdaSets,
+    debug_print: DebugPrint,
 ) -> String {
     let mut buf = String::new();
     let env = Env {
         home,
         interns,
-        print_lambda_sets,
+        debug: debug_print,
     };
     let mut ctx = Context {
         able_variables: vec![],
@@ -408,18 +415,11 @@ pub fn name_and_print_var(
     subs: &mut Subs,
     home: ModuleId,
     interns: &Interns,
-    print_lambda_sets: PrintLambdaSets,
+    debug_print: DebugPrint,
 ) -> String {
     let named_result = name_all_type_vars(var, subs);
     let content = subs.get_content_without_compacting(var);
-    content_to_string(
-        content,
-        subs,
-        home,
-        interns,
-        named_result,
-        print_lambda_sets,
-    )
+    content_to_string(content, subs, home, interns, named_result, debug_print)
 }
 
 pub fn get_single_arg<'a>(subs: &'a Subs, args: &'a AliasVariables) -> &'a Content {
@@ -495,7 +495,7 @@ fn write_content<'a>(
             }
         },
         Structure(flat_type) => write_flat_type(env, ctx, flat_type, subs, buf, parens),
-        Alias(symbol, args, _actual, _kind) => {
+        Alias(symbol, args, actual, _kind) => {
             let write_parens = parens == Parens::InTypeParam && !args.is_empty();
 
             match *symbol {
@@ -553,6 +553,11 @@ fn write_content<'a>(
                     write_parens,
                 ),
 
+                _ if env.debug.print_only_under_alias => write_parens!(write_parens, buf, {
+                    let content = subs.get_content_without_compacting(*actual);
+                    write_content(env, ctx, content, subs, buf, parens)
+                }),
+
                 _ => write_parens!(write_parens, buf, {
                     write_symbol(env, *symbol, buf);
 
@@ -571,7 +576,7 @@ fn write_content<'a>(
 
                     roc_debug_flags::dbg_do!(roc_debug_flags::ROC_PRETTY_PRINT_ALIAS_CONTENTS, {
                         buf.push_str("[[ but really ");
-                        let content = subs.get_content_without_compacting(*_actual);
+                        let content = subs.get_content_without_compacting(*actual);
                         write_content(env, ctx, content, subs, buf, parens);
                         buf.push_str("]]");
                     });
@@ -583,7 +588,7 @@ fn write_content<'a>(
             recursion_var,
             unspecialized,
         }) => {
-            debug_assert!(matches!(env.print_lambda_sets, PrintLambdaSets::Yes));
+            debug_assert!(env.debug.print_lambda_sets);
 
             buf.push_str("[[");
 
@@ -1192,22 +1197,19 @@ fn write_fn<'a>(
         );
     }
 
-    match env.print_lambda_sets {
-        PrintLambdaSets::No => {
-            buf.push_str(" -> ");
-        }
-        PrintLambdaSets::Yes => {
-            buf.push_str(" -");
-            write_content(
-                env,
-                ctx,
-                subs.get_content_without_compacting(closure),
-                subs,
-                buf,
-                parens,
-            );
-            buf.push_str("-> ");
-        }
+    if !env.debug.print_lambda_sets {
+        buf.push_str(" -> ");
+    } else {
+        buf.push_str(" -");
+        write_content(
+            env,
+            ctx,
+            subs.get_content_without_compacting(closure),
+            subs,
+            buf,
+            parens,
+        );
+        buf.push_str("-> ");
     }
 
     write_content(

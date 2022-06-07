@@ -12,7 +12,7 @@ use roc_repl_eval::{
 };
 use roc_reporting::report::DEFAULT_PALETTE_HTML;
 use roc_target::TargetInfo;
-use roc_types::pretty_print::{name_and_print_var, PrintLambdaSets};
+use roc_types::pretty_print::{name_and_print_var, DebugPrint};
 
 use crate::{js_create_app, js_get_result_and_memory, js_run_app};
 
@@ -189,7 +189,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         &mut subs,
         module_id,
         &interns,
-        PrintLambdaSets::No,
+        DebugPrint::NOTHING,
     );
     let content = subs.get_content_without_compacting(main_fn_var);
 

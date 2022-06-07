@@ -19,7 +19,7 @@ mod solve_expr {
     use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Region};
     use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
     use roc_solve::solve::TypeError;
-    use roc_types::pretty_print::{name_and_print_var, PrintLambdaSets};
+    use roc_types::pretty_print::{name_and_print_var, DebugPrint};
     use std::path::PathBuf;
 
     // HELPERS
@@ -177,7 +177,7 @@ mod solve_expr {
 
         debug_assert!(exposed_to_host.len() == 1);
         let (_symbol, variable) = exposed_to_host.into_iter().next().unwrap();
-        let actual_str = name_and_print_var(variable, subs, home, &interns, PrintLambdaSets::No);
+        let actual_str = name_and_print_var(variable, subs, home, &interns, DebugPrint::NOTHING);
 
         Ok((type_problems, can_problems, actual_str))
     }
@@ -235,7 +235,7 @@ mod solve_expr {
         assert_eq!(actual, expected.to_string());
     }
 
-    fn infer_queries(src: &str, expected: &[&'static str]) {
+    fn infer_queries_help(src: &str, expected: &[&'static str], print_only_under_alias: bool) {
         let (
             LoadedModule {
                 module_id: home,
@@ -277,7 +277,16 @@ mod solve_expr {
             let var = find_type_at(region, &decls)
                 .unwrap_or_else(|| panic!("No type for {:?} ({:?})!", &text, region));
 
-            let actual_str = name_and_print_var(var, subs, home, &interns, PrintLambdaSets::Yes);
+            let actual_str = name_and_print_var(
+                var,
+                subs,
+                home,
+                &interns,
+                DebugPrint {
+                    print_lambda_sets: true,
+                    print_only_under_alias,
+                },
+            );
 
             let elaborated =
                 match find_ability_member_and_owning_type_at(region, &decls, &abilities_store) {
@@ -299,6 +308,15 @@ mod solve_expr {
         }
 
         assert_eq!(solved_queries, expected)
+    }
+
+    macro_rules! infer_queries {
+        ($program:expr, $queries:expr $(,)?) => {
+            infer_queries_help($program, $queries, false)
+        };
+        ($program:expr, $queries:expr, print_only_under_alias=true $(,)?) => {
+            infer_queries_help($program, $queries, true)
+        };
     }
 
     fn check_inferred_abilities<'a, I>(src: &'a str, expected_specializations: I)
@@ -6150,7 +6168,7 @@ mod solve_expr {
 
     #[test]
     fn intermediate_branch_types() {
-        infer_queries(
+        infer_queries!(
             indoc!(
                 r#"
                 app "test" provides [foo] to "./platform"
@@ -6278,7 +6296,7 @@ mod solve_expr {
 
     #[test]
     fn encoder() {
-        infer_queries(
+        infer_queries!(
             indoc!(
                 r#"
                 app "test" provides [myU8Bytes] to "./platform"
@@ -6324,7 +6342,7 @@ mod solve_expr {
 
     #[test]
     fn decoder() {
-        infer_queries(
+        infer_queries!(
             indoc!(
                 r#"
                 app "test" provides [myU8] to "./platform"
@@ -6406,7 +6424,7 @@ mod solve_expr {
 
     #[test]
     fn static_specialization() {
-        infer_queries(
+        infer_queries!(
             indoc!(
                 r#"
                 app "test" provides [main] to "./platform"
@@ -6455,7 +6473,7 @@ mod solve_expr {
 
     #[test]
     fn encode_record() {
-        infer_queries(
+        infer_queries!(
             indoc!(
                 r#"
                 app "test"
@@ -6474,7 +6492,7 @@ mod solve_expr {
 
     #[test]
     fn encode_record_with_nested_custom_impl() {
-        infer_queries(
+        infer_queries!(
             indoc!(
                 r#"
                 app "test"
@@ -6494,7 +6512,7 @@ mod solve_expr {
 
     #[test]
     fn resolve_lambda_set_generalized_ability_alias() {
-        infer_queries(
+        infer_queries!(
             indoc!(
                 r#"
                 app "test" provides [main] to "./platform"
@@ -6529,7 +6547,7 @@ mod solve_expr {
 
     #[test]
     fn resolve_lambda_set_ability_chain() {
-        infer_queries(
+        infer_queries!(
             indoc!(
                 r#"
                 app "test" provides [main] to "./platform"
@@ -6565,7 +6583,7 @@ mod solve_expr {
 
     #[test]
     fn resolve_lambda_set_branches_ability_vs_non_ability() {
-        infer_queries(
+        infer_queries!(
             indoc!(
                 r#"
                 app "test" provides [main] to "./platform"
@@ -6603,7 +6621,7 @@ mod solve_expr {
 
     #[test]
     fn resolve_lambda_set_branches_same_ability() {
-        infer_queries(
+        infer_queries!(
             indoc!(
                 r#"
                 app "test" provides [main] to "./platform"
@@ -6632,6 +6650,71 @@ mod solve_expr {
                 "idChoice : a -[[] + a:id(4):1]-> a | a has Id",
                 "idChoice : A -[[id(5)]]-> A",
             ],
+        )
+    }
+
+    #[test]
+    fn resolve_unspecialized_lambda_set_behind_alias() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Thunk a : {} -> a
+
+                Id has id : a -> Thunk a | a has Id
+
+                A := {}
+                id = \@A {} -> \{} -> @A {}
+                #^^{-1}
+
+                main =
+                    alias = id
+                    #       ^^
+
+                    a : A
+                    a = (alias (@A {})) {}
+                    #    ^^^^^
+
+                    a
+                "#
+            ),
+            &[
+                "A#id(7) : {} -[[id(7)]]-> ({} -[[8(8)]]-> {})",
+                "Id#id(6) : {} -[[id(7)]]-> ({} -[[8(8)]]-> {})",
+                "alias : {} -[[id(7)]]-> ({} -[[8(8)]]-> {})",
+            ],
+            print_only_under_alias = true,
+        )
+    }
+
+    #[test]
+    fn resolve_unspecialized_lambda_set_behind_opaque() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Thunk a := {} -> a
+
+                Id has id : a -> Thunk a | a has Id
+
+                A := {}
+                id = \@A {} -> @Thunk (\{} -> @A {})
+                #^^{-1}
+
+                main =
+                    thunk = id (@A {})
+                    @Thunk it = thunk
+                    it {}
+                    #^^{-1}
+                "#
+            ),
+            &[
+                "A#id(7) : {} -[[id(7)]]-> ({} -[[8(8)]]-> {})",
+                "it : {} -[[8(8)]]-> {}",
+            ],
+            print_only_under_alias = true,
         )
     }
 }
