@@ -185,6 +185,9 @@ impl<'a> WasmModule<'a> {
         arena: &'a Bump,
         called_preload_fns: T,
     ) {
+        let host_import_count =
+            self.import.imports.len() + self.code.dead_import_dummy_count as usize;
+
         let exported_fn_iter = self
             .export
             .exports
@@ -193,12 +196,48 @@ impl<'a> WasmModule<'a> {
             .map(|ex| ex.index);
         let exported_fn_indices = Vec::from_iter_in(exported_fn_iter, arena);
 
-        self.code.remove_dead_preloads(
+        let live_import_fns = self.code.remove_dead_preloads(
             arena,
             self.import.function_count(),
             &exported_fn_indices,
             called_preload_fns,
-        )
+            &self.reloc_code,
+            &self.linking,
+        );
+
+        // Retain any imported functions whose index appears in live_import_fns
+        let mut fn_index = 0;
+        let mut live_index = 0;
+        self.import.imports.retain(|import| {
+            if !matches!(import.description, ImportDesc::Func { .. }) {
+                true
+            } else if live_index >= live_import_fns.len() {
+                false
+            } else {
+                let retain = live_import_fns[live_index] == fn_index;
+                if retain {
+                    live_index += 1;
+                }
+                fn_index += 1;
+                retain
+            }
+        });
+
+        // Update function signatures
+        for (new_index, old_index) in live_import_fns.iter().enumerate() {
+            // Safe because `old_index >= new_index`
+            self.function.signatures[new_index] = self.function.signatures[*old_index as usize];
+        }
+
+        // Update debug names
+        for (new_index, old_index) in live_import_fns.iter().enumerate() {
+            // Safe because `old_index >= new_index`
+            self.names.function_names[new_index] = self.names.function_names[*old_index as usize];
+        }
+        let first_dead_import_index = live_import_fns.last().map(|x| x + 1).unwrap_or(0) as usize;
+        for i in first_dead_import_index..host_import_count {
+            self.names.function_names[i] = (i as u32, "unused_host_import");
+        }
     }
 
     pub fn get_exported_global_u32(&self, name: &str) -> Option<u32> {
@@ -329,7 +368,7 @@ impl<'a> WasmModule<'a> {
 
             // Remember to insert a dummy function at the beginning of the code section
             // to compensate for having one less import, so that function indices don't change.
-            self.code.linking_dummy_count += 1;
+            self.code.dead_import_dummy_count += 1;
 
             // Insert any type signature for the dummy. Signature index 0 will do.
             self.function.signatures.insert(0, 0);

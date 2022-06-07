@@ -8,6 +8,7 @@ use super::dead_code::{
     copy_preloads_shrinking_dead_fns, parse_preloads_call_graph, trace_call_graph,
     PreloadsCallGraph,
 };
+use super::linking::{LinkingSection, RelocationSection};
 use super::opcodes::OpCode;
 use super::parse::{Parse, ParseError, SkipBytes};
 use super::serialize::{SerialBuffer, Serialize, MAX_SIZE_ENCODED_U32};
@@ -1175,7 +1176,8 @@ pub struct CodeSection<'a> {
     pub preloaded_count: u32,
     pub preloaded_reloc_offset: u32,
     pub preloaded_bytes: Vec<'a, u8>,
-    pub linking_dummy_count: u32,
+    /// Dead imports are replaced with dummy functions in CodeSection
+    pub dead_import_dummy_count: u32,
     pub code_builders: Vec<'a, CodeBuilder<'a>>,
     dead_code_metadata: PreloadsCallGraph<'a>,
 }
@@ -1233,7 +1235,7 @@ impl<'a> CodeSection<'a> {
             preloaded_count: count,
             preloaded_reloc_offset,
             preloaded_bytes,
-            linking_dummy_count: 0,
+            dead_import_dummy_count: 0,
             code_builders: Vec::with_capacity_in(0, arena),
             dead_code_metadata,
         })
@@ -1245,13 +1247,47 @@ impl<'a> CodeSection<'a> {
         import_fn_count: usize,
         exported_fns: &[u32],
         called_preload_fns: T,
-    ) {
-        let live_ext_fn_indices = trace_call_graph(
+        reloc_code: &RelocationSection<'a>,
+        linking: &LinkingSection<'a>,
+    ) -> Vec<u32> {
+        let mut live_preload_fns = trace_call_graph(
             arena,
             &self.dead_code_metadata,
             exported_fns,
             called_preload_fns,
         );
+        live_preload_fns.sort_unstable();
+        live_preload_fns.dedup();
+
+        let host_import_count = import_fn_count + self.dead_import_dummy_count as usize;
+        let split_at = live_preload_fns
+            .iter()
+            .position(|f| *f as usize >= host_import_count)
+            .unwrap_or(live_preload_fns.len());
+        let mut live_import_fns = live_preload_fns;
+        let live_defined_fns = live_import_fns.split_off(split_at);
+
+        let dead_import_count = host_import_count - live_import_fns.len();
+        self.dead_import_dummy_count += dead_import_count as u32;
+        for (new_index, old_index) in live_import_fns.iter().enumerate() {
+            if new_index == *old_index as usize {
+                continue;
+            }
+            let sym_index = linking
+                .find_imported_function_symbol(*old_index)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Linking failed! Can't find fn #{} in host symbol table",
+                        old_index
+                    )
+                });
+            reloc_code.apply_relocs_u32(
+                &mut self.preloaded_bytes,
+                self.preloaded_reloc_offset,
+                sym_index,
+                new_index as u32,
+            );
+        }
 
         let mut buffer = Vec::with_capacity_in(self.preloaded_bytes.len(), arena);
 
@@ -1260,11 +1296,13 @@ impl<'a> CodeSection<'a> {
             &mut buffer,
             &self.dead_code_metadata,
             &self.preloaded_bytes,
-            import_fn_count + self.linking_dummy_count as usize,
-            live_ext_fn_indices,
+            host_import_count,
+            live_defined_fns,
         );
 
         self.preloaded_bytes = buffer;
+
+        live_import_fns
     }
 }
 
@@ -1272,14 +1310,14 @@ impl<'a> Serialize for CodeSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         let header_indices = write_section_header(buffer, SectionId::Code);
         buffer.encode_u32(
-            self.linking_dummy_count + self.preloaded_count + self.code_builders.len() as u32,
+            self.dead_import_dummy_count + self.preloaded_count + self.code_builders.len() as u32,
         );
 
         // Insert dummy functions, requested by our linking logic.
         // This helps to minimise the number of functions we need to move around during linking.
         let arena = self.code_builders[0].arena;
         let dummy = CodeBuilder::dummy(arena);
-        for _ in 0..self.linking_dummy_count {
+        for _ in 0..self.dead_import_dummy_count {
             dummy.serialize(buffer);
         }
 
