@@ -6748,4 +6748,73 @@ mod solve_expr {
             print_only_under_alias = true,
         )
     }
+
+    #[test]
+    fn resolve_recursive_ability_lambda_set() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Diverge has diverge : a -> a | a has Diverge
+
+                A := {}
+                diverge = \@A {} -> diverge (@A {})
+                #^^^^^^^{-1}        ^^^^^^^
+
+                main =
+                    a : A
+                    a = diverge (@A {})
+                    #   ^^^^^^^
+
+                    a
+                "#
+            ),
+            &[
+                "A#diverge(5) : A -[[diverge(5)]]-> A",
+                "Diverge#diverge(4) : A -[[diverge(5)]]-> A",
+                //
+                "A#diverge(5) : A -[[diverge(5)]]-> A",
+            ],
+        )
+    }
+
+    #[test]
+    fn resolve_mutually_recursive_ability_lambda_sets() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Bounce has
+                    ping : a -> a | a has Bounce
+                    pong : a -> a | a has Bounce
+
+                A := {}
+
+                ping = \@A {} -> pong (@A {})
+                #^^^^{-1}        ^^^^
+
+                pong = \@A {} -> ping (@A {})
+                #^^^^{-1}        ^^^^
+
+                main =
+                    a : A
+                    a = ping (@A {})
+                    #   ^^^^
+
+                    a
+                "#
+            ),
+            &[
+                "A#ping(7) : A -[[ping(7)]]-> A",
+                "Bounce#pong(6) : A -[[pong(8)]]-> A",
+                //
+                "A#pong(8) : A -[[pong(8)]]-> A",
+                "A#ping(7) : A -[[ping(7)]]-> A",
+                //
+                "A#ping(7) : A -[[ping(7)]]-> A",
+            ],
+        )
+    }
 }
