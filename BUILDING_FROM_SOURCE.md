@@ -2,59 +2,56 @@
 
 ## Using Nix
 
-### On NixOS
-
-NixOS users should make use of the nix flake by [enabling nix flakes](https://nixos.wiki/wiki/Flakes). Shell creation can be done by executing `nix develop` from the root of the repo. NixOS users that do not make use of this flake will get stuck on issue #1846.
-
-### On Linux/MacOS x86_64/aarch64
+### On Linux/MacOS/NixOS x86_64/aarch64/arm64
 
 #### Install
 
-Using [nix](https://nixos.org/download.html) is a quick way to get an environment bootstrapped with a single command.
-
-Anyone having trouble installing the proper version of LLVM themselves might also prefer this method.
+We highly recommend Using [nix](https://nixos.org/download.html) to automatically install all dependencies necessary to build roc.
 
 If you are running ArchLinux or a derivative like Manjaro, you'll need to run `sudo sysctl -w kernel.unprivileged_userns_clone=1` before installing nix.
 
-Install nix:
+Install nix (not necessary on NixOS):
+```
+curl -L https://nixos.org/nix/install | sh
+```
 
-`curl -L https://nixos.org/nix/install | sh`
+Start a fresh terminal session (= open a new terminal).
 
-You will need to start a fresh terminal session to use nix.
+install nixFlakes in your environment:
+```
+nix-env -iA nixpkgs.nixFlakes
+```
+
+Edit either `~/.config/nix/nix.conf` or `/etc/nix/nix.conf` and add:
+```
+experimental-features = nix-command flakes
+```
+
+ If Nix was installed in multi-user mode, make sure to restart the nix-daemon.
+ If you don't know how to do this, restarting your computer will also do the job.
 
 #### Usage
 
-Now with nix installed, you just need to run one command:
-
-`nix-shell`
-
-> This may not output anything for a little while. This is normal, hang in there. Also make sure you are in the roc project root.
-
-> Also, if you're on NixOS you'll need to enable opengl at the system-wide level. You can do this in configuration.nix with `hardware.opengl.enable = true;`. If you don't do this, nix-shell will fail!
-
+Now with nix set up, you just need to run one command from the roc project root directory:
+```
+nix develop
+```
 You should be in a shell with everything needed to build already installed.
 Use `cargo run help` to see all subcommands.
 To use the `repl` subcommand, execute `cargo run repl`.
 Use `cargo build` to build the whole project.
 
-> When using `nix-shell`, make sure that if you start `nix-shell` and then run `echo "$PATH" | tr ':' '\n'`, you see the `usr/bin` path listed after all the `/nix/…` paths. Otherwise you might get some nasty rust compilation errors!
-
 #### Extra tips
 
-If you plan on using `nix-shell` regularly, check out [direnv](https://direnv.net/) and [lorri](https://github.com/nix-community/lorri). Whenever you `cd` into `roc/`, they will automatically load the Nix dependencies into your current shell, so you never have to run nix-shell directly!
+If you want to load all dependencies automatically whenever you `cd` into `roc`, check out [direnv](https://direnv.net/) and [lorri](https://github.com/nix-community/lorri).
+Then you will no longer need to execute `nix develop` first.
 
 ### Editor
 
 The editor is a :construction:WIP:construction: and not ready yet to replace your favorite editor, although if you want to try it out on nix, read on.
-`cargo run edit` should work from NixOS, if you use a nix-shell from inside another OS, follow the instructions below.
+`cargo run edit` should work from NixOS, if you use another OS, follow the instructions below.
 
-#### from nix flake
-
-Running the ediotr may fail using the classic nix-shell, we recommend using the nix flake, see [enabling nix flakes](https://nixos.wiki/wiki/Flakes).
-
-start a nix shell using `nix develop` and follow the instructions below for your graphics configuration.
-
-##### Nvidia GPU
+#### Nvidia GPU
 
 ```
 nix run --override-input nixpkgs nixpkgs/nixos-21.11 --impure github:guibou/nixGL#nixVulkanNvidia -- cargo run edit
@@ -78,32 +75,6 @@ nix run --override-input nixpkgs nixpkgs/nixos-21.11 --impure github:guibou/nixG
 ##### Other configs
 
 Check the [nixGL repo](https://github.com/guibou/nixGL) for other graphics configurations. Feel free to ask us for help if you get stuck.
-
-#### using a classic nix-shell
-
-##### Nvidia GPU
-
-Outside of a nix shell, execute the following:
-```
-nix-channel --add https://github.com/guibou/nixGL/archive/main.tar.gz nixgl && nix-channel --update
-nix-env -iA nixgl.auto.nixVulkanNvidia
-```
-Running the editor does not work with `nix-shell --pure`, instead run:
-```
-nix-shell
-```
-460.91.03 may be different for you, type nixVulkanNvidia and press tab to autocomplete for your version.
-```
-nixVulkanNvidia-460.91.03 cargo run edit
-```
-
-##### Integrated Intel Graphics
-
-nix-shell does not work here, use the flake instead; check the section "Integrated Intel Graphics" under "from nix flake".
-
-##### Other configs
-
-Check the [nixGL repo](https://github.com/guibou/nixGL) for other graphics configurations.
 
 ## Troubleshooting
 

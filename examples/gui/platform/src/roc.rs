@@ -1,7 +1,7 @@
 use crate::graphics::colors::Rgba;
 use core::ffi::c_void;
 use core::mem::{self, ManuallyDrop};
-use roc_std::{ReferenceCount, RocList, RocStr};
+use roc_std::{RocList, RocStr};
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
@@ -51,7 +51,7 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 #[repr(transparent)]
 #[cfg(target_pointer_width = "64")] // on a 64-bit system, the tag fits in this pointer's spare 3 bits
 pub struct RocElem {
-    entry: *const RocElemEntry,
+    entry: *mut RocElemEntry,
 }
 
 impl RocElem {
@@ -80,53 +80,50 @@ pub enum RocElemTag {
 }
 
 #[repr(C)]
+#[derive(Clone)]
 pub struct RocButton {
     pub child: ManuallyDrop<RocElem>,
     pub styles: ButtonStyles,
 }
 
 #[repr(C)]
+#[derive(Clone)]
 pub struct RocRowOrCol {
     pub children: RocList<RocElem>,
 }
 
-unsafe impl ReferenceCount for RocElem {
-    /// Increment the reference count.
-    fn increment(&self) {
-        use RocElemTag::*;
-
-        match self.tag() {
-            Button => unsafe { &*self.entry().button.child }.increment(),
-            Text => unsafe { &*self.entry().text }.increment(),
-            Row | Col => {
-                let children = unsafe { &self.entry().row_or_col.children };
-
-                for child in children.as_slice().iter() {
-                    child.increment();
-                }
+impl Clone for RocElem {
+    fn clone(&self) -> Self {
+        unsafe {
+            match self.tag() {
+                RocElemTag::Button => Self {
+                    entry: &mut RocElemEntry {
+                        button: (*self.entry).button.clone(),
+                    },
+                },
+                RocElemTag::Text => Self {
+                    entry: &mut RocElemEntry {
+                        text: (*self.entry).text.clone(),
+                    },
+                },
+                RocElemTag::Col | RocElemTag::Row => Self {
+                    entry: &mut RocElemEntry {
+                        row_or_col: (*self.entry).row_or_col.clone(),
+                    },
+                },
             }
         }
     }
+}
 
-    /// Decrement the reference count.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `ptr` points to a value with a non-zero
-    /// reference count.
-    unsafe fn decrement(ptr: *const Self) {
-        use RocElemTag::*;
-
-        let elem = &*ptr;
-
-        match elem.tag() {
-            Button => ReferenceCount::decrement(&*elem.entry().button.child),
-            Text => ReferenceCount::decrement(&*elem.entry().text),
-            Row | Col => {
-                let children = &elem.entry().row_or_col.children;
-
-                for child in children.as_slice().iter() {
-                    ReferenceCount::decrement(child);
+impl Drop for RocElem {
+    fn drop(&mut self) {
+        unsafe {
+            match self.tag() {
+                RocElemTag::Button => mem::drop(ManuallyDrop::take(&mut (*self.entry).button)),
+                RocElemTag::Text => mem::drop(ManuallyDrop::take(&mut (*self.entry).text)),
+                RocElemTag::Col | RocElemTag::Row => {
+                    mem::drop(ManuallyDrop::take(&mut (*self.entry).row_or_col))
                 }
             }
         }

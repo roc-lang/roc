@@ -1317,7 +1317,7 @@ fn can_tags<'a>(
                         arg_types.push(ann);
                     }
 
-                    let tag_name = TagName::Tag(name);
+                    let tag_name = TagName(name);
                     tag_types.push((tag_name.clone(), arg_types));
 
                     break 'inner tag_name;

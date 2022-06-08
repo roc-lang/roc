@@ -1,6 +1,6 @@
 mod bindings;
 
-use bindings::{StrConsList, StrConsList_Cons};
+use bindings::StrConsList;
 use indoc::indoc;
 
 extern "C" {
@@ -38,10 +38,7 @@ pub extern "C" fn rust_main() -> i32 {
             "#
         ),
         tag_union,
-        StrConsList::Cons(StrConsList_Cons {
-            f0: "small str".into(),
-            f1: StrConsList::Nil
-        }),
+        StrConsList::Cons("small str".into(), StrConsList::Nil),
         StrConsList::Nil,
     ); // Debug
 

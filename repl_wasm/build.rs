@@ -40,6 +40,7 @@ fn main() {
         PRE_LINKED_BINARY,
         "--export-all",
         "--no-entry",
+        "--relocatable",
     ];
 
     let zig = zig_executable();

@@ -13,7 +13,7 @@ use roc_can::expr::{AccessorData, AnnotatedMark, ClosureData, Field, WhenBranch}
 use roc_can::pattern::Pattern;
 use roc_can::traverse::symbols_introduced_from_pattern;
 use roc_collections::all::{HumanIndex, MutMap, SendMap};
-use roc_module::ident::{Lowercase, TagName};
+use roc_module::ident::Lowercase;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{IllegalCycleMark, Variable};
@@ -366,7 +366,6 @@ pub fn constrain_expr(
         Closure(ClosureData {
             function_type: fn_var,
             closure_type: closure_var,
-            closure_ext_var,
             return_type: ret_var,
             arguments,
             loc_body: boxed,
@@ -379,7 +378,6 @@ pub fn constrain_expr(
 
             let ret_var = *ret_var;
             let closure_var = *closure_var;
-            let closure_ext_var = *closure_ext_var;
 
             let closure_type = Type::Variable(closure_var);
             let return_type = Type::Variable(ret_var);
@@ -393,7 +391,6 @@ pub fn constrain_expr(
 
             vars.push(ret_var);
             vars.push(closure_var);
-            vars.push(closure_ext_var);
             vars.push(*fn_var);
 
             let body_type = NoExpectation(return_type);
@@ -418,7 +415,6 @@ pub fn constrain_expr(
                 region,
                 captured_symbols,
                 closure_var,
-                closure_ext_var,
                 &mut vars,
             );
 
@@ -858,7 +854,6 @@ pub fn constrain_expr(
             field,
             record_var,
             closure_var,
-            closure_ext_var,
             ext_var,
             field_var,
         }) => {
@@ -880,7 +875,7 @@ pub fn constrain_expr(
 
             let lambda_set = Type::ClosureTag {
                 name: *closure_name,
-                ext: *closure_ext_var,
+                captures: vec![],
             };
 
             let closure_type = Type::Variable(*closure_var);
@@ -909,14 +904,7 @@ pub fn constrain_expr(
             ];
 
             constraints.exists_many(
-                [
-                    *record_var,
-                    *function_var,
-                    *closure_var,
-                    *closure_ext_var,
-                    field_var,
-                    ext_var,
-                ],
+                [*record_var, *function_var, *closure_var, field_var, ext_var],
                 cons,
             )
         }
@@ -1430,7 +1418,6 @@ fn constrain_typed_def(
             Closure(ClosureData {
                 function_type: fn_var,
                 closure_type: closure_var,
-                closure_ext_var,
                 return_type: ret_var,
                 captured_symbols,
                 arguments,
@@ -1455,12 +1442,10 @@ fn constrain_typed_def(
             let mut vars = Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
             let ret_var = *ret_var;
             let closure_var = *closure_var;
-            let closure_ext_var = *closure_ext_var;
             let ret_type = *ret_type.clone();
 
             vars.push(ret_var);
             vars.push(closure_var);
-            vars.push(closure_ext_var);
 
             constrain_typed_function_arguments(
                 constraints,
@@ -1478,7 +1463,6 @@ fn constrain_typed_def(
                 region,
                 captured_symbols,
                 closure_var,
-                closure_ext_var,
                 &mut vars,
             );
 
@@ -1790,13 +1774,11 @@ fn constrain_closure_size(
     region: Region,
     captured_symbols: &[(Symbol, Variable)],
     closure_var: Variable,
-    closure_ext_var: Variable,
     variables: &mut Vec<Variable>,
 ) -> Constraint {
     debug_assert!(variables.iter().any(|s| *s == closure_var));
-    debug_assert!(variables.iter().any(|s| *s == closure_ext_var));
 
-    let mut tag_arguments = Vec::with_capacity(captured_symbols.len());
+    let mut captured_types = Vec::with_capacity(captured_symbols.len());
     let mut captured_symbols_constraints = Vec::with_capacity(captured_symbols.len());
 
     for (symbol, var) in captured_symbols {
@@ -1804,7 +1786,7 @@ fn constrain_closure_size(
         variables.push(*var);
 
         // this symbol is captured, so it must be part of the closure type
-        tag_arguments.push(Type::Variable(*var));
+        captured_types.push(Type::Variable(*var));
 
         // make the variable equal to the looked-up type of symbol
         captured_symbols_constraints.push(constraints.lookup(
@@ -1815,17 +1797,9 @@ fn constrain_closure_size(
     }
 
     // pick a more efficient representation if we don't actually capture anything
-    let closure_type = if tag_arguments.is_empty() {
-        Type::ClosureTag {
-            name,
-            ext: closure_ext_var,
-        }
-    } else {
-        let tag_name = TagName::Closure(name);
-        Type::TagUnion(
-            vec![(tag_name, tag_arguments)],
-            TypeExtension::from_type(Type::Variable(closure_ext_var)),
-        )
+    let closure_type = Type::ClosureTag {
+        name,
+        captures: captured_types,
     };
 
     let finalizer = constraints.equal_types_var(
@@ -1999,7 +1973,6 @@ pub fn rec_defs_help(
                         Closure(ClosureData {
                             function_type: fn_var,
                             closure_type: closure_var,
-                            closure_ext_var,
                             return_type: ret_var,
                             captured_symbols,
                             arguments,
@@ -2025,12 +1998,10 @@ pub fn rec_defs_help(
                         let mut vars = Vec::with_capacity(state.vars.capacity() + 1);
                         let ret_var = *ret_var;
                         let closure_var = *closure_var;
-                        let closure_ext_var = *closure_ext_var;
                         let ret_type = *ret_type.clone();
 
                         vars.push(ret_var);
                         vars.push(closure_var);
-                        vars.push(closure_ext_var);
 
                         constrain_typed_function_arguments(
                             constraints,
@@ -2049,7 +2020,6 @@ pub fn rec_defs_help(
                             region,
                             captured_symbols,
                             closure_var,
-                            closure_ext_var,
                             &mut vars,
                         );
 

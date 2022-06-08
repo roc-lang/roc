@@ -383,11 +383,7 @@ impl<'a> RocDocAllocator<'a> {
     }
 
     pub fn tag_name(&'a self, tn: TagName) -> DocBuilder<'a, Self, Annotation> {
-        match tn {
-            TagName::Tag(uppercase) => self.tag(uppercase),
-            TagName::Closure(symbol) => self.symbol_qualified(symbol),
-            // TagName::Closure(_symbol) => unreachable!("closure tags are internal only"),
-        }
+        self.tag(tn.0)
     }
 
     pub fn symbol_unqualified(&'a self, symbol: Symbol) -> DocBuilder<'a, Self, Annotation> {
@@ -417,6 +413,7 @@ impl<'a> RocDocAllocator<'a> {
         .annotate(Annotation::Symbol)
     }
 
+    /// TODO: remove in favor of tag_name
     pub fn tag(&'a self, uppercase: Uppercase) -> DocBuilder<'a, Self, Annotation> {
         self.text(format!("{}", uppercase))
             .annotate(Annotation::Tag)

@@ -465,6 +465,197 @@ pub(crate) fn canonicalize_defs<'a>(
         scope.register_debug_idents();
     }
 
+    let (aliases, symbols_introduced) = canonicalize_type_defs(
+        env,
+        &mut output,
+        var_store,
+        scope,
+        pending_type_defs,
+        pattern_type,
+    );
+
+    // Now that we have the scope completely assembled, and shadowing resolved,
+    // we're ready to canonicalize any body exprs.
+    canonicalize_value_defs(
+        env,
+        output,
+        var_store,
+        scope,
+        &value_defs,
+        pattern_type,
+        aliases,
+        symbols_introduced,
+    )
+}
+
+#[inline(always)]
+pub(crate) fn canonicalize_toplevel_defs<'a>(
+    env: &mut Env<'a>,
+    mut output: Output,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    loc_defs: &'a mut roc_parse::ast::Defs<'a>,
+    pattern_type: PatternType,
+) -> (CanDefs, Output, MutMap<Symbol, Region>) {
+    // Canonicalizing defs while detecting shadowing involves a multi-step process:
+    //
+    // 1. Go through each of the patterns.
+    // 2. For each identifier pattern, get the scope.symbol() for the ident. (That symbol will use the home module for its module.)
+    // 3. If that symbol is already in scope, then we're about to shadow it. Error!
+    // 4. Otherwise, add it to the scope immediately, so we can detect shadowing within the same
+    //    pattern (e.g. (Foo a a) = ...)
+    // 5. Add this canonicalized pattern and its corresponding ast::Expr to pending_exprs.
+    // 5. Once every pattern has been processed and added to scope, go back and canonicalize the exprs from
+    //    pending_exprs, this time building up a canonical def for each one.
+    //
+    // This way, whenever any expr is doing lookups, it knows everything that's in scope -
+    // even defs that appear after it in the source.
+    //
+    // This naturally handles recursion too, because a given expr which refers
+    // to itself won't be processed until after its def has been added to scope.
+
+    let mut pending_type_defs = Vec::with_capacity(loc_defs.type_defs.len());
+    let mut value_defs = Vec::with_capacity(loc_defs.value_defs.len());
+
+    for (index, either_index) in loc_defs.tags.iter().enumerate() {
+        match either_index.split() {
+            Ok(type_index) => {
+                let type_def = &loc_defs.type_defs[type_index.index()];
+                pending_type_defs.push(to_pending_type_def(env, type_def, scope, pattern_type));
+            }
+            Err(value_index) => {
+                let value_def = &loc_defs.value_defs[value_index.index()];
+                let region = loc_defs.regions[index];
+                value_defs.push(Loc::at(region, value_def));
+            }
+        }
+    }
+
+    if cfg!(debug_assertions) {
+        scope.register_debug_idents();
+    }
+
+    let (aliases, symbols_introduced) = canonicalize_type_defs(
+        env,
+        &mut output,
+        var_store,
+        scope,
+        pending_type_defs,
+        pattern_type,
+    );
+
+    // Now that we have the scope completely assembled, and shadowing resolved,
+    // we're ready to canonicalize any body exprs.
+    canonicalize_value_defs(
+        env,
+        output,
+        var_store,
+        scope,
+        &value_defs,
+        pattern_type,
+        aliases,
+        symbols_introduced,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn canonicalize_value_defs<'a>(
+    env: &mut Env<'a>,
+    mut output: Output,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    value_defs: &[Loc<&'a roc_parse::ast::ValueDef<'a>>],
+    pattern_type: PatternType,
+    mut aliases: VecMap<Symbol, Alias>,
+    mut symbols_introduced: MutMap<Symbol, Region>,
+) -> (CanDefs, Output, MutMap<Symbol, Region>) {
+    // Canonicalize all the patterns, record shadowing problems, and store
+    // the ast::Expr values in pending_exprs for further canonicalization
+    // once we've finished assembling the entire scope.
+    let mut pending_value_defs = Vec::with_capacity(value_defs.len());
+    for loc_def in value_defs {
+        let mut new_output = Output::default();
+        match to_pending_value_def(
+            env,
+            var_store,
+            loc_def.value,
+            scope,
+            &mut new_output,
+            pattern_type,
+        ) {
+            None => { /* skip */ }
+            Some(pending_def) => {
+                // Record the ast::Expr for later. We'll do another pass through these
+                // once we have the entire scope assembled. If we were to canonicalize
+                // the exprs right now, they wouldn't have symbols in scope from defs
+                // that get would have gotten added later in the defs list!
+                pending_value_defs.push(pending_def);
+                output.union(new_output);
+            }
+        }
+    }
+
+    let mut symbol_to_index: Vec<(IdentId, u32)> = Vec::with_capacity(pending_value_defs.len());
+
+    for (def_index, pending_def) in pending_value_defs.iter().enumerate() {
+        for (s, r) in BindingsFromPattern::new(pending_def.loc_pattern()) {
+            // store the top-level defs, used to ensure that closures won't capture them
+            if let PatternType::TopLevelDef = pattern_type {
+                env.top_level_symbols.insert(s);
+            }
+
+            symbols_introduced.insert(s, r);
+
+            debug_assert_eq!(env.home, s.module_id());
+            debug_assert!(
+                !symbol_to_index.iter().any(|(id, _)| *id == s.ident_id()),
+                "{:?}",
+                s
+            );
+
+            symbol_to_index.push((s.ident_id(), def_index as u32));
+        }
+    }
+
+    let capacity = pending_value_defs.len();
+    let mut defs = Vec::with_capacity(capacity);
+    let mut def_ordering = DefOrdering::from_symbol_to_id(env.home, symbol_to_index, capacity);
+
+    for (def_id, pending_def) in pending_value_defs.into_iter().enumerate() {
+        let temp_output = canonicalize_pending_value_def(
+            env,
+            pending_def,
+            output,
+            scope,
+            var_store,
+            pattern_type,
+            &mut aliases,
+        );
+
+        output = temp_output.output;
+
+        defs.push(Some(temp_output.def));
+
+        def_ordering.insert_symbol_references(def_id as u32, &temp_output.references)
+    }
+
+    let can_defs = CanDefs {
+        defs,
+        def_ordering,
+        aliases,
+    };
+
+    (can_defs, output, symbols_introduced)
+}
+
+fn canonicalize_type_defs<'a>(
+    env: &mut Env<'a>,
+    output: &mut Output,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    pending_type_defs: Vec<PendingTypeDef<'a>>,
+    pattern_type: PatternType,
+) -> (VecMap<Symbol, Alias>, MutMap<Symbol, Region>) {
     enum TypeDef<'a> {
         Alias(
             Loc<Symbol>,
@@ -547,7 +738,7 @@ pub(crate) fn canonicalize_defs<'a>(
             TypeDef::Alias(name, vars, ann) => {
                 let alias = canonicalize_alias(
                     env,
-                    &mut output,
+                    output,
                     var_store,
                     scope,
                     &pending_abilities_in_scope,
@@ -565,7 +756,7 @@ pub(crate) fn canonicalize_defs<'a>(
             TypeDef::Opaque(name, vars, ann, derived) => {
                 let alias_and_derives = canonicalize_opaque(
                     env,
-                    &mut output,
+                    output,
                     var_store,
                     scope,
                     &pending_abilities_in_scope,
@@ -590,7 +781,7 @@ pub(crate) fn canonicalize_defs<'a>(
 
     // Now that we know the alias dependency graph, we can try to insert recursion variables
     // where aliases are recursive tag unions, or detect illegal recursions.
-    let mut aliases = correct_mutual_recursive_type_alias(env, aliases, var_store);
+    let aliases = correct_mutual_recursive_type_alias(env, aliases, var_store);
 
     for (symbol, alias) in aliases.iter() {
         scope.add_alias(
@@ -605,7 +796,7 @@ pub(crate) fn canonicalize_defs<'a>(
     // Resolve all pending abilities, to add them to scope.
     resolve_abilities(
         env,
-        &mut output,
+        output,
         var_store,
         scope,
         abilities,
@@ -613,89 +804,7 @@ pub(crate) fn canonicalize_defs<'a>(
         pattern_type,
     );
 
-    // Now that we have the scope completely assembled, and shadowing resolved,
-    // we're ready to canonicalize any body exprs.
-
-    // Canonicalize all the patterns, record shadowing problems, and store
-    // the ast::Expr values in pending_exprs for further canonicalization
-    // once we've finished assembling the entire scope.
-    let mut pending_value_defs = Vec::with_capacity(value_defs.len());
-    for loc_def in value_defs.into_iter() {
-        let mut new_output = Output::default();
-        match to_pending_value_def(
-            env,
-            var_store,
-            loc_def.value,
-            scope,
-            &mut new_output,
-            pattern_type,
-        ) {
-            None => { /* skip */ }
-            Some(pending_def) => {
-                // Record the ast::Expr for later. We'll do another pass through these
-                // once we have the entire scope assembled. If we were to canonicalize
-                // the exprs right now, they wouldn't have symbols in scope from defs
-                // that get would have gotten added later in the defs list!
-                pending_value_defs.push(pending_def);
-                output.union(new_output);
-            }
-        }
-    }
-
-    let mut symbol_to_index: Vec<(IdentId, u32)> = Vec::with_capacity(pending_value_defs.len());
-
-    for (def_index, pending_def) in pending_value_defs.iter().enumerate() {
-        for (s, r) in BindingsFromPattern::new(pending_def.loc_pattern()) {
-            // store the top-level defs, used to ensure that closures won't capture them
-            if let PatternType::TopLevelDef = pattern_type {
-                env.top_level_symbols.insert(s);
-            }
-
-            symbols_introduced.insert(s, r);
-
-            debug_assert_eq!(env.home, s.module_id());
-            debug_assert!(
-                !symbol_to_index.iter().any(|(id, _)| *id == s.ident_id()),
-                "{:?}",
-                s
-            );
-
-            symbol_to_index.push((s.ident_id(), def_index as u32));
-        }
-    }
-
-    let capacity = pending_value_defs.len();
-    let mut defs = Vec::with_capacity(capacity);
-    let mut def_ordering = DefOrdering::from_symbol_to_id(env.home, symbol_to_index, capacity);
-
-    for (def_id, pending_def) in pending_value_defs.into_iter().enumerate() {
-        let temp_output = canonicalize_pending_value_def(
-            env,
-            pending_def,
-            output,
-            scope,
-            var_store,
-            pattern_type,
-            &mut aliases,
-        );
-
-        output = temp_output.output;
-
-        defs.push(Some(temp_output.def));
-
-        def_ordering.insert_symbol_references(def_id as u32, &temp_output.references)
-    }
-
-    (
-        CanDefs {
-            defs,
-            def_ordering,
-            // The result needs a thread-safe `SendMap`
-            aliases,
-        },
-        output,
-        symbols_introduced,
-    )
+    (aliases, symbols_introduced)
 }
 
 /// Resolve all pending abilities, to add them to scope.
@@ -758,43 +867,41 @@ fn resolve_abilities<'a>(
                 .iter()
                 .partition(|av| av.ability == loc_ability_name.value);
 
-            let mut bad_has_clauses = false;
-
-            if variables_bound_to_ability.is_empty() {
-                // There are no variables bound to the parent ability - then this member doesn't
-                // need to be a part of the ability.
-                env.problem(Problem::AbilityMemberMissingHasClause {
-                    member: member_sym,
-                    ability: loc_ability_name.value,
-                    region: name_region,
-                });
-                bad_has_clauses = true;
-            }
-
-            if variables_bound_to_ability.len() > 1 {
-                // There is more than one variable bound to the member signature, so something like
-                //   Eq has eq : a, b -> Bool | a has Eq, b has Eq
-                // We have no way of telling what type implements a particular instance of Eq in
-                // this case (a or b?), so disallow it.
-                let span_has_clauses =
-                    Region::across_all(variables_bound_to_ability.iter().map(|v| &v.first_seen));
-                let bound_var_names = variables_bound_to_ability
-                    .iter()
-                    .map(|v| v.name.clone())
-                    .collect();
-                env.problem(Problem::AbilityMemberMultipleBoundVars {
-                    member: member_sym,
-                    ability: loc_ability_name.value,
-                    span_has_clauses,
-                    bound_var_names,
-                });
-                bad_has_clauses = true;
-            }
-
-            if bad_has_clauses {
-                // Pretend the member isn't a part of the ability
-                continue;
-            }
+            let var_bound_to_ability = match variables_bound_to_ability.as_slice() {
+                [one] => one.variable,
+                [] => {
+                    // There are no variables bound to the parent ability - then this member doesn't
+                    // need to be a part of the ability.
+                    env.problem(Problem::AbilityMemberMissingHasClause {
+                        member: member_sym,
+                        ability: loc_ability_name.value,
+                        region: name_region,
+                    });
+                    // Pretend the member isn't a part of the ability
+                    continue;
+                }
+                [..] => {
+                    // There is more than one variable bound to the member signature, so something like
+                    //   Eq has eq : a, b -> Bool | a has Eq, b has Eq
+                    // We have no way of telling what type implements a particular instance of Eq in
+                    // this case (a or b?), so disallow it.
+                    let span_has_clauses = Region::across_all(
+                        variables_bound_to_ability.iter().map(|v| &v.first_seen),
+                    );
+                    let bound_var_names = variables_bound_to_ability
+                        .iter()
+                        .map(|v| v.name.clone())
+                        .collect();
+                    env.problem(Problem::AbilityMemberMultipleBoundVars {
+                        member: member_sym,
+                        ability: loc_ability_name.value,
+                        span_has_clauses,
+                        bound_var_names,
+                    });
+                    // Pretend the member isn't a part of the ability
+                    continue;
+                }
+            };
 
             // The introduced variables are good; add them to the output.
             output
@@ -809,6 +916,13 @@ fn resolve_abilities<'a>(
                 flex_vars: iv.collect_flex(),
             };
 
+            let signature = {
+                let mut signature = member_annot.typ;
+                signature
+                    .instantiate_lambda_sets_as_unspecialized(var_bound_to_ability, member_sym);
+                signature
+            };
+
             can_members.push((
                 member_sym,
                 AbilityMemberData {
@@ -816,7 +930,7 @@ fn resolve_abilities<'a>(
                     region: name_region,
                     typ: MemberTypeInfo::Local {
                         variables,
-                        signature: member_annot.typ,
+                        signature,
                         signature_var: var_store.fresh(),
                     },
                 },
@@ -1250,7 +1364,6 @@ fn canonicalize_pending_value_def<'a>(
                     value: Closure(ClosureData {
                         function_type: var_store.fresh(),
                         closure_type: var_store.fresh(),
-                        closure_ext_var: var_store.fresh(),
                         return_type: var_store.fresh(),
                         name: symbol,
                         captured_symbols: Vec::new(),
@@ -1468,23 +1581,26 @@ pub fn can_defs_with_return<'a>(
     let mut loc_expr: Loc<Expr> = ret_expr;
 
     for declaration in declarations.into_iter().rev() {
-        loc_expr = Loc {
-            region: Region::zero(),
-            value: decl_to_let(declaration, loc_expr),
-        };
+        loc_expr = decl_to_let(declaration, loc_expr);
     }
 
     (loc_expr.value, output)
 }
 
-fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Expr {
+fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Loc<Expr> {
     match decl {
-        Declaration::Declare(def) => Expr::LetNonRec(Box::new(def), Box::new(loc_ret)),
+        Declaration::Declare(def) => {
+            let region = Region::span_across(&def.loc_pattern.region, &loc_ret.region);
+            let expr = Expr::LetNonRec(Box::new(def), Box::new(loc_ret));
+            Loc::at(region, expr)
+        }
         Declaration::DeclareRec(defs, cycle_mark) => {
-            Expr::LetRec(defs, Box::new(loc_ret), cycle_mark)
+            let region = Region::span_across(&defs[0].loc_pattern.region, &loc_ret.region);
+            let expr = Expr::LetRec(defs, Box::new(loc_ret), cycle_mark);
+            Loc::at(region, expr)
         }
         Declaration::InvalidCycle(entries) => {
-            Expr::RuntimeError(RuntimeError::CircularDef(entries))
+            Loc::at_zero(Expr::RuntimeError(RuntimeError::CircularDef(entries)))
         }
         Declaration::Builtin(_) => {
             // Builtins should only be added to top-level decls, not to let-exprs!

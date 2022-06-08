@@ -43,9 +43,8 @@ fn build_wasm() {
         "-lc",
         "-o",
         &format!("{}/{}.o", out_dir, PLATFORM_FILENAME),
-        "--export-all",
         "--no-entry",
-        // "--emit-relocs", // TODO: resize stack by relocating __heap_base (issue #2480) here and in repl_test build
+        "--relocatable",
     ];
 
     let zig = zig_executable();
@@ -98,10 +97,18 @@ fn build_wasm_libc_compilerrt(out_dir: &str, source_path: &str) -> (String, Stri
         ],
     );
 
-    (
-        run_command("find", &[&zig_cache_dir, "-name", "libc.a"]),
-        run_command("find", &[&zig_cache_dir, "-name", "compiler_rt.o"]),
-    )
+    let libc_path = run_command("find", &[&zig_cache_dir, "-name", "libc.a"])
+        .split('\n')
+        .next()
+        .unwrap()
+        .into();
+    let compiler_rt_path = run_command("find", &[&zig_cache_dir, "-name", "compiler_rt.o"])
+        .split('\n')
+        .next()
+        .unwrap()
+        .into();
+
+    (libc_path, compiler_rt_path)
 }
 
 fn feature_is_enabled(feature_name: &str) -> bool {

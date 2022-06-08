@@ -1,8 +1,6 @@
 helloC
 helloRust
 helloSwift
-helloWeb.wasm
 helloWorld
-helloWorld.wasm
 helloZig
-host.wasm
+*.wasm

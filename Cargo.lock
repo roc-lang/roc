@@ -3562,6 +3562,7 @@ dependencies = [
  "roc_region",
  "roc_target",
  "roc_types",
+ "tempfile",
 ]
 
 [[package]]
@@ -3853,6 +3854,17 @@ name = "roc_ident"
 version = "0.1.0"
 
 [[package]]
+name = "roc_late_solve"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "roc_can",
+ "roc_solve",
+ "roc_types",
+ "roc_unify",
+]
+
+[[package]]
 name = "roc_linker"
 version = "0.1.0"
 dependencies = [
@@ -3941,14 +3953,13 @@ dependencies = [
  "roc_debug_flags",
  "roc_error_macros",
  "roc_exhaustive",
+ "roc_late_solve",
  "roc_module",
  "roc_problem",
  "roc_region",
- "roc_solve",
  "roc_std",
  "roc_target",
  "roc_types",
- "roc_unify",
  "static_assertions 1.1.0",
  "ven_pretty",
 ]
@@ -4169,7 +4180,6 @@ dependencies = [
  "roc_module",
  "roc_region",
  "static_assertions 1.1.0",
- "ven_ena",
 ]
 
 [[package]]
@@ -5122,13 +5132,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc5cf98d8186244414c848017f0e2676b3fcb46807f6668a97dfe67359a3c4b7"
 dependencies = [
  "getrandom",
-]
-
-[[package]]
-name = "ven_ena"
-version = "0.13.1"
-dependencies = [
- "log",
 ]
 
 [[package]]

@@ -2,7 +2,7 @@
 
 use crate::layout::{
     Builtin, ClosureRepresentation, LambdaSet, Layout, LayoutCache, LayoutProblem,
-    RawFunctionLayout, TagIdIntType, UnionLayout, WrappedVariant,
+    RawFunctionLayout, TagIdIntType, TagOrClosure, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
@@ -18,19 +18,20 @@ use roc_debug_flags::{
 };
 use roc_error_macros::todo_abilities;
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
+use roc_late_solve::{
+    instantiate_rigids, resolve_ability_specialization, Resolved, UnificationFailed,
+};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::{RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
-use roc_solve::ability::{resolve_ability_specialization, Resolved};
 use roc_std::RocDec;
 use roc_target::TargetInfo;
 use roc_types::subs::{
     Content, ExhaustiveMark, FlatType, RedundantMark, StorageSubs, Subs, Variable,
     VariableSubsSlice,
 };
-use roc_unify::unify::Mode;
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
@@ -76,7 +77,7 @@ macro_rules! return_on_layout_error {
 }
 
 macro_rules! return_on_layout_error_help {
-    ($env:expr, $error:expr) => {
+    ($env:expr, $error:expr) => {{
         match $error {
             LayoutProblem::UnresolvedTypeVar(_) => {
                 return Stmt::RuntimeError($env.arena.alloc(format!(
@@ -93,7 +94,7 @@ macro_rules! return_on_layout_error_help {
                 )));
             }
         }
-    };
+    }};
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1268,6 +1269,12 @@ impl<'a, 'i> Env<'a, 'i> {
     pub fn is_imported_symbol(&self, symbol: Symbol) -> bool {
         symbol.module_id() != self.home
     }
+
+    /// Unifies two variables and performs lambda set compaction.
+    /// Use this rather than [roc_unify::unify] directly!
+    fn unify(&mut self, left: Variable, right: Variable) -> Result<(), UnificationFailed> {
+        roc_late_solve::unify(self.arena, self.subs, self.abilities_store, left, right)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Copy, Eq, Hash)]
@@ -1644,7 +1651,7 @@ pub enum Expr<'a> {
 
     Tag {
         tag_layout: UnionLayout<'a>,
-        tag_name: TagName,
+        tag_name: TagOrClosure,
         tag_id: TagIdIntType,
         arguments: &'a [Symbol],
     },
@@ -1688,7 +1695,7 @@ pub enum Expr<'a> {
         update_mode: UpdateModeId,
         // normal Tag fields
         tag_layout: UnionLayout<'a>,
-        tag_name: TagName,
+        tag_name: TagOrClosure,
         tag_id: TagIdIntType,
         arguments: &'a [Symbol],
     },
@@ -1776,8 +1783,8 @@ impl<'a> Expr<'a> {
                 ..
             } => {
                 let doc_tag = match tag_name {
-                    TagName::Tag(s) => alloc.text(s.as_str()),
-                    TagName::Closure(s) => alloc
+                    TagOrClosure::Tag(TagName(s)) => alloc.text(s.as_str()),
+                    TagOrClosure::Closure(s) => alloc
                         .text("ClosureTag(")
                         .append(symbol_to_doc(alloc, *s))
                         .append(")"),
@@ -1797,8 +1804,8 @@ impl<'a> Expr<'a> {
                 ..
             } => {
                 let doc_tag = match tag_name {
-                    TagName::Tag(s) => alloc.text(s.as_str()),
-                    TagName::Closure(s) => alloc
+                    TagOrClosure::Tag(TagName(s)) => alloc.text(s.as_str()),
+                    TagOrClosure::Closure(s) => alloc
                         .text("ClosureTag(")
                         .append(symbol_to_doc(alloc, *s))
                         .append(")"),
@@ -2265,7 +2272,7 @@ fn from_can_let<'a>(
                             needed_specializations.next().unwrap();
 
                         // Unify the expr_var with the requested specialization once.
-                        let _res = roc_unify::unify::unify(env.subs, var, def.expr_var, Mode::EQ);
+                        let _res = env.unify(var, def.expr_var);
 
                         resolve_abilities_in_specialized_body(
                             env,
@@ -2304,8 +2311,7 @@ fn from_can_let<'a>(
                             "expr marked as having specializations, but it has no type variables!",
                         );
 
-                            let _res =
-                                roc_unify::unify::unify(env.subs, var, new_def_expr_var, Mode::EQ);
+                            let _res = env.unify(var, new_def_expr_var);
 
                             resolve_abilities_in_specialized_body(
                                 env,
@@ -2757,7 +2763,10 @@ fn generate_runtime_error_function<'a>(
     )
     .unwrap();
 
-    eprintln!("emitted runtime error function {:?}", &msg);
+    eprintln!(
+        "emitted runtime error function {:?} for layout {:?}",
+        &msg, layout
+    );
 
     let runtime_error = Stmt::RuntimeError(msg.into_bump_str());
 
@@ -2796,16 +2805,14 @@ fn resolve_abilities_in_specialized_body<'a>(
 ) -> std::vec::Vec<SpecializationId> {
     use roc_can::expr::Expr;
     use roc_can::traverse::{walk_expr, Visitor};
-    use roc_unify::unify::unify;
 
-    struct Resolver<'a> {
-        subs: &'a mut Subs,
-        procs: &'a Procs<'a>,
-        abilities_store: &'a mut AbilitiesStore,
+    struct Resolver<'a, 'b, 'borrow> {
+        env: &'borrow mut Env<'a, 'b>,
+        procs: &'borrow Procs<'a>,
         seen_defs: MutSet<Symbol>,
         specialized: std::vec::Vec<SpecializationId>,
     }
-    impl Visitor for Resolver<'_> {
+    impl Visitor for Resolver<'_, '_, '_> {
         fn visit_expr(&mut self, expr: &Expr, _region: Region, var: Variable) {
             match expr {
                 Expr::Closure(..) => {
@@ -2821,6 +2828,7 @@ fn resolve_abilities_in_specialized_body<'a>(
                 }
                 Expr::AbilityMember(member_sym, specialization_id, _specialization_var) => {
                     let (specialization, specialization_def) = match self
+                        .env
                         .abilities_store
                         .get_resolved(*specialization_id)
                     {
@@ -2839,8 +2847,8 @@ fn resolve_abilities_in_specialized_body<'a>(
                         ),
                         None => {
                             let specialization = resolve_ability_specialization(
-                                self.subs,
-                                self.abilities_store,
+                                self.env.subs,
+                                self.env.abilities_store,
                                 *member_sym,
                                 var,
                             )
@@ -2853,7 +2861,8 @@ fn resolve_abilities_in_specialized_body<'a>(
                                 }
                             };
 
-                            self.abilities_store
+                            self.env
+                                .abilities_store
                                 .insert_resolved(*specialization_id, specialization);
 
                             debug_assert!(!self.specialized.contains(specialization_id));
@@ -2870,8 +2879,8 @@ fn resolve_abilities_in_specialized_body<'a>(
                                 .expect("Specialization found, but it's not in procs");
                             let specialization_var = specialization_def.annotation;
 
-                            let unified = unify(self.subs, var, specialization_var, Mode::EQ);
-                            unified.expect_success(
+                            let unified = self.env.unify(var, specialization_var);
+                            unified.expect(
                                 "Specialization does not unify - this is a typechecker bug!",
                             );
 
@@ -2896,9 +2905,8 @@ fn resolve_abilities_in_specialized_body<'a>(
     }
 
     let mut resolver = Resolver {
-        subs: env.subs,
+        env,
         procs,
-        abilities_store: env.abilities_store,
         seen_defs: MutSet::default(),
         specialized: vec![],
     };
@@ -2923,12 +2931,7 @@ fn specialize_external<'a>(
     let snapshot = env.subs.snapshot();
     let cache_snapshot = layout_cache.snapshot();
 
-    let _unified = roc_unify::unify::unify(
-        env.subs,
-        partial_proc.annotation,
-        fn_var,
-        roc_unify::unify::Mode::EQ,
-    );
+    let _unified = env.unify(partial_proc.annotation, fn_var);
 
     // This will not hold for programs with type errors
     // let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));
@@ -3268,6 +3271,7 @@ fn specialize_external<'a>(
     }
 }
 
+#[derive(Debug)]
 enum SpecializedLayout<'a> {
     /// A body like `foo = \a,b,c -> ...`
     FunctionBody {
@@ -3499,7 +3503,6 @@ where
     F: FnOnce(&mut Env<'a, '_>) -> Variable,
 {
     // add the specializations that other modules require of us
-    use roc_solve::solve::instantiate_rigids;
 
     let snapshot = env.subs.snapshot();
     let cache_snapshot = layout_cache.snapshot();
@@ -5284,7 +5287,7 @@ where
         ClosureRepresentation::Union {
             tag_id,
             alphabetic_order_fields: field_layouts,
-            tag_name,
+            closure_name: tag_name,
             union_layout,
         } => {
             // captured variables are in symbol-alphabetic order, but now we want
@@ -5309,7 +5312,7 @@ where
             let expr = Expr::Tag {
                 tag_id,
                 tag_layout: union_layout,
-                tag_name,
+                tag_name: tag_name.into(),
                 arguments: symbols,
             };
 
@@ -5413,12 +5416,14 @@ fn convert_tag_union<'a>(
         Unit | UnitWithArguments => Stmt::Let(assigned, Expr::Struct(&[]), Layout::UNIT, hole),
         BoolUnion { ttrue, .. } => Stmt::Let(
             assigned,
-            Expr::Literal(Literal::Bool(tag_name == ttrue)),
+            Expr::Literal(Literal::Bool(&tag_name == ttrue.expect_tag_ref())),
             Layout::Builtin(Builtin::Bool),
             hole,
         ),
         ByteUnion(tag_names) => {
-            let opt_tag_id = tag_names.iter().position(|key| key == &tag_name);
+            let opt_tag_id = tag_names
+                .iter()
+                .position(|key| key.expect_tag_ref() == &tag_name);
 
             match opt_tag_id {
                 Some(tag_id) => Stmt::Let(
@@ -5499,7 +5504,7 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name,
+                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -5510,7 +5515,7 @@ fn convert_tag_union<'a>(
                     tag_name: wrapped_tag_name,
                     ..
                 } => {
-                    debug_assert_eq!(tag_name, wrapped_tag_name);
+                    debug_assert_eq!(TagOrClosure::Tag(tag_name.clone()), wrapped_tag_name);
 
                     field_symbols = {
                         let mut temp = Vec::with_capacity_in(field_symbols_temp.len(), arena);
@@ -5522,7 +5527,7 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name,
+                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -5547,7 +5552,7 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name,
+                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -5574,7 +5579,7 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name,
+                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -5592,7 +5597,7 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name,
+                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -5790,7 +5795,6 @@ fn register_capturing_closure<'a>(
             function_type,
             return_type,
             closure_type,
-            closure_ext_var,
             recursive,
             arguments,
             loc_body: boxed_body,
@@ -5836,7 +5840,7 @@ fn register_capturing_closure<'a>(
                     &captured_symbols,
                     layout_cache.raw_from_var(env.arena, function_type, env.subs),
                     env.subs,
-                    (function_type, closure_type, closure_ext_var),
+                    (function_type, closure_type),
                 );
                 CapturedSymbols::None
             }
@@ -8328,36 +8332,39 @@ fn from_can_pattern_help<'a>(
                         }],
                     },
                 },
-                BoolUnion { ttrue, ffalse } => Pattern::BitLiteral {
-                    value: tag_name == &ttrue,
-                    tag_name: tag_name.clone(),
-                    union: Union {
-                        render_as: RenderAs::Tag,
-                        alternatives: vec![
-                            Ctor {
-                                tag_id: TagId(0),
-                                name: CtorName::Tag(ffalse),
-                                arity: 0,
-                            },
-                            Ctor {
-                                tag_id: TagId(1),
-                                name: CtorName::Tag(ttrue),
-                                arity: 0,
-                            },
-                        ],
-                    },
-                },
+                BoolUnion { ttrue, ffalse } => {
+                    let (ttrue, ffalse) = (ttrue.expect_tag(), ffalse.expect_tag());
+                    Pattern::BitLiteral {
+                        value: tag_name == &ttrue,
+                        tag_name: tag_name.clone(),
+                        union: Union {
+                            render_as: RenderAs::Tag,
+                            alternatives: vec![
+                                Ctor {
+                                    tag_id: TagId(0),
+                                    name: CtorName::Tag(ffalse),
+                                    arity: 0,
+                                },
+                                Ctor {
+                                    tag_id: TagId(1),
+                                    name: CtorName::Tag(ttrue),
+                                    arity: 0,
+                                },
+                            ],
+                        },
+                    }
+                }
                 ByteUnion(tag_names) => {
                     let tag_id = tag_names
                         .iter()
-                        .position(|key| key == tag_name)
+                        .position(|key| tag_name == key.expect_tag_ref())
                         .expect("tag must be in its own type");
 
                     let mut ctors = std::vec::Vec::with_capacity(tag_names.len());
                     for (i, tag_name) in tag_names.into_iter().enumerate() {
                         ctors.push(Ctor {
                             tag_id: TagId(i as _),
-                            name: CtorName::Tag(tag_name),
+                            name: CtorName::Tag(tag_name.expect_tag()),
                             arity: 0,
                         })
                     }
@@ -8454,7 +8461,7 @@ fn from_can_pattern_help<'a>(
                             for (i, (tag_name, args)) in tags.iter().enumerate() {
                                 ctors.push(Ctor {
                                     tag_id: TagId(i as _),
-                                    name: CtorName::Tag(tag_name.clone()),
+                                    name: CtorName::Tag(tag_name.expect_tag_ref().clone()),
                                     arity: args.len(),
                                 })
                             }
@@ -8506,7 +8513,7 @@ fn from_can_pattern_help<'a>(
                             for (i, (tag_name, args)) in tags.iter().enumerate() {
                                 ctors.push(Ctor {
                                     tag_id: TagId(i as _),
-                                    name: CtorName::Tag(tag_name.clone()),
+                                    name: CtorName::Tag(tag_name.expect_tag_ref().clone()),
                                     // don't include tag discriminant in arity
                                     arity: args.len() - 1,
                                 })
@@ -8548,7 +8555,7 @@ fn from_can_pattern_help<'a>(
                             tag_name: w_tag_name,
                             fields,
                         } => {
-                            debug_assert_eq!(&w_tag_name, tag_name);
+                            debug_assert_eq!(w_tag_name.expect_tag_ref(), tag_name);
 
                             ctors.push(Ctor {
                                 tag_id: TagId(0),
@@ -8600,7 +8607,7 @@ fn from_can_pattern_help<'a>(
                                 if i == nullable_id as usize {
                                     ctors.push(Ctor {
                                         tag_id: TagId(i as _),
-                                        name: CtorName::Tag(nullable_name.clone()),
+                                        name: CtorName::Tag(nullable_name.expect_tag_ref().clone()),
                                         // don't include tag discriminant in arity
                                         arity: 0,
                                     });
@@ -8610,7 +8617,7 @@ fn from_can_pattern_help<'a>(
 
                                 ctors.push(Ctor {
                                     tag_id: TagId(i as _),
-                                    name: CtorName::Tag(tag_name.clone()),
+                                    name: CtorName::Tag(tag_name.expect_tag_ref().clone()),
                                     // don't include tag discriminant in arity
                                     arity: args.len() - 1,
                                 });
@@ -8621,7 +8628,7 @@ fn from_can_pattern_help<'a>(
                             if i == nullable_id as usize {
                                 ctors.push(Ctor {
                                     tag_id: TagId(i as _),
-                                    name: CtorName::Tag(nullable_name.clone()),
+                                    name: CtorName::Tag(nullable_name.expect_tag_ref().clone()),
                                     // don't include tag discriminant in arity
                                     arity: 0,
                                 });
@@ -8634,7 +8641,7 @@ fn from_can_pattern_help<'a>(
 
                             let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
 
-                            let it = if tag_name == &nullable_name {
+                            let it = if tag_name == nullable_name.expect_tag_ref() {
                                 [].iter()
                             } else {
                                 argument_layouts.iter()
@@ -8672,13 +8679,13 @@ fn from_can_pattern_help<'a>(
 
                             ctors.push(Ctor {
                                 tag_id: TagId(nullable_id as _),
-                                name: CtorName::Tag(nullable_name.clone()),
+                                name: CtorName::Tag(nullable_name.expect_tag_ref().clone()),
                                 arity: 0,
                             });
 
                             ctors.push(Ctor {
                                 tag_id: TagId(!nullable_id as _),
-                                name: CtorName::Tag(nullable_name.clone()),
+                                name: CtorName::Tag(nullable_name.expect_tag_ref().clone()),
                                 // FIXME drop tag
                                 arity: other_fields.len() - 1,
                             });
@@ -8690,7 +8697,7 @@ fn from_can_pattern_help<'a>(
 
                             let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
 
-                            let it = if tag_name == &nullable_name {
+                            let it = if tag_name == nullable_name.expect_tag_ref() {
                                 [].iter()
                             } else {
                                 // FIXME drop tag

@@ -10,13 +10,12 @@ pub mod pattern;
 pub mod spaces;
 
 use bumpalo::{collections::String, Bump};
-use roc_parse::ast::{Def, Module};
-use roc_region::all::Loc;
+use roc_parse::ast::Module;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub struct Ast<'a> {
     pub module: Module<'a>,
-    pub defs: bumpalo::collections::vec::Vec<'a, Loc<Def<'a>>>,
+    pub defs: roc_parse::ast::Defs<'a>,
 }
 
 #[derive(Debug)]

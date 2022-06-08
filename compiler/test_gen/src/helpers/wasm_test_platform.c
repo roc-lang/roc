@@ -124,7 +124,7 @@ void roc_dealloc(void *ptr, unsigned int alignment)
 //--------------------------
 
 // Allow the test to probe the panic message
-char* panic_msg;
+extern char* panic_msg;
 
 void roc_panic(char *msg, unsigned int tag_id)
 {

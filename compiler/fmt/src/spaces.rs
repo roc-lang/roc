@@ -184,10 +184,20 @@ impl<'a> RemoveSpaces<'a> for Ast<'a> {
         Ast {
             module: self.module.remove_spaces(arena),
             defs: {
-                let mut defs = Vec::with_capacity_in(self.defs.len(), arena);
-                for d in &self.defs {
-                    defs.push(d.remove_spaces(arena))
+                let mut defs = self.defs.clone();
+
+                for type_def in defs.type_defs.iter_mut() {
+                    *type_def = type_def.remove_spaces(arena);
                 }
+
+                for value_def in defs.value_defs.iter_mut() {
+                    *value_def = value_def.remove_spaces(arena);
+                }
+
+                for region_def in defs.regions.iter_mut() {
+                    *region_def = region_def.remove_spaces(arena);
+                }
+
                 defs
             },
         }
@@ -272,6 +282,12 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                 },
             },
         }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for Region {
+    fn remove_spaces(&self, _arena: &'a Bump) -> Self {
+        Region::zero()
     }
 }
 

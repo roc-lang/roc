@@ -13,7 +13,7 @@ cp -r public/ build/
 
 # grab the source code and copy it to Netlify's server; if it's not there, fail the build.
 pushd build
-wget https://github.com/rtfeldman/elm-css/files/8037422/roc-source-code.zip
+wget https://github.com/rtfeldman/elm-css/files/8849069/roc-source-code.zip
 popd
 
 pushd ..

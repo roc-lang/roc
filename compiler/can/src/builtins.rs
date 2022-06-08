@@ -2620,7 +2620,6 @@ fn list_intersperse(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let clos = Closure(ClosureData {
         function_type: clos_var,
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: clos_acc_var,
         name: clos_sym,
         recursive: Recursive::NotRecursive,
@@ -2712,7 +2711,6 @@ fn list_split(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let clos = Closure(ClosureData {
         function_type: clos_fun_var,
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: clos_ret_var,
         name: clos_sym,
         recursive: Recursive::NotRecursive,
@@ -2906,7 +2904,6 @@ fn list_drop_if(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let keep_predicate = Closure(ClosureData {
         function_type: t_keep_predicate,
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: Variable::BOOL,
         name: Symbol::LIST_DROP_IF_PREDICATE,
         recursive: Recursive::NotRecursive,
@@ -3093,7 +3090,6 @@ fn list_join_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let concat_clos = Closure(ClosureData {
         function_type: t_concat_clos,
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: list_after,
         name: Symbol::LIST_JOIN_MAP_CONCAT,
         recursive: Recursive::NotRecursive,
@@ -3632,7 +3628,6 @@ fn list_sort_desc(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let closure = Closure(ClosureData {
         function_type: closure_var,
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: compare_ret_var,
         name: Symbol::LIST_SORT_DESC_COMPARE,
         recursive: Recursive::NotRecursive,
@@ -4116,7 +4111,6 @@ fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let wrapper = Closure(ClosureData {
         function_type: wrapper_var,
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: accum_var,
         name: Symbol::SET_WALK_USER_FUNCTION,
         recursive: Recursive::NotRecursive,
@@ -4712,7 +4706,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
             CalledVia::Space,
         );
 
-        let tag_name = TagName::Tag("Ok".into());
+        let tag_name = TagName("Ok".into());
 
         // ok branch
         let ok = Tag {
@@ -4744,7 +4738,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Tag("Err".into());
+        let tag_name = TagName("Err".into());
 
         let err = Tag {
             variant_var: var_store.fresh(),
@@ -4813,7 +4807,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             CalledVia::Space,
         );
 
-        let tag_name = TagName::Tag("Err".into());
+        let tag_name = TagName("Err".into());
 
         // ok branch
         let ok = Tag {
@@ -4845,7 +4839,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Tag("Ok".into());
+        let tag_name = TagName("Ok".into());
 
         let err = Tag {
             variant_var: var_store.fresh(),
@@ -4901,7 +4895,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // ok branch
-        let tag_name = TagName::Tag("Ok".into());
+        let tag_name = TagName("Ok".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -4922,7 +4916,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Tag("Err".into());
+        let tag_name = TagName("Err".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -4968,7 +4962,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // ok branch
-        let tag_name = TagName::Tag("Ok".into());
+        let tag_name = TagName("Ok".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -4980,7 +4974,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
         let false_expr = Tag {
             variant_var: var_store.fresh(),
             ext_var: var_store.fresh(),
-            name: TagName::Tag("False".into()),
+            name: TagName("False".into()),
             arguments: vec![],
         };
 
@@ -4996,7 +4990,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Tag("Err".into());
+        let tag_name = TagName("Err".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -5008,7 +5002,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
         let true_expr = Tag {
             variant_var: var_store.fresh(),
             ext_var: var_store.fresh(),
-            name: TagName::Tag("True".into()),
+            name: TagName("True".into()),
             arguments: vec![],
         };
 
@@ -5049,7 +5043,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // ok branch
-        let tag_name = TagName::Tag("Ok".into());
+        let tag_name = TagName("Ok".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -5061,7 +5055,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
         let true_expr = Tag {
             variant_var: var_store.fresh(),
             ext_var: var_store.fresh(),
-            name: TagName::Tag("True".into()),
+            name: TagName("True".into()),
             arguments: vec![],
         };
 
@@ -5077,7 +5071,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Tag("Err".into());
+        let tag_name = TagName("Err".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -5089,7 +5083,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
         let false_expr = Tag {
             variant_var: var_store.fresh(),
             ext_var: var_store.fresh(),
-            name: TagName::Tag("False".into()),
+            name: TagName("False".into()),
             arguments: vec![],
         };
 
@@ -5143,7 +5137,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
             CalledVia::Space,
         );
 
-        let tag_name = TagName::Tag("Ok".into());
+        let tag_name = TagName("Ok".into());
 
         // ok branch
         let ok = call_func;
@@ -5170,7 +5164,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Tag("Err".into());
+        let tag_name = TagName("Err".into());
 
         let err = Tag {
             variant_var: var_store.fresh(),
@@ -5231,7 +5225,7 @@ fn tag(name: &'static str, args: Vec<Expr>, var_store: &mut VarStore) -> Expr {
     Expr::Tag {
         variant_var: var_store.fresh(),
         ext_var: var_store.fresh(),
-        name: TagName::Tag(name.into()),
+        name: TagName(name.into()),
         arguments: args
             .into_iter()
             .map(|expr| (var_store.fresh(), no_region(expr)))
@@ -5404,7 +5398,6 @@ fn defn_help(
     Closure(ClosureData {
         function_type: var_store.fresh(),
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: ret_var,
         name: fn_name,
         captured_symbols: Vec::new(),

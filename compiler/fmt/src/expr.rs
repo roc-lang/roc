@@ -116,7 +116,6 @@ impl<'a> Formattable for Expr<'a> {
     ) {
         use self::Expr::*;
 
-        //dbg!(self);
         let apply_needs_parens = parens == Parens::InApply;
 
         match self {
@@ -146,7 +145,10 @@ impl<'a> Formattable for Expr<'a> {
                     }
 
                     let next_indent = if starts_with_newline(sub_expr) || should_add_newlines {
-                        indent + INDENT
+                        match sub_expr {
+                            Expr::Closure(..) | Expr::SpaceAfter(Closure(..), ..) => indent,
+                            _ => indent + INDENT,
+                        }
                     } else {
                         indent
                     };

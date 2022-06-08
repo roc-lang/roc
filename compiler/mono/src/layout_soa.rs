@@ -1,10 +1,9 @@
 use crate::layout::{ext_var_is_empty_record, ext_var_is_empty_tag_union};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
-use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_target::TargetInfo;
-use roc_types::subs::{Content, FlatType, Subs, Variable};
+use roc_types::subs::{self, Content, FlatType, Subs, Variable};
 use roc_types::types::RecordField;
 use std::collections::hash_map::Entry;
 
@@ -142,11 +141,20 @@ impl FunctionLayout {
             | Content::FlexAbleVar(_, _)
             | Content::RigidAbleVar(_, _) => Err(UnresolvedVariable(var)),
             Content::RecursionVar { .. } => Err(TypeError(())),
+            Content::LambdaSet(lset) => Self::from_lambda_set(layouts, subs, *lset),
             Content::Structure(flat_type) => Self::from_flat_type(layouts, subs, flat_type),
             Content::Alias(_, _, actual, _) => Self::from_var_help(layouts, subs, *actual),
             Content::RangedNumber(actual, _) => Self::from_var_help(layouts, subs, *actual),
             Content::Error => Err(TypeError(())),
         }
+    }
+
+    fn from_lambda_set(
+        _layouts: &mut Layouts,
+        _subs: &Subs,
+        _lset: subs::LambdaSet,
+    ) -> Result<Self, LayoutError> {
+        todo!();
     }
 
     fn from_flat_type(
@@ -252,99 +260,88 @@ impl LambdaSet {
             Content::RecursionVar { .. } => {
                 unreachable!("lambda sets cannot currently be recursive")
             }
-            Content::Structure(flat_type) => Self::from_flat_type(layouts, subs, flat_type),
+            Content::LambdaSet(lset) => Self::from_lambda_set(layouts, subs, *lset),
+            Content::Structure(_flat_type) => unreachable!(),
             Content::Alias(_, _, actual, _) => Self::from_var_help(layouts, subs, *actual),
             Content::RangedNumber(actual, _) => Self::from_var_help(layouts, subs, *actual),
             Content::Error => Err(TypeError(())),
         }
     }
 
-    fn from_flat_type(
+    fn from_lambda_set(
         layouts: &mut Layouts,
         subs: &Subs,
-        flat_type: &FlatType,
+        lset: subs::LambdaSet,
     ) -> Result<Self, LayoutError> {
-        use FlatType::*;
-        use LayoutError::*;
+        let subs::LambdaSet {
+            solved,
+            recursion_var: _,
+            unspecialized: _,
+        } = lset;
 
-        match flat_type {
-            TagUnion(union_tags, ext) => {
-                debug_assert!(ext_var_is_empty_tag_union(subs, *ext));
+        // TODO: handle unspecialized
 
-                debug_assert!(
-                    !union_tags.is_empty(),
-                    "lambda set must contain atleast the function itself"
-                );
+        debug_assert!(
+            !solved.is_empty(),
+            "lambda set must contain atleast the function itself"
+        );
 
-                let tag_names = union_tags.tag_names();
-                let closure_names = Self::get_closure_names(layouts, subs, tag_names);
+        let lambda_names = solved.labels();
+        let closure_names = Self::get_closure_names(layouts, subs, lambda_names);
 
-                let variables = union_tags.variables();
-                if variables.len() == 1 {
-                    let tag_name = &subs.tag_names[tag_names.start as usize];
-                    let symbol = if let TagName::Closure(symbol) = tag_name {
-                        let index = Index::new(layouts.symbols.len() as u32);
-                        layouts.symbols.push(*symbol);
-                        index
-                    } else {
-                        unreachable!("must be a closure tag")
-                    };
-                    let variable_slice = subs.variable_slices[variables.start as usize];
+        let variables = solved.variables();
+        if variables.len() == 1 {
+            let symbol = subs.closure_names[lambda_names.start as usize];
+            let symbol_index = Index::new(layouts.symbols.len() as u32);
+            layouts.symbols.push(symbol);
+            let variable_slice = subs.variable_slices[variables.start as usize];
 
-                    match variable_slice.len() {
-                        0 => Ok(LambdaSet::Empty { symbol }),
-                        1 => {
-                            let var = subs.variables[variable_slice.start as usize];
-                            let layout = Layout::from_var(layouts, subs, var)?;
+            match variable_slice.len() {
+                0 => Ok(LambdaSet::Empty {
+                    symbol: symbol_index,
+                }),
+                1 => {
+                    let var = subs.variables[variable_slice.start as usize];
+                    let layout = Layout::from_var(layouts, subs, var)?;
 
-                            let index = Index::new(layouts.layouts.len() as u32);
-                            layouts.layouts.push(layout);
+                    let index = Index::new(layouts.layouts.len() as u32);
+                    layouts.layouts.push(layout);
 
-                            Ok(LambdaSet::Single {
-                                symbol,
-                                layout: index,
-                            })
-                        }
-                        _ => {
-                            let slice = Layout::from_variable_slice(layouts, subs, variable_slice)?;
+                    Ok(LambdaSet::Single {
+                        symbol: symbol_index,
+                        layout: index,
+                    })
+                }
+                _ => {
+                    let slice = Layout::from_variable_slice(layouts, subs, variable_slice)?;
 
-                            Ok(LambdaSet::Struct {
-                                symbol,
-                                layouts: slice,
-                            })
-                        }
-                    }
-                } else {
-                    let layouts =
-                        Layout::from_slice_variable_slice(layouts, subs, union_tags.variables())?;
-
-                    Ok(LambdaSet::Union {
-                        symbols: closure_names,
-                        layouts,
+                    Ok(LambdaSet::Struct {
+                        symbol: symbol_index,
+                        layouts: slice,
                     })
                 }
             }
-            Erroneous(_) => Err(TypeError(())),
-            _ => unreachable!(),
+        } else {
+            let layouts = Layout::from_slice_variable_slice(layouts, subs, solved.variables())?;
+
+            Ok(LambdaSet::Union {
+                symbols: closure_names,
+                layouts,
+            })
         }
     }
 
     fn get_closure_names(
         layouts: &mut Layouts,
         subs: &Subs,
-        subs_slice: roc_types::subs::SubsSlice<TagName>,
+        subs_slice: roc_types::subs::SubsSlice<Symbol>,
     ) -> Slice<Symbol> {
         let slice = Slice::new(layouts.symbols.len() as u32, subs_slice.len() as u16);
 
-        let tag_names = &subs.tag_names[subs_slice.indices()];
+        let symbols = &subs.closure_names[subs_slice.indices()];
 
-        for tag_name in tag_names {
-            match tag_name {
-                TagName::Closure(symbol) => {
-                    layouts.symbols.push(*symbol);
-                }
-                TagName::Tag(_) => unreachable!("lambda set tags must be closure tags"),
-            }
+        for symbol in symbols {
+            layouts.symbols.push(*symbol);
         }
 
         slice
@@ -664,6 +661,8 @@ impl Layout {
                     }
                 }
             }
+            // Lambda set layout is same as tag union
+            Content::LambdaSet(lset) => Self::from_lambda_set(layouts, subs, *lset),
             Content::Structure(flat_type) => Self::from_flat_type(layouts, subs, flat_type),
             Content::Alias(symbol, _, actual, _) => {
                 let symbol = *symbol;
@@ -689,6 +688,50 @@ impl Layout {
             }
             Content::RangedNumber(typ, _) => Self::from_var_help(layouts, subs, *typ),
             Content::Error => Err(TypeError(())),
+        }
+    }
+
+    fn from_lambda_set(
+        layouts: &mut Layouts,
+        subs: &Subs,
+        lset: subs::LambdaSet,
+    ) -> Result<Layout, LayoutError> {
+        let subs::LambdaSet {
+            solved,
+            recursion_var,
+            unspecialized: _,
+        } = lset;
+
+        // TODO: handle unspecialized lambda set
+
+        match recursion_var.into_variable() {
+            Some(rec_var) => {
+                let rec_var = subs.get_root_key_without_compacting(rec_var);
+
+                let cached = layouts
+                    .recursion_variable_to_structure_variable_map
+                    .get(&rec_var);
+
+                if let Some(layout_index) = cached {
+                    match layouts.layouts[layout_index.index as usize] {
+                        Layout::Reserved => {
+                            // we have to do the work here to fill this reserved variable in
+                        }
+                        other => {
+                            return Ok(other);
+                        }
+                    }
+                }
+
+                let slices = Self::from_slice_variable_slice(layouts, subs, solved.variables())?;
+
+                Ok(Layout::UnionRecursive(slices))
+            }
+            None => {
+                let slices = Self::from_slice_variable_slice(layouts, subs, solved.variables())?;
+
+                Ok(Layout::UnionNonRecursive(slices))
+            }
         }
     }
 
