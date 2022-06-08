@@ -1,19 +1,18 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use crate::{roc_alloc, roc_dealloc, storage::Storage};
 use core::{
     cell::Cell,
     cmp::{self, Ordering},
     fmt::Debug,
-    mem::{self, ManuallyDrop},
+    mem,
     ops::Deref,
     ptr::{self, NonNull},
 };
 
-use crate::{roc_alloc, roc_dealloc, storage::Storage};
-
 #[repr(C)]
 pub struct RocBox<T> {
-    contents: NonNull<ManuallyDrop<T>>,
+    contents: NonNull<T>,
 }
 
 impl<T> RocBox<T> {
@@ -35,9 +34,9 @@ impl<T> RocBox<T> {
         }
 
         let contents = unsafe {
-            let contents_ptr = ptr.cast::<u8>().add(alignment).cast::<ManuallyDrop<T>>();
+            let contents_ptr = ptr.cast::<u8>().add(alignment).cast::<T>();
 
-            *contents_ptr = ManuallyDrop::new(contents);
+            *contents_ptr = contents;
 
             if true {
                 todo!("Increment the refcount of `contents`, and also do that in RocList extend_from_slice.");
@@ -156,7 +155,7 @@ impl<T> Drop for RocBox<T> {
                 // Drop the stored contents.
                 let contents_ptr = contents.as_ptr();
 
-                mem::drop::<T>(ManuallyDrop::take(&mut *contents_ptr));
+                mem::drop::<T>(ptr::read(contents_ptr));
 
                 let alignment = Self::alloc_alignment();
 
