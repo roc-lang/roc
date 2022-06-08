@@ -625,6 +625,7 @@ pub fn resolve_ability_specialization(
         .member_def(ability_member)
         .expect("Not an ability member symbol");
 
+    // Figure out the ability we're resolving in a temporary subs snapshot.
     let snapshot = subs.snapshot();
 
     let signature_var = member_def
@@ -632,8 +633,8 @@ pub fn resolve_ability_specialization(
         .unwrap_or_else(|| internal_error!("Signature var not resolved for {:?}", ability_member));
 
     instantiate_rigids(subs, signature_var);
-    let (_, must_implement_ability) = unify(subs, specialization_var, signature_var, Mode::EQ)
-        .expect_success(
+    let (_vars, must_implement_ability, _lambda_sets_to_specialize) =
+        unify(subs, specialization_var, signature_var, Mode::EQ).expect_success(
             "If resolving a specialization, the specialization must be known to typecheck.",
         );
 

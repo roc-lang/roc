@@ -1,8 +1,8 @@
 use crate::subs::{
     self, AliasVariables, Content, FlatType, GetSubsSlice, Label, Subs, SubsIndex, UnionLabels,
-    UnionTags, Variable,
+    UnionTags, UnsortedUnionLabels, Variable,
 };
-use crate::types::{name_type_var, RecordField};
+use crate::types::{name_type_var, RecordField, Uls};
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName};
@@ -48,9 +48,15 @@ macro_rules! write_parens {
     };
 }
 
+pub enum PrintLambdaSets {
+    Yes,
+    No,
+}
+
 struct Env<'a> {
     home: ModuleId,
     interns: &'a Interns,
+    print_lambda_sets: PrintLambdaSets,
 }
 
 /// How many times a root variable appeared in Subs.
@@ -234,6 +240,7 @@ fn find_names_needed(
         LambdaSet(subs::LambdaSet {
             solved,
             recursion_var,
+            unspecialized,
         }) => {
             for slice_index in solved.variables() {
                 let slice = subs[slice_index];
@@ -241,6 +248,11 @@ fn find_names_needed(
                     let var = subs[var_index];
                     find_names_needed(var, subs, roots, root_appearances, names_taken);
                 }
+            }
+
+            for uls_index in unspecialized.into_iter() {
+                let Uls(var, _, _) = subs[uls_index];
+                find_names_needed(var, subs, roots, root_appearances, names_taken);
             }
 
             if let Some(rec_var) = recursion_var.into_variable() {
@@ -364,9 +376,14 @@ fn content_to_string(
     home: ModuleId,
     interns: &Interns,
     named_result: NamedResult,
+    print_lambda_sets: PrintLambdaSets,
 ) -> String {
     let mut buf = String::new();
-    let env = Env { home, interns };
+    let env = Env {
+        home,
+        interns,
+        print_lambda_sets,
+    };
     let mut ctx = Context {
         able_variables: vec![],
         recursion_structs_to_expand: named_result.recursion_structs_to_expand,
@@ -391,10 +408,18 @@ pub fn name_and_print_var(
     subs: &mut Subs,
     home: ModuleId,
     interns: &Interns,
+    print_lambda_sets: PrintLambdaSets,
 ) -> String {
     let named_result = name_all_type_vars(var, subs);
     let content = subs.get_content_without_compacting(var);
-    content_to_string(content, subs, home, interns, named_result)
+    content_to_string(
+        content,
+        subs,
+        home,
+        interns,
+        named_result,
+        print_lambda_sets,
+    )
 }
 
 pub fn get_single_arg<'a>(subs: &'a Subs, args: &'a AliasVariables) -> &'a Content {
@@ -553,8 +578,63 @@ fn write_content<'a>(
                 }),
             }
         }
-        LambdaSet(_) => {
-            // lambda sets never exposed to the user
+        LambdaSet(subs::LambdaSet {
+            solved,
+            recursion_var,
+            unspecialized,
+        }) => {
+            debug_assert!(matches!(env.print_lambda_sets, PrintLambdaSets::Yes));
+
+            buf.push_str("[[");
+
+            let print_symbol = |symbol: &Symbol| {
+                format!(
+                    "{}({})",
+                    symbol.as_str(env.interns),
+                    symbol.ident_id().index(),
+                )
+            };
+
+            write_sorted_tags2(
+                env,
+                ctx,
+                subs,
+                buf,
+                solved.unsorted_lambdas(subs),
+                print_symbol,
+            );
+
+            buf.push(']');
+
+            if let Some(rec_var) = recursion_var.into_variable() {
+                buf.push_str(" as ");
+                write_content(
+                    env,
+                    ctx,
+                    subs.get_content_without_compacting(rec_var),
+                    subs,
+                    buf,
+                    parens,
+                )
+            }
+
+            for Uls(var, member, region) in subs.get_subs_slice(*unspecialized) {
+                buf.push_str(" + ");
+                write_content(
+                    env,
+                    ctx,
+                    subs.get_content_without_compacting(*var),
+                    subs,
+                    buf,
+                    Parens::Unnecessary,
+                );
+                buf.push(':');
+                buf.push_str(&print_symbol(member));
+                buf.push(':');
+                buf.push_str(&region.to_string());
+            }
+
+            buf.push(']');
         }
         RangedNumber(typ, _range_vars) => write_content(
             env,
@@ -672,19 +752,19 @@ fn write_ext_content<'a>(
     }
 }
 
-fn write_sorted_tags2<'a>(
+fn write_sorted_tags2<'a, L>(
     env: &Env,
     ctx: &mut Context<'a>,
     subs: &'a Subs,
     buf: &mut String,
-    tags: &UnionTags,
-    ext_var: Variable,
-) -> ExtContent<'a> {
-    // Sort the fields so they always end up in the same order.
-    let (tags, new_ext_var) = tags.unsorted_tags_and_ext(subs, ext_var);
+    tags: UnsortedUnionLabels<L>,
+    label_to_string: impl Fn(&L) -> String,
+) where
+    L: Label + Ord,
+{
     let mut sorted_fields = tags.tags;
 
-    sorted_fields.sort_by(|(a, _), (b, _)| a.as_ident_str().cmp(&b.as_ident_str()));
+    sorted_fields.sort_by(|(a, _), (b, _)| a.cmp(b));
 
     let mut any_written_yet = false;
 
@@ -695,7 +775,7 @@ fn write_sorted_tags2<'a>(
             any_written_yet = true;
         }
 
-        buf.push_str(label.as_ident_str().as_str());
+        buf.push_str(&label_to_string(label));
 
         for var in vars {
             buf.push(' ');
@@ -709,8 +789,6 @@ fn write_sorted_tags2<'a>(
             );
         }
     }
-
-    ExtContent::from_var(subs, new_ext_var)
 }
 
 fn write_sorted_tags<'a>(
@@ -788,10 +866,11 @@ fn write_flat_type<'a>(
         ),
         EmptyRecord => buf.push_str(EMPTY_RECORD),
         EmptyTagUnion => buf.push_str(EMPTY_TAG_UNION),
-        Func(args, _closure, ret) => write_fn(
+        Func(args, closure, ret) => write_fn(
             env,
             ctx,
             subs.get_subs_slice(*args),
+            *closure,
             *ret,
             subs,
             buf,
@@ -863,11 +942,20 @@ fn write_flat_type<'a>(
         TagUnion(tags, ext_var) => {
             buf.push('[');
 
-            let ext_content = write_sorted_tags2(env, ctx, subs, buf, tags, *ext_var);
+            // Sort the fields so they always end up in the same order.
+            let (tags, new_ext_var) = tags.unsorted_tags_and_ext(subs, *ext_var);
+            write_sorted_tags2(env, ctx, subs, buf, tags, |tag| tag.0.as_str().to_string());
 
             buf.push(']');
 
-            write_ext_content(env, ctx, subs, buf, ext_content, parens)
+            write_ext_content(
+                env,
+                ctx,
+                subs,
+                buf,
+                ExtContent::from_var(subs, new_ext_var),
+                parens,
+            )
         }
 
         FunctionOrTagUnion(tag_name, _, ext_var) => {
@@ -885,11 +973,19 @@ fn write_flat_type<'a>(
         RecursiveTagUnion(rec_var, tags, ext_var) => {
             buf.push('[');
 
-            let ext_content = write_sorted_tags2(env, ctx, subs, buf, tags, *ext_var);
+            let (tags, new_ext_var) = tags.unsorted_tags_and_ext(subs, *ext_var);
+            write_sorted_tags2(env, ctx, subs, buf, tags, |tag| tag.0.as_str().to_string());
 
             buf.push(']');
 
-            write_ext_content(env, ctx, subs, buf, ext_content, parens);
+            write_ext_content(
+                env,
+                ctx,
+                subs,
+                buf,
+                ExtContent::from_var(subs, new_ext_var),
+                parens,
+            );
 
             buf.push_str(" as ");
             write_content(
@@ -965,7 +1061,12 @@ pub fn resolve_lambda_set(subs: &Subs, mut var: Variable) -> ResolvedLambdaSet {
             Content::LambdaSet(subs::LambdaSet {
                 solved,
                 recursion_var: _,
+                unspecialized,
             }) => {
+                debug_assert!(
+                    unspecialized.is_empty(),
+                    "unspecialized lambda sets left over during resolution"
+                );
                 push_union(subs, solved, &mut set);
                 return ResolvedLambdaSet::Set(set);
             }
@@ -1056,10 +1157,12 @@ fn write_apply<'a>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_fn<'a>(
     env: &Env,
     ctx: &mut Context<'a>,
     args: &[Variable],
+    closure: Variable,
     ret: Variable,
     subs: &'a Subs,
     buf: &mut String,
@@ -1089,7 +1192,24 @@ fn write_fn<'a>(
         );
     }
 
-    buf.push_str(" -> ");
+    match env.print_lambda_sets {
+        PrintLambdaSets::No => {
+            buf.push_str(" -> ");
+        }
+        PrintLambdaSets::Yes => {
+            buf.push_str(" -");
+            write_content(
+                env,
+                ctx,
+                subs.get_content_without_compacting(closure),
+                subs,
+                buf,
+                parens,
+            );
+            buf.push_str("-> ");
+        }
+    }
+
     write_content(
         env,
         ctx,

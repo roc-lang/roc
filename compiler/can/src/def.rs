@@ -1581,23 +1581,26 @@ pub fn can_defs_with_return<'a>(
     let mut loc_expr: Loc<Expr> = ret_expr;
 
     for declaration in declarations.into_iter().rev() {
-        loc_expr = Loc {
-            region: Region::zero(),
-            value: decl_to_let(declaration, loc_expr),
-        };
+        loc_expr = decl_to_let(declaration, loc_expr);
     }
 
     (loc_expr.value, output)
 }
 
-fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Expr {
+fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Loc<Expr> {
     match decl {
-        Declaration::Declare(def) => Expr::LetNonRec(Box::new(def), Box::new(loc_ret)),
+        Declaration::Declare(def) => {
+            let region = Region::span_across(&def.loc_pattern.region, &loc_ret.region);
+            let expr = Expr::LetNonRec(Box::new(def), Box::new(loc_ret));
+            Loc::at(region, expr)
+        }
         Declaration::DeclareRec(defs, cycle_mark) => {
-            Expr::LetRec(defs, Box::new(loc_ret), cycle_mark)
+            let region = Region::span_across(&defs[0].loc_pattern.region, &loc_ret.region);
+            let expr = Expr::LetRec(defs, Box::new(loc_ret), cycle_mark);
+            Loc::at(region, expr)
         }
         Declaration::InvalidCycle(entries) => {
-            Expr::RuntimeError(RuntimeError::CircularDef(entries))
+            Loc::at_zero(Expr::RuntimeError(RuntimeError::CircularDef(entries)))
         }
         Declaration::Builtin(_) => {
             // Builtins should only be added to top-level decls, not to let-exprs!

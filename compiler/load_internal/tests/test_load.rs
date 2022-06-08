@@ -30,6 +30,7 @@ mod test_load {
     use roc_reporting::report::RocDocAllocator;
     use roc_target::TargetInfo;
     use roc_types::pretty_print::name_and_print_var;
+    use roc_types::pretty_print::PrintLambdaSets;
     use roc_types::subs::Subs;
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -237,7 +238,8 @@ mod test_load {
         expected_types: &mut HashMap<&str, &str>,
     ) {
         for (symbol, expr_var) in &def.pattern_vars {
-            let actual_str = name_and_print_var(*expr_var, subs, home, interns);
+            let actual_str =
+                name_and_print_var(*expr_var, subs, home, interns, PrintLambdaSets::No);
             let fully_qualified = symbol.fully_qualified(interns, home).to_string();
             let expected_type = expected_types
                 .remove(fully_qualified.as_str())

@@ -12,7 +12,7 @@ use roc_repl_eval::{
 };
 use roc_reporting::report::DEFAULT_PALETTE_HTML;
 use roc_target::TargetInfo;
-use roc_types::pretty_print::name_and_print_var;
+use roc_types::pretty_print::{name_and_print_var, PrintLambdaSets};
 
 use crate::{js_create_app, js_get_result_and_memory, js_run_app};
 
@@ -184,7 +184,13 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
     let main_fn_var = *main_fn_var;
 
     // pretty-print the expr type string for later.
-    let expr_type_str = name_and_print_var(main_fn_var, &mut subs, module_id, &interns);
+    let expr_type_str = name_and_print_var(
+        main_fn_var,
+        &mut subs,
+        module_id,
+        &interns,
+        PrintLambdaSets::No,
+    );
     let content = subs.get_content_without_compacting(main_fn_var);
 
     let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
