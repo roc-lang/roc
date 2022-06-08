@@ -178,6 +178,7 @@ impl<'a> WasmModule<'a> {
     ) {
         //
         // Parse the host's call graph
+        // TODO: speed this up by using linker data instead of parsing instruction bytes
         //
         let indirect_callees = self.element.indirect_callees(arena);
         let import_signatures = self.import.function_signatures(arena);

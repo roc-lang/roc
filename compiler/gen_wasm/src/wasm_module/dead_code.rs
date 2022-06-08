@@ -165,6 +165,7 @@ pub fn trace_call_graph<'a, Indices: IntoIterator<Item = u32>>(
     current_trace.dedup();
 
     // Fast per-function lookup table to see if its dependencies have already been traced
+    // TODO: try a bitvec instead of Vec<bool>
     let mut already_traced = Vec::from_iter_in(std::iter::repeat(false).take(num_preloads), arena);
 
     loop {
