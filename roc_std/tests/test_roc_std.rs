@@ -233,9 +233,16 @@ mod with_terminator {
         verify_temp_c("", 0);
     }
 
-    /// e.g. "1" or "12" or "12345" etc.
+    /// e.g. "a" or "abc" or "abcdefg" etc.
     fn string_for_len(len: usize) -> String {
-        let bytes: Vec<u8> = (1..=len as u8).collect();
+        let first_index: usize = 97; // start with ASCII lowercase "a"
+        let bytes: Vec<u8> = (0..len)
+            .map(|index| {
+                let letter = (index % 26) + first_index;
+
+                letter.try_into().unwrap()
+            })
+            .collect();
 
         assert_eq!(bytes.len(), len);
 
