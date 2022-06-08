@@ -38,10 +38,6 @@ impl<T> RocBox<T> {
 
             *contents_ptr = contents;
 
-            if true {
-                todo!("Increment the refcount of `contents`, and also do that in RocList extend_from_slice.");
-            }
-
             // We already verified that the original alloc pointer was non-null,
             // and this one is the alloc pointer with `alignment` bytes added to it,
             // so it should be non-null too.
