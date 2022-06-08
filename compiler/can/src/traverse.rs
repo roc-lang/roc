@@ -7,7 +7,7 @@ use roc_types::subs::Variable;
 use crate::{
     abilities::AbilitiesStore,
     def::{Annotation, Declaration, Def},
-    expr::{AccessorData, ClosureData, Expr, Field, WhenBranch},
+    expr::{self, AccessorData, ClosureData, Expr, Field},
     pattern::{DestructType, Pattern, RecordDestruct},
 };
 
@@ -195,7 +195,7 @@ pub fn walk_when<V: Visitor>(
     cond_var: Variable,
     expr_var: Variable,
     loc_cond: &Loc<Expr>,
-    branches: &[WhenBranch],
+    branches: &[expr::WhenBranch],
 ) {
     visitor.visit_expr(&loc_cond.value, loc_cond.region, cond_var);
 
@@ -205,8 +205,12 @@ pub fn walk_when<V: Visitor>(
 }
 
 #[inline(always)]
-pub fn walk_when_branch<V: Visitor>(visitor: &mut V, branch: &WhenBranch, expr_var: Variable) {
-    let WhenBranch {
+pub fn walk_when_branch<V: Visitor>(
+    visitor: &mut V,
+    branch: &expr::WhenBranch,
+    expr_var: Variable,
+) {
+    let expr::WhenBranch {
         patterns,
         value,
         guard,
@@ -274,32 +278,48 @@ pub fn walk_record_fields<'a, V: Visitor>(
 }
 
 pub trait Visitor: Sized {
+    /// Most default implementations will call [Visitor::should_visit] to decide whether they
+    /// should descend into a node. Return `false` to skip visiting.
+    fn should_visit(&mut self, _region: Region) -> bool {
+        true
+    }
+
     fn visit_decls(&mut self, decls: &[Declaration]) {
         walk_decls(self, decls);
     }
 
     fn visit_decl(&mut self, decl: &Declaration) {
-        walk_decl(self, decl);
+        if self.should_visit(decl.region()) {
+            walk_decl(self, decl);
+        }
     }
 
     fn visit_def(&mut self, def: &Def) {
-        walk_def(self, def);
+        if self.should_visit(def.region()) {
+            walk_def(self, def);
+        }
     }
 
     fn visit_annotation(&mut self, _pat: &Annotation) {
         // ignore by default
     }
 
-    fn visit_expr(&mut self, expr: &Expr, _region: Region, var: Variable) {
-        walk_expr(self, expr, var);
+    fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
+        if self.should_visit(region) {
+            walk_expr(self, expr, var);
+        }
     }
 
-    fn visit_pattern(&mut self, pattern: &Pattern, _region: Region, _opt_var: Option<Variable>) {
-        walk_pattern(self, pattern);
+    fn visit_pattern(&mut self, pattern: &Pattern, region: Region, _opt_var: Option<Variable>) {
+        if self.should_visit(region) {
+            walk_pattern(self, pattern);
+        }
     }
 
-    fn visit_record_destruct(&mut self, destruct: &RecordDestruct, _region: Region) {
-        walk_record_destruct(self, destruct);
+    fn visit_record_destruct(&mut self, destruct: &RecordDestruct, region: Region) {
+        if self.should_visit(region) {
+            walk_record_destruct(self, destruct);
+        }
     }
 }
 
