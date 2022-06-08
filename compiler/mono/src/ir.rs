@@ -18,12 +18,14 @@ use roc_debug_flags::{
 };
 use roc_error_macros::todo_abilities;
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
+use roc_late_solve::{
+    instantiate_rigids, resolve_ability_specialization, Resolved, UnificationFailed,
+};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::{RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
-use roc_solve::ability::{resolve_ability_specialization, Resolved};
 use roc_std::RocDec;
 use roc_target::TargetInfo;
 use roc_types::subs::{
@@ -1270,34 +1272,8 @@ impl<'a, 'i> Env<'a, 'i> {
 
     /// Unifies two variables and performs lambda set compaction.
     /// Use this rather than [roc_unify::unify] directly!
-    fn unify(&mut self, left: Variable, right: Variable) -> Result<(), ()> {
-        use roc_solve::solve::{compact_lambda_sets_of_vars, Pools};
-        use roc_unify::unify::{unify, Mode, Unified};
-
-        let unified = unify(self.subs, left, right, Mode::EQ);
-        match unified {
-            Unified::Success {
-                vars: _,
-                must_implement_ability: _,
-                lambda_sets_to_specialize,
-            } => {
-                let mut pools = Pools::default();
-                compact_lambda_sets_of_vars(
-                    self.subs,
-                    self.arena,
-                    &mut pools,
-                    self.abilities_store,
-                    lambda_sets_to_specialize,
-                );
-                // Pools are only used to keep track of variable ranks for generalization purposes.
-                // Since we break generalization during monomorphization, `pools` is irrelevant
-                // here. We only need it for `compact_lambda_sets_of_vars`, which is also used in a
-                // solving context where pools are relevant.
-
-                Ok(())
-            }
-            Unified::Failure(..) | Unified::BadType(..) => Err(()),
-        }
+    fn unify(&mut self, left: Variable, right: Variable) -> Result<(), UnificationFailed> {
+        roc_late_solve::unify(self.arena, self.subs, self.abilities_store, left, right)
     }
 }
 
@@ -3520,7 +3496,6 @@ where
     F: FnOnce(&mut Env<'a, '_>) -> Variable,
 {
     // add the specializations that other modules require of us
-    use roc_solve::solve::instantiate_rigids;
 
     let snapshot = env.subs.snapshot();
     let cache_snapshot = layout_cache.snapshot();
