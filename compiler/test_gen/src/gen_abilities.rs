@@ -290,12 +290,11 @@ fn decode() {
             fromBytes : List U8, fmt -> Result val DecodeError
                         | fmt has DecoderFormatting, val has Decoding
             fromBytes = \lst, fmt ->
-                when decodeWith lst decoder fmt is
-                    { result, rest } ->
-                        Result.after result \val ->
-                            if List.isEmpty rest
-                            then Ok val
-                            else Err (Leftover rest)
+                it = decodeWith lst decoder fmt
+                Result.after it.result \val ->
+                    if List.isEmpty it.rest
+                    then Ok val
+                    else Err (Leftover it.rest)
 
 
             Linear := {}

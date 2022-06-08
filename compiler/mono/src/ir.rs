@@ -4925,12 +4925,15 @@ pub fn with_hole<'a>(
                             }
                         }
                         Value(function_symbol) => {
+                            dbg!(function_symbol);
                             let function_symbol = procs.get_or_insert_symbol_specialization(
                                 env,
                                 layout_cache,
                                 function_symbol,
                                 fn_var,
                             );
+
+                            dbg!(function_symbol);
 
                             match full_layout {
                                 RawFunctionLayout::Function(
