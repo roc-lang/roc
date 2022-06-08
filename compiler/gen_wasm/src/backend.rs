@@ -265,10 +265,9 @@ impl<'a> WasmBackend<'a> {
     /// If the host has a `main` function then we need to insert a `_start` to call it.
     /// This is something linkers do, and this backend is also a linker!
     fn maybe_call_host_main(&mut self) {
-        let main_symbol_index = if let Some(i) = self.module.linking.find_internal_symbol("main") {
-            i as usize
-        } else {
-            return;
+        let main_symbol_index = match self.module.linking.find_internal_symbol("main") {
+            Ok(x) => x,
+            Err(_) => return,
         };
 
         let main_fn_index: u32 = match &self.module.linking.symbol_table[main_symbol_index] {

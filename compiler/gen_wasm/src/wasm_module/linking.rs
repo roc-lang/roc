@@ -577,24 +577,43 @@ impl<'a> LinkingSection<'a> {
         }
     }
 
-    pub fn find_internal_symbol(&self, target_name: &str) -> Option<u32> {
+    pub fn find_internal_symbol(&self, target_name: &str) -> Result<usize, String> {
         self.symbol_table
             .iter()
             .position(|sym| sym.name() == Some(target_name))
-            .map(|x| x as u32)
+            .ok_or_else(|| {
+                format!(
+                    "Linking failed! Can't find `{}` in host symbol table",
+                    target_name
+                )
+            })
     }
 
-    pub fn find_imported_function_symbol(&self, fn_index: u32) -> Option<u32> {
+    pub fn find_and_reindex_imported_fn(
+        &mut self,
+        old_fn_index: u32,
+        new_fn_index: u32,
+    ) -> Result<u32, String> {
         self.symbol_table
-            .iter()
+            .iter_mut()
             .position(|sym| match sym {
                 SymInfo::Function(WasmObjectSymbol::ImplicitlyNamed { flags, index, .. })
                 | SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { flags, index, .. }) => {
-                    flags & WASM_SYM_UNDEFINED != 0 && *index == fn_index
+                    let found = *flags & WASM_SYM_UNDEFINED != 0 && *index == old_fn_index;
+                    if found {
+                        *index = new_fn_index;
+                    }
+                    found
                 }
                 _ => false,
             })
             .map(|sym_index| sym_index as u32)
+            .ok_or_else(|| {
+                format!(
+                    "Linking failed! Can't find fn #{} in host symbol table",
+                    old_fn_index
+                )
+            })
     }
 
     pub fn name_index_map(&self, arena: &'a Bump, prefix: &str) -> Vec<'a, (&'a str, u32)> {

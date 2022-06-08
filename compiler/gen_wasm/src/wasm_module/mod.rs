@@ -257,26 +257,22 @@ impl<'a> WasmModule<'a> {
         //
         // Relocate Wasm calls to JS imports
         // This must happen *before* we run dead code elimination on the code section,
-        // so that the host's linking data will still be valid.
+        // so that byte offsets in the host's linking data will still be valid.
         //
-        for (new_index, old_index) in live_import_fns.iter().enumerate() {
-            if new_index == *old_index as usize {
+        for (i, old_index) in live_import_fns.iter().enumerate() {
+            let new_index = i as u32;
+            if new_index == *old_index {
                 continue;
             }
             let sym_index = self
                 .linking
-                .find_imported_function_symbol(*old_index)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Linking failed! Can't find fn #{} in host symbol table",
-                        old_index
-                    )
-                });
+                .find_and_reindex_imported_fn(*old_index, new_index)
+                .unwrap();
             self.reloc_code.apply_relocs_u32(
                 &mut self.code.preloaded_bytes,
                 self.code.preloaded_reloc_offset,
                 sym_index,
-                new_index as u32,
+                new_index,
             );
         }
 
@@ -312,10 +308,7 @@ impl<'a> WasmModule<'a> {
     }
 
     pub fn relocate_internal_symbol(&mut self, sym_name: &str, value: u32) -> u32 {
-        let sym_index = self
-            .linking
-            .find_internal_symbol(sym_name)
-            .unwrap_or_else(|| panic!("Linking failed! Can't find host symbol `{}`", sym_name));
+        let sym_index = self.linking.find_internal_symbol(sym_name).unwrap() as u32;
 
         self.reloc_code.apply_relocs_u32(
             &mut self.code.preloaded_bytes,
@@ -380,13 +373,8 @@ impl<'a> WasmModule<'a> {
             // Find the host's symbol for the function we're linking
             let host_sym_index = self
                 .linking
-                .find_imported_function_symbol(host_fn_index as u32)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Linking failed! Can't find fn #{} ({}) in host symbol table",
-                        host_fn_index, app_fn_name
-                    )
-                });
+                .find_and_reindex_imported_fn(host_fn_index as u32, app_fn_index)
+                .unwrap();
 
             // Update calls to use the app function instead of the host import
             self.reloc_code.apply_relocs_u32(
@@ -403,13 +391,8 @@ impl<'a> WasmModule<'a> {
                 // Find the symbol for the swapped JS import
                 let swap_sym_index = self
                     .linking
-                    .find_imported_function_symbol(swap_fn_index as u32)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "Linking failed! Can't find fn #{} ({}) in host symbol table",
-                            swap_fn_index, swap_fn_name
-                        )
-                    });
+                    .find_and_reindex_imported_fn(swap_fn_index as u32, host_fn_index as u32)
+                    .unwrap();
 
                 // Update calls to the swapped JS import
                 self.reloc_code.apply_relocs_u32(
