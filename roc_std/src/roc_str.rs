@@ -17,33 +17,32 @@ use crate::RocList;
 #[repr(transparent)]
 pub struct RocStr(RocStrInner);
 
-macro_rules! with_stack_bytes {
-    ($len:expr, $elem_type:ty, $closure:expr) => {
-        {
-            use $crate::RocStr;
+fn with_stack_bytes<F, E, T>(length: usize, closure: F) -> T
+where
+    F: FnOnce(*mut E) -> T,
+{
+    use crate::{roc_alloc, roc_dealloc};
+    use core::mem::MaybeUninit;
 
-            if $len < RocStr::TEMP_STR_MAX_STACK_BYTES {
-                // TODO: once https://doc.rust-lang.org/std/mem/union.MaybeUninit.html#method.uninit_array
-                // has become stabilized, use that here in order to do a precise
-                // stack allocation instead of always over-allocating to 64B.
-                let mut bytes: MaybeUninit<[u8; RocStr::TEMP_STR_MAX_STACK_BYTES]> =
-                    MaybeUninit::uninit();
+    if length < RocStr::TEMP_STR_MAX_STACK_BYTES {
+        // TODO: once https://doc.rust-lang.org/std/mem/union.MaybeUninit.html#method.uninit_array
+        // has become stabilized, use that here in order to do a precise
+        // stack allocation instead of always over-allocating to 64B.
+        let mut bytes: MaybeUninit<[u8; RocStr::TEMP_STR_MAX_STACK_BYTES]> = MaybeUninit::uninit();
 
-                $closure(bytes.as_mut_ptr() as *mut $elem_type)
-            } else {
-                let align = core::mem::align_of::<$elem_type>() as u32;
-                // The string is too long to stack-allocate, so
-                // do a heap allocation and then free it afterwards.
-                let ptr = roc_alloc($len, align) as *mut $elem_type;
-                let answer = $closure(ptr);
+        closure(bytes.as_mut_ptr() as *mut E)
+    } else {
+        let align = core::mem::align_of::<E>() as u32;
+        // The string is too long to stack-allocate, so
+        // do a heap allocation and then free it afterwards.
+        let ptr = unsafe { roc_alloc(length, align) } as *mut E;
+        let answer = closure(ptr);
 
-                // Free the heap allocation.
-                roc_dealloc(ptr.cast(), align);
+        // Free the heap allocation.
+        unsafe { roc_dealloc(ptr.cast(), align) };
 
-                answer
-            }
-        }
-    };
+        answer
+    }
 }
 
 impl RocStr {
@@ -142,7 +141,7 @@ impl RocStr {
                 // The requested capacity won't fit in a small string; we need to go big.
                 let mut roc_list = RocList::with_capacity(target_cap);
 
-                roc_list.extend_from_slice(&small_str.as_bytes());
+                roc_list.extend_from_slice(small_str.as_bytes());
 
                 *self = RocStr(RocStrInner {
                     heap_allocated: ManuallyDrop::new(roc_list),
@@ -214,9 +213,6 @@ impl RocStr {
         // more efficient than that - due to knowing that it's already in UTF-8 and always
         // has room for a 1-byte terminator in the existing allocation (either in the refcount
         // bytes, or, in a small string, in the length at the end of the string).
-        use core::mem::MaybeUninit;
-
-        use crate::{roc_alloc, roc_dealloc};
 
         let terminate = |alloc_ptr: *mut u8, len: usize| unsafe {
             *(alloc_ptr.add(len)) = terminator;
@@ -260,7 +256,8 @@ impl RocStr {
                             let len = roc_list.len();
 
                             // The backing list was not unique, so we can't mutate it in-place.
-                            with_stack_bytes!(len, u8, |alloc_ptr| {
+                            // ask for `len + 1` to store the original string and the terminator
+                            with_stack_bytes(len + 1, |alloc_ptr: *mut u8| {
                                 let alloc_ptr = alloc_ptr as *mut u8;
                                 let elem_ptr = roc_list.ptr_to_first_elem() as *mut u8;
 
@@ -353,7 +350,7 @@ impl RocStr {
         if let Some(pos) = self.first_nul_byte() {
             Err(InteriorNulError { pos, roc_str: self })
         } else {
-            let answer = self.with_terminator(0, |dest_ptr: *mut u16, str_slice: &str| {
+            let answer = self.with_terminator(0u16, |dest_ptr: *mut u16, str_slice: &str| {
                 // Translate UTF-8 source bytes into UTF-16 and write them into the destination.
                 for (index, mut wchar) in str_slice.encode_utf16().enumerate() {
                     // Replace slashes with backslashes
@@ -386,11 +383,11 @@ impl RocStr {
     ///
     ///     use roc_std::{RocStr, InteriorNulError};
     ///
-    ///     pub fn temp_windows_path<T, F: Fn(*mut u16, usize) -> T>(
+    ///     pub fn with_windows_path<T, F: Fn(*mut u16, usize) -> T>(
     ///         roc_str: RocStr,
     ///         func: F,
     ///     ) -> Result<T, InteriorNulError> {
-    ///         roc_str.temp_nul_terminated(|dest_ptr: *mut u16, str_slice: &str| {
+    ///         let answer = roc_str.with_terminator(0u16, |dest_ptr: *mut u16, str_slice: &str| {
     ///             // Translate UTF-8 source bytes into UTF-16 and write them into the destination.
     ///             for (index, mut wchar) in str_slice.encode_utf16().enumerate() {
     ///                 // Replace slashes with backslashes
@@ -404,15 +401,17 @@ impl RocStr {
     ///             }
     ///
     ///             func(dest_ptr, str_slice.len())
-    ///         })
+    ///         });
+    ///
+    ///         Ok(answer)
     ///     }
     pub fn with_terminator<E: Copy, A, F: Fn(*mut E, &str) -> A>(
         self,
         terminator: E,
         func: F,
     ) -> A {
-        use crate::{roc_alloc, roc_dealloc, Storage};
-        use core::mem::{align_of, MaybeUninit};
+        use crate::Storage;
+        use core::mem::align_of;
 
         let terminate = |alloc_ptr: *mut E, str_slice: &str| unsafe {
             *(alloc_ptr.add(str_slice.len())) = terminator;
@@ -422,8 +421,12 @@ impl RocStr {
 
         // When we don't have an existing allocation that can work, fall back on this.
         // It uses either a stack allocation, or, if that would be too big, a heap allocation.
-        let fallback = |str_slice: &str| unsafe {
-            with_stack_bytes!(str_slice.len(), E, |alloc_ptr: *mut E| {
+        let fallback = |str_slice: &str| {
+            // We need 1 extra elem for the terminator. It must be an elem,
+            // not a byte, because we'll be providing a pointer to elems.
+            let needed_bytes = (str_slice.len() + 1) * size_of::<E>();
+
+            with_stack_bytes(needed_bytes, |alloc_ptr: *mut E| {
                 terminate(alloc_ptr, str_slice)
             })
         };
@@ -445,7 +448,7 @@ impl RocStr {
                             // the bytes originally used for the refcount.
                             let available_bytes = roc_list.capacity() + size_of::<Storage>();
 
-                            if needed_bytes < available_bytes {
+                            if dbg!(needed_bytes < available_bytes) {
                                 debug_assert!(align_of::<Storage>() >= align_of::<E>());
 
                                 // We happen to have sufficient excess capacity already,
