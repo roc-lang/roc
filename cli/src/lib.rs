@@ -710,9 +710,8 @@ unsafe fn roc_run_native_debug(
     match libc::fork() {
         0 => {
             // we are the child
-            println!("we are the child {}", std::process::id());
 
-            if dbg!(executable.execve(argv, envp)) < 0 {
+            if executable.execve(argv, envp) < 0 {
                 // Get the current value of errno
                 let e = errno::errno();
 
@@ -738,9 +737,6 @@ unsafe fn roc_run_native_debug(
             process::exit(1)
         }
         1.. => {
-            // parent
-            println!("we are the parent {}", std::process::id());
-
             let name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
             let cstring = CString::new(name).unwrap();
 
@@ -759,7 +755,7 @@ unsafe fn roc_run_native_debug(
                         process::exit(0);
                     }
                     SIGUSR1 => {
-                        // this is the sgnal we use for an expect failure. Let's see what the child told us
+                        // this is the signal we use for an expect failure. Let's see what the child told us
                         let shared_fd =
                             libc::shm_open(cstring.as_ptr().cast(), libc::O_RDONLY, 0o666);
 

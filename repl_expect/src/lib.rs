@@ -50,8 +50,6 @@ pub fn get_values<'a>(
                 "expect_repl_main_fn",
                 proc_layout,
                 content,
-                interns,
-                home,
                 subs,
                 target_info,
             )
@@ -97,8 +95,6 @@ fn get_value<'a>(
         "expect_repl_main_fn",
         proc_layout,
         content,
-        interns,
-        home,
         subs,
         target_info,
     )
