@@ -49,6 +49,24 @@ pub struct Def {
     pub annotation: Option<Annotation>,
 }
 
+impl Def {
+    pub fn region(&self) -> Region {
+        let head_region = match &self.annotation {
+            Some(ann) => {
+                if ann.region.start() < self.loc_pattern.region.start() {
+                    ann.region
+                } else {
+                    // Happens with annotation-only bodies like foo : T, since `T` is after the
+                    // pattern.
+                    self.loc_pattern.region
+                }
+            }
+            None => self.loc_pattern.region,
+        };
+        Region::span_across(&head_region, &self.loc_expr.region)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Annotation {
     pub signature: Type,
@@ -195,6 +213,21 @@ impl Declaration {
             DeclareRec(defs, _) => defs.len(),
             InvalidCycle { .. } => 0,
             Builtin(_) => 0,
+        }
+    }
+
+    pub fn region(&self) -> Region {
+        match self {
+            Declaration::Declare(def) => def.region(),
+            Declaration::DeclareRec(defs, _) => Region::span_across(
+                &defs.first().unwrap().region(),
+                &defs.last().unwrap().region(),
+            ),
+            Declaration::Builtin(def) => def.region(),
+            Declaration::InvalidCycle(cycles) => Region::span_across(
+                &cycles.first().unwrap().expr_region,
+                &cycles.last().unwrap().expr_region,
+            ),
         }
     }
 }
