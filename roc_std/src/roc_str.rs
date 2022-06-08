@@ -2,7 +2,7 @@
 
 use core::{
     convert::TryFrom,
-    fmt::Debug,
+    fmt,
     hash::Hash,
     mem::{size_of, ManuallyDrop},
     ops::{Deref, DerefMut},
@@ -233,12 +233,12 @@ impl RocStr {
                             let len = roc_list.len();
                             let ptr = if len < roc_list.capacity() {
                                 // We happen to have excess capacity already, so we will be able
-                                // to write the \0 into the first byte of excess capacity.
+                                // to write the terminator into the first byte of excess capacity.
                                 roc_list.ptr_to_first_elem() as *mut u8
                             } else {
                                 // We always have an allocation that's even bigger than necessary,
                                 // because the refcount bytes take up more than the 1B needed for
-                                // the \0 at the end. We just need to shift the bytes over on top
+                                // the terminator. We just need to shift the bytes over on top
                                 // of the refcount.
                                 let alloc_ptr = roc_list.ptr_to_allocation() as *mut u8;
 
@@ -566,7 +566,13 @@ impl Ord for RocStr {
     }
 }
 
-impl Debug for RocStr {
+impl fmt::Debug for RocStr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.deref().fmt(f)
+    }
+}
+
+impl fmt::Display for RocStr {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.deref().fmt(f)
     }
