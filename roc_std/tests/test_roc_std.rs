@@ -59,6 +59,7 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 
 #[cfg(test)]
 mod test_roc_std {
+    use roc_std::RocDec;
     use roc_std::RocResult;
     use roc_std::RocStr;
 
@@ -161,6 +162,23 @@ mod test_roc_std {
 
         assert!(!roc_result.is_ok());
         assert!(roc_result.is_err());
+    }
+
+    #[test]
+    fn roc_dec_fmt() {
+        assert_eq!(
+            format!("{}", RocDec::MIN),
+            "-1701411834604692317316.87303715884105728"
+        );
+
+        let half = RocDec::from_str("0.5").unwrap();
+        assert_eq!(format!("{}", half), "0.5");
+
+        let ten = RocDec::from_str("10").unwrap();
+        assert_eq!(format!("{}", ten), "10");
+
+        let example = RocDec::from_str("1234.5678").unwrap();
+        assert_eq!(format!("{}", example), "1234.5678");
     }
 }
 

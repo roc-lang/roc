@@ -9,6 +9,8 @@ use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Drop;
 use core::str;
 
+use arrayvec::ArrayString;
+
 mod roc_box;
 mod roc_list;
 mod roc_str;
@@ -346,77 +348,62 @@ impl RocDec {
         self.0
     }
 
-    #[cfg(not(feature = "no_std"))]
-    fn to_str_helper(self, bytes: &mut [u8; Self::MAX_STR_LENGTH]) -> &str {
-        // TODO there is probably some way to implement this logic without std::io::Write,
-        // which in turn would make this method work with no_std.
-        use std::io::Write;
+    fn to_str_helper(self, string: &mut ArrayString<{ Self::MAX_STR_LENGTH }>) -> &str {
+        use std::fmt::Write;
 
         if self.as_i128() == 0 {
             return "0";
         }
 
         // The :019 in the following write! is computed as Self::DECIMAL_PLACES + 1. If you change
-        // Self::DECIMAL_PLACES, this assert should remind you to change that format string as
-        // well.
+        // Self::DECIMAL_PLACES, this assert should remind you to change that format string as well.
         static_assertions::const_assert!(Self::DECIMAL_PLACES + 1 == 19);
 
         // By using the :019 format, we're guaranteeing that numbers less than 1, say 0.01234
-        // get their leading zeros placed in bytes for us. i.e. bytes = b"0012340000000000000"
-        write!(&mut bytes[..], "{:019}", self.as_i128()).unwrap();
-
-        // If self represents 1234.5678, then bytes is b"1234567800000000000000".
-        let mut i = Self::MAX_STR_LENGTH - 1;
-        // Find the last place where we have actual data.
-        while bytes[i] == 0 {
-            i -= 1;
-        }
-        // At this point i is 21 because bytes[21] is the final '0' in b"1234567800000000000000".
+        // get their leading zeros placed in bytes for us. i.e. `string = b"0012340000000000000"`
+        write!(string, "{:019}", self.as_i128()).unwrap();
 
         let is_negative = self.as_i128() < 0;
-        let decimal_location = i - Self::DECIMAL_PLACES + 1 + (is_negative as usize);
-        // decimal_location = 4
+        let decimal_location = string.len() - Self::DECIMAL_PLACES + (is_negative as usize);
 
-        while bytes[i] == b'0' && i >= decimal_location {
-            bytes[i] = b'0';
-            i -= 1;
-        }
-        // Now i = 7, because bytes[7] = '8', and bytes = b"12345678"
+        // skip trailing zeros
+        let last_nonzero_byte = string.trim_end_matches('0').len();
 
-        if i < decimal_location {
+        if last_nonzero_byte < decimal_location {
             // This means that we've removed trailing zeros and are left with an integer. Our
             // convention is to print these without a decimal point or trailing zeros, so we're done.
-            return unsafe { str::from_utf8_unchecked(&bytes[0..i + 1]) };
+            string.truncate(decimal_location);
+            return string.as_str();
         }
 
-        let ret = i + 1;
-        while i >= decimal_location {
-            bytes[i + 1] = bytes[i];
-            i -= 1;
-        }
-        bytes[i + 1] = bytes[i];
-        // Now i = 4, and bytes = b"123455678"
+        // otherwise, we're dealing with a fraction, and need to insert the decimal dot
 
+        // truncate all extra zeros off
+        string.truncate(last_nonzero_byte);
+
+        // push a dummy character so we have space for the decimal dot
+        string.push('$');
+
+        // Safety: at any time, the string only contains ascii characters, so it is always valid utf8
+        let bytes = unsafe { string.as_bytes_mut() };
+
+        // shift the fractional part by one
+        bytes.copy_within(decimal_location..last_nonzero_byte, decimal_location + 1);
+
+        // and put in the decimal dot in the right place
         bytes[decimal_location] = b'.';
-        // Finally bytes = b"1234.5678"
 
-        unsafe { str::from_utf8_unchecked(&bytes[0..ret + 1]) }
+        string.as_str()
     }
 
-    #[cfg(not(feature = "no_std"))] // to_str_helper currently uses std, but might not need to.
     pub fn to_str(&self) -> RocStr {
-        let mut bytes = [0; Self::MAX_STR_LENGTH];
-
-        RocStr::from(self.to_str_helper(&mut bytes))
+        RocStr::from(self.to_str_helper(&mut ArrayString::new()))
     }
 }
 
-#[cfg(not(feature = "no_std"))] // to_str_helper currently uses std, but might not need to.
 impl fmt::Display for RocDec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut bytes = [0; Self::MAX_STR_LENGTH];
-
-        f.write_str(self.to_str_helper(&mut bytes))
+        f.write_str(self.to_str_helper(&mut ArrayString::new()))
     }
 }
 
