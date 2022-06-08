@@ -1357,6 +1357,14 @@ pub enum Stmt<'a> {
     },
     Ret(Symbol),
     Refcounting(ModifyRc, &'a Stmt<'a>),
+    Expect {
+        condition: Symbol,
+        region: Region,
+        lookups: &'a [Symbol],
+        layouts: &'a [Layout<'a>],
+        /// what happens after the expect
+        remainder: &'a Stmt<'a>,
+    },
     /// a join point `join f <params> = <continuation> in remainder`
     Join {
         id: JoinPointId,
@@ -1942,6 +1950,10 @@ impl<'a> Stmt<'a> {
                 .to_doc(alloc)
                 .append(alloc.hardline())
                 .append(cont.to_doc(alloc)),
+
+            Expect { condition, .. } => alloc
+                .text("expect ")
+                .append(symbol_to_doc(alloc, *condition)),
 
             Ret(symbol) => alloc
                 .text("ret ")
@@ -4115,7 +4127,7 @@ pub fn with_hole<'a>(
 
         EmptyRecord => let_empty_struct(assigned, hole),
 
-        Expect(_, _) => unreachable!("I think this is unreachable"),
+        Expect { .. } => unreachable!("I think this is unreachable"),
 
         If {
             cond_var,
@@ -5957,39 +5969,43 @@ pub fn from_can<'a>(
             stmt
         }
 
-        Expect(condition, rest) => {
-            let rest = from_can(env, variable, rest.value, procs, layout_cache);
-
-            let bool_layout = Layout::Builtin(Builtin::Bool);
+        Expect {
+            loc_condition,
+            loc_continuation,
+            lookups_in_cond,
+        } => {
+            let rest = from_can(env, variable, loc_continuation.value, procs, layout_cache);
             let cond_symbol = env.unique_symbol();
 
-            let op = LowLevel::ExpectTrue;
-            let call_type = CallType::LowLevel {
-                op,
-                update_mode: env.next_update_mode_id(),
-            };
-            let arguments = env.arena.alloc([cond_symbol]);
-            let call = self::Call {
-                call_type,
-                arguments,
+            let lookups = Vec::from_iter_in(lookups_in_cond.iter().map(|t| t.0), env.arena);
+
+            let mut layouts = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
+
+            for (_, var) in lookups_in_cond {
+                let res_layout = layout_cache.from_var(env.arena, var, env.subs);
+                let layout = return_on_layout_error!(env, res_layout);
+                layouts.push(layout);
+            }
+
+            let mut stmt = Stmt::Expect {
+                condition: cond_symbol,
+                region: loc_condition.region,
+                lookups: lookups.into_bump_slice(),
+                layouts: layouts.into_bump_slice(),
+                remainder: env.arena.alloc(rest),
             };
 
-            let rest = Stmt::Let(
-                env.unique_symbol(),
-                Expr::Call(call),
-                bool_layout,
-                env.arena.alloc(rest),
-            );
-
-            with_hole(
+            stmt = with_hole(
                 env,
-                condition.value,
+                loc_condition.value,
                 variable,
                 procs,
                 layout_cache,
                 cond_symbol,
-                env.arena.alloc(rest),
-            )
+                env.arena.alloc(stmt),
+            );
+
+            stmt
         }
 
         LetRec(defs, cont, _cycle_mark) => {
@@ -6326,6 +6342,26 @@ fn substitute_in_stmt_help<'a>(
             // TODO should we substitute in the ModifyRc?
             match substitute_in_stmt_help(arena, cont, subs) {
                 Some(cont) => Some(arena.alloc(Refcounting(*modify, cont))),
+                None => None,
+            }
+        }
+
+        Expect {
+            condition,
+            region,
+            lookups,
+            layouts,
+            remainder,
+        } => {
+            // TODO should we substitute in the ModifyRc?
+            match substitute_in_stmt_help(arena, remainder, subs) {
+                Some(cont) => Some(arena.alloc(Expect {
+                    condition: *condition,
+                    region: *region,
+                    lookups,
+                    layouts,
+                    remainder: cont,
+                })),
                 None => None,
             }
         }

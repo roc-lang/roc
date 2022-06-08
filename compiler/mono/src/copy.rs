@@ -363,7 +363,15 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 lambda_set_variables: lambda_set_variables.clone(),
             },
 
-            Expect(e1, e2) => Expect(Box::new(e1.map(go_help)), Box::new(e2.map(go_help))),
+            Expect {
+                loc_condition,
+                loc_continuation,
+                lookups_in_cond,
+            } => Expect {
+                loc_condition: Box::new(loc_condition.map(go_help)),
+                loc_continuation: Box::new(loc_continuation.map(go_help)),
+                lookups_in_cond: lookups_in_cond.to_vec(),
+            },
 
             TypedHole(v) => TypedHole(sub!(*v)),
 

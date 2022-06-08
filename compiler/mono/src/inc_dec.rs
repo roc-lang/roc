@@ -108,6 +108,15 @@ pub fn occurring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) 
                 stack.push(cont);
             }
 
+            Expect {
+                condition,
+                remainder,
+                ..
+            } => {
+                result.insert(*condition);
+                stack.push(remainder);
+            }
+
             Jump(_, arguments) => {
                 result.extend(arguments.iter().copied());
             }
@@ -1196,6 +1205,8 @@ impl<'a> Context<'a> {
                 (switch, case_live_vars)
             }
 
+            Expect { remainder, .. } => self.visit_stmt(codegen, remainder),
+
             RuntimeError(_) | Refcounting(_, _) => (stmt, MutSet::default()),
         }
     }
@@ -1297,6 +1308,15 @@ pub fn collect_stmt(
             let symbol = modify.get_symbol();
             vars.insert(symbol);
             collect_stmt(cont, jp_live_vars, vars)
+        }
+
+        Expect {
+            condition,
+            remainder,
+            ..
+        } => {
+            vars.insert(*condition);
+            collect_stmt(remainder, jp_live_vars, vars)
         }
 
         Join {
