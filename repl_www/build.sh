@@ -37,3 +37,9 @@ fi
 BINDGEN_FILE="roc_repl_wasm.js"
 echo 'var __wbg_star0 = { now: Date.now };' > $WWW_ROOT/$BINDGEN_FILE
 grep -v '^import' repl_wasm/pkg/$BINDGEN_FILE >> $WWW_ROOT/$BINDGEN_FILE
+
+# Copy static files
+if [[ $WWW_ROOT != repl_www/public ]]
+then
+    cp -r repl_www/public/* $WWW_ROOT
+fi
