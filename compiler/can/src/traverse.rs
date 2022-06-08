@@ -5,7 +5,7 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 
 use crate::{
-    abilities::SpecializationId,
+    abilities::AbilitiesStore,
     def::{Annotation, Declaration, Def},
     expr::{AccessorData, ClosureData, Expr, Field, WhenBranch},
     pattern::{DestructType, Pattern, RecordDestruct},
@@ -163,10 +163,18 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
             let (var, le) = &**argument;
             visitor.visit_expr(&le.value, le.region, *var);
         }
-        Expr::Expect(e1, e2) => {
-            // TODO: what type does an expect have?
-            visitor.visit_expr(&e1.value, e1.region, Variable::NULL);
-            visitor.visit_expr(&e2.value, e2.region, Variable::NULL);
+        Expr::Expect {
+            loc_condition,
+            loc_continuation,
+            lookups_in_cond: _,
+        } => {
+            // TODO: what type does an expect have? bool
+            visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::NULL);
+            visitor.visit_expr(
+                &loc_continuation.value,
+                loc_continuation.region,
+                Variable::NULL,
+            );
         }
         Expr::TypedHole(_) => { /* terminal */ }
         Expr::RuntimeError(..) => { /* terminal */ }
@@ -377,28 +385,68 @@ pub fn find_type_at(region: Region, decls: &[Declaration]) -> Option<Variable> {
     visitor.typ
 }
 
-pub fn find_ability_member_at(
+/// Given an ability Foo has foo : ..., returns (T, foo1) if the symbol at the given region is a
+/// symbol foo1 that specializes foo for T. Otherwise if the symbol is foo but the specialization
+/// is unknown, (Foo, foo) is returned. Otherwise [None] is returned.
+pub fn find_ability_member_and_owning_type_at(
     region: Region,
     decls: &[Declaration],
-) -> Option<(Symbol, SpecializationId)> {
+    abilities_store: &AbilitiesStore,
+) -> Option<(Symbol, Symbol)> {
     let mut visitor = Finder {
         region,
         found: None,
+        abilities_store,
     };
     visitor.visit_decls(decls);
     return visitor.found;
 
-    struct Finder {
+    struct Finder<'a> {
         region: Region,
-        found: Option<(Symbol, SpecializationId)>,
+        abilities_store: &'a AbilitiesStore,
+        found: Option<(Symbol, Symbol)>,
     }
 
-    impl Visitor for Finder {
+    impl Visitor for Finder<'_> {
+        fn visit_pattern(&mut self, pattern: &Pattern, region: Region, _opt_var: Option<Variable>) {
+            if region == self.region {
+                if let Pattern::AbilityMemberSpecialization {
+                    ident: spec_symbol,
+                    specializes: _,
+                } = pattern
+                {
+                    debug_assert!(self.found.is_none());
+                    let spec_type =
+                        find_specialization_type_of_symbol(*spec_symbol, self.abilities_store)
+                            .unwrap();
+                    self.found = Some((spec_type, *spec_symbol))
+                }
+            }
+            walk_pattern(self, pattern);
+        }
+
         fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
             if region == self.region {
-                if let &Expr::AbilityMember(symbol, specialization_id, _) = expr {
+                if let &Expr::AbilityMember(member_symbol, specialization_id, _var) = expr {
                     debug_assert!(self.found.is_none());
-                    self.found = Some((symbol, specialization_id));
+                    self.found = match self.abilities_store.get_resolved(specialization_id) {
+                        Some(spec_symbol) => {
+                            let spec_type = find_specialization_type_of_symbol(
+                                spec_symbol,
+                                self.abilities_store,
+                            )
+                            .unwrap();
+                            Some((spec_type, spec_symbol))
+                        }
+                        None => {
+                            let parent_ability = self
+                                .abilities_store
+                                .member_def(member_symbol)
+                                .unwrap()
+                                .parent_ability;
+                            Some((parent_ability, member_symbol))
+                        }
+                    };
                     return;
                 }
             }
@@ -406,6 +454,16 @@ pub fn find_ability_member_at(
                 walk_expr(self, expr, var);
             }
         }
+    }
+
+    fn find_specialization_type_of_symbol(
+        symbol: Symbol,
+        abilities_store: &AbilitiesStore,
+    ) -> Option<Symbol> {
+        abilities_store
+            .iter_specializations()
+            .find(|(_, ms)| ms.symbol == symbol)
+            .map(|(spec, _)| spec.1)
     }
 }
 

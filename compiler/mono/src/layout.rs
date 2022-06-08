@@ -1698,7 +1698,16 @@ fn layout_from_lambda_set<'a>(
     let subs::LambdaSet {
         solved,
         recursion_var,
+        unspecialized,
     } = lset;
+
+    if !unspecialized.is_empty() {
+        internal_error!(
+            "unspecialized lambda sets remain during layout generation for {:?}",
+            roc_types::subs::SubsFmtContent(&Content::LambdaSet(lset), env.subs)
+        );
+    }
+
     match recursion_var.into_variable() {
         None => {
             let labels = solved.unsorted_lambdas(env.subs);

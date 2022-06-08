@@ -30,7 +30,6 @@ use roc_types::subs::{
     Content, ExhaustiveMark, FlatType, RedundantMark, StorageSubs, Subs, Variable,
     VariableSubsSlice,
 };
-use roc_unify::unify::Mode;
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
@@ -1268,6 +1267,38 @@ impl<'a, 'i> Env<'a, 'i> {
     pub fn is_imported_symbol(&self, symbol: Symbol) -> bool {
         symbol.module_id() != self.home
     }
+
+    /// Unifies two variables and performs lambda set compaction.
+    /// Use this rather than [roc_unify::unify] directly!
+    fn unify(&mut self, left: Variable, right: Variable) -> Result<(), ()> {
+        use roc_solve::solve::{compact_lambda_sets_of_vars, Pools};
+        use roc_unify::unify::{unify, Mode, Unified};
+
+        let unified = unify(self.subs, left, right, Mode::EQ);
+        match unified {
+            Unified::Success {
+                vars: _,
+                must_implement_ability: _,
+                lambda_sets_to_specialize,
+            } => {
+                let mut pools = Pools::default();
+                compact_lambda_sets_of_vars(
+                    self.subs,
+                    self.arena,
+                    &mut pools,
+                    self.abilities_store,
+                    lambda_sets_to_specialize,
+                );
+                // Pools are only used to keep track of variable ranks for generalization purposes.
+                // Since we break generalization during monomorphization, `pools` is irrelevant
+                // here. We only need it for `compact_lambda_sets_of_vars`, which is also used in a
+                // solving context where pools are relevant.
+
+                Ok(())
+            }
+            Unified::Failure(..) | Unified::BadType(..) => Err(()),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Copy, Eq, Hash)]
@@ -1326,6 +1357,14 @@ pub enum Stmt<'a> {
     },
     Ret(Symbol),
     Refcounting(ModifyRc, &'a Stmt<'a>),
+    Expect {
+        condition: Symbol,
+        region: Region,
+        lookups: &'a [Symbol],
+        layouts: &'a [Layout<'a>],
+        /// what happens after the expect
+        remainder: &'a Stmt<'a>,
+    },
     /// a join point `join f <params> = <continuation> in remainder`
     Join {
         id: JoinPointId,
@@ -1912,6 +1951,10 @@ impl<'a> Stmt<'a> {
                 .append(alloc.hardline())
                 .append(cont.to_doc(alloc)),
 
+            Expect { condition, .. } => alloc
+                .text("expect ")
+                .append(symbol_to_doc(alloc, *condition)),
+
             Ret(symbol) => alloc
                 .text("ret ")
                 .append(symbol_to_doc(alloc, *symbol))
@@ -2246,7 +2289,7 @@ fn from_can_let<'a>(
                             needed_specializations.next().unwrap();
 
                         // Unify the expr_var with the requested specialization once.
-                        let _res = roc_unify::unify::unify(env.subs, var, def.expr_var, Mode::EQ);
+                        let _res = env.unify(var, def.expr_var);
 
                         resolve_abilities_in_specialized_body(
                             env,
@@ -2285,8 +2328,7 @@ fn from_can_let<'a>(
                             "expr marked as having specializations, but it has no type variables!",
                         );
 
-                            let _res =
-                                roc_unify::unify::unify(env.subs, var, new_def_expr_var, Mode::EQ);
+                            let _res = env.unify(var, new_def_expr_var);
 
                             resolve_abilities_in_specialized_body(
                                 env,
@@ -2780,16 +2822,14 @@ fn resolve_abilities_in_specialized_body<'a>(
 ) -> std::vec::Vec<SpecializationId> {
     use roc_can::expr::Expr;
     use roc_can::traverse::{walk_expr, Visitor};
-    use roc_unify::unify::unify;
 
-    struct Resolver<'a> {
-        subs: &'a mut Subs,
-        procs: &'a Procs<'a>,
-        abilities_store: &'a mut AbilitiesStore,
+    struct Resolver<'a, 'b, 'borrow> {
+        env: &'borrow mut Env<'a, 'b>,
+        procs: &'borrow Procs<'a>,
         seen_defs: MutSet<Symbol>,
         specialized: std::vec::Vec<SpecializationId>,
     }
-    impl Visitor for Resolver<'_> {
+    impl Visitor for Resolver<'_, '_, '_> {
         fn visit_expr(&mut self, expr: &Expr, _region: Region, var: Variable) {
             match expr {
                 Expr::Closure(..) => {
@@ -2805,6 +2845,7 @@ fn resolve_abilities_in_specialized_body<'a>(
                 }
                 Expr::AbilityMember(member_sym, specialization_id, _specialization_var) => {
                     let (specialization, specialization_def) = match self
+                        .env
                         .abilities_store
                         .get_resolved(*specialization_id)
                     {
@@ -2823,8 +2864,8 @@ fn resolve_abilities_in_specialized_body<'a>(
                         ),
                         None => {
                             let specialization = resolve_ability_specialization(
-                                self.subs,
-                                self.abilities_store,
+                                self.env.subs,
+                                self.env.abilities_store,
                                 *member_sym,
                                 var,
                             )
@@ -2837,7 +2878,8 @@ fn resolve_abilities_in_specialized_body<'a>(
                                 }
                             };
 
-                            self.abilities_store
+                            self.env
+                                .abilities_store
                                 .insert_resolved(*specialization_id, specialization);
 
                             debug_assert!(!self.specialized.contains(specialization_id));
@@ -2854,8 +2896,8 @@ fn resolve_abilities_in_specialized_body<'a>(
                                 .expect("Specialization found, but it's not in procs");
                             let specialization_var = specialization_def.annotation;
 
-                            let unified = unify(self.subs, var, specialization_var, Mode::EQ);
-                            unified.expect_success(
+                            let unified = self.env.unify(var, specialization_var);
+                            unified.expect(
                                 "Specialization does not unify - this is a typechecker bug!",
                             );
 
@@ -2880,9 +2922,8 @@ fn resolve_abilities_in_specialized_body<'a>(
     }
 
     let mut resolver = Resolver {
-        subs: env.subs,
+        env,
         procs,
-        abilities_store: env.abilities_store,
         seen_defs: MutSet::default(),
         specialized: vec![],
     };
@@ -2907,12 +2948,7 @@ fn specialize_external<'a>(
     let snapshot = env.subs.snapshot();
     let cache_snapshot = layout_cache.snapshot();
 
-    let _unified = roc_unify::unify::unify(
-        env.subs,
-        partial_proc.annotation,
-        fn_var,
-        roc_unify::unify::Mode::EQ,
-    );
+    let _unified = env.unify(partial_proc.annotation, fn_var);
 
     // This will not hold for programs with type errors
     // let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));
@@ -4091,7 +4127,7 @@ pub fn with_hole<'a>(
 
         EmptyRecord => let_empty_struct(assigned, hole),
 
-        Expect(_, _) => unreachable!("I think this is unreachable"),
+        Expect { .. } => unreachable!("I think this is unreachable"),
 
         If {
             cond_var,
@@ -5933,39 +5969,43 @@ pub fn from_can<'a>(
             stmt
         }
 
-        Expect(condition, rest) => {
-            let rest = from_can(env, variable, rest.value, procs, layout_cache);
-
-            let bool_layout = Layout::Builtin(Builtin::Bool);
+        Expect {
+            loc_condition,
+            loc_continuation,
+            lookups_in_cond,
+        } => {
+            let rest = from_can(env, variable, loc_continuation.value, procs, layout_cache);
             let cond_symbol = env.unique_symbol();
 
-            let op = LowLevel::ExpectTrue;
-            let call_type = CallType::LowLevel {
-                op,
-                update_mode: env.next_update_mode_id(),
-            };
-            let arguments = env.arena.alloc([cond_symbol]);
-            let call = self::Call {
-                call_type,
-                arguments,
+            let lookups = Vec::from_iter_in(lookups_in_cond.iter().map(|t| t.0), env.arena);
+
+            let mut layouts = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
+
+            for (_, var) in lookups_in_cond {
+                let res_layout = layout_cache.from_var(env.arena, var, env.subs);
+                let layout = return_on_layout_error!(env, res_layout);
+                layouts.push(layout);
+            }
+
+            let mut stmt = Stmt::Expect {
+                condition: cond_symbol,
+                region: loc_condition.region,
+                lookups: lookups.into_bump_slice(),
+                layouts: layouts.into_bump_slice(),
+                remainder: env.arena.alloc(rest),
             };
 
-            let rest = Stmt::Let(
-                env.unique_symbol(),
-                Expr::Call(call),
-                bool_layout,
-                env.arena.alloc(rest),
-            );
-
-            with_hole(
+            stmt = with_hole(
                 env,
-                condition.value,
+                loc_condition.value,
                 variable,
                 procs,
                 layout_cache,
                 cond_symbol,
-                env.arena.alloc(rest),
-            )
+                env.arena.alloc(stmt),
+            );
+
+            stmt
         }
 
         LetRec(defs, cont, _cycle_mark) => {
@@ -6302,6 +6342,26 @@ fn substitute_in_stmt_help<'a>(
             // TODO should we substitute in the ModifyRc?
             match substitute_in_stmt_help(arena, cont, subs) {
                 Some(cont) => Some(arena.alloc(Refcounting(*modify, cont))),
+                None => None,
+            }
+        }
+
+        Expect {
+            condition,
+            region,
+            lookups,
+            layouts,
+            remainder,
+        } => {
+            // TODO should we substitute in the ModifyRc?
+            match substitute_in_stmt_help(arena, remainder, subs) {
+                Some(cont) => Some(arena.alloc(Expect {
+                    condition: *condition,
+                    region: *region,
+                    lookups,
+                    layouts,
+                    remainder: cont,
+                })),
                 None => None,
             }
         }

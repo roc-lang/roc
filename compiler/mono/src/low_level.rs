@@ -206,5 +206,4 @@ enum FirstOrder {
     Or,
     Not,
     Hash,
-    ExpectTrue,
 }

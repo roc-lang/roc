@@ -10299,4 +10299,53 @@ All branches in an `if` must have the same type!
             ),
         )
     }
+
+    #[test]
+    fn issue_1755() {
+        new_report_problem_as(
+            "issue_1755",
+            indoc!(
+                r#"
+                Handle := {}
+
+                await : Result a err, (a -> Result b err) -> Result b err
+                open : {} -> Result Handle *
+                close : Handle -> Result {} *
+
+                withOpen : (Handle -> Result {} *) -> Result {} *
+                withOpen = \callback ->
+                    handle <- await (open {})
+                    {} <- await (callback handle)
+                    close handle
+
+                withOpen
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                Something is off with the body of the `withOpen` definition:
+
+                10│       withOpen : (Handle -> Result {} *) -> Result {} *
+                11│       withOpen = \callback ->
+                12│>          handle <- await (open {})
+                13│>          {} <- await (callback handle)
+                14│>          close handle
+
+                The type annotation on `withOpen` says this `await` call should have the
+                type:
+
+                    Result {} *
+
+                However, the type of this `await` call is connected to another type in a
+                way that isn't reflected in this annotation.
+
+                Tip: Any connection between types must use a named type variable, not
+                a `*`! Maybe the annotation  on `withOpen` should have a named type
+                variable in place of the `*`?
+                "#
+            ),
+        )
+    }
 }

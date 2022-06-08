@@ -444,13 +444,6 @@ fn gen_from_mono_module_dev_wasm32(
     app_o_file: &Path,
     preprocessed_host_path: &Path,
 ) -> CodeGenTiming {
-    if true {
-        // WIP: gen_wasm is not yet able to link roc__mainForHost_1_exposed
-        // It works fine in tests and in the web REPL, but not with a real host!
-        // This code path is not part of test_gen or repl_wasm
-        todo!("WebAssembly development backend is not ready to use yet!")
-    }
-
     let code_gen_start = SystemTime::now();
     let MonomorphizedModule {
         module_id,

@@ -1,14 +1,14 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 use crate::types::{
-    name_type_var, AliasKind, ErrorType, Problem, RecordField, RecordFieldsError, TypeExt,
+    name_type_var, AliasKind, ErrorType, Problem, RecordField, RecordFieldsError, TypeExt, Uls,
 };
 use roc_collections::all::{ImMap, ImSet, MutSet, SendMap};
+use roc_collections::{VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName, Uppercase};
 use roc_module::symbol::Symbol;
 use std::fmt;
 use std::iter::{once, Iterator, Map};
-use ven_ena::unify::UnifyKey;
 
 use crate::unification_table::{Snapshot, UnificationTable};
 
@@ -76,6 +76,7 @@ struct SubsHeader {
     field_names: u64,
     record_fields: u64,
     variable_slices: u64,
+    unspecialized_lambda_sets: u64,
     exposed_vars_by_symbol: u64,
 }
 
@@ -93,6 +94,7 @@ impl SubsHeader {
             field_names: subs.field_names.len() as u64,
             record_fields: subs.record_fields.len() as u64,
             variable_slices: subs.variable_slices.len() as u64,
+            unspecialized_lambda_sets: subs.unspecialized_lambda_sets.len() as u64,
             exposed_vars_by_symbol: exposed_vars_by_symbol as u64,
         }
     }
@@ -139,6 +141,7 @@ impl Subs {
         written = Self::serialize_field_names(&self.field_names, writer, written)?;
         written = Self::serialize_slice(&self.record_fields, writer, written)?;
         written = Self::serialize_slice(&self.variable_slices, writer, written)?;
+        written = Self::serialize_slice(&self.unspecialized_lambda_sets, writer, written)?;
         written = Self::serialize_slice(exposed_vars_by_symbol, writer, written)?;
 
         Ok(written)
@@ -222,6 +225,8 @@ impl Subs {
             Self::deserialize_slice(bytes, header.record_fields as usize, offset);
         let (variable_slices, offset) =
             Self::deserialize_slice(bytes, header.variable_slices as usize, offset);
+        let (unspecialized_lambda_sets, offset) =
+            Self::deserialize_slice(bytes, header.unspecialized_lambda_sets as usize, offset);
         let (exposed_vars_by_symbol, _) =
             Self::deserialize_slice(bytes, header.exposed_vars_by_symbol as usize, offset);
 
@@ -234,8 +239,10 @@ impl Subs {
                 field_names,
                 record_fields: record_fields.to_vec(),
                 variable_slices: variable_slices.to_vec(),
+                unspecialized_lambda_sets: unspecialized_lambda_sets.to_vec(),
                 tag_name_cache: Default::default(),
                 problems: Default::default(),
+                uls_of_var: Default::default(),
             },
             exposed_vars_by_symbol,
         )
@@ -301,6 +308,52 @@ impl Subs {
     }
 }
 
+/// Mapping of variables to [Content::LambdaSet]s containing unspecialized lambda sets depending on
+/// that variable.
+#[derive(Clone, Default, Debug)]
+pub struct UlsOfVar(VecMap<Variable, VecSet<Variable>>);
+
+impl UlsOfVar {
+    pub fn add(&mut self, var: Variable, dependent_lambda_set: Variable) -> bool {
+        // NOTE: this adds the var directly without following unification links.
+        // [Subs::remove_dependent_unspecialized_lambda_sets] follows unifications when removing.
+        let set = self.0.get_or_insert(var, Default::default);
+        set.insert(dependent_lambda_set)
+    }
+
+    pub fn extend(
+        &mut self,
+        var: Variable,
+        dependent_lambda_sets: impl IntoIterator<Item = Variable>,
+    ) {
+        // NOTE: this adds the var directly without following unification links.
+        // [Subs::remove_dependent_unspecialized_lambda_sets] follows unifications when removing.
+        let set = self.0.get_or_insert(var, Default::default);
+        set.extend(dependent_lambda_sets);
+    }
+
+    pub fn union(&mut self, other: Self) {
+        for (key, lset) in other.drain() {
+            self.extend(key, lset);
+        }
+    }
+
+    /// NOTE: this does not follow unification links.
+    pub fn drain(self) -> impl Iterator<Item = (Variable, impl Iterator<Item = Variable>)> {
+        self.0
+            .into_iter()
+            .map(|(v, set): (Variable, VecSet<Variable>)| (v, set.into_iter()))
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
 #[derive(Clone)]
 pub struct Subs {
     utable: UnificationTable,
@@ -310,8 +363,10 @@ pub struct Subs {
     pub field_names: Vec<Lowercase>,
     pub record_fields: Vec<RecordField<()>>,
     pub variable_slices: Vec<VariableSubsSlice>,
+    pub unspecialized_lambda_sets: Vec<Uls>,
     pub tag_name_cache: TagNameCache,
     pub problems: Vec<Problem>,
+    pub uls_of_var: UlsOfVar,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -406,6 +461,20 @@ impl std::ops::Index<SubsIndex<Symbol>> for Subs {
 impl std::ops::IndexMut<SubsIndex<Symbol>> for Subs {
     fn index_mut(&mut self, index: SubsIndex<Symbol>) -> &mut Self::Output {
         &mut self.closure_names[index.index as usize]
+    }
+}
+
+impl std::ops::Index<SubsIndex<Uls>> for Subs {
+    type Output = Uls;
+
+    fn index(&self, index: SubsIndex<Uls>) -> &Self::Output {
+        &self.unspecialized_lambda_sets[index.index as usize]
+    }
+}
+
+impl std::ops::IndexMut<SubsIndex<Uls>> for Subs {
+    fn index_mut(&mut self, index: SubsIndex<Uls>) -> &mut Self::Output {
+        &mut self.unspecialized_lambda_sets[index.index as usize]
     }
 }
 
@@ -568,6 +637,17 @@ impl SubsSlice<TagName> {
     }
 }
 
+impl SubsSlice<Uls> {
+    pub fn reserve_uls_slice(subs: &mut Subs, length: usize) -> Self {
+        let start = subs.unspecialized_lambda_sets.len() as u32;
+
+        subs.unspecialized_lambda_sets
+            .extend(std::iter::repeat(Uls(Variable::NULL, Symbol::UNDERSCORE, 0)).take(length));
+
+        Self::new(start, length as u16)
+    }
+}
+
 impl<T> SubsIndex<T> {
     pub const fn new(start: u32) -> Self {
         Self {
@@ -638,6 +718,12 @@ impl GetSubsSlice<TagName> for Subs {
 impl GetSubsSlice<Symbol> for Subs {
     fn get_subs_slice(&self, subs_slice: SubsSlice<Symbol>) -> &[Symbol] {
         subs_slice.get_slice(&self.closure_names)
+    }
+}
+
+impl GetSubsSlice<Uls> for Subs {
+    fn get_subs_slice(&self, subs_slice: SubsSlice<Uls>) -> &[Uls] {
+        subs_slice.get_slice(&self.unspecialized_lambda_sets)
     }
 }
 
@@ -712,6 +798,7 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
         Content::LambdaSet(LambdaSet {
             solved,
             recursion_var,
+            unspecialized,
         }) => {
             write!(f, "LambdaSet([")?;
 
@@ -728,7 +815,14 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
                 write!(f, ", ")?;
             }
 
-            write!(f, "<{:?}>])", recursion_var)
+            write!(f, "]")?;
+            if let Some(rec_var) = recursion_var.into_variable() {
+                write!(f, " as <{:?}>", rec_var)?;
+            }
+            for uls in subs.get_subs_slice(*unspecialized) {
+                write!(f, " + {:?}", uls)?;
+            }
+            write!(f, ")")
         }
         Content::RangedNumber(typ, range) => {
             write!(f, "RangedNumber({:?}, {:?})", typ, range)
@@ -827,6 +921,29 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
         FlatType::Erroneous(e) => write!(f, "Erroneous({:?})", e),
         FlatType::EmptyRecord => write!(f, "EmptyRecord"),
         FlatType::EmptyTagUnion => write!(f, "EmptyTagUnion"),
+    }
+}
+
+#[cfg(debug_assertions)]
+pub struct DebugUtable<'a>(pub &'a Subs);
+
+#[cfg(debug_assertions)]
+impl std::fmt::Debug for DebugUtable<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("UnificationTable {\n")?;
+        for v in 0..self.0.utable.len() {
+            f.write_fmt(format_args!("  {} => ", v))?;
+            let var = unsafe { Variable::from_index(v as u32) };
+            let root = self.0.utable.root_key_without_compacting(var);
+            if root == var {
+                let desc = self.0.utable.get_descriptor(root);
+                let fmt_content = crate::subs::SubsFmtContent(&desc.content, self.0);
+                f.write_fmt(format_args!("{:?} at {}\n", fmt_content, desc.rank))?;
+            } else {
+                f.write_fmt(format_args!("{}\n", root.index()))?;
+            }
+        }
+        f.write_str("}")
     }
 }
 
@@ -1206,22 +1323,6 @@ impl fmt::Debug for Variable {
     }
 }
 
-impl UnifyKey for Variable {
-    type Value = Descriptor;
-
-    fn index(&self) -> u32 {
-        self.0
-    }
-
-    fn from_index(index: u32) -> Self {
-        Variable(index)
-    }
-
-    fn tag() -> &'static str {
-        "Variable"
-    }
-}
-
 /// Used in SolvedType
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct VarId(u32);
@@ -1535,8 +1636,10 @@ impl Subs {
             // store an empty slice at the first position
             // used for "TagOrFunction"
             variable_slices: vec![VariableSubsSlice::default()],
+            unspecialized_lambda_sets: Vec::new(),
             tag_name_cache: Default::default(),
             problems: Vec::new(),
+            uls_of_var: Default::default(),
         };
 
         subs.utable.reserve(capacity);
@@ -1782,12 +1885,18 @@ impl Subs {
         self.set_content(recursive, Content::Structure(flat_type));
     }
 
-    pub fn mark_lambda_set_recursive(&mut self, recursive: Variable, solved_lambdas: UnionLambdas) {
+    pub fn mark_lambda_set_recursive(
+        &mut self,
+        recursive: Variable,
+        solved_lambdas: UnionLambdas,
+        unspecialized_lambdas: SubsSlice<Uls>,
+    ) {
         let (rec_var, new_tags) = self.mark_union_recursive_help(recursive, solved_lambdas);
 
         let new_lambda_set = Content::LambdaSet(LambdaSet {
             solved: new_tags,
             recursion_var: OptVariable::from(rec_var),
+            unspecialized: unspecialized_lambdas,
         });
 
         self.set_content(recursive, new_lambda_set);
@@ -1896,6 +2005,28 @@ impl Subs {
 
     pub fn vars_since_snapshot(&mut self, snapshot: &Snapshot) -> core::ops::Range<Variable> {
         self.utable.vars_since_snapshot(snapshot)
+    }
+
+    pub fn get_lambda_set(&self, lambda_set: Variable) -> LambdaSet {
+        match self.get_content_without_compacting(lambda_set) {
+            Content::LambdaSet(lambda_set) => *lambda_set,
+            _ => internal_error!("not a lambda set"),
+        }
+    }
+
+    pub fn remove_dependent_unspecialized_lambda_sets(
+        &mut self,
+        var: Variable,
+    ) -> impl Iterator<Item = Variable> + '_ {
+        let utable = &self.utable;
+        let root_var = utable.root_key_without_compacting(var);
+
+        self.uls_of_var
+            .0
+            .drain_filter(move |cand_var, _| {
+                utable.root_key_without_compacting(*cand_var) == root_var
+            })
+            .flat_map(|(_, lambda_set_vars)| lambda_set_vars.into_iter())
     }
 }
 
@@ -2076,6 +2207,8 @@ pub struct LambdaSet {
     ///
     /// However, we don't know if a lambda set is recursive or not until type inference.
     pub recursion_var: OptVariable,
+    /// Lambdas we won't know until an ability specialization is resolved.
+    pub unspecialized: SubsSlice<Uls>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -2952,6 +3085,7 @@ fn occurs(
             LambdaSet(self::LambdaSet {
                 solved,
                 recursion_var,
+                unspecialized: _,
             }) => {
                 let mut new_seen = seen.to_owned();
                 new_seen.push(root_var);
@@ -2961,6 +3095,9 @@ fn occurs(
                         new_seen.push(subs.get_root_key_without_compacting(v));
                     }
                 }
+
+                // unspecialized lambda vars excluded because they are not explicitly part of the
+                // type (they only matter after being resolved).
 
                 occurs_union(subs, root_var, &new_seen, include_recursion_var, solved)
             }
@@ -3139,15 +3276,21 @@ fn explicit_substitute(
             LambdaSet(self::LambdaSet {
                 solved,
                 recursion_var,
+                unspecialized,
             }) => {
                 // NOTE recursion_var is not substituted, verify that this is correct!
                 let new_solved = explicit_substitute_union(subs, from, to, solved, seen);
+
+                for Uls(v, _, _) in subs.get_subs_slice(unspecialized) {
+                    debug_assert!(*v != from, "unspecialized lambda set vars should never occur in a position where they need to be explicitly substituted.");
+                }
 
                 subs.set_content(
                     in_var,
                     LambdaSet(self::LambdaSet {
                         solved: new_solved,
                         recursion_var,
+                        unspecialized,
                     }),
                 );
 
@@ -3256,12 +3399,18 @@ fn get_var_names(
             LambdaSet(self::LambdaSet {
                 solved,
                 recursion_var,
+                unspecialized,
             }) => {
                 let taken_names = get_var_names_union(subs, solved, taken_names);
-                match recursion_var.into_variable() {
+                let mut taken_names = match recursion_var.into_variable() {
                     Some(v) => get_var_names(subs, v, taken_names),
                     None => taken_names,
+                };
+                for uls_index in unspecialized {
+                    let Uls(v, _, _) = subs[uls_index];
+                    taken_names = get_var_names(subs, v, taken_names);
                 }
+                taken_names
             }
 
             RangedNumber(typ, _) => get_var_names(subs, typ, taken_names),
@@ -3500,10 +3649,7 @@ fn content_to_err_type(
             ErrorType::Alias(symbol, err_args, Box::new(err_type), kind)
         }
 
-        LambdaSet(self::LambdaSet {
-            solved: _,
-            recursion_var: _r,
-        }) => {
+        LambdaSet(self::LambdaSet { .. }) => {
             // Don't print lambda sets since we don't expect them to be exposed to the user
             ErrorType::Error
         }
@@ -3744,6 +3890,7 @@ struct StorageSubsOffsets {
     field_names: u32,
     record_fields: u32,
     variable_slices: u32,
+    unspecialized_lambda_sets: u32,
     problems: u32,
 }
 
@@ -3761,7 +3908,7 @@ impl StorageSubs {
     }
 
     pub fn extend_with_variable(&mut self, source: &mut Subs, variable: Variable) -> Variable {
-        deep_copy_var_to(source, &mut self.subs, variable)
+        storage_copy_var_to(source, &mut self.subs, variable)
     }
 
     pub fn import_variable_from(&mut self, source: &mut Subs, variable: Variable) -> CopiedImport {
@@ -3781,6 +3928,7 @@ impl StorageSubs {
             field_names: self.subs.field_names.len() as u32,
             record_fields: self.subs.record_fields.len() as u32,
             variable_slices: self.subs.variable_slices.len() as u32,
+            unspecialized_lambda_sets: self.subs.unspecialized_lambda_sets.len() as u32,
             problems: self.subs.problems.len() as u32,
         };
 
@@ -3792,6 +3940,7 @@ impl StorageSubs {
             field_names: target.field_names.len() as u32,
             record_fields: target.record_fields.len() as u32,
             variable_slices: target.variable_slices.len() as u32,
+            unspecialized_lambda_sets: target.unspecialized_lambda_sets.len() as u32,
             problems: target.problems.len() as u32,
         };
 
@@ -3838,6 +3987,9 @@ impl StorageSubs {
         target.closure_names.extend(self.subs.closure_names);
         target.field_names.extend(self.subs.field_names);
         target.record_fields.extend(self.subs.record_fields);
+        target
+            .unspecialized_lambda_sets
+            .extend(self.subs.unspecialized_lambda_sets);
         target.problems.extend(self.subs.problems);
 
         debug_assert_eq!(
@@ -3922,9 +4074,11 @@ impl StorageSubs {
             LambdaSet(self::LambdaSet {
                 solved,
                 recursion_var,
+                unspecialized,
             }) => LambdaSet(self::LambdaSet {
                 solved: Self::offset_lambda_set(offsets, *solved),
                 recursion_var: recursion_var.map(|v| Self::offset_variable(offsets, v)),
+                unspecialized: Self::offset_uls_slice(offsets, *unspecialized),
             }),
             RangedNumber(typ, range) => RangedNumber(Self::offset_variable(offsets, *typ), *range),
             Error => Content::Error,
@@ -3995,6 +4149,12 @@ impl StorageSubs {
         slice
     }
 
+    fn offset_uls_slice(offsets: &StorageSubsOffsets, mut slice: SubsSlice<Uls>) -> SubsSlice<Uls> {
+        slice.start += offsets.unspecialized_lambda_sets;
+
+        slice
+    }
+
     fn offset_problem(
         offsets: &StorageSubsOffsets,
         mut problem_index: SubsIndex<Problem>,
@@ -4021,7 +4181,7 @@ fn put_scratchpad(scratchpad: bumpalo::Bump) {
     });
 }
 
-pub fn deep_copy_var_to(
+pub fn storage_copy_var_to(
     source: &mut Subs, // mut to set the copy
     target: &mut Subs,
     var: Variable,
@@ -4033,14 +4193,14 @@ pub fn deep_copy_var_to(
     let copy = {
         let visited = bumpalo::collections::Vec::with_capacity_in(256, &arena);
 
-        let mut env = DeepCopyVarToEnv {
+        let mut env = StorageCopyVarToEnv {
             visited,
             source,
             target,
             max_rank: rank,
         };
 
-        let copy = deep_copy_var_to_help(&mut env, var);
+        let copy = storage_copy_var_to_help(&mut env, var);
 
         // we have tracked all visited variables, and can now traverse them
         // in one go (without looking at the UnificationTable) and clear the copy field
@@ -4063,7 +4223,7 @@ pub fn deep_copy_var_to(
     copy
 }
 
-struct DeepCopyVarToEnv<'a> {
+struct StorageCopyVarToEnv<'a> {
     visited: bumpalo::collections::Vec<'a, Variable>,
     source: &'a mut Subs,
     target: &'a mut Subs,
@@ -4071,8 +4231,8 @@ struct DeepCopyVarToEnv<'a> {
 }
 
 #[inline(always)]
-fn deep_copy_union<L: Label>(
-    env: &mut DeepCopyVarToEnv<'_>,
+fn storage_copy_union<L: Label>(
+    env: &mut StorageCopyVarToEnv<'_>,
     tags: UnionLabels<L>,
 ) -> UnionLabels<L> {
     let new_variable_slices = SubsSlice::reserve_variable_slices(env.target, tags.len());
@@ -4085,7 +4245,7 @@ fn deep_copy_union<L: Label>(
         let it = (new_variables.indices()).zip(slice);
         for (target_index, var_index) in it {
             let var = env.source[var_index];
-            let copy_var = deep_copy_var_to_help(env, var);
+            let copy_var = storage_copy_var_to_help(env, var);
             env.target.variables[target_index] = copy_var;
         }
 
@@ -4102,7 +4262,7 @@ fn deep_copy_union<L: Label>(
     UnionLabels::from_slices(new_tag_names, new_variable_slices)
 }
 
-fn deep_copy_var_to_help(env: &mut DeepCopyVarToEnv<'_>, var: Variable) -> Variable {
+fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) -> Variable {
     use Content::*;
     use FlatType::*;
 
@@ -4155,7 +4315,7 @@ fn deep_copy_var_to_help(env: &mut DeepCopyVarToEnv<'_>, var: Variable) -> Varia
 
                     for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
                         let var = env.source[var_index];
-                        let copy_var = deep_copy_var_to_help(env, var);
+                        let copy_var = storage_copy_var_to_help(env, var);
                         env.target.variables[target_index] = copy_var;
                     }
 
@@ -4163,15 +4323,15 @@ fn deep_copy_var_to_help(env: &mut DeepCopyVarToEnv<'_>, var: Variable) -> Varia
                 }
 
                 Func(arguments, closure_var, ret_var) => {
-                    let new_ret_var = deep_copy_var_to_help(env, ret_var);
+                    let new_ret_var = storage_copy_var_to_help(env, ret_var);
 
-                    let new_closure_var = deep_copy_var_to_help(env, closure_var);
+                    let new_closure_var = storage_copy_var_to_help(env, closure_var);
 
                     let new_arguments = SubsSlice::reserve_into_subs(env.target, arguments.len());
 
                     for (target_index, var_index) in (new_arguments.indices()).zip(arguments) {
                         let var = env.source[var_index];
-                        let copy_var = deep_copy_var_to_help(env, var);
+                        let copy_var = storage_copy_var_to_help(env, var);
                         env.target.variables[target_index] = copy_var;
                     }
 
@@ -4188,7 +4348,7 @@ fn deep_copy_var_to_help(env: &mut DeepCopyVarToEnv<'_>, var: Variable) -> Varia
                         let it = (new_variables.indices()).zip(fields.iter_variables());
                         for (target_index, var_index) in it {
                             let var = env.source[var_index];
-                            let copy_var = deep_copy_var_to_help(env, var);
+                            let copy_var = storage_copy_var_to_help(env, var);
                             env.target.variables[target_index] = copy_var;
                         }
 
@@ -4212,12 +4372,12 @@ fn deep_copy_var_to_help(env: &mut DeepCopyVarToEnv<'_>, var: Variable) -> Varia
                         }
                     };
 
-                    Record(record_fields, deep_copy_var_to_help(env, ext_var))
+                    Record(record_fields, storage_copy_var_to_help(env, ext_var))
                 }
 
                 TagUnion(tags, ext_var) => {
-                    let new_ext = deep_copy_var_to_help(env, ext_var);
-                    let union_tags = deep_copy_union(env, tags);
+                    let new_ext = storage_copy_var_to_help(env, ext_var);
+                    let union_tags = storage_copy_union(env, tags);
 
                     TagUnion(union_tags, new_ext)
                 }
@@ -4227,14 +4387,14 @@ fn deep_copy_var_to_help(env: &mut DeepCopyVarToEnv<'_>, var: Variable) -> Varia
 
                     env.target.tag_names.push(env.source[tag_name].clone());
 
-                    FunctionOrTagUnion(new_tag_name, symbol, deep_copy_var_to_help(env, ext_var))
+                    FunctionOrTagUnion(new_tag_name, symbol, storage_copy_var_to_help(env, ext_var))
                 }
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
-                    let union_tags = deep_copy_union(env, tags);
+                    let union_tags = storage_copy_union(env, tags);
 
-                    let new_ext = deep_copy_var_to_help(env, ext_var);
-                    let new_rec_var = deep_copy_var_to_help(env, rec_var);
+                    let new_ext = storage_copy_var_to_help(env, ext_var);
+                    let new_rec_var = storage_copy_var_to_help(env, rec_var);
 
                     RecursiveTagUnion(new_rec_var, union_tags, new_ext)
                 }
@@ -4262,7 +4422,7 @@ fn deep_copy_var_to_help(env: &mut DeepCopyVarToEnv<'_>, var: Variable) -> Varia
             opt_name,
             structure,
         } => {
-            let new_structure = deep_copy_var_to_help(env, structure);
+            let new_structure = storage_copy_var_to_help(env, structure);
 
             debug_assert!((new_structure.index() as usize) < env.target.len());
 
@@ -4316,7 +4476,7 @@ fn deep_copy_var_to_help(env: &mut DeepCopyVarToEnv<'_>, var: Variable) -> Varia
                 (new_variables.indices()).zip(arguments.all_variables())
             {
                 let var = env.source[var_index];
-                let copy_var = deep_copy_var_to_help(env, var);
+                let copy_var = storage_copy_var_to_help(env, var);
                 env.target.variables[target_index] = copy_var;
             }
 
@@ -4325,7 +4485,7 @@ fn deep_copy_var_to_help(env: &mut DeepCopyVarToEnv<'_>, var: Variable) -> Varia
                 ..arguments
             };
 
-            let new_real_type_var = deep_copy_var_to_help(env, real_type_var);
+            let new_real_type_var = storage_copy_var_to_help(env, real_type_var);
             let new_content = Alias(symbol, new_arguments, new_real_type_var, kind);
 
             env.target.set(copy, make_descriptor(new_content));
@@ -4336,20 +4496,33 @@ fn deep_copy_var_to_help(env: &mut DeepCopyVarToEnv<'_>, var: Variable) -> Varia
         LambdaSet(self::LambdaSet {
             solved,
             recursion_var,
+            unspecialized,
         }) => {
-            let new_solved = deep_copy_union(env, solved);
-            let new_rec_var = recursion_var.map(|v| deep_copy_var_to_help(env, v));
+            let new_solved = storage_copy_union(env, solved);
+            let new_rec_var = recursion_var.map(|v| storage_copy_var_to_help(env, v));
+
+            // NB: we are only copying into storage here, not instantiating like in solve::deep_copy_var.
+            // So no bookkeeping should be done for the new unspecialized lambda sets.
+            let new_unspecialized = SubsSlice::reserve_uls_slice(env.target, unspecialized.len());
+            for (target_index, source_index) in
+                (new_unspecialized.into_iter()).zip(unspecialized.into_iter())
+            {
+                let Uls(var, sym, region) = env.source[source_index];
+                let new_var = storage_copy_var_to_help(env, var);
+                env.target[target_index] = Uls(new_var, sym, region);
+            }
 
             let new_content = LambdaSet(self::LambdaSet {
                 solved: new_solved,
                 recursion_var: new_rec_var,
+                unspecialized: new_unspecialized,
             });
             env.target.set(copy, make_descriptor(new_content));
             copy
         }
 
         RangedNumber(typ, range) => {
-            let new_typ = deep_copy_var_to_help(env, typ);
+            let new_typ = storage_copy_var_to_help(env, typ);
 
             let new_content = RangedNumber(new_typ, range);
 
@@ -4786,14 +4959,27 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
         LambdaSet(self::LambdaSet {
             solved,
             recursion_var,
+            unspecialized,
         }) => {
             let new_solved = copy_union(env, max_rank, solved);
             let new_rec_var =
                 recursion_var.map(|rec_var| copy_import_to_help(env, max_rank, rec_var));
 
+            // NB: we are only copying across subs here, not instantiating like in deep_copy_var.
+            // So no bookkeeping should be done for the new unspecialized lambda sets.
+            let new_unspecialized = SubsSlice::reserve_uls_slice(env.target, unspecialized.len());
+            for (target_index, source_index) in
+                (new_unspecialized.into_iter()).zip(unspecialized.into_iter())
+            {
+                let Uls(var, sym, region) = env.source[source_index];
+                let new_var = copy_import_to_help(env, max_rank, var);
+                env.target[target_index] = Uls(new_var, sym, region);
+            }
+
             let new_content = LambdaSet(self::LambdaSet {
                 solved: new_solved,
                 recursion_var: new_rec_var,
+                unspecialized: new_unspecialized,
             });
 
             env.target.set(copy, make_descriptor(new_content));

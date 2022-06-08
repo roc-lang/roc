@@ -123,7 +123,15 @@ fn add_type_help<'a>(
         Content::LambdaSet(LambdaSet {
             solved,
             recursion_var: _,
-        }) => add_union(env, opt_name, solved, var, types),
+            unspecialized,
+        }) => {
+            debug_assert!(
+                unspecialized.is_empty(),
+                "unspecialized lambda sets left over"
+            );
+
+            add_union(env, opt_name, solved, var, types)
+        }
         Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
             debug_assert!(ext_var_is_empty_tag_union(subs, *ext_var));
 

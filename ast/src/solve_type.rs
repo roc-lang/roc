@@ -231,6 +231,7 @@ fn solve<'a>(
                 Success {
                     vars,
                     must_implement_ability: _,
+                    lambda_sets_to_specialize: _, // TODO ignored
                 } => {
                     // TODO(abilities) record deferred ability checks
                     introduce(subs, rank, pools, &vars);
@@ -328,6 +329,7 @@ fn solve<'a>(
                         Success {
                             vars,
                             must_implement_ability: _,
+                            lambda_sets_to_specialize: _, // TODO ignored
                         } => {
                             // TODO(abilities) record deferred ability checks
                             introduce(subs, rank, pools, &vars);
@@ -403,6 +405,7 @@ fn solve<'a>(
                 Success {
                     vars,
                     must_implement_ability: _,
+                    lambda_sets_to_specialize: _, // TODO ignored
                 } => {
                     // TODO(abilities) record deferred ability checks
                     introduce(subs, rank, pools, &vars);
@@ -715,6 +718,7 @@ fn solve<'a>(
                 Success {
                     vars,
                     must_implement_ability: _,
+                    lambda_sets_to_specialize: _, // TODO ignored
                 } => {
                     // TODO(abilities) record deferred ability checks
                     introduce(subs, rank, pools, &vars);
@@ -1411,6 +1415,8 @@ fn adjust_rank_content(
         LambdaSet(subs::LambdaSet {
             solved,
             recursion_var,
+            // TODO: handle unspecialized
+            unspecialized: _,
         }) => {
             let mut rank = group_rank;
 
@@ -1611,6 +1617,8 @@ fn instantiate_rigids_help(
         LambdaSet(subs::LambdaSet {
             solved,
             recursion_var,
+            // TODO: handle unspecialized
+            unspecialized: _,
         }) => {
             if let Some(rec_var) = recursion_var.into_variable() {
                 instantiate_rigids_help(subs, max_rank, pools, rec_var);
@@ -1892,6 +1900,7 @@ fn deep_copy_var_help(
         LambdaSet(subs::LambdaSet {
             solved,
             recursion_var,
+            unspecialized,
         }) => {
             let mut new_variable_slices = Vec::with_capacity(solved.len());
 
@@ -1924,6 +1933,8 @@ fn deep_copy_var_help(
             let new_content = LambdaSet(subs::LambdaSet {
                 solved: new_solved,
                 recursion_var: new_rec_var,
+                // TODO: actually copy
+                unspecialized,
             });
 
             subs.set(copy, make_descriptor(new_content));

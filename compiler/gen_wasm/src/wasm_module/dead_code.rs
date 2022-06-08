@@ -201,18 +201,16 @@ pub fn copy_preloads_shrinking_dead_fns<'a, T: SerialBuffer>(
     arena: &'a Bump,
     buffer: &mut T,
     call_graph: &PreloadsCallGraph<'a>,
-    external_code: &[u8],
+    preloaded_bytes: &[u8],
     import_fn_count: usize,
     mut live_preload_indices: Vec<'a, u32>,
 ) {
     let preload_idx_start = import_fn_count;
 
     // Create a dummy function with just a single `unreachable` instruction
-    let mut dummy_builder = CodeBuilder::new(arena);
-    dummy_builder.unreachable_();
-    dummy_builder.build_fn_header_and_footer(&[], 0, None);
-    let mut dummy_bytes = Vec::with_capacity_in(dummy_builder.size(), arena);
-    dummy_builder.serialize(&mut dummy_bytes);
+    let builder = CodeBuilder::dummy(arena);
+    let mut dummy_bytes = Vec::with_capacity_in(builder.size(), arena);
+    builder.serialize(&mut dummy_bytes);
 
     live_preload_indices.sort_unstable();
     live_preload_indices.dedup();
@@ -227,7 +225,7 @@ pub fn copy_preloads_shrinking_dead_fns<'a, T: SerialBuffer>(
                 next_live_idx = live_iter.next();
                 let live_body_start = call_graph.code_offsets[i] as usize;
                 let live_body_end = call_graph.code_offsets[i + 1] as usize;
-                buffer.append_slice(&external_code[live_body_start..live_body_end]);
+                buffer.append_slice(&preloaded_bytes[live_body_start..live_body_end]);
             }
             _ => {
                 buffer.append_slice(&dummy_bytes);
