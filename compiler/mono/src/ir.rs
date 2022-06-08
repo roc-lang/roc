@@ -4718,15 +4718,6 @@ pub fn with_hole<'a>(
                             }
                         }
                         Value(function_symbol) => {
-                            dbg!((
-                                function_symbol,
-                                fn_var,
-                                roc_types::subs::SubsFmtContent(
-                                    env.subs.get_content_without_compacting(fn_var),
-                                    env.subs
-                                )
-                            ));
-
                             let function_symbol = procs.symbol_specializations.get_or_insert(
                                 env,
                                 layout_cache,
