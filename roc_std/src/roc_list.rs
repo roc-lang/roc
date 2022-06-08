@@ -22,8 +22,8 @@ pub struct RocList<T> {
 
 impl<T> RocList<T> {
     #[inline(always)]
-    fn alloc_alignment() -> usize {
-        mem::align_of::<T>().max(mem::align_of::<Storage>())
+    fn alloc_alignment() -> u32 {
+        mem::align_of::<T>().max(mem::align_of::<Storage>()) as u32
     }
 
     pub fn empty() -> Self {
@@ -36,17 +36,17 @@ impl<T> RocList<T> {
 
     /// Create an empty RocList with enough space preallocated to store
     /// the requested number of elements.
-    pub fn with_capacity(elems: usize) -> Self {
+    pub fn with_capacity(num_elems: usize) -> Self {
         Self {
-            elements: Some(Self::elems_with_capacity(elems)),
+            elements: Some(Self::elems_with_capacity(num_elems)),
             length: 0,
-            capacity: elems,
+            capacity: num_elems,
         }
     }
 
-    fn elems_with_capacity(elems: usize) -> NonNull<ManuallyDrop<T>> {
-        let alignment = Self::alloc_alignment();
-        let alloc_ptr = unsafe { roc_alloc(elems * mem::size_of::<T>(), alignment as u32) };
+    fn elems_with_capacity(num_elems: usize) -> NonNull<ManuallyDrop<T>> {
+        let num_bytes = num_elems * mem::size_of::<T>();
+        let alloc_ptr = unsafe { roc_alloc(num_bytes, Self::alloc_alignment()) };
 
         Self::elems_from_allocation(NonNull::new(alloc_ptr).unwrap_or_else(|| {
             todo!("Call roc_panic with the info that an allocation failed.");
@@ -54,14 +54,10 @@ impl<T> RocList<T> {
     }
 
     fn elems_from_allocation(allocation: NonNull<c_void>) -> NonNull<ManuallyDrop<T>> {
-        let alignment = Self::alloc_alignment();
         let alloc_ptr = allocation.as_ptr();
 
         unsafe {
-            let elem_ptr = alloc_ptr
-                .cast::<u8>()
-                .add(alignment)
-                .cast::<ManuallyDrop<T>>();
+            let elem_ptr = Self::elem_ptr_from_alloc_ptr(alloc_ptr).cast::<ManuallyDrop<T>>();
 
             // Initialize the reference count.
             alloc_ptr
@@ -102,13 +98,7 @@ impl<T> RocList<T> {
     #[inline(always)]
     fn elements_and_storage(&self) -> Option<(NonNull<ManuallyDrop<T>>, &Cell<Storage>)> {
         let elements = self.elements?;
-        let storage = unsafe {
-            &*elements
-                .as_ptr()
-                .cast::<u8>()
-                .sub(Self::alloc_alignment())
-                .cast::<Cell<Storage>>()
-        };
+        let storage = unsafe { &*self.ptr_to_allocation().cast::<Cell<Storage>>() };
         Some((elements, storage))
     }
 
@@ -123,10 +113,19 @@ impl<T> RocList<T> {
     }
 
     /// Useful for doing memcpy on the underlying allocation. Returns NULL if list is empty.
-    pub(crate) unsafe fn ptr_to_allocation(&self) -> *const c_void {
+    pub(crate) unsafe fn ptr_to_allocation(&self) -> *mut c_void {
         unsafe {
-            (self.ptr_to_first_elem() as *const u8)
-                .sub(Self::alloc_alignment())
+            self.ptr_to_first_elem()
+                .cast::<u8>()
+                .sub(Self::alloc_alignment() as usize) as *mut _
+        }
+    }
+
+    unsafe fn elem_ptr_from_alloc_ptr(alloc_ptr: *mut c_void) -> *mut c_void {
+        unsafe {
+            alloc_ptr
+                .cast::<u8>()
+                .add(Self::alloc_alignment() as usize)
                 .cast()
         }
     }
@@ -151,13 +150,13 @@ where
 
                         // Try to reallocate in-place.
                         let new_ptr = roc_realloc(
-                            original_ptr as *mut _,
+                            original_ptr,
                             num_elems,
                             self.length,
-                            Self::alloc_alignment() as u32,
+                            Self::alloc_alignment(),
                         );
 
-                        if new_ptr == original_ptr as *mut _ {
+                        if new_ptr == original_ptr {
                             // We successfully reallocated in-place; we're done!
                             return;
                         } else {
@@ -186,17 +185,11 @@ where
                     let needs_dealloc = new_storage.decrease();
 
                     if needs_dealloc {
-                        let alignment = Self::alloc_alignment();
-
                         // Unlike in Drop, do *not* decrement the refcounts of all the elements!
                         // The new allocation is referencing them, so instead of incrementing them all
                         // all just to decrement them again here, we neither increment nor decrement them.
                         unsafe {
-                            // Release the memory.
-                            roc_dealloc(
-                                old_elements_ptr.cast::<u8>().sub(alignment).cast(),
-                                alignment as u32,
-                            );
+                            roc_dealloc(self.ptr_to_allocation(), Self::alloc_alignment());
                         }
                     } else if !new_storage.is_readonly() {
                         // Write the storage back.
@@ -237,7 +230,7 @@ where
         }
 
         let alignment = Self::alloc_alignment();
-        let elements_offset = alignment;
+        let elements_offset = alignment as usize;
         let new_size = elements_offset + mem::size_of::<T>() * (self.len() + slice.len());
         let non_null_elements = if let Some((elements, storage)) = self.elements_and_storage() {
             // Decrement the list's refence count.
@@ -254,9 +247,7 @@ where
                     let old_size = elements_offset + (mem::size_of::<T>() * self.len());
 
                     let new_ptr = unsafe {
-                        let ptr = elements.as_ptr().cast::<u8>().sub(alignment).cast();
-
-                        roc_realloc(ptr, new_size, old_size, alignment as u32).cast()
+                        roc_realloc(self.ptr_to_allocation(), new_size, old_size, alignment).cast()
                     };
 
                     self.capacity = new_size;
@@ -434,13 +425,8 @@ impl<T> Drop for RocList<T> {
                         mem::drop::<T>(ManuallyDrop::take(&mut *elem_ptr));
                     }
 
-                    let alignment = Self::alloc_alignment();
-
                     // Release the memory.
-                    roc_dealloc(
-                        elements.as_ptr().cast::<u8>().sub(alignment).cast(),
-                        alignment as u32,
-                    );
+                    roc_dealloc(self.ptr_to_allocation(), Self::alloc_alignment());
                 }
             } else if !new_storage.is_readonly() {
                 // Write the storage back.
