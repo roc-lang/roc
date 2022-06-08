@@ -367,15 +367,18 @@ struct TypeAtVisitor {
 }
 
 impl Visitor for TypeAtVisitor {
+    fn should_visit(&mut self, region: Region) -> bool {
+        region.contains(&self.region)
+    }
+
     fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
         if region == self.region {
             debug_assert!(self.typ.is_none());
             self.typ = Some(var);
             return;
         }
-        if region.contains(&self.region) {
-            walk_expr(self, expr, var);
-        }
+
+        walk_expr(self, expr, var);
     }
 
     fn visit_pattern(&mut self, pat: &Pattern, region: Region, opt_var: Option<Variable>) {
@@ -384,9 +387,8 @@ impl Visitor for TypeAtVisitor {
             self.typ = opt_var;
             return;
         }
-        if region.contains(&self.region) {
-            walk_pattern(self, pat)
-        }
+
+        walk_pattern(self, pat)
     }
 }
 
@@ -420,6 +422,10 @@ pub fn find_ability_member_and_owning_type_at(
     }
 
     impl Visitor for Finder<'_> {
+        fn should_visit(&mut self, region: Region) -> bool {
+            region.contains(&self.region)
+        }
+
         fn visit_pattern(&mut self, pattern: &Pattern, region: Region, _opt_var: Option<Variable>) {
             if region == self.region {
                 if let Pattern::AbilityMemberSpecialization {
@@ -434,6 +440,7 @@ pub fn find_ability_member_and_owning_type_at(
                     self.found = Some((spec_type, *spec_symbol))
                 }
             }
+
             walk_pattern(self, pattern);
         }
 
@@ -462,9 +469,8 @@ pub fn find_ability_member_and_owning_type_at(
                     return;
                 }
             }
-            if region.contains(&self.region) {
-                walk_expr(self, expr, var);
-            }
+
+            walk_expr(self, expr, var);
         }
     }
 
