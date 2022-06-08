@@ -2786,7 +2786,10 @@ fn instantiate_lambda_sets_as_unspecialized(
                 type_arguments,
                 lambda_set_variables,
             }) => {
-                stack.extend(lambda_set_variables.iter_mut().rev().map(|ls| &mut ls.0));
+                for lambda_set in lambda_set_variables.iter_mut() {
+                    debug_assert!(matches!(lambda_set.0, Type::Variable(_)));
+                    lambda_set.0 = new_uls();
+                }
                 stack.extend(type_arguments.iter_mut().rev());
             }
             Type::Alias {
@@ -2796,8 +2799,11 @@ fn instantiate_lambda_sets_as_unspecialized(
                 actual,
                 kind: _,
             } => {
+                for lambda_set in lambda_set_variables.iter_mut() {
+                    debug_assert!(matches!(lambda_set.0, Type::Variable(_)));
+                    lambda_set.0 = new_uls();
+                }
                 stack.push(actual);
-                stack.extend(lambda_set_variables.iter_mut().rev().map(|ls| &mut ls.0));
                 stack.extend(type_arguments.iter_mut().rev().map(|t| &mut t.typ));
             }
             Type::HostExposedAlias {
@@ -2807,8 +2813,11 @@ fn instantiate_lambda_sets_as_unspecialized(
                 actual_var: _,
                 actual,
             } => {
+                for lambda_set in lambda_set_variables.iter_mut() {
+                    debug_assert!(matches!(lambda_set.0, Type::Variable(_)));
+                    lambda_set.0 = new_uls();
+                }
                 stack.push(actual);
-                stack.extend(lambda_set_variables.iter_mut().rev().map(|ls| &mut ls.0));
                 stack.extend(type_arguments.iter_mut().rev());
             }
             Type::Apply(_sym, args, _region) => {
