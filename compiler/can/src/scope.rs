@@ -647,15 +647,15 @@ mod test {
         assert_eq!(
             &idents,
             &[
-                Ident::from("Box"),
-                Ident::from("Set"),
-                Ident::from("Dict"),
-                Ident::from("Str"),
-                Ident::from("Ok"),
                 Ident::from("False"),
-                Ident::from("List"),
                 Ident::from("True"),
+                Ident::from("Str"),
+                Ident::from("List"),
+                Ident::from("Ok"),
                 Ident::from("Err"),
+                Ident::from("Dict"),
+                Ident::from("Set"),
+                Ident::from("Box"),
             ]
         );
     }
@@ -674,15 +674,15 @@ mod test {
         assert_eq!(
             &idents,
             &[
-                Ident::from("Box"),
-                Ident::from("Set"),
-                Ident::from("Dict"),
-                Ident::from("Str"),
-                Ident::from("Ok"),
                 Ident::from("False"),
-                Ident::from("List"),
                 Ident::from("True"),
+                Ident::from("Str"),
+                Ident::from("List"),
+                Ident::from("Ok"),
                 Ident::from("Err"),
+                Ident::from("Dict"),
+                Ident::from("Set"),
+                Ident::from("Box"),
             ]
         );
 
