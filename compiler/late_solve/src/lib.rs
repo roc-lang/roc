@@ -3,7 +3,7 @@
 
 use bumpalo::Bump;
 use roc_can::abilities::AbilitiesStore;
-use roc_solve::solve::{compact_lambda_sets_of_vars, Pools};
+use roc_solve::solve::{compact_lambda_sets_of_vars, Phase, Pools};
 use roc_types::subs::{Subs, Variable};
 use roc_unify::unify::{unify as unify_unify, Mode, Unified};
 
@@ -33,6 +33,7 @@ pub fn unify(
                 &mut pools,
                 abilities_store,
                 lambda_sets_to_specialize,
+                Phase::Late,
             );
             // Pools are only used to keep track of variable ranks for generalization purposes.
             // Since we break generalization during monomorphization, `pools` is irrelevant
