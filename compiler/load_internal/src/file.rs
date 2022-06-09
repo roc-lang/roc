@@ -6,7 +6,7 @@ use crossbeam::thread;
 use parking_lot::Mutex;
 use roc_builtins::roc::module_source;
 use roc_builtins::std::borrow_stdlib;
-use roc_can::abilities::{AbilitiesStore, SolvedSpecializations};
+use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, SolvedSpecializations};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::def::Declaration;
 use roc_can::expr::PendingDerives;
@@ -128,7 +128,7 @@ struct ModuleCache<'a> {
     headers: MutMap<ModuleId, ModuleHeader<'a>>,
     parsed: MutMap<ModuleId, ParsedModule<'a>>,
     aliases: MutMap<ModuleId, MutMap<Symbol, (bool, Alias)>>,
-    abilities: MutMap<ModuleId, AbilitiesStore>,
+    pending_abilities: MutMap<ModuleId, PendingAbilitiesStore>,
     constrained: MutMap<ModuleId, ConstrainedModule>,
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
@@ -175,7 +175,7 @@ impl Default for ModuleCache<'_> {
             headers: Default::default(),
             parsed: Default::default(),
             aliases: Default::default(),
-            abilities: Default::default(),
+            pending_abilities: Default::default(),
             constrained: Default::default(),
             typechecked: Default::default(),
             found_specializations: Default::default(),
@@ -295,7 +295,7 @@ fn start_phase<'a>(
                     .clone();
 
                 let mut aliases = MutMap::default();
-                let mut abilities_store = AbilitiesStore::default();
+                let mut abilities_store = PendingAbilitiesStore::default();
 
                 for imported in parsed.imported_modules.keys() {
                     match state.module_cache.aliases.get(imported) {
@@ -315,7 +315,7 @@ fn start_phase<'a>(
                         }
                     }
 
-                    match state.module_cache.abilities.get(imported) {
+                    match state.module_cache.pending_abilities.get(imported) {
                         None => unreachable!(
                             r"imported module {:?} did not register its abilities, so {:?} cannot use them",
                             imported, parsed.module_id,
@@ -880,7 +880,7 @@ enum BuildTask<'a> {
         dep_idents: IdentIdsByModule,
         exposed_symbols: VecSet<Symbol>,
         aliases: MutMap<Symbol, Alias>,
-        abilities_store: AbilitiesStore,
+        abilities_store: PendingAbilitiesStore,
         skip_constraint_gen: bool,
     },
     Solve {
@@ -2046,7 +2046,7 @@ fn update<'a>(
 
             state
                 .module_cache
-                .abilities
+                .pending_abilities
                 .insert(module_id, constrained_module.module.abilities_store.clone());
 
             state
@@ -3566,61 +3566,81 @@ impl<'a> BuildTask<'a> {
 
 fn add_imports(
     subs: &mut Subs,
-    abilities_store: &mut AbilitiesStore,
+    pending_abilities: PendingAbilitiesStore,
     mut exposed_for_module: ExposedForModule,
     def_types: &mut Vec<(Symbol, Loc<roc_types::types::Type>)>,
     rigid_vars: &mut Vec<Variable>,
-) -> Vec<Variable> {
+) -> (Vec<Variable>, AbilitiesStore) {
     let mut import_variables = Vec::new();
 
-    for symbol in exposed_for_module.imported_values {
-        let module_id = symbol.module_id();
-        match exposed_for_module.exposed_by_module.get_mut(&module_id) {
-            Some(ExposedModuleTypes {
-                stored_vars_by_symbol,
-                storage_subs,
-                solved_specializations: _,
-            }) => {
-                let variable = match stored_vars_by_symbol.iter().find(|(s, _)| *s == symbol) {
-                    None => {
-                        // Today we define builtins in each module that uses them
-                        // so even though they have a different module name from
-                        // the surrounding module, they are not technically imported
-                        debug_assert!(symbol.is_builtin());
-                        continue;
-                    }
-                    Some((_, x)) => *x,
-                };
+    let mut cached_symbol_vars = VecMap::default();
 
-                let copied_import = storage_subs.export_variable_to(subs, variable);
+    dbg!(&exposed_for_module.imported_values);
 
-                def_types.push((
-                    symbol,
-                    Loc::at_zero(roc_types::types::Type::Variable(copied_import.variable)),
-                ));
+    macro_rules! import_var_for_symbol  {
+        ($symbol:ident, $break:stmt) => {
+            let module_id = $symbol.module_id();
+            match exposed_for_module.exposed_by_module.get_mut(&module_id) {
+                Some(ExposedModuleTypes {
+                    stored_vars_by_symbol,
+                    storage_subs,
+                    solved_specializations: _,
+                }) => {
+                    let variable = match stored_vars_by_symbol.iter().find(|(s, _)| *s == $symbol) {
+                        None => {
+                            // Today we define builtins in each module that uses them
+                            // so even though they have a different module name from
+                            // the surrounding module, they are not technically imported
+                            debug_assert!($symbol.is_builtin());
+                            $break
+                        }
+                        Some((_, x)) => *x,
+                    };
 
-                // not a typo; rigids are turned into flex during type inference, but when imported we must
-                // consider them rigid variables
-                rigid_vars.extend(copied_import.rigid);
-                rigid_vars.extend(copied_import.flex);
+                    let copied_import = storage_subs.export_variable_to(subs, variable);
 
-                // Rigid vars bound to abilities are also treated like rigids.
-                rigid_vars.extend(copied_import.rigid_able);
-                rigid_vars.extend(copied_import.flex_able);
+                    def_types.push((
+                        $symbol,
+                        Loc::at_zero(roc_types::types::Type::Variable(copied_import.variable)),
+                    ));
 
-                import_variables.extend(copied_import.registered);
+                    // not a typo; rigids are turned into flex during type inference, but when imported we must
+                    // consider them rigid variables
+                    rigid_vars.extend(copied_import.rigid);
+                    rigid_vars.extend(copied_import.flex);
 
-                if abilities_store.is_ability_member_name(symbol) {
-                    abilities_store.resolved_imported_member_var(symbol, copied_import.variable);
+                    // Rigid vars bound to abilities are also treated like rigids.
+                    rigid_vars.extend(copied_import.rigid_able);
+                    rigid_vars.extend(copied_import.flex_able);
+
+                    import_variables.extend(copied_import.registered);
+
+                    cached_symbol_vars.insert($symbol, copied_import.variable);
                 }
-            }
-            None => {
-                internal_error!("Imported module {:?} is not available", module_id)
+                None => {
+                    internal_error!("Imported module {:?} is not available", module_id)
+                }
             }
         }
     }
 
-    import_variables
+    for symbol in exposed_for_module.imported_values {
+        import_var_for_symbol!(symbol, continue);
+    }
+
+    let abilities_store =
+        pending_abilities.resolve(|symbol| match cached_symbol_vars.get(&symbol).copied() {
+            Some(var) => var,
+            None => {
+                import_var_for_symbol!(
+                    symbol,
+                    internal_error!("Import ability member {:?} not available", symbol)
+                );
+                *cached_symbol_vars.get(&symbol).unwrap()
+            }
+        });
+
+    (import_variables, abilities_store)
 }
 
 #[allow(clippy::complexity)]
@@ -3643,7 +3663,7 @@ fn run_solve_solve(
         exposed_symbols,
         aliases,
         rigid_variables,
-        mut abilities_store,
+        abilities_store: pending_abilities,
         ..
     } = module;
 
@@ -3652,9 +3672,9 @@ fn run_solve_solve(
 
     let mut subs = Subs::new_from_varstore(var_store);
 
-    let import_variables = add_imports(
+    let (import_variables, abilities_store) = add_imports(
         &mut subs,
-        &mut abilities_store,
+        pending_abilities,
         exposed_for_module,
         &mut def_types,
         &mut rigid_vars,
@@ -3867,7 +3887,7 @@ fn canonicalize_and_constrain<'a>(
     dep_idents: IdentIdsByModule,
     exposed_symbols: VecSet<Symbol>,
     aliases: MutMap<Symbol, Alias>,
-    imported_abilities_state: AbilitiesStore,
+    imported_abilities_state: PendingAbilitiesStore,
     parsed: ParsedModule<'a>,
     skip_constraint_gen: bool,
 ) -> CanAndCon {

@@ -1,5 +1,4 @@
 use roc_collections::{all::MutMap, VecMap, VecSet};
-use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::{subs::Variable, types::Type};
@@ -13,8 +12,14 @@ pub struct MemberVariables {
     pub flex_vars: Vec<Variable>,
 }
 
+/// The member and its signature is defined locally, in the module the store is created for.
+/// We need to instantiate and introduce this during solving.
 #[derive(Debug, Clone)]
-pub enum MemberTypeInfo {
+pub struct ResolvedMemberType(Variable);
+
+/// Member type information that needs to be resolved from imports.
+#[derive(Debug, Clone)]
+pub enum PendingMemberType {
     /// The member and its signature is defined locally, in the module the store is created for.
     /// We need to instantiate and introduce this during solving.
     Local {
@@ -24,25 +29,38 @@ pub enum MemberTypeInfo {
     },
     /// The member was defined in another module, so we'll import its variable when it's time to
     /// solve. At that point we'll resolve `var` here.
-    Imported { signature_var: Option<Variable> },
+    Imported,
+}
+
+pub trait ResolvePhase: std::fmt::Debug + Clone + Copy {
+    type MemberType: std::fmt::Debug + Clone;
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+pub struct Pending;
+impl ResolvePhase for Pending {
+    type MemberType = PendingMemberType;
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+pub struct Resolved;
+impl ResolvePhase for Resolved {
+    type MemberType = ResolvedMemberType;
 }
 
 /// Stores information about an ability member definition, including the parent ability, the
 /// defining type, and what type variables need to be instantiated with instances of the ability.
 // TODO: SoA and put me in an arena
 #[derive(Debug, Clone)]
-pub struct AbilityMemberData {
+pub struct AbilityMemberData<Phase: ResolvePhase> {
     pub parent_ability: Symbol,
     pub region: Region,
-    pub typ: MemberTypeInfo,
+    pub typ: Phase::MemberType,
 }
 
-impl AbilityMemberData {
-    pub fn signature_var(&self) -> Option<Variable> {
-        match self.typ {
-            MemberTypeInfo::Local { signature_var, .. } => Some(signature_var),
-            MemberTypeInfo::Imported { signature_var } => signature_var,
-        }
+impl AbilityMemberData<Resolved> {
+    pub fn signature_var(&self) -> Variable {
+        self.typ.0
     }
 }
 
@@ -93,12 +111,12 @@ pub enum SpecializationLambdaSetError {}
 // are only dealing with intra-module abilities for now.
 // TODO(abilities): many of these should be `VecMap`s. Do some benchmarking.
 #[derive(Default, Debug, Clone)]
-pub struct AbilitiesStore {
+pub struct IAbilitiesStore<Phase: ResolvePhase> {
     /// Maps an ability to the members defining it.
     members_of_ability: MutMap<Symbol, Vec<Symbol>>,
 
     /// Information about all members composing abilities.
-    ability_members: MutMap<Symbol, AbilityMemberData>,
+    ability_members: MutMap<Symbol, AbilityMemberData<Phase>>,
 
     /// Map of symbols that specialize an ability member to the root ability symbol name.
     /// For example, for the program
@@ -121,11 +139,14 @@ pub struct AbilitiesStore {
     resolved_specializations: MutMap<SpecializationId, Symbol>,
 }
 
-impl AbilitiesStore {
+pub type AbilitiesStore = IAbilitiesStore<Resolved>;
+pub type PendingAbilitiesStore = IAbilitiesStore<Pending>;
+
+impl<Phase: ResolvePhase> IAbilitiesStore<Phase> {
     /// Records the definition of an ability, including its members.
     pub fn register_ability<I>(&mut self, ability: Symbol, members: I)
     where
-        I: IntoIterator<Item = (Symbol, AbilityMemberData)>,
+        I: IntoIterator<Item = (Symbol, AbilityMemberData<Phase>)>,
         I::IntoIter: ExactSizeIterator,
     {
         let members = members.into_iter();
@@ -142,8 +163,32 @@ impl AbilitiesStore {
         );
     }
 
+    /// Checks if `name` is a root ability member symbol name.
+    /// Note that this will return `false` for specializations of an ability member, which have
+    /// different symbols from the root.
+    pub fn is_ability_member_name(&self, name: Symbol) -> bool {
+        self.ability_members.contains_key(&name)
+    }
+
     pub fn is_ability(&self, ability: Symbol) -> bool {
         self.members_of_ability.contains_key(&ability)
+    }
+
+    /// Iterator over all abilities and their members that this store knows about.
+    pub fn iter_abilities(&self) -> impl Iterator<Item = (Symbol, &[Symbol])> {
+        self.members_of_ability
+            .iter()
+            .map(|(k, v)| (*k, v.as_slice()))
+    }
+
+    /// Returns information about all known ability members and their root symbols.
+    pub fn root_ability_members(&self) -> &MutMap<Symbol, AbilityMemberData<Phase>> {
+        &self.ability_members
+    }
+
+    /// Returns whether a symbol is declared to specialize an ability member.
+    pub fn is_specialization_name(&self, symbol: Symbol) -> bool {
+        self.specialization_to_root.contains_key(&symbol)
     }
 
     /// Records a specialization of `ability_member` with specialized type `implementing_type`.
@@ -161,18 +206,6 @@ impl AbilitiesStore {
         debug_assert!(old_spec.is_none(), "Replacing existing specialization");
     }
 
-    /// Checks if `name` is a root ability member symbol name.
-    /// Note that this will return `false` for specializations of an ability member, which have
-    /// different symbols from the root.
-    pub fn is_ability_member_name(&self, name: Symbol) -> bool {
-        self.ability_members.contains_key(&name)
-    }
-
-    /// Returns information about all known ability members and their root symbols.
-    pub fn root_ability_members(&self) -> &MutMap<Symbol, AbilityMemberData> {
-        &self.ability_members
-    }
-
     /// Records that the symbol `specializing_symbol` claims to specialize `ability_member`; for
     /// example the symbol of `hash : Id -> U64` specializing `hash : a -> U64 | a has Hash`.
     pub fn register_specializing_symbol(
@@ -184,11 +217,20 @@ impl AbilitiesStore {
             .insert(specializing_symbol, ability_member);
     }
 
-    /// Returns whether a symbol is declared to specialize an ability member.
-    pub fn is_specialization_name(&self, symbol: Symbol) -> bool {
-        self.specialization_to_root.contains_key(&symbol)
+    pub fn members_of_ability(&self, ability: Symbol) -> Option<&[Symbol]> {
+        self.members_of_ability.get(&ability).map(|v| v.as_ref())
     }
 
+    pub fn fresh_specialization_id(&mut self) -> SpecializationId {
+        debug_assert!(self.next_specialization_id != std::u32::MAX);
+
+        let id = SpecializationId(self.next_specialization_id);
+        self.next_specialization_id += 1;
+        id
+    }
+}
+
+impl IAbilitiesStore<Resolved> {
     /// Finds the symbol name and ability member definition for a symbol specializing the ability
     /// member, if it specializes any.
     /// For example, suppose `hash : Id -> U64` has symbol #hash1 and specializes
@@ -197,7 +239,7 @@ impl AbilitiesStore {
     pub fn root_name_and_def(
         &self,
         specializing_symbol: Symbol,
-    ) -> Option<(Symbol, &AbilityMemberData)> {
+    ) -> Option<(Symbol, &AbilityMemberData<Resolved>)> {
         let root_symbol = self.specialization_to_root.get(&specializing_symbol)?;
         debug_assert!(self.ability_members.contains_key(root_symbol));
         let root_data = self.ability_members.get(root_symbol).unwrap();
@@ -205,15 +247,8 @@ impl AbilitiesStore {
     }
 
     /// Finds the ability member definition for a member name.
-    pub fn member_def(&self, member: Symbol) -> Option<&AbilityMemberData> {
+    pub fn member_def(&self, member: Symbol) -> Option<&AbilityMemberData<Resolved>> {
         self.ability_members.get(&member)
-    }
-
-    /// Iterator over all abilities and their members that this store knows about.
-    pub fn iter_abilities(&self) -> impl Iterator<Item = (Symbol, &[Symbol])> {
-        self.members_of_ability
-            .iter()
-            .map(|(k, v)| (*k, v.as_slice()))
     }
 
     /// Returns an iterator over pairs ((ability member, type), specialization) specifying that
@@ -227,18 +262,6 @@ impl AbilitiesStore {
     /// Retrieves the specialization of `member` for `typ`, if it exists.
     pub fn get_specialization(&self, member: Symbol, typ: Symbol) -> Option<&MemberSpecialization> {
         self.declared_specializations.get(&(member, typ))
-    }
-
-    pub fn members_of_ability(&self, ability: Symbol) -> Option<&[Symbol]> {
-        self.members_of_ability.get(&ability).map(|v| v.as_ref())
-    }
-
-    pub fn fresh_specialization_id(&mut self) -> SpecializationId {
-        debug_assert!(self.next_specialization_id != std::u32::MAX);
-
-        let id = SpecializationId(self.next_specialization_id);
-        self.next_specialization_id += 1;
-        id
     }
 
     pub fn insert_resolved(&mut self, id: SpecializationId, specialization: Symbol) {
@@ -266,7 +289,9 @@ impl AbilitiesStore {
     pub fn get_resolved(&self, id: SpecializationId) -> Option<Symbol> {
         self.resolved_specializations.get(&id).copied()
     }
+}
 
+impl IAbilitiesStore<Pending> {
     /// Creates a store from [`self`] that closes over the abilities/members given by the
     /// imported `symbols`, and their specializations (if any).
     pub fn closure_from_imported(&self, symbols: &VecSet<Symbol>) -> Self {
@@ -283,7 +308,7 @@ impl AbilitiesStore {
             resolved_specializations: _,
         } = self;
 
-        let mut new = Self::default();
+        let mut new = PendingAbilitiesStore::default();
 
         // 1. Figure out the abilities we need to introduce.
         let mut abilities_to_introduce = VecSet::with_capacity(2);
@@ -302,15 +327,21 @@ impl AbilitiesStore {
             let members = members_of_ability.get(&ability).unwrap();
             let mut imported_member_data = Vec::with_capacity(members.len());
             for member in members {
-                let mut member_data = ability_members.get(member).unwrap().clone();
+                let AbilityMemberData {
+                    parent_ability,
+                    region,
+                    typ: _,
+                } = ability_members.get(member).unwrap().clone();
                 // All external members need to be marked as imported. We'll figure out their real
                 // type variables when it comes time to solve the module we're currently importing
                 // into.
-                member_data.typ = MemberTypeInfo::Imported {
-                    signature_var: None,
+                let imported_data = AbilityMemberData {
+                    parent_ability,
+                    region,
+                    typ: PendingMemberType::Imported,
                 };
 
-                imported_member_data.push((*member, member_data));
+                imported_member_data.push((*member, imported_data));
             }
 
             new.register_ability(ability, imported_member_data);
@@ -372,14 +403,56 @@ impl AbilitiesStore {
         debug_assert!(self.resolved_specializations.is_empty());
     }
 
-    pub fn resolved_imported_member_var(&mut self, member: Symbol, var: Variable) {
-        let member_data = self.ability_members.get_mut(&member).unwrap();
-        match &mut member_data.typ {
-            MemberTypeInfo::Imported { signature_var } => {
-                let old = signature_var.replace(var);
-                debug_assert!(old.is_none(), "Replacing existing variable!");
-            }
-            _ => internal_error!("{:?} is not imported!", member),
+    pub fn resolve<VarOfSymbol>(self, mut variable_of_symbol: VarOfSymbol) -> AbilitiesStore
+    where
+        VarOfSymbol: FnMut(Symbol) -> Variable,
+    {
+        let Self {
+            members_of_ability,
+            ability_members,
+            specialization_to_root,
+            declared_specializations,
+            next_specialization_id,
+            resolved_specializations,
+        } = self;
+
+        let ability_members = ability_members
+            .into_iter()
+            .map(|(member_symbol, member_data)| {
+                let AbilityMemberData {
+                    parent_ability,
+                    region,
+                    typ,
+                } = member_data;
+
+                let typ = match typ {
+                    PendingMemberType::Local {
+                        signature_var,
+                        signature: _,
+                        variables: _,
+                    } => ResolvedMemberType(signature_var),
+                    PendingMemberType::Imported => {
+                        ResolvedMemberType(variable_of_symbol(member_symbol))
+                    }
+                };
+
+                let member_data = AbilityMemberData {
+                    parent_ability,
+                    region,
+                    typ,
+                };
+
+                (member_symbol, member_data)
+            })
+            .collect();
+
+        AbilitiesStore {
+            members_of_ability,
+            ability_members,
+            specialization_to_root,
+            declared_specializations,
+            next_specialization_id,
+            resolved_specializations,
         }
     }
 }

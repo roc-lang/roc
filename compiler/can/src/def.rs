@@ -1,6 +1,6 @@
 use crate::abilities::AbilityMemberData;
-use crate::abilities::MemberTypeInfo;
 use crate::abilities::MemberVariables;
+use crate::abilities::PendingMemberType;
 use crate::annotation::canonicalize_annotation;
 use crate::annotation::find_type_def_symbols;
 use crate::annotation::make_apply_symbol;
@@ -961,7 +961,7 @@ fn resolve_abilities<'a>(
                 AbilityMemberData {
                     parent_ability: loc_ability_name.value,
                     region: name_region,
-                    typ: MemberTypeInfo::Local {
+                    typ: PendingMemberType::Local {
                         variables,
                         signature,
                         signature_var: var_store.fresh(),

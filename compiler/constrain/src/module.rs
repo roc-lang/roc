@@ -1,6 +1,6 @@
 use crate::expr::{constrain_def_make_constraint, constrain_def_pattern, Env};
 use roc_builtins::std::StdLib;
-use roc_can::abilities::{AbilitiesStore, MemberTypeInfo, SolvedSpecializations};
+use roc_can::abilities::{PendingAbilitiesStore, PendingMemberType, SolvedSpecializations};
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::def::Declaration;
 use roc_can::expected::Expected;
@@ -99,7 +99,7 @@ pub struct ExposedModuleTypes {
 pub fn constrain_module(
     constraints: &mut Constraints,
     symbols_from_requires: Vec<(Loc<Symbol>, Loc<Type>)>,
-    abilities_store: &AbilitiesStore,
+    abilities_store: &PendingAbilitiesStore,
     declarations: &[Declaration],
     home: ModuleId,
 ) -> Constraint {
@@ -176,12 +176,12 @@ fn constrain_symbols_from_requires(
 
 pub fn frontload_ability_constraints(
     constraints: &mut Constraints,
-    abilities_store: &AbilitiesStore,
+    abilities_store: &PendingAbilitiesStore,
     home: ModuleId,
     mut constraint: Constraint,
 ) -> Constraint {
     for (member_name, member_data) in abilities_store.root_ability_members().iter() {
-        if let MemberTypeInfo::Local {
+        if let PendingMemberType::Local {
             signature_var,
             variables: vars,
             signature,

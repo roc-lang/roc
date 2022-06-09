@@ -1549,9 +1549,7 @@ fn check_ability_specialization(
     // inferred type for the specialization actually aligns with the expected
     // implementation.
     if let Some((ability_member, root_data)) = abilities_store.root_name_and_def(symbol) {
-        let root_signature_var = root_data.signature_var().unwrap_or_else(|| {
-            internal_error!("Signature var not resolved for {:?}", ability_member)
-        });
+        let root_signature_var = root_data.signature_var();
         let parent_ability = root_data.parent_ability;
 
         // Check if they unify - if they don't, then the claimed specialization isn't really one,
