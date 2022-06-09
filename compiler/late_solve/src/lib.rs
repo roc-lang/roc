@@ -49,4 +49,4 @@ pub fn unify(
 pub use roc_solve::solve::instantiate_rigids;
 
 pub use roc_solve::ability::resolve_ability_specialization;
-pub use roc_solve::ability::Resolved;
+pub use roc_solve::ability::{Resolved, WorldAbilities};

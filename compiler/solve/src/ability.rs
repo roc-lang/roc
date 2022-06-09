@@ -1,8 +1,10 @@
+use std::sync::{Arc, RwLock};
+
 use roc_can::abilities::AbilitiesStore;
 use roc_can::expr::PendingDerives;
-use roc_collections::VecMap;
+use roc_collections::{MutMap, VecMap};
 use roc_error_macros::internal_error;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{Content, FlatType, GetSubsSlice, Rank, Subs, Variable};
 use roc_types::types::{AliasKind, Category, ErrorType, PatternCategory};
@@ -11,6 +13,29 @@ use roc_unify::unify::{MustImplementAbility, Obligated};
 
 use crate::solve::{instantiate_rigids, type_to_var};
 use crate::solve::{Aliases, Pools, TypeError};
+
+pub type AllModuleAbilities = Arc<RwLock<MutMap<ModuleId, AbilitiesStore>>>;
+
+pub enum WorldAbilities<'a> {
+    BigWorld(AllModuleAbilities),
+    TinyWorld(&'a AbilitiesStore),
+}
+
+impl WorldAbilities<'_> {
+    pub fn with_module_store<T, F>(&self, module: ModuleId, mut f: F) -> T
+    where
+        F: FnMut(&AbilitiesStore) -> T,
+    {
+        match self {
+            WorldAbilities::BigWorld(world) => {
+                let world = world.read().unwrap();
+                let module_store = world.get(&module).unwrap();
+                f(module_store)
+            }
+            WorldAbilities::TinyWorld(store) => f(store),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum AbilityImplError {

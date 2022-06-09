@@ -41,6 +41,7 @@ use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SyntaxError};
 use roc_region::all::{LineInfo, Loc, Region};
 use roc_reporting::report::RenderTarget;
+use roc_solve::ability::{AllModuleAbilities, WorldAbilities};
 use roc_solve::module::SolvedModule;
 use roc_solve::solve;
 use roc_target::TargetInfo;
@@ -446,6 +447,13 @@ fn start_phase<'a>(
                     abilities_store,
                 } = found_specializations;
 
+                let old_store = &state
+                    .inverse_solved_abilities
+                    .write()
+                    .unwrap()
+                    .insert(module_id, abilities_store);
+                debug_assert!(old_store.is_none(), "{:?} abilities not new", module_id);
+
                 BuildTask::MakeSpecializations {
                     module_id,
                     ident_ids,
@@ -454,7 +462,7 @@ fn start_phase<'a>(
                     layout_cache,
                     specializations_we_must_make,
                     module_timing,
-                    abilities_store,
+                    world_abilities: Arc::clone(&state.inverse_solved_abilities),
                 }
             }
         }
@@ -745,6 +753,9 @@ struct State<'a> {
 
     pub render: RenderTarget,
 
+    /// At a given point in time, this map contains the abilities stores in reverse order
+    pub inverse_solved_abilities: AllModuleAbilities,
+
     // cached subs (used for builtin modules, could include packages in the future too)
     cached_subs: CachedSubs,
 }
@@ -789,6 +800,7 @@ impl<'a> State<'a> {
             layout_caches: std::vec::Vec::with_capacity(number_of_workers),
             cached_subs: Arc::new(Mutex::new(cached_subs)),
             render,
+            inverse_solved_abilities: Default::default(),
         }
     }
 }
@@ -916,7 +928,7 @@ enum BuildTask<'a> {
         layout_cache: LayoutCache<'a>,
         specializations_we_must_make: Vec<ExternalSpecializations>,
         module_timing: ModuleTiming,
-        abilities_store: AbilitiesStore,
+        world_abilities: AllModuleAbilities,
     },
 }
 
@@ -4166,7 +4178,7 @@ fn make_specializations<'a>(
     specializations_we_must_make: Vec<ExternalSpecializations>,
     mut module_timing: ModuleTiming,
     target_info: TargetInfo,
-    abilities_store: AbilitiesStore,
+    world_abilities: AllModuleAbilities,
 ) -> Msg<'a> {
     let make_specializations_start = SystemTime::now();
     let mut update_mode_ids = UpdateModeIds::new();
@@ -4180,7 +4192,7 @@ fn make_specializations<'a>(
         update_mode_ids: &mut update_mode_ids,
         // call_specialization_counter=0 is reserved
         call_specialization_counter: 1,
-        abilities_store: &abilities_store,
+        abilities: WorldAbilities::BigWorld(world_abilities),
     };
 
     let mut procs = Procs::new_in(arena);
@@ -4275,7 +4287,7 @@ fn build_pending_specializations<'a>(
         update_mode_ids: &mut update_mode_ids,
         // call_specialization_counter=0 is reserved
         call_specialization_counter: 1,
-        abilities_store: &abilities_store,
+        abilities: WorldAbilities::TinyWorld(&abilities_store),
     };
 
     // Add modules' decls to Procs
@@ -4587,7 +4599,7 @@ fn run_task<'a>(
             layout_cache,
             specializations_we_must_make,
             module_timing,
-            abilities_store,
+            world_abilities,
         } => Ok(make_specializations(
             arena,
             module_id,
@@ -4598,7 +4610,7 @@ fn run_task<'a>(
             specializations_we_must_make,
             module_timing,
             target_info,
-            abilities_store,
+            world_abilities,
         )),
     }?;
 
