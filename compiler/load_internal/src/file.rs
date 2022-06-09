@@ -447,11 +447,20 @@ fn start_phase<'a>(
                     abilities_store,
                 } = found_specializations;
 
-                let old_store = &state
-                    .inverse_solved_abilities
-                    .write()
-                    .unwrap()
-                    .insert(module_id, abilities_store);
+                // Safety: by this point every module should have been solved, so there is no need
+                // for our exposed types anymore, but the world does need them.
+                let our_exposed_types = unsafe { state.exposed_types.remove(&module_id) }
+                    .unwrap_or_else(|| {
+                        internal_error!("Exposed types for {:?} missing", module_id)
+                    });
+
+                let old_store = &state.inverse_world_abilities.write().unwrap().insert(
+                    module_id,
+                    (
+                        abilities_store,
+                        our_exposed_types.exposed_types_storage_subs,
+                    ),
+                );
                 debug_assert!(old_store.is_none(), "{:?} abilities not new", module_id);
 
                 BuildTask::MakeSpecializations {
@@ -462,7 +471,7 @@ fn start_phase<'a>(
                     layout_cache,
                     specializations_we_must_make,
                     module_timing,
-                    world_abilities: Arc::clone(&state.inverse_solved_abilities),
+                    world_abilities: Arc::clone(&state.inverse_world_abilities),
                 }
             }
         }
@@ -754,7 +763,7 @@ struct State<'a> {
     pub render: RenderTarget,
 
     /// At a given point in time, this map contains the abilities stores in reverse order
-    pub inverse_solved_abilities: AllModuleAbilities,
+    pub inverse_world_abilities: AllModuleAbilities,
 
     // cached subs (used for builtin modules, could include packages in the future too)
     cached_subs: CachedSubs,
@@ -800,7 +809,7 @@ impl<'a> State<'a> {
             layout_caches: std::vec::Vec::with_capacity(number_of_workers),
             cached_subs: Arc::new(Mutex::new(cached_subs)),
             render,
-            inverse_solved_abilities: Default::default(),
+            inverse_world_abilities: Default::default(),
         }
     }
 }
@@ -4192,7 +4201,7 @@ fn make_specializations<'a>(
         update_mode_ids: &mut update_mode_ids,
         // call_specialization_counter=0 is reserved
         call_specialization_counter: 1,
-        abilities: WorldAbilities::BigWorld(world_abilities),
+        abilities: WorldAbilities::BigWorld(Arc::clone(&world_abilities)),
     };
 
     let mut procs = Procs::new_in(arena);
@@ -4226,6 +4235,23 @@ fn make_specializations<'a>(
     module_timing.make_specializations = make_specializations_end
         .duration_since(make_specializations_start)
         .unwrap();
+
+    if cfg!(debug_assertions) {
+        let reentrant_specializations_needed = external_specializations_requested
+            .iter()
+            .filter(|(module, _)| {
+                **module != home && {
+                    let world = world_abilities.read().unwrap();
+                    world.contains_key(module)
+                }
+            })
+            .collect::<HashMap<_, _>>();
+        assert!(
+            reentrant_specializations_needed.is_empty(),
+            "Need re-entrant external specializations: {:?}",
+            reentrant_specializations_needed
+        );
+    }
 
     Msg::MadeSpecializations {
         module_id: home,

@@ -1273,9 +1273,14 @@ impl<'a, 'i> Env<'a, 'i> {
     /// Unifies two variables and performs lambda set compaction.
     /// Use this rather than [roc_unify::unify] directly!
     fn unify(&mut self, left: Variable, right: Variable) -> Result<(), UnificationFailed> {
-        self.abilities.with_module_store(self.home, |store| {
-            roc_late_solve::unify(self.arena, self.subs, store, left, right)
-        })
+        roc_late_solve::unify(
+            self.home,
+            self.arena,
+            self.subs,
+            &self.abilities,
+            left,
+            right,
+        )
     }
 }
 
@@ -4755,7 +4760,7 @@ pub fn with_hole<'a>(
                         UnspecializedExpr(symbol) => {
                             match procs.ability_member_aliases.get(symbol).unwrap() {
                                 &self::AbilityMember(member) => {
-                                    let resolved_proc = env.abilities.with_module_store(env.home, |store| 
+                                    let resolved_proc = env.abilities.with_module_store(env.home, |store|
                                         resolve_ability_specialization(env.subs, store, member, fn_var)
                                             .expect("Recorded as an ability member, but it doesn't have a specialization")
                                     );

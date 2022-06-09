@@ -57,6 +57,10 @@ impl ExposedByModule {
     pub fn iter_all(&self) -> impl Iterator<Item = (&ModuleId, &ExposedModuleTypes)> {
         self.exposed.iter()
     }
+
+    pub unsafe fn remove(&mut self, module_id: &ModuleId) -> Option<ExposedModuleTypes> {
+        self.exposed.remove(module_id)
+    }
 }
 
 #[derive(Clone, Debug, Default)]

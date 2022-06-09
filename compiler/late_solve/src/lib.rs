@@ -2,10 +2,15 @@
 //! the compiler backend.
 
 use bumpalo::Bump;
-use roc_can::abilities::AbilitiesStore;
+use roc_module::symbol::ModuleId;
 use roc_solve::solve::{compact_lambda_sets_of_vars, Phase, Pools};
 use roc_types::subs::{Subs, Variable};
 use roc_unify::unify::{unify as unify_unify, Mode, Unified};
+
+pub use roc_solve::solve::instantiate_rigids;
+
+pub use roc_solve::ability::resolve_ability_specialization;
+pub use roc_solve::ability::{Resolved, WorldAbilities};
 
 #[derive(Debug)]
 pub struct UnificationFailed;
@@ -13,9 +18,10 @@ pub struct UnificationFailed;
 /// Unifies two variables and performs lambda set compaction.
 /// Ranks and other ability demands are disregarded.
 pub fn unify(
+    home: ModuleId,
     arena: &Bump,
     subs: &mut Subs,
-    abilities_store: &AbilitiesStore,
+    world_abilities: &WorldAbilities,
     left: Variable,
     right: Variable,
 ) -> Result<(), UnificationFailed> {
@@ -27,13 +33,14 @@ pub fn unify(
             lambda_sets_to_specialize,
         } => {
             let mut pools = Pools::default();
+
             compact_lambda_sets_of_vars(
                 subs,
                 arena,
                 &mut pools,
-                abilities_store,
+                world_abilities,
                 lambda_sets_to_specialize,
-                Phase::Late,
+                Phase::Late { home },
             );
             // Pools are only used to keep track of variable ranks for generalization purposes.
             // Since we break generalization during monomorphization, `pools` is irrelevant
@@ -45,8 +52,3 @@ pub fn unify(
         Unified::Failure(..) | Unified::BadType(..) => Err(UnificationFailed),
     }
 }
-
-pub use roc_solve::solve::instantiate_rigids;
-
-pub use roc_solve::ability::resolve_ability_specialization;
-pub use roc_solve::ability::{Resolved, WorldAbilities};

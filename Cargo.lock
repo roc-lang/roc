@@ -3855,6 +3855,7 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "roc_can",
+ "roc_module",
  "roc_solve",
  "roc_types",
  "roc_unify",

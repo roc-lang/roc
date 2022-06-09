@@ -1,6 +1,6 @@
 use crate::ability::{
     resolve_ability_specialization, type_implementing_specialization, AbilityImplError,
-    DeferredObligations, DeriveKey, PendingDerivesTable, Resolved, Unfulfilled,
+    DeferredObligations, DeriveKey, PendingDerivesTable, Resolved, Unfulfilled, WorldAbilities,
 };
 use bumpalo::Bump;
 use roc_can::abilities::{AbilitiesStore, MemberSpecialization};
@@ -15,7 +15,7 @@ use roc_debug_flags::dbg_do;
 use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
 use roc_error_macros::internal_error;
 use roc_module::ident::TagName;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_problem::can::CycleEntry;
 use roc_region::all::{Loc, Region};
 use roc_types::solved_types::Solved;
@@ -90,7 +90,10 @@ pub enum Phase {
     Solve,
     /// Calls into solve during later phases of compilation, namely monomorphization.
     /// Here we expect all information is known.
-    Late,
+    Late {
+        /// Module being solved
+        home: ModuleId,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -573,7 +576,7 @@ fn run_in_place(
         subs,
         &arena,
         &mut pools,
-        abilities_store,
+        &WorldAbilities::TinyWorld(abilities_store),
         deferred_uls_to_resolve,
         Phase::Solve,
     );
@@ -1780,7 +1783,7 @@ pub fn compact_lambda_sets_of_vars(
     subs: &mut Subs,
     arena: &Bump,
     pools: &mut Pools,
-    abilities_store: &AbilitiesStore,
+    abilities: &WorldAbilities,
     uls_of_var: UlsOfVar,
     phase: Phase,
 ) {
@@ -1792,7 +1795,8 @@ pub fn compact_lambda_sets_of_vars(
                 continue;
             }
 
-            compact_lambda_set(subs, arena, pools, abilities_store, root_lset, phase);
+            compact_lambda_set(subs, arena, pools, abilities, root_lset, phase);
+
             seen.insert(root_lset);
         }
     }
@@ -1802,7 +1806,7 @@ fn compact_lambda_set(
     subs: &mut Subs,
     arena: &Bump,
     pools: &mut Pools,
-    abilities_store: &AbilitiesStore,
+    abilities: &WorldAbilities,
     this_lambda_set: Variable,
     phase: Phase,
 ) {
@@ -1855,35 +1859,50 @@ fn compact_lambda_set(
             }
         };
 
-        let opt_specialization = abilities_store.get_specialization(member, *opaque);
-        let specialized_lambda_set = match (phase, opt_specialization) {
-            (Phase::Solve, None) => {
-                // doesn't specialize, we'll have reported an error for this
-                continue;
+        enum Spec {
+            Some(Variable),
+            Skip,
+        }
+
+        let opaque_home = opaque.module_id();
+        let specialized_lambda_set = abilities.with_module_store(opaque_home, |abilities_store| {
+            let opt_specialization = abilities_store.get_specialization(member, *opaque);
+            match (phase, opt_specialization) {
+                (Phase::Solve, None) => {
+                    // doesn't specialize, we'll have reported an error for this
+                    Spec::Skip
+                }
+                (Phase::Late { home }, None) => {
+                    internal_error!(
+                        "expected to know a specialization for {:?}#{:?}, but it wasn't found (from module {:?})",
+                        opaque,
+                        member,
+                        home
+                    );
+                }
+                (_, Some(specialization)) => {
+                    let specialized_lambda_set = *specialization
+                        .specialization_lambda_sets
+                        .get(&region)
+                        .expect("lambda set region not resolved");
+                    Spec::Some(specialized_lambda_set)
+                }
             }
-            (Phase::Late, None) => {
-                internal_error!(
-                    "expected to know a specialization for {:?}#{:?}, but it wasn't found",
-                    opaque,
-                    member
-                );
-            }
-            (_, Some(specialization)) => *specialization
-                .specialization_lambda_sets
-                .get(&region)
-                .expect("lambda set region not resolved"),
+        });
+
+        let specialized_lambda_set = match specialized_lambda_set {
+            Spec::Some(lset) => match phase {
+                Phase::Solve => lset,
+                Phase::Late { home } => {
+                    abilities.copy_lambda_set_var_into(lset, opaque_home, subs, home)
+                }
+            },
+            Spec::Skip => continue,
         };
 
         // Ensure the specialization lambda set is already compacted.
         if subs.get_root_key(specialized_lambda_set) != subs.get_root_key(this_lambda_set) {
-            compact_lambda_set(
-                subs,
-                arena,
-                pools,
-                abilities_store,
-                specialized_lambda_set,
-                phase,
-            );
+            compact_lambda_set(subs, arena, pools, abilities, specialized_lambda_set, phase);
         }
 
         // Ensure the specialization lambda set we'll unify with is not a generalized one, but one
