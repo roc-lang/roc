@@ -1,6 +1,6 @@
 use std::process::Command;
 
-const TEST_HOST_SOURCE: &str = "tests/linking_tests_host.c";
+const TEST_HOST_SOURCE: &str = "tests/linking_tests_host.zig";
 const TEST_HOST_TARGET: &str = "tests/linking_tests_host.wasm";
 
 #[test]
