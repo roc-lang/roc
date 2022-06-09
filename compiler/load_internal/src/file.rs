@@ -3575,8 +3575,6 @@ fn add_imports(
 
     let mut cached_symbol_vars = VecMap::default();
 
-    dbg!(&exposed_for_module.imported_values);
-
     macro_rules! import_var_for_symbol  {
         ($symbol:ident, $break:stmt) => {
             let module_id = $symbol.module_id();
