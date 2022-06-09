@@ -448,7 +448,7 @@ impl RocStr {
                             // the bytes originally used for the refcount.
                             let available_bytes = roc_list.capacity() + size_of::<Storage>();
 
-                            if dbg!(needed_bytes < available_bytes) {
+                            if needed_bytes < available_bytes {
                                 debug_assert!(align_of::<Storage>() >= align_of::<E>());
 
                                 // We happen to have sufficient excess capacity already,

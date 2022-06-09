@@ -195,8 +195,6 @@ mod with_terminator {
             roc_str.reserve(excess_capacity);
         }
 
-        dbg!(roc_str.len());
-
         // utf8_nul_terminated
         {
             let answer = roc_str.clone().utf8_nul_terminated(|ptr, len| {
