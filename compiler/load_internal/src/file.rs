@@ -6,7 +6,7 @@ use crossbeam::thread;
 use parking_lot::Mutex;
 use roc_builtins::roc::module_source;
 use roc_builtins::std::borrow_stdlib;
-use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, SolvedSpecializations};
+use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedSpecializations};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::def::Declaration;
 use roc_can::expr::PendingDerives;
@@ -2144,9 +2144,8 @@ fn update<'a>(
                 state.exposed_types.insert(
                     module_id,
                     ExposedModuleTypes {
-                        stored_vars_by_symbol: solved_module.stored_vars_by_symbol,
-                        storage_subs: solved_module.storage_subs,
-                        solved_specializations: solved_module.solved_specializations,
+                        exposed_types_storage_subs: solved_module.exposed_types,
+                        resolved_specializations: solved_module.solved_specializations,
                     },
                 );
 
@@ -3502,7 +3501,7 @@ impl<'a> BuildTask<'a> {
     // TODO trim down these arguments - possibly by moving Constraint into Module
     #[allow(clippy::too_many_arguments)]
     fn solve_module(
-        mut module: Module,
+        module: Module,
         ident_ids: IdentIds,
         module_timing: ModuleTiming,
         constraints: Constraints,
@@ -3516,25 +3515,6 @@ impl<'a> BuildTask<'a> {
         cached_subs: CachedSubs,
     ) -> Self {
         let exposed_by_module = exposed_types.retain_modules(imported_modules.keys());
-
-        let abilities_store = &mut module.abilities_store;
-
-        for module in imported_modules.keys() {
-            let exposed = exposed_by_module
-                .get(module)
-                .unwrap_or_else(|| internal_error!("No exposed types for {:?}", module));
-            let ExposedModuleTypes {
-                solved_specializations,
-                ..
-            } = exposed;
-            for ((member, typ), specialization) in solved_specializations.iter() {
-                abilities_store.register_specialization_for_type(
-                    *member,
-                    *typ,
-                    specialization.clone(),
-                );
-            }
-        }
 
         let exposed_for_module =
             ExposedForModule::new(module.referenced_values.iter(), exposed_by_module);
@@ -3565,8 +3545,9 @@ impl<'a> BuildTask<'a> {
 }
 
 fn add_imports(
+    my_module: ModuleId,
     subs: &mut Subs,
-    pending_abilities: PendingAbilitiesStore,
+    mut pending_abilities: PendingAbilitiesStore,
     mut exposed_for_module: ExposedForModule,
     def_types: &mut Vec<(Symbol, Loc<roc_types::types::Type>)>,
     rigid_vars: &mut Vec<Variable>,
@@ -3576,15 +3557,14 @@ fn add_imports(
     let mut cached_symbol_vars = VecMap::default();
 
     macro_rules! import_var_for_symbol  {
-        ($symbol:ident, $break:stmt) => {
+        ($subs:expr, $exposed_by_module:expr, $symbol:ident, $break:stmt) => {
             let module_id = $symbol.module_id();
-            match exposed_for_module.exposed_by_module.get_mut(&module_id) {
+            match $exposed_by_module.get_mut(&module_id) {
                 Some(ExposedModuleTypes {
-                    stored_vars_by_symbol,
-                    storage_subs,
-                    solved_specializations: _,
+                    exposed_types_storage_subs: exposed_types,
+                    resolved_specializations: _,
                 }) => {
-                    let variable = match stored_vars_by_symbol.iter().find(|(s, _)| *s == $symbol) {
+                    let variable = match exposed_types.stored_vars_by_symbol.iter().find(|(s, _)| **s == $symbol) {
                         None => {
                             // Today we define builtins in each module that uses them
                             // so even though they have a different module name from
@@ -3595,7 +3575,7 @@ fn add_imports(
                         Some((_, x)) => *x,
                     };
 
-                    let copied_import = storage_subs.export_variable_to(subs, variable);
+                    let copied_import = exposed_types.storage_subs.export_variable_to($subs, variable);
 
                     def_types.push((
                         $symbol,
@@ -3623,20 +3603,60 @@ fn add_imports(
     }
 
     for symbol in exposed_for_module.imported_values {
-        import_var_for_symbol!(symbol, continue);
+        import_var_for_symbol!(subs, exposed_for_module.exposed_by_module, symbol, continue);
     }
 
-    let abilities_store =
-        pending_abilities.resolve(|symbol| match cached_symbol_vars.get(&symbol).copied() {
+    // TODO: see if we can reduce the amount of specializations we need to import.
+    // One idea is to just always assume external modules fulfill their specialization obligations
+    // and save lambda set resolution for mono.
+    for (_, module_types) in exposed_for_module.exposed_by_module.iter_all() {
+        for ((member, typ), specialization) in module_types.resolved_specializations.iter() {
+            pending_abilities.import_specialization(*member, *typ, specialization)
+        }
+    }
+
+    struct Ctx<'a> {
+        subs: &'a mut Subs,
+        exposed_by_module: &'a mut ExposedByModule,
+    }
+
+    let abilities_store = pending_abilities.resolve_for_module(
+        my_module,
+        &mut Ctx {
+            subs,
+            exposed_by_module: &mut exposed_for_module.exposed_by_module,
+        },
+        |ctx, symbol| match cached_symbol_vars.get(&symbol).copied() {
             Some(var) => var,
             None => {
                 import_var_for_symbol!(
+                    ctx.subs,
+                    ctx.exposed_by_module,
                     symbol,
                     internal_error!("Import ability member {:?} not available", symbol)
                 );
                 *cached_symbol_vars.get(&symbol).unwrap()
             }
-        });
+        },
+        |ctx, module, lset_var| match ctx.exposed_by_module.get_mut(&module) {
+            Some(ExposedModuleTypes {
+                exposed_types_storage_subs: exposed_types,
+                resolved_specializations: _,
+            }) => {
+                let var = exposed_types
+                    .stored_specialization_lambda_set_vars
+                    .get(&lset_var)
+                    .expect("Lambda set var from other module not available");
+
+                let copied_import = exposed_types
+                    .storage_subs
+                    .export_variable_to(ctx.subs, *var);
+
+                copied_import.variable
+            }
+            None => internal_error!("Imported module {:?} is not available", module),
+        },
+    );
 
     (import_variables, abilities_store)
 }
@@ -3652,7 +3672,7 @@ fn run_solve_solve(
     module: Module,
 ) -> (
     Solved<Subs>,
-    SolvedSpecializations,
+    ResolvedSpecializations,
     Vec<(Symbol, Variable)>,
     Vec<solve::TypeError>,
     AbilitiesStore,
@@ -3671,6 +3691,7 @@ fn run_solve_solve(
     let mut subs = Subs::new_from_varstore(var_store);
 
     let (import_variables, abilities_store) = add_imports(
+        module.module_id,
         &mut subs,
         pending_abilities,
         exposed_for_module,
@@ -3700,7 +3721,7 @@ fn run_solve_solve(
 
         let module_id = module.module_id;
         // Figure out what specializations belong to this module
-        let solved_specializations: SolvedSpecializations = abilities_store
+        let solved_specializations: ResolvedSpecializations = abilities_store
             .iter_specializations()
             .filter(|((member, typ), _)| {
                 // This module solved this specialization if either the member or the type comes from the
@@ -3798,16 +3819,18 @@ fn run_solve<'a>(
     };
 
     let mut solved_subs = solved_subs;
-    let (storage_subs, stored_vars_by_symbol) =
-        roc_solve::module::exposed_types_storage_subs(&mut solved_subs, &exposed_vars_by_symbol);
+    let exposed_types = roc_solve::module::exposed_types_storage_subs(
+        &mut solved_subs,
+        &exposed_vars_by_symbol,
+        &solved_specializations,
+    );
 
     let solved_module = SolvedModule {
         exposed_vars_by_symbol,
         problems,
         aliases,
-        stored_vars_by_symbol,
         solved_specializations,
-        storage_subs,
+        exposed_types,
     };
 
     // Record the final timings

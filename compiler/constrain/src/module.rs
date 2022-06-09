@@ -1,6 +1,6 @@
 use crate::expr::{constrain_def_make_constraint, constrain_def_pattern, Env};
 use roc_builtins::std::StdLib;
-use roc_can::abilities::{PendingAbilitiesStore, PendingMemberType, SolvedSpecializations};
+use roc_can::abilities::{PendingAbilitiesStore, PendingMemberType, ResolvedSpecializations};
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::def::Declaration;
 use roc_can::expected::Expected;
@@ -10,7 +10,7 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::solved_types::{FreeVars, SolvedType};
-use roc_types::subs::{VarStore, Variable};
+use roc_types::subs::{ExposedTypesStorageSubs, VarStore, Variable};
 use roc_types::types::{AnnotationSource, Category, Type};
 
 /// The types of all exposed values/functions of a collection of modules
@@ -88,12 +88,12 @@ impl ExposedForModule {
     }
 }
 
-/// The types of all exposed values/functions of a module
+/// The types of all exposed values/functions of a module. This includes ability member
+/// specializations.
 #[derive(Clone, Debug)]
 pub struct ExposedModuleTypes {
-    pub stored_vars_by_symbol: Vec<(Symbol, Variable)>,
-    pub storage_subs: roc_types::subs::StorageSubs,
-    pub solved_specializations: SolvedSpecializations,
+    pub exposed_types_storage_subs: ExposedTypesStorageSubs,
+    pub resolved_specializations: ResolvedSpecializations,
 }
 
 pub fn constrain_module(
