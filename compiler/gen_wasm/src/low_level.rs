@@ -149,7 +149,7 @@ impl<'a> LowLevelCall<'a> {
 
     fn load_args_and_call_zig(&self, backend: &mut WasmBackend<'a>, name: &'a str) {
         let (num_wasm_args, has_return_val, ret_zig_packed_struct) = self.load_args(backend);
-        backend.call_zig_builtin_after_loading_args(name, num_wasm_args, has_return_val);
+        backend.call_host_fn_after_loading_args(name, num_wasm_args, has_return_val);
 
         if ret_zig_packed_struct {
             match self.ret_storage {
@@ -1264,5 +1264,5 @@ fn list_map_n<'a>(
     };
 
     let has_return_val = false;
-    backend.call_zig_builtin_after_loading_args(zig_fn_name, num_wasm_args, has_return_val);
+    backend.call_host_fn_after_loading_args(zig_fn_name, num_wasm_args, has_return_val);
 }

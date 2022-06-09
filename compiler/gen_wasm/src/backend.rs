@@ -876,7 +876,7 @@ impl<'a> WasmBackend<'a> {
         let tag_id = 0;
         self.code_builder.i32_const(elements_addr as i32);
         self.code_builder.i32_const(tag_id);
-        self.call_zig_builtin_after_loading_args("roc_panic", 2, false);
+        self.call_host_fn_after_loading_args("roc_panic", 2, false);
 
         self.code_builder.unreachable_();
     }
@@ -1117,7 +1117,23 @@ impl<'a> WasmBackend<'a> {
                 call_higher_order_lowlevel(self, ret_sym, ret_layout, *higher_order_lowlevel)
             }
 
-            CallType::Foreign { .. } => todo!("CallType::Foreign"),
+            CallType::Foreign {
+                foreign_symbol,
+                ret_layout,
+            } => {
+                let name = foreign_symbol.as_str();
+                let wasm_layout = WasmLayout::new(ret_layout);
+                let (num_wasm_args, has_return_val, _ret_zig_packed_struct) =
+                    self.storage.load_symbols_for_call(
+                        self.env.arena,
+                        &mut self.code_builder,
+                        arguments,
+                        ret_sym,
+                        &wasm_layout,
+                        CallConv::C,
+                    );
+                self.call_host_fn_after_loading_args(name, num_wasm_args, has_return_val)
+            }
         }
     }
 
@@ -1190,9 +1206,9 @@ impl<'a> WasmBackend<'a> {
     /// Generate a call instruction to a Zig builtin function.
     /// And if we haven't seen it before, add an Import and linker data for it.
     /// Zig calls use LLVM's "fast" calling convention rather than our usual C ABI.
-    pub fn call_zig_builtin_after_loading_args(
+    pub fn call_host_fn_after_loading_args(
         &mut self,
-        name: &'a str,
+        name: &str,
         num_wasm_args: usize,
         has_return_val: bool,
     ) {
@@ -1689,7 +1705,7 @@ impl<'a> WasmBackend<'a> {
         self.code_builder.i32_const(alignment_bytes as i32);
 
         // Call the foreign function. (Zig and C calling conventions are the same for this signature)
-        self.call_zig_builtin_after_loading_args("roc_alloc", 2, true);
+        self.call_host_fn_after_loading_args("roc_alloc", 2, true);
 
         // Save the allocation address to a temporary local variable
         let local_id = self.storage.create_anonymous_local(ValueType::I32);
