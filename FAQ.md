@@ -82,6 +82,8 @@ The first of these problems could be addressed by having function equality alway
 Each of these designs makes Roc a language that's some combination of more error-prone, more confusing, and more
 brittle to change. Disallowing function equality at compile time eliminates all of these drawbacks.
 
+Note that you can implement the `Eq` ability for a record that contains a function any way you want (for example, ignoring the function).
+
 ## Why doesn't Roc have a `Maybe` or `Option` or `Optional` type, or `null` or `nil` or `undefined`?
 
 It's common for programming languages to have a [null reference](https://en.wikipedia.org/wiki/Null_pointer)
