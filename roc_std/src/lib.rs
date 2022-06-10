@@ -16,6 +16,7 @@ mod roc_list;
 mod roc_str;
 mod storage;
 
+pub use roc_box::RocBox;
 pub use roc_list::RocList;
 pub use roc_str::{InteriorNulError, RocStr};
 pub use storage::Storage;

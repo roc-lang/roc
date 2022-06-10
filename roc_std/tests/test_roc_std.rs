@@ -59,7 +59,7 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 
 #[cfg(test)]
 mod test_roc_std {
-    use roc_std::{RocDec, RocList, RocResult, RocStr};
+    use roc_std::{RocBox, RocDec, RocList, RocResult, RocStr};
 
     fn roc_str_byte_representation(string: &RocStr) -> [u8; RocStr::SIZE] {
         unsafe { core::mem::transmute_copy(string) }
@@ -187,6 +187,14 @@ mod test_roc_std {
 
         assert!(!roc_result.is_ok());
         assert!(roc_result.is_err());
+    }
+
+    #[test]
+    fn create_roc_box() {
+        let contents = 42;
+        let roc_box = RocBox::new(contents);
+
+        assert_eq!(roc_box.into_inner(), contents)
     }
 
     #[test]
