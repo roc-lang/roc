@@ -1467,30 +1467,26 @@ impl<'a> NameSection<'a> {
     pub fn append_function(&mut self, index: u32, name: &'a str) {
         self.function_names.push((index, name));
     }
+
+    pub fn empty(arena: &'a Bump) -> Self {
+        NameSection {
+            function_names: bumpalo::vec![in arena],
+        }
+    }
 }
 
 impl<'a> Parse<&'a Bump> for NameSection<'a> {
     fn parse(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let cursor_start = *cursor;
+
         // If we're already past the end of the preloaded file then there is no Name section
         if *cursor >= module_bytes.len() {
-            return Ok(NameSection {
-                function_names: bumpalo::vec![in arena],
-            });
+            return Ok(Self::empty(arena));
         }
 
         // Custom section ID
-        let section_id_byte = module_bytes[*cursor];
-        if section_id_byte != Self::ID as u8 {
-            let message = format!(
-                "Expected section ID 0x{:x}, but found 0x{:x} at offset 0x{:x}",
-                Self::ID as u8,
-                section_id_byte,
-                *cursor
-            );
-            return Err(ParseError {
-                message,
-                offset: *cursor,
-            });
+        if module_bytes[*cursor] != Self::ID as u8 {
+            return Ok(Self::empty(arena));
         }
         *cursor += 1;
 
@@ -1500,15 +1496,10 @@ impl<'a> Parse<&'a Bump> for NameSection<'a> {
 
         let section_name = <&'a str>::parse(arena, module_bytes, cursor)?;
         if section_name != Self::NAME {
-            let message = format!(
-                "Expected Custom section {:?}, found {:?}",
-                Self::NAME,
-                section_name
-            );
-            return Err(ParseError {
-                message,
-                offset: *cursor,
-            });
+            // This is a different Custom section. This host has no debug info.
+            // Not a parse error, just an empty section.
+            *cursor = cursor_start;
+            return Ok(Self::empty(arena));
         }
 
         // Find function names subsection
