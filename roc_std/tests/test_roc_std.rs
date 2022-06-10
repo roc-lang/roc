@@ -300,4 +300,13 @@ mod with_terminator {
         // This is big enough that it should be a heap allocation for UTF-8 and UTF-16
         verify_temp_c(&string_for_len(65), 0);
     }
+
+    #[test]
+    fn with_excess_capacity() {
+        // We should be able to use the excess capacity for all of these.
+        verify_temp_c(&string_for_len(33), 1);
+        verify_temp_c(&string_for_len(33), 33);
+        verify_temp_c(&string_for_len(65), 1);
+        verify_temp_c(&string_for_len(65), 64);
+    }
 }
