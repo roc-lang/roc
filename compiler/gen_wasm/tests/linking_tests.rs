@@ -172,7 +172,7 @@ impl<'a> BackendInputs<'a> {
 }
 
 #[test]
-fn test_without_dce() {
+fn test_linking_without_dce() {
     let arena = Bump::new();
 
     let BackendInputs {
@@ -201,6 +201,12 @@ fn test_without_dce() {
     let (final_module, _called_preload_fns, _roc_main_index) =
         roc_gen_wasm::build_app_module(&env, &mut interns, host_module, procedures);
 
+    {
+        let mut buffer = Vec::with_capacity(final_module.size());
+        final_module.serialize(&mut buffer);
+        fs::write("tests/without_dce.wasm", buffer).unwrap();
+    }
+
     let final_import_names = Vec::from_iter(final_module.import.imports.iter().map(|i| i.name));
 
     assert_eq!(
@@ -209,6 +215,51 @@ fn test_without_dce() {
             "roc_js_called_indirectly_from_roc",
             "roc_js_called_indirectly_from_main",
             "roc_js_unused",
+            "roc_js_called_directly_from_roc",
+            "roc_js_called_directly_from_main",
+        ]
+    );
+}
+
+#[test]
+fn test_linking_with_dce() {
+    let arena = Bump::new();
+
+    let BackendInputs {
+        env,
+        mut interns,
+        host_module,
+        procedures,
+    } = BackendInputs::new(&arena);
+
+    let host_import_names = Vec::from_iter(host_module.import.imports.iter().map(|i| i.name));
+    assert_eq!(
+        &host_import_names,
+        &[
+            "__linear_memory",
+            "__stack_pointer",
+            "roc_js_called_indirectly_from_roc",
+            "roc_js_called_indirectly_from_main",
+            "roc_js_unused",
+            "roc_js_called_directly_from_roc",
+            "roc_js_called_directly_from_main",
+            "__indirect_function_table",
+        ]
+    );
+
+    // If linking between app and host fails, backend will panic
+    let (mut final_module, called_preload_fns, _roc_main_index) =
+        roc_gen_wasm::build_app_module(&env, &mut interns, host_module, procedures);
+
+    final_module.eliminate_dead_code(env.arena, called_preload_fns);
+
+    let final_import_names = Vec::from_iter(final_module.import.imports.iter().map(|i| i.name));
+
+    assert_eq!(
+        &final_import_names,
+        &[
+            "roc_js_called_indirectly_from_roc",
+            "roc_js_called_indirectly_from_main",
             "roc_js_called_directly_from_roc",
             "roc_js_called_directly_from_main",
         ]
