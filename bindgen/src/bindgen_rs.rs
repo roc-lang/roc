@@ -1051,19 +1051,9 @@ pub struct {name} {{
                         | RocType::RocSet(_)
                         | RocType::RocBox(_)
                         | RocType::TagUnion(_)
+                        | RocType::Struct { .. }
                         | RocType::RecursivePointer { .. } => {
                             format!(".field({deref_str}{actual_self}.{tag_name})")
-                        }
-                        RocType::Struct { fields, .. } => {
-                            let mut buf = Vec::new();
-
-                            for (label, _) in fields {
-                                buf.push(format!(
-                                    ".field(&({deref_str}{actual_self}.{tag_name}).{label})"
-                                ));
-                            }
-
-                            buf.join("\n")
                         }
                         RocType::TagUnionPayload { fields, .. } => {
                             let mut buf = Vec::new();
