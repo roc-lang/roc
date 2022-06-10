@@ -1583,9 +1583,9 @@ pub struct {name} {{
 
             if needs_dealloc {{
                 // Drop the payload first.
-                let payload = unsafe {{ core::mem::ManuallyDrop::take(&mut *self.pointer) }};
-
-                core::mem::drop::<{payload_type_name}>(payload);
+                unsafe {{
+                    core::mem::ManuallyDrop::drop(&mut core::ptr::read(self.pointer));
+                }}
 
                 // Dealloc the pointer
                 let alignment = core::mem::align_of::<Self>().max(core::mem::align_of::<roc_std::Storage>());
