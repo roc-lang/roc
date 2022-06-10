@@ -308,17 +308,19 @@ impl<'a> WasmModule<'a> {
             .and_then(|ex| self.global.parse_u32_at_index(ex.index).ok())
     }
 
-    pub fn relocate_internal_symbol(&mut self, sym_name: &str, value: u32) -> u32 {
-        let sym_index = self.linking.find_internal_symbol(sym_name).unwrap() as u32;
+    pub fn relocate_internal_symbol(&mut self, sym_name: &str, value: u32) -> Result<u32, String> {
+        self.linking
+            .find_internal_symbol(sym_name)
+            .map(|sym_index| {
+                self.reloc_code.apply_relocs_u32(
+                    &mut self.code.preloaded_bytes,
+                    self.code.preloaded_reloc_offset,
+                    sym_index as u32,
+                    value,
+                );
 
-        self.reloc_code.apply_relocs_u32(
-            &mut self.code.preloaded_bytes,
-            self.code.preloaded_reloc_offset,
-            sym_index,
-            value,
-        );
-
-        sym_index
+                sym_index as u32
+            })
     }
 
     /// Linking steps for host-to-app functions like `roc__mainForHost_1_exposed`

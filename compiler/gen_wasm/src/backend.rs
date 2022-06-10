@@ -57,6 +57,7 @@ pub struct WasmBackend<'a> {
     pub proc_lookup: Vec<'a, ProcLookupData<'a>>,
     host_lookup: Vec<'a, (&'a str, u32)>,
     helper_proc_gen: CodeGenHelp<'a>,
+    can_relocate_heap: bool,
 
     // Function-level data
     pub code_builder: CodeBuilder<'a>,
@@ -81,7 +82,7 @@ impl<'a> WasmBackend<'a> {
     ) -> Self {
         // TODO: get this from a CLI parameter with some default
         const STACK_SIZE: u32 = 1024 * 1024;
-        Self::set_memory_layout(env, &mut module, STACK_SIZE);
+        let can_relocate_heap = Self::set_memory_layout(env, &mut module, STACK_SIZE);
 
         Self::export_globals(&mut module);
 
@@ -113,6 +114,7 @@ impl<'a> WasmBackend<'a> {
             proc_lookup,
             host_lookup,
             helper_proc_gen,
+            can_relocate_heap,
 
             // Function-level data
             block_depth: 0,
@@ -127,7 +129,7 @@ impl<'a> WasmBackend<'a> {
     /// Since they're all in one block, they can't grow independently. Only the highest one can grow.
     /// Also, there's no "invalid region" below the stack, so stack overflow will overwrite constants!
     /// TODO: Detect stack overflow in function prologue... at least in Roc code...
-    fn set_memory_layout(env: &'a Env<'a>, module: &mut WasmModule<'a>, stack_size: u32) {
+    fn set_memory_layout(env: &'a Env<'a>, module: &mut WasmModule<'a>, stack_size: u32) -> bool {
         let mut stack_heap_boundary = module.data.end_addr + stack_size;
         stack_heap_boundary = round_up_to_alignment!(stack_heap_boundary, MemorySection::PAGE_SIZE);
 
@@ -181,7 +183,9 @@ impl<'a> WasmBackend<'a> {
         });
 
         // Set the constant that malloc uses to know where the heap begins
-        module.relocate_internal_symbol("__heap_base", stack_heap_boundary);
+        module
+            .relocate_internal_symbol("__heap_base", stack_heap_boundary)
+            .is_ok()
     }
 
     /// If the host has some `extern` global variables, we need to create them in the final binary
@@ -1216,12 +1220,7 @@ impl<'a> WasmBackend<'a> {
             .host_lookup
             .iter()
             .find(|(fn_name, _)| *fn_name == name)
-            .unwrap_or_else(|| {
-                panic!(
-                    "I can't find the builtin function `{}` in the preprocessed host file.",
-                    name
-                )
-            });
+            .unwrap_or_else(|| panic!("The Roc app needs to call a host function called `{}` but I can't find it!", name));
 
         self.called_preload_fns.push(*fn_index);
         self.code_builder
@@ -1688,6 +1687,10 @@ impl<'a> WasmBackend<'a> {
         alignment_bytes: u32,
         initial_refcount: u32,
     ) {
+        if !self.can_relocate_heap {
+            // This will probably only happen for test hosts.
+            panic!("The app tries to allocate heap memory but the host doesn't support that. It needs to export __heap_base");
+        }
         // Add extra bytes for the refcount
         let extra_bytes = alignment_bytes.max(PTR_SIZE);
 
