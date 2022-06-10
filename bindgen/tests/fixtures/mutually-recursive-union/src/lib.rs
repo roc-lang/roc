@@ -58,11 +58,11 @@ pub extern "C" fn rust_main() -> i32 {
 
     // Verify that it has all the expected traits.
 
-    // assert!(tag_union == tag_union); // PartialEq
-    // assert!(tag_union.clone() == tag_union.clone()); // Clone
+    assert!(tag_union == tag_union); // PartialEq
+    assert!(tag_union.clone() == tag_union.clone()); // Clone
 
-    // assert!(tag_union.partial_cmp(&tag_union) == Some(Ordering::Equal)); // PartialOrd
-    // assert!(tag_union.cmp(&tag_union) == Ordering::Equal); // Ord
+    assert!(tag_union.partial_cmp(&tag_union) == Some(Ordering::Equal)); // PartialOrd
+    assert!(tag_union.cmp(&tag_union) == Ordering::Equal); // Ord
 
     // print!(
     //     indoc!(
@@ -79,12 +79,12 @@ pub extern "C" fn rust_main() -> i32 {
     //     // Expr::String("this is a test".into()),
     // ); // Debug
 
-    // let mut set = HashSet::new();
+    let mut set = HashSet::new();
 
-    // set.insert(tag_union.clone()); // Eq, Hash
-    // set.insert(tag_union);
+    set.insert(tag_union.clone()); // Eq, Hash
+    set.insert(tag_union);
 
-    // assert_eq!(set.len(), 1);
+    assert_eq!(set.len(), 1);
 
     // Exit code
     0

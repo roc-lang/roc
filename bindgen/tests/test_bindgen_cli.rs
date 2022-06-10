@@ -128,7 +128,7 @@ mod bindgen_cli_run {
         "#),
 
         mutually_recursive_union:"mutually-recursive-union" => indoc!(r#"
-            tag_union was: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
+            rbt was: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
             `Concat (String "Hello, ") (String "World!")` is: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
             `String "this is a test"` is: Expr::String("this is a test")
         "#),
