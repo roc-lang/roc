@@ -1,104 +1,14 @@
-mod bindings;
+#![allow(non_snake_case)]
 
-use bindings::Rbt;
-use indoc::indoc;
+use core::ffi::c_void;
+use roc_std::RocStr;
+use std::ffi::CStr;
+use std::os::raw::c_char;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(_: *mut Rbt);
+    fn roc_main(_: &mut RocStr);
 }
-
-#[no_mangle]
-pub extern "C" fn rust_main() -> i32 {
-    use std::cmp::Ordering;
-    use std::collections::hash_set::HashSet;
-
-    let tag_union = unsafe {
-        let mut ret: core::mem::MaybeUninit<Rbt> = core::mem::MaybeUninit::uninit();
-
-        roc_main(ret.as_mut_ptr());
-
-        ret.assume_init()
-    };
-
-    // main = {
-    //     default: Job {
-    //         command: Command {
-    //             tool: SystemTool { name: "test", num: 42 }
-    //         },
-    //         inputFiles : ["foo"]
-    //     }
-    // }
-
-    // unsafe {
-    //     dbg!(&tag_union.default.as_Job());
-    // }
-
-    // unsafe {
-    //     dbg!(&tag_union.default.as_Job().inputFiles);
-    // }
-
-    // unsafe {
-    //     dbg!(&tag_union);
-    // }
-
-    // Tool : [
-    //     SystemTool { name : Str, num : U32 },
-    //     FromJob { job : Job, num : U32 }
-    // ]
-
-    // Command : [Command { tool : Tool }]
-
-    // Job : [
-    //     Job { command : Command, inputFiles : List Str },
-    //     Foo Str,
-    //     # WithTool Tool # Mutual recursion; Tool also references Job
-    // ]
-
-    // Rbt : { default: Job }
-
-    // mainForHost : Rbt
-    // mainForHost = main
-
-    // Verify that it has all the expected traits.
-
-    assert!(tag_union == tag_union); // PartialEq
-    assert!(tag_union.clone() == tag_union.clone()); // Clone
-
-    assert!(tag_union.partial_cmp(&tag_union) == Some(Ordering::Equal)); // PartialOrd
-    assert!(tag_union.cmp(&tag_union) == Ordering::Equal); // Ord
-
-    print!(
-        indoc!(
-            r#"
-                rbt was: {:?}
-            "# // `Concat (String "Hello, ") (String "World!")` is: {:?}
-               // `String "this is a test"` is: {:?}
-        ),
-        tag_union,
-        // Expr::Concat(
-        //     Expr::String("Hello, ".into()),
-        //     Expr::String("World!".into()),
-        // ),
-        // Expr::String("this is a test".into()),
-    ); // Debug
-
-    let mut set = HashSet::new();
-
-    set.insert(tag_union.clone()); // Eq, Hash
-    set.insert(tag_union);
-
-    assert_eq!(set.len(), 1);
-
-    // Exit code
-    0
-}
-
-// Externs required by roc_std and by the Roc app
-
-use core::ffi::c_void;
-use std::ffi::CStr;
-use std::os::raw::c_char;
 
 #[no_mangle]
 pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
@@ -141,4 +51,22 @@ pub unsafe extern "C" fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize
 #[no_mangle]
 pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut c_void {
     libc::memset(dst, c, n)
+}
+
+#[no_mangle]
+pub extern "C" fn rust_main() -> i32 {
+    unsafe {
+        let mut roc_str = RocStr::default();
+        roc_main(&mut roc_str);
+
+        let len = roc_str.len();
+        let str_bytes = roc_str.as_bytes().as_ptr() as *const libc::c_void;
+
+        if libc::write(1, str_bytes, len) < 0 {
+            panic!("Writing to stdout failed!");
+        }
+    }
+
+    // Exit code
+    0
 }

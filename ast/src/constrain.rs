@@ -1938,7 +1938,7 @@ pub mod test_constrain {
     use roc_parse::parser::{SourceError, SyntaxError};
     use roc_region::all::Region;
     use roc_types::{
-        pretty_print::name_and_print_var,
+        pretty_print::{name_and_print_var, DebugPrint},
         solved_types::Solved,
         subs::{Subs, VarStore, Variable},
     };
@@ -2059,7 +2059,8 @@ pub mod test_constrain {
                     all_ident_ids: dep_idents,
                 };
 
-                let actual_str = name_and_print_var(var, subs, mod_id, &interns);
+                let actual_str =
+                    name_and_print_var(var, subs, mod_id, &interns, DebugPrint::NOTHING);
 
                 assert_eq!(actual_str, expected_str);
             }

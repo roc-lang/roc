@@ -12,14 +12,14 @@ mod solve_expr {
     use crate::helpers::with_larger_debug_stack;
     use lazy_static::lazy_static;
     use regex::Regex;
-    use roc_can::traverse::{find_ability_member_at, find_type_at};
+    use roc_can::traverse::{find_ability_member_and_owning_type_at, find_type_at};
     use roc_load::LoadedModule;
     use roc_module::symbol::{Interns, ModuleId};
     use roc_problem::can::Problem;
     use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Region};
     use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
     use roc_solve::solve::TypeError;
-    use roc_types::pretty_print::name_and_print_var;
+    use roc_types::pretty_print::{name_and_print_var, DebugPrint};
     use std::path::PathBuf;
 
     // HELPERS
@@ -177,7 +177,7 @@ mod solve_expr {
 
         debug_assert!(exposed_to_host.len() == 1);
         let (_symbol, variable) = exposed_to_host.into_iter().next().unwrap();
-        let actual_str = name_and_print_var(variable, subs, home, &interns);
+        let actual_str = name_and_print_var(variable, subs, home, &interns, DebugPrint::NOTHING);
 
         Ok((type_problems, can_problems, actual_str))
     }
@@ -235,7 +235,7 @@ mod solve_expr {
         assert_eq!(actual, expected.to_string());
     }
 
-    fn infer_queries(src: &str, expected: &[&'static str]) {
+    fn infer_queries_help(src: &str, expected: &[&'static str], print_only_under_alias: bool) {
         let (
             LoadedModule {
                 module_id: home,
@@ -275,33 +275,48 @@ mod solve_expr {
             let end = region.end().offset;
             let text = &src[start as usize..end as usize];
             let var = find_type_at(region, &decls)
-                .unwrap_or_else(|| panic!("No type for {} ({:?})!", &text, region));
+                .unwrap_or_else(|| panic!("No type for {:?} ({:?})!", &text, region));
 
-            let actual_str = name_and_print_var(var, subs, home, &interns);
+            let actual_str = name_and_print_var(
+                var,
+                subs,
+                home,
+                &interns,
+                DebugPrint {
+                    print_lambda_sets: true,
+                    print_only_under_alias,
+                },
+            );
 
-            let elaborated = match find_ability_member_at(region, &decls) {
-                Some((member, specialization_id)) => {
-                    let qual = match abilities_store.get_resolved(specialization_id) {
-                        Some(specialization) => {
-                            abilities_store
-                                .iter_specializations()
-                                .find(|(_, ms)| ms.symbol == specialization)
-                                .unwrap()
-                                .0
-                                 .1
-                        }
-                        None => abilities_store.member_def(member).unwrap().parent_ability,
-                    };
-                    let qual_str = qual.as_str(&interns);
-                    format!("{}#{} : {}", qual_str, text, actual_str)
-                }
-                None => format!("{} : {}", text, actual_str),
-            };
+            let elaborated =
+                match find_ability_member_and_owning_type_at(region, &decls, &abilities_store) {
+                    Some((spec_type, spec_symbol)) => {
+                        format!(
+                            "{}#{}({}) : {}",
+                            spec_type.as_str(&interns),
+                            text,
+                            spec_symbol.ident_id().index(),
+                            actual_str
+                        )
+                    }
+                    None => {
+                        format!("{} : {}", text, actual_str)
+                    }
+                };
 
             solved_queries.push(elaborated);
         }
 
         assert_eq!(solved_queries, expected)
+    }
+
+    macro_rules! infer_queries {
+        ($program:expr, $queries:expr $(,)?) => {
+            infer_queries_help($program, $queries, false)
+        };
+        ($program:expr, $queries:expr, print_only_under_alias=true $(,)?) => {
+            infer_queries_help($program, $queries, true)
+        };
     }
 
     fn check_inferred_abilities<'a, I>(src: &'a str, expected_specializations: I)
@@ -6153,7 +6168,7 @@ mod solve_expr {
 
     #[test]
     fn intermediate_branch_types() {
-        infer_queries(
+        infer_queries!(
             indoc!(
                 r#"
                 app "test" provides [foo] to "./platform"
@@ -6281,7 +6296,7 @@ mod solve_expr {
 
     #[test]
     fn encoder() {
-        infer_queries(
+        infer_queries!(
             indoc!(
                 r#"
                 app "test" provides [myU8Bytes] to "./platform"
@@ -6318,8 +6333,8 @@ mod solve_expr {
                 "#
             ),
             &[
-                "u8 : U8 -> Encoder Linear",
-                "toEncoder : MyU8 -> Encoder fmt | fmt has Format",
+                "Linear#u8(22) : U8 -[[u8(22)]]-> Encoder Linear",
+                "MyU8#toEncoder(23) : MyU8 -[[toEncoder(23)]]-> Encoder fmt | fmt has Format",
                 "myU8Bytes : List U8",
             ],
         )
@@ -6327,7 +6342,7 @@ mod solve_expr {
 
     #[test]
     fn decoder() {
-        infer_queries(
+        infer_queries!(
             indoc!(
                 r#"
                 app "test" provides [myU8] to "./platform"
@@ -6379,8 +6394,8 @@ mod solve_expr {
                 "#
             ),
             &[
-                "u8 : Decoder U8 Linear",
-                "decoder : Decoder MyU8 fmt | fmt has DecoderFormatting",
+                "Linear#u8(27) : Decoder U8 Linear",
+                "MyU8#decoder(28) : Decoder MyU8 fmt | fmt has DecoderFormatting",
                 "myU8 : Result MyU8 DecodeError",
             ],
         )
@@ -6409,7 +6424,7 @@ mod solve_expr {
 
     #[test]
     fn static_specialization() {
-        infer_queries(
+        infer_queries!(
             indoc!(
                 r#"
                 app "test" provides [main] to "./platform"
@@ -6426,7 +6441,7 @@ mod solve_expr {
                     a
                 "#
             ),
-            &["A#default : {} -> A"],
+            &["A#default(5) : {} -[[default(5)]]-> A"],
         )
     }
 
@@ -6458,7 +6473,7 @@ mod solve_expr {
 
     #[test]
     fn encode_record() {
-        infer_queries(
+        infer_queries!(
             indoc!(
                 r#"
                 app "test"
@@ -6469,13 +6484,15 @@ mod solve_expr {
                      # ^^^^^^^^^
                 "#
             ),
-            &["Encoding#toEncoder : { a : Str } -> Encoder fmt | fmt has EncoderFormatting"],
+            &[
+                "Encoding#toEncoder(2) : { a : Str } -[[] + { a : Str }:toEncoder(2):1]-> Encoder fmt | fmt has EncoderFormatting",
+            ],
         )
     }
 
     #[test]
     fn encode_record_with_nested_custom_impl() {
-        infer_queries(
+        infer_queries!(
             indoc!(
                 r#"
                 app "test"
@@ -6489,7 +6506,315 @@ mod solve_expr {
                      # ^^^^^^^^^
                 "#
             ),
-            &["Encoding#toEncoder : { a : A } -> Encoder fmt | fmt has EncoderFormatting"],
+            &["Encoding#toEncoder(2) : { a : A } -[[] + { a : A }:toEncoder(2):1]-> Encoder fmt | fmt has EncoderFormatting"],
+        )
+    }
+
+    #[test]
+    fn resolve_lambda_set_generalized_ability_alias() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Id has id : a -> a | a has Id
+
+                A := {}
+                id = \@A {} -> @A {}
+                #^^{-1}
+
+                main =
+                    alias1 = id
+                    #        ^^
+                    alias2 = alias1
+                    #        ^^^^^^
+
+                    a : A
+                    a = alias2 (@A {})
+                    #   ^^^^^^
+
+                    a
+                "#
+            ),
+            &[
+                "A#id(5) : A -[[id(5)]]-> A",
+                "Id#id(4) : a -[[] + a:id(4):1]-> a | a has Id",
+                "alias1 : a -[[] + a:id(4):1]-> a | a has Id",
+                "alias2 : A -[[id(5)]]-> A",
+            ],
+        )
+    }
+
+    #[test]
+    fn resolve_lambda_set_ability_chain() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Id1 has id1 : a -> a | a has Id1
+                Id2 has id2 : a -> a | a has Id2
+
+                A := {}
+                id1 = \@A {} -> @A {}
+                #^^^{-1}
+                
+                id2 = \@A {} -> id1 (@A {})
+                #^^^{-1}        ^^^
+
+                main =
+                    a : A
+                    a = id2 (@A {})
+                    #   ^^^
+
+                    a
+                "#
+            ),
+            &[
+                "A#id1(8) : A -[[id1(8)]]-> A",
+                //
+                "A#id2(9) : A -[[id2(9)]]-> A",
+                "A#id1(8) : A -[[id1(8)]]-> A",
+                //
+                "A#id2(9) : A -[[id2(9)]]-> A",
+            ],
+        )
+    }
+
+    #[test]
+    fn resolve_lambda_set_branches_ability_vs_non_ability() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Id has id : a -> a | a has Id
+
+                A := {}
+                id = \@A {} -> @A {}
+                #^^{-1}
+
+                idNotAbility = \x -> x
+                #^^^^^^^^^^^^{-1}
+
+                main =
+                    choice : [T, U]
+
+                    idChoice =
+                    #^^^^^^^^{-1}
+                        when choice is
+                            T -> id
+                            U -> idNotAbility
+
+                    idChoice (@A {})
+                    #^^^^^^^^{-1}
+                "#
+            ),
+            &[
+                "A#id(5) : A -[[id(5)]]-> A",
+                "idNotAbility : a -[[idNotAbility(6)]]-> a",
+                "idChoice : a -[[idNotAbility(6)] + a:id(4):1]-> a | a has Id",
+                "idChoice : A -[[id(5), idNotAbility(6)]]-> A",
+            ],
+        )
+    }
+
+    #[test]
+    fn resolve_lambda_set_branches_same_ability() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Id has id : a -> a | a has Id
+
+                A := {}
+                id = \@A {} -> @A {}
+                #^^{-1}
+
+                main =
+                    choice : [T, U]
+
+                    idChoice =
+                    #^^^^^^^^{-1}
+                        when choice is
+                            T -> id
+                            U -> id
+
+                    idChoice (@A {})
+                    #^^^^^^^^{-1}
+                "#
+            ),
+            &[
+                "A#id(5) : A -[[id(5)]]-> A",
+                "idChoice : a -[[] + a:id(4):1]-> a | a has Id",
+                "idChoice : A -[[id(5)]]-> A",
+            ],
+        )
+    }
+
+    #[test]
+    fn resolve_unspecialized_lambda_set_behind_alias() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Thunk a : {} -> a
+
+                Id has id : a -> Thunk a | a has Id
+
+                A := {}
+                id = \@A {} -> \{} -> @A {}
+                #^^{-1}
+
+                main =
+                    alias = id
+                    #       ^^
+
+                    a : A
+                    a = (alias (@A {})) {}
+                    #    ^^^^^
+
+                    a
+                "#
+            ),
+            &[
+                "A#id(7) : {} -[[id(7)]]-> ({} -[[8(8)]]-> {})",
+                "Id#id(6) : {} -[[id(7)]]-> ({} -[[8(8)]]-> {})",
+                "alias : {} -[[id(7)]]-> ({} -[[8(8)]]-> {})",
+            ],
+            print_only_under_alias = true,
+        )
+    }
+
+    #[test]
+    fn resolve_unspecialized_lambda_set_behind_opaque() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Thunk a := {} -> a
+
+                Id has id : a -> Thunk a | a has Id
+
+                A := {}
+                id = \@A {} -> @Thunk (\{} -> @A {})
+                #^^{-1}
+
+                main =
+                    thunk = id (@A {})
+                    @Thunk it = thunk
+                    it {}
+                    #^^{-1}
+                "#
+            ),
+            &[
+                "A#id(7) : {} -[[id(7)]]-> ({} -[[8(8)]]-> {})",
+                "it : {} -[[8(8)]]-> {}",
+            ],
+            print_only_under_alias = true,
+        )
+    }
+
+    #[test]
+    fn resolve_two_unspecialized_lambda_sets_in_one_lambda_set() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Thunk a : {} -> a
+
+                Id has id : a -> Thunk a | a has Id
+
+                A := {}
+                id = \@A {} -> \{} -> @A {}
+                #^^{-1}
+
+                main =
+                    a : A
+                    a = (id (@A {})) {}
+                    #    ^^
+
+                    a
+                "#
+            ),
+            &[
+                "A#id(7) : {} -[[id(7)]]-> ({} -[[8(8)]]-> {})",
+                "A#id(7) : {} -[[id(7)]]-> ({} -[[8(8)]]-> {})",
+            ],
+            print_only_under_alias = true,
+        )
+    }
+
+    #[test]
+    fn resolve_recursive_ability_lambda_set() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Diverge has diverge : a -> a | a has Diverge
+
+                A := {}
+                diverge = \@A {} -> diverge (@A {})
+                #^^^^^^^{-1}        ^^^^^^^
+
+                main =
+                    a : A
+                    a = diverge (@A {})
+                    #   ^^^^^^^
+
+                    a
+                "#
+            ),
+            &[
+                "A#diverge(5) : A -[[diverge(5)]]-> A",
+                "Diverge#diverge(4) : A -[[diverge(5)]]-> A",
+                //
+                "A#diverge(5) : A -[[diverge(5)]]-> A",
+            ],
+        )
+    }
+
+    #[test]
+    fn resolve_mutually_recursive_ability_lambda_sets() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Bounce has
+                    ping : a -> a | a has Bounce
+                    pong : a -> a | a has Bounce
+
+                A := {}
+
+                ping = \@A {} -> pong (@A {})
+                #^^^^{-1}        ^^^^
+
+                pong = \@A {} -> ping (@A {})
+                #^^^^{-1}        ^^^^
+
+                main =
+                    a : A
+                    a = ping (@A {})
+                    #   ^^^^
+
+                    a
+                "#
+            ),
+            &[
+                "A#ping(7) : A -[[ping(7)]]-> A",
+                "Bounce#pong(6) : A -[[pong(8)]]-> A",
+                //
+                "A#pong(8) : A -[[pong(8)]]-> A",
+                "A#ping(7) : A -[[ping(7)]]-> A",
+                //
+                "A#ping(7) : A -[[ping(7)]]-> A",
+            ],
         )
     }
 }

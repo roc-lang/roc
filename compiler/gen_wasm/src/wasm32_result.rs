@@ -88,7 +88,8 @@ fn insert_wrapper_metadata<'a>(
     module: &mut WasmModule<'a>,
     wrapper_name: &'static str,
 ) {
-    let index = (module.import.fn_signatures.len() as u32)
+    let index = (module.import.function_count() as u32)
+        + module.code.linking_dummy_count
         + module.code.preloaded_count
         + module.code.code_builders.len() as u32;
 
@@ -103,7 +104,7 @@ fn insert_wrapper_metadata<'a>(
         index,
     });
 
-    let linker_symbol = SymInfo::Function(WasmObjectSymbol::Defined {
+    let linker_symbol = SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed {
         flags: 0,
         index,
         name: wrapper_name,

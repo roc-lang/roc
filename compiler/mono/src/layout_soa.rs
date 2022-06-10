@@ -276,7 +276,10 @@ impl LambdaSet {
         let subs::LambdaSet {
             solved,
             recursion_var: _,
+            unspecialized: _,
         } = lset;
+
+        // TODO: handle unspecialized
 
         debug_assert!(
             !solved.is_empty(),
@@ -696,7 +699,10 @@ impl Layout {
         let subs::LambdaSet {
             solved,
             recursion_var,
+            unspecialized: _,
         } = lset;
+
+        // TODO: handle unspecialized lambda set
 
         match recursion_var.into_variable() {
             Some(rec_var) => {

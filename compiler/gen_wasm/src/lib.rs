@@ -8,7 +8,7 @@ pub mod wasm_module;
 pub mod wasm32_result;
 pub mod wasm32_sized;
 
-use bumpalo::collections::{String, Vec};
+use bumpalo::collections::Vec;
 use bumpalo::{self, Bump};
 
 use roc_collections::all::{MutMap, MutSet};
@@ -21,7 +21,7 @@ use roc_target::TargetInfo;
 use wasm_module::parse::ParseError;
 
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
-use crate::wasm_module::{Align, CodeBuilder, Export, ExportType, LocalId, ValueType, WasmModule};
+use crate::wasm_module::{Align, CodeBuilder, LocalId, ValueType, WasmModule};
 
 const TARGET_INFO: TargetInfo = TargetInfo::default_wasm32();
 const PTR_SIZE: u32 = {
@@ -84,15 +84,19 @@ pub fn build_app_module<'a>(
     host_module: WasmModule<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> (WasmModule<'a>, Vec<'a, u32>, u32) {
-    let mut layout_ids = LayoutIds::default();
+    let layout_ids = LayoutIds::default();
     let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
     let mut proc_lookup = Vec::with_capacity_in(procedures.len() * 2, env.arena);
-    let mut exports = Vec::with_capacity_in(4, env.arena);
+    let mut host_to_app_map = Vec::with_capacity_in(env.exposed_to_host.len(), env.arena);
     let mut maybe_main_fn_index = None;
 
-    // Collect the symbols & names for the procedures,
-    // and filter out procs we're going to inline
-    let mut fn_index: u32 = 0;
+    // Adjust Wasm function indices to account for functions from the object file
+    let fn_index_offset: u32 =
+        host_module.import.function_count() as u32 + host_module.code.preloaded_count;
+
+    // Pre-pass over the procedure names & layouts
+    // Filter out procs we're going to inline & gather some data for lookups
+    let mut fn_index: u32 = fn_index_offset;
     for ((sym, proc_layout), proc) in procedures.into_iter() {
         if matches!(
             LowLevelWrapperType::from_symbol(sym),
@@ -102,21 +106,15 @@ pub fn build_app_module<'a>(
         }
         procs.push(proc);
 
-        let fn_name = layout_ids
-            .get_toplevel(sym, &proc_layout)
-            .to_symbol_string(sym, interns);
-        let name = String::from_str_in(&fn_name, env.arena).into_bump_str();
-
         if env.exposed_to_host.contains(&sym) {
             maybe_main_fn_index = Some(fn_index);
-            exports.push(Export {
-                name,
-                ty: ExportType::Func,
-                index: fn_index,
-            });
+
+            // Assumption: there is only one specialization of a host-exposed function
+            let ident_string = sym.as_str(interns);
+            let c_function_name = bumpalo::format!(in env.arena, "roc__{}_1_exposed", ident_string);
+            host_to_app_map.push((c_function_name.into_bump_str(), fn_index));
         }
 
-        // linker_sym_index is redundant for these procs from user code, but needed for generated helpers!
         proc_lookup.push(ProcLookupData {
             name: sym,
             layout: proc_layout,
@@ -126,15 +124,12 @@ pub fn build_app_module<'a>(
         fn_index += 1;
     }
 
-    // Adjust Wasm function indices to account for functions from the object file
-    let fn_index_offset: u32 =
-        host_module.import.fn_signatures.len() as u32 + host_module.code.preloaded_count;
-
     let mut backend = WasmBackend::new(
         env,
         interns,
         layout_ids,
         proc_lookup,
+        host_to_app_map,
         host_module,
         fn_index_offset,
         CodeGenHelp::new(env.arena, TargetInfo::default_wasm32(), env.module_id),
@@ -185,7 +180,7 @@ pub fn build_app_module<'a>(
     }
 
     let (module, called_preload_fns) = backend.finalize();
-    let main_function_index = maybe_main_fn_index.unwrap() + fn_index_offset;
+    let main_function_index = maybe_main_fn_index.unwrap();
 
     (module, called_preload_fns, main_function_index)
 }
