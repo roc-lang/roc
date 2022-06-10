@@ -595,6 +595,7 @@ fn add_type_help<'a>(
 
             type_id
         }
+        Content::LambdaSet(_) => todo!(),
     }
 }
 
