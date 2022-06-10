@@ -44,9 +44,15 @@ impl<T> RocList<T> {
         }
     }
 
+    /// Used for both roc_alloc and roc_realloc - given the number of elements,
+    /// returns the number of bytes needed to allocate, taking into account both the
+    /// size of the elements as well as the size of Storage.
+    fn alloc_bytes(num_elems: usize) -> usize {
+        mem::size_of::<Storage>() + (num_elems * mem::size_of::<T>())
+    }
+
     fn elems_with_capacity(num_elems: usize) -> NonNull<ManuallyDrop<T>> {
-        let num_bytes = num_elems * mem::size_of::<T>();
-        let alloc_ptr = unsafe { roc_alloc(num_bytes, Self::alloc_alignment()) };
+        let alloc_ptr = unsafe { roc_alloc(Self::alloc_bytes(num_elems), Self::alloc_alignment()) };
 
         Self::elems_from_allocation(NonNull::new(alloc_ptr).unwrap_or_else(|| {
             todo!("Call roc_panic with the info that an allocation failed.");
@@ -139,6 +145,7 @@ where
     ///
     /// May return a new RocList, if the provided one was not unique.
     pub fn reserve(&mut self, num_elems: usize) {
+        let new_len = num_elems + self.length;
         let new_elems;
         let old_elements_ptr;
 
@@ -146,17 +153,18 @@ where
             Some((elements, storage)) => {
                 if storage.get().is_unique() {
                     unsafe {
-                        let original_ptr = self.ptr_to_allocation();
+                        let old_alloc = self.ptr_to_allocation();
+                        old_elements_ptr = elements.as_ptr();
 
                         // Try to reallocate in-place.
-                        let new_ptr = roc_realloc(
-                            original_ptr,
-                            num_elems,
-                            self.length,
+                        let new_alloc = roc_realloc(
+                            old_alloc,
+                            Self::alloc_bytes(new_len),
+                            Self::alloc_bytes(self.capacity),
                             Self::alloc_alignment(),
                         );
 
-                        if new_ptr == original_ptr {
+                        if new_alloc == old_alloc {
                             // We successfully reallocated in-place; we're done!
                             return;
                         } else {
@@ -165,11 +173,10 @@ where
                             // The existing allocation that references to them is now gone and
                             // no longer referencing them.
                             new_elems = Self::elems_from_allocation(
-                                NonNull::new(new_ptr).unwrap_or_else(|| {
+                                NonNull::new(new_alloc).unwrap_or_else(|| {
                                     todo!("Reallocation failed");
                                 }),
                             );
-                            old_elements_ptr = elements.as_ptr();
                         }
 
                         // Note that realloc automatically deallocates the old allocation,
@@ -177,7 +184,7 @@ where
                     }
                 } else {
                     // Make a new allocation
-                    new_elems = Self::elems_with_capacity(num_elems);
+                    new_elems = Self::elems_with_capacity(new_len);
                     old_elements_ptr = elements.as_ptr();
 
                     // Decrease the current allocation's reference count.
@@ -199,7 +206,7 @@ where
             }
             None => {
                 // This is an empty list, so `reserve` is the same as `with_capacity`.
-                *self = Self::with_capacity(num_elems);
+                *self = Self::with_capacity(new_len);
 
                 return;
             }
@@ -213,7 +220,7 @@ where
         *self = Self {
             elements: Some(new_elems),
             length: self.length,
-            capacity: num_elems,
+            capacity: new_len,
         };
     }
 
@@ -229,9 +236,7 @@ where
             return;
         }
 
-        let alignment = Self::alloc_alignment();
-        let elements_offset = alignment as usize;
-        let new_size = elements_offset + mem::size_of::<T>() * (self.len() + slice.len());
+        let new_len = self.len() + slice.len();
         let non_null_elements = if let Some((elements, storage)) = self.elements_and_storage() {
             // Decrement the list's refence count.
             let mut copy = storage.get();
@@ -239,18 +244,21 @@ where
 
             if is_unique {
                 // If we have enough capacity, we can add to the existing elements in-place.
-                if self.capacity() >= new_size {
+                if self.capacity() >= slice.len() {
                     elements
                 } else {
                     // There wasn't enough capacity, so we need a new allocation.
                     // Since this is a unique RocList, we can use realloc here.
-                    let old_size = elements_offset + (mem::size_of::<T>() * self.len());
-
                     let new_ptr = unsafe {
-                        roc_realloc(self.ptr_to_allocation(), new_size, old_size, alignment).cast()
+                        roc_realloc(
+                            storage.as_ptr().cast(),
+                            Self::alloc_bytes(new_len),
+                            Self::alloc_bytes(self.capacity),
+                            Self::alloc_alignment(),
+                        )
                     };
 
-                    self.capacity = new_size;
+                    self.capacity = new_len;
 
                     Self::elems_from_allocation(NonNull::new(new_ptr).unwrap_or_else(|| {
                         todo!("Reallocation failed");
@@ -263,7 +271,7 @@ where
                 }
 
                 // Allocate new memory.
-                let new_elements = Self::elems_with_capacity(new_size);
+                let new_elements = Self::elems_with_capacity(slice.len());
 
                 // Copy the old elements to the new allocation.
                 unsafe {
@@ -273,7 +281,7 @@ where
                 new_elements
             }
         } else {
-            Self::elems_with_capacity(new_size)
+            Self::elems_with_capacity(slice.len())
         };
 
         self.elements = Some(non_null_elements);
