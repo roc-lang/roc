@@ -190,18 +190,21 @@ where
 
                     // Decrease the current allocation's reference count.
                     let mut new_storage = storage.get();
-                    let needs_dealloc = new_storage.decrease();
 
-                    if needs_dealloc {
-                        // Unlike in Drop, do *not* decrement the refcounts of all the elements!
-                        // The new allocation is referencing them, so instead of incrementing them all
-                        // all just to decrement them again here, we neither increment nor decrement them.
-                        unsafe {
-                            roc_dealloc(self.ptr_to_allocation(), Self::alloc_alignment());
+                    if !new_storage.is_readonly() {
+                        let needs_dealloc = new_storage.decrease();
+
+                        if needs_dealloc {
+                            // Unlike in Drop, do *not* decrement the refcounts of all the elements!
+                            // The new allocation is referencing them, so instead of incrementing them all
+                            // all just to decrement them again here, we neither increment nor decrement them.
+                            unsafe {
+                                roc_dealloc(self.ptr_to_allocation(), Self::alloc_alignment());
+                            }
+                        } else {
+                            // Write the storage back.
+                            storage.set(new_storage);
                         }
-                    } else if !new_storage.is_readonly() {
-                        // Write the storage back.
-                        storage.set(new_storage);
                     }
                 }
             }
@@ -423,21 +426,24 @@ impl<T> Drop for RocList<T> {
         if let Some((elements, storage)) = self.elements_and_storage() {
             // Decrease the list's reference count.
             let mut new_storage = storage.get();
-            let needs_dealloc = new_storage.decrease();
 
-            if needs_dealloc {
-                unsafe {
-                    // Drop the stored elements.
-                    for index in 0..self.len() {
-                        ManuallyDrop::drop(&mut *elements.as_ptr().add(index));
+            if !new_storage.is_readonly() {
+                let needs_dealloc = new_storage.decrease();
+
+                if needs_dealloc {
+                    unsafe {
+                        // Drop the stored elements.
+                        for index in 0..self.len() {
+                            ManuallyDrop::drop(&mut *elements.as_ptr().add(index));
+                        }
+
+                        // Release the memory.
+                        roc_dealloc(self.ptr_to_allocation(), Self::alloc_alignment());
                     }
-
-                    // Release the memory.
-                    roc_dealloc(self.ptr_to_allocation(), Self::alloc_alignment());
+                } else {
+                    // Write the storage back.
+                    storage.set(new_storage);
                 }
-            } else if !new_storage.is_readonly() {
-                // Write the storage back.
-                storage.set(new_storage);
             }
         }
     }
