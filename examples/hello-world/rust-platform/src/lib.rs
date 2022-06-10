@@ -30,17 +30,13 @@ pub extern "C" fn rust_main() -> i32 {
     //     }
     // }
 
-    // unsafe {
-    //     dbg!(&tag_union.default.as_Job());
-    // }
+    unsafe {
+        dbg!(&tag_union.default.as_Job());
+    }
 
-    // unsafe {
-    //     dbg!(&tag_union.default.as_Job().inputFiles);
-    // }
-
-    // unsafe {
-    //     dbg!(&tag_union);
-    // }
+    unsafe {
+        dbg!(&tag_union.default.as_Job().inputFiles);
+    }
 
     // Tool : [
     //     SystemTool { name : Str, num : U32 },
@@ -63,25 +59,28 @@ pub extern "C" fn rust_main() -> i32 {
     // Verify that it has all the expected traits.
 
     assert!(tag_union == tag_union); // PartialEq
+    print!("={:?}\n", &tag_union);
     assert!(tag_union.clone() == tag_union.clone()); // Clone
+
+    print!("={:?}\n", &tag_union);
 
     assert!(tag_union.partial_cmp(&tag_union) == Some(Ordering::Equal)); // PartialOrd
     assert!(tag_union.cmp(&tag_union) == Ordering::Equal); // Ord
 
-    print!(
-        indoc!(
-            r#"
-                rbt was: {:?}
-            "# // `Concat (String "Hello, ") (String "World!")` is: {:?}
-               // `String "this is a test"` is: {:?}
-        ),
-        tag_union,
-        // Expr::Concat(
-        //     Expr::String("Hello, ".into()),
-        //     Expr::String("World!".into()),
-        // ),
-        // Expr::String("this is a test".into()),
-    ); // Debug
+    // print!(
+    //     indoc!(
+    //         r#"
+    //             rbt was: {:?}
+    //         "# // `Concat (String "Hello, ") (String "World!")` is: {:?}
+    //            // `String "this is a test"` is: {:?}
+    //     ),
+    //     tag_union,
+    //     // Expr::Concat(
+    //     //     Expr::String("Hello, ".into()),
+    //     //     Expr::String("World!".into()),
+    //     // ),
+    //     // Expr::String("this is a test".into()),
+    // ); // Debug
 
     let mut set = HashSet::new();
 
