@@ -6,7 +6,6 @@ use roc_builtins::bitcode::{
     IntWidth::{self, *},
 };
 use roc_collections::VecMap;
-use roc_module::ident::TagName;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::layout::{
     cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Layout, LayoutCache,
@@ -720,10 +719,7 @@ fn add_tag_union<'a>(
     let mut tags: Vec<(String, Vec<Variable>)> = union_tags
         .iter_from_subs(subs)
         .map(|(tag_name, payload_vars)| {
-            let name_str = match tag_name {
-                TagName::Tag(uppercase) => uppercase.as_str().to_string(),
-                TagName::Closure(_) => unreachable!(),
-            };
+            let name_str = tag_name.0.as_str().to_string();
 
             (name_str, payload_vars.to_vec())
         })
