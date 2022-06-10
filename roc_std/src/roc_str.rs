@@ -371,10 +371,17 @@ impl RocStr {
     }
 
     /// Generic version of temp_c_utf8 and temp_c_utf16. The given function will be
-    /// passed a pointer to elements of type E. The number of elements will be equal to
-    /// the length of the `&str` given as the other parameter. There will be a `0` element
-    /// at the end of those elements, even if there are no elements (in which case the
-    /// `&str` argument will be empty and the `*mut E` will point to a `0`).
+    /// passed a pointer to elements of type E. The pointer will have enough room to hold
+    /// one element for each byte of the given `&str`'s length, plus the terminator element.
+    ///
+    /// The terminator will be written right after the end of the space for the other elements,
+    /// but all the memory in that space before the terminator will be uninitialized. This means
+    /// if you want to do something like copy the contents of the `&str` into there, that will
+    /// need to be done explicitly.
+    ///
+    /// The terminator is always written - even if there are no other elements present before it.
+    /// (In such a case, the `&str` argument will be empty and the `*mut E` will point directly
+    /// to the terminator).
     ///
     /// One use for this is to convert slashes to backslashes in Windows paths;
     /// this function provides the most efficient way to do that, because no extra
