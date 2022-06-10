@@ -8,7 +8,7 @@ use std::fmt::Display;
 pub static TEMPLATE: &[u8] = include_bytes!("../templates/template.rs");
 pub static HEADER: &[u8] = include_bytes!("../templates/header.rs");
 const INDENT: &str = "    ";
-const VARIANT_DOC_COMMENT: &str =
+const DISCRIMINANT_DOC_COMMENT: &str =
     "/// Returns which variant this tag union holds. Note that this never includes a payload!";
 
 type Impls = IndexMap<Impl, IndexMap<String, Vec<TargetInfo>>>;
@@ -265,7 +265,7 @@ fn add_discriminant(
     //     Bar,
     //     Foo,
     // }
-    let discriminant_name = format!("variant_{name}");
+    let discriminant_name = format!("discriminant_{name}");
     let discriminant_type = RocType::TagUnion(RocTagUnion::Enumeration {
         name: discriminant_name.clone(),
         tags: tag_names.clone(),
@@ -350,7 +350,7 @@ pub struct {name} {{
         let mut buf = format!("#[repr(C)]\n{pub_str}union {decl_union_name} {{\n");
 
         for (tag_name, opt_payload_id) in tags {
-            // If there's no payload, we don't need a variant for it.
+            // If there's no payload, we don't need a discriminant for it.
             if let Some(payload_id) = opt_payload_id {
                 let payload_type = types.get_type(*payload_id);
 
@@ -413,8 +413,8 @@ pub struct {name} {{
                         opt_impl.clone(),
                         target_info,
                         format!(
-                            r#"{VARIANT_DOC_COMMENT}
-    pub fn variant(&self) -> {discriminant_name} {{
+                            r#"{DISCRIMINANT_DOC_COMMENT}
+    pub fn discriminant(&self) -> {discriminant_name} {{
         // The discriminant is stored in the unused bytes at the end of the recursive pointer
         unsafe {{ core::mem::transmute::<u8, {discriminant_name}>((self.pointer as u8) & {bitmask}) }}
     }}"#
@@ -479,8 +479,8 @@ pub struct {name} {{
                     opt_impl.clone(),
                     target_info,
                     format!(
-                        r#"{VARIANT_DOC_COMMENT}
-    pub fn variant(&self) -> {discriminant_name} {{
+                        r#"{DISCRIMINANT_DOC_COMMENT}
+    pub fn discriminant(&self) -> {discriminant_name} {{
         unsafe {{
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
@@ -515,7 +515,7 @@ pub struct {name} {{
             // pub fn Foo(payload: roc_std::RocStr) -> Self {
             //     Self {
             //         tag: tag_MyTagUnion::Foo,
-            //         variant: variant_MyTagUnion {
+            //         discriminant: discriminant_MyTagUnion {
             //             Foo: core::mem::ManuallyDrop::new(payload),
             //         },
             //     }
@@ -682,11 +682,11 @@ pub struct {name} {{
                     opt_impl.clone(),
                     target_info,
                     format!(
-                        r#"/// Unsafely assume the given {name} has a .variant() of {tag_name} and convert it to {tag_name}'s payload.
-    /// (Always examine .variant() first to make sure this is the correct variant!)
-    /// Panics in debug builds if the .variant() doesn't return {tag_name}.
+                        r#"/// Unsafely assume the given {name} has a .discriminant() of {tag_name} and convert it to {tag_name}'s payload.
+    /// (Always examine .discriminant() first to make sure this is the correct variant!)
+    /// Panics in debug builds if the .discriminant() doesn't return {tag_name}.
     pub unsafe fn into_{tag_name}({self_for_into}) -> {owned_ret_type} {{
-        debug_assert_eq!(self.variant(), {discriminant_name}::{tag_name});
+        debug_assert_eq!(self.discriminant(), {discriminant_name}::{tag_name});
 
         let payload = {owned_get_payload};
 
@@ -700,11 +700,11 @@ pub struct {name} {{
                     opt_impl.clone(),
                     target_info,
                     format!(
-                        r#"/// Unsafely assume the given {name} has a .variant() of {tag_name} and return its payload.
-    /// (Always examine .variant() first to make sure this is the correct variant!)
-    /// Panics in debug builds if the .variant() doesn't return {tag_name}.
+                        r#"/// Unsafely assume the given {name} has a .discriminant() of {tag_name} and return its payload.
+    /// (Always examine .discriminant() first to make sure this is the correct variant!)
+    /// Panics in debug builds if the .discriminant() doesn't return {tag_name}.
     pub unsafe fn as_{tag_name}(&self) -> {borrowed_ret_type} {{
-        debug_assert_eq!(self.variant(), {discriminant_name}::{tag_name});
+        debug_assert_eq!(self.discriminant(), {discriminant_name}::{tag_name});
 
         let payload = {borrowed_get_payload};
 
@@ -799,7 +799,7 @@ pub struct {name} {{
         };
         let opt_impl = Some(format!("{opt_impl_prefix}impl PartialEq for {name}"));
         let mut buf = r#"fn eq(&self, other: &Self) -> bool {
-            if self.variant() != other.variant() {
+            if self.discriminant() != other.discriminant() {
                 return false;
             }
 
@@ -837,7 +837,7 @@ pub struct {name} {{
     {
         let opt_impl = Some(format!("impl PartialOrd for {name}"));
         let mut buf = r#"fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        match self.variant().partial_cmp(&other.variant()) {
+        match self.discriminant().partial_cmp(&other.discriminant()) {
             Some(core::cmp::Ordering::Equal) => {}
             not_eq => return not_eq,
         }
@@ -876,7 +876,7 @@ pub struct {name} {{
     {
         let opt_impl = Some(format!("impl Ord for {name}"));
         let mut buf = r#"fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-            match self.variant().cmp(&other.variant()) {
+            match self.discriminant().cmp(&other.discriminant()) {
                 core::cmp::Ordering::Equal => {}
                 not_eq => return not_eq,
             }
@@ -969,7 +969,7 @@ pub struct {name} {{
                     r#"
         };
 
-        answer.set_discriminant(self.variant());
+        answer.set_discriminant(self.discriminant());
 
         answer
     }"#,
@@ -1102,7 +1102,7 @@ fn write_impl_tags<
 ) {
     write_indents(indentations, buf);
 
-    buf.push_str("match self.variant() {\n");
+    buf.push_str("match self.discriminant() {\n");
 
     for (tag_name, opt_payload_id) in tags {
         let branch_str = to_branch_str(tag_name, *opt_payload_id);
@@ -1322,8 +1322,8 @@ pub struct {name} {{
             opt_impl.clone(),
             target_info,
             format!(
-                r#"{VARIANT_DOC_COMMENT}
-    pub fn variant(&self) -> {discriminant_name} {{
+                r#"{DISCRIMINANT_DOC_COMMENT}
+    pub fn discriminant(&self) -> {discriminant_name} {{
         if self.pointer.is_null() {{
             {discriminant_name}::{null_tag}
         }} else {{
@@ -1439,11 +1439,11 @@ pub struct {name} {{
                 opt_impl.clone(),
                 target_info,
                 format!(
-                    r#"/// Unsafely assume the given {name} has a .variant() of {non_null_tag} and convert it to {non_null_tag}'s payload.
-    /// (Always examine .variant() first to make sure this is the correct variant!)
-    /// Panics in debug builds if the .variant() doesn't return {non_null_tag}.
+                    r#"/// Unsafely assume the given {name} has a .discriminant() of {non_null_tag} and convert it to {non_null_tag}'s payload.
+    /// (Always examine .discriminant() first to make sure this is the correct variant!)
+    /// Panics in debug builds if the .discriminant() doesn't return {non_null_tag}.
     pub unsafe fn into_{non_null_tag}(self) -> {owned_ret_type} {{
-        debug_assert_eq!(self.variant(), {discriminant_name}::{non_null_tag});
+        debug_assert_eq!(self.discriminant(), {discriminant_name}::{non_null_tag});
 
         let payload = {assign_payload};
 
@@ -1460,11 +1460,11 @@ pub struct {name} {{
             opt_impl.clone(),
             target_info,
             format!(
-                r#"/// Unsafely assume the given {name} has a .variant() of {non_null_tag} and return its payload.
-    /// (Always examine .variant() first to make sure this is the correct variant!)
-    /// Panics in debug builds if the .variant() doesn't return {non_null_tag}.
+                r#"/// Unsafely assume the given {name} has a .discriminant() of {non_null_tag} and return its payload.
+    /// (Always examine .discriminant() first to make sure this is the correct variant!)
+    /// Panics in debug builds if the .discriminant() doesn't return {non_null_tag}.
     pub unsafe fn as_{non_null_tag}(&self) -> {borrowed_ret_type} {{
-        debug_assert_eq!(self.variant(), {discriminant_name}::{non_null_tag});
+        debug_assert_eq!(self.discriminant(), {discriminant_name}::{non_null_tag});
 
         let payload = &*self.pointer;
 
