@@ -8,15 +8,15 @@ pub mod serialize;
 
 use bumpalo::{collections::Vec, Bump};
 pub use code_builder::{Align, CodeBuilder, LocalId, ValueType, VmSymbolState};
-pub use linking::{OffsetRelocType, RelocationEntry, SymInfo, SymType};
+pub use linking::{OffsetRelocType, RelocationEntry, SymInfo};
 pub use sections::{ConstExpr, Export, ExportType, Global, GlobalType, Signature};
 
 use self::linking::{LinkingSection, RelocationSection};
 use self::parse::{Parse, ParseError};
 use self::sections::{
     CodeSection, DataSection, ElementSection, ExportSection, FunctionSection, GlobalSection,
-    ImportSection, MemorySection, NameSection, OpaqueSection, Section, SectionId, TableSection,
-    TypeSection,
+    ImportDesc, ImportSection, MemorySection, NameSection, OpaqueSection, Section, SectionId,
+    TableSection, TypeSection,
 };
 use self::serialize::{SerialBuffer, Serialize};
 
@@ -111,11 +111,12 @@ impl<'a> WasmModule<'a> {
         let element = ElementSection::parse(arena, bytes, &mut cursor)?;
         let indirect_callees = element.indirect_callees(arena);
 
+        let imported_fn_signatures = import.function_signatures(arena);
         let code = CodeSection::parse(
             arena,
             bytes,
             &mut cursor,
-            &import.fn_signatures,
+            &imported_fn_signatures,
             &function.signatures,
             &indirect_callees,
         )?;
@@ -190,12 +191,12 @@ impl<'a> WasmModule<'a> {
             .iter()
             .filter(|ex| ex.ty == ExportType::Func)
             .map(|ex| ex.index);
-        let function_indices = Vec::from_iter_in(exported_fn_iter, arena);
+        let exported_fn_indices = Vec::from_iter_in(exported_fn_iter, arena);
 
         self.code.remove_dead_preloads(
             arena,
-            self.import.fn_signatures.len(),
-            &function_indices,
+            self.import.function_count(),
+            &exported_fn_indices,
             called_preload_fns,
         )
     }
@@ -208,11 +209,11 @@ impl<'a> WasmModule<'a> {
             .and_then(|ex| self.global.parse_u32_at_index(ex.index).ok())
     }
 
-    pub fn relocate_preloaded_code(&mut self, sym_name: &str, sym_type: SymType, value: u32) {
+    pub fn relocate_internal_symbol(&mut self, sym_name: &str, value: u32) -> u32 {
         let sym_index = self
             .linking
-            .find_symbol_by_name(sym_name, sym_type)
-            .unwrap_or_else(|| panic!("Linking failed! Can't find symbol `{}`", sym_name));
+            .find_internal_symbol(sym_name)
+            .unwrap_or_else(|| panic!("Linking failed! Can't find host symbol `{}`", sym_name));
 
         self.reloc_code.apply_relocs_u32(
             &mut self.code.preloaded_bytes,
@@ -220,5 +221,127 @@ impl<'a> WasmModule<'a> {
             sym_index,
             value,
         );
+
+        sym_index
+    }
+
+    /// Linking steps for host-to-app functions like `roc__mainForHost_1_exposed`
+    /// (See further explanation in the gen_wasm README)
+    /// - Remove the target function from the ImportSection. It's not a JS import but the host declared it as one.
+    /// - Update all of its call sites to the new index in the app
+    /// - Swap the _last_ JavaScript import into the slot we just vacated
+    /// - Update all call sites for the swapped JS function
+    /// - Update the FunctionSection to show the correct type signature for the swapped JS function
+    /// - Insert a dummy function in the CodeSection, at the same index as the swapped JS function
+    pub fn link_host_to_app_calls(&mut self, host_to_app_map: Vec<'a, (&'a str, u32)>) {
+        for (app_fn_name, app_fn_index) in host_to_app_map.into_iter() {
+            // Find the host import, and the last imported function to swap with it.
+            // Not all imports are functions, so the function index and import index may be different
+            // (We could support imported globals if we relocated them, although we don't at the time of this comment)
+            let mut host_fn = None;
+            let mut swap_fn = None;
+            self.import
+                .imports
+                .iter()
+                .enumerate()
+                .filter(|(_import_index, import)| {
+                    matches!(import.description, ImportDesc::Func { .. })
+                })
+                .enumerate()
+                .for_each(|(fn_index, (import_index, import))| {
+                    swap_fn = Some((import_index, fn_index));
+                    if import.name == app_fn_name {
+                        host_fn = Some((import_index, fn_index));
+                    }
+                });
+
+            let (host_import_index, host_fn_index) = match host_fn {
+                Some(x) => x,
+                None => {
+                    // The Wasm host doesn't call our app function, so it must be called from JS. Export it.
+                    self.export.append(Export {
+                        name: app_fn_name,
+                        ty: ExportType::Func,
+                        index: app_fn_index,
+                    });
+                    continue;
+                }
+            };
+            let (swap_import_index, swap_fn_index) = swap_fn.unwrap();
+
+            // Note: swap_remove will not work, because some imports may not be functions.
+            let swap_import = self.import.imports.remove(swap_import_index);
+            if swap_import_index != host_import_index {
+                self.import.imports[host_import_index] = swap_import;
+            }
+
+            // Find the host's symbol for the function we're linking
+            let host_sym_index = self
+                .linking
+                .find_imported_function_symbol(host_fn_index as u32)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Linking failed! Can't find fn #{} ({}) in host symbol table",
+                        host_fn_index, app_fn_name
+                    )
+                });
+
+            // Update calls to use the app function instead of the host import
+            self.reloc_code.apply_relocs_u32(
+                &mut self.code.preloaded_bytes,
+                self.code.preloaded_reloc_offset,
+                host_sym_index,
+                app_fn_index,
+            );
+
+            if swap_import_index != host_import_index {
+                // get the name using the old host import index because we already swapped it!
+                let swap_fn_name = self.import.imports[host_import_index].name;
+
+                // Find the symbol for the swapped JS import
+                let swap_sym_index = self
+                    .linking
+                    .find_imported_function_symbol(swap_fn_index as u32)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "Linking failed! Can't find fn #{} ({}) in host symbol table",
+                            swap_fn_index, swap_fn_name
+                        )
+                    });
+
+                // Update calls to the swapped JS import
+                self.reloc_code.apply_relocs_u32(
+                    &mut self.code.preloaded_bytes,
+                    self.code.preloaded_reloc_offset,
+                    swap_sym_index,
+                    host_fn_index as u32,
+                );
+
+                // Update the name in the debug info
+                let (_, debug_name) = self
+                    .names
+                    .function_names
+                    .iter_mut()
+                    .find(|(i, _)| *i as usize == host_fn_index)
+                    .unwrap();
+                debug_name.clone_from(&swap_fn_name);
+            }
+
+            // Remember to insert a dummy function at the beginning of the code section
+            // to compensate for having one less import, so that function indices don't change.
+            self.code.linking_dummy_count += 1;
+
+            // Insert any type signature for the dummy. Signature index 0 will do.
+            self.function.signatures.insert(0, 0);
+
+            // Update the debug name for the dummy
+            let (_, debug_name) = self
+                .names
+                .function_names
+                .iter_mut()
+                .find(|(i, _)| *i as usize == swap_fn_index)
+                .unwrap();
+            debug_name.clone_from(&"linking_dummy");
+        }
     }
 }

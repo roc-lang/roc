@@ -20,6 +20,13 @@ impl<K, V> VecMap<K, V> {
         debug_assert_eq!(self.keys.len(), self.values.len());
         self.keys.len()
     }
+
+    pub fn swap_remove(&mut self, index: usize) -> (K, V) {
+        let k = self.keys.swap_remove(index);
+        let v = self.values.swap_remove(index);
+
+        (k, v)
+    }
 }
 
 impl<K: PartialEq, V> VecMap<K, V> {
@@ -33,13 +40,6 @@ impl<K: PartialEq, V> VecMap<K, V> {
     pub fn is_empty(&self) -> bool {
         debug_assert_eq!(self.keys.len(), self.values.len());
         self.keys.is_empty()
-    }
-
-    pub fn swap_remove(&mut self, index: usize) -> (K, V) {
-        let k = self.keys.swap_remove(index);
-        let v = self.values.swap_remove(index);
-
-        (k, v)
     }
 
     pub fn insert(&mut self, key: K, mut value: V) -> Option<V> {
@@ -123,6 +123,17 @@ impl<K: PartialEq, V> VecMap<K, V> {
     pub unsafe fn zip(keys: Vec<K>, values: Vec<V>) -> Self {
         Self { keys, values }
     }
+
+    pub fn drain_filter<F>(&mut self, predicate: F) -> DrainFilter<K, V, F>
+    where
+        F: Fn(&K, &V) -> bool,
+    {
+        DrainFilter {
+            vec_map: self,
+            predicate,
+            cur_idx: 0,
+        }
+    }
 }
 
 impl<K: PartialEq, V> Extend<(K, V)> for VecMap<K, V> {
@@ -196,5 +207,65 @@ impl<K: PartialEq, V> FromIterator<(K, V)> for VecMap<K, V> {
             map.insert(k, v);
         }
         map
+    }
+}
+
+pub struct DrainFilter<'a, K, V, F>
+where
+    F: Fn(&K, &V) -> bool,
+{
+    vec_map: &'a mut VecMap<K, V>,
+    predicate: F,
+    cur_idx: usize,
+}
+
+impl<K, V, F> Iterator for DrainFilter<'_, K, V, F>
+where
+    F: Fn(&K, &V) -> bool,
+{
+    type Item = (K, V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.cur_idx < self.vec_map.len() {
+            let key = &self.vec_map.keys[self.cur_idx];
+            let value = &self.vec_map.values[self.cur_idx];
+            let drain = (self.predicate)(key, value);
+            if drain {
+                let kv = self.vec_map.swap_remove(self.cur_idx);
+                return Some(kv);
+            } else {
+                self.cur_idx += 1;
+            }
+        }
+        None
+    }
+}
+
+#[cfg(test)]
+mod test_drain_filter {
+    use crate::VecMap;
+
+    #[test]
+    fn test_nothing() {
+        let mut map = VecMap::default();
+        map.extend(vec![(1, 2), (2, 4)]);
+        let mut iter = map.drain_filter(|k, _| *k == 0);
+        assert!(iter.next().is_none());
+        assert_eq!(map.len(), 2);
+    }
+
+    #[test]
+    fn test_drain() {
+        let mut map = VecMap::default();
+        map.extend(vec![(1, 2), (2, 4), (3, 6), (4, 8), (5, 10)]);
+
+        let mut drained: Vec<_> = map.drain_filter(|k, _| k % 2 == 0).collect();
+        drained.sort_unstable();
+        assert_eq!(drained, vec![(2, 4), (4, 8)]);
+
+        assert_eq!(map.len(), 3);
+        let mut rest: Vec<_> = map.into_iter().collect();
+        rest.sort_unstable();
+        assert_eq!(rest, vec![(1, 2), (3, 6), (5, 10)]);
     }
 }

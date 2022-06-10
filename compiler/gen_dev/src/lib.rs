@@ -981,6 +981,9 @@ trait Backend<'a> {
                     self.set_last_seen(*sym, stmt);
                 }
             }
+
+            Stmt::Expect { .. } => todo!("expect is not implemented in the wasm backend"),
+
             Stmt::RuntimeError(_) => {}
         }
     }

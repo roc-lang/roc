@@ -2737,6 +2737,81 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             }
         }
 
+        Expect {
+            condition: cond,
+            region: _,
+            lookups: _,
+            layouts: _,
+            remainder,
+        } => {
+            // do stuff
+
+            let bd = env.builder;
+            let context = env.context;
+
+            let (cond, _cond_layout) = load_symbol_and_layout(scope, cond);
+
+            let condition = bd.build_int_compare(
+                IntPredicate::EQ,
+                cond.into_int_value(),
+                context.bool_type().const_int(1, false),
+                "is_true",
+            );
+
+            let then_block = context.append_basic_block(parent, "then_block");
+            let throw_block = context.append_basic_block(parent, "throw_block");
+
+            bd.build_conditional_branch(condition, then_block, throw_block);
+
+            {
+                bd.position_at_end(throw_block);
+
+                match env.target_info.ptr_width() {
+                    roc_target::PtrWidth::Bytes8 => {
+                        let func = env
+                            .module
+                            .get_function(bitcode::UTILS_EXPECT_FAILED)
+                            .unwrap();
+                        // TODO get the actual line info instead of
+                        // hardcoding as zero!
+                        let callable = CallableValue::try_from(func).unwrap();
+                        let start_line = context.i32_type().const_int(0, false);
+                        let end_line = context.i32_type().const_int(0, false);
+                        let start_col = context.i16_type().const_int(0, false);
+                        let end_col = context.i16_type().const_int(0, false);
+
+                        bd.build_call(
+                            callable,
+                            &[
+                                start_line.into(),
+                                end_line.into(),
+                                start_col.into(),
+                                end_col.into(),
+                            ],
+                            "call_expect_failed",
+                        );
+
+                        bd.build_unconditional_branch(then_block);
+                    }
+                    roc_target::PtrWidth::Bytes4 => {
+                        // temporary WASM implementation
+                        throw_exception(env, "An expectation failed!");
+                    }
+                }
+            }
+
+            bd.position_at_end(then_block);
+
+            build_exp_stmt(
+                env,
+                layout_ids,
+                func_spec_solutions,
+                scope,
+                parent,
+                remainder,
+            )
+        }
+
         RuntimeError(error_msg) => {
             throw_exception(env, error_msg);
 
@@ -6126,67 +6201,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (set, _set_layout) = load_symbol_and_layout(scope, &args[0]);
 
             set
-        }
-        ExpectTrue => {
-            debug_assert_eq!(args.len(), 1);
-
-            let context = env.context;
-            let bd = env.builder;
-
-            let (cond, _cond_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let condition = bd.build_int_compare(
-                IntPredicate::EQ,
-                cond.into_int_value(),
-                context.bool_type().const_int(1, false),
-                "is_true",
-            );
-
-            let then_block = context.append_basic_block(parent, "then_block");
-            let throw_block = context.append_basic_block(parent, "throw_block");
-
-            bd.build_conditional_branch(condition, then_block, throw_block);
-
-            {
-                bd.position_at_end(throw_block);
-
-                match env.target_info.ptr_width() {
-                    roc_target::PtrWidth::Bytes8 => {
-                        let func = env
-                            .module
-                            .get_function(bitcode::UTILS_EXPECT_FAILED)
-                            .unwrap();
-                        // TODO get the actual line info instead of
-                        // hardcoding as zero!
-                        let callable = CallableValue::try_from(func).unwrap();
-                        let start_line = context.i32_type().const_int(0, false);
-                        let end_line = context.i32_type().const_int(0, false);
-                        let start_col = context.i16_type().const_int(0, false);
-                        let end_col = context.i16_type().const_int(0, false);
-
-                        bd.build_call(
-                            callable,
-                            &[
-                                start_line.into(),
-                                end_line.into(),
-                                start_col.into(),
-                                end_col.into(),
-                            ],
-                            "call_expect_failed",
-                        );
-
-                        bd.build_unconditional_branch(then_block);
-                    }
-                    roc_target::PtrWidth::Bytes4 => {
-                        // temporary WASM implementation
-                        throw_exception(env, "An expectation failed!");
-                    }
-                }
-            }
-
-            bd.position_at_end(then_block);
-
-            cond
         }
 
         ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk

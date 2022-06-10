@@ -152,7 +152,7 @@ macro_rules! instruction_memargs {
 
 #[derive(Debug)]
 pub struct CodeBuilder<'a> {
-    arena: &'a Bump,
+    pub arena: &'a Bump,
 
     /// The main container for the instructions
     code: Vec<'a, u8>,
@@ -205,6 +205,14 @@ impl<'a> CodeBuilder<'a> {
             inner_length: Vec::with_capacity_in(5, arena),
             vm_block_stack,
         }
+    }
+
+    /// Build a dummy function with just a single `unreachable` instruction
+    pub fn dummy(arena: &'a Bump) -> Self {
+        let mut builder = Self::new(arena);
+        builder.unreachable_();
+        builder.build_fn_header_and_footer(&[], 0, None);
+        builder
     }
 
     /**********************************************************

@@ -273,8 +273,14 @@ pub enum Type {
 /// usage site. Unspecialized lambda sets aid us in recovering those lambda sets; when we
 /// instantiate `a` with a proper type `T`, we'll know to resolve the lambda set by extracting
 /// it at region "1" from the specialization of "default" for `T`.
-#[derive(PartialEq, Eq, Clone, Copy)]
-pub struct Uls(Variable, Symbol, u8);
+#[derive(PartialEq, Eq, Clone, Copy, PartialOrd, Ord)]
+pub struct Uls(pub Variable, pub Symbol, pub u8);
+
+impl std::fmt::Debug for Uls {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Uls({:?}:{:?}:{:?})", self.0, self.1, self.2)
+    }
+}
 
 static mut TYPE_CLONE_COUNT: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
@@ -648,8 +654,8 @@ impl fmt::Debug for Type {
             Type::RangedNumber(typ, range_vars) => {
                 write!(f, "Ranged({:?}, {:?})", typ, range_vars)
             }
-            Type::UnspecializedLambdaSet(Uls(a, mem, region)) => {
-                write!(f, "ULS({:?}:{:?}:{:?})", a, mem, region)
+            Type::UnspecializedLambdaSet(uls) => {
+                write!(f, "{:?}", uls)
             }
         }
     }
@@ -2780,7 +2786,10 @@ fn instantiate_lambda_sets_as_unspecialized(
                 type_arguments,
                 lambda_set_variables,
             }) => {
-                stack.extend(lambda_set_variables.iter_mut().rev().map(|ls| &mut ls.0));
+                for lambda_set in lambda_set_variables.iter_mut() {
+                    debug_assert!(matches!(lambda_set.0, Type::Variable(_)));
+                    lambda_set.0 = new_uls();
+                }
                 stack.extend(type_arguments.iter_mut().rev());
             }
             Type::Alias {
@@ -2790,8 +2799,11 @@ fn instantiate_lambda_sets_as_unspecialized(
                 actual,
                 kind: _,
             } => {
+                for lambda_set in lambda_set_variables.iter_mut() {
+                    debug_assert!(matches!(lambda_set.0, Type::Variable(_)));
+                    lambda_set.0 = new_uls();
+                }
                 stack.push(actual);
-                stack.extend(lambda_set_variables.iter_mut().rev().map(|ls| &mut ls.0));
                 stack.extend(type_arguments.iter_mut().rev().map(|t| &mut t.typ));
             }
             Type::HostExposedAlias {
@@ -2801,8 +2813,11 @@ fn instantiate_lambda_sets_as_unspecialized(
                 actual_var: _,
                 actual,
             } => {
+                for lambda_set in lambda_set_variables.iter_mut() {
+                    debug_assert!(matches!(lambda_set.0, Type::Variable(_)));
+                    lambda_set.0 = new_uls();
+                }
                 stack.push(actual);
-                stack.extend(lambda_set_variables.iter_mut().rev().map(|ls| &mut ls.0));
                 stack.extend(type_arguments.iter_mut().rev());
             }
             Type::Apply(_sym, args, _region) => {

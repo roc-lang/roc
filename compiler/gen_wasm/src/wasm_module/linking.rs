@@ -118,32 +118,6 @@ pub enum RelocationEntry {
     },
 }
 
-impl RelocationEntry {
-    pub fn offset(&self) -> u32 {
-        match self {
-            Self::Index { offset, .. } => *offset,
-            Self::Offset { offset, .. } => *offset,
-        }
-    }
-
-    pub fn offset_mut(&mut self) -> &mut u32 {
-        match self {
-            Self::Index { offset, .. } => offset,
-            Self::Offset { offset, .. } => offset,
-        }
-    }
-}
-
-impl RelocationEntry {
-    pub fn for_function_call(offset: u32, symbol_index: u32) -> Self {
-        RelocationEntry::Index {
-            type_id: IndexRelocType::FunctionIndexLeb,
-            offset,
-            symbol_index,
-        }
-    }
-}
-
 impl Parse<()> for RelocationEntry {
     fn parse(_: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
         let type_id_byte = bytes[*cursor];
@@ -202,8 +176,20 @@ impl<'a> RelocationSection<'a> {
     ) {
         for entry in self.entries.iter() {
             match entry {
-                RelocationEntry::Index { symbol_index, .. } if *symbol_index == sym_index => {
-                    todo!("Linking RelocationEntry {:?}", entry)
+                RelocationEntry::Index {
+                    type_id,
+                    offset,
+                    symbol_index,
+                } if *symbol_index == sym_index => {
+                    use IndexRelocType::*;
+                    let idx = (*offset - section_bytes_offset) as usize;
+                    match type_id {
+                        FunctionIndexLeb | TypeIndexLeb | GlobalIndexLeb | EventIndexLeb
+                        | TableNumberLeb => {
+                            overwrite_padded_u32(&mut section_bytes[idx..], value);
+                        }
+                        _ => todo!("Linking relocation type {:?}", type_id),
+                    }
                 }
                 RelocationEntry::Offset {
                     type_id,
@@ -212,13 +198,12 @@ impl<'a> RelocationSection<'a> {
                     addend,
                 } if *symbol_index == sym_index => {
                     use OffsetRelocType::*;
+                    let idx = (*offset - section_bytes_offset) as usize;
                     match type_id {
                         MemoryAddrLeb => {
-                            let idx = (*offset - section_bytes_offset) as usize;
                             overwrite_padded_u32(&mut section_bytes[idx..], value + *addend as u32);
                         }
                         MemoryAddrSleb => {
-                            let idx = (*offset - section_bytes_offset) as usize;
                             overwrite_padded_i32(&mut section_bytes[idx..], value as i32 + *addend);
                         }
                         _ => todo!("Linking relocation type {:?}", type_id),
@@ -372,12 +357,12 @@ pub const WASM_SYM_NO_STRIP: u32 = 0x80;
 
 #[derive(Clone, Debug)]
 pub enum WasmObjectSymbol<'a> {
-    Defined {
+    ExplicitlyNamed {
         flags: u32,
         index: u32,
         name: &'a str,
     },
-    Imported {
+    ImplicitlyNamed {
         flags: u32,
         index: u32,
     },
@@ -397,9 +382,9 @@ impl<'a> Parse<&'a Bump> for WasmObjectSymbol<'a> {
 
         if has_explicit_name {
             let name = <&'a str>::parse(arena, bytes, cursor)?;
-            Ok(Self::Defined { flags, index, name })
+            Ok(Self::ExplicitlyNamed { flags, index, name })
         } else {
-            Ok(Self::Imported { flags, index })
+            Ok(Self::ImplicitlyNamed { flags, index })
         }
     }
 }
@@ -471,9 +456,23 @@ pub enum SymInfo<'a> {
     Table(WasmObjectSymbol<'a>),
 }
 
+impl<'a> SymInfo<'a> {
+    pub fn name(&self) -> Option<&'a str> {
+        match self {
+            Self::Function(WasmObjectSymbol::ExplicitlyNamed { name, .. }) => Some(name),
+            Self::Data(DataSymbol::Defined { name, .. }) => Some(name),
+            Self::Data(DataSymbol::Imported { name, .. }) => Some(name),
+            Self::Global(WasmObjectSymbol::ExplicitlyNamed { name, .. }) => Some(name),
+            Self::Event(WasmObjectSymbol::ExplicitlyNamed { name, .. }) => Some(name),
+            Self::Table(WasmObjectSymbol::ExplicitlyNamed { name, .. }) => Some(name),
+            _ => None, // ImplicitlyNamed or SectionSymbols
+        }
+    }
+}
+
 #[repr(u8)]
 #[derive(Debug)]
-pub enum SymType {
+enum SymType {
     Function = 0,
     Data = 1,
     Global = 2,
@@ -499,16 +498,6 @@ impl Parse<()> for SymType {
                 message: format!("Invalid symbol info type in linking section: {}", x),
             }),
         }
-    }
-}
-
-impl<'a> SymInfo<'a> {
-    pub fn for_function(wasm_function_index: u32, name: &'a str) -> Self {
-        SymInfo::Function(WasmObjectSymbol::Defined {
-            flags: 0,
-            index: wasm_function_index,
-            name,
-        })
     }
 }
 
@@ -588,27 +577,24 @@ impl<'a> LinkingSection<'a> {
         }
     }
 
-    pub fn find_symbol_by_name(&self, sym_name: &str, sym_type: SymType) -> Option<u32> {
-        let found = match sym_type {
-            SymType::Data => self
-                .symbol_table
-                .iter()
-                .position(|sym_info| match sym_info {
-                    SymInfo::Data(DataSymbol::Imported { name, .. })
-                    | SymInfo::Data(DataSymbol::Defined { name, .. }) => *name == sym_name,
-                    _ => false,
-                }),
-            SymType::Function => self
-                .symbol_table
-                .iter()
-                .position(|sym_info| match sym_info {
-                    SymInfo::Function(WasmObjectSymbol::Defined { name, .. }) => *name == sym_name,
-                    _ => false,
-                }),
-            _ => unimplemented!("Finding {:?} symbols by name", sym_type),
-        };
+    pub fn find_internal_symbol(&self, target_name: &str) -> Option<u32> {
+        self.symbol_table
+            .iter()
+            .position(|sym| sym.name() == Some(target_name))
+            .map(|x| x as u32)
+    }
 
-        found.map(|i| i as u32)
+    pub fn find_imported_function_symbol(&self, fn_index: u32) -> Option<u32> {
+        self.symbol_table
+            .iter()
+            .position(|sym| match sym {
+                SymInfo::Function(WasmObjectSymbol::ImplicitlyNamed { flags, index, .. })
+                | SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { flags, index, .. }) => {
+                    flags & WASM_SYM_UNDEFINED != 0 && *index == fn_index
+                }
+                _ => false,
+            })
+            .map(|sym_index| sym_index as u32)
     }
 
     pub fn name_index_map(&self, arena: &'a Bump, prefix: &str) -> Vec<'a, (&'a str, u32)> {
@@ -616,7 +602,7 @@ impl<'a> LinkingSection<'a> {
             .symbol_table
             .iter()
             .filter_map(|sym_info| match sym_info {
-                SymInfo::Function(WasmObjectSymbol::Defined { flags, index, name })
+                SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { flags, index, name })
                     if flags & WASM_SYM_BINDING_LOCAL == 0 && name.starts_with(prefix) =>
                 {
                     Some((*name, *index))
@@ -678,7 +664,7 @@ impl<'a> Parse<&'a Bump> for LinkingSection<'a> {
                     }
                 }
                 SubSectionId::InitFuncs | SubSectionId::ComdatInfo => {
-                    // We don't use these sections, just skip over them.
+                    // We don't use these subsections, just skip over them.
                     *cursor += len as usize;
                 }
             }
