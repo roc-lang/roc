@@ -430,7 +430,7 @@ impl<T> Drop for RocList<T> {
                     for index in 0..self.len() {
                         let elem_ptr = elements.as_ptr().add(index);
 
-                        mem::drop::<T>(ManuallyDrop::take(&mut *elem_ptr));
+                        ManuallyDrop::drop(&mut *elem_ptr);
                     }
 
                     // Release the memory.
