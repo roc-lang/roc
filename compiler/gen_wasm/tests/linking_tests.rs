@@ -1,20 +1,26 @@
 use bumpalo::Bump;
+use roc_gen_wasm::Env;
+use std::fs;
+use std::process::Command;
+
 use roc_builtins::bitcode::IntWidth;
-use roc_collections::MutMap;
+use roc_collections::{MutMap, MutSet};
+use roc_gen_wasm::wasm_module::WasmModule;
 use roc_module::ident::{ForeignSymbol, ModuleName};
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::{IdentIds, ModuleId, Symbol, Interns};
+use roc_module::symbol::{
+    IdentIds, IdentIdsByModule, Interns, ModuleId, ModuleIds, PackageModuleIds, PackageQualified,
+    Symbol,
+};
 use roc_mono::ir::{
     Call, CallType, Expr, HostExposedLayouts, Proc, ProcLayout, SelfRecursive, Stmt, UpdateModeId,
 };
 use roc_mono::layout::{Builtin, Layout};
-use std::fs;
-use std::process::Command;
 
 const TEST_HOST_SOURCE: &str = "tests/linking_tests_host.zig";
 const TEST_HOST_TARGET: &str = "tests/linking_tests_host.wasm";
 
-fn build_host() -> Vec<u8> {
+fn build_host() -> std::vec::Vec<u8> {
     let args = [
         "build-obj",
         "-target",
@@ -30,18 +36,29 @@ fn build_host() -> Vec<u8> {
         .output()
         .expect("failed to compile host");
 
+    println!("Built linking test host at {}", TEST_HOST_TARGET);
     fs::read(TEST_HOST_TARGET).unwrap()
 }
 
-fn build_app<'a>(arena: &'a Bump) -> MutMap<(Symbol, ProcLayout<'a>), Proc<'a>> {
+fn create_symbol(home: ModuleId, ident_ids: &mut IdentIds, debug_name: &str) -> Symbol {
+    let ident_id = ident_ids.add_str(debug_name);
+    Symbol::new(home, ident_id)
+}
+
+// Build a fake Roc app in mono IR
+// Calls two host functions, one Wasm and one JS
+fn build_app_mono<'a>(
+    arena: &'a Bump,
+    home: ModuleId,
+    ident_ids: &mut IdentIds,
+) -> (Symbol, MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>) {
     let int_layout = Layout::Builtin(Builtin::Int(IntWidth::I32));
     let int_layout_ref = arena.alloc(int_layout);
 
-    // Abusing some constants, because all the stuff to make Symbols is private!
-    let proc_name = Symbol::USER_FUNCTION;
-    let js_call_result = Symbol::DEV_TMP;
-    let host_call_result = Symbol::DEV_TMP2;
-    let return_value = Symbol::DEV_TMP3;
+    let proc_name = create_symbol(home, ident_ids, "proc_name");
+    let js_call_result = create_symbol(home, ident_ids, "js_call_result");
+    let host_call_result = create_symbol(home, ident_ids, "host_call_result");
+    let return_value = create_symbol(home, ident_ids, "return_value");
 
     let js_call = Expr::Call(Call {
         call_type: CallType::Foreign {
@@ -102,18 +119,73 @@ fn build_app<'a>(arena: &'a Bump) -> MutMap<(Symbol, ProcLayout<'a>), Proc<'a>> 
 
     let mut app = MutMap::default();
     app.insert((proc_name, proc_layout), proc);
-    app
+
+    (proc_name, app)
 }
 
-fn build_interns() -> Interns {
-    todo!()
+struct BackendInputs<'a> {
+    env: Env<'a>,
+    interns: Interns,
+    host_module: WasmModule<'a>,
+    procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+}
+
+impl<'a> BackendInputs<'a> {
+    fn new(arena: &'a Bump) -> Self {
+        // Compile the host from an external source file
+        let host_bytes = build_host();
+        let host_module: WasmModule = roc_gen_wasm::parse_host(arena, &host_bytes).unwrap();
+
+        // Identifier stuff to build the mono IR
+        let module_name = ModuleName::from("UserApp");
+        let pkg_qualified_module_name = PackageQualified::Unqualified(module_name);
+        let mut package_module_ids = PackageModuleIds::default();
+        let module_id: ModuleId = package_module_ids.get_or_insert(&pkg_qualified_module_name);
+        let mut ident_ids = IdentIds::default();
+
+        // IR for the app
+        let (roc_main_sym, procedures) = build_app_mono(arena, module_id, &mut ident_ids);
+        let mut exposed_to_host = MutSet::default();
+        exposed_to_host.insert(roc_main_sym);
+        let env = Env {
+            arena,
+            module_id,
+            exposed_to_host,
+        };
+
+        // Identifier stuff for the backend
+        let module_ids = ModuleIds::default();
+        let mut all_ident_ids: IdentIdsByModule = IdentIds::exposed_builtins(1);
+        all_ident_ids.insert(module_id, ident_ids);
+        let interns = Interns {
+            module_ids,
+            all_ident_ids,
+        };
+
+        BackendInputs {
+            env,
+            interns,
+            host_module,
+            procedures,
+        }
+    }
 }
 
 #[test]
 fn test_linking() {
     let arena = Bump::new();
-    let host_bytes = build_host();
-    let app_mono = build_app(&arena);
-    let interns = build_interns();
-    todo!()
+
+    let BackendInputs {
+        env,
+        mut interns,
+        host_module,
+        procedures,
+    } = BackendInputs::new(&arena);
+    
+    // dbg!(host_module.import.imports.len());
+
+    let (final_module, called_preload_fns, _roc_main_index) =
+        roc_gen_wasm::build_app_module(&env, &mut interns, host_module, procedures);
+
+    // dbg!(final_module.import.imports.len());
 }
