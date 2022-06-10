@@ -172,11 +172,7 @@ impl<'a> WasmModule<'a> {
         })
     }
 
-    pub fn eliminate_dead_code<T: IntoIterator<Item = u32>>(
-        &mut self,
-        arena: &'a Bump,
-        called_preload_fns: T,
-    ) {
+    pub fn eliminate_dead_code(&mut self, arena: &'a Bump, called_preload_fns: Vec<'a, u32>) {
         //
         // Parse the host's call graph
         // TODO: speed this up by using linker data instead of parsing instruction bytes

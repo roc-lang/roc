@@ -137,11 +137,11 @@ pub fn parse_preloads_call_graph<'a>(
 /// Now we need to trace the dependency graphs of a specific subset of them
 /// Result is the full set of builtins and platform functions used in the app.
 /// The rest are "dead code" and can be eliminated.
-pub fn trace_call_graph<'a, Indices: IntoIterator<Item = u32>>(
+pub fn trace_call_graph<'a>(
     arena: &'a Bump,
     call_graph: &PreloadsCallGraph<'a>,
     exported_fns: &[u32],
-    called_from_app: Indices,
+    called_from_app: Vec<'a, u32>,
 ) -> Vec<'a, u32> {
     let num_preloads = call_graph.num_preloads;
 
