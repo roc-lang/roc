@@ -62,7 +62,7 @@ fn build_app_mono<'a>(
 
     let js_call = Expr::Call(Call {
         call_type: CallType::Foreign {
-            foreign_symbol: ForeignSymbol::from("roc_js_called_directly_from_roc"),
+            foreign_symbol: ForeignSymbol::from("js_called_directly_from_roc"),
             ret_layout: int_layout_ref,
         },
         arguments: &[Symbol::ARG_1],
@@ -70,7 +70,7 @@ fn build_app_mono<'a>(
 
     let host_call = Expr::Call(Call {
         call_type: CallType::Foreign {
-            foreign_symbol: ForeignSymbol::from("roc_host_called_directly_from_roc"),
+            foreign_symbol: ForeignSymbol::from("host_called_directly_from_roc"),
             ret_layout: int_layout_ref,
         },
         arguments: &[Symbol::ARG_1],
@@ -188,11 +188,11 @@ fn test_linking_without_dce() {
         &[
             "__linear_memory",
             "__stack_pointer",
-            "roc_js_called_indirectly_from_roc",
-            "roc_js_called_indirectly_from_main",
-            "roc_js_unused",
-            "roc_js_called_directly_from_roc",
-            "roc_js_called_directly_from_main",
+            "js_called_indirectly_from_roc",
+            "js_called_indirectly_from_main",
+            "js_unused",
+            "js_called_directly_from_roc",
+            "js_called_directly_from_main",
             "__indirect_function_table",
         ]
     );
@@ -212,11 +212,11 @@ fn test_linking_without_dce() {
     assert_eq!(
         &final_import_names,
         &[
-            "roc_js_called_indirectly_from_roc",
-            "roc_js_called_indirectly_from_main",
-            "roc_js_unused",
-            "roc_js_called_directly_from_roc",
-            "roc_js_called_directly_from_main",
+            "js_called_indirectly_from_roc",
+            "js_called_indirectly_from_main",
+            "js_unused",
+            "js_called_directly_from_roc",
+            "js_called_directly_from_main",
         ]
     );
 }
@@ -238,11 +238,11 @@ fn test_linking_with_dce() {
         &[
             "__linear_memory",
             "__stack_pointer",
-            "roc_js_called_indirectly_from_roc",
-            "roc_js_called_indirectly_from_main",
-            "roc_js_unused",
-            "roc_js_called_directly_from_roc",
-            "roc_js_called_directly_from_main",
+            "js_called_indirectly_from_roc",
+            "js_called_indirectly_from_main",
+            "js_unused",
+            "js_called_directly_from_roc",
+            "js_called_directly_from_main",
             "__indirect_function_table",
         ]
     );
@@ -258,10 +258,10 @@ fn test_linking_with_dce() {
     assert_eq!(
         &final_import_names,
         &[
-            "roc_js_called_indirectly_from_roc",
-            "roc_js_called_indirectly_from_main",
-            "roc_js_called_directly_from_roc",
-            "roc_js_called_directly_from_main",
+            "js_called_indirectly_from_roc",
+            "js_called_indirectly_from_main",
+            "js_called_directly_from_roc",
+            "js_called_directly_from_main",
         ]
     );
 }
