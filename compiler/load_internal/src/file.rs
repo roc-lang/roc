@@ -2249,10 +2249,16 @@ fn update<'a>(
                 .notify(module_id, Phase::MakeSpecializations);
 
             if work.is_empty() && state.dependencies.solved_all() {
-                if !external_specializations_requested.is_empty() {
+                if !external_specializations_requested.is_empty()
+                    || !state
+                        .module_cache
+                        .external_specializations_requested
+                        .is_empty()
+                {
                     internal_error!(
-                        "No more work left, but external specializations left over: {:?}",
-                        external_specializations_requested
+                        "No more work left, but external specializations left over: {:?}, {:?}",
+                        external_specializations_requested,
+                        state.module_cache.external_specializations_requested
                     )
                 }
 
