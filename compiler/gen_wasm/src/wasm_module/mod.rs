@@ -112,6 +112,7 @@ impl<'a> WasmModule<'a> {
         let export = ExportSection::parse(arena, bytes, &mut cursor)?;
         let start = OpaqueSection::parse((arena, SectionId::Start), bytes, &mut cursor)?;
         let element = ElementSection::parse(arena, bytes, &mut cursor)?;
+        let _data_count = OpaqueSection::parse((arena, SectionId::DataCount), bytes, &mut cursor)?;
         let code = CodeSection::parse(arena, bytes, &mut cursor)?;
         let data = DataSection::parse(arena, bytes, &mut cursor)?;
         let linking = LinkingSection::parse(arena, bytes, &mut cursor)?;
