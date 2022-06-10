@@ -761,13 +761,13 @@ pub struct {name} {{
     // The Drop impl for the tag union
     {
         let opt_impl = Some(format!("impl Drop for {name}"));
-        let mut buf = String::new();
+        let mut drop_payload = String::new();
 
         write_impl_tags(
-            2,
+            3,
             tags.iter(),
             &discriminant_name,
-            &mut buf,
+            &mut drop_payload,
             |tag_name, opt_payload_id| {
                 match opt_payload_id {
                     Some(payload_id) if types.get_type(payload_id).has_pointer(types) => {
@@ -782,12 +782,45 @@ pub struct {name} {{
             },
         );
 
-        add_decl(
-            impls,
-            opt_impl,
-            target_info,
-            format!("fn drop(&mut self) {{\n{buf}{INDENT}}}"),
-        );
+        // Drop works differently for recursive vs non-recursive tag unions.
+        let drop_fn = match recursiveness {
+            Recursiveness::Recursive => {
+                format!(
+                    r#"fn drop(&mut self) {{
+        // We only need to do any work if there's actually a heap-allocated payload.
+        if let Some(storage) = self.storage() {{
+            let mut new_storage = storage.get();
+
+            // Decrement the refcount
+            let needs_dealloc = !new_storage.is_readonly() && new_storage.decrease();
+
+            if needs_dealloc {{
+                // Drop the payload first.
+                {drop_payload}
+
+                // Dealloc the pointer
+                let alignment = core::mem::align_of::<Self>().max(core::mem::align_of::<roc_std::Storage>());
+
+                unsafe {{ crate::roc_dealloc(storage.as_ptr().cast(), alignment as u32); }}
+            }} else {{
+                // Write the storage back.
+                storage.set(new_storage);
+            }}
+        }}
+    }}"#
+                )
+            }
+            Recursiveness::NonRecursive => {
+                format!(
+                    r#"fn drop(&mut self) {{
+        // Drop the payloads
+        {drop_payload}
+    }}"#
+                )
+            }
+        };
+
+        add_decl(impls, opt_impl, target_info, drop_fn);
     }
 
     // The PartialEq impl for the tag union
@@ -1541,41 +1574,28 @@ pub struct {name} {{
             target_info,
             format!(
                 r#"fn drop(&mut self) {{
+        // We only need to do any work if there's actually a heap-allocated payload.
         if let Some(storage) = self.storage() {{
-            // Decrement the refcount and return early if no dealloc is needed
-            {{
-                let mut new_storage = storage.get();
+            let mut new_storage = storage.get();
 
-                if new_storage.is_readonly() {{
-                    return;
-                }}
+            // Decrement the refcount
+            let needs_dealloc = !new_storage.is_readonly() && new_storage.decrease();
 
-                let needs_dealloc = new_storage.decrease();
-
-                if !needs_dealloc {{
-                    // Write the storage back.
-                    storage.set(new_storage);
-
-                    return;
-                }}
-            }}
-
-            if !self.pointer.is_null() {{
-                // If there is a payload, drop it first.
-               let payload = unsafe {{ core::mem::ManuallyDrop::take(&mut *self.pointer) }};
+            if needs_dealloc {{
+                // Drop the payload first.
+                let payload = unsafe {{ core::mem::ManuallyDrop::take(&mut *self.pointer) }};
 
                 core::mem::drop::<{payload_type_name}>(payload);
-            }}
 
-            // Dealloc the pointer
-            unsafe {{
+                // Dealloc the pointer
                 let alignment = core::mem::align_of::<Self>().max(core::mem::align_of::<roc_std::Storage>());
-                let alloc_ptr = self.pointer.cast::<u8>().sub(alignment);
 
-                crate::roc_dealloc(
-                    alloc_ptr as *mut core::ffi::c_void,
-                    alignment as u32,
-                );
+                unsafe {{
+                    crate::roc_dealloc(storage.as_ptr().cast(), alignment as u32);
+                }}
+            }} else {{
+                // Write the storage back.
+                storage.set(new_storage);
             }}
         }}
     }}"#
