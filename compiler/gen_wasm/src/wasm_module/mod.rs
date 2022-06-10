@@ -14,7 +14,7 @@ pub use sections::{ConstExpr, Export, ExportType, Global, GlobalType, Signature}
 use self::dead_code::{
     copy_preloads_shrinking_dead_fns, parse_preloads_call_graph, trace_call_graph,
 };
-use self::linking::{LinkingSection, RelocationSection};
+use self::linking::{LinkingSection, RelocationSection, WasmObjectSymbol};
 use self::parse::{Parse, ParseError};
 use self::sections::{
     CodeSection, DataSection, ElementSection, ExportSection, FunctionSection, GlobalSection,
@@ -432,5 +432,50 @@ impl<'a> WasmModule<'a> {
                 .unwrap();
             debug_name.clone_from(&"linking_dummy");
         }
+    }
+
+    /// Create a name->index lookup table for host functions that may be called from the app
+    pub fn get_host_function_lookup(&self, arena: &'a Bump) -> Vec<'a, (&'a str, u32)> {
+        // Functions beginning with `roc_` go first, since they're most likely to be called
+        let roc_global_fns =
+            self.linking
+                .symbol_table
+                .iter()
+                .filter_map(|sym_info| match sym_info {
+                    SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { flags, index, name })
+                        if flags & linking::WASM_SYM_BINDING_LOCAL == 0
+                            && name.starts_with("roc_") =>
+                    {
+                        Some((*name, *index))
+                    }
+                    _ => None,
+                });
+
+        let other_global_fns =
+            self.linking
+                .symbol_table
+                .iter()
+                .filter_map(|sym_info| match sym_info {
+                    SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { flags, index, name })
+                        if flags & linking::WASM_SYM_BINDING_LOCAL == 0
+                            && !name.starts_with("roc_") =>
+                    {
+                        Some((*name, *index))
+                    }
+                    _ => None,
+                });
+
+        let import_fns = self
+            .import
+            .imports
+            .iter()
+            .filter(|import| matches!(import.description, ImportDesc::Func { .. }))
+            .enumerate()
+            .map(|(fn_index, import)| (import.name, fn_index as u32));
+
+        Vec::from_iter_in(
+            roc_global_fns.chain(other_global_fns).chain(import_fns),
+            arena,
+        )
     }
 }

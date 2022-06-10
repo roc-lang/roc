@@ -98,8 +98,7 @@ impl<'a> WasmBackend<'a> {
 
         module.code.code_builders.reserve(proc_lookup.len());
 
-        let symbol_prefix = "roc_"; // The app only links to roc_builtins.*, roc_alloc, etc.
-        let host_lookup = module.linking.name_index_map(env.arena, symbol_prefix);
+        let host_lookup = module.get_host_function_lookup(env.arena);
 
         WasmBackend {
             env,
@@ -1220,7 +1219,7 @@ impl<'a> WasmBackend<'a> {
             .host_lookup
             .iter()
             .find(|(fn_name, _)| *fn_name == name)
-            .unwrap_or_else(|| panic!("The Roc app needs to call a host function called `{}` but I can't find it!", name));
+            .unwrap_or_else(|| panic!("The Roc app tries to call `{}` but I can't find it!", name));
 
         self.called_preload_fns.push(*fn_index);
         self.code_builder
