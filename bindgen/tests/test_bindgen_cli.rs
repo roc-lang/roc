@@ -129,12 +129,6 @@ mod bindgen_cli_run {
         advanced_recursive_union:"advanced-recursive-union" => indoc!(r#"
             rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { tool: Tool::SystemTool(R4 { name: "test", num: 42 }) }), inputFiles: ["foo"] }) }
         "#),
-
-        mutually_recursive_union:"mutually-recursive-union" => indoc!(r#"
-            rbt was: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
-            `Concat (String "Hello, ") (String "World!")` is: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
-            `String "this is a test"` is: Expr::String("this is a test")
-        "#),
     }
 
     fn check_for_tests(all_fixtures: &mut roc_collections::VecSet<String>) {
