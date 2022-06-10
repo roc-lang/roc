@@ -224,17 +224,23 @@ mod with_terminator {
     fn verify_temp_c(string: &str, excess_capacity: usize) {
         let mut roc_str = RocStr::from(string);
 
+        println!("-------------1--------------");
         if excess_capacity > 0 {
             roc_str.reserve(excess_capacity);
         }
 
         // utf8_nul_terminated
         {
+            println!("-------------2--------------");
             let answer = roc_str.clone().utf8_nul_terminated(|ptr, len| {
-                let bytes = unsafe { slice::from_raw_parts(ptr.cast(), len + 1) };
+                println!("-------------3--------------");
+                let bytes = unsafe { slice::from_raw_parts(ptr, len + 1) };
+                println!("-------------4--------------");
                 let c_str = CStr::from_bytes_with_nul(bytes).unwrap();
+                println!("-------------5--------------");
 
                 assert_eq!(c_str.to_str(), Ok(string));
+                println!("-------------6--------------");
 
                 42
             });
@@ -303,10 +309,12 @@ mod with_terminator {
 
     #[test]
     fn with_excess_capacity() {
+        println!("Start!");
         // We should be able to use the excess capacity for all of these.
-        verify_temp_c(&string_for_len(33), 1);
-        verify_temp_c(&string_for_len(33), 33);
-        verify_temp_c(&string_for_len(65), 1);
-        verify_temp_c(&string_for_len(65), 64);
+        verify_temp_c(&string_for_len(33), 1); // TODO why isn't this unique?! ohh because I CLONED IT
+        println!("Success!");
+        // verify_temp_c(&string_for_len(33), 33);
+        // verify_temp_c(&string_for_len(65), 1);
+        // verify_temp_c(&string_for_len(65), 64);
     }
 }
