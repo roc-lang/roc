@@ -59,9 +59,7 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 
 #[cfg(test)]
 mod test_roc_std {
-    use roc_std::RocDec;
-    use roc_std::RocResult;
-    use roc_std::RocStr;
+    use roc_std::{RocDec, RocList, RocResult, RocStr};
 
     fn roc_str_byte_representation(string: &RocStr) -> [u8; RocStr::SIZE] {
         unsafe { core::mem::transmute_copy(string) }
@@ -123,12 +121,39 @@ mod test_roc_std {
     }
 
     #[test]
-    fn reserve() {
+    fn reserve_small_str() {
         let mut roc_str = RocStr::empty();
 
         roc_str.reserve(42);
 
         assert_eq!(roc_str.capacity(), 42);
+    }
+
+    #[test]
+    fn reserve_big_str() {
+        let mut roc_str = RocStr::empty();
+
+        roc_str.reserve(5000);
+
+        assert_eq!(roc_str.capacity(), 5000);
+    }
+
+    #[test]
+    fn reserve_small_list() {
+        let mut roc_list = RocList::<RocStr>::empty();
+
+        roc_list.reserve(42);
+
+        assert_eq!(roc_list.capacity(), 42);
+    }
+
+    #[test]
+    fn reserve_big_list() {
+        let mut roc_list = RocList::<RocStr>::empty();
+
+        roc_list.reserve(5000);
+
+        assert_eq!(roc_list.capacity(), 5000);
     }
 
     #[test]
@@ -261,8 +286,8 @@ mod with_terminator {
 
     #[test]
     fn no_excess_capacity() {
-        // // This is small enough that it should be a stack allocation for UTF-8
-        // verify_temp_c(&string_for_len(33), 0);
+        // This is small enough that it should be a stack allocation for UTF-8
+        verify_temp_c(&string_for_len(33), 0);
 
         // This is big enough that it should be a heap allocation for UTF-8 and UTF-16
         verify_temp_c(&string_for_len(65), 0);
