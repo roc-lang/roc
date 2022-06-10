@@ -126,10 +126,10 @@ pub fn emit(types_and_targets: &[(Types, TargetInfo)]) -> String {
 fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impls) {
     match types.get_type(id) {
         RocType::Struct { name, fields } => {
-            add_struct(&name, target_info, &fields, id, types, impls, false)
+            add_struct(name, target_info, fields, id, types, impls, false)
         }
         RocType::TagUnionPayload { name, fields } => {
-            add_struct(&name, target_info, &fields, id, types, impls, true)
+            add_struct(name, target_info, fields, id, types, impls, true)
         }
         RocType::TagUnion(tag_union) => {
             match tag_union {
@@ -144,7 +144,7 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                         add_decl(impls, None, target_info, body);
                     } else {
                         add_enumeration(
-                            &name,
+                            name,
                             target_info,
                             types.get_type(id),
                             tags.iter(),
@@ -172,10 +172,10 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
 
                         add_tag_union(
                             Recursiveness::NonRecursive,
-                            &name,
+                            name,
                             target_info,
                             id,
-                            &tags,
+                            tags,
                             discriminant_offset,
                             types,
                             impls,
@@ -201,10 +201,10 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
 
                         add_tag_union(
                             Recursiveness::Recursive,
-                            &name,
+                            name,
                             target_info,
                             id,
-                            &tags,
+                            tags,
                             discriminant_offset,
                             types,
                             impls,
@@ -221,11 +221,11 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                     non_null_payload,
                     null_represents_first_tag,
                 } => add_nullable_unwrapped(
-                    &name,
+                    name,
                     target_info,
                     id,
-                    &null_tag,
-                    &non_null_tag,
+                    null_tag,
+                    non_null_tag,
                     *non_null_payload,
                     *null_represents_first_tag,
                     types,
@@ -289,6 +289,7 @@ enum Recursiveness {
     NonRecursive,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn add_tag_union(
     recursiveness: Recursiveness,
     name: &str,
@@ -1572,8 +1573,7 @@ pub struct {name} {{
             impls,
             opt_impl,
             target_info,
-            format!(
-                r#"fn drop(&mut self) {{
+            r#"fn drop(&mut self) {{
         // We only need to do any work if there's actually a heap-allocated payload.
         if let Some(storage) = self.storage() {{
             let mut new_storage = storage.get();
@@ -1598,8 +1598,7 @@ pub struct {name} {{
                 storage.set(new_storage);
             }}
         }}
-    }}"#
-            ),
+    }}"#.to_string(),
         );
     }
 
