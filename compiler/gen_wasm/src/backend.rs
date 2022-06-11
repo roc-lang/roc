@@ -288,6 +288,11 @@ impl<'a> WasmBackend<'a> {
             }
         };
 
+        let mut exports = self.module.export.exports.iter();
+        if exports.find(|ex| ex.name == "_start").is_some() {
+            return;
+        }
+
         self.module.add_function_signature(Signature {
             param_types: bumpalo::vec![in self.env.arena],
             ret_type: None,
