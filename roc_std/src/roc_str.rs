@@ -152,9 +152,12 @@ impl RocStr {
 
             roc_list.reserve(bytes);
 
-            *self = RocStr(RocStrInner {
+            let mut updated = RocStr(RocStrInner {
                 heap_allocated: ManuallyDrop::new(roc_list),
             });
+
+            std::mem::swap(self, &mut updated);
+            std::mem::forget(updated);
         }
     }
 

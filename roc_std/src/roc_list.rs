@@ -154,7 +154,6 @@ where
                 if storage.get().is_unique() {
                     unsafe {
                         let old_alloc = self.ptr_to_allocation();
-                        old_elements_ptr = elements.as_ptr();
 
                         // Try to reallocate in-place.
                         let new_alloc = roc_realloc(
@@ -187,6 +186,11 @@ where
                     new_elems = Self::elems_with_capacity(new_len);
                     old_elements_ptr = elements.as_ptr();
 
+                    unsafe {
+                        // Copy the old elements to the new allocation.
+                        copy_nonoverlapping(old_elements_ptr, new_elems.as_ptr(), self.length);
+                    }
+
                     // Decrease the current allocation's reference count.
                     let mut new_storage = storage.get();
                     let needs_dealloc = new_storage.decrease();
@@ -212,16 +216,17 @@ where
             }
         }
 
-        unsafe {
-            // Copy the old elements to the new allocation.
-            copy_nonoverlapping(old_elements_ptr, new_elems.as_ptr(), self.length);
-        }
+        let length = self.length;
 
-        *self = Self {
+        let mut updated = Self {
             elements: Some(new_elems),
-            length: self.length,
+            length,
             capacity: new_len,
         };
+
+        std::mem::swap(self, &mut updated);
+
+        std::mem::forget(updated);
     }
 
     pub fn from_slice(slice: &[T]) -> Self {
