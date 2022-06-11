@@ -1,6 +1,5 @@
 use bumpalo::collections::Vec as BumpVec;
 use bumpalo::Bump;
-use roc_module::ident::{Ident, IdentStr};
 use roc_parse::{ast::CommentOrNewline, parser::SyntaxError};
 use roc_region::all::Region;
 
@@ -41,8 +40,7 @@ pub fn toplevel_defs_to_defs2<'a>(
 
                 match loc_pattern.value {
                     Identifier(id_str) => {
-                        let identifier_id =
-                            env.ident_ids.get_or_insert(&Ident(IdentStr::from(id_str)));
+                        let identifier_id = env.ident_ids.get_or_insert(id_str);
 
                         // TODO support with annotation
                         Def2::ValueDef {
@@ -164,7 +162,7 @@ pub fn def_to_def2<'a>(
 
             match loc_pattern.value {
                 Identifier(id_str) => {
-                    let identifier_id = env.ident_ids.get_or_insert(&Ident(IdentStr::from(id_str)));
+                    let identifier_id = env.ident_ids.get_or_insert(id_str);
 
                     // TODO support with annotation
                     Def2::ValueDef {

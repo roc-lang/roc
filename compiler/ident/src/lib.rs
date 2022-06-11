@@ -272,7 +272,15 @@ impl std::hash::Hash for IdentStr {
 
 impl Clone for IdentStr {
     fn clone(&self) -> Self {
-        Self::from_str(self.as_str())
+        if self.is_empty() || self.is_small_str() {
+            // we can just copy the bytes
+            Self {
+                elements: self.elements,
+                length: self.length,
+            }
+        } else {
+            Self::from_str(self.as_str())
+        }
     }
 }
 

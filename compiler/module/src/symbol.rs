@@ -1,10 +1,9 @@
 use crate::ident::{Ident, ModuleName};
 use crate::module_err::{IdentIdNotFound, ModuleIdNotFound, ModuleResult};
-use roc_collections::{default_hasher, MutMap, SendMap, SmallStringInterner, VecMap};
+use roc_collections::{SmallStringInterner, VecMap};
 use roc_ident::IdentStr;
 use roc_region::all::Region;
 use snafu::OptionExt;
-use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::{fmt, u32};
 
@@ -238,12 +237,12 @@ lazy_static! {
     /// which displays not only the Module ID, but also the Module Name which
     /// corresponds to that ID.
     ///
-    static ref DEBUG_MODULE_ID_NAMES: std::sync::Mutex<roc_collections::all::MutMap<u32, Box<str>>> =
+    static ref DEBUG_MODULE_ID_NAMES: std::sync::Mutex<roc_collections::SmallStringInterner> =
         // This stores a u32 key instead of a ModuleId key so that if there's
         // a problem with ModuleId's Debug implementation, logging this for diagnostic
         // purposes won't recursively trigger ModuleId's Debug instance in the course of printing
         // this out.
-        std::sync::Mutex::new(roc_collections::all::MutMap::default());
+        std::sync::Mutex::new(roc_collections::SmallStringInterner::with_capacity(10));
 }
 
 #[derive(Debug, Default)]
@@ -270,7 +269,7 @@ impl Interns {
         let ident: Ident = ident.into();
 
         match self.all_ident_ids.get(&module_id) {
-            Some(ident_ids) => match ident_ids.get_id(&ident) {
+            Some(ident_ids) => match ident_ids.get_id(ident.as_str()) {
                 Some(ident_id) => Symbol::new(module_id, ident_id),
                 None => {
                     panic!("Interns::symbol could not find ident entry for {:?} for module {:?} in Interns {:?}", ident, module_id, self);
@@ -319,12 +318,12 @@ lazy_static! {
     /// This is used in Debug builds only, to let us have a Debug instance
     /// which displays not only the Module ID, but also the Module Name which
     /// corresponds to that ID.
-    static ref DEBUG_IDENT_IDS_BY_MODULE_ID: std::sync::Mutex<roc_collections::all::MutMap<u32, IdentIds>> =
+    static ref DEBUG_IDENT_IDS_BY_MODULE_ID: std::sync::Mutex<roc_collections::VecMap<u32, IdentIds>> =
         // This stores a u32 key instead of a ModuleId key so that if there's
         // a problem with ModuleId's Debug implementation, logging this for diagnostic
         // purposes won't recursively trigger ModuleId's Debug instance in the course of printing
         // this out.
-        std::sync::Mutex::new(roc_collections::all::MutMap::default());
+        std::sync::Mutex::new(roc_collections::VecMap::default());
 }
 
 /// A globally unique ID that gets assigned to each module as it is loaded.
@@ -386,8 +385,8 @@ impl fmt::Debug for ModuleId {
                 .expect("Failed to acquire lock for Debug reading from DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
 
         if PRETTY_PRINT_DEBUG_SYMBOLS {
-            match names.get(&(self.to_zero_indexed() as u32)) {
-                Some(str_ref) => write!(f, "{}", str_ref.clone()),
+            match names.try_get(self.to_zero_indexed()) {
+                Some(str_ref) => write!(f, "{}", str_ref),
                 None => {
                     panic!(
                         "Could not find a Debug name for module ID {} in {:?}",
@@ -434,60 +433,49 @@ impl<'a, T> PackageQualified<'a, T> {
 
 #[derive(Debug, Clone)]
 pub struct PackageModuleIds<'a> {
-    by_name: MutMap<PQModuleName<'a>, ModuleId>,
     by_id: Vec<PQModuleName<'a>>,
 }
 
 impl<'a> PackageModuleIds<'a> {
     pub fn get_or_insert(&mut self, module_name: &PQModuleName<'a>) -> ModuleId {
-        match self.by_name.get(module_name) {
-            Some(id) => *id,
-            None => {
-                let by_id = &mut self.by_id;
-                let module_id = ModuleId::from_zero_indexed(by_id.len());
-
-                by_id.push(module_name.clone());
-
-                self.by_name.insert(module_name.clone(), module_id);
-
-                if cfg!(debug_assertions) {
-                    Self::insert_debug_name(module_id, module_name);
-                }
-
-                module_id
-            }
+        if let Some(module_id) = self.get_id(module_name) {
+            return module_id;
         }
+
+        // didn't find it, so we'll add it
+        let module_id = ModuleId::from_zero_indexed(self.by_id.len());
+        self.by_id.push(module_name.clone());
+        if cfg!(debug_assertions) {
+            Self::insert_debug_name(module_id, module_name);
+        }
+
+        module_id
     }
 
     pub fn into_module_ids(self) -> ModuleIds {
-        let by_name: MutMap<ModuleName, ModuleId> = self
-            .by_name
-            .into_iter()
-            .map(|(pqname, module_id)| (pqname.as_inner().clone(), module_id))
-            .collect();
-
         let by_id: Vec<ModuleName> = self
             .by_id
             .into_iter()
             .map(|pqname| pqname.as_inner().clone())
             .collect();
 
-        ModuleIds { by_name, by_id }
+        ModuleIds { by_id }
     }
 
     #[cfg(debug_assertions)]
     fn insert_debug_name(module_id: ModuleId, module_name: &PQModuleName) {
         let mut names = DEBUG_MODULE_ID_NAMES.lock().expect("Failed to acquire lock for Debug interning into DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
 
-        names
-            .entry(module_id.to_zero_indexed() as u32)
-            .or_insert_with(|| match module_name {
-                PQModuleName::Unqualified(module) => module.as_str().into(),
-                PQModuleName::Qualified(package, module) => {
-                    let name = format!("{}.{}", package, module.as_str()).into();
-                    name
+        if names.try_get(module_id.to_zero_indexed()).is_none() {
+            match module_name {
+                PQModuleName::Unqualified(module) => {
+                    names.insert(module.as_str());
                 }
-            });
+                PQModuleName::Qualified(package, module) => {
+                    names.insert(&format!("{}.{}", package, module.as_str()));
+                }
+            }
+        }
     }
 
     #[cfg(not(debug_assertions))]
@@ -495,8 +483,14 @@ impl<'a> PackageModuleIds<'a> {
         // By design, this is a no-op in release builds!
     }
 
-    pub fn get_id(&self, module_name: &PQModuleName<'a>) -> Option<&ModuleId> {
-        self.by_name.get(module_name)
+    pub fn get_id(&self, module_name: &PQModuleName<'a>) -> Option<ModuleId> {
+        for (index, name) in self.by_id.iter().enumerate() {
+            if name == module_name {
+                return Some(ModuleId::from_zero_indexed(index));
+            }
+        }
+
+        None
     }
 
     pub fn get_name(&self, id: ModuleId) -> Option<&PQModuleName> {
@@ -509,35 +503,26 @@ impl<'a> PackageModuleIds<'a> {
 }
 
 /// Stores a mapping between ModuleId and InlinableString.
-///
-/// Each module name is stored twice, for faster lookups.
-/// Since these are interned strings, this shouldn't result in many total allocations in practice.
 #[derive(Debug, Clone)]
 pub struct ModuleIds {
-    by_name: MutMap<ModuleName, ModuleId>,
     /// Each ModuleId is an index into this Vec
     by_id: Vec<ModuleName>,
 }
 
 impl ModuleIds {
     pub fn get_or_insert(&mut self, module_name: &ModuleName) -> ModuleId {
-        match self.by_name.get(module_name) {
-            Some(id) => *id,
-            None => {
-                let by_id = &mut self.by_id;
-                let module_id = ModuleId::from_zero_indexed(by_id.len());
-
-                by_id.push(module_name.clone());
-
-                self.by_name.insert(module_name.clone(), module_id);
-
-                if cfg!(debug_assertions) {
-                    Self::insert_debug_name(module_id, module_name);
-                }
-
-                module_id
-            }
+        if let Some(module_id) = self.get_id(module_name) {
+            return module_id;
         }
+
+        // didn't find it, so we'll add it
+        let module_id = ModuleId::from_zero_indexed(self.by_id.len());
+        self.by_id.push(module_name.clone());
+        if cfg!(debug_assertions) {
+            Self::insert_debug_name(module_id, module_name);
+        }
+
+        module_id
     }
 
     #[cfg(debug_assertions)]
@@ -545,9 +530,9 @@ impl ModuleIds {
         let mut names = DEBUG_MODULE_ID_NAMES.lock().expect("Failed to acquire lock for Debug interning into DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
 
         // TODO make sure modules are never added more than once!
-        names
-            .entry(module_id.to_zero_indexed() as u32)
-            .or_insert_with(|| module_name.as_str().to_string().into());
+        if names.try_get(module_id.to_zero_indexed()).is_none() {
+            names.insert(module_name.as_str());
+        }
     }
 
     #[cfg(not(debug_assertions))]
@@ -555,8 +540,15 @@ impl ModuleIds {
         // By design, this is a no-op in release builds!
     }
 
-    pub fn get_id(&self, module_name: &ModuleName) -> Option<&ModuleId> {
-        self.by_name.get(module_name)
+    #[inline]
+    pub fn get_id(&self, module_name: &ModuleName) -> Option<ModuleId> {
+        for (index, name) in self.by_id.iter().enumerate() {
+            if name == module_name {
+                return Some(ModuleId::from_zero_indexed(index));
+            }
+        }
+
+        None
     }
 
     pub fn get_name(&self, id: ModuleId) -> Option<&ModuleName> {
@@ -597,10 +589,6 @@ impl IdentIds {
             .map(|(index, ident)| (IdentId(index as u32), ident))
     }
 
-    pub fn add_ident(&mut self, ident_name: &Ident) -> IdentId {
-        self.add_str(ident_name.as_str())
-    }
-
     pub fn add_str(&mut self, ident_name: &str) -> IdentId {
         IdentId(self.interner.insert(ident_name) as u32)
     }
@@ -609,10 +597,10 @@ impl IdentIds {
         IdentId(self.interner.duplicate(ident_id.0 as usize) as u32)
     }
 
-    pub fn get_or_insert(&mut self, name: &Ident) -> IdentId {
+    pub fn get_or_insert(&mut self, name: &str) -> IdentId {
         match self.get_id(name) {
             Some(id) => id,
-            None => self.add_str(name.as_str()),
+            None => self.add_str(name),
         }
     }
 
@@ -637,9 +625,9 @@ impl IdentIds {
     }
 
     #[inline(always)]
-    pub fn get_id(&self, ident_name: &Ident) -> Option<IdentId> {
+    pub fn get_id(&self, ident_name: &str) -> Option<IdentId> {
         self.interner
-            .find_index(ident_name.as_str())
+            .find_index(ident_name)
             .map(|i| IdentId(i as u32))
     }
 
@@ -867,7 +855,6 @@ macro_rules! define_builtins {
                 // +1 because the user will be compiling at least 1 non-builtin module!
                 let capacity = $total + 1;
 
-                let mut by_name = HashMap::with_capacity_and_hasher(capacity, default_hasher());
                 let mut by_id = Vec::with_capacity(capacity);
 
                 let mut insert_both = |id: ModuleId, name_str: &'static str| {
@@ -877,7 +864,6 @@ macro_rules! define_builtins {
                         Self::insert_debug_name(id, &name);
                     }
 
-                    by_name.insert(name.clone(), id);
                     by_id.push(name);
                 };
 
@@ -885,7 +871,7 @@ macro_rules! define_builtins {
                     insert_both(ModuleId::$module_const, $module_name);
                 )+
 
-                ModuleIds { by_name, by_id }
+                ModuleIds {  by_id }
             }
         }
 
@@ -894,7 +880,6 @@ macro_rules! define_builtins {
                 // +1 because the user will be compiling at least 1 non-builtin module!
                 let capacity = $total + 1;
 
-                let mut by_name = HashMap::with_capacity_and_hasher(capacity, default_hasher());
                 let mut by_id = Vec::with_capacity(capacity);
 
                 let mut insert_both = |id: ModuleId, name_str: &'static str| {
@@ -905,7 +890,6 @@ macro_rules! define_builtins {
                         Self::insert_debug_name(id, &name);
                     }
 
-                    by_name.insert(name.clone(), id);
                     by_id.push(name);
                 };
 
@@ -913,7 +897,7 @@ macro_rules! define_builtins {
                     insert_both(ModuleId::$module_const, $module_name);
                 )+
 
-                PackageModuleIds { by_name, by_id }
+                PackageModuleIds { by_id }
             }
         }
 
@@ -928,8 +912,8 @@ macro_rules! define_builtins {
             /// and what symbols they should resolve to.
             ///
             /// This is for type aliases like `Int` and `Str` and such.
-            pub fn default_in_scope() -> SendMap<Ident, (Symbol, Region)> {
-                let mut scope = SendMap::default();
+            pub fn default_in_scope() -> VecMap<Ident, (Symbol, Region)> {
+                let mut scope = VecMap::default();
 
                 $(
                     $(

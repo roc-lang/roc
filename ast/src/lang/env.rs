@@ -109,13 +109,11 @@ impl<'a> Env<'a> {
         let module_name: ModuleName = module_name.into();
 
         match self.module_ids.get_id(&module_name) {
-            Some(&module_id) => {
-                let ident: Ident = ident.into();
-
+            Some(module_id) => {
                 // You can do qualified lookups on your own module, e.g.
                 // if I'm in the Foo module, I can do a `Foo.bar` lookup.
                 if module_id == self.home {
-                    match self.ident_ids.get_id(&ident) {
+                    match self.ident_ids.get_id(ident) {
                         Some(ident_id) => {
                             let symbol = Symbol::new(module_id, ident_id);
 
@@ -125,7 +123,7 @@ impl<'a> Env<'a> {
                         }
                         None => Err(RuntimeError::LookupNotInScope(
                             Loc {
-                                value: ident,
+                                value: Ident::from(ident),
                                 region,
                             },
                             self.ident_ids
@@ -136,7 +134,7 @@ impl<'a> Env<'a> {
                     }
                 } else {
                     match self.dep_idents.get(&module_id) {
-                        Some(exposed_ids) => match exposed_ids.get_id(&ident) {
+                        Some(exposed_ids) => match exposed_ids.get_id(ident) {
                             Some(ident_id) => {
                                 let symbol = Symbol::new(module_id, ident_id);
 
@@ -154,7 +152,7 @@ impl<'a> Env<'a> {
                                     .collect();
                                 Err(RuntimeError::ValueNotExposed {
                                     module_name,
-                                    ident,
+                                    ident: Ident::from(ident),
                                     region,
                                     exposed_values,
                                 })

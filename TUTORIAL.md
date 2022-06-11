@@ -322,8 +322,8 @@ addAndStringify = \counts ->
     Num.toStr (counts.birds + counts.iguanas)
 ```
 
-This works because `addWithStringify` only uses `counts.birds` and `counts.iguanas`.
-If we were to use `counts.note` inside `addWithStringify`, then we would get an error
+This works because `addAndStringify` only uses `counts.birds` and `counts.iguanas`.
+If we were to use `counts.note` inside `addAndStringify`, then we would get an error
 because `total` is calling `addAndStringify` passing a record that doesn't have a `note` field.
 
 Record fields can have any combination of types we want. `totalWithNote` uses a record that
