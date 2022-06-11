@@ -628,9 +628,7 @@ pub fn resolve_ability_specialization(
     // Figure out the ability we're resolving in a temporary subs snapshot.
     let snapshot = subs.snapshot();
 
-    let signature_var = member_def
-        .signature_var()
-        .unwrap_or_else(|| internal_error!("Signature var not resolved for {:?}", ability_member));
+    let signature_var = member_def.signature_var();
 
     instantiate_rigids(subs, signature_var);
     let (_vars, must_implement_ability, _lambda_sets_to_specialize) =
