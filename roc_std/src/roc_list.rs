@@ -166,6 +166,9 @@ where
                         if new_alloc == old_alloc {
                             // We successfully reallocated in-place; we're done!
                             return;
+                        } else if new_alloc.is_null() {
+                            roc_dealloc(old_alloc, Self::alloc_alignment());
+                            panic!("realloc failed");
                         } else {
                             // We got back a different allocation; copy the existing elements
                             // into it. We don't need to increment their refcounts because

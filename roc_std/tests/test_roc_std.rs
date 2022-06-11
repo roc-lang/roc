@@ -191,7 +191,7 @@ mod test_roc_std {
 
     #[test]
     fn create_roc_box() {
-        let contents = 42;
+        let contents = 42i32;
         let roc_box = RocBox::new(contents);
 
         assert_eq!(roc_box.into_inner(), contents)
