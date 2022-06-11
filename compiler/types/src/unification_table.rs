@@ -1,3 +1,5 @@
+use std::hint::unreachable_unchecked;
+
 use crate::subs::{Content, Descriptor, Mark, OptVariable, Rank, Variable, VariableSubsSlice};
 
 #[derive(Clone, Default)]
@@ -9,20 +11,28 @@ pub struct UnificationTable {
 pub struct Snapshot(UnificationTable);
 
 #[derive(Debug, Clone, Copy)]
-struct Combine {
-    redirect: OptVariable,
+enum Combine {
+    Redirect(Variable),
+    Root(Root),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Root {
     rank: Rank,
     mark: Mark,
     copy: OptVariable,
 }
 
-impl Combine {
+impl Root {
     const NONE: Self = Self {
-        redirect: OptVariable::NONE,
         rank: Rank::NONE,
         mark: Mark::NONE,
         copy: OptVariable::NONE,
     };
+}
+
+impl Combine {
+    const NONE: Self = Self::Root(Root::NONE);
 }
 
 impl UnificationTable {
@@ -66,12 +76,7 @@ impl UnificationTable {
 
         self.contents.push(content);
 
-        let combine = Combine {
-            redirect: OptVariable::NONE,
-            rank,
-            mark,
-            copy,
-        };
+        let combine = Combine::Root(Root { rank, mark, copy });
 
         self.metadata.push(combine);
 
@@ -103,33 +108,28 @@ impl UnificationTable {
 
         self.contents[index] = content;
 
-        self.metadata[index] = Combine {
-            redirect: OptVariable::NONE,
-            rank,
-            mark,
-            copy,
-        };
+        self.metadata[index] = Combine::Root(Root { rank, mark, copy });
     }
 
     pub fn modify<F, T>(&mut self, key: Variable, mapper: F) -> T
     where
         F: FnOnce(&mut Descriptor) -> T,
     {
-        let root = self.root_key(key);
-        let index = root.index() as usize;
+        let root_key = self.root_key(key);
+        let index = root_key.index() as usize;
 
-        let combine = &self.metadata[index];
+        let root = self.get_root_unchecked(root_key);
 
         let mut desc = Descriptor {
             content: self.contents[index],
-            rank: combine.rank,
-            mark: combine.mark,
-            copy: combine.copy,
+            rank: root.rank,
+            mark: root.mark,
+            copy: root.copy,
         };
 
         let result = mapper(&mut desc);
 
-        self.set_unchecked(root, desc.content, desc.rank, desc.mark, desc.copy);
+        self.set_unchecked(root_key, desc.content, desc.rank, desc.mark, desc.copy);
 
         result
     }
@@ -137,19 +137,33 @@ impl UnificationTable {
     // GET UNCHECKED
 
     #[inline(always)]
+    pub fn get_root_unchecked(&self, key: Variable) -> Root {
+        match self.metadata[key.index() as usize] {
+            Combine::Root(root) => root,
+            Combine::Redirect(_) => {
+                if cfg!(debug_assertions) {
+                    unreachable!("unchecked access on non-root variable {:?}", key);
+                } else {
+                    unsafe { unreachable_unchecked() }
+                }
+            }
+        }
+    }
+
+    #[inline(always)]
     pub fn get_rank_unchecked(&self, key: Variable) -> Rank {
-        self.metadata[key.index() as usize].rank
+        self.get_root_unchecked(key).rank
     }
 
     #[inline(always)]
     pub fn get_mark_unchecked(&self, key: Variable) -> Mark {
-        self.metadata[key.index() as usize].mark
+        self.get_root_unchecked(key).mark
     }
 
     #[allow(unused)]
     #[inline(always)]
     pub fn get_copy_unchecked(&self, key: Variable) -> OptVariable {
-        self.metadata[key.index() as usize].copy
+        self.get_root_unchecked(key).copy
     }
 
     #[inline(always)]
@@ -160,19 +174,33 @@ impl UnificationTable {
     // GET CHECKED
 
     #[inline(always)]
+    pub fn get_root(&self, key: Variable) -> Root {
+        let root_key = self.root_key_without_compacting(key);
+        match self.metadata[root_key.index() as usize] {
+            Combine::Root(root) => root,
+            Combine::Redirect(_) => {
+                if cfg!(debug_assertions) {
+                    unreachable!("the root key {:?} is not actually a root key", root_key);
+                } else {
+                    unsafe { unreachable_unchecked() }
+                }
+            }
+        }
+    }
+
+    #[inline(always)]
     pub fn get_rank(&self, key: Variable) -> Rank {
-        self.metadata[self.root_key_without_compacting(key).index() as usize].rank
+        self.get_root(key).rank
     }
 
     #[inline(always)]
     pub fn get_mark(&self, key: Variable) -> Mark {
-        self.metadata[self.root_key_without_compacting(key).index() as usize].mark
+        self.get_root(key).mark
     }
 
     #[inline(always)]
     pub fn get_copy(&self, key: Variable) -> OptVariable {
-        let index = self.root_key_without_compacting(key).index() as usize;
-        self.metadata[index].copy
+        self.get_root(key).copy
     }
 
     #[inline(always)]
@@ -183,19 +211,36 @@ impl UnificationTable {
     // SET UNCHECKED
 
     #[inline(always)]
+    pub fn modify_root_unchecked<F, T>(&mut self, key: Variable, f: F) -> T
+    where
+        F: Fn(&mut Root) -> T,
+    {
+        match &mut self.metadata[key.index() as usize] {
+            Combine::Root(root) => f(root),
+            Combine::Redirect(_) => {
+                if cfg!(debug_assertions) {
+                    unreachable!("unchecked access on non-root variable {:?}", key);
+                } else {
+                    unsafe { unreachable_unchecked() }
+                }
+            }
+        }
+    }
+
+    #[inline(always)]
     pub fn set_rank_unchecked(&mut self, key: Variable, value: Rank) {
-        self.metadata[key.index() as usize].rank = value;
+        self.modify_root_unchecked(key, |root| root.rank = value)
     }
 
     #[inline(always)]
     pub fn set_mark_unchecked(&mut self, key: Variable, value: Mark) {
-        self.metadata[key.index() as usize].mark = value;
+        self.modify_root_unchecked(key, |root| root.mark = value)
     }
 
     #[allow(unused)]
     #[inline(always)]
     pub fn set_copy_unchecked(&mut self, key: Variable, value: OptVariable) {
-        self.metadata[key.index() as usize].copy = value;
+        self.modify_root_unchecked(key, |root| root.copy = value)
     }
 
     #[allow(unused)]
@@ -208,20 +253,20 @@ impl UnificationTable {
 
     #[inline(always)]
     pub fn set_rank(&mut self, key: Variable, value: Rank) {
-        let index = self.root_key(key).index() as usize;
-        self.metadata[index].rank = value;
+        let root_key = self.root_key(key);
+        self.modify_root_unchecked(root_key, |root| root.rank = value)
     }
 
     #[inline(always)]
     pub fn set_mark(&mut self, key: Variable, value: Mark) {
-        let index = self.root_key(key).index() as usize;
-        self.metadata[index].mark = value;
+        let root_key = self.root_key(key);
+        self.modify_root_unchecked(root_key, |root| root.mark = value)
     }
 
     #[inline(always)]
     pub fn set_copy(&mut self, key: Variable, value: OptVariable) {
-        let index = self.root_key(key).index() as usize;
-        self.metadata[index].copy = value;
+        let root_key = self.root_key(key);
+        self.modify_root_unchecked(root_key, |root| root.copy = value)
     }
 
     #[inline(always)]
@@ -236,16 +281,9 @@ impl UnificationTable {
     pub fn root_key(&mut self, mut key: Variable) -> Variable {
         let root = self.root_key_without_compacting(key);
 
-        while root != key {
-            let next_key = std::mem::replace(
-                &mut self.metadata[key.index() as usize].redirect,
-                OptVariable::from(root),
-            );
-
-            match next_key.into_variable() {
-                Some(redirect) => key = redirect,
-                None => break, // no redirect; we've found the root
-            }
+        while let Combine::Redirect(redirect) = &mut self.metadata[key.index() as usize] {
+            key = *redirect;
+            *redirect = root;
         }
 
         root
@@ -253,7 +291,7 @@ impl UnificationTable {
 
     #[inline(always)]
     pub fn root_key_without_compacting(&self, mut key: Variable) -> Variable {
-        while let Some(redirect) = self.metadata[key.index() as usize].redirect.into_variable() {
+        while let Combine::Redirect(redirect) = self.metadata[key.index() as usize] {
             key = redirect;
         }
 
@@ -278,7 +316,7 @@ impl UnificationTable {
     }
 
     pub fn is_redirect(&self, key: Variable) -> bool {
-        self.metadata[key.index() as usize].redirect.is_some()
+        matches!(self.metadata[key.index() as usize], Combine::Redirect(_))
     }
 
     pub fn unioned(&mut self, a: Variable, b: Variable) -> bool {
@@ -288,11 +326,13 @@ impl UnificationTable {
     // custom very specific helpers
     #[inline(always)]
     pub fn get_rank_set_mark(&mut self, key: Variable, mark: Mark) -> Rank {
-        let index = self.root_key(key).index() as usize;
-        let metadata = &mut self.metadata[index];
+        let root_key = self.root_key(key);
 
-        metadata.mark = mark;
-        metadata.rank
+        self.modify_root_unchecked(root_key, |root| {
+            root.mark = mark;
+
+            root.rank
+        })
     }
 
     /// NOTE: assumes variables are root
@@ -302,7 +342,7 @@ impl UnificationTable {
 
         // redirect from -> to
         if from_index != to_index {
-            self.metadata[from_index].redirect = OptVariable::from(to);
+            self.metadata[from_index] = Combine::Redirect(to)
         }
 
         // update to's Descriptor
@@ -310,14 +350,16 @@ impl UnificationTable {
     }
 
     pub fn get_descriptor(&self, key: Variable) -> Descriptor {
-        let index = self.root_key_without_compacting(key).index() as usize;
-        let metadata = self.metadata[index];
+        let root_key = self.root_key_without_compacting(key);
+        let index = root_key.index() as usize;
+
+        let root = self.get_root_unchecked(root_key);
 
         Descriptor {
             content: self.contents[index],
-            rank: metadata.rank,
-            mark: metadata.mark,
-            copy: metadata.copy,
+            rank: root.rank,
+            mark: root.mark,
+            copy: root.copy,
         }
     }
 
@@ -340,10 +382,24 @@ impl UnificationTable {
         let mut redirects = Vec::new();
 
         for c in self.metadata.iter() {
-            ranks.push(c.rank);
-            marks.push(c.mark);
-            copies.push(c.copy);
-            redirects.push(c.redirect);
+            match c {
+                Combine::Redirect(redirect) => {
+                    let root = Root::NONE;
+
+                    ranks.push(root.rank);
+                    marks.push(root.mark);
+                    copies.push(root.copy);
+
+                    redirects.push(OptVariable::from(*redirect));
+                }
+                Combine::Root(root) => {
+                    ranks.push(root.rank);
+                    marks.push(root.mark);
+                    copies.push(root.copy);
+
+                    redirects.push(OptVariable::NONE);
+                }
+            }
         }
 
         written = Subs::serialize_slice(&ranks, writer, written)?;
@@ -371,12 +427,16 @@ impl UnificationTable {
             .zip(copies.iter())
             .zip(redirects.iter());
         for (((rank, mark), copy), redirect) in it {
-            metadata.push(Combine {
-                redirect: *redirect,
-                rank: *rank,
-                mark: *mark,
-                copy: *copy,
-            });
+            match redirect.into_variable() {
+                Some(redirect) => metadata.push(Combine::Redirect(redirect)),
+                None => {
+                    metadata.push(Combine::Root(Root {
+                        rank: *rank,
+                        mark: *mark,
+                        copy: *copy,
+                    }));
+                }
+            }
         }
 
         let this = Self {
