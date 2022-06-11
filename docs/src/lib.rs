@@ -527,13 +527,11 @@ fn type_annotation_to_html(indent_level: usize, buf: &mut String, type_ann: &Typ
             if parts.is_empty() {
                 buf.push_str(name);
             } else {
-                buf.push('(');
                 buf.push_str(name);
                 for part in parts {
                     buf.push(' ');
                     type_annotation_to_html(indent_level, buf, part);
                 }
-                buf.push(')');
             }
         }
         TypeAnnotation::Record { fields, extension } => {
