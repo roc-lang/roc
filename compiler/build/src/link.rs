@@ -421,7 +421,6 @@ pub fn rebuild_host(
     let env_home = env::var("HOME").unwrap_or_else(|_| "".to_string());
     let env_cpath = env::var("CPATH").unwrap_or_else(|_| "".to_string());
 
-
     if zig_host_src.exists() {
         // Compile host.zig
 
