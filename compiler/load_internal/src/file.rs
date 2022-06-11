@@ -2233,6 +2233,8 @@ fn update<'a>(
             layout_cache,
             ..
         } => {
+            debug_assert!(state.goal_phase == Phase::MakeSpecializations);
+
             log!("made specializations for {:?}", module_id);
 
             // in the future, layouts will be in SoA form and we'll want to hold on to this data
@@ -2245,10 +2247,22 @@ fn update<'a>(
                 .dependencies
                 .notify(module_id, Phase::MakeSpecializations);
 
-            if work.is_empty()
-                && state.dependencies.solved_all()
-                && state.goal_phase == Phase::MakeSpecializations
-            {
+            if work.is_empty() && state.dependencies.solved_all() {
+                if !external_specializations_requested.is_empty()
+                    || !state
+                        .module_cache
+                        .external_specializations_requested
+                        .is_empty()
+                {
+                    internal_error!(
+                        "No more work left, but external specializations left over: {:?}, {:?}",
+                        external_specializations_requested,
+                        state.module_cache.external_specializations_requested
+                    )
+                }
+
+                log!("specializations complete from {:?}", module_id);
+
                 debug_print_ir!(state, ROC_PRINT_IR_AFTER_SPECIALIZATION);
 
                 Proc::insert_reset_reuse_operations(
@@ -2282,19 +2296,6 @@ fn update<'a>(
 
                 state.constrained_ident_ids.insert(module_id, ident_ids);
 
-                for (module_id, requested) in external_specializations_requested {
-                    let existing = match state
-                        .module_cache
-                        .external_specializations_requested
-                        .entry(module_id)
-                    {
-                        Vacant(entry) => entry.insert(vec![]),
-                        Occupied(entry) => entry.into_mut(),
-                    };
-
-                    existing.push(requested);
-                }
-
                 // use the subs of the root module;
                 // this is used in the repl to find the type of `main`
                 let subs = if module_id == state.root_id {
@@ -2311,9 +2312,7 @@ fn update<'a>(
                     })
                     .map_err(|_| LoadingProblem::MsgChannelDied)?;
 
-                // As far as type-checking goes, once we've solved
-                // the originally requested module, we're all done!
-                return Ok(state);
+                Ok(state)
             } else {
                 // record the subs of the root module;
                 // this is used in the repl to find the type of `main`
@@ -2337,9 +2336,9 @@ fn update<'a>(
                 }
 
                 start_tasks(arena, &mut state, work, injector, worker_listeners)?;
-            }
 
-            Ok(state)
+                Ok(state)
+            }
         }
         Msg::FinishedAllTypeChecking { .. } => {
             unreachable!();
