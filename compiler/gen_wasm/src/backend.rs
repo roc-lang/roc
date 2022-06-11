@@ -55,7 +55,7 @@ pub struct WasmBackend<'a> {
     pub fn_index_offset: u32,
     called_preload_fns: Vec<'a, u32>,
     pub proc_lookup: Vec<'a, ProcLookupData<'a>>,
-    host_lookup: Vec<'a, (&'a str, u32)>,
+    host_lookup: Vec<'a, (u32, &'a str)>,
     helper_proc_gen: CodeGenHelp<'a>,
     can_relocate_heap: bool,
 
@@ -99,6 +99,10 @@ impl<'a> WasmBackend<'a> {
         module.code.code_builders.reserve(proc_lookup.len());
 
         let host_lookup = module.get_host_function_lookup(env.arena);
+        if module.names.function_names.is_empty() {
+            module.names.function_names = host_lookup.clone();
+            module.names.function_names.sort_by_key(|(idx, _name)| *idx);
+        }
 
         WasmBackend {
             env,
@@ -1215,10 +1219,10 @@ impl<'a> WasmBackend<'a> {
         num_wasm_args: usize,
         has_return_val: bool,
     ) {
-        let (_, fn_index) = self
+        let (fn_index, _) = self
             .host_lookup
             .iter()
-            .find(|(fn_name, _)| *fn_name == name)
+            .find(|(_, fn_name)| *fn_name == name)
             .unwrap_or_else(|| panic!("The Roc app tries to call `{}` but I can't find it!", name));
 
         self.called_preload_fns.push(*fn_index);
