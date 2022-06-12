@@ -202,7 +202,6 @@ impl<'a> WasmBackend<'a> {
 
                     module.reloc_code.apply_relocs_u32(
                         &mut module.code.preloaded_bytes,
-                        module.code.preloaded_reloc_offset,
                         sym_index as u32,
                         global_value_addr,
                     );

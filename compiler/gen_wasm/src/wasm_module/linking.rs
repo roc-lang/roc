@@ -167,13 +167,7 @@ impl<'a> RelocationSection<'a> {
         }
     }
 
-    pub fn apply_relocs_u32(
-        &self,
-        section_bytes: &mut [u8],
-        section_bytes_offset: u32,
-        sym_index: u32,
-        value: u32,
-    ) {
+    pub fn apply_relocs_u32(&self, section_bytes: &mut [u8], sym_index: u32, value: u32) {
         for entry in self.entries.iter() {
             match entry {
                 RelocationEntry::Index {
@@ -182,7 +176,7 @@ impl<'a> RelocationSection<'a> {
                     symbol_index,
                 } if *symbol_index == sym_index => {
                     use IndexRelocType::*;
-                    let idx = (*offset - section_bytes_offset) as usize;
+                    let idx = *offset as usize;
                     match type_id {
                         FunctionIndexLeb | TypeIndexLeb | GlobalIndexLeb | EventIndexLeb
                         | TableNumberLeb => {
@@ -198,7 +192,7 @@ impl<'a> RelocationSection<'a> {
                     addend,
                 } if *symbol_index == sym_index => {
                     use OffsetRelocType::*;
-                    let idx = (*offset - section_bytes_offset) as usize;
+                    let idx = *offset as usize;
                     match type_id {
                         MemoryAddrLeb => {
                             overwrite_padded_u32(&mut section_bytes[idx..], value + *addend as u32);

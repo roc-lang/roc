@@ -257,7 +257,6 @@ impl<'a> WasmModule<'a> {
                 .unwrap();
             self.reloc_code.apply_relocs_u32(
                 &mut self.code.preloaded_bytes,
-                self.code.preloaded_reloc_offset,
                 sym_index,
                 new_index as u32,
             );
@@ -385,7 +384,6 @@ impl<'a> WasmModule<'a> {
             .map(|sym_index| {
                 self.reloc_code.apply_relocs_u32(
                     &mut self.code.preloaded_bytes,
-                    self.code.preloaded_reloc_offset,
                     sym_index as u32,
                     value,
                 );
@@ -453,7 +451,6 @@ impl<'a> WasmModule<'a> {
             // Update calls to use the app function instead of the host import
             self.reloc_code.apply_relocs_u32(
                 &mut self.code.preloaded_bytes,
-                self.code.preloaded_reloc_offset,
                 host_sym_index,
                 app_fn_index,
             );
@@ -471,7 +468,6 @@ impl<'a> WasmModule<'a> {
                 // Update calls to the swapped JS import
                 self.reloc_code.apply_relocs_u32(
                     &mut self.code.preloaded_bytes,
-                    self.code.preloaded_reloc_offset,
                     swap_sym_index,
                     host_fn_index as u32,
                 );

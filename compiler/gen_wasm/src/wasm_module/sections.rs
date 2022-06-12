@@ -1161,7 +1161,6 @@ impl<'a> Serialize for ElementSection<'a> {
 #[derive(Debug)]
 pub struct CodeSection<'a> {
     pub preloaded_count: u32,
-    pub preloaded_reloc_offset: u32,
     pub preloaded_bytes: Vec<'a, u8>,
     /// The start of each preloaded function
     pub preloaded_offsets: Vec<'a, u32>,
@@ -1195,12 +1194,12 @@ impl<'a> CodeSection<'a> {
         let function_bodies_start = *cursor;
         let next_section_start = section_body_start + section_size as usize;
 
-        // `preloaded_bytes` is offset from the start of the section, since we skip the function count.
-        // When we do relocations, we need to account for this offset, so let's record it here.
-        let preloaded_reloc_offset = (function_bodies_start - section_body_start) as u32;
-
+        // preloaded_bytes starts at the function count, since that's considered the zero offset in the linker data.
+        // But when we finally write to file, we'll exclude the function count and write our own, including app fns.
         let mut preloaded_bytes =
             Vec::with_capacity_in(next_section_start - function_bodies_start, arena);
+        preloaded_bytes.extend_from_slice(&module_bytes[section_body_start..*cursor]);
+
         let mut preloaded_offsets = Vec::with_capacity_in(count as usize, arena);
 
         // While copying the code bytes, also note where each function starts & ends
@@ -1210,7 +1209,7 @@ impl<'a> CodeSection<'a> {
             preloaded_offsets.push((fn_start - section_body_start) as u32);
             let fn_length = u32::parse((), module_bytes, cursor)? as usize;
             *cursor += fn_length;
-            preloaded_bytes.extend_from_slice(&module_bytes[fn_start..][..fn_length]);
+            preloaded_bytes.extend_from_slice(&module_bytes[fn_start..*cursor]);
         }
         preloaded_offsets.push(next_section_start as u32); // also note where the last fn ends
 
@@ -1218,7 +1217,6 @@ impl<'a> CodeSection<'a> {
 
         Ok(CodeSection {
             preloaded_count: count,
-            preloaded_reloc_offset,
             preloaded_bytes,
             preloaded_offsets,
             dead_import_dummy_count: 0,
@@ -1243,7 +1241,8 @@ impl<'a> Serialize for CodeSection<'a> {
         }
 
         // host + builtin functions
-        buffer.append_slice(&self.preloaded_bytes);
+        let first_fn_start = self.preloaded_offsets[0] as usize;
+        buffer.append_slice(&self.preloaded_bytes[first_fn_start..]);
 
         // Roc functions
         for code_builder in self.code_builders.iter() {
