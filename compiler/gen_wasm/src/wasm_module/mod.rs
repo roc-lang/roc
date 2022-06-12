@@ -353,6 +353,11 @@ impl<'a> WasmModule<'a> {
             for fn_index in current_pass_fns.iter().copied() {
                 live_flags.set(fn_index as usize, true);
 
+                // Skip JS imports and Roc functions
+                if fn_index < host_fn_min || fn_index >= host_fn_max {
+                    continue;
+                }
+
                 // Find where the function body is
                 let offset_index = (fn_index - host_fn_min) as usize;
                 let code_start = self.code.preloaded_offsets[offset_index];

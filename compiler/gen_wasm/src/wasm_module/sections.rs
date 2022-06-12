@@ -1211,7 +1211,7 @@ impl<'a> CodeSection<'a> {
             *cursor += fn_length;
             preloaded_bytes.extend_from_slice(&module_bytes[fn_start..*cursor]);
         }
-        preloaded_offsets.push(next_section_start as u32); // also note where the last fn ends
+        preloaded_offsets.push((next_section_start - section_body_start) as u32);
 
         debug_assert_eq!(preloaded_offsets.len(), 1 + count as usize);
 

@@ -17,7 +17,7 @@ use roc_std::RocDec;
 use crate::layout::{CallConv, ReturnMethod, WasmLayout};
 use crate::low_level::{call_higher_order_lowlevel, LowLevelCall};
 use crate::storage::{Storage, StoredValue, StoredValueKind};
-use crate::wasm_module::linking::{self, DataSymbol, WasmObjectSymbol};
+use crate::wasm_module::linking::{DataSymbol, WasmObjectSymbol};
 use crate::wasm_module::sections::{
     ConstExpr, DataMode, DataSegment, Export, Global, GlobalType, Import, ImportDesc, Limits,
     MemorySection,
@@ -277,19 +277,27 @@ impl<'a> WasmBackend<'a> {
         };
 
         let main_fn_index: u32 = match &self.module.linking.symbol_table[main_symbol_index] {
-            SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { flags, index, .. })
-                if flags & linking::WASM_SYM_BINDING_LOCAL == 0 =>
-            {
-                *index
-            }
+            SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { index, .. }) => *index,
             _ => {
                 return;
             }
         };
+        dbg!(main_fn_index);
 
-        let mut exports = self.module.export.exports.iter();
-        if exports.any(|ex| ex.name == "_start") {
-            return;
+        match self.module.linking.find_internal_symbol("_start") {
+            Ok(sym_index) => {
+                let index = match self.module.linking.symbol_table[sym_index] {
+                    SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { index, .. }) => index,
+                    _ => panic!("linker symbol `_start` is not a function"),
+                };
+                self.module.export.append(Export {
+                    name: "_start",
+                    ty: ExportType::Func,
+                    index,
+                });
+                return;
+            }
+            _ => {}
         }
 
         self.module.add_function_signature(Signature {
