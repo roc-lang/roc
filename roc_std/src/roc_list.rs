@@ -210,23 +210,17 @@ where
             }
             None => {
                 // This is an empty list, so `reserve` is the same as `with_capacity`.
-                *self = Self::with_capacity(new_len);
+                self.update_to(Self::with_capacity(new_len));
 
                 return;
             }
         }
 
-        let length = self.length;
-
-        let mut updated = Self {
+        self.update_to(Self {
             elements: Some(new_elems),
-            length,
+            length: self.length,
             capacity: new_len,
-        };
-
-        std::mem::swap(self, &mut updated);
-
-        std::mem::forget(updated);
+        });
     }
 
     pub fn from_slice(slice: &[T]) -> Self {
@@ -311,6 +305,16 @@ where
         }
 
         self.capacity = self.length
+    }
+
+    /// Replace self with a new version, without letting `drop` run in between.
+    fn update_to(&mut self, mut updated: Self) {
+        // We want to replace `self` with `updated` in a way that makes sure
+        // `self`'s `drop` never runs. This is the proper way to do that:
+        // swap them, and then forget the "updated" one (which is now pointing
+        // to the original allocation).
+        mem::swap(self, &mut updated);
+        mem::forget(updated);
     }
 }
 
