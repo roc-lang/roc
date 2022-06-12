@@ -12,6 +12,8 @@ pub use sections::{ConstExpr, Export, ExportType, Global, GlobalType, Signature}
 use bitvec::vec::BitVec;
 use bumpalo::{collections::Vec, Bump};
 
+use crate::DEBUG_SETTINGS;
+
 use self::linking::{IndexRelocType, LinkingSection, RelocationSection, WasmObjectSymbol};
 use self::parse::{Parse, ParseError};
 use self::sections::{
@@ -171,6 +173,9 @@ impl<'a> WasmModule<'a> {
     }
 
     pub fn eliminate_dead_code(&mut self, arena: &'a Bump, called_host_fns: &[u32]) {
+        if DEBUG_SETTINGS.skip_dead_code_elim {
+            return;
+        }
         //
         // Mark all live host functions
         //

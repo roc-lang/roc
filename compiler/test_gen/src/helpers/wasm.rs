@@ -3,7 +3,7 @@ use crate::helpers::from_wasmer_memory::FromWasmerMemory;
 use roc_collections::all::MutSet;
 use roc_gen_wasm::wasm32_result::Wasm32Result;
 use roc_gen_wasm::wasm_module::{Export, ExportType};
-use roc_gen_wasm::{DEBUG_LOG_SETTINGS, MEMORY_NAME};
+use roc_gen_wasm::{DEBUG_SETTINGS, MEMORY_NAME};
 use roc_load::Threading;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -45,7 +45,7 @@ pub fn compile_and_load<'a, T: Wasm32Result>(
     let compiled_bytes =
         compile_roc_to_wasm_bytes(arena, &platform_bytes, src, test_wrapper_type_info);
 
-    if DEBUG_LOG_SETTINGS.keep_test_binary {
+    if DEBUG_SETTINGS.keep_test_binary {
         let build_dir_hash = src_hash(src);
         save_wasm_file(&compiled_bytes, build_dir_hash)
     };

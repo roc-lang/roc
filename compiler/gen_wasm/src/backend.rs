@@ -26,7 +26,7 @@ use crate::wasm_module::{
     code_builder, CodeBuilder, ExportType, LocalId, Signature, SymInfo, ValueType, WasmModule,
 };
 use crate::{
-    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, DEBUG_LOG_SETTINGS, MEMORY_NAME,
+    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, DEBUG_SETTINGS, MEMORY_NAME,
     PTR_SIZE, PTR_TYPE, TARGET_INFO,
 };
 
@@ -362,7 +362,7 @@ impl<'a> WasmBackend<'a> {
     ***********************************************************/
 
     pub fn build_proc(&mut self, proc: &Proc<'a>) {
-        if DEBUG_LOG_SETTINGS.proc_start_end {
+        if DEBUG_SETTINGS.proc_start_end {
             println!("\ngenerating procedure {:?}\n", proc.name);
         }
 
@@ -375,7 +375,7 @@ impl<'a> WasmBackend<'a> {
         self.finalize_proc();
         self.reset();
 
-        if DEBUG_LOG_SETTINGS.proc_start_end {
+        if DEBUG_SETTINGS.proc_start_end {
             println!("\nfinished generating {:?}\n", proc.name);
         }
     }
@@ -431,7 +431,7 @@ impl<'a> WasmBackend<'a> {
             self.storage.stack_frame_pointer,
         );
 
-        if DEBUG_LOG_SETTINGS.storage_map {
+        if DEBUG_SETTINGS.storage_map {
             println!("\nStorage:");
             for (sym, storage) in self.storage.symbol_storage_map.iter() {
                 println!("{:?} => {:?}", sym, storage);
@@ -639,7 +639,7 @@ impl<'a> WasmBackend<'a> {
     fn stmt_let(&mut self, stmt: &Stmt<'a>) {
         let mut current_stmt = stmt;
         while let Stmt::Let(sym, expr, layout, following) = current_stmt {
-            if DEBUG_LOG_SETTINGS.let_stmt_ir {
+            if DEBUG_SETTINGS.let_stmt_ir {
                 println!("let {:?} = {}", sym, expr.to_pretty(200)); // ignore `following`! Too confusing otherwise.
             }
 
