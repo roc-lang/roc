@@ -155,7 +155,6 @@ where
                 if storage.get().is_unique() {
                     unsafe {
                         let old_alloc = self.ptr_to_allocation();
-                        old_elements_ptr = elements.as_ptr();
 
                         // Try to reallocate in-place.
                         let new_alloc = roc_realloc(
@@ -188,6 +187,11 @@ where
                     new_elems = Self::elems_with_capacity(new_len);
                     old_elements_ptr = elements.as_ptr();
 
+                    unsafe {
+                        // Copy the old elements to the new allocation.
+                        copy_nonoverlapping(old_elements_ptr, new_elems.as_ptr(), self.length);
+                    }
+
                     // Decrease the current allocation's reference count.
                     let mut new_storage = storage.get();
 
@@ -210,22 +214,17 @@ where
             }
             None => {
                 // This is an empty list, so `reserve` is the same as `with_capacity`.
-                *self = Self::with_capacity(new_len);
+                self.update_to(Self::with_capacity(new_len));
 
                 return;
             }
         }
 
-        unsafe {
-            // Copy the old elements to the new allocation.
-            copy_nonoverlapping(old_elements_ptr, new_elems.as_ptr(), self.length);
-        }
-
-        *self = Self {
+        self.update_to(Self {
             elements: Some(new_elems),
             length: self.length,
             capacity: new_len,
-        };
+        });
     }
 
     pub fn from_slice(slice: &[T]) -> Self {
@@ -310,6 +309,16 @@ where
         }
 
         self.capacity = self.length
+    }
+
+    /// Replace self with a new version, without letting `drop` run in between.
+    fn update_to(&mut self, mut updated: Self) {
+        // We want to replace `self` with `updated` in a way that makes sure
+        // `self`'s `drop` never runs. This is the proper way to do that:
+        // swap them, and then forget the "updated" one (which is now pointing
+        // to the original allocation).
+        mem::swap(self, &mut updated);
+        mem::forget(updated);
     }
 }
 

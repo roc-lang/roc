@@ -7,6 +7,9 @@ use core::num::NonZeroIsize;
 /// once it has been stabilized.
 const REFCOUNT_1: NonZeroIsize = unsafe { NonZeroIsize::new_unchecked(isize::MIN) };
 
+const _ASSERT_STORAGE_SIZE: () =
+    assert!(std::mem::size_of::<isize>() == std::mem::size_of::<Storage>());
+
 #[derive(Clone, Copy, Debug)]
 pub enum Storage {
     Readonly,

@@ -1,10 +1,11 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use core::{
+    cmp,
     convert::TryFrom,
     fmt,
-    hash::Hash,
-    mem::{size_of, ManuallyDrop},
+    hash::{self, Hash},
+    mem::{self, size_of, ManuallyDrop},
     ops::{Deref, DerefMut},
     ptr,
 };
@@ -152,9 +153,12 @@ impl RocStr {
 
             roc_list.reserve(bytes);
 
-            *self = RocStr(RocStrInner {
+            let mut updated = RocStr(RocStrInner {
                 heap_allocated: ManuallyDrop::new(roc_list),
             });
+
+            mem::swap(self, &mut updated);
+            mem::forget(updated);
         }
     }
 
@@ -459,11 +463,18 @@ impl RocStr {
                                 debug_assert!(align_of::<Storage>() >= align_of::<E>());
 
                                 // We happen to have sufficient excess capacity already,
-                                // so we will be able to write the UTF-16 chars as well as
+                                // so we will be able to write the new elements as well as
                                 // the terminator into the existing allocation.
                                 let ptr = roc_list.ptr_to_allocation() as *mut E;
+                                let answer = terminate(ptr, self.as_str());
 
-                                terminate(ptr, self.as_str())
+                                // We cannot rely on the RocStr::drop implementation, because
+                                // it tries to use the refcount - which we just overwrote
+                                // with string bytes.
+                                mem::forget(self);
+                                crate::roc_dealloc(ptr.cast(), mem::align_of::<E>() as u32);
+
+                                answer
                             } else {
                                 // We didn't have sufficient excess capacity already,
                                 // so we need to do either a new stack allocation or a new
@@ -565,13 +576,13 @@ impl PartialEq for RocStr {
 impl Eq for RocStr {}
 
 impl PartialOrd for RocStr {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         self.as_str().partial_cmp(other.as_str())
     }
 }
 
 impl Ord for RocStr {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
         self.as_str().cmp(other.as_str())
     }
 }
@@ -693,7 +704,7 @@ impl DerefMut for SmallString {
 }
 
 impl Hash for RocStr {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
         self.as_str().hash(state)
     }
 }

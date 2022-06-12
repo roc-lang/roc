@@ -1242,7 +1242,7 @@ pub struct Env<'a, 'i> {
     pub target_info: TargetInfo,
     pub update_mode_ids: &'i mut UpdateModeIds,
     pub call_specialization_counter: u32,
-    pub abilities_store: &'i mut AbilitiesStore,
+    pub abilities_store: &'i AbilitiesStore,
 }
 
 impl<'a, 'i> Env<'a, 'i> {

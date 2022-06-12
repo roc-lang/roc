@@ -158,7 +158,7 @@ fn generate_entry_docs<'a>(
                 ValueDef::Annotation(loc_pattern, loc_ann) => {
                     if let Pattern::Identifier(identifier) = loc_pattern.value {
                         // Check if the definition is exposed
-                        if ident_ids.get_id(&identifier.into()).is_some() {
+                        if ident_ids.get_id(identifier).is_some() {
                             let name = identifier.to_string();
                             let doc_def = DocDef {
                                 name,
@@ -179,7 +179,7 @@ fn generate_entry_docs<'a>(
                 } => {
                     if let Pattern::Identifier(identifier) = ann_pattern.value {
                         // Check if the definition is exposed
-                        if ident_ids.get_id(&identifier.into()).is_some() {
+                        if ident_ids.get_id(identifier).is_some() {
                             let doc_def = DocDef {
                                 name: identifier.to_string(),
                                 type_annotation: type_to_docs(false, ann_type.value),

@@ -1,4 +1,4 @@
-use crate::abilities::AbilitiesStore;
+use crate::abilities::PendingAbilitiesStore;
 use crate::annotation::canonicalize_annotation;
 use crate::def::{canonicalize_toplevel_defs, sort_can_defs, Declaration, Def};
 use crate::effect_module::HostedGeneratedFunctions;
@@ -30,7 +30,7 @@ pub struct Module {
     /// all aliases. `bool` indicates whether it is exposed
     pub aliases: MutMap<Symbol, (bool, Alias)>,
     pub rigid_variables: RigidVariables,
-    pub abilities_store: AbilitiesStore,
+    pub abilities_store: PendingAbilitiesStore,
 }
 
 #[derive(Debug, Default)]
@@ -167,7 +167,7 @@ pub fn canonicalize_module_defs<'a>(
     exposed_ident_ids: IdentIds,
     dep_idents: &'a IdentIdsByModule,
     aliases: MutMap<Symbol, Alias>,
-    imported_abilities_state: AbilitiesStore,
+    imported_abilities_state: PendingAbilitiesStore,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     exposed_symbols: &VecSet<Symbol>,
     symbols_from_requires: &[(Loc<Symbol>, Loc<TypeAnnotation<'a>>)],

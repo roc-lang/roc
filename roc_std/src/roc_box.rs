@@ -18,7 +18,7 @@ pub struct RocBox<T> {
 impl<T> RocBox<T> {
     pub fn new(contents: T) -> Self {
         let alignment = Self::alloc_alignment();
-        let bytes = mem::size_of_val(&contents) + alignment;
+        let bytes = mem::size_of::<T>() + alignment;
 
         let ptr = unsafe { roc_alloc(bytes, alignment as u32) };
 
@@ -27,11 +27,8 @@ impl<T> RocBox<T> {
         }
 
         // Initialize the reference count.
-        unsafe {
-            let storage_ptr = ptr.cast::<Storage>();
-
-            storage_ptr.write(Storage::new_reference_counted());
-        }
+        let refcount_one = Storage::new_reference_counted();
+        unsafe { ptr.cast::<Storage>().write(refcount_one) };
 
         let contents = unsafe {
             let contents_ptr = ptr.cast::<u8>().add(alignment).cast::<T>();
@@ -57,12 +54,14 @@ impl<T> RocBox<T> {
     }
 
     fn storage(&self) -> &Cell<Storage> {
+        let alignment = Self::alloc_alignment();
+
         unsafe {
             &*self
                 .contents
                 .as_ptr()
                 .cast::<u8>()
-                .sub(mem::size_of::<T>())
+                .sub(alignment)
                 .cast::<Cell<Storage>>()
         }
     }
