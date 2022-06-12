@@ -462,18 +462,19 @@ impl RocStr {
                                 debug_assert!(align_of::<Storage>() >= align_of::<E>());
 
                                 // We happen to have sufficient excess capacity already,
-                                // so we will be able to write the UTF-16 chars as well as
+                                // so we will be able to write the new elements as well as
                                 // the terminator into the existing allocation.
                                 let ptr = roc_list.ptr_to_allocation() as *mut E;
+                                let answer = terminate(ptr, self.as_str());
 
-                                let result = terminate(ptr, self.as_str());
+                                // We cannot rely on the RocStr::drop implementation, because
+                                // it tries to use the refcount - which we just overwrote
+                                // with string bytes.
 
-                                // we cannot rely on the RocStr::drop implementation, because the
-                                // refcount was overwritten with string bytes
                                 std::mem::forget(self);
                                 crate::roc_dealloc(ptr.cast(), std::mem::align_of::<E>() as u32);
 
-                                result
+                                answer
                             } else {
                                 // We didn't have sufficient excess capacity already,
                                 // so we need to do either a new stack allocation or a new
