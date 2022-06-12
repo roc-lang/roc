@@ -5,6 +5,8 @@ pub mod parse;
 pub mod sections;
 pub mod serialize;
 
+use std::iter::repeat;
+
 pub use code_builder::{Align, CodeBuilder, LocalId, ValueType, VmSymbolState};
 pub use linking::{OffsetRelocType, RelocationEntry, SymInfo};
 pub use sections::{ConstExpr, Export, ExportType, Global, GlobalType, Signature};
@@ -211,35 +213,38 @@ impl<'a> WasmModule<'a> {
         // Remove all unused JS imports
         // We don't want to force the web page to provide dummy JS functions, it's a pain!
         //
-
+        let mut live_import_fns = Vec::with_capacity_in(self.import.imports.len(), arena);
         let mut fn_index = 0;
         self.import.imports.retain(|import| {
             if !matches!(import.description, ImportDesc::Func { .. }) {
                 true
             } else {
                 let live = live_flags[fn_index];
+                if live {
+                    live_import_fns.push(fn_index);
+                }
                 fn_index += 1;
                 live
             }
         });
 
-        //
-        // Update function signatures & debug names for imports that changed index
-        //
-        let live_import_fns = Vec::from_iter_in(
-            live_flags
-                .iter_ones()
-                .take_while(|i| *i < self.import.imports.len()),
-            arena,
-        );
-        for (new_index, old_index) in live_import_fns.iter().enumerate() {
-            // Safe because `old_index >= new_index`
-            self.function.signatures[new_index] = self.function.signatures[*old_index];
-            self.names.function_names[new_index] = self.names.function_names[*old_index];
-        }
-        let first_dead_import_index = live_import_fns.last().map(|x| x + 1).unwrap_or(0) as u32;
-        for i in first_dead_import_index..host_fn_min {
-            self.names.function_names[i as usize] = (i, "unused_host_import");
+        // signatures
+        let live_import_count = live_import_fns.len();
+        let dead_import_count = host_fn_min as usize - live_import_count;
+        let signature_count = self.function.signatures.len();
+        self.function
+            .signatures
+            .extend(repeat(0).take(dead_import_count));
+        self.function
+            .signatures
+            .copy_within(0..signature_count, dead_import_count);
+
+        // debug names
+        for (new_index, &old_index) in live_import_fns.iter().enumerate() {
+            let old_name: &str = self.names.function_names[old_index].1;
+            let new_name: &str = self.names.function_names[new_index].1;
+            self.names.function_names[new_index].1 = old_name;
+            self.names.function_names[old_index].1 = new_name;
         }
 
         //
