@@ -1018,9 +1018,9 @@ enum ElementSegmentFormatId {
 
 /// A Segment initialises a subrange of elements in a table. Normally there's just one Segment.
 #[derive(Debug)]
-struct ElementSegment<'a> {
-    offset: ConstExpr, // The starting table index for the segment
-    fn_indices: Vec<'a, u32>,
+pub struct ElementSegment<'a> {
+    pub offset: ConstExpr, // The starting table index for the segment
+    pub fn_indices: Vec<'a, u32>,
 }
 
 impl<'a> ElementSegment<'a> {
@@ -1076,7 +1076,7 @@ impl<'a> Serialize for ElementSegment<'a> {
 /// The only currently supported Element type is a function reference, used for indirect calls.
 #[derive(Debug)]
 pub struct ElementSection<'a> {
-    segments: Vec<'a, ElementSegment<'a>>,
+    pub segments: Vec<'a, ElementSegment<'a>>,
 }
 
 impl<'a> ElementSection<'a> {
@@ -1115,14 +1115,6 @@ impl<'a> ElementSection<'a> {
     /// Approximate serialized byte size (for buffer capacity)
     pub fn size(&self) -> usize {
         self.segments.iter().map(|seg| seg.size()).sum()
-    }
-
-    pub fn indirect_callees(&self, arena: &'a Bump) -> Vec<'a, u32> {
-        let mut result = bumpalo::vec![in arena];
-        for segment in self.segments.iter() {
-            result.extend_from_slice(&segment.fn_indices);
-        }
-        result
     }
 }
 
@@ -1171,6 +1163,8 @@ pub struct CodeSection<'a> {
     pub preloaded_count: u32,
     pub preloaded_reloc_offset: u32,
     pub preloaded_bytes: Vec<'a, u8>,
+    /// The start of each preloaded function
+    pub preloaded_offsets: Vec<'a, u32>,
     /// Dead imports are replaced with dummy functions in CodeSection
     pub dead_import_dummy_count: u32,
     pub code_builders: Vec<'a, CodeBuilder<'a>>,
@@ -1196,27 +1190,37 @@ impl<'a> CodeSection<'a> {
         }
         *cursor += 1;
         let section_size = u32::parse((), module_bytes, cursor)?;
-        let count_start = *cursor;
+        let section_body_start = *cursor;
         let count = u32::parse((), module_bytes, cursor)?;
         let function_bodies_start = *cursor;
-        let next_section_start = count_start + section_size as usize;
-        *cursor = next_section_start;
+        let next_section_start = section_body_start + section_size as usize;
 
         // `preloaded_bytes` is offset from the start of the section, since we skip the function count.
         // When we do relocations, we need to account for this offset, so let's record it here.
-        let preloaded_reloc_offset = (function_bodies_start - count_start) as u32;
+        let preloaded_reloc_offset = (function_bodies_start - section_body_start) as u32;
 
-        let preloaded_bytes = Vec::from_iter_in(
-            module_bytes[function_bodies_start..next_section_start]
-                .iter()
-                .copied(),
-            arena,
-        );
+        let mut preloaded_bytes =
+            Vec::with_capacity_in(next_section_start - function_bodies_start, arena);
+        let mut preloaded_offsets = Vec::with_capacity_in(count as usize, arena);
+
+        // While copying the code bytes, also note where each function starts & ends
+        // Later we will use this for dead code elimination
+        while *cursor < next_section_start {
+            let fn_start = *cursor;
+            preloaded_offsets.push((fn_start - section_body_start) as u32);
+            let fn_length = u32::parse((), module_bytes, cursor)? as usize;
+            *cursor += fn_length;
+            preloaded_bytes.extend_from_slice(&module_bytes[fn_start..][..fn_length]);
+        }
+        preloaded_offsets.push(next_section_start as u32); // also note where the last fn ends
+
+        debug_assert_eq!(preloaded_offsets.len(), 1 + count as usize);
 
         Ok(CodeSection {
             preloaded_count: count,
             preloaded_reloc_offset,
             preloaded_bytes,
+            preloaded_offsets,
             dead_import_dummy_count: 0,
             code_builders: Vec::with_capacity_in(0, arena),
         })

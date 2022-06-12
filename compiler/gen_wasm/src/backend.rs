@@ -289,7 +289,7 @@ impl<'a> WasmBackend<'a> {
         };
 
         let mut exports = self.module.export.exports.iter();
-        if exports.find(|ex| ex.name == "_start").is_some() {
+        if exports.any(|ex| ex.name == "_start") {
             return;
         }
 

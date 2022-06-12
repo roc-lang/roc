@@ -1,20 +1,18 @@
 pub mod code_builder;
-mod dead_code;
 pub mod linking;
 pub mod opcodes;
 pub mod parse;
 pub mod sections;
 pub mod serialize;
 
-use bumpalo::{collections::Vec, Bump};
 pub use code_builder::{Align, CodeBuilder, LocalId, ValueType, VmSymbolState};
 pub use linking::{OffsetRelocType, RelocationEntry, SymInfo};
 pub use sections::{ConstExpr, Export, ExportType, Global, GlobalType, Signature};
 
-use self::dead_code::{
-    copy_preloads_shrinking_dead_fns, parse_preloads_call_graph, trace_call_graph,
-};
-use self::linking::{LinkingSection, RelocationSection, WasmObjectSymbol};
+use bitvec::vec::BitVec;
+use bumpalo::{collections::Vec, Bump};
+
+use self::linking::{IndexRelocType, LinkingSection, RelocationSection, WasmObjectSymbol};
 use self::parse::{Parse, ParseError};
 use self::sections::{
     CodeSection, DataSection, ElementSection, ExportSection, FunctionSection, GlobalSection,
@@ -172,84 +170,71 @@ impl<'a> WasmModule<'a> {
         })
     }
 
-    pub fn eliminate_dead_code(&mut self, arena: &'a Bump, called_preload_fns: Vec<'a, u32>) {
+    pub fn eliminate_dead_code(&mut self, arena: &'a Bump, called_host_fns: &[u32]) {
         //
-        // Parse the host's call graph
-        // TODO: speed this up by using linker data instead of parsing instruction bytes
+        // Mark all live host functions
         //
-        let indirect_callees = self.element.indirect_callees(arena);
-        let import_signatures = self.import.function_signatures(arena);
-        let preloads_call_graph = parse_preloads_call_graph(
-            arena,
-            &self.code.preloaded_bytes,
-            &import_signatures,
-            &self.function.signatures,
-            &indirect_callees,
-        )
-        .unwrap();
+        let host_fn_min = self.import.imports.len() as u32 + self.code.dead_import_dummy_count;
+        let host_fn_max = host_fn_min + self.code.preloaded_count;
 
-        //
-        // Trace all live host functions, using the call graph
-        // Start with the functions called from Roc, and those exported to JS
-        //
-        let exported_fn_iter = self
+        // All functions exported to JS must be kept alive
+        let exported_fns = self
             .export
             .exports
             .iter()
             .filter(|ex| ex.ty == ExportType::Func)
             .map(|ex| ex.index);
-        let exported_fn_indices = Vec::from_iter_in(exported_fn_iter, arena);
-        let live_preload_fns = trace_call_graph(
-            arena,
-            &preloads_call_graph,
-            &exported_fn_indices,
-            called_preload_fns,
-        );
 
-        //
-        // Categorise the live functions as either imports from JS, or internal Wasm functions
-        //
-        let host_import_count =
-            self.import.imports.len() + self.code.dead_import_dummy_count as usize;
-        let split_at = live_preload_fns
+        // We conservatively assume that all functions declared as indirectly callable, are live
+        let indirect_callees = self
+            .element
+            .segments
             .iter()
-            .position(|f| *f as usize >= host_import_count)
-            .unwrap_or(live_preload_fns.len());
-        let mut live_import_fns = live_preload_fns;
-        let live_wasm_fns = live_import_fns.split_off(split_at);
+            .flat_map(|seg| seg.fn_indices.iter().copied());
+
+        // Trace callees of the live functions, and mark those as live too
+        let live_flags = self.trace_live_host_functions(
+            arena,
+            called_host_fns,
+            exported_fns,
+            indirect_callees,
+            host_fn_min,
+            host_fn_max,
+        );
 
         //
         // Remove all unused JS imports
         // We don't want to force the web page to provide dummy JS functions, it's a pain!
         //
+
         let mut fn_index = 0;
-        let mut live_index = 0;
         self.import.imports.retain(|import| {
             if !matches!(import.description, ImportDesc::Func { .. }) {
                 true
-            } else if live_index >= live_import_fns.len() {
-                false
             } else {
-                let retain = live_import_fns[live_index] == fn_index;
-                if retain {
-                    live_index += 1;
-                }
+                let live = live_flags[fn_index];
                 fn_index += 1;
-                retain
+                live
             }
         });
 
         //
         // Update function signatures & debug names for imports that changed index
         //
+        let live_import_fns = Vec::from_iter_in(
+            live_flags
+                .iter_ones()
+                .take_while(|i| *i < self.import.imports.len()),
+            arena,
+        );
         for (new_index, old_index) in live_import_fns.iter().enumerate() {
             // Safe because `old_index >= new_index`
-            self.function.signatures[new_index] = self.function.signatures[*old_index as usize];
-            self.names.function_names[new_index] = self.names.function_names[*old_index as usize];
+            self.function.signatures[new_index] = self.function.signatures[*old_index];
+            self.names.function_names[new_index] = self.names.function_names[*old_index];
         }
-        let first_dead_import_index = live_import_fns.last().map(|x| x + 1).unwrap_or(0) as usize;
-        for i in first_dead_import_index..host_import_count {
-            self.names.function_names[i] = (i as u32, "unused_host_import");
+        let first_dead_import_index = live_import_fns.last().map(|x| x + 1).unwrap_or(0) as u32;
+        for i in first_dead_import_index..host_fn_min {
+            self.names.function_names[i as usize] = (i, "unused_host_import");
         }
 
         //
@@ -257,20 +242,19 @@ impl<'a> WasmModule<'a> {
         // This must happen *before* we run dead code elimination on the code section,
         // so that byte offsets in the host's linking data will still be valid.
         //
-        for (i, old_index) in live_import_fns.iter().enumerate() {
-            let new_index = i as u32;
-            if new_index == *old_index {
+        for (new_index, &old_index) in live_import_fns.iter().enumerate() {
+            if new_index == old_index {
                 continue;
             }
             let sym_index = self
                 .linking
-                .find_and_reindex_imported_fn(*old_index, new_index)
+                .find_and_reindex_imported_fn(old_index as u32, new_index as u32)
                 .unwrap();
             self.reloc_code.apply_relocs_u32(
                 &mut self.code.preloaded_bytes,
                 self.code.preloaded_reloc_offset,
                 sym_index,
-                new_index,
+                new_index as u32,
             );
         }
 
@@ -278,31 +262,116 @@ impl<'a> WasmModule<'a> {
         // For every eliminated JS import, insert a dummy Wasm function at the same index.
         // This avoids shifting the indices of Wasm functions, which would require more linking work.
         //
-        let dead_import_count = host_import_count - live_import_fns.len();
-        self.code.dead_import_dummy_count += dead_import_count as u32;
+        let dead_import_count = host_fn_min - live_import_fns.len() as u32;
+        self.code.dead_import_dummy_count += dead_import_count;
 
         //
         // Dead code elimination. Replace dead functions with tiny dummies.
-        // This avoids changing function indices, which would require more linking work.
+        // This is fast. Live function indices are unchanged, so no relocations are needed.
         //
+        let dummy = CodeBuilder::dummy(arena);
+        let mut dummy_bytes = Vec::with_capacity_in(dummy.size(), arena);
+        dummy.serialize(&mut dummy_bytes);
+
         let mut buffer = Vec::with_capacity_in(self.code.preloaded_bytes.len(), arena);
-        copy_preloads_shrinking_dead_fns(
-            arena,
-            &mut buffer,
-            &preloads_call_graph,
-            &self.code.preloaded_bytes,
-            host_import_count,
-            live_wasm_fns,
-        );
+        for (i, fn_index) in (host_fn_min..host_fn_max).enumerate() {
+            if live_flags[fn_index as usize] {
+                let code_start = self.code.preloaded_offsets[i] as usize;
+                let code_end = self.code.preloaded_offsets[i + 1] as usize;
+                buffer.extend_from_slice(&self.code.preloaded_bytes[code_start..code_end]);
+            } else {
+                buffer.extend_from_slice(&dummy_bytes);
+            }
+        }
+
         self.code.preloaded_bytes = buffer;
     }
 
-    pub fn get_exported_global_u32(&self, name: &str) -> Option<u32> {
-        self.export
-            .exports
-            .iter()
-            .find(|ex| ex.name == name)
-            .and_then(|ex| self.global.parse_u32_at_index(ex.index).ok())
+    fn trace_live_host_functions<E: Iterator<Item = u32>, I: Iterator<Item = u32>>(
+        &self,
+        arena: &'a Bump,
+        called_host_fns: &[u32],
+        exported_fns: E,
+        indirectly_called_fns: I,
+        host_fn_min: u32,
+        host_fn_max: u32,
+    ) -> BitVec<usize> {
+        let call_offsets_and_symbols: Vec<(u32, u32)> = Vec::from_iter_in(
+            self.reloc_code
+                .entries
+                .iter()
+                .filter_map(|entry| match entry {
+                    RelocationEntry::Index {
+                        type_id: IndexRelocType::FunctionIndexLeb,
+                        offset,
+                        symbol_index,
+                    } => Some((*offset, *symbol_index)),
+                    _ => None,
+                }),
+            arena,
+        );
+
+        // Create a fast lookup from symbol index to function index, for the inner loop below
+        // (Do all the matching and dereferencing outside the loop)
+        let symbol_fn_indices: Vec<'a, u32> = Vec::from_iter_in(
+            self.linking
+                .symbol_table
+                .iter()
+                .map(|sym_info| match sym_info {
+                    SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { index, .. }) => *index,
+                    SymInfo::Function(WasmObjectSymbol::ImplicitlyNamed { index, .. }) => *index,
+                    _ => u32::MAX, // just use a dummy value for non-function symbols
+                }),
+            arena,
+        );
+
+        // Loop variables for the main loop below
+        let capacity = host_fn_max as usize + self.code.code_builders.len();
+        let mut live_flags = BitVec::repeat(false, capacity);
+        let mut next_pass_fns = Vec::with_capacity_in(capacity, arena);
+        let mut current_pass_fns = Vec::with_capacity_in(capacity, arena);
+
+        // Start with everything called from Roc and everything exported to JS
+        // Also include everything that can be indirectly called (crude, but good enough!)
+        current_pass_fns.extend(
+            called_host_fns
+                .iter()
+                .copied()
+                .chain(exported_fns)
+                .chain(indirectly_called_fns),
+        );
+
+        while !current_pass_fns.is_empty() {
+            current_pass_fns.sort_unstable();
+            current_pass_fns.dedup();
+
+            // For each live function in the current pass
+            for fn_index in current_pass_fns.iter().copied() {
+                live_flags.set(fn_index as usize, true);
+
+                // Find where the function body is
+                let offset_index = (fn_index - host_fn_min) as usize;
+                let code_start = self.code.preloaded_offsets[offset_index];
+                let code_end = self.code.preloaded_offsets[offset_index + 1];
+
+                // For each call in the body
+                for (offset, symbol) in call_offsets_and_symbols.iter() {
+                    if *offset > code_start && *offset < code_end {
+                        // Find out which other function is being called
+                        let called_fn_index = symbol_fn_indices[*symbol as usize];
+
+                        // If it's not already marked live, include it in the next pass
+                        if !live_flags[called_fn_index as usize] {
+                            next_pass_fns.push(called_fn_index);
+                        }
+                    }
+                }
+            }
+            current_pass_fns.clone_from(&next_pass_fns);
+            next_pass_fns.clear();
+        }
+
+        live_flags
     }
 
     pub fn relocate_internal_symbol(&mut self, sym_name: &str, value: u32) -> Result<u32, String> {

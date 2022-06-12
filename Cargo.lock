@@ -3827,6 +3827,7 @@ dependencies = [
 name = "roc_gen_wasm"
 version = "0.1.0"
 dependencies = [
+ "bitvec 1.0.0",
  "bumpalo",
  "roc_builtins",
  "roc_collections",

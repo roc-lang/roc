@@ -251,7 +251,7 @@ fn test_linking_with_dce() {
     let (mut final_module, called_preload_fns, _roc_main_index) =
         roc_gen_wasm::build_app_module(&env, &mut interns, host_module, procedures);
 
-    final_module.eliminate_dead_code(env.arena, called_preload_fns);
+    final_module.eliminate_dead_code(env.arena, &called_preload_fns);
 
     let final_import_names = Vec::from_iter(final_module.import.imports.iter().map(|i| i.name));
 
