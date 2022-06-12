@@ -283,6 +283,7 @@ impl<'a> WasmModule<'a> {
         dummy.serialize(&mut dummy_bytes);
 
         let mut buffer = Vec::with_capacity_in(self.code.preloaded_bytes.len(), arena);
+        self.code.preloaded_count.serialize(&mut buffer);
         for (i, fn_index) in (host_fn_min..host_fn_max).enumerate() {
             if live_flags[fn_index as usize] {
                 let code_start = self.code.preloaded_offsets[i] as usize;
