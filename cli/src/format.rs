@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::FormatMode;
 use bumpalo::Bump;
 use roc_error_macros::{internal_error, user_error};
-use roc_fmt::def::fmt_def;
+use roc_fmt::def::fmt_toplevel_defs;
 use roc_fmt::module::fmt_module;
 use roc_fmt::spaces::RemoveSpaces;
 use roc_fmt::{Ast, Buf};
@@ -71,7 +71,7 @@ pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), Str
             user_error!("Unexpected parse failure when parsing this formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, e)
         }));
         let mut buf = Buf::new_in(&arena);
-        fmt_all(&arena, &mut buf, ast);
+        fmt_all(&mut buf, ast);
 
         let reparsed_ast = arena.alloc(parse_all(&arena, buf.as_str()).unwrap_or_else(|e| {
             let mut fail_file = file.clone();
@@ -118,7 +118,7 @@ pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), Str
 
         // Now verify that the resultant formatting is _stable_ - i.e. that it doesn't change again if re-formatted
         let mut reformatted_buf = Buf::new_in(&arena);
-        fmt_all(&arena, &mut reformatted_buf, reparsed_ast);
+        fmt_all(&mut reformatted_buf, reparsed_ast);
         if buf.as_str() != reformatted_buf.as_str() {
             let mut unstable_1_file = file.clone();
             unstable_1_file.set_extension("roc-format-unstable-1");
@@ -163,11 +163,10 @@ fn parse_all<'a>(arena: &'a Bump, src: &'a str) -> Result<Ast<'a>, SyntaxError<'
     Ok(Ast { module, defs })
 }
 
-fn fmt_all<'a>(arena: &'a Bump, buf: &mut Buf<'a>, ast: &'a Ast) {
+fn fmt_all<'a>(buf: &mut Buf<'a>, ast: &'a Ast) {
     fmt_module(buf, &ast.module);
-    for def in &ast.defs {
-        fmt_def(buf, arena.alloc(def.value), 0);
-    }
+
+    fmt_toplevel_defs(buf, &ast.defs, 0);
 
     buf.fmt_end_of_file();
 }

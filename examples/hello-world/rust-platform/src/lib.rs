@@ -3,6 +3,7 @@
 use core::ffi::c_void;
 use roc_std::RocStr;
 use std::ffi::CStr;
+use std::mem::ManuallyDrop;
 use std::os::raw::c_char;
 
 extern "C" {
@@ -56,7 +57,10 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
     unsafe {
-        let mut roc_str = RocStr::default();
+        // ManuallyDrop must be used here in order to prevent the RocStr from
+        // getting dropped as soon as it's no longer referenced anywhere, which
+        // happens earlier than the libc::write that receives a pointer to its data.
+        let mut roc_str = ManuallyDrop::new(RocStr::default());
         roc_main(&mut roc_str);
 
         let len = roc_str.len();
@@ -65,6 +69,8 @@ pub extern "C" fn rust_main() -> i32 {
         if libc::write(1, str_bytes, len) < 0 {
             panic!("Writing to stdout failed!");
         }
+
+        ManuallyDrop::drop(&mut roc_str)
     }
 
     // Exit code

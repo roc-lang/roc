@@ -1,46 +1,54 @@
-[
-    @0-24 SpaceAfter(
-        SpaceBefore(
-            Value(
-                Body(
-                    @0-4 Identifier(
-                        "main",
-                    ),
-                    @11-24 SpaceBefore(
-                        Defs(
-                            [
-                                @11-17 Value(
-                                    Body(
-                                        @11-12 Identifier(
-                                            "i",
-                                        ),
-                                        @15-17 Num(
-                                            "64",
-                                        ),
-                                    ),
+Defs {
+    tags: [
+        Index(2147483648),
+    ],
+    regions: [
+        @0-24,
+    ],
+    space_before: [
+        Slice(start = 0, length = 0),
+    ],
+    space_after: [
+        Slice(start = 0, length = 1),
+    ],
+    spaces: [
+        Newline,
+    ],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @0-4 Identifier(
+                "main",
+            ),
+            @11-24 SpaceBefore(
+                Defs(
+                    [
+                        @11-17 Value(
+                            Body(
+                                @11-12 Identifier(
+                                    "i",
                                 ),
-                            ],
-                            @23-24 SpaceBefore(
-                                Var {
-                                    module_name: "",
-                                    ident: "i",
-                                },
-                                [
-                                    Newline,
-                                    Newline,
-                                ],
+                                @15-17 Num(
+                                    "64",
+                                ),
                             ),
                         ),
+                    ],
+                    @23-24 SpaceBefore(
+                        Var {
+                            module_name: "",
+                            ident: "i",
+                        },
                         [
+                            Newline,
                             Newline,
                         ],
                     ),
                 ),
+                [
+                    Newline,
+                ],
             ),
-            [],
         ),
-        [
-            Newline,
-        ],
-    ),
-]
+    ],
+}

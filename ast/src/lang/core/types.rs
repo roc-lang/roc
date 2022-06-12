@@ -4,7 +4,7 @@
 // use roc_can::expr::Output;
 use roc_collections::all::{MutMap, MutSet};
 use roc_error_macros::todo_abilities;
-use roc_module::ident::{Ident, Lowercase, TagName};
+use roc_module::ident::{Ident, Lowercase, TagName, Uppercase};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::types::{Problem, RecordField};
@@ -698,7 +698,7 @@ fn can_tags<'a>(
                         as_type_id(env, scope, rigids, type_id, &loc_arg.value, loc_arg.region);
                     }
 
-                    let tag_name = TagName::Tag(name.value.into());
+                    let tag_name = TagName(name.value.into());
                     tag_types.push((tag_name.clone(), arg_types));
 
                     break 'inner tag_name;

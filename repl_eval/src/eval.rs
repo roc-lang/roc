@@ -6,7 +6,7 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::TagName;
-use roc_module::symbol::{Interns, ModuleId, Symbol};
+use roc_module::symbol::Symbol;
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::{
     union_sorted_tags_help, Builtin, Layout, LayoutCache, UnionLayout, UnionVariant, WrappedVariant,
@@ -23,8 +23,6 @@ struct Env<'a, 'env> {
     arena: &'a Bump,
     subs: &'env Subs,
     target_info: TargetInfo,
-    interns: &'env Interns,
-    home: ModuleId,
 }
 
 #[derive(Debug)]
@@ -47,8 +45,6 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
     main_fn_name: &str,
     layout: ProcLayout<'a>,
     content: &'a Content,
-    interns: &'a Interns,
-    home: ModuleId,
     subs: &'a Subs,
     target_info: TargetInfo,
 ) -> Result<Expr<'a>, ToAstProblem> {
@@ -56,8 +52,6 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
         arena,
         subs,
         target_info,
-        interns,
-        home,
     };
 
     match layout {
@@ -101,7 +95,7 @@ fn unroll_newtypes_and_aliases<'a>(
     loop {
         match content {
             Content::Structure(FlatType::TagUnion(tags, _))
-                if tags.is_newtype_wrapper_of_tag(env.subs) =>
+                if tags.is_newtype_wrapper(env.subs) =>
             {
                 let (tag_name, vars): (&TagName, &[Variable]) = tags
                     .unsorted_iterator(env.subs, Variable::EMPTY_TAG_UNION)
@@ -470,13 +464,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
 }
 
 fn tag_name_to_expr<'a>(env: &Env<'a, '_>, tag_name: &TagName) -> Expr<'a> {
-    match tag_name {
-        TagName::Tag(_) => Expr::Tag(
-            env.arena
-                .alloc_str(&tag_name.as_ident_str(env.interns, env.home)),
-        ),
-        TagName::Closure(_) => unreachable!("User cannot type this"),
-    }
+    Expr::Tag(env.arena.alloc_str(&tag_name.as_ident_str()))
 }
 
 /// Represents the layout of `RecursivePointer`s in a tag union, when recursive
@@ -618,9 +606,9 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 env,
                 mem,
                 addr,
-                tag_name,
+                tag_name.expect_tag_ref(),
                 arg_layouts,
-                &vars_of_tag[tag_name],
+                &vars_of_tag[tag_name.expect_tag_ref()],
                 WhenRecursive::Unreachable,
             )
         }
@@ -648,9 +636,9 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 env,
                 mem,
                 ptr_to_data,
-                tag_name,
+                tag_name.expect_tag_ref(),
                 arg_layouts,
-                &vars_of_tag[tag_name],
+                &vars_of_tag[tag_name.expect_tag_ref()],
                 when_recursive,
             )
         }
@@ -666,7 +654,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             let (tag_name, arg_layouts) = match union_variant {
                 UnionVariant::Wrapped(WrappedVariant::NonNullableUnwrapped {
                     tag_name, fields,
-                }) => (tag_name, fields),
+                }) => (tag_name.expect_tag(), fields),
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
@@ -697,7 +685,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                     nullable_name,
                     other_name,
                     other_fields,
-                }) => (nullable_name, other_name, other_fields),
+                }) => (nullable_name.expect_tag(), other_name.expect_tag(), other_fields),
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
@@ -729,7 +717,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                     nullable_id,
                     nullable_name,
                     sorted_tag_layouts,
-                }) => (nullable_id, nullable_name, sorted_tag_layouts),
+                }) => (nullable_id, nullable_name.expect_tag(), sorted_tag_layouts),
                 _ => unreachable!("any other variant would have a different layout"),
             };
 
@@ -746,9 +734,9 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                     env,
                     mem,
                     data_addr,
-                    tag_name,
+                    tag_name.expect_tag_ref(),
                     arg_layouts,
-                    &vars_of_tag[tag_name],
+                    &vars_of_tag[tag_name.expect_tag_ref()],
                     when_recursive,
                 )
             }
@@ -1035,7 +1023,7 @@ fn bool_to_ast<'a, M: ReplAppMemory>(
                     let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
 
                     let loc_tag_expr = {
-                        let tag_name = &tag_name.as_ident_str(env.interns, env.home);
+                        let tag_name = &tag_name.as_ident_str();
                         let tag_expr = Expr::Tag(arena.alloc_str(tag_name));
 
                         &*arena.alloc(Loc {
@@ -1070,13 +1058,9 @@ fn bool_to_ast<'a, M: ReplAppMemory>(
                     debug_assert!(payload_vars_2.is_empty());
 
                     let tag_name = if value {
-                        max_by_key(tag_name_1, tag_name_2, |n| {
-                            n.as_ident_str(env.interns, env.home)
-                        })
+                        max_by_key(tag_name_1, tag_name_2, |n| n.as_ident_str())
                     } else {
-                        min_by_key(tag_name_1, tag_name_2, |n| {
-                            n.as_ident_str(env.interns, env.home)
-                        })
+                        min_by_key(tag_name_1, tag_name_2, |n| n.as_ident_str())
                     };
 
                     tag_name_to_expr(env, tag_name)
@@ -1114,7 +1098,7 @@ fn byte_to_ast<'a, M: ReplAppMemory>(
                     let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
 
                     let loc_tag_expr = {
-                        let tag_name = &tag_name.as_ident_str(env.interns, env.home);
+                        let tag_name = &tag_name.as_ident_str();
                         let tag_expr = Expr::Tag(arena.alloc_str(tag_name));
 
                         &*arena.alloc(Loc {
@@ -1160,7 +1144,7 @@ fn byte_to_ast<'a, M: ReplAppMemory>(
 
                     match union_variant {
                         UnionVariant::ByteUnion(tagnames) => {
-                            let tag_name = &tagnames[value as usize];
+                            let tag_name = &tagnames[value as usize].expect_tag_ref();
                             let tag_expr = tag_name_to_expr(env, tag_name);
                             let loc_tag_expr = Loc::at_zero(tag_expr);
                             Expr::Apply(env.arena.alloc(loc_tag_expr), &[], CalledVia::Space)

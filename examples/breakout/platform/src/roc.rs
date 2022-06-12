@@ -1,8 +1,8 @@
 use crate::graphics::colors::Rgba;
 use core::alloc::Layout;
 use core::ffi::c_void;
-use core::mem::ManuallyDrop;
-use roc_std::{ReferenceCount, RocList, RocStr};
+use core::mem::{self, ManuallyDrop};
+use roc_std::{RocList, RocStr};
 use std::ffi::CStr;
 use std::fmt::Debug;
 use std::mem::MaybeUninit;
@@ -273,7 +273,7 @@ impl RocElem {
 }
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct RocRect {
     pub color: Rgba,
 
@@ -284,31 +284,34 @@ pub struct RocRect {
     pub width: f32,
 }
 
-unsafe impl ReferenceCount for RocElem {
-    /// Increment the reference count.
-    fn increment(&self) {
-        use RocElemTag::*;
-
-        match self.tag() {
-            Rect => { /* nothing to increment! */ }
-            Text => unsafe { &*self.entry().text }.increment(),
+impl Clone for RocElem {
+    fn clone(&self) -> Self {
+        unsafe {
+            match self.tag() {
+                RocElemTag::Rect => Self {
+                    tag: RocElemTag::Rect,
+                    entry: RocElemEntry {
+                        rect: self.entry.rect.clone(),
+                    },
+                },
+                RocElemTag::Text => Self {
+                    tag: RocElemTag::Text,
+                    entry: RocElemEntry {
+                        text: self.entry.text.clone(),
+                    },
+                },
+            }
         }
     }
+}
 
-    /// Decrement the reference count.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `ptr` points to a value with a non-zero
-    /// reference count.
-    unsafe fn decrement(ptr: *const Self) {
-        use RocElemTag::*;
-
-        let elem = &*ptr;
-
-        match elem.tag() {
-            Rect => { /* nothing to decrement! */ }
-            Text => ReferenceCount::decrement(&*elem.entry().text),
+impl Drop for RocElem {
+    fn drop(&mut self) {
+        unsafe {
+            match self.tag() {
+                RocElemTag::Rect => mem::drop(ManuallyDrop::take(&mut self.entry.rect)),
+                RocElemTag::Text => mem::drop(ManuallyDrop::take(&mut self.entry.text)),
+            }
         }
     }
 }

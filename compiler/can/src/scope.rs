@@ -5,7 +5,7 @@ use roc_problem::can::RuntimeError;
 use roc_region::all::{Loc, Region};
 use roc_types::types::{Alias, AliasKind, AliasVar, Type};
 
-use crate::abilities::AbilitiesStore;
+use crate::abilities::PendingAbilitiesStore;
 
 use bitvec::vec::BitVec;
 
@@ -15,7 +15,7 @@ pub struct Scope {
     pub aliases: VecMap<Symbol, Alias>,
 
     /// The abilities currently in scope, and their implementors.
-    pub abilities_store: AbilitiesStore,
+    pub abilities_store: PendingAbilitiesStore,
 
     /// The current module being processed. This will be used to turn
     /// unqualified idents into Symbols.
@@ -35,7 +35,7 @@ impl Scope {
     pub fn new(
         home: ModuleId,
         initial_ident_ids: IdentIds,
-        starting_abilities_store: AbilitiesStore,
+        starting_abilities_store: PendingAbilitiesStore,
     ) -> Scope {
         let imports = Symbol::default_in_scope()
             .into_iter()
@@ -570,7 +570,7 @@ mod test {
         let mut scope = Scope::new(
             ModuleId::ATTR,
             IdentIds::default(),
-            AbilitiesStore::default(),
+            PendingAbilitiesStore::default(),
         );
 
         let region = Region::zero();
@@ -589,7 +589,7 @@ mod test {
         let mut scope = Scope::new(
             ModuleId::ATTR,
             IdentIds::default(),
-            AbilitiesStore::default(),
+            PendingAbilitiesStore::default(),
         );
 
         let region1 = Region::from_pos(Position { offset: 10 });
@@ -618,7 +618,7 @@ mod test {
         let mut scope = Scope::new(
             ModuleId::ATTR,
             IdentIds::default(),
-            AbilitiesStore::default(),
+            PendingAbilitiesStore::default(),
         );
 
         let region = Region::zero();
@@ -639,7 +639,7 @@ mod test {
         let scope = Scope::new(
             ModuleId::ATTR,
             IdentIds::default(),
-            AbilitiesStore::default(),
+            PendingAbilitiesStore::default(),
         );
 
         let idents: Vec<_> = scope.idents_in_scope().collect();
@@ -647,15 +647,15 @@ mod test {
         assert_eq!(
             &idents,
             &[
-                Ident::from("Box"),
-                Ident::from("Set"),
-                Ident::from("Dict"),
-                Ident::from("Str"),
-                Ident::from("Ok"),
                 Ident::from("False"),
-                Ident::from("List"),
                 Ident::from("True"),
+                Ident::from("Str"),
+                Ident::from("List"),
+                Ident::from("Ok"),
                 Ident::from("Err"),
+                Ident::from("Dict"),
+                Ident::from("Set"),
+                Ident::from("Box"),
             ]
         );
     }
@@ -666,7 +666,7 @@ mod test {
         let mut scope = Scope::new(
             ModuleId::ATTR,
             IdentIds::default(),
-            AbilitiesStore::default(),
+            PendingAbilitiesStore::default(),
         );
 
         let idents: Vec<_> = scope.idents_in_scope().collect();
@@ -674,15 +674,15 @@ mod test {
         assert_eq!(
             &idents,
             &[
-                Ident::from("Box"),
-                Ident::from("Set"),
-                Ident::from("Dict"),
-                Ident::from("Str"),
-                Ident::from("Ok"),
                 Ident::from("False"),
-                Ident::from("List"),
                 Ident::from("True"),
+                Ident::from("Str"),
+                Ident::from("List"),
+                Ident::from("Ok"),
                 Ident::from("Err"),
+                Ident::from("Dict"),
+                Ident::from("Set"),
+                Ident::from("Box"),
             ]
         );
 
@@ -737,7 +737,7 @@ mod test {
         let mut scope = Scope::new(
             ModuleId::ATTR,
             IdentIds::default(),
-            AbilitiesStore::default(),
+            PendingAbilitiesStore::default(),
         );
 
         let ident = Ident::from("product");
@@ -759,7 +759,7 @@ mod test {
         let mut scope = Scope::new(
             ModuleId::ATTR,
             IdentIds::default(),
-            AbilitiesStore::default(),
+            PendingAbilitiesStore::default(),
         );
 
         let ident = Ident::from("product");

@@ -4,9 +4,9 @@ app "helloZig"
     provides [main] to pf
 
 
-main = 
-    a = Str.concat "a" "foo" 
-    b = Str.concat "a" "bar" 
+main =
+    a = Str.concat "a" "foo"
+    b = Str.concat "a" "bar"
 
     (
         expect a == b

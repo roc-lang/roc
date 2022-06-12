@@ -38,7 +38,9 @@ pub fn compile_and_load<'a, T: Wasm32Result>(
     src: &str,
     test_wrapper_type_info: PhantomData<T>,
 ) -> wasmer::Instance {
-    let platform_bytes = load_platform_and_builtins();
+    let platform_path = get_preprocessed_host_path();
+    let platform_bytes = std::fs::read(&platform_path).unwrap();
+    println!("Loading test host {}", platform_path.display());
 
     let compiled_bytes =
         compile_roc_to_wasm_bytes(arena, &platform_bytes, src, test_wrapper_type_info);
@@ -51,10 +53,11 @@ pub fn compile_and_load<'a, T: Wasm32Result>(
     load_bytes_into_runtime(compiled_bytes)
 }
 
-fn load_platform_and_builtins() -> std::vec::Vec<u8> {
+fn get_preprocessed_host_path() -> PathBuf {
     let out_dir = std::env::var(OUT_DIR_VAR).unwrap();
-    let platform_path = Path::new(&out_dir).join([PLATFORM_FILENAME, "o"].join("."));
-    std::fs::read(&platform_path).unwrap()
+    Path::new(&out_dir)
+        .join([PLATFORM_FILENAME, "o"].join("."))
+        .to_path_buf()
 }
 
 fn src_hash(src: &str) -> u64 {
@@ -119,7 +122,14 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         exposed_to_host,
     };
 
-    let host_module = roc_gen_wasm::parse_host(env.arena, host_bytes).unwrap();
+    let host_module = roc_gen_wasm::parse_host(env.arena, host_bytes).unwrap_or_else(|e| {
+        panic!(
+            "I ran into a problem with the host object file, {} at offset 0x{:x}:\n{}",
+            get_preprocessed_host_path().display(),
+            e.offset,
+            e.message
+        )
+    });
 
     let (mut module, called_preload_fns, main_fn_index) =
         roc_gen_wasm::build_app_module(&env, &mut interns, host_module, procedures);
@@ -127,7 +137,14 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
     T::insert_wrapper(arena, &mut module, TEST_WRAPPER_NAME, main_fn_index);
 
     // Export the initialiser function for refcount tests
-    let init_refcount_idx = module.names.functions[INIT_REFCOUNT_NAME];
+    let init_refcount_idx = module
+        .names
+        .function_names
+        .iter()
+        .filter(|(_, name)| *name == INIT_REFCOUNT_NAME)
+        .map(|(i, _)| *i)
+        .next()
+        .unwrap();
     module.export.append(Export {
         name: INIT_REFCOUNT_NAME,
         ty: ExportType::Func,

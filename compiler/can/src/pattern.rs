@@ -260,7 +260,7 @@ pub fn canonicalize_pattern<'a>(
             Pattern::AppliedTag {
                 whole_var: var_store.fresh(),
                 ext_var: var_store.fresh(),
-                tag_name: TagName::Tag((*name).into()),
+                tag_name: TagName((*name).into()),
                 arguments: vec![],
             }
         }
@@ -290,7 +290,7 @@ pub fn canonicalize_pattern<'a>(
 
             match tag.value {
                 Tag(name) => {
-                    let tag_name = TagName::Tag(name.into());
+                    let tag_name = TagName(name.into());
                     Pattern::AppliedTag {
                         whole_var: var_store.fresh(),
                         ext_var: var_store.fresh(),

@@ -505,7 +505,7 @@ fn test_at_path<'a>(
                         render_as: RenderAs::Tag,
                         alternatives: vec![Ctor {
                             tag_id: TagId(0),
-                            name: CtorName::Tag(TagName::Tag(RECORD_TAG_NAME.into())),
+                            name: CtorName::Tag(TagName(RECORD_TAG_NAME.into())),
                             arity: destructs.len(),
                         }],
                     };
@@ -525,7 +525,7 @@ fn test_at_path<'a>(
 
                     IsCtor {
                         tag_id: 0,
-                        ctor_name: CtorName::Tag(TagName::Tag(RECORD_TAG_NAME.into())),
+                        ctor_name: CtorName::Tag(TagName(RECORD_TAG_NAME.into())),
                         union,
                         arguments,
                     }
@@ -677,7 +677,7 @@ fn to_relevant_branch_help<'a>(
                 tag_id,
                 ..
             } => {
-                debug_assert!(test_name == &CtorName::Tag(TagName::Tag(RECORD_TAG_NAME.into())));
+                debug_assert!(test_name == &CtorName::Tag(TagName(RECORD_TAG_NAME.into())));
                 let sub_positions = destructs.into_iter().enumerate().map(|(index, destruct)| {
                     let pattern = match destruct.typ {
                         DestructType::Guard(guard) => guard.clone(),

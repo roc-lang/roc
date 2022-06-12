@@ -1,4 +1,4 @@
-use crate::types::{Field, RocTagUnion, RocType, TypeId, Types};
+use crate::types::{RocNum, RocTagUnion, RocType, TypeId, Types};
 use indexmap::IndexMap;
 use roc_mono::layout::UnionLayout;
 use roc_target::{Architecture, TargetInfo};
@@ -8,29 +8,55 @@ use std::fmt::Display;
 pub static TEMPLATE: &[u8] = include_bytes!("../templates/template.rs");
 pub static HEADER: &[u8] = include_bytes!("../templates/header.rs");
 const INDENT: &str = "    ";
-const VARIANT_DOC_COMMENT: &str =
+const DISCRIMINANT_DOC_COMMENT: &str =
     "/// Returns which variant this tag union holds. Note that this never includes a payload!";
 
-type Impls = IndexMap<Impl, IndexMap<String, Vec<Architecture>>>;
+type Impls = IndexMap<Impl, IndexMap<String, Vec<TargetInfo>>>;
 type Impl = Option<String>;
+
+/// Recursive tag unions need a custom Clone which bumps refcount.
+const RECURSIVE_TAG_UNION_CLONE: &str = r#"fn clone(&self) -> Self {
+    if let Some(storage) = self.storage() {
+        let mut new_storage = storage.get();
+        if !new_storage.is_readonly() {
+            new_storage.increment_reference_count();
+            storage.set(new_storage);
+        }
+    }
+
+    Self {
+        pointer: self.pointer
+    }
+}"#;
+
+const RECURSIVE_TAG_UNION_STORAGE: &str = r#"#[inline(always)]
+    fn storage(&self) -> Option<&core::cell::Cell<roc_std::Storage>> {
+        if self.pointer.is_null() {
+            None
+        } else {
+            unsafe {
+                Some(&*self.pointer.cast::<core::cell::Cell<roc_std::Storage>>().sub(1))
+            }
+        }
+    }"#;
 
 /// Add the given declaration body, along with the architecture, to the Impls.
 /// This can optionally be within an `impl`, or if no `impl` is specified,
 /// then it's added at the top level.
-fn add_decl(impls: &mut Impls, opt_impl: Impl, architecture: Architecture, body: String) {
+fn add_decl(impls: &mut Impls, opt_impl: Impl, target_info: TargetInfo, body: String) {
     let decls = impls.entry(opt_impl).or_default();
-    let architectures = decls.entry(body).or_default();
+    let targets = decls.entry(body).or_default();
 
-    architectures.push(architecture);
+    targets.push(target_info);
 }
 
-pub fn emit(types_by_architecture: &[(Architecture, Types)]) -> String {
+pub fn emit(types_and_targets: &[(Types, TargetInfo)]) -> String {
     let mut buf = String::new();
     let mut impls: Impls = IndexMap::default();
 
-    for (architecture, types) in types_by_architecture.iter() {
+    for (types, target_info) in types_and_targets {
         for id in types.sorted_ids() {
-            add_type(*architecture, id, types, &mut impls);
+            add_type(*target_info, id, types, &mut impls);
         }
     }
 
@@ -47,7 +73,7 @@ pub fn emit(types_by_architecture: &[(Architecture, Types)]) -> String {
             has_impl = false;
         }
 
-        for (decl, architectures) in decls {
+        for (decl, targets) in decls {
             // If we're inside an `impl` block, indent the cfg annotation
             let indent = if has_impl { INDENT } else { "" };
 
@@ -55,20 +81,23 @@ pub fn emit(types_by_architecture: &[(Architecture, Types)]) -> String {
             buf.push('\n');
             buf.push_str(indent);
 
-            match architectures.len() {
+            match targets.len() {
                 1 => {
-                    let arch = arch_to_str(architectures.get(0).unwrap());
+                    let arch = arch_to_str(targets.get(0).unwrap().architecture);
 
-                    buf.push_str(&format!("r#[cfg(target_arch = \"{arch}\")]"));
+                    buf.push_str(&format!("#[cfg(target_arch = \"{arch}\")]"));
                 }
                 _ => {
-                    // We should never have a decl recorded with 0 architectures!
-                    debug_assert_ne!(architectures.len(), 0);
+                    // We should never have a decl recorded with 0 targets!
+                    debug_assert_ne!(targets.len(), 0);
 
-                    let alternatives = architectures
+                    let alternatives = targets
                         .iter()
-                        .map(|arch| {
-                            format!("{indent}{INDENT}target_arch = \"{}\"", arch_to_str(arch))
+                        .map(|target_info| {
+                            format!(
+                                "{indent}{INDENT}target_arch = \"{}\"",
+                                arch_to_str(target_info.architecture)
+                            )
                         })
                         .collect::<Vec<_>>()
                         .join(",\n");
@@ -94,10 +123,13 @@ pub fn emit(types_by_architecture: &[(Architecture, Types)]) -> String {
     buf
 }
 
-fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut Impls) {
-    match types.get(id) {
+fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impls) {
+    match types.get_type(id) {
         RocType::Struct { name, fields } => {
-            add_struct(name, architecture, fields, id, types, impls)
+            add_struct(name, target_info, fields, id, types, impls, false)
+        }
+        RocType::TagUnionPayload { name, fields } => {
+            add_struct(name, target_info, fields, id, types, impls, true)
         }
         RocType::TagUnion(tag_union) => {
             match tag_union {
@@ -105,31 +137,79 @@ fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut I
                     if tags.len() == 1 {
                         // An enumeration with one tag is a zero-sized unit type, so
                         // represent it as a zero-sized struct (e.g. "struct Foo()").
-                        let derive = derive_str(types.get(id), types, true);
+                        let derive = derive_str(types.get_type(id), types, true);
                         let struct_name = type_name(id, types);
                         let body = format!("{derive}\nstruct {struct_name}();");
 
-                        add_decl(impls, None, architecture, body);
+                        add_decl(impls, None, target_info, body);
                     } else {
                         add_enumeration(
                             name,
-                            architecture,
-                            types.get(id),
+                            target_info,
+                            types.get_type(id),
                             tags.iter(),
                             types,
                             impls,
                         )
                     }
                 }
-                RocTagUnion::NonRecursive { tags, name } => {
+                RocTagUnion::NonRecursive {
+                    tags,
+                    name,
+                    discriminant_type,
+                } => {
                     // Empty tag unions can never come up at runtime,
                     // and so don't need declared types.
                     if !tags.is_empty() {
-                        add_tag_union(name, architecture, id, tags, types, impls);
+                        // The discriminant is placed immediately after the last byte of
+                        // the longest variant. That means if we take the total size
+                        // and subtract the size of the discriminant, we have its offset.
+                        //
+                        // Importantly, we should use the size *without* alignment rounding;
+                        // otherwise, that might not be where the discriminant actually is!
+                        let discriminant_offset =
+                            types.size_ignoring_alignment(id) - discriminant_type.size();
+
+                        add_tag_union(
+                            Recursiveness::NonRecursive,
+                            name,
+                            target_info,
+                            id,
+                            tags,
+                            discriminant_offset,
+                            types,
+                            impls,
+                        );
                     }
                 }
-                RocTagUnion::Recursive { .. } => {
-                    todo!();
+                RocTagUnion::Recursive {
+                    tags,
+                    name,
+                    discriminant_type,
+                } => {
+                    // Empty tag unions can never come up at runtime,
+                    // and so don't need declared types.
+                    if !tags.is_empty() {
+                        // The discriminant is placed immediately after the last byte of
+                        // the longest variant. That means if we take the total size
+                        // and subtract the size of the discriminant, we have its offset.
+                        //
+                        // Importantly, we should use the size *without* alignment rounding;
+                        // otherwise, that might not be where the discriminant actually is!
+                        let discriminant_offset =
+                            types.size_ignoring_alignment(id) - discriminant_type.size();
+
+                        add_tag_union(
+                            Recursiveness::Recursive,
+                            name,
+                            target_info,
+                            id,
+                            tags,
+                            discriminant_offset,
+                            types,
+                            impls,
+                        );
+                    }
                 }
                 RocTagUnion::NullableWrapped { .. } => {
                     todo!();
@@ -142,7 +222,7 @@ fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut I
                     null_represents_first_tag,
                 } => add_nullable_unwrapped(
                     name,
-                    architecture,
+                    target_info,
                     id,
                     null_tag,
                     non_null_tag,
@@ -157,42 +237,23 @@ fn add_type(architecture: Architecture, id: TypeId, types: &Types, impls: &mut I
             }
         }
         // These types don't need to be declared in Rust.
-        RocType::U8
-        | RocType::U16
-        | RocType::U32
-        | RocType::U64
-        | RocType::U128
-        | RocType::I8
-        | RocType::I16
-        | RocType::I32
-        | RocType::I64
-        | RocType::I128
-        | RocType::F32
-        | RocType::F64
-        | RocType::F128
+        RocType::Num(_)
         | RocType::Bool
-        | RocType::RocDec
         | RocType::RocStr
         | RocType::RocDict(_, _)
         | RocType::RocSet(_)
         | RocType::RocList(_)
         | RocType::RocBox(_) => {}
-        RocType::TransparentWrapper { name, content } => {
-            let typ = types.get(id);
-            let derive = derive_str(typ, types, !typ.has_enumeration(types));
-            let body = format!(
-                "{derive}\n#[repr(transparent)]\npub struct {name}({});",
-                type_name(*content, types)
-            );
-
-            add_decl(impls, None, architecture, body);
+        RocType::RecursivePointer { .. } => {
+            // This is recursively pointing to a type that should already have been added,
+            // so no extra work needs to happen.
         }
     }
 }
 
 fn add_discriminant(
     name: &str,
-    architecture: Architecture,
+    target_info: TargetInfo,
     tag_names: Vec<String>,
     types: &Types,
     impls: &mut Impls,
@@ -204,7 +265,7 @@ fn add_discriminant(
     //     Bar,
     //     Foo,
     // }
-    let discriminant_name = format!("variant_{name}");
+    let discriminant_name = format!("discriminant_{name}");
     let discriminant_type = RocType::TagUnion(RocTagUnion::Enumeration {
         name: discriminant_name.clone(),
         tags: tag_names.clone(),
@@ -212,7 +273,7 @@ fn add_discriminant(
 
     add_enumeration(
         &discriminant_name,
-        architecture,
+        target_info,
         &discriminant_type,
         tag_names.into_iter(),
         types,
@@ -222,31 +283,77 @@ fn add_discriminant(
     discriminant_name
 }
 
+#[derive(Copy, Clone)]
+enum Recursiveness {
+    Recursive,
+    NonRecursive,
+}
+
+#[allow(clippy::too_many_arguments)]
 fn add_tag_union(
+    recursiveness: Recursiveness,
     name: &str,
-    architecture: Architecture,
+    target_info: TargetInfo,
     type_id: TypeId,
     tags: &[(String, Option<TypeId>)],
+    discriminant_offset: u32,
     types: &Types,
     impls: &mut Impls,
 ) {
+    // We should never be attempting to bindgen empty tag unions; RocType should not
+    // have let this happen.
+    debug_assert_ne!(tags.len(), 0);
+
     let tag_names = tags.iter().map(|(name, _)| name).cloned().collect();
-    let discriminant_name = add_discriminant(name, architecture, tag_names, types, impls);
-    let typ = types.get(type_id);
-    // TODO also do this for other targets. Remember, these can change based on more
-    // than just pointer width; e.g. on wasm, the alignments of U16 and U8 are both 4!
-    let target_info = TargetInfo::from(&target_lexicon::Triple::host());
-    let discriminant_offset = RocTagUnion::discriminant_offset(tags, types, target_info);
-    let size = typ.size(types, target_info);
+    let discriminant_name = add_discriminant(name, target_info, tag_names, types, impls);
+    let typ = types.get_type(type_id);
+    let size_rounded_to_alignment = types.size_rounded_to_alignment(type_id);
+    let (actual_self, actual_self_mut, actual_other, union_name) = match recursiveness {
+        Recursiveness::Recursive => (
+            "(&*self.union_pointer())",
+            "(&mut *self.union_pointer())",
+            "(&*other.union_pointer())",
+            format!("union_{name}"),
+        ),
+        Recursiveness::NonRecursive => ("self", "self", "other", name.to_string()),
+    };
 
     {
+        // Recursive tag unions have a public struct, not a public union
+        let pub_str;
+        let decl_union_name: &str;
+
+        match recursiveness {
+            Recursiveness::Recursive => {
+                add_decl(
+                    impls,
+                    None,
+                    target_info,
+                    format!(
+                        r#"
+pub struct {name} {{
+    pointer: *mut {union_name},
+}}
+"#
+                    ),
+                );
+
+                pub_str = "";
+                decl_union_name = &union_name;
+            }
+            Recursiveness::NonRecursive => {
+                pub_str = "pub ";
+                decl_union_name = name;
+            }
+        };
+
         // No #[derive(...)] for unions; we have to generate each impl ourselves!
-        let mut buf = format!("#[repr(C)]\npub union {name} {{\n");
+        let mut buf = format!("#[repr(C)]\n{pub_str}union {decl_union_name} {{\n");
 
         for (tag_name, opt_payload_id) in tags {
-            // If there's no payload, we don't need a variant for it.
+            // If there's no payload, we don't need a discriminant for it.
             if let Some(payload_id) = opt_payload_id {
-                let payload_type = types.get(*payload_id);
+                let payload_type = types.get_type(*payload_id);
 
                 buf.push_str(&format!("{INDENT}{tag_name}: "));
 
@@ -265,58 +372,131 @@ fn add_tag_union(
             }
         }
 
-        // When there's no alignment padding after the largest variant,
-        // the compiler will make extra room for the discriminant.
-        // We need that to be reflected in the overall size of the enum,
-        // so add an extra variant with the appropriate size.
-        //
-        // (Do this even if theoretically shouldn't be necessary, since
-        // there's no runtime cost and it more explicitly syncs the
-        // union's size with what we think it should be.)
-        buf.push_str(&format!("{INDENT}_sizer: [u8; {size}],\n}}"));
+        if tags.len() > 1 {
+            // When there's a discriminant (so, multiple tags) and there is
+            // no alignment padding after the largest variant,
+            // the compiler will make extra room for the discriminant.
+            // We need that to be reflected in the overall size of the enum,
+            // so add an extra variant with the appropriate size.
+            //
+            // (Do this even if theoretically shouldn't be necessary, since
+            // there's no runtime cost and it more explicitly syncs the
+            // union's size with what we think it should be.)
+            buf.push_str(&format!(
+                "{INDENT}_sizer: [u8; {size_rounded_to_alignment}],\n"
+            ));
+        }
 
-        add_decl(impls, None, architecture, buf);
+        buf.push('}');
+
+        add_decl(impls, None, target_info, buf);
     }
 
     // The impl for the tag union
     {
         let opt_impl = Some(format!("impl {name}"));
+        let bitmask;
 
-        // An old design, which ended up not working out, was that the tag union
-        // was a struct containing two fields: one for the `union`, and another
-        // for the discriminant.
-        //
-        // The problem with this was alignment; e.g. if you have one variant with a
-        // RocStr in it and another with an I128, then the `union` has a size of 32B
-        // and the discriminant is right after it - making the size of the whole struct
-        // round up to 48B total, since it has an alignment of 16 from the I128.
-        //
-        // However, Roc will generate the more efficient thing here: the whole thing will
-        // be 32B, and the discriminant will appear at offset 24 - right after the end of
-        // the RocStr. The current design recognizes this and works with it, by representing
-        // the entire structure as a union and manually setting the tag at the appropriate offset.
-        add_decl(
-            impls,
-            opt_impl.clone(),
-            architecture,
-            format!(
-                r#"{VARIANT_DOC_COMMENT}
-    pub fn variant(&self) -> {discriminant_name} {{
+        match recursiveness {
+            Recursiveness::Recursive => {
+                add_decl(
+                    impls,
+                    opt_impl.clone(),
+                    target_info,
+                    RECURSIVE_TAG_UNION_STORAGE.to_string(),
+                );
+
+                if tags.len() <= max_pointer_tagged_variants(target_info.architecture) {
+                    bitmask = format!("{:#b}", tagged_pointer_bitmask(target_info.architecture));
+
+                    add_decl(
+                        impls,
+                        opt_impl.clone(),
+                        target_info,
+                        format!(
+                            r#"{DISCRIMINANT_DOC_COMMENT}
+    pub fn discriminant(&self) -> {discriminant_name} {{
+        // The discriminant is stored in the unused bytes at the end of the recursive pointer
+        unsafe {{ core::mem::transmute::<u8, {discriminant_name}>((self.pointer as u8) & {bitmask}) }}
+    }}"#
+                        ),
+                    );
+
+                    add_decl(
+                        impls,
+                        opt_impl.clone(),
+                        target_info,
+                        format!(
+                            r#"/// Internal helper
+    fn tag_discriminant(pointer: *mut {union_name}, discriminant: {discriminant_name}) -> *mut {union_name} {{
+        // The discriminant is stored in the unused bytes at the end of the union pointer
+        let untagged = (pointer as usize) & (!{bitmask} as usize);
+        let tagged = untagged | (discriminant as usize);
+
+        tagged as *mut {union_name}
+    }}"#
+                        ),
+                    );
+
+                    add_decl(
+                        impls,
+                        opt_impl.clone(),
+                        target_info,
+                        format!(
+                            r#"/// Internal helper
+    fn union_pointer(&self) -> *mut {union_name} {{
+        // The discriminant is stored in the unused bytes at the end of the union pointer
+        ((self.pointer as usize) & (!{bitmask} as usize)) as *mut {union_name}
+    }}"#
+                        ),
+                    );
+                } else {
+                    todo!(
+                        "Support {} tags in a recursive tag union on target_info {:?}. (This is too many tags for pointer tagging to work, so we need to bindgen something different.)",
+                        tags.len(),
+                        target_info
+                    );
+                }
+            }
+            Recursiveness::NonRecursive => {
+                // The bitmask doesn't come up in a nonrecursive tag union.
+                bitmask = String::new();
+
+                // An old design, which ended up not working out, was that the tag union
+                // was a struct containing two fields: one for the `union`, and another
+                // for the discriminant.
+                //
+                // The problem with this was alignment; e.g. if you have one variant with a
+                // RocStr in it and another with an I128, then the `union` has a size of 32B
+                // and the discriminant is right after it - making the size of the whole struct
+                // round up to 48B total, since it has an alignment of 16 from the I128.
+                //
+                // However, Roc will generate the more efficient thing here: the whole thing will
+                // be 32B, and the discriminant will appear at offset 24 - right after the end of
+                // the RocStr. The current design recognizes this and works with it, by representing
+                // the entire structure as a union and manually setting the tag at the appropriate offset.
+                add_decl(
+                    impls,
+                    opt_impl.clone(),
+                    target_info,
+                    format!(
+                        r#"{DISCRIMINANT_DOC_COMMENT}
+    pub fn discriminant(&self) -> {discriminant_name} {{
         unsafe {{
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
             core::mem::transmute::<u8, {discriminant_name}>(*bytes.as_ptr().add({discriminant_offset}))
         }}
     }}"#
-            ),
-        );
+                    ),
+                );
 
-        add_decl(
-            impls,
-            opt_impl.clone(),
-            architecture,
-            format!(
-                r#"/// Internal helper
+                add_decl(
+                    impls,
+                    opt_impl.clone(),
+                    target_info,
+                    format!(
+                        r#"/// Internal helper
     fn set_discriminant(&mut self, discriminant: {discriminant_name}) {{
         let discriminant_ptr: *mut {discriminant_name} = (self as *mut {name}).cast();
 
@@ -324,8 +504,10 @@ fn add_tag_union(
             *(discriminant_ptr.add({discriminant_offset})) = discriminant;
         }}
     }}"#
-            ),
-        );
+                    ),
+                );
+            }
+        }
 
         for (tag_name, opt_payload_id) in tags {
             // Add a convenience constructor function to the impl, e.g.
@@ -334,97 +516,182 @@ fn add_tag_union(
             // pub fn Foo(payload: roc_std::RocStr) -> Self {
             //     Self {
             //         tag: tag_MyTagUnion::Foo,
-            //         variant: variant_MyTagUnion {
+            //         discriminant: discriminant_MyTagUnion {
             //             Foo: core::mem::ManuallyDrop::new(payload),
             //         },
             //     }
             // }
             if let Some(payload_id) = opt_payload_id {
-                let payload_type = types.get(*payload_id);
-                let payload_type_name = type_name(*payload_id, types);
+                let payload_type = types.get_type(*payload_id);
+                let self_for_into;
+                let payload_args;
+                let args_to_payload;
+                let owned_ret_type;
+                let borrowed_ret_type;
+                let owned_get_payload;
+                let borrowed_get_payload;
+                let owned_ret;
+                let borrowed_ret;
 
-                let (init_payload, get_payload, ref_if_needed, self_for_into) =
-                    if payload_type.has_pointer(types) {
-                        (
-                            "core::mem::ManuallyDrop::new(payload)",
-                            format!("core::mem::ManuallyDrop::take(&mut self.{tag_name})",),
-                            // Since this is a ManuallyDrop, our `as_` method will need
-                            // to dereference the variant (e.g. `&self.Foo`)
-                            "&",
+                match recursiveness {
+                    Recursiveness::Recursive => {
+                        if payload_type.has_pointer(types) {
+                            owned_get_payload = format!(
+                                r#"{{
+            let ptr = (self.pointer as usize & !{bitmask}) as *mut {union_name};
+
+            core::mem::ManuallyDrop::take(&mut (*ptr).{tag_name})
+        }}"#
+                            );
+                            borrowed_get_payload = format!(
+                                r#"{{
+            let ptr = (self.pointer as usize & !{bitmask}) as *mut {union_name};
+
+            &(*ptr).{tag_name}
+        }}"#
+                            );
                             // we need `mut self` for the argument because of ManuallyDrop
-                            "mut self",
-                        )
-                    } else {
-                        (
-                            "payload",
-                            format!("self.{tag_name}"),
-                            // Since this is not a ManuallyDrop, our `as_` method will not
-                            // want to dereference the variant (e.g. `self.Foo` with no '&')
-                            "",
+                            self_for_into = "mut self";
+                        } else {
+                            owned_get_payload = format!(
+                                r#"{{
+            let ptr = (self.pointer as usize & !{bitmask}) as *mut {union_name};
+
+            core::ptr::read(ptr).{tag_name}
+        }}"#
+                            );
+                            borrowed_get_payload = format!(
+                                r#"{{
+            let ptr = (self.pointer as usize & !{bitmask}) as *mut {union_name};
+
+            (&ptr).{tag_name}
+        }}"#
+                            );
                             // we don't need `mut self` unless we need ManuallyDrop
-                            "self",
-                        )
-                    };
+                            self_for_into = "self";
+                        };
+                    }
+                    Recursiveness::NonRecursive => {
+                        if payload_type.has_pointer(types) {
+                            owned_get_payload =
+                                format!("core::mem::ManuallyDrop::take(&mut self.{tag_name})");
+                            borrowed_get_payload = format!("&self.{tag_name}");
+                            // we need `mut self` for the argument because of ManuallyDrop
+                            self_for_into = "mut self";
+                        } else {
+                            owned_get_payload = format!("self.{tag_name}");
+                            borrowed_get_payload = format!("&self.{tag_name}");
+                            // we don't need `mut self` unless we need ManuallyDrop
+                            self_for_into = "self";
+                        };
+                    }
+                }
 
-                add_decl(
-                    impls,
-                    opt_impl.clone(),
-                    architecture,
-                    format!(
-                        r#"/// Construct a tag named {tag_name}, with the appropriate payload
-    pub fn {tag_name}(payload: {payload_type_name}) -> Self {{
-        let mut answer = Self {{
-            {tag_name}: {init_payload}
-        }};
-
-        answer.set_discriminant({discriminant_name}::{tag_name});
-
-        answer
-    }}"#
-                    ),
-                );
-
-                let (ret_type_str, ret) = match payload_type {
+                match payload_type {
                     RocType::RocStr
                     | RocType::Bool
-                    | RocType::I8
-                    | RocType::U8
-                    | RocType::I16
-                    | RocType::U16
-                    | RocType::I32
-                    | RocType::U32
-                    | RocType::I64
-                    | RocType::U64
-                    | RocType::I128
-                    | RocType::U128
-                    | RocType::F32
-                    | RocType::F64
-                    | RocType::F128
-                    | RocType::RocDec
+                    | RocType::Num(_)
                     | RocType::RocList(_)
                     | RocType::RocDict(_, _)
                     | RocType::RocSet(_)
                     | RocType::RocBox(_)
                     | RocType::TagUnion(_)
-                    | RocType::TransparentWrapper { .. } => {
-                        (payload_type_name.clone(), get_payload)
+                    | RocType::RecursivePointer { .. } => {
+                        owned_ret_type = type_name(*payload_id, types);
+                        borrowed_ret_type = format!("&{}", owned_ret_type);
+                        owned_ret = "payload".to_string();
+                        borrowed_ret = format!("&{owned_ret}");
+                        payload_args = format!("arg: {owned_ret_type}");
+                        args_to_payload = if payload_type.has_pointer(types) {
+                            "core::mem::ManuallyDrop::new(arg)".to_string()
+                        } else {
+                            "arg".to_string()
+                        };
                     }
-                    RocType::Struct { .. } => {
-                        todo!();
+                    RocType::Struct { fields, .. } => {
+                        let answer =
+                            tag_union_struct_help(fields.iter(), *payload_id, types, false);
+
+                        owned_ret = answer.owned_ret;
+                        borrowed_ret = answer.borrowed_ret;
+                        owned_ret_type = answer.owned_ret_type;
+                        borrowed_ret_type = answer.borrowed_ret_type;
+                        payload_args = answer.payload_args;
+                        args_to_payload = answer.args_to_payload;
+                    }
+                    RocType::TagUnionPayload { fields, .. } => {
+                        let answer = tag_union_struct_help(fields.iter(), *payload_id, types, true);
+
+                        owned_ret = answer.owned_ret;
+                        borrowed_ret = answer.borrowed_ret;
+                        owned_ret_type = answer.owned_ret_type;
+                        borrowed_ret_type = answer.borrowed_ret_type;
+                        payload_args = answer.payload_args;
+                        args_to_payload = answer.args_to_payload;
                     }
                 };
+
+                {
+                    let body = match recursiveness {
+                        Recursiveness::Recursive => {
+                            format!(
+                                r#"
+        let size = core::mem::size_of::<{union_name}>();
+        let align = core::mem::align_of::<{union_name}>() as u32;
+
+        unsafe {{
+            let ptr = crate::roc_alloc(size, align) as *mut {union_name};
+
+            *ptr = {union_name} {{
+                {tag_name}: {args_to_payload}
+            }};
+
+            Self {{
+                pointer: Self::tag_discriminant(ptr, {discriminant_name}::{tag_name}),
+            }}
+        }}"#
+                            )
+                        }
+                        Recursiveness::NonRecursive => {
+                            format!(
+                                r#"
+        let mut answer = Self {{
+            {tag_name}: {args_to_payload}
+        }};
+
+        answer.set_discriminant({discriminant_name}::{tag_name});
+
+        answer"#
+                            )
+                        }
+                    };
+
+                    add_decl(
+                        impls,
+                        opt_impl.clone(),
+                        target_info,
+                        format!(
+                            r#"/// Construct a tag named {tag_name}, with the appropriate payload
+    pub fn {tag_name}({payload_args}) -> Self {{{body}
+    }}"#
+                        ),
+                    );
+                }
 
                 add_decl(
                     impls,
                     opt_impl.clone(),
-                    architecture,
+                    target_info,
                     format!(
-                        r#"/// Unsafely assume the given {name} has a .variant() of {tag_name} and convert it to {tag_name}'s payload.
-    /// (Always examine .variant() first to make sure this is the correct variant!)
-    /// Panics in debug builds if the .variant() doesn't return {tag_name}.
-    pub unsafe fn into_{tag_name}({self_for_into}) -> {ret_type_str} {{
-        debug_assert_eq!(self.variant(), {discriminant_name}::{tag_name});
-        {ret}
+                        r#"/// Unsafely assume the given {name} has a .discriminant() of {tag_name} and convert it to {tag_name}'s payload.
+    /// (Always examine .discriminant() first to make sure this is the correct variant!)
+    /// Panics in debug builds if the .discriminant() doesn't return {tag_name}.
+    pub unsafe fn into_{tag_name}({self_for_into}) -> {owned_ret_type} {{
+        debug_assert_eq!(self.discriminant(), {discriminant_name}::{tag_name});
+
+        let payload = {owned_get_payload};
+
+        {owned_ret}
     }}"#,
                     ),
                 );
@@ -432,14 +699,17 @@ fn add_tag_union(
                 add_decl(
                     impls,
                     opt_impl.clone(),
-                    architecture,
+                    target_info,
                     format!(
-                        r#"/// Unsafely assume the given {name} has a .variant() of {tag_name} and return its payload.
-    /// (Always examine .variant() first to make sure this is the correct variant!)
-    /// Panics in debug builds if the .variant() doesn't return {tag_name}.
-    pub unsafe fn as_{tag_name}(&self) -> {ref_if_needed}{payload_type_name} {{
-        debug_assert_eq!(self.variant(), {discriminant_name}::{tag_name});
-        {ref_if_needed}self.{tag_name}
+                        r#"/// Unsafely assume the given {name} has a .discriminant() of {tag_name} and return its payload.
+    /// (Always examine .discriminant() first to make sure this is the correct variant!)
+    /// Panics in debug builds if the .discriminant() doesn't return {tag_name}.
+    pub unsafe fn as_{tag_name}(&self) -> {borrowed_ret_type} {{
+        debug_assert_eq!(self.discriminant(), {discriminant_name}::{tag_name});
+
+        let payload = {borrowed_get_payload};
+
+        {borrowed_ret}
     }}"#,
                     ),
                 );
@@ -447,7 +717,7 @@ fn add_tag_union(
                 add_decl(
                     impls,
                     opt_impl.clone(),
-                    architecture,
+                    target_info,
                     format!(
                         r#"/// A tag named {tag_name}, which has no payload.
     pub const {tag_name}: Self = unsafe {{
@@ -463,7 +733,7 @@ fn add_tag_union(
                 add_decl(
                     impls,
                     opt_impl.clone(),
-                    architecture,
+                    target_info,
                     format!(
                         r#"/// Other `into_` methods return a payload, but since the {tag_name} tag
     /// has no payload, this does nothing and is only here for completeness.
@@ -476,7 +746,7 @@ fn add_tag_union(
                 add_decl(
                     impls,
                     opt_impl.clone(),
-                    architecture,
+                    target_info,
                     format!(
                         r#"/// Other `as` methods return a payload, but since the {tag_name} tag
     /// has no payload, this does nothing and is only here for completeness.
@@ -492,17 +762,17 @@ fn add_tag_union(
     // The Drop impl for the tag union
     {
         let opt_impl = Some(format!("impl Drop for {name}"));
-        let mut buf = String::new();
+        let mut drop_payload = String::new();
 
         write_impl_tags(
-            2,
+            3,
             tags.iter(),
             &discriminant_name,
-            &mut buf,
+            &mut drop_payload,
             |tag_name, opt_payload_id| {
                 match opt_payload_id {
-                    Some(payload_id) if types.get(payload_id).has_pointer(types) => {
-                        format!("unsafe {{ core::mem::ManuallyDrop::drop(&mut self.{tag_name}) }},",)
+                    Some(payload_id) if types.get_type(payload_id).has_pointer(types) => {
+                        format!("unsafe {{ core::mem::ManuallyDrop::drop(&mut {actual_self_mut}.{tag_name}) }},",)
                     }
                     _ => {
                         // If it had no payload, or if the payload had no pointers,
@@ -513,12 +783,45 @@ fn add_tag_union(
             },
         );
 
-        add_decl(
-            impls,
-            opt_impl,
-            architecture,
-            format!("fn drop(&mut self) {{\n{buf}{INDENT}}}"),
-        );
+        // Drop works differently for recursive vs non-recursive tag unions.
+        let drop_fn = match recursiveness {
+            Recursiveness::Recursive => {
+                format!(
+                    r#"fn drop(&mut self) {{
+        // We only need to do any work if there's actually a heap-allocated payload.
+        if let Some(storage) = self.storage() {{
+            let mut new_storage = storage.get();
+
+            // Decrement the refcount
+            let needs_dealloc = !new_storage.is_readonly() && new_storage.decrease();
+
+            if needs_dealloc {{
+                // Drop the payload first.
+                {drop_payload}
+
+                // Dealloc the pointer
+                let alignment = core::mem::align_of::<Self>().max(core::mem::align_of::<roc_std::Storage>());
+
+                unsafe {{ crate::roc_dealloc(storage.as_ptr().cast(), alignment as u32); }}
+            }} else {{
+                // Write the storage back.
+                storage.set(new_storage);
+            }}
+        }}
+    }}"#
+                )
+            }
+            Recursiveness::NonRecursive => {
+                format!(
+                    r#"fn drop(&mut self) {{
+        // Drop the payloads
+        {drop_payload}
+    }}"#
+                )
+            }
+        };
+
+        add_decl(impls, opt_impl, target_info, drop_fn);
     }
 
     // The PartialEq impl for the tag union
@@ -530,7 +833,7 @@ fn add_tag_union(
         };
         let opt_impl = Some(format!("{opt_impl_prefix}impl PartialEq for {name}"));
         let mut buf = r#"fn eq(&self, other: &Self) -> bool {
-            if self.variant() != other.variant() {
+            if self.discriminant() != other.discriminant() {
                 return false;
             }
 
@@ -545,7 +848,7 @@ fn add_tag_union(
             &mut buf,
             |tag_name, opt_payload_id| {
                 if opt_payload_id.is_some() {
-                    format!("self.{tag_name} == other.{tag_name},")
+                    format!("{actual_self}.{tag_name} == {actual_other}.{tag_name},")
                 } else {
                     // if the tags themselves had been unequal, we already would have
                     // early-returned with false, so this means the tags were equal
@@ -561,19 +864,19 @@ fn add_tag_union(
         buf.push_str(INDENT);
         buf.push('}');
 
-        add_decl(impls, opt_impl, architecture, buf);
+        add_decl(impls, opt_impl, target_info, buf);
     }
 
     // The PartialOrd impl for the tag union
     {
         let opt_impl = Some(format!("impl PartialOrd for {name}"));
         let mut buf = r#"fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-            match self.variant().partial_cmp(&other.variant()) {
-                Some(core::cmp::Ordering::Equal) => {}
-                not_eq => return not_eq,
-            }
+        match self.discriminant().partial_cmp(&other.discriminant()) {
+            Some(core::cmp::Ordering::Equal) => {}
+            not_eq => return not_eq,
+        }
 
-            unsafe {
+        unsafe {
 "#
         .to_string();
 
@@ -584,7 +887,7 @@ fn add_tag_union(
             &mut buf,
             |tag_name, opt_payload_id| {
                 if opt_payload_id.is_some() {
-                    format!("self.{tag_name}.partial_cmp(&other.{tag_name}),",)
+                    format!("{actual_self}.{tag_name}.partial_cmp(&{actual_other}.{tag_name}),",)
                 } else {
                     // if the tags themselves had been unequal, we already would have
                     // early-returned, so this means the tags were equal and there's
@@ -600,14 +903,14 @@ fn add_tag_union(
         buf.push_str(INDENT);
         buf.push('}');
 
-        add_decl(impls, opt_impl, architecture, buf);
+        add_decl(impls, opt_impl, target_info, buf);
     }
 
     // The Ord impl for the tag union
     {
         let opt_impl = Some(format!("impl Ord for {name}"));
         let mut buf = r#"fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-            match self.variant().cmp(&other.variant()) {
+            match self.discriminant().cmp(&other.discriminant()) {
                 core::cmp::Ordering::Equal => {}
                 not_eq => return not_eq,
             }
@@ -623,7 +926,7 @@ fn add_tag_union(
             &mut buf,
             |tag_name, opt_payload_id| {
                 if opt_payload_id.is_some() {
-                    format!("self.{tag_name}.cmp(&other.{tag_name}),",)
+                    format!("{actual_self}.{tag_name}.cmp(&{actual_other}.{tag_name}),",)
                 } else {
                     // if the tags themselves had been unequal, we already would have
                     // early-returned, so this means the tags were equal and there's
@@ -639,7 +942,7 @@ fn add_tag_union(
         buf.push_str(INDENT);
         buf.push('}');
 
-        add_decl(impls, opt_impl, architecture, buf);
+        add_decl(impls, opt_impl, target_info, buf);
     }
 
     // The Clone impl for the tag union
@@ -651,46 +954,66 @@ fn add_tag_union(
         };
 
         let opt_impl = Some(format!("{opt_impl_prefix}impl Clone for {name}"));
-        let mut buf = r#"fn clone(&self) -> Self {
+        let body = match recursiveness {
+            Recursiveness::Recursive => RECURSIVE_TAG_UNION_CLONE.to_string(),
+            Recursiveness::NonRecursive => {
+                let mut buf = r#"fn clone(&self) -> Self {
         let mut answer = unsafe {
 "#
-        .to_string();
+                .to_string();
 
-        write_impl_tags(
-            3,
-            tags.iter(),
-            &discriminant_name,
-            &mut buf,
-            |tag_name, opt_payload_id| {
-                if opt_payload_id.is_some() {
-                    format!(
-                        r#"Self {{
-                    {tag_name}: self.{tag_name}.clone(),
+                write_impl_tags(
+                    3,
+                    tags.iter(),
+                    &discriminant_name,
+                    &mut buf,
+                    |tag_name, opt_payload_id| {
+                        if opt_payload_id.is_some() {
+                            match recursiveness {
+                                Recursiveness::Recursive => {
+                                    format!(
+                                        r#"Self {{
+                    {union_name} {{
+                        {tag_name}: self.pointer
+                    }}
                 }},"#,
-                    )
-                } else {
-                    // when there's no payload, initialize to garbage memory.
-                    format!(
-                        r#"core::mem::transmute::<
+                                    )
+                                }
+                                Recursiveness::NonRecursive => {
+                                    format!(
+                                        r#"Self {{
+                    {tag_name}: {actual_self}.{tag_name}.clone(),
+                }},"#,
+                                    )
+                                }
+                            }
+                        } else {
+                            // when there's no payload, initialize to garbage memory.
+                            format!(
+                                r#"core::mem::transmute::<
                     core::mem::MaybeUninit<{name}>,
                     {name},
                 >(core::mem::MaybeUninit::uninit()),"#,
-                    )
-                }
-            },
-        );
+                            )
+                        }
+                    },
+                );
 
-        buf.push_str(
-            r#"
+                buf.push_str(
+                    r#"
         };
 
-        answer.set_discriminant(self.variant());
+        answer.set_discriminant(self.discriminant());
 
         answer
     }"#,
-        );
+                );
 
-        add_decl(impls, opt_impl, architecture, buf);
+                buf
+            }
+        };
+
+        add_decl(impls, opt_impl, target_info, body);
     }
 
     // The Hash impl for the tag union
@@ -710,7 +1033,7 @@ fn add_tag_union(
                     format!(
                         r#"unsafe {{
                     {hash_tag};
-                    self.{tag_name}.hash(state);
+                    {actual_self}.{tag_name}.hash(state);
                 }},"#
                     )
                 } else {
@@ -722,7 +1045,7 @@ fn add_tag_union(
         buf.push_str(INDENT);
         buf.push('}');
 
-        add_decl(impls, opt_impl, architecture, buf);
+        add_decl(impls, opt_impl, target_info, buf);
     }
 
     // The Debug impl for the tag union
@@ -730,9 +1053,9 @@ fn add_tag_union(
         let opt_impl = Some(format!("impl core::fmt::Debug for {name}"));
         let mut buf = format!(
             r#"fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
-            f.write_str("{name}::")?;
+        f.write_str("{name}::")?;
 
-            unsafe {{
+        unsafe {{
 "#
         );
 
@@ -746,14 +1069,44 @@ fn add_tag_union(
                     // If it's a ManuallyDrop, we need a `*` prefix to dereference it
                     // (because otherwise we're using ManuallyDrop's Debug instance
                     // rather than the Debug instance of the value it wraps).
-                    let deref_str = if types.get(payload_id).has_pointer(types) {
+                    let payload_type = types.get_type(payload_id);
+                    let deref_str = if payload_type.has_pointer(types) {
                         "&*"
                     } else {
                         "&"
                     };
 
+                    let fields_str = match payload_type {
+                        RocType::RocStr
+                        | RocType::Bool
+                        | RocType::Num(_)
+                        | RocType::RocList(_)
+                        | RocType::RocDict(_, _)
+                        | RocType::RocSet(_)
+                        | RocType::RocBox(_)
+                        | RocType::TagUnion(_)
+                        | RocType::Struct { .. }
+                        | RocType::RecursivePointer { .. } => {
+                            format!(".field({deref_str}{actual_self}.{tag_name})")
+                        }
+                        RocType::TagUnionPayload { fields, .. } => {
+                            let mut buf = Vec::new();
+
+                            for (label, _) in fields {
+                                // Needs an "f" prefix
+                                buf.push(format!(
+                                    ".field(&({deref_str}{actual_self}.{tag_name}).f{label})"
+                                ));
+                            }
+
+                            buf.join("\n")
+                        }
+                    };
+
                     format!(
-                        r#"f.debug_tuple("{tag_name}").field({deref_str}self.{tag_name}).finish(),"#,
+                        r#"f.debug_tuple("{tag_name}")
+        {fields_str}
+        .finish(),"#,
                     )
                 }
                 None => format!(r#"f.write_str("{tag_name}"),"#),
@@ -766,7 +1119,7 @@ fn add_tag_union(
         buf.push_str(INDENT);
         buf.push('}');
 
-        add_decl(impls, opt_impl, architecture, buf);
+        add_decl(impls, opt_impl, target_info, buf);
     }
 }
 
@@ -783,7 +1136,7 @@ fn write_impl_tags<
 ) {
     write_indents(indentations, buf);
 
-    buf.push_str("match self.variant() {\n");
+    buf.push_str("match self.discriminant() {\n");
 
     for (tag_name, opt_payload_id) in tags {
         let branch_str = to_branch_str(tag_name, *opt_payload_id);
@@ -802,7 +1155,7 @@ fn write_impl_tags<
 
 fn add_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str> + Display>(
     name: &str,
-    architecture: Architecture,
+    target_info: TargetInfo,
     typ: &RocType,
     tags: I,
     types: &Types,
@@ -819,7 +1172,7 @@ fn add_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str> + Display>(
     // e.g. "#[repr(u8)]\npub enum Foo {\n"
     let mut buf = format!("{derive}\n#[repr(u{repr_bytes})]\npub enum {name} {{\n");
 
-    // Debug impls should never vary by architecture.
+    // Debug impls should never vary by target_info.
     let mut debug_buf = format!(
         r#"impl core::fmt::Debug for {name} {{
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
@@ -841,67 +1194,64 @@ fn add_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str> + Display>(
         "}}\n\n{debug_buf}{INDENT}{INDENT}}}\n{INDENT}}}\n}}"
     ));
 
-    add_decl(impls, None, architecture, buf);
+    add_decl(impls, None, target_info, buf);
 }
 
-fn add_struct(
+fn add_struct<S: Display>(
     name: &str,
-    architecture: Architecture,
-    fields: &[Field],
+    target_info: TargetInfo,
+    fields: &[(S, TypeId)],
     struct_id: TypeId,
     types: &Types,
     impls: &mut Impls,
+    is_tag_union_payload: bool,
 ) {
-    match fields.len() {
-        0 => {
-            // An empty record is zero-sized and won't end up being passed to/from the host.
-        }
-        1 => {
-            // Unwrap single-field records
-            add_type(
-                architecture,
-                fields.first().unwrap().type_id(),
-                types,
-                impls,
-            )
-        }
-        _ => {
-            let derive = derive_str(types.get(struct_id), types, true);
-            let mut buf = format!("{derive}\n#[repr(C)]\npub struct {name} {{\n");
+    let derive = derive_str(types.get_type(struct_id), types, true);
+    let pub_str = if is_tag_union_payload { "" } else { "pub " };
+    let repr = if fields.len() == 1 {
+        "transparent"
+    } else {
+        "C"
+    };
+    let mut buf = format!("{derive}\n#[repr({repr})]\n{pub_str}struct {name} {{\n");
 
-            for field in fields {
-                buf.push_str(&format!(
-                    "{INDENT}pub {}: {},\n",
-                    field.label(),
-                    type_name(field.type_id(), types)
-                ));
-            }
+    for (label, type_id) in fields {
+        let type_str = type_name(*type_id, types);
 
-            buf.push('}');
+        // Tag union payloads have numbered fields, so we prefix them
+        // with an "f" because Rust doesn't allow struct fields to be numbers.
+        let label = if is_tag_union_payload {
+            format!("f{label}")
+        } else {
+            format!("{label}")
+        };
 
-            add_decl(impls, None, architecture, buf);
-        }
+        buf.push_str(&format!("{INDENT}pub {label}: {type_str},\n",));
     }
+
+    buf.push('}');
+
+    add_decl(impls, None, target_info, buf);
 }
 
 fn type_name(id: TypeId, types: &Types) -> String {
-    match types.get(id) {
-        RocType::U8 => "u8".to_string(),
-        RocType::U16 => "u16".to_string(),
-        RocType::U32 => "u32".to_string(),
-        RocType::U64 => "u64".to_string(),
-        RocType::U128 => "roc_std::U128".to_string(),
-        RocType::I8 => "i8".to_string(),
-        RocType::I16 => "i16".to_string(),
-        RocType::I32 => "i32".to_string(),
-        RocType::I64 => "i64".to_string(),
-        RocType::I128 => "roc_std::I128".to_string(),
-        RocType::F32 => "f32".to_string(),
-        RocType::F64 => "f64".to_string(),
-        RocType::F128 => "roc_std::F128".to_string(),
-        RocType::Bool => "bool".to_string(),
-        RocType::RocDec => "roc_std::RocDec".to_string(),
+    match types.get_type(id) {
         RocType::RocStr => "roc_std::RocStr".to_string(),
+        RocType::Bool => "bool".to_string(),
+        RocType::Num(RocNum::U8) => "u8".to_string(),
+        RocType::Num(RocNum::U16) => "u16".to_string(),
+        RocType::Num(RocNum::U32) => "u32".to_string(),
+        RocType::Num(RocNum::U64) => "u64".to_string(),
+        RocType::Num(RocNum::U128) => "roc_std::U128".to_string(),
+        RocType::Num(RocNum::I8) => "i8".to_string(),
+        RocType::Num(RocNum::I16) => "i16".to_string(),
+        RocType::Num(RocNum::I32) => "i32".to_string(),
+        RocType::Num(RocNum::I64) => "i64".to_string(),
+        RocType::Num(RocNum::I128) => "roc_std::I128".to_string(),
+        RocType::Num(RocNum::F32) => "f32".to_string(),
+        RocType::Num(RocNum::F64) => "f64".to_string(),
+        RocType::Num(RocNum::F128) => "roc_std::F128".to_string(),
+        RocType::Num(RocNum::Dec) => "roc_std::RocDec".to_string(),
         RocType::RocDict(key_id, val_id) => format!(
             "roc_std::RocDict<{}, {}>",
             type_name(*key_id, types),
@@ -911,13 +1261,14 @@ fn type_name(id: TypeId, types: &Types) -> String {
         RocType::RocList(elem_id) => format!("roc_std::RocList<{}>", type_name(*elem_id, types)),
         RocType::RocBox(elem_id) => format!("roc_std::RocBox<{}>", type_name(*elem_id, types)),
         RocType::Struct { name, .. }
-        | RocType::TransparentWrapper { name, .. }
+        | RocType::TagUnionPayload { name, .. }
         | RocType::TagUnion(RocTagUnion::NonRecursive { name, .. })
         | RocType::TagUnion(RocTagUnion::Recursive { name, .. })
         | RocType::TagUnion(RocTagUnion::Enumeration { name, .. })
         | RocType::TagUnion(RocTagUnion::NullableWrapped { name, .. })
         | RocType::TagUnion(RocTagUnion::NullableUnwrapped { name, .. })
         | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { name, .. }) => name.clone(),
+        RocType::RecursivePointer(content) => type_name(*content, types),
     }
 }
 
@@ -951,7 +1302,7 @@ fn derive_str(typ: &RocType, types: &Types, include_debug: bool) -> String {
 #[allow(clippy::too_many_arguments)]
 fn add_nullable_unwrapped(
     name: &str,
-    architecture: Architecture,
+    target_info: TargetInfo,
     id: TypeId,
     null_tag: &str,
     non_null_tag: &str,
@@ -964,8 +1315,8 @@ fn add_nullable_unwrapped(
 
     tag_names.sort();
 
-    let discriminant_name = add_discriminant(name, architecture, tag_names, types, impls);
-    let payload_type = types.get(non_null_payload);
+    let discriminant_name = add_discriminant(name, target_info, tag_names, types, impls);
+    let payload_type = types.get_type(non_null_payload);
     let payload_type_name = type_name(non_null_payload, types);
     let has_pointer = payload_type.has_pointer(types);
 
@@ -973,20 +1324,20 @@ fn add_nullable_unwrapped(
     {
         // This struct needs its own Clone impl because it has
         // a refcount to bump
-        let derive_extras = if types.get(id).has_float(types) {
+        let derive_extras = if types.get_type(id).has_float(types) {
             ""
         } else {
             ", Eq, Ord, Hash"
         };
         let body = format!(
-            r#"#[repr(C)]
+            r#"#[repr(transparent)]
 #[derive(PartialEq, PartialOrd{derive_extras})]
 pub struct {name} {{
     pointer: *mut core::mem::ManuallyDrop<{payload_type_name}>,
 }}"#
         );
 
-        add_decl(impls, None, architecture, body);
+        add_decl(impls, None, target_info, body);
     }
 
     // The impl for the tag union
@@ -996,27 +1347,17 @@ pub struct {name} {{
         add_decl(
             impls,
             opt_impl.clone(),
-            architecture,
-            r#"#[inline(always)]
-    fn storage(&self) -> Option<&core::cell::Cell<roc_std::Storage>> {
-        if self.pointer.is_null() {
-            None
-        } else {
-            unsafe {
-                Some(&*self.pointer.cast::<core::cell::Cell<roc_std::Storage>>().sub(1))
-            }
-        }
-    }"#
-            .to_string(),
+            target_info,
+            RECURSIVE_TAG_UNION_STORAGE.to_string(),
         );
 
         add_decl(
             impls,
             opt_impl.clone(),
-            architecture,
+            target_info,
             format!(
-                r#"{VARIANT_DOC_COMMENT}
-    pub fn variant(&self) -> {discriminant_name} {{
+                r#"{DISCRIMINANT_DOC_COMMENT}
+    pub fn discriminant(&self) -> {discriminant_name} {{
         if self.pointer.is_null() {{
             {discriminant_name}::{null_tag}
         }} else {{
@@ -1025,6 +1366,52 @@ pub struct {name} {{
     }}"#
             ),
         );
+
+        let owned_ret_type;
+        let borrowed_ret_type;
+        let payload_args;
+        let args_to_payload;
+        let owned_ret;
+        let borrowed_ret;
+
+        match payload_type {
+            RocType::RocStr
+            | RocType::Bool
+            | RocType::Num(_)
+            | RocType::RocList(_)
+            | RocType::RocDict(_, _)
+            | RocType::RocSet(_)
+            | RocType::RocBox(_)
+            | RocType::TagUnion(_)
+            | RocType::RecursivePointer { .. } => {
+                owned_ret_type = type_name(non_null_payload, types);
+                borrowed_ret_type = format!("&{}", owned_ret_type);
+                payload_args = format!("arg: {owned_ret_type}");
+                args_to_payload = "arg".to_string();
+                owned_ret = "payload".to_string();
+                borrowed_ret = format!("&{owned_ret}");
+            }
+            RocType::Struct { fields, .. } => {
+                let answer = tag_union_struct_help(fields.iter(), non_null_payload, types, false);
+
+                payload_args = answer.payload_args;
+                args_to_payload = answer.args_to_payload;
+                owned_ret = answer.owned_ret;
+                borrowed_ret = answer.borrowed_ret;
+                owned_ret_type = answer.owned_ret_type;
+                borrowed_ret_type = answer.borrowed_ret_type;
+            }
+            RocType::TagUnionPayload { fields, .. } => {
+                let answer = tag_union_struct_help(fields.iter(), non_null_payload, types, true);
+
+                payload_args = answer.payload_args;
+                args_to_payload = answer.args_to_payload;
+                owned_ret = answer.owned_ret;
+                borrowed_ret = answer.borrowed_ret;
+                owned_ret_type = answer.owned_ret_type;
+                borrowed_ret_type = answer.borrowed_ret_type;
+            }
+        };
 
         // Add a convenience constructor function for the tag with the payload, e.g.
         //
@@ -1045,13 +1432,14 @@ pub struct {name} {{
         add_decl(
             impls,
             opt_impl.clone(),
-            architecture,
+            target_info,
             format!(
                 r#"/// Construct a tag named {non_null_tag}, with the appropriate payload
-    pub fn {non_null_tag}(payload: {payload_type_name}) -> Self {{
+    pub fn {non_null_tag}({payload_args}) -> Self {{
         let payload_align = core::mem::align_of::<{payload_type_name}>();
         let self_align = core::mem::align_of::<Self>();
         let size = self_align + core::mem::size_of::<{payload_type_name}>();
+        let payload = {args_to_payload};
 
         unsafe {{
             // Store the payload at `self_align` bytes after the allocation,
@@ -1059,7 +1447,7 @@ pub struct {name} {{
             let alloc_ptr = crate::roc_alloc(size, payload_align as u32);
             let payload_ptr = alloc_ptr.cast::<u8>().add(self_align).cast::<core::mem::ManuallyDrop<{payload_type_name}>>();
 
-            *payload_ptr = core::mem::ManuallyDrop::new(payload);
+            *payload_ptr = payload;
 
             // The reference count is stored immediately before the payload,
             // which isn't necessarily the same as alloc_ptr - e.g. when alloc_ptr
@@ -1083,19 +1471,19 @@ pub struct {name} {{
             add_decl(
                 impls,
                 opt_impl.clone(),
-                architecture,
+                target_info,
                 format!(
-                    r#"/// Unsafely assume the given {name} has a .variant() of {non_null_tag} and convert it to {non_null_tag}'s payload.
-    /// (Always examine .variant() first to make sure this is the correct variant!)
-    /// Panics in debug builds if the .variant() doesn't return {non_null_tag}.
-    pub unsafe fn into_{non_null_tag}(self) -> {payload_type_name} {{
-        debug_assert_eq!(self.variant(), {discriminant_name}::{non_null_tag});
+                    r#"/// Unsafely assume the given {name} has a .discriminant() of {non_null_tag} and convert it to {non_null_tag}'s payload.
+    /// (Always examine .discriminant() first to make sure this is the correct variant!)
+    /// Panics in debug builds if the .discriminant() doesn't return {non_null_tag}.
+    pub unsafe fn into_{non_null_tag}(self) -> {owned_ret_type} {{
+        debug_assert_eq!(self.discriminant(), {discriminant_name}::{non_null_tag});
 
         let payload = {assign_payload};
 
-        core::mem::drop(self);
+        core::mem::drop::<Self>(self);
 
-        payload
+        {owned_ret}
     }}"#,
                 ),
             );
@@ -1104,14 +1492,17 @@ pub struct {name} {{
         add_decl(
             impls,
             opt_impl.clone(),
-            architecture,
+            target_info,
             format!(
-                r#"/// Unsafely assume the given {name} has a .variant() of {non_null_tag} and return its payload.
-    /// (Always examine .variant() first to make sure this is the correct variant!)
-    /// Panics in debug builds if the .variant() doesn't return {non_null_tag}.
-    pub unsafe fn as_{non_null_tag}(&self) -> &{payload_type_name} {{
-        debug_assert_eq!(self.variant(), {discriminant_name}::{non_null_tag});
-        &*self.pointer
+                r#"/// Unsafely assume the given {name} has a .discriminant() of {non_null_tag} and return its payload.
+    /// (Always examine .discriminant() first to make sure this is the correct variant!)
+    /// Panics in debug builds if the .discriminant() doesn't return {non_null_tag}.
+    pub unsafe fn as_{non_null_tag}(&self) -> {borrowed_ret_type} {{
+        debug_assert_eq!(self.discriminant(), {discriminant_name}::{non_null_tag});
+
+        let payload = &*self.pointer;
+
+        {borrowed_ret}
     }}"#,
             ),
         );
@@ -1125,7 +1516,7 @@ pub struct {name} {{
         add_decl(
             impls,
             opt_impl.clone(),
-            architecture,
+            target_info,
             format!(
                 r#"/// A tag named {null_tag}, which has no payload.
     pub const {null_tag}: Self = Self {{
@@ -1137,7 +1528,7 @@ pub struct {name} {{
         add_decl(
             impls,
             opt_impl.clone(),
-            architecture,
+            target_info,
             format!(
                 r#"/// Other `into_` methods return a payload, but since the {null_tag} tag
     /// has no payload, this does nothing and is only here for completeness.
@@ -1150,7 +1541,7 @@ pub struct {name} {{
         add_decl(
             impls,
             opt_impl,
-            architecture,
+            target_info,
             format!(
                 r#"/// Other `as` methods return a payload, but since the {null_tag} tag
     /// has no payload, this does nothing and is only here for completeness.
@@ -1161,89 +1552,17 @@ pub struct {name} {{
         );
     }
 
-    // The roc_std::ReferenceCount impl for the tag union
-    {
-        let opt_impl = Some(format!("unsafe impl roc_std::ReferenceCount for {name}"));
-
-        add_decl(
-            impls,
-            opt_impl.clone(),
-            architecture,
-            r#"fn increment(&self) {
-        if let Some(storage) = self.storage() {
-            let mut copy = storage.get();
-            if !copy.is_readonly() {
-                copy.increment_reference_count();
-                storage.set(copy);
-            }
-        }
-    }"#
-            .to_string(),
-        );
-
-        add_decl(
-            impls,
-            opt_impl,
-            architecture,
-                r#"unsafe fn decrement(wrapper_ptr: *const Self) {
-        let wrapper = &*wrapper_ptr;
-
-        if let Some(storage) = Self::storage(wrapper) {
-            // Decrement the refcount and return early if no dealloc is needed
-            {
-                let mut new_storage = storage.get();
-
-                if new_storage.is_readonly() {
-                    return;
-                }
-
-                let needs_dealloc = new_storage.decrease();
-
-                if !needs_dealloc {
-                    // Write the storage back.
-                    storage.set(new_storage);
-
-                    return;
-                }
-            }
-
-            if !wrapper.pointer.is_null() {
-                // If there is a payload, recursively drop it first.
-                let mut payload = core::mem::ManuallyDrop::take(&mut *wrapper.pointer);
-
-                core::mem::drop(payload);
-            }
-
-            // Dealloc the pointer
-            let alignment = core::mem::align_of::<Self>().max(core::mem::align_of::<roc_std::Storage>());
-            let alloc_ptr = wrapper.pointer.cast::<u8>().sub(alignment);
-
-            crate::roc_dealloc(
-                alloc_ptr as *mut core::ffi::c_void,
-                alignment as u32,
-            );
-        }
-    }"#.to_string()
-        );
-    }
-
     // The Clone impl for the tag union
     {
         // Note that these never have Copy because they always contain a pointer.
         let opt_impl = Some(format!("impl Clone for {name}"));
 
-        // Recursive tag unions need a custom Clone which bumps refcount.
-        let body = r#"fn clone(&self) -> Self {
-        roc_std::ReferenceCount::increment(self);
-
-        Self {
-            pointer: self.pointer
-        }
-    }
-"#
-        .to_string();
-
-        add_decl(impls, opt_impl, architecture, body);
+        add_decl(
+            impls,
+            opt_impl,
+            target_info,
+            RECURSIVE_TAG_UNION_CLONE.to_string(),
+        );
     }
 
     // The Drop impl for the tag union
@@ -1253,13 +1572,33 @@ pub struct {name} {{
         add_decl(
             impls,
             opt_impl,
-            architecture,
-            r#"fn drop(&mut self) {
-        unsafe {
-            roc_std::ReferenceCount::decrement(self as *const Self);
-        }
-    }"#
-            .to_string(),
+            target_info,
+            r#"fn drop(&mut self) {{
+        // We only need to do any work if there's actually a heap-allocated payload.
+        if let Some(storage) = self.storage() {{
+            let mut new_storage = storage.get();
+
+            // Decrement the refcount
+            let needs_dealloc = !new_storage.is_readonly() && new_storage.decrease();
+
+            if needs_dealloc {{
+                // Drop the payload first.
+                unsafe {{
+                    core::mem::ManuallyDrop::drop(&mut core::ptr::read(self.pointer));
+                }}
+
+                // Dealloc the pointer
+                let alignment = core::mem::align_of::<Self>().max(core::mem::align_of::<roc_std::Storage>());
+
+                unsafe {{
+                    crate::roc_dealloc(storage.as_ptr().cast(), alignment as u32);
+                }}
+            }} else {{
+                // Write the storage back.
+                storage.set(new_storage);
+            }}
+        }}
+    }}"#.to_string(),
         );
     }
 
@@ -1268,6 +1607,41 @@ pub struct {name} {{
         let opt_impl = Some(format!("impl core::fmt::Debug for {name}"));
         let extra_deref = if has_pointer { "*" } else { "" };
 
+        let fields_str = match payload_type {
+            RocType::RocStr
+            | RocType::Bool
+            | RocType::Num(_)
+            | RocType::RocList(_)
+            | RocType::RocDict(_, _)
+            | RocType::RocSet(_)
+            | RocType::RocBox(_)
+            | RocType::TagUnion(_)
+            | RocType::RecursivePointer { .. } => {
+                format!(
+                    r#"f.debug_tuple("{non_null_tag}").field(&*{extra_deref}self.pointer).finish()"#
+                )
+            }
+            RocType::Struct { fields, .. } => {
+                let mut buf = Vec::new();
+
+                for (label, _) in fields {
+                    buf.push(format!(".field(&(&*{extra_deref}self.pointer).{label})"));
+                }
+
+                buf.join(&format!("\n{INDENT}{INDENT}{INDENT}{INDENT}{INDENT}"))
+            }
+            RocType::TagUnionPayload { fields, .. } => {
+                let mut buf = Vec::new();
+
+                for (label, _) in fields {
+                    // Needs an "f" prefix
+                    buf.push(format!(".field(&(&*{extra_deref}self.pointer).f{label})"));
+                }
+
+                buf.join(&format!("\n{INDENT}{INDENT}{INDENT}{INDENT}{INDENT}"))
+            }
+        };
+
         let body = format!(
             r#"fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{
         if self.pointer.is_null() {{
@@ -1275,16 +1649,20 @@ pub struct {name} {{
         }} else {{
             f.write_str("{name}::")?;
 
-            unsafe {{ f.debug_tuple("{non_null_tag}").field(&*{extra_deref}self.pointer).finish() }}
+            unsafe {{
+                f.debug_tuple("{non_null_tag}")
+                    {fields_str}
+                    .finish()
+            }}
         }}
     }}"#
         );
 
-        add_decl(impls, opt_impl, architecture, body);
+        add_decl(impls, opt_impl, target_info, body);
     }
 }
 
-fn arch_to_str(architecture: &Architecture) -> &'static str {
+fn arch_to_str(architecture: Architecture) -> &'static str {
     match architecture {
         Architecture::X86_64 => "x86_64",
         Architecture::X86_32 => "x86",
@@ -1297,5 +1675,143 @@ fn arch_to_str(architecture: &Architecture) -> &'static str {
 fn write_indents(indentations: usize, buf: &mut String) {
     for _ in 0..indentations {
         buf.push_str(INDENT);
+    }
+}
+
+fn max_pointer_tagged_variants(architecture: Architecture) -> usize {
+    match architecture {
+        // On a 64-bit system, pointers have 3 bits that are unused, so return 2^3 = 8
+        Architecture::X86_64 | Architecture::Aarch64 => 8,
+        // On a 32-bit system, pointers have 2 bits that are unused, so return 2^4 = 4
+        Architecture::X86_32 | Architecture::Aarch32 | Architecture::Wasm32 => 4,
+    }
+}
+
+#[inline(always)]
+fn tagged_pointer_bitmask(architecture: Architecture) -> u8 {
+    match architecture {
+        // On a 64-bit system, pointers have 3 bits that are unused
+        Architecture::X86_64 | Architecture::Aarch64 => 0b0000_0111,
+        // On a 32-bit system, pointers have 2 bits that are unused
+        Architecture::X86_32 | Architecture::Aarch32 | Architecture::Wasm32 => 0b0000_0011,
+    }
+}
+
+struct StructIngredients {
+    payload_args: String,
+    args_to_payload: String,
+    owned_ret: String,
+    borrowed_ret: String,
+    owned_ret_type: String,
+    borrowed_ret_type: String,
+}
+
+fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + PartialOrd + 'a>(
+    fields: I,
+    payload_id: TypeId,
+    types: &Types,
+    is_tag_union_payload: bool,
+) -> StructIngredients {
+    let mut sorted_fields = fields.collect::<Vec<&(L, TypeId)>>();
+
+    sorted_fields.sort_by(|(label1, _), (label2, _)| label1.partial_cmp(label2).unwrap());
+
+    let mut ret_types = Vec::new();
+    let mut ret_values = Vec::new();
+
+    for (label, type_id) in sorted_fields.iter() {
+        let label = if is_tag_union_payload {
+            // Tag union payload fields need "f" prefix
+            // because they're numbers
+            format!("f{}", label)
+        } else {
+            format!("{}", label)
+        };
+
+        ret_values.push(format!("payload.{label}"));
+        ret_types.push(type_name(*type_id, types));
+    }
+
+    let payload_type_name = type_name(payload_id, types);
+    let payload_args = ret_types
+        .iter()
+        .enumerate()
+        .map(|(index, typ)| format!("arg{index}: {typ}"))
+        .collect::<Vec<String>>()
+        .join(", ");
+    let args_to_payload = format!(
+        "core::mem::ManuallyDrop::new({payload_type_name} {{\n{}\n{INDENT}{INDENT}{INDENT}{INDENT}}})",
+        sorted_fields
+            .iter()
+            .enumerate()
+            .map(|(index, (label, _))| {
+                let mut indents = String::new();
+
+                for _ in 0..5 {
+                    indents.push_str(INDENT);
+                }
+
+                let label = if is_tag_union_payload {
+                    // Tag union payload fields need "f" prefix
+                    // because they're numbers
+                    format!("f{}", label)
+                } else {
+                    format!("{}", label)
+                };
+
+                format!("{indents}{label}: arg{index},")
+            })
+            .collect::<Vec<String>>()
+            .join("\n")
+    );
+    let owned_ret;
+    let borrowed_ret;
+    let owned_ret_type;
+    let borrowed_ret_type;
+
+    if ret_types.len() == 1 {
+        owned_ret_type = ret_types.join("");
+        borrowed_ret_type = format!("&{owned_ret_type}");
+
+        let ret_val = ret_values.first().unwrap();
+        owned_ret = format!("\n{INDENT}{INDENT}{ret_val}");
+        borrowed_ret = format!("\n{INDENT}{INDENT}&{ret_val}");
+    } else {
+        owned_ret_type = format!("({})", ret_types.join(", "));
+        borrowed_ret_type = format!(
+            "({})",
+            ret_types
+                .iter()
+                .map(|ret_type| { format!("&{ret_type}") })
+                .collect::<Vec<String>>()
+                .join(", ")
+        );
+        owned_ret = {
+            let lines = ret_values
+                .iter()
+                .map(|line| format!("\n{INDENT}{INDENT}{INDENT}{line}"))
+                .collect::<Vec<String>>()
+                .join(", ");
+
+            format!("({lines}\n{INDENT}{INDENT})")
+        };
+        borrowed_ret = {
+            let lines = ret_values
+                .iter()
+                .map(|line| format!("\n{INDENT}{INDENT}{INDENT}&{line}"))
+                .collect::<Vec<String>>()
+                .join(", ");
+
+            format!("({lines}\n{INDENT}{INDENT})")
+        };
+    }
+
+    StructIngredients {
+        payload_args,
+        args_to_payload,
+        owned_ret,
+        borrowed_ret,
+        owned_ret_type,
+        borrowed_ret_type,
     }
 }

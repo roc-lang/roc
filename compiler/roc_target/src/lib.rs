@@ -2,9 +2,9 @@
 // See github.com/rtfeldman/roc/issues/800 for discussion of the large_enum_variant check.
 #![allow(clippy::large_enum_variant)]
 
-use strum_macros::EnumIter;
+use strum_macros::{EnumCount, EnumIter};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TargetInfo {
     pub architecture: Architecture,
 }
@@ -65,13 +65,15 @@ pub enum PtrWidth {
     Bytes8 = 8,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter)]
+/// These should be sorted alphabetically!
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, EnumIter, EnumCount)]
+#[repr(u8)]
 pub enum Architecture {
-    X86_64,
-    X86_32,
-    Aarch64,
     Aarch32,
+    Aarch64,
     Wasm32,
+    X86_32,
+    X86_64,
 }
 
 impl Architecture {

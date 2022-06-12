@@ -57,13 +57,13 @@ pub fn main() {
     };
 
     match load_types(input_path.clone(), &cwd, Threading::AllAvailable) {
-        Ok(types_by_architecture) => {
+        Ok(types_and_targets) => {
             let mut buf;
 
             match output_type {
                 OutputType::Rust => {
                     buf = std::str::from_utf8(bindgen_rs::HEADER).unwrap().to_string();
-                    let body = bindgen_rs::emit(&types_by_architecture);
+                    let body = bindgen_rs::emit(&types_and_targets);
 
                     buf.push_str(&body);
                 }

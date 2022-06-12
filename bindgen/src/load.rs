@@ -1,14 +1,12 @@
-use crate::bindgen::Env;
-use crate::types::Types;
+use crate::types::{Env, Types};
 use bumpalo::Bump;
 use roc_can::{
     def::{Declaration, Def},
     pattern::Pattern,
 };
 use roc_load::{LoadedModule, Threading};
-use roc_mono::layout::LayoutCache;
 use roc_reporting::report::RenderTarget;
-use roc_target::Architecture;
+use roc_target::{Architecture, TargetInfo};
 use std::io;
 use std::path::{Path, PathBuf};
 use strum::IntoEnumIterator;
@@ -18,9 +16,7 @@ pub fn load_types(
     full_file_path: PathBuf,
     dir: &Path,
     threading: Threading,
-) -> Result<Vec<(Architecture, Types)>, io::Error> {
-    // TODO: generate both 32-bit and 64-bit #[cfg] macros if structs are different
-    // depending on 32-bit vs 64-bit targets.
+) -> Result<Vec<(Types, TargetInfo)>, io::Error> {
     let target_info = (&Triple::host()).into();
 
     let arena = &Bump::new();
@@ -58,59 +54,51 @@ pub fn load_types(
         );
     }
 
-    let mut answer = Vec::with_capacity(Architecture::iter().size_hint().0);
-
-    for architecture in Architecture::iter() {
-        let mut layout_cache = LayoutCache::new(architecture.into());
-        let mut env = Env {
-            arena,
-            layout_cache: &mut layout_cache,
-            interns: &interns,
-            struct_names: Default::default(),
-            enum_names: Default::default(),
-            subs,
-        };
-        let mut types = Types::default();
-
-        for decl in decls.iter() {
-            let defs = match decl {
-                Declaration::Declare(def) => {
-                    vec![def.clone()]
-                }
-                Declaration::DeclareRec(defs, cycle_mark) => {
-                    if cycle_mark.is_illegal(subs) {
-                        Vec::new()
-                    } else {
-                        defs.clone()
-                    }
-                }
-                Declaration::Builtin(..) => {
-                    unreachable!("Builtin decl in userspace module?")
-                }
-                Declaration::InvalidCycle(..) => Vec::new(),
-            };
-
-            for Def {
-                loc_pattern,
-                pattern_vars,
-                ..
-            } in defs.into_iter()
-            {
-                if let Pattern::Identifier(sym) = loc_pattern.value {
-                    let var = pattern_vars
-                        .get(&sym)
-                        .expect("Indetifier known but it has no var?");
-
-                    env.add_type(*var, &mut types);
-                } else {
-                    // figure out if we need to export non-identifier defs - when would that
-                    // happen?
-                }
+    let defs_iter = decls.iter().flat_map(|decl| match decl {
+        Declaration::Declare(def) => {
+            vec![def.clone()]
+        }
+        Declaration::DeclareRec(defs, cycle_mark) => {
+            if cycle_mark.is_illegal(subs) {
+                Vec::new()
+            } else {
+                defs.clone()
             }
         }
+        Declaration::Builtin(..) => {
+            unreachable!("Builtin decl in userspace module?")
+        }
+        Declaration::InvalidCycle(..) => Vec::new(),
+    });
 
-        answer.push((architecture, types));
-    }
+    let vars_iter = defs_iter.filter_map(
+        |Def {
+             loc_pattern,
+             pattern_vars,
+             ..
+         }| {
+            if let Pattern::Identifier(sym) = loc_pattern.value {
+                let var = pattern_vars
+                    .get(&sym)
+                    .expect("Indetifier known but it has no var?");
 
-    Ok(answer)
+                Some(*var)
+            } else {
+                // figure out if we need to export non-identifier defs - when
+                // would that happen?
+                None
+            }
+        },
+    );
+
+    let types_and_targets = Architecture::iter()
+        .map(|arch| {
+            let target_info = arch.into();
+            let mut env = Env::new(arena, subs, &interns, target_info);
+
+            (env.vars_to_types(vars_iter.clone()), target_info)
+        })
+        .collect();
+
+    Ok(types_and_targets)
 }

@@ -313,6 +313,7 @@ pub fn build_zig_host_wasm32(
 pub fn build_c_host_native(
     env_path: &str,
     env_home: &str,
+    env_cpath: &str,
     dest: &str,
     sources: &[&str],
     opt_level: OptLevel,
@@ -322,6 +323,7 @@ pub fn build_c_host_native(
     command
         .env_clear()
         .env("PATH", &env_path)
+        .env("CPATH", &env_cpath)
         .env("HOME", &env_home)
         .args(sources)
         .args(&["-o", dest]);
@@ -361,11 +363,12 @@ pub fn build_swift_host_native(
         unimplemented!("Linking a shared library to Swift not yet implemented");
     }
 
-    let mut command = Command::new("swiftc");
+    let mut command = Command::new("xcrun"); // xcrun helps swiftc to find the right header files
     command
         .env_clear()
         .env("PATH", &env_path)
         .env("HOME", &env_home)
+        .arg("swiftc")
         .args(sources)
         .arg("-emit-object")
         .arg("-parse-as-library")
@@ -416,6 +419,7 @@ pub fn rebuild_host(
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
     let env_home = env::var("HOME").unwrap_or_else(|_| "".to_string());
+    let env_cpath = env::var("CPATH").unwrap_or_else(|_| "".to_string());
 
     if zig_host_src.exists() {
         // Compile host.zig
@@ -530,6 +534,7 @@ pub fn rebuild_host(
             let output = build_c_host_native(
                 &env_path,
                 &env_home,
+                &env_cpath,
                 c_host_dest.to_str().unwrap(),
                 &[c_host_src.to_str().unwrap()],
                 opt_level,
@@ -585,6 +590,7 @@ pub fn rebuild_host(
             let output = build_c_host_native(
                 &env_path,
                 &env_home,
+                &env_cpath,
                 host_dest.to_str().unwrap(),
                 &[
                     c_host_src.to_str().unwrap(),
@@ -598,6 +604,7 @@ pub fn rebuild_host(
             let output = build_c_host_native(
                 &env_path,
                 &env_home,
+                &env_cpath,
                 c_host_dest.to_str().unwrap(),
                 &[c_host_src.to_str().unwrap()],
                 opt_level,
@@ -638,6 +645,7 @@ pub fn rebuild_host(
         let output = build_c_host_native(
             &env_path,
             &env_home,
+            &env_cpath,
             host_dest.to_str().unwrap(),
             &[c_host_src.to_str().unwrap()],
             opt_level,
@@ -1155,7 +1163,7 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
     Notes:
         zig build-obj just gives you back the first input file, doesn't combine them!
         zig build-lib works but doesn't emit relocations, even with --emit-relocs (bug?)
-            (gen_wasm needs relocs to adjust stack size by changing the __heap_base constant)
+            (gen_wasm needs relocs for host-to-app calls and stack size adjustment)
         zig wasm-ld is a wrapper around wasm-ld and gives us maximum flexiblity
             (but seems to be an unofficial API)
     */
@@ -1172,7 +1180,7 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
         "--export-all",
         "--no-entry",
         "--import-undefined",
-        // "--relocatable", // enable this when gen_wasm can handle Custom sections in any order
+        "--relocatable",
     ];
 
     command.args(args);
