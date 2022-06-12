@@ -121,10 +121,13 @@ mod bindgen_cli_run {
             `Cons "small str" Nil` is: StrConsList::Cons("small str", StrConsList::Nil)
             `Nil` is: StrConsList::Nil
         "#),
-        recursive_union:"recursive-union" => indoc!(r#"
+        basic_recursive_union:"basic-recursive-union" => indoc!(r#"
             tag_union was: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
             `Concat (String "Hello, ") (String "World!")` is: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
             `String "this is a test"` is: Expr::String("this is a test")
+        "#),
+        advanced_recursive_union:"advanced-recursive-union" => indoc!(r#"
+            rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { tool: Tool::SystemTool(R4 { name: "test", num: 42 }) }), inputFiles: ["foo"] }) }
         "#),
     }
 

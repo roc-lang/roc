@@ -5,6 +5,7 @@ use core::{
     cmp::{self, Ordering},
     ffi::c_void,
     fmt::Debug,
+    hash::Hash,
     intrinsics::copy_nonoverlapping,
     mem::{self, ManuallyDrop},
     ops::Deref,
@@ -193,18 +194,21 @@ where
 
                     // Decrease the current allocation's reference count.
                     let mut new_storage = storage.get();
-                    let needs_dealloc = new_storage.decrease();
 
-                    if needs_dealloc {
-                        // Unlike in Drop, do *not* decrement the refcounts of all the elements!
-                        // The new allocation is referencing them, so instead of incrementing them all
-                        // all just to decrement them again here, we neither increment nor decrement them.
-                        unsafe {
-                            roc_dealloc(self.ptr_to_allocation(), Self::alloc_alignment());
+                    if !new_storage.is_readonly() {
+                        let needs_dealloc = new_storage.decrease();
+
+                        if needs_dealloc {
+                            // Unlike in Drop, do *not* decrement the refcounts of all the elements!
+                            // The new allocation is referencing them, so instead of incrementing them all
+                            // all just to decrement them again here, we neither increment nor decrement them.
+                            unsafe {
+                                roc_dealloc(self.ptr_to_allocation(), Self::alloc_alignment());
+                            }
+                        } else {
+                            // Write the storage back.
+                            storage.set(new_storage);
                         }
-                    } else if !new_storage.is_readonly() {
-                        // Write the storage back.
-                        storage.set(new_storage);
                     }
                 }
             }
@@ -431,23 +435,24 @@ impl<T> Drop for RocList<T> {
         if let Some((elements, storage)) = self.elements_and_storage() {
             // Decrease the list's reference count.
             let mut new_storage = storage.get();
-            let needs_dealloc = new_storage.decrease();
 
-            if needs_dealloc {
-                unsafe {
-                    // Drop the stored elements.
-                    for index in 0..self.len() {
-                        let elem_ptr = elements.as_ptr().add(index);
+            if !new_storage.is_readonly() {
+                let needs_dealloc = new_storage.decrease();
 
-                        ManuallyDrop::drop(&mut *elem_ptr);
+                if needs_dealloc {
+                    unsafe {
+                        // Drop the stored elements.
+                        for index in 0..self.len() {
+                            ManuallyDrop::drop(&mut *elements.as_ptr().add(index));
+                        }
+
+                        // Release the memory.
+                        roc_dealloc(self.ptr_to_allocation(), Self::alloc_alignment());
                     }
-
-                    // Release the memory.
-                    roc_dealloc(self.ptr_to_allocation(), Self::alloc_alignment());
+                } else {
+                    // Write the storage back.
+                    storage.set(new_storage);
                 }
-            } else if !new_storage.is_readonly() {
-                // Write the storage back.
-                storage.set(new_storage);
             }
         }
     }
@@ -506,5 +511,21 @@ impl<T> Drop for IntoIter<T> {
                 mem::drop::<T>(unsafe { ManuallyDrop::take(&mut *elements.as_ptr().add(i)) })
             }
         }
+    }
+}
+
+impl<T: Hash> Hash for RocList<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // This is the same as Rust's Vec implementation, which
+        // just delegates to the slice implementation. It's a bit surprising
+        // that Hash::hash_slice doesn't automatically incorporate the length,
+        // but the slice implementation indeed does explicitly call self.len().hash(state);
+        //
+        // To verify, click the "source" links for:
+        //     Vec: https://doc.rust-lang.org/std/vec/struct.Vec.html#impl-Hash
+        //     slice: https://doc.rust-lang.org/std/primitive.slice.html#impl-Hash
+        self.len().hash(state);
+
+        Hash::hash_slice(self.as_slice(), state);
     }
 }
