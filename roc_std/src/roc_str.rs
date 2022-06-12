@@ -466,7 +466,14 @@ impl RocStr {
                                 // the terminator into the existing allocation.
                                 let ptr = roc_list.ptr_to_allocation() as *mut E;
 
-                                terminate(ptr, self.as_str())
+                                let result = terminate(ptr, self.as_str());
+
+                                // we cannot rely on the RocStr::drop implementation, because the
+                                // refcount was overwritten with string bytes
+                                std::mem::forget(self);
+                                crate::roc_dealloc(ptr.cast(), std::mem::align_of::<E>() as u32);
+
+                                result
                             } else {
                                 // We didn't have sufficient excess capacity already,
                                 // so we need to do either a new stack allocation or a new
