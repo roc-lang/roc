@@ -1,10 +1,11 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use core::{
+    cmp,
     convert::TryFrom,
     fmt,
-    hash::Hash,
-    mem::{size_of, ManuallyDrop},
+    hash::{self, Hash},
+    mem::{self, size_of, ManuallyDrop},
     ops::{Deref, DerefMut},
     ptr,
 };
@@ -156,8 +157,8 @@ impl RocStr {
                 heap_allocated: ManuallyDrop::new(roc_list),
             });
 
-            std::mem::swap(self, &mut updated);
-            std::mem::forget(updated);
+            mem::swap(self, &mut updated);
+            mem::forget(updated);
         }
     }
 
@@ -470,9 +471,8 @@ impl RocStr {
                                 // We cannot rely on the RocStr::drop implementation, because
                                 // it tries to use the refcount - which we just overwrote
                                 // with string bytes.
-
-                                std::mem::forget(self);
-                                crate::roc_dealloc(ptr.cast(), std::mem::align_of::<E>() as u32);
+                                mem::forget(self);
+                                crate::roc_dealloc(ptr.cast(), mem::align_of::<E>() as u32);
 
                                 answer
                             } else {
@@ -576,13 +576,13 @@ impl PartialEq for RocStr {
 impl Eq for RocStr {}
 
 impl PartialOrd for RocStr {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         self.as_str().partial_cmp(other.as_str())
     }
 }
 
 impl Ord for RocStr {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
         self.as_str().cmp(other.as_str())
     }
 }
@@ -704,7 +704,7 @@ impl DerefMut for SmallString {
 }
 
 impl Hash for RocStr {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
         self.as_str().hash(state)
     }
 }
