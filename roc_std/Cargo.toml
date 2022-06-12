@@ -10,6 +10,7 @@ version = "0.1.0"
 
 [dependencies]
 static_assertions = "0.1"
+arrayvec = "0.7.2"
 
 [dev-dependencies]
 indoc = "1.0.3"
@@ -21,3 +22,4 @@ libc = "0.2.106"
 [features]
 default = ["platform"]
 platform = []
+no_std = []
