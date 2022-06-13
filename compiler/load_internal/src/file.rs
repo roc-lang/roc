@@ -489,7 +489,7 @@ fn start_phase<'a>(
                     layout_cache,
                     specializations_we_must_make,
                     module_timing,
-                    world_abilities: state.world_abilities.clone(),
+                    world_abilities: state.world_abilities.clone_ref(),
                 }
             }
         }

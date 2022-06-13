@@ -22,7 +22,7 @@ pub struct UnificationFailed;
 
 /// A global view of all abilities across all modules in a program under compilation.
 /// [WorldAbilities::insert] adds a solved abilities store for a module to the global map.
-/// Use [WorldAbilities::clone] to get a thread-safe, reference-counted copy of the global map.
+/// Use [WorldAbilities::clone_ref] to get a thread-safe, reference-counted copy of the global map.
 /// Note that this is indeed a map shared amongst everything during a compilation.
 #[derive(Default, Debug)]
 pub struct WorldAbilities {
@@ -45,7 +45,7 @@ impl WorldAbilities {
         debug_assert!(old_store.is_none(), "{:?} abilities not new", module);
     }
 
-    pub fn clone(&self) -> Self {
+    pub fn clone_ref(&self) -> Self {
         Self {
             world: Arc::clone(&self.world),
         }

@@ -58,6 +58,10 @@ impl ExposedByModule {
         self.exposed.iter()
     }
 
+    /// # Safety
+    ///
+    /// May only be called when the exposed types of a modules are no longer needed, or may be
+    /// transitioned into another context.
     pub unsafe fn remove(&mut self, module_id: &ModuleId) -> Option<ExposedModuleTypes> {
         self.exposed.remove(module_id)
     }
