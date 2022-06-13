@@ -689,6 +689,10 @@ impl IdentIdsByModule {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    pub unsafe fn remove(&mut self, key: ModuleId) -> Option<IdentIds> {
+        self.0.remove(&key).map(|(_, v)| v)
+    }
 }
 
 // BUILTINS

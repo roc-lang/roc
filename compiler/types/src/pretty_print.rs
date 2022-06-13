@@ -1070,7 +1070,9 @@ pub fn resolve_lambda_set(subs: &Subs, mut var: Variable) -> ResolvedLambdaSet {
             }) => {
                 debug_assert!(
                     unspecialized.is_empty(),
-                    "unspecialized lambda sets left over during resolution"
+                    "unspecialized lambda sets left over during resolution: {:?}, tbl {:?}",
+                    crate::subs::SubsFmtContent(subs.get_content_without_compacting(var), subs),
+                    crate::subs::DebugUtable(subs),
                 );
                 push_union(subs, solved, &mut set);
                 return ResolvedLambdaSet::Set(set);

@@ -10,7 +10,7 @@ use roc_module::symbol::Symbol;
 use std::fmt;
 use std::iter::{once, Iterator, Map};
 
-use crate::unification_table::{Snapshot, UnificationTable};
+use crate::unification_table::{self, UnificationTable};
 
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
@@ -313,6 +313,8 @@ impl Subs {
 #[derive(Clone, Default, Debug)]
 pub struct UlsOfVar(VecMap<Variable, VecSet<Variable>>);
 
+struct UlsOfVarSnapshot(UlsOfVar);
+
 impl UlsOfVar {
     pub fn add(&mut self, var: Variable, dependent_lambda_set: Variable) -> bool {
         // NOTE: this adds the var directly without following unification links.
@@ -351,6 +353,14 @@ impl UlsOfVar {
 
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    fn snapshot(&self) -> UlsOfVarSnapshot {
+        UlsOfVarSnapshot(self.clone())
+    }
+
+    fn rollback_to(&mut self, snapshot: UlsOfVarSnapshot) {
+        *self = snapshot.0;
     }
 }
 
@@ -819,8 +829,15 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
             if let Some(rec_var) = recursion_var.into_variable() {
                 write!(f, " as <{:?}>", rec_var)?;
             }
-            for uls in subs.get_subs_slice(*unspecialized) {
-                write!(f, " + {:?}", uls)?;
+            for Uls(var, member, region) in subs.get_subs_slice(*unspecialized) {
+                write!(
+                    f,
+                    " + (<{:?}>{:?}:{:?}:{:?})",
+                    var,
+                    SubsFmtContent(subs.get_content_without_compacting(*var), subs),
+                    member,
+                    region
+                )?;
             }
             write!(f, ")")
         }
@@ -1602,6 +1619,11 @@ fn define_float_types(subs: &mut Subs) {
     );
 }
 
+pub struct SubsSnapshot {
+    utable_snapshot: unification_table::Snapshot,
+    uls_of_var_snapshot: UlsOfVarSnapshot,
+}
+
 impl Subs {
     pub const RESULT_TAG_NAMES: SubsSlice<TagName> = SubsSlice::new(0, 2);
     pub const TAG_NAME_ERR: SubsIndex<TagName> = SubsIndex::new(0);
@@ -1991,20 +2013,25 @@ impl Subs {
         (var.index() as usize) < self.len()
     }
 
-    pub fn snapshot(&mut self) -> Snapshot {
-        self.utable.snapshot()
+    pub fn snapshot(&mut self) -> SubsSnapshot {
+        SubsSnapshot {
+            utable_snapshot: self.utable.snapshot(),
+            uls_of_var_snapshot: self.uls_of_var.snapshot(),
+        }
     }
 
-    pub fn rollback_to(&mut self, snapshot: Snapshot) {
-        self.utable.rollback_to(snapshot)
+    pub fn rollback_to(&mut self, snapshot: SubsSnapshot) {
+        self.utable.rollback_to(snapshot.utable_snapshot);
+        self.uls_of_var.rollback_to(snapshot.uls_of_var_snapshot);
     }
 
-    pub fn commit_snapshot(&mut self, _snapshot: Snapshot) {
-        // self.utable.commit(snapshot)
+    pub fn commit_snapshot(&mut self, _snapshot: SubsSnapshot) {
+        // self.utable.commit(snapshot.utable_snapshot)
+        // self.uls_of_var.commit(snapshot.uls_of_var_snapshot)
     }
 
-    pub fn vars_since_snapshot(&mut self, snapshot: &Snapshot) -> core::ops::Range<Variable> {
-        self.utable.vars_since_snapshot(snapshot)
+    pub fn vars_since_snapshot(&mut self, snapshot: &SubsSnapshot) -> core::ops::Range<Variable> {
+        self.utable.vars_since_snapshot(&snapshot.utable_snapshot)
     }
 
     pub fn get_lambda_set(&self, lambda_set: Variable) -> LambdaSet {

@@ -9,7 +9,7 @@ pub struct UnificationTable {
     redirects: Vec<OptVariable>,
 }
 
-pub struct Snapshot(UnificationTable);
+pub(crate) struct Snapshot(UnificationTable);
 
 impl UnificationTable {
     #[allow(unused)]
@@ -228,15 +228,15 @@ impl UnificationTable {
         key
     }
 
-    pub fn snapshot(&self) -> Snapshot {
+    pub(crate) fn snapshot(&self) -> Snapshot {
         Snapshot(self.clone())
     }
 
-    pub fn rollback_to(&mut self, snapshot: Snapshot) {
+    pub(crate) fn rollback_to(&mut self, snapshot: Snapshot) {
         *self = snapshot.0;
     }
 
-    pub fn vars_since_snapshot(&self, snapshot: &Snapshot) -> std::ops::Range<Variable> {
+    pub(crate) fn vars_since_snapshot(&self, snapshot: &Snapshot) -> std::ops::Range<Variable> {
         unsafe {
             let start = Variable::from_index(snapshot.0.len() as u32);
             let end = Variable::from_index(self.len() as u32);
