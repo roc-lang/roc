@@ -1,92 +1,16 @@
-use std::sync::{Arc, RwLock};
-
 use roc_can::abilities::AbilitiesStore;
 use roc_can::expr::PendingDerives;
-use roc_collections::{MutMap, VecMap};
+use roc_collections::VecMap;
 use roc_error_macros::internal_error;
-use roc_module::symbol::{ModuleId, Symbol};
+use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{
-    Content, ExposedTypesStorageSubs, FlatType, GetSubsSlice, Rank, Subs, Variable,
-};
+use roc_types::subs::{Content, FlatType, GetSubsSlice, Rank, Subs, Variable};
 use roc_types::types::{AliasKind, Category, ErrorType, PatternCategory};
 use roc_unify::unify::MustImplementConstraints;
 use roc_unify::unify::{MustImplementAbility, Obligated};
 
 use crate::solve::{instantiate_rigids, type_to_var};
 use crate::solve::{Aliases, Pools, TypeError};
-
-pub type AllModuleAbilities =
-    Arc<RwLock<MutMap<ModuleId, (AbilitiesStore, ExposedTypesStorageSubs)>>>;
-
-pub enum WorldAbilities<'a> {
-    BigWorld(AllModuleAbilities),
-    TinyWorld(&'a AbilitiesStore),
-}
-
-impl WorldAbilities<'_> {
-    pub fn with_module_store<T, F>(&self, module: ModuleId, mut f: F) -> T
-    where
-        F: FnMut(&AbilitiesStore) -> T,
-    {
-        match self {
-            WorldAbilities::BigWorld(world) => {
-                let world = world.read().unwrap();
-                let (module_store, _module_types) = world.get(&module).unwrap();
-                f(module_store)
-            }
-            WorldAbilities::TinyWorld(store) => f(store),
-        }
-    }
-
-    pub fn copy_lambda_set_var_into(
-        &self,
-        external_lambda_set_var: Variable,
-        external_module_id: ModuleId,
-        target_subs: &mut Subs,
-        target_module_id: ModuleId,
-    ) -> Variable {
-        match (external_module_id == target_module_id, self) {
-            (true, _) => {
-                debug_assert!(matches!(
-                    target_subs.get_content_without_compacting(external_lambda_set_var),
-                    Content::LambdaSet(..)
-                ));
-                external_lambda_set_var
-            }
-            (false, Self::TinyWorld(_)) => {
-                // If we're only aware of our module's abilities store, the var must be in our
-                // module store. Even if the specialization lambda set comes from another module,
-                // we would have taken care to import it during multi-module solving.
-                debug_assert!(matches!(
-                    target_subs.get_content_without_compacting(external_lambda_set_var),
-                    Content::LambdaSet(..)
-                ));
-                external_lambda_set_var
-            }
-            (false, Self::BigWorld(world)) => {
-                let mut world = world.write().unwrap();
-                let (_module_store, module_types) = world.get_mut(&external_module_id).unwrap();
-
-                let storage_lambda_set_var = *module_types
-                    .stored_specialization_lambda_set_vars
-                    .get(&external_lambda_set_var)
-                    .unwrap();
-                let copied = module_types
-                    .storage_subs
-                    .export_variable_to(target_subs, storage_lambda_set_var);
-                let our_lambda_set_var = copied.variable;
-
-                debug_assert!(matches!(
-                    target_subs.get_content_without_compacting(our_lambda_set_var),
-                    Content::LambdaSet(..)
-                ));
-
-                our_lambda_set_var
-            }
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub enum AbilityImplError {

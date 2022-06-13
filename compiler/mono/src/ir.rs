@@ -19,7 +19,7 @@ use roc_debug_flags::{
 use roc_error_macros::todo_abilities;
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
 use roc_late_solve::{
-    instantiate_rigids, resolve_ability_specialization, Resolved, UnificationFailed, WorldAbilities,
+    instantiate_rigids, resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed,
 };
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -1268,7 +1268,7 @@ pub struct Env<'a, 'i> {
     pub target_info: TargetInfo,
     pub update_mode_ids: &'i mut UpdateModeIds,
     pub call_specialization_counter: u32,
-    pub abilities: WorldAbilities<'i>,
+    pub abilities: AbilitiesView<'i>,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
@@ -3775,11 +3775,13 @@ pub fn with_hole<'a>(
             specialize_naked_symbol(env, variable, procs, layout_cache, assigned, hole, symbol)
         }
         AbilityMember(_member, specialization_id, _) => {
-            let specialization_symbol = env.abilities.with_module_store(env.home, |store| {
-                store
-                    .get_resolved(specialization_id)
-                    .expect("Specialization was never made!")
-            });
+            let specialization_symbol =
+                env.abilities
+                    .with_module_abilities_store(env.home, |store| {
+                        store
+                            .get_resolved(specialization_id)
+                            .expect("Specialization was never made!")
+                    });
 
             specialize_naked_symbol(
                 env,
@@ -4786,7 +4788,7 @@ pub fn with_hole<'a>(
                         UnspecializedExpr(symbol) => {
                             match procs.ability_member_aliases.get(symbol).unwrap() {
                                 &self::AbilityMember(member) => {
-                                    let resolved_proc = env.abilities.with_module_store(env.home, |store|
+                                    let resolved_proc = env.abilities.with_module_abilities_store(env.home, |store|
                                         resolve_ability_specialization(env.subs, store, member, fn_var)
                                             .expect("Recorded as an ability member, but it doesn't have a specialization")
                                     );
@@ -5166,7 +5168,7 @@ fn late_resolve_ability_specialization<'a>(
 ) -> Symbol {
     let opt_resolved = env
         .abilities
-        .with_module_store(env.home, |store| store.get_resolved(specialization_id));
+        .with_module_abilities_store(env.home, |store| store.get_resolved(specialization_id));
 
     if let Some(spec_symbol) = opt_resolved {
         // Fast path: specialization is monomorphic, was found during solving.
@@ -5190,10 +5192,12 @@ fn late_resolve_ability_specialization<'a>(
         env.subs[spec_symbol_index]
     } else {
         // Otherwise, resolve by checking the able var.
-        let specialization = env.abilities.with_module_store(env.home, |store| {
-            resolve_ability_specialization(env.subs, store, member, specialization_var)
-                .expect("Ability specialization is unknown - code generation cannot proceed!")
-        });
+        let specialization = env
+            .abilities
+            .with_module_abilities_store(env.home, |store| {
+                resolve_ability_specialization(env.subs, store, member, specialization_var)
+                    .expect("Ability specialization is unknown - code generation cannot proceed!")
+            });
 
         match specialization {
             Resolved::Specialization(symbol) => symbol,
@@ -7028,7 +7032,7 @@ where
     {
         let is_ability_member = env
             .abilities
-            .with_module_store(env.home, |store| store.is_ability_member_name(right));
+            .with_module_abilities_store(env.home, |store| store.is_ability_member_name(right));
 
         if is_ability_member {
             procs

@@ -23,6 +23,7 @@ use roc_debug_flags::{
     ROC_PRINT_LOAD_LOG,
 };
 use roc_error_macros::internal_error;
+use roc_late_solve::{AbilitiesView, WorldAbilities};
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
     IdentIds, IdentIdsByModule, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds,
@@ -41,7 +42,6 @@ use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SyntaxError};
 use roc_region::all::{LineInfo, Loc, Region};
 use roc_reporting::report::RenderTarget;
-use roc_solve::ability::{AllModuleAbilities, WorldAbilities};
 use roc_solve::module::SolvedModule;
 use roc_solve::solve;
 use roc_target::TargetInfo;
@@ -442,7 +442,6 @@ fn start_phase<'a>(
                             .unwrap();
 
                         let FoundSpecializationsModule {
-                            module_id,
                             ident_ids,
                             subs,
                             procs_base,
@@ -458,15 +457,12 @@ fn start_phase<'a>(
                                 internal_error!("Exposed types for {:?} missing", module_id)
                             });
 
-                        let old_store = &state.inverse_world_abilities.write().unwrap().insert(
+                        // Add our abilities to the world.
+                        state.world_abilities.insert(
                             module_id,
-                            (
-                                abilities_store,
-                                our_exposed_types.exposed_types_storage_subs,
-                            ),
+                            abilities_store,
+                            our_exposed_types.exposed_types_storage_subs,
                         );
-
-                        debug_assert!(old_store.is_none(), "{:?} abilities not new", module_id);
 
                         (ident_ids, subs, procs_base, layout_cache, module_timing)
                     } else {
@@ -493,7 +489,7 @@ fn start_phase<'a>(
                     layout_cache,
                     specializations_we_must_make,
                     module_timing,
-                    world_abilities: Arc::clone(&state.inverse_world_abilities),
+                    world_abilities: state.world_abilities.clone(),
                 }
             }
         }
@@ -596,7 +592,6 @@ pub struct TypeCheckedModule<'a> {
 
 #[derive(Debug)]
 struct FoundSpecializationsModule<'a> {
-    module_id: ModuleId,
     ident_ids: IdentIds,
     layout_cache: LayoutCache<'a>,
     procs_base: ProcsBase<'a>,
@@ -818,8 +813,8 @@ struct State<'a> {
 
     pub render: RenderTarget,
 
-    /// At a given point in time, this map contains the abilities stores in reverse order
-    pub inverse_world_abilities: AllModuleAbilities,
+    /// All abilities across all modules.
+    pub world_abilities: WorldAbilities,
 
     make_specializations_pass: MakeSpecializationsPass,
 
@@ -867,8 +862,8 @@ impl<'a> State<'a> {
             layout_caches: std::vec::Vec::with_capacity(number_of_workers),
             cached_subs: Arc::new(Mutex::new(cached_subs)),
             render,
-            inverse_world_abilities: Default::default(),
             make_specializations_pass: MakeSpecializationsPass::Pass(1),
+            world_abilities: Default::default(),
         }
     }
 }
@@ -996,7 +991,7 @@ enum BuildTask<'a> {
         layout_cache: LayoutCache<'a>,
         specializations_we_must_make: Vec<ExternalSpecializations>,
         module_timing: ModuleTiming,
-        world_abilities: AllModuleAbilities,
+        world_abilities: WorldAbilities,
     },
 }
 
@@ -2287,7 +2282,6 @@ fn update<'a>(
                 .extend(procs_base.module_thunks.iter().copied());
 
             let found_specializations_module = FoundSpecializationsModule {
-                module_id,
                 ident_ids,
                 layout_cache,
                 procs_base,
@@ -4368,7 +4362,7 @@ fn make_specializations<'a>(
     specializations_we_must_make: Vec<ExternalSpecializations>,
     mut module_timing: ModuleTiming,
     target_info: TargetInfo,
-    world_abilities: AllModuleAbilities,
+    world_abilities: WorldAbilities,
 ) -> Msg<'a> {
     let make_specializations_start = SystemTime::now();
     let mut update_mode_ids = UpdateModeIds::new();
@@ -4382,7 +4376,7 @@ fn make_specializations<'a>(
         update_mode_ids: &mut update_mode_ids,
         // call_specialization_counter=0 is reserved
         call_specialization_counter: 1,
-        abilities: WorldAbilities::BigWorld(Arc::clone(&world_abilities)),
+        abilities: AbilitiesView::World(world_abilities),
     };
 
     let mut procs = Procs::new_in(arena);
@@ -4468,7 +4462,10 @@ fn build_pending_specializations<'a>(
         update_mode_ids: &mut update_mode_ids,
         // call_specialization_counter=0 is reserved
         call_specialization_counter: 1,
-        abilities: WorldAbilities::TinyWorld(&abilities_store),
+        // NB: for getting pending specializations the module view is enough because we only need
+        // to know the types and abilities in our modules. Only for building *all* specializations
+        // do we need a global view.
+        abilities: AbilitiesView::Module(&abilities_store),
     };
 
     // Add modules' decls to Procs
