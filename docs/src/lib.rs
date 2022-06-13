@@ -756,7 +756,7 @@ fn doc_url<'a>(
         }
     } else {
         match interns.module_ids.get_id(&module_name.into()) {
-            Some(&module_id) => {
+            Some(module_id) => {
                 // You can do qualified lookups on your own module, e.g.
                 // if I'm in the Foo module, I can do a `Foo.bar` lookup.
                 if module_id == home {
@@ -772,7 +772,7 @@ fn doc_url<'a>(
                     // This is not the home module
                     match dep_idents
                         .get(&module_id)
-                        .and_then(|exposed_ids| exposed_ids.get_id(&ident.into()))
+                        .and_then(|exposed_ids| exposed_ids.get_id(ident))
                     {
                         Some(_) => {
                             // This is a valid symbol for this dependency,

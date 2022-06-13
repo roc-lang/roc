@@ -13,6 +13,7 @@ members = [
     "compiler/constrain",
     "compiler/unify",
     "compiler/solve",
+    "compiler/late_solve",
     "compiler/fmt",
     "compiler/mono",
     "compiler/alias_analysis",

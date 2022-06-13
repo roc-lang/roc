@@ -439,6 +439,7 @@ fn stmt_spec<'a>(
 
             builder.add_choice(block, &cases)
         }
+        Expect { remainder, .. } => stmt_spec(builder, env, block, layout, remainder),
         Ret(symbol) => Ok(env.symbols[symbol]),
         Refcounting(modify_rc, continuation) => match modify_rc {
             ModifyRc::Inc(symbol, _) => {

@@ -21,6 +21,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrayvec"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8da52d66c7071e2e3fa2a1e5c6d088fec47b593032b254f5e980de8ea54454d6"
+
+[[package]]
 name = "cfg-if"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -193,12 +199,20 @@ checksum = "f497285884f3fcff424ffc933e56d7cbca511def0c9831a7f9b5f6153e3cc89b"
 name = "roc_std"
 version = "0.1.0"
 dependencies = [
+ "arrayvec",
  "indoc",
  "libc",
  "pretty_assertions",
  "quickcheck",
  "quickcheck_macros",
+ "static_assertions",
 ]
+
+[[package]]
+name = "static_assertions"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f406d6ee68db6796e11ffd7b4d171864c58b7451e79ef9460ea33c287a1f89a7"
 
 [[package]]
 name = "syn"

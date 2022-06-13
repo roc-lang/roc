@@ -1,6 +1,6 @@
 use crate::abilities::AbilityMemberData;
-use crate::abilities::MemberTypeInfo;
 use crate::abilities::MemberVariables;
+use crate::abilities::PendingMemberType;
 use crate::annotation::canonicalize_annotation;
 use crate::annotation::find_type_def_symbols;
 use crate::annotation::make_apply_symbol;
@@ -47,6 +47,24 @@ pub struct Def {
     pub expr_var: Variable,
     pub pattern_vars: SendMap<Symbol, Variable>,
     pub annotation: Option<Annotation>,
+}
+
+impl Def {
+    pub fn region(&self) -> Region {
+        let head_region = match &self.annotation {
+            Some(ann) => {
+                if ann.region.start() < self.loc_pattern.region.start() {
+                    ann.region
+                } else {
+                    // Happens with annotation-only bodies like foo : T, since `T` is after the
+                    // pattern.
+                    self.loc_pattern.region
+                }
+            }
+            None => self.loc_pattern.region,
+        };
+        Region::span_across(&head_region, &self.loc_expr.region)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -195,6 +213,21 @@ impl Declaration {
             DeclareRec(defs, _) => defs.len(),
             InvalidCycle { .. } => 0,
             Builtin(_) => 0,
+        }
+    }
+
+    pub fn region(&self) -> Region {
+        match self {
+            Declaration::Declare(def) => def.region(),
+            Declaration::DeclareRec(defs, _) => Region::span_across(
+                &defs.first().unwrap().region(),
+                &defs.last().unwrap().region(),
+            ),
+            Declaration::Builtin(def) => def.region(),
+            Declaration::InvalidCycle(cycles) => Region::span_across(
+                &cycles.first().unwrap().expr_region,
+                &cycles.last().unwrap().expr_region,
+            ),
         }
     }
 }
@@ -928,7 +961,7 @@ fn resolve_abilities<'a>(
                 AbilityMemberData {
                     parent_ability: loc_ability_name.value,
                     region: name_region,
-                    typ: MemberTypeInfo::Local {
+                    typ: PendingMemberType::Local {
                         variables,
                         signature,
                         signature_var: var_store.fresh(),
@@ -1581,23 +1614,26 @@ pub fn can_defs_with_return<'a>(
     let mut loc_expr: Loc<Expr> = ret_expr;
 
     for declaration in declarations.into_iter().rev() {
-        loc_expr = Loc {
-            region: Region::zero(),
-            value: decl_to_let(declaration, loc_expr),
-        };
+        loc_expr = decl_to_let(declaration, loc_expr);
     }
 
     (loc_expr.value, output)
 }
 
-fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Expr {
+fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Loc<Expr> {
     match decl {
-        Declaration::Declare(def) => Expr::LetNonRec(Box::new(def), Box::new(loc_ret)),
+        Declaration::Declare(def) => {
+            let region = Region::span_across(&def.loc_pattern.region, &loc_ret.region);
+            let expr = Expr::LetNonRec(Box::new(def), Box::new(loc_ret));
+            Loc::at(region, expr)
+        }
         Declaration::DeclareRec(defs, cycle_mark) => {
-            Expr::LetRec(defs, Box::new(loc_ret), cycle_mark)
+            let region = Region::span_across(&defs[0].loc_pattern.region, &loc_ret.region);
+            let expr = Expr::LetRec(defs, Box::new(loc_ret), cycle_mark);
+            Loc::at(region, expr)
         }
         Declaration::InvalidCycle(entries) => {
-            Expr::RuntimeError(RuntimeError::CircularDef(entries))
+            Loc::at_zero(Expr::RuntimeError(RuntimeError::CircularDef(entries)))
         }
         Declaration::Builtin(_) => {
             // Builtins should only be added to top-level decls, not to let-exprs!

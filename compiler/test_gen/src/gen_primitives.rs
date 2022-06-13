@@ -1,14 +1,10 @@
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
 #[cfg(feature = "gen-llvm")]
-use crate::helpers::llvm::assert_expect_failed;
-#[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_non_opt_evals_to;
 
 #[cfg(feature = "gen-dev")]
 use crate::helpers::dev::assert_evals_to;
-// #[cfg(feature = "gen-dev")]
-// use crate::helpers::dev::assert_expect_failed;
 // #[cfg(feature = "gen-dev")]
 // use crate::helpers::dev::assert_evals_to as assert_llvm_evals_to;
 // #[cfg(feature = "gen-dev")]
@@ -18,8 +14,6 @@ use crate::helpers::dev::assert_evals_to;
 use crate::helpers::wasm::assert_evals_to;
 #[cfg(feature = "gen-wasm")]
 use crate::helpers::wasm::assert_evals_to as assert_non_opt_evals_to;
-// #[cfg(feature = "gen-wasm")]
-// use crate::helpers::dev::assert_expect_failed;
 // #[cfg(feature = "gen-wasm")]
 // use crate::helpers::wasm::assert_evals_to as assert_llvm_evals_to;
 // #[cfg(feature = "gen-wasm")]
@@ -2536,23 +2530,6 @@ fn call_invalid_layout() {
         i64,
         |x| x,
         true
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm"))]
-#[should_panic(expected = "Failed with 1 failures. Failures: ")]
-fn expect_fail() {
-    assert_expect_failed!(
-        indoc!(
-            r#"
-            expect 1 == 2
-
-            3
-            "#
-        ),
-        3,
-        i64
     );
 }
 

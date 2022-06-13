@@ -3851,6 +3851,17 @@ name = "roc_ident"
 version = "0.1.0"
 
 [[package]]
+name = "roc_late_solve"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "roc_can",
+ "roc_solve",
+ "roc_types",
+ "roc_unify",
+]
+
+[[package]]
 name = "roc_linker"
 version = "0.1.0"
 dependencies = [
@@ -3939,14 +3950,13 @@ dependencies = [
  "roc_debug_flags",
  "roc_error_macros",
  "roc_exhaustive",
+ "roc_late_solve",
  "roc_module",
  "roc_problem",
  "roc_region",
- "roc_solve",
  "roc_std",
  "roc_target",
  "roc_types",
- "roc_unify",
  "static_assertions 1.1.0",
  "ven_pretty",
 ]
@@ -4111,6 +4121,7 @@ dependencies = [
 name = "roc_std"
 version = "0.1.0"
 dependencies = [
+ "arrayvec 0.7.2",
  "static_assertions 0.1.1",
 ]
 

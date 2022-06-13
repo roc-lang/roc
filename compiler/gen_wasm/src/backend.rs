@@ -620,6 +620,8 @@ impl<'a> WasmBackend<'a> {
 
             Stmt::Refcounting(modify, following) => self.stmt_refcounting(modify, following),
 
+            Stmt::Expect { .. } => todo!("expect is not implemented in the wasm backend"),
+
             Stmt::RuntimeError(msg) => self.stmt_runtime_error(msg),
         }
     }

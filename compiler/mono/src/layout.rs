@@ -1698,7 +1698,16 @@ fn layout_from_lambda_set<'a>(
     let subs::LambdaSet {
         solved,
         recursion_var,
+        unspecialized,
     } = lset;
+
+    if !unspecialized.is_empty() {
+        internal_error!(
+            "unspecialized lambda sets remain during layout generation for {:?}",
+            roc_types::subs::SubsFmtContent(&Content::LambdaSet(lset), env.subs)
+        );
+    }
+
     match recursion_var.into_variable() {
         None => {
             let labels = solved.unsorted_lambdas(env.subs);
@@ -2250,7 +2259,7 @@ where
 
             for (index, &(tag_name, arguments)) in tags_list.into_iter().enumerate() {
                 // reserve space for the tag discriminant
-                if matches!(nullable, Some((i, _)) if i  as usize == index) {
+                if matches!(nullable, Some((i, _)) if i as usize == index) {
                     debug_assert!(arguments.is_empty());
                     continue;
                 }
