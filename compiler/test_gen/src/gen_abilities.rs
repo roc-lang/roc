@@ -328,7 +328,6 @@ fn decode() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[ignore]
 fn encode_use_stdlib() {
     assert_evals_to!(
         indoc!(
