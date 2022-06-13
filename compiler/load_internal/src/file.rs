@@ -1238,6 +1238,13 @@ pub enum Threading {
 ///     of any requests that were added in the course of completing other requests). Now
 ///     we have a map of specializations, and everything was assembled in parallel with
 ///     no unique specialization ever getting assembled twice (meaning no wasted effort).
+///
+///     a. Note that this might mean that we have to specialize certain modules multiple times.
+///        When might this happen? Well, abilities can introduce implicit edges in the dependency
+///        graph, and even cycles. For example, suppose module Ab provides "ability1" and a function
+///        "f" that uses "ability1", and module App implements "ability1" and calls "f" with the
+///        implementing type. Then the specialization of "Ab#f" depends on the specialization of
+///        "ability1" back in the App module.
 /// 12. Now that we have our final map of specializations, we can proceed to code gen!
 ///     As long as the specializations are stored in a per-ModuleId map, we can also
 ///     parallelize this code gen. (e.g. in dev builds, building separate LLVM modules
@@ -2460,8 +2467,52 @@ fn update<'a>(
 
                 NextStep::RelaunchPhase => {
                     // We passed through the dependency graph of modules to be specialized, but
-                    // there are still specializations left over. This happens due to abilities.
-                    // Restart the specialization graph.
+                    // there are still specializations left over. Restart the make specializations
+                    // phase in reverse topological order.
+                    //
+                    // This happens due to abilities. In detail, consider
+                    //
+                    //   # Default module
+                    //   interface Default exposes [default, getDefault]
+                    //
+                    //   Default has default : {} -> a | a has Default
+                    //
+                    //   getDefault = \{} -> default {}
+                    //
+                    //   # App module
+                    //   app "test" provides [main] imports [Default.{default, getDefault}]
+                    //
+                    //   Foo := {}
+                    //
+                    //   default = \{} -> @Foo {}
+                    //
+                    //   main =
+                    //     f : Foo
+                    //     f = getDefault {}
+                    //     f
+                    //
+                    // The syntactic make specializations graph (based on imports) will be
+                    // App -> Default, and in a pass will build the specializations `App#main` and
+                    // `Default#getDefault for Foo`. But now notice that `Default#getDefault` will
+                    // have gained an implicit dependency on the specialized `default` for `Foo`,
+                    // `App#Foo#default`. So for abilities, the syntactic import graph is not
+                    // enough to express the entire dependency graph.
+                    //
+                    // The simplest way to resolve these leftover, possibly circular
+                    // specializations is to relaunch the make-specializations phase in the import
+                    // order until there are no more specializations left to be made. This is a bit
+                    // unfortunate in that we may look again into modules that don't need any
+                    // specializations made, but there are also some nice properties:
+                    //
+                    // - no more specializations will be made than needed
+                    // - the number of phase relaunches scales linearly with the largest number of
+                    //   "bouncing back and forth" between ability calls, which is likely to be
+                    //   small in practice
+                    // - the phases will always terminate. suppose they didn't; then there must be
+                    //   an infinite chain of calls all of which have different layouts. In Roc
+                    //   this can only be true if the calls are all mutually recursive, and
+                    //   furthermore are polymorphically recursive. But polymorphic recursion is
+                    //   illegal in Roc, will have been enforced during type inference.
 
                     if state
                         .module_cache
