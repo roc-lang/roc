@@ -194,6 +194,12 @@ impl<'a> PartialProcs<'a> {
 
         self.references.push((alias, real_symbol));
     }
+
+    pub fn drain(self) -> impl Iterator<Item = (Symbol, PartialProc<'a>)> {
+        debug_assert_eq!(self.symbols.len(), self.partial_procs.len());
+
+        self.symbols.into_iter().zip(self.partial_procs.into_iter())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -531,7 +537,7 @@ impl HostSpecializations {
 pub struct ExternalSpecializations {
     /// Not a bumpalo vec because bumpalo is not thread safe
     /// Separate array so we can search for membership quickly
-    symbols: std::vec::Vec<Symbol>,
+    pub symbols: std::vec::Vec<Symbol>,
     storage_subs: StorageSubs,
     /// For each symbol, what types to specialize it for, points into the storage_subs
     types_to_specialize: std::vec::Vec<std::vec::Vec<Variable>>,
@@ -897,6 +903,16 @@ impl<'a> SymbolSpecializations<'a> {
 }
 
 #[derive(Clone, Debug)]
+pub struct ProcsBase<'a> {
+    pub partial_procs: BumpMap<Symbol, PartialProc<'a>>,
+    pub module_thunks: &'a [Symbol],
+    /// A host-exposed function must be specialized; it's a seed for subsequent specializations
+    pub host_specializations: HostSpecializations,
+    pub runtime_errors: BumpMap<Symbol, &'a str>,
+    pub imported_module_thunks: &'a [Symbol],
+}
+
+#[derive(Clone, Debug)]
 pub struct Procs<'a> {
     pub partial_procs: PartialProcs<'a>,
     ability_member_aliases: AbilityAliases,
@@ -947,17 +963,27 @@ impl<'a> Procs<'a> {
     pub fn get_specialized_procs_without_rc(
         self,
         env: &mut Env<'a, '_>,
-    ) -> MutMap<(Symbol, ProcLayout<'a>), Proc<'a>> {
-        let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
+    ) -> (MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>, ProcsBase<'a>) {
+        let mut specialized_procs =
+            MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
 
         for (symbol, layout, mut proc) in self.specialized.into_iter_assert_done() {
             proc.make_tail_recursive(env);
 
             let key = (symbol, layout);
-            result.insert(key, proc);
+            specialized_procs.insert(key, proc);
         }
 
-        result
+        let restored_procs_base = ProcsBase {
+            partial_procs: self.partial_procs.drain().collect(),
+            module_thunks: self.module_thunks,
+            // This must now be empty
+            host_specializations: HostSpecializations::default(),
+            runtime_errors: self.runtime_errors,
+            imported_module_thunks: self.imported_module_thunks,
+        };
+
+        (specialized_procs, restored_procs_base)
     }
 
     // TODO trim these down
@@ -5156,6 +5182,7 @@ fn late_resolve_ability_specialization<'a>(
             unspecialized,
             recursion_var: _,
         } = env.subs.get_lambda_set(*lambda_set);
+
         debug_assert!(unspecialized.is_empty());
         let mut iter_lambda_set = solved.iter_all();
         debug_assert_eq!(iter_lambda_set.len(), 1);
