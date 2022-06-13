@@ -282,16 +282,17 @@ impl<'a> WasmBackend<'a> {
                 return;
             }
         };
-        dbg!(main_fn_index);
 
-        match self.module.linking.find_internal_symbol("_start") {
+        const START: &str = "_start";
+
+        match self.module.linking.find_internal_symbol(START) {
             Ok(sym_index) => {
                 let index = match self.module.linking.symbol_table[sym_index] {
                     SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { index, .. }) => index,
-                    _ => panic!("linker symbol `_start` is not a function"),
+                    _ => panic!("linker symbol `{}` is not a function", START),
                 };
                 self.module.export.append(Export {
-                    name: "_start",
+                    name: START,
                     ty: ExportType::Func,
                     index,
                 });
@@ -306,7 +307,7 @@ impl<'a> WasmBackend<'a> {
         });
 
         self.module.export.append(Export {
-            name: "_start",
+            name: START,
             ty: ExportType::Func,
             index: self.fn_index_offset + self.module.code.code_builders.len() as u32,
         });
@@ -1144,7 +1145,7 @@ impl<'a> WasmBackend<'a> {
             } => {
                 let name = foreign_symbol.as_str();
                 let wasm_layout = WasmLayout::new(ret_layout);
-                let (num_wasm_args, has_return_val, _ret_zig_packed_struct) =
+                let (num_wasm_args, has_return_val, ret_zig_packed_struct) =
                     self.storage.load_symbols_for_call(
                         self.env.arena,
                         &mut self.code_builder,
@@ -1153,6 +1154,7 @@ impl<'a> WasmBackend<'a> {
                         &wasm_layout,
                         CallConv::C,
                     );
+                debug_assert!(!ret_zig_packed_struct); // only true in another place where we use the same helper fn
                 self.call_host_fn_after_loading_args(name, num_wasm_args, has_return_val)
             }
         }
