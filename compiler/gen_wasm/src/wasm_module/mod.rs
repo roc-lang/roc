@@ -512,7 +512,7 @@ impl<'a> WasmModule<'a> {
     }
 
     /// Create a name->index lookup table for host functions that may be called from the app
-    pub fn get_host_function_lookup(&self, arena: &'a Bump) -> Vec<'a, (u32, &'a str)> {
+    pub fn get_host_function_lookup(&self, arena: &'a Bump) -> Vec<'a, (&'a str, u32)> {
         // Functions beginning with `roc_` go first, since they're most likely to be called
         let roc_global_fns =
             self.linking
@@ -523,7 +523,7 @@ impl<'a> WasmModule<'a> {
                         if flags & linking::WASM_SYM_BINDING_LOCAL == 0
                             && name.starts_with("roc_") =>
                     {
-                        Some((*index, *name))
+                        Some((*name, *index))
                     }
                     _ => None,
                 });
@@ -537,7 +537,7 @@ impl<'a> WasmModule<'a> {
                         if flags & linking::WASM_SYM_BINDING_LOCAL == 0
                             && !name.starts_with("roc_") =>
                     {
-                        Some((*index, *name))
+                        Some((*name, *index))
                     }
                     _ => None,
                 });
@@ -548,7 +548,7 @@ impl<'a> WasmModule<'a> {
             .iter()
             .filter(|import| matches!(import.description, ImportDesc::Func { .. }))
             .enumerate()
-            .map(|(fn_index, import)| (fn_index as u32, import.name));
+            .map(|(fn_index, import)| (import.name, fn_index as u32));
 
         Vec::from_iter_in(
             roc_global_fns.chain(other_global_fns).chain(import_fns),

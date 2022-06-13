@@ -55,7 +55,7 @@ pub struct WasmBackend<'a> {
     pub fn_index_offset: u32,
     called_preload_fns: Vec<'a, u32>,
     pub proc_lookup: Vec<'a, ProcLookupData<'a>>,
-    host_lookup: Vec<'a, (u32, &'a str)>,
+    host_lookup: Vec<'a, (&'a str, u32)>,
     helper_proc_gen: CodeGenHelp<'a>,
     can_relocate_heap: bool,
 
@@ -100,7 +100,19 @@ impl<'a> WasmBackend<'a> {
 
         let host_lookup = module.get_host_function_lookup(env.arena);
         if module.names.function_names.is_empty() {
-            module.names.function_names = host_lookup.clone();
+            let import_fns = module.import.imports.iter().filter(|imp| imp.is_function());
+            let import_names = Vec::from_iter_in(import_fns.map(|imp| imp.name), env.arena);
+            let symbols = module.linking.symbol_table.iter();
+            let names = symbols.filter_map(|sym_info| match sym_info {
+                SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { index, name, .. }) => {
+                    Some((*index, *name))
+                }
+                SymInfo::Function(WasmObjectSymbol::ImplicitlyNamed { index, .. }) => {
+                    Some((*index, import_names[*index as usize]))
+                }
+                _ => None,
+            });
+            module.names.function_names.extend(names);
             module.names.function_names.sort_by_key(|(idx, _name)| *idx);
         }
 
@@ -1235,10 +1247,10 @@ impl<'a> WasmBackend<'a> {
         num_wasm_args: usize,
         has_return_val: bool,
     ) {
-        let (fn_index, _) = self
+        let (_, fn_index) = self
             .host_lookup
             .iter()
-            .find(|(_, fn_name)| *fn_name == name)
+            .find(|(fn_name, _)| *fn_name == name)
             .unwrap_or_else(|| panic!("The Roc app tries to call `{}` but I can't find it!", name));
 
         self.called_preload_fns.push(*fn_index);

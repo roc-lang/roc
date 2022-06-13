@@ -400,6 +400,10 @@ impl<'a> Import<'a> {
                 ImportDesc::Global { .. } => 2,
             }
     }
+
+    pub fn is_function(&self) -> bool {
+        matches!(self.description, ImportDesc::Func { .. })
+    }
 }
 
 impl<'a> Serialize for Import<'a> {
@@ -431,10 +435,7 @@ impl<'a> ImportSection<'a> {
     }
 
     pub fn function_count(&self) -> usize {
-        self.imports
-            .iter()
-            .filter(|imp| matches!(imp.description, ImportDesc::Func { .. }))
-            .count()
+        self.imports.iter().filter(|imp| imp.is_function()).count()
     }
 }
 
