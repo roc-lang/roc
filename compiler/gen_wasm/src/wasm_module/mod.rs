@@ -181,7 +181,9 @@ impl<'a> WasmModule<'a> {
         //
         // Mark all live host functions
         //
-        let host_fn_min = self.import.imports.len() as u32 + self.code.dead_import_dummy_count;
+
+        let import_count = self.import.imports.len();
+        let host_fn_min = import_count as u32 + self.code.dead_import_dummy_count;
         let host_fn_max = host_fn_min + self.code.preloaded_count;
 
         // All functions exported to JS must be kept alive
@@ -192,19 +194,25 @@ impl<'a> WasmModule<'a> {
             .filter(|ex| ex.ty == ExportType::Func)
             .map(|ex| ex.index);
 
-        // We conservatively assume that all functions declared as indirectly callable, are live
-        let indirect_callees = self
-            .element
-            .segments
-            .iter()
-            .flat_map(|seg| seg.fn_indices.iter().copied());
+        // Indirect calls (function pointers) need special treatment
+        let indirect_callees_and_signatures = Vec::from_iter_in(
+            self.element
+                .segments
+                .iter()
+                .flat_map(|seg| seg.fn_indices.iter().copied())
+                .map(|fn_index| {
+                    let sig = self.function.signatures[fn_index as usize - import_count];
+                    (fn_index, sig)
+                }),
+            arena,
+        );
 
         // Trace callees of the live functions, and mark those as live too
         let live_flags = self.trace_live_host_functions(
             arena,
             called_host_fns,
             exported_fns,
-            indirect_callees,
+            indirect_callees_and_signatures,
             host_fn_min,
             host_fn_max,
         );
@@ -213,7 +221,7 @@ impl<'a> WasmModule<'a> {
         // Remove all unused JS imports
         // We don't want to force the web page to provide dummy JS functions, it's a pain!
         //
-        let mut live_import_fns = Vec::with_capacity_in(self.import.imports.len(), arena);
+        let mut live_import_fns = Vec::with_capacity_in(import_count, arena);
         let mut fn_index = 0;
         self.import.imports.retain(|import| {
             if !matches!(import.description, ImportDesc::Func { .. }) {
@@ -297,29 +305,34 @@ impl<'a> WasmModule<'a> {
         self.code.preloaded_bytes = buffer;
     }
 
-    fn trace_live_host_functions<E: Iterator<Item = u32>, I: Iterator<Item = u32>>(
+    fn trace_live_host_functions<I: Iterator<Item = u32>>(
         &self,
         arena: &'a Bump,
         called_host_fns: &[u32],
-        exported_fns: E,
-        indirectly_called_fns: I,
+        exported_fns: I,
+        indirect_callees_and_signatures: Vec<'a, (u32, u32)>,
         host_fn_min: u32,
         host_fn_max: u32,
     ) -> BitVec<usize> {
-        let call_offsets_and_symbols: Vec<(u32, u32)> = Vec::from_iter_in(
-            self.reloc_code
-                .entries
-                .iter()
-                .filter_map(|entry| match entry {
-                    RelocationEntry::Index {
-                        type_id: IndexRelocType::FunctionIndexLeb,
-                        offset,
-                        symbol_index,
-                    } => Some((*offset, *symbol_index)),
-                    _ => None,
-                }),
-            arena,
-        );
+        let reloc_len = self.reloc_code.entries.len();
+
+        let mut call_offsets_and_symbols = Vec::with_capacity_in(reloc_len, arena);
+        let mut indirect_call_offsets_and_types = Vec::with_capacity_in(reloc_len, arena);
+        for entry in self.reloc_code.entries.iter() {
+            match entry {
+                RelocationEntry::Index {
+                    type_id: IndexRelocType::FunctionIndexLeb,
+                    offset,
+                    symbol_index,
+                } => call_offsets_and_symbols.push((*offset, *symbol_index)),
+                RelocationEntry::Index {
+                    type_id: IndexRelocType::TypeIndexLeb,
+                    offset,
+                    symbol_index,
+                } => indirect_call_offsets_and_types.push((*offset, *symbol_index)),
+                _ => {}
+            }
+        }
 
         // Create a fast lookup from symbol index to function index, for the inner loop below
         // (Do all the matching and dereferencing outside the loop)
@@ -343,13 +356,7 @@ impl<'a> WasmModule<'a> {
 
         // Start with everything called from Roc and everything exported to JS
         // Also include everything that can be indirectly called (crude, but good enough!)
-        current_pass_fns.extend(
-            called_host_fns
-                .iter()
-                .copied()
-                .chain(exported_fns)
-                .chain(indirectly_called_fns),
-        );
+        current_pass_fns.extend(called_host_fns.iter().copied().chain(exported_fns));
 
         while !current_pass_fns.is_empty() {
             current_pass_fns.sort_unstable();
@@ -378,6 +385,23 @@ impl<'a> WasmModule<'a> {
                         // If it's not already marked live, include it in the next pass
                         if !live_flags[called_fn_index as usize] {
                             next_pass_fns.push(called_fn_index);
+                        }
+                    }
+                }
+
+                // For each indirect call in the body
+                for (offset, signature) in indirect_call_offsets_and_types.iter() {
+                    if *offset > code_start && *offset < code_end {
+                        // Find which functions have the right type signature for this call
+                        let potential_callees = indirect_callees_and_signatures
+                            .iter()
+                            .filter(|(_, sig)| sig == signature)
+                            .map(|(f, _)| *f);
+                        // Mark them all as live
+                        for f in potential_callees {
+                            if !live_flags[f as usize] {
+                                next_pass_fns.push(f);
+                            }
                         }
                     }
                 }
