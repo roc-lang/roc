@@ -1130,6 +1130,8 @@ fn unify_shared_fields(
     let mut matching_fields = Vec::with_capacity(shared_fields.len());
     let num_shared_fields = shared_fields.len();
 
+    let mut whole_outcome = Outcome::default();
+
     for (name, (actual, expected)) in shared_fields {
         let local_outcome = unify_pool(
             subs,
@@ -1163,6 +1165,7 @@ fn unify_shared_fields(
             };
 
             matching_fields.push((name, actual));
+            whole_outcome.union(local_outcome);
         }
     }
 
@@ -1211,7 +1214,9 @@ fn unify_shared_fields(
 
         let flat_type = FlatType::Record(fields, new_ext_var);
 
-        merge(subs, ctx, Structure(flat_type))
+        let merge_outcome = merge(subs, ctx, Structure(flat_type));
+        whole_outcome.union(merge_outcome);
+        whole_outcome
     } else {
         mismatch!("in unify_shared_fields")
     }
