@@ -227,7 +227,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
             &main_fn_layout.result,
         );
 
-        module.eliminate_dead_code(env.arena, called_preload_fns);
+        module.eliminate_dead_code(env.arena, &called_preload_fns);
 
         let mut buffer = Vec::with_capacity_in(module.size(), arena);
         module.serialize(&mut buffer);
