@@ -211,7 +211,34 @@ macro_rules! synth {
             let fields = RecordFields::insert_into_subs(subs, vec![ $( ($field.into(), RecordField::Required($typ)) ,)* ]);
             synth_var(subs, Content::Structure(FlatType::Record(fields, Variable::EMPTY_RECORD)))
         }
+    };
+    (var $var:expr) => {
+        |_| { $var }
     }
+}
+
+#[test]
+fn empty_record() {
+    derive_test(
+        synth!(var Variable::EMPTY_RECORD),
+        indoc!(
+            r#"
+            \Test.0 -> (Encode.record [ ])
+            "#
+        ),
+    )
+}
+
+#[test]
+fn zero_field_record() {
+    derive_test(
+        synth!({}),
+        indoc!(
+            r#"
+            \Test.0 -> (Encode.record [ ])
+            "#
+        ),
+    )
 }
 
 #[test]

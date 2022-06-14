@@ -129,12 +129,14 @@ fn to_encoder_from_var(env: &mut Env<'_>, mut var: Variable) -> Expr {
                 FlatType::Record(fields, ext_var) => {
                     return to_encoder_record(env, var, fields, ext_var)
                 }
+                FlatType::EmptyRecord => {
+                    return to_encoder_record(env, var, RecordFields::empty(), var)
+                }
 
                 FlatType::Apply(_, _) => todo!(),
                 FlatType::TagUnion(_, _) => todo!(),
                 FlatType::FunctionOrTagUnion(_, _, _) => todo!(),
                 FlatType::RecursiveTagUnion(_, _, _) => todo!(),
-                FlatType::EmptyRecord => todo!(),
                 FlatType::EmptyTagUnion => todo!(),
 
                 FlatType::Func(..) => bad_input!(env, var, "functions cannot be encoded"),
