@@ -297,20 +297,17 @@ impl<'a> WasmBackend<'a> {
 
         const START: &str = "_start";
 
-        match self.module.linking.find_internal_symbol(START) {
-            Ok(sym_index) => {
-                let index = match self.module.linking.symbol_table[sym_index] {
-                    SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { index, .. }) => index,
-                    _ => panic!("linker symbol `{}` is not a function", START),
-                };
-                self.module.export.append(Export {
-                    name: START,
-                    ty: ExportType::Func,
-                    index,
-                });
-                return;
-            }
-            _ => {}
+        if let Ok(sym_index) = self.module.linking.find_internal_symbol(START) {
+            let fn_index = match self.module.linking.symbol_table[sym_index] {
+                SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { index, .. }) => index,
+                _ => panic!("linker symbol `{}` is not a function", START),
+            };
+            self.module.export.append(Export {
+                name: START,
+                ty: ExportType::Func,
+                index: fn_index,
+            });
+            return;
         }
 
         self.module.add_function_signature(Signature {
