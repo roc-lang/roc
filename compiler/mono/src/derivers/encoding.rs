@@ -17,7 +17,7 @@ use roc_types::subs::{
     Content, ExposedTypesStorageSubs, FlatType, GetSubsSlice, LambdaSet, OptVariable, RecordFields,
     Subs, SubsFmtContent, SubsSlice, UnionLambdas, Variable, VariableSubsSlice,
 };
-use roc_types::types::{AliasKind, RecordField, RecordFieldsError};
+use roc_types::types::{AliasKind, RecordField};
 
 use crate::derivers::synth_var;
 
@@ -162,30 +162,29 @@ fn to_encoder_record(
     //      { key: "a", value: Encode.toEncoder rcd.a },
     //      { key: "b", value: Encode.toEncoder rcd.b },
     //   ]
-    dbg!(record_var);
+
+    debug_assert!(matches!(
+        env.subs.get_content_without_compacting(ext_var),
+        Content::Structure(FlatType::EmptyRecord)
+    ));
     let rcd_sym = env.unique_symbol();
     let whole_rcd_var = env.subs.fresh_unnamed_flex_var(); // type of the { key, value } records in the list
 
-    let fields_it = match fields.unsorted_iterator(env.subs, ext_var) {
-        Ok(it) => it,
-        Err(RecordFieldsError) => bad_input!(env, ext_var, "extension var for record is unbound"),
-    }
-    .map(|(name, field)| (name.clone(), field))
-    .collect::<Vec<_>>();
-
     use Expr::*;
 
-    let fields_list = fields_it
-        .into_iter()
-        .map(|(field_name, field)| {
+    let fields_list = fields
+        .iter_all()
+        .map(|(field_name_index, field_var_index, _)| {
+            let field_name = env.subs[field_name_index].clone();
+            let field_var = env.subs[field_var_index];
+            let field_var_slice = VariableSubsSlice::new(field_var_index.index, 1);
+
             // key: "a"
             let key_field = Field {
                 var: Variable::STR,
                 region: Region::zero(),
                 loc_expr: Box::new(Loc::at_zero(Str(field_name.as_str().into()))),
             };
-
-            let field_var = *field.as_inner();
 
             // rcd.a
             let field_access = Access {
@@ -201,9 +200,6 @@ fn to_encoder_record(
             let to_encoder_fn_var = env.import_encode_symbol(Symbol::ENCODE_TO_ENCODER);
 
             // (typeof rcd.a) -[clos]-> t1
-            // TODO: we don't have to re-add the field var as a subs slice if we iterate over the
-            // original record fields' variable slice.
-            let field_var_slice = VariableSubsSlice::insert_into_subs(env.subs, once(field_var));
             let to_encoder_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
             let encoder_var = env.subs.fresh_unnamed_flex_var(); // t1
             let this_to_encoder_fn_var = synth_var(
