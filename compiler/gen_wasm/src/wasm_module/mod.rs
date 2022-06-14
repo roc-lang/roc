@@ -406,8 +406,9 @@ impl<'a> WasmModule<'a> {
                     }
                 }
             }
-            current_pass_fns.clone_from(&next_pass_fns);
-            next_pass_fns.clear();
+
+            current_pass_fns.clear();
+            std::mem::swap(&mut current_pass_fns, &mut next_pass_fns);
         }
 
         live_flags
