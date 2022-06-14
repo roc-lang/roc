@@ -1,3 +1,5 @@
+#![cfg(feature = "gen-wasm")]
+
 use bumpalo::Bump;
 use roc_gen_wasm::Env;
 use std::fs;
@@ -17,8 +19,8 @@ use roc_mono::ir::{
 };
 use roc_mono::layout::{Builtin, Layout};
 
-const TEST_HOST_SOURCE: &str = "tests/linking_tests_host.zig";
-const TEST_HOST_TARGET: &str = "tests/linking_tests_host.wasm";
+const TEST_HOST_SOURCE: &str = "src/helpers/wasm_linking_test_host.zig";
+const TEST_HOST_TARGET: &str = "src/helpers/wasm_linking_test_host.wasm";
 
 fn build_host() -> std::vec::Vec<u8> {
     let args = [
@@ -171,6 +173,29 @@ impl<'a> BackendInputs<'a> {
     }
 }
 
+fn load_bytes_into_runtime(bytes: &[u8]) -> wasmer::Instance {
+    use wasmer::{Function, Module, Store};
+
+    let store = Store::default();
+    let wasmer_module = Module::new(&store, bytes).unwrap();
+
+    let import_object = wasmer::imports!(
+        "env" => {
+            "js_called_indirectly_from_roc" => Function::new_native(&store, wasmer_import),
+            "js_called_indirectly_from_main" => Function::new_native(&store, wasmer_import),
+            "js_unused" => Function::new_native(&store, wasmer_import),
+            "js_called_directly_from_roc" => Function::new_native(&store, wasmer_import),
+            "js_called_directly_from_main" => Function::new_native(&store, wasmer_import),
+        }
+    );
+
+    wasmer::Instance::new(&wasmer_module, &import_object).unwrap()
+}
+
+fn wasmer_import(x: i32) -> i32 {
+    x + 100
+}
+
 #[test]
 fn test_linking_without_dce() {
     let arena = Bump::new();
@@ -201,10 +226,11 @@ fn test_linking_without_dce() {
     let (final_module, _called_preload_fns, _roc_main_index) =
         roc_gen_wasm::build_app_module(&env, &mut interns, host_module, procedures);
 
+    let mut buffer = Vec::with_capacity(final_module.size());
+    final_module.serialize(&mut buffer);
+
     if std::env::var("DEBUG_WASM").is_ok() {
-        let mut buffer = Vec::with_capacity(final_module.size());
-        final_module.serialize(&mut buffer);
-        fs::write("tests/without_dce.wasm", buffer).unwrap();
+        fs::write("tests/without_dce.wasm", &buffer).unwrap();
     }
 
     let final_import_names = Vec::from_iter(final_module.import.imports.iter().map(|i| i.name));
@@ -219,6 +245,11 @@ fn test_linking_without_dce() {
             "js_called_directly_from_main",
         ]
     );
+
+    // Try to run it, make sure it doesn't crash
+    let instance = load_bytes_into_runtime(&buffer);
+    let start = instance.exports.get_function("_start").unwrap();
+    start.call(&[]).unwrap();
 }
 
 #[test]
@@ -255,10 +286,10 @@ fn test_linking_with_dce() {
 
     final_module.eliminate_dead_code(env.arena, &called_preload_fns);
 
+    let mut buffer = Vec::with_capacity(final_module.size());
+    final_module.serialize(&mut buffer);
     if std::env::var("DEBUG_WASM").is_ok() {
-        let mut buffer = Vec::with_capacity(final_module.size());
-        final_module.serialize(&mut buffer);
-        fs::write("tests/with_dce.wasm", buffer).unwrap();
+        fs::write("tests/with_dce.wasm", &buffer).unwrap();
     }
 
     let final_import_names = Vec::from_iter(final_module.import.imports.iter().map(|i| i.name));
@@ -283,4 +314,9 @@ fn test_linking_with_dce() {
             (4, "js_unused"),
         ]
     );
+
+    // Try to run it, make sure it doesn't crash
+    let instance = load_bytes_into_runtime(&buffer);
+    let start = instance.exports.get_function("_start").unwrap();
+    start.call(&[]).unwrap();
 }

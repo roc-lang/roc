@@ -6,6 +6,7 @@ zig-cache
 *.rs.bk
 *.o
 *.tmp
+*.wasm
 
 # llvm human-readable output
 *.ll

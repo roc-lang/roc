@@ -19,6 +19,9 @@ pub mod gen_tags;
 mod helpers;
 pub mod wasm_str;
 
+#[cfg(feature = "gen-wasm")]
+pub mod wasm_linking;
+
 use core::ffi::c_void;
 
 /// # Safety
