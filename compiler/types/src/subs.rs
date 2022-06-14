@@ -4627,7 +4627,7 @@ struct CopyImportEnv<'a> {
 }
 
 pub fn copy_import_to(
-    source: &mut Subs, // mut to set the copy
+    source: &mut Subs, // mut to set the copy. TODO: use a separate copy table to avoid mut
     target: &mut Subs,
     var: Variable,
     rank: Rank,

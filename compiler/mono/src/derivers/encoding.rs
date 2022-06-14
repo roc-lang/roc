@@ -9,15 +9,17 @@ use roc_can::expr::{AnnotatedMark, ClosureData, Expr, Field, Recursive};
 use roc_can::pattern::Pattern;
 use roc_collections::SendMap;
 use roc_error_macros::internal_error;
+use roc_late_solve::instantiate_rigids;
 use roc_module::called_via::CalledVia;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{
-    Content, Descriptor, ExposedTypesStorageSubs, FlatType, GetSubsSlice, LambdaSet, Mark,
-    OptVariable, Rank, RecordFields, Subs, SubsFmtContent, SubsSlice, UnionLambdas, Variable,
-    VariableSubsSlice,
+    Content, ExposedTypesStorageSubs, FlatType, GetSubsSlice, LambdaSet, OptVariable, RecordFields,
+    Subs, SubsFmtContent, SubsSlice, UnionLambdas, Variable, VariableSubsSlice,
 };
 use roc_types::types::{AliasKind, RecordField, RecordFieldsError};
+
+use crate::derivers::synth_var;
 
 macro_rules! bad_input {
     ($env:expr, $var:expr) => {
@@ -61,6 +63,8 @@ impl Env<'_> {
             .storage_subs
             .export_variable_to(self.subs, *storage_var);
 
+        instantiate_rigids(self.subs, imported.variable);
+
         imported.variable
     }
 
@@ -77,11 +81,13 @@ impl Env<'_> {
     }
 }
 
+// TODO: decide whether it will be better to pass the whole signature, or just the argument type.
+// For now we are only using the argument type for convinience of testing.
 #[allow(dead_code)]
-pub fn derive_to_encoder(env: &mut Env<'_>, signature: Variable) {
+fn verify_signature(env: &mut Env<'_>, signature: Variable) {
     // Verify the signature is what we expect: input -> Encoder fmt | fmt has EncoderFormatting
     // and get the input type
-    let input = match env.subs.get_content_without_compacting(signature) {
+    match env.subs.get_content_without_compacting(signature) {
         Content::Structure(FlatType::Func(input, _, output)) => {
             // Check the output is Encoder fmt | fmt has EncoderFormatting
             match env.subs.get_content_without_compacting(*output) {
@@ -105,11 +111,13 @@ pub fn derive_to_encoder(env: &mut Env<'_>, signature: Variable) {
         }
         _ => bad_input!(env, signature),
     };
-
-    to_encoder_from_var(env, input)
 }
 
-fn to_encoder_from_var(env: &mut Env<'_>, mut var: Variable) {
+pub fn derive_to_encoder(env: &mut Env<'_>, for_var: Variable) -> Expr {
+    to_encoder_from_var(env, for_var)
+}
+
+fn to_encoder_from_var(env: &mut Env<'_>, mut var: Variable) -> Expr {
     loop {
         match *env.subs.get_content_without_compacting(var) {
             Content::Alias(_, _, real_var, _) => var = real_var,
@@ -118,7 +126,9 @@ fn to_encoder_from_var(env: &mut Env<'_>, mut var: Variable) {
             Content::RecursionVar { .. } => todo!(),
             Content::LambdaSet(_) => todo!(),
             Content::Structure(flat_type) => match flat_type {
-                FlatType::Record(fields, ext_var) => to_encoder_record(env, var, fields, ext_var),
+                FlatType::Record(fields, ext_var) => {
+                    return to_encoder_record(env, var, fields, ext_var)
+                }
 
                 FlatType::Apply(_, _) => todo!(),
                 FlatType::TagUnion(_, _) => todo!(),
@@ -140,25 +150,12 @@ fn to_encoder_from_var(env: &mut Env<'_>, mut var: Variable) {
     }
 }
 
-fn synth_var(subs: &mut Subs, content: Content) -> Variable {
-    let descriptor = Descriptor {
-        content,
-        // NOTE: this is incorrect, but that is irrelevant - derivers may only be called during
-        // monomorphization (or later), at which point we do not care about variable
-        // generalization. Hence ranks should not matter.
-        rank: Rank::toplevel(),
-        mark: Mark::NONE,
-        copy: OptVariable::NONE,
-    };
-    subs.fresh(descriptor)
-}
-
 fn to_encoder_record(
     env: &mut Env<'_>,
     record_var: Variable,
     fields: RecordFields,
     ext_var: Variable,
-) {
+) -> Expr {
     // Suppose rcd = { a: t1, b: t2 }. Build
     //
     // \rcd -> Encode.record [
@@ -276,7 +273,7 @@ fn to_encoder_record(
 
     // [ { key: .., value: ..}, .. ]
     let fields_list = List {
-        elem_var: fields_list_var,
+        elem_var: whole_rcd_var,
         loc_elems: fields_list,
     };
 
@@ -305,7 +302,7 @@ fn to_encoder_record(
     // Encode.record : fields_list_var -[clos]-> Encoder fmt | fmt has EncoderFormatting
     let encode_record_fn = Box::new((
         encode_record_fn_var,
-        Loc::at_zero(Var(Symbol::ENCODE_TO_ENCODER)),
+        Loc::at_zero(Var(Symbol::ENCODE_RECORD)),
         encode_record_clos_var,
         encoder_var,
     ));
@@ -349,5 +346,5 @@ fn to_encoder_record(
             Loc::at_zero(Pattern::Identifier(rcd_sym)),
         )],
         loc_body: Box::new(Loc::at_zero(encode_record_call)),
-    });
+    })
 }
