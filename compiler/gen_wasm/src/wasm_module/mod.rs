@@ -284,7 +284,7 @@ impl<'a> WasmModule<'a> {
 
         //
         // Dead code elimination. Replace dead functions with tiny dummies.
-        // This is fast. Live function indices are unchanged, so no relocations are needed.
+        // Live function indices are unchanged, so no relocations are needed.
         //
         let dummy = CodeBuilder::dummy(arena);
         let mut dummy_bytes = Vec::with_capacity_in(dummy.size(), arena);
@@ -393,7 +393,7 @@ impl<'a> WasmModule<'a> {
                 // For each indirect call in the body
                 for (offset, signature) in indirect_call_offsets_and_types.iter() {
                     if *offset > code_start && *offset < code_end {
-                        // Find which functions have the right type signature for this call
+                        // Find which indirect callees have the right type signature
                         let potential_callees = indirect_callees_and_signatures
                             .iter()
                             .filter(|(_, sig)| sig == signature)
