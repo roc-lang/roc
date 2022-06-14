@@ -1282,6 +1282,10 @@ define_const_var! {
     :pub F64,
 
     :pub DEC,
+
+    // The following are abound in derived abilities, so we cache them.
+    :pub STR,
+    :pub LIST_U8,
 }
 
 impl Variable {
@@ -1322,6 +1326,8 @@ impl Variable {
             Symbol::NUM_F32 => Some(Variable::F32),
 
             Symbol::NUM_DEC => Some(Variable::DEC),
+
+            Symbol::STR_STR => Some(Variable::STR),
 
             _ => None,
         }
@@ -1698,6 +1704,20 @@ impl Subs {
                 AliasKind::Structural,
             )
         });
+
+        subs.set_content(Variable::STR, {
+            Content::Structure(FlatType::Apply(
+                Symbol::STR_STR,
+                VariableSubsSlice::default(),
+            ))
+        });
+
+        let u8_slice =
+            VariableSubsSlice::insert_into_subs(&mut subs, std::iter::once(Variable::U8));
+        subs.set_content(
+            Variable::LIST_U8,
+            Content::Structure(FlatType::Apply(Symbol::LIST_LIST, u8_slice)),
+        );
 
         subs
     }
