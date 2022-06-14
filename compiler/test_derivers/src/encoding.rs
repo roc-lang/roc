@@ -3,6 +3,11 @@
 use std::path::PathBuf;
 
 use bumpalo::Bump;
+use indoc::indoc;
+use pretty_assertions::assert_eq;
+use ven_pretty::DocAllocator;
+
+use crate::pretty_print::{pretty_print, Ctx};
 use roc_can::{
     abilities::{AbilitiesStore, ResolvedSpecializations},
     constraint::Constraints,
@@ -15,21 +20,20 @@ use roc_constrain::{
     expr::constrain_expr,
     module::{ExposedByModule, ExposedForModule, ExposedModuleTypes},
 };
+use roc_debug_flags::{dbg_do, ROC_PRINT_UNIFICATIONS, ROC_PRINT_UNIFICATIONS_DERIVED};
 use roc_load_internal::file::{add_imports, default_aliases, LoadedModule, Threading};
 use roc_module::{
     ident::ModuleName,
     symbol::{IdentIds, Interns, ModuleId},
 };
 use roc_mono::derivers::encoding::Env;
+use roc_mono::derivers::{encoding, synth_var};
 use roc_region::all::{LineInfo, Region};
 use roc_reporting::report::{type_problem, RocDocAllocator};
 use roc_types::{
     subs::{Content, ExposedTypesStorageSubs, FlatType, RecordFields, Subs, Variable},
     types::{RecordField, Type},
 };
-use ven_pretty::DocAllocator;
-
-use roc_mono::derivers::{encoding, synth_var};
 
 fn encode_path() -> PathBuf {
     let repo_root = std::env::var("ROC_WORKSPACE_DIR").expect("are you running with `cargo test`?");
@@ -96,6 +100,10 @@ fn check_derived_typechecks(
         constraints.let_import_constraint(rigid_vars, def_types, constr, &import_variables);
 
     // run the solver, print and fail if we have errors
+    dbg_do!(
+        ROC_PRINT_UNIFICATIONS_DERIVED,
+        std::env::set_var(ROC_PRINT_UNIFICATIONS, "1")
+    );
     let (_solved_subs, _, problems, _) = roc_solve::module::run_solve(
         &constraints,
         constr,
@@ -138,7 +146,7 @@ fn check_derived_typechecks(
     }
 }
 
-fn derive_test<S>(synth_input: S)
+fn derive_test<S>(synth_input: S, expected: &str)
 where
     S: FnOnce(&mut Subs) -> Variable,
 {
@@ -165,19 +173,26 @@ where
 
     let test_module = interns.module_id(&ModuleName::from("Test"));
     let mut test_subs = Subs::new();
-    let mut test_ident_ids = IdentIds::default();
+    interns
+        .all_ident_ids
+        .insert(test_module, IdentIds::default());
 
     let mut env = Env {
         home: test_module,
         arena: &arena,
         subs: &mut test_subs,
-        ident_ids: &mut test_ident_ids,
+        ident_ids: interns.all_ident_ids.get_mut(&test_module).unwrap(),
         exposed_encode_types: &mut exposed_encode_types,
     };
 
     let signature_var = synth_input(env.subs);
 
     let derived = encoding::derive_to_encoder(&mut env, signature_var);
+    test_module.register_debug_idents(interns.all_ident_ids.get(&test_module).unwrap());
+
+    let ctx = Ctx { interns: &interns };
+    let derived_program = pretty_print(&ctx, &derived);
+    assert_eq!(expected, derived_program);
 
     check_derived_typechecks(
         derived,
@@ -201,5 +216,29 @@ macro_rules! synth {
 
 #[test]
 fn one_field_record() {
-    derive_test(synth!({ "a": Variable::U8 }))
+    derive_test(
+        synth!({ "a": Variable::U8 }),
+        indoc!(
+            r#"
+            \Test.0 ->
+              (Encode.record [ { value: (Encode.toEncoder (Test.0).a), key: "a", }, ])
+            "#
+        ),
+    )
+}
+
+#[test]
+fn two_field_record() {
+    derive_test(
+        synth!({ "a": Variable::U8, "b": Variable::STR }),
+        indoc!(
+            r#"
+            \Test.0 ->
+              (Encode.record [
+                { value: (Encode.toEncoder (Test.0).a), key: "a", },
+                { value: (Encode.toEncoder (Test.0).b), key: "b", },
+              ])
+            "#
+        ),
+    )
 }

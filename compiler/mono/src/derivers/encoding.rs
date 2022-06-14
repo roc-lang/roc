@@ -162,6 +162,7 @@ fn to_encoder_record(
     //      { key: "a", value: Encode.toEncoder rcd.a },
     //      { key: "b", value: Encode.toEncoder rcd.b },
     //   ]
+    dbg!(record_var);
     let rcd_sym = env.unique_symbol();
     let whole_rcd_var = env.subs.fresh_unnamed_flex_var(); // type of the { key, value } records in the list
 
@@ -189,7 +190,7 @@ fn to_encoder_record(
             // rcd.a
             let field_access = Access {
                 record_var,
-                ext_var,
+                ext_var: env.subs.fresh_unnamed_flex_var(),
                 field_var,
                 loc_expr: Box::new(Loc::at_zero(Var(rcd_sym))),
                 field: field_name,
