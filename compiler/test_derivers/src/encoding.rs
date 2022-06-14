@@ -48,6 +48,7 @@ fn check_derived_typechecks(
     exposed_encode_types: ExposedTypesStorageSubs,
     encode_abilities_store: AbilitiesStore,
 ) {
+    // constrain the derived
     let mut constraints = Constraints::new();
     let mut env = roc_constrain::expr::Env {
         rigids: Default::default(),
@@ -61,6 +62,10 @@ fn check_derived_typechecks(
         &derived,
         Expected::NoExpectation(Type::Variable(test_subs.fresh_unnamed_flex_var())),
     );
+
+    // the derived depends on stuff from Encode, so
+    //   - we need to add those dependencies as imported on the constraint
+    //   - we need to add Encode ability info to a local abilities store
     let encode_values_to_import = exposed_encode_types
         .stored_vars_by_symbol
         .keys()
@@ -90,6 +95,7 @@ fn check_derived_typechecks(
     let constr =
         constraints.let_import_constraint(rigid_vars, def_types, constr, &import_variables);
 
+    // run the solver, print and fail if we have errors
     let (_solved_subs, _, problems, _) = roc_solve::module::run_solve(
         &constraints,
         constr,
@@ -183,8 +189,9 @@ where
     );
 }
 
+// Writing out the types into content is terrible, so let's use a DSL at least for testing
 macro_rules! synth {
-    (rcd{ $($field:literal: $typ:expr),* }) => {
+    ({ $($field:literal: $typ:expr),* }) => {
         |subs| {
             let fields = RecordFields::insert_into_subs(subs, vec![ $( ($field.into(), RecordField::Required($typ)) ,)* ]);
             synth_var(subs, Content::Structure(FlatType::Record(fields, Variable::EMPTY_RECORD)))
@@ -194,5 +201,5 @@ macro_rules! synth {
 
 #[test]
 fn one_field_record() {
-    derive_test(synth!(rcd{ "a": Variable::U8 }))
+    derive_test(synth!({ "a": Variable::U8 }))
 }
