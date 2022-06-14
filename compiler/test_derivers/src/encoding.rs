@@ -20,7 +20,7 @@ use roc_constrain::{
     expr::constrain_expr,
     module::{ExposedByModule, ExposedForModule, ExposedModuleTypes},
 };
-use roc_debug_flags::{dbg_do, ROC_PRINT_UNIFICATIONS, ROC_PRINT_UNIFICATIONS_DERIVED};
+use roc_debug_flags::dbg_do;
 use roc_load_internal::file::{add_imports, default_aliases, LoadedModule, Threading};
 use roc_module::{
     ident::ModuleName,
@@ -101,8 +101,8 @@ fn check_derived_typechecks(
 
     // run the solver, print and fail if we have errors
     dbg_do!(
-        ROC_PRINT_UNIFICATIONS_DERIVED,
-        std::env::set_var(ROC_PRINT_UNIFICATIONS, "1")
+        roc_debug_flags::ROC_PRINT_UNIFICATIONS_DERIVED,
+        std::env::set_var(roc_debug_flags::ROC_PRINT_UNIFICATIONS_DERIVED, "1")
     );
     let (_solved_subs, _, problems, _) = roc_solve::module::run_solve(
         &constraints,
@@ -119,7 +119,7 @@ fn check_derived_typechecks(
         let lines = LineInfo::new(" ");
         let src_lines = vec![" "];
         let mut reports = Vec::new();
-        let alloc = RocDocAllocator::new(&src_lines, test_module, &interns);
+        let alloc = RocDocAllocator::new(&src_lines, test_module, interns);
 
         for problem in problems.into_iter() {
             if let Some(report) = type_problem(&alloc, &lines, filename.clone(), problem.clone()) {
@@ -163,7 +163,7 @@ where
         &arena,
         encode_path().file_name().unwrap().into(),
         source,
-        &encode_path().parent().unwrap(),
+        encode_path().parent().unwrap(),
         Default::default(),
         target_info,
         roc_reporting::report::RenderTarget::ColorTerminal,

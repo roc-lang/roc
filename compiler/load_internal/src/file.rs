@@ -2663,6 +2663,7 @@ fn finish_specialization(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish(
     state: State,
     solved: Solved<Subs>,
