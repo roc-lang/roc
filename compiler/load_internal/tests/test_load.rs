@@ -638,7 +638,7 @@ mod test_load {
             indoc!(
                 r#"
                 app "example"
-                    packages { pf: "./zzz-does-not-exist" }
+                    packages { pf: "./zzz-does-not-exist/main.roc" }
                     imports []
                     provides [main] to pf
 
@@ -651,7 +651,7 @@ mod test_load {
             Err(report) => {
                 assert!(report.contains("FILE NOT FOUND"), "report=({})", report);
                 assert!(
-                    report.contains("zzz-does-not-exist/Package-Config.roc"),
+                    report.contains("zzz-does-not-exist/main.roc"),
                     "report=({})",
                     report
                 );
@@ -664,7 +664,7 @@ mod test_load {
     fn platform_parse_error() {
         let modules = vec![
             (
-                "platform/Package-Config.roc",
+                "platform/main.roc",
                 indoc!(
                     r#"
                         platform "hello-c"
@@ -708,7 +708,7 @@ mod test_load {
     fn platform_exposes_main_return_by_pointer_issue() {
         let modules = vec![
             (
-                "platform/Package-Config.roc",
+                "platform/main.roc",
                 indoc!(
                     r#"
                     platform "hello-world"
@@ -821,7 +821,7 @@ mod test_load {
     fn issue_2863_module_type_does_not_exist() {
         let modules = vec![
             (
-                "platform/Package-Config.roc",
+                "platform/main.roc",
                 indoc!(
                     r#"
                     platform "testplatform"

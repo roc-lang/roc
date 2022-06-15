@@ -72,9 +72,6 @@ const DEFAULT_APP_OUTPUT_PATH: &str = "app";
 /// Filename extension for normal Roc modules
 const ROC_FILE_EXTENSION: &str = "roc";
 
-/// Roc-Config file name
-const PKG_CONFIG_FILE_NAME: &str = "Package-Config";
-
 /// The . in between module names like Foo.Bar.Baz
 const MODULE_SEPARATOR: char = '.';
 
@@ -2164,7 +2161,7 @@ fn update<'a>(
 
             let work = state.dependencies.notify(module_id, Phase::SolveTypes);
 
-            // if there is a platform, the Package-Config module provides host-exposed,
+            // if there is a platform, the `platform` module provides host-exposed,
             // otherwise the App module exposes host-exposed
             let is_host_exposed = match state.platform_data {
                 None => module_id == state.root_id,
@@ -2755,8 +2752,8 @@ fn load_pkg_config<'a>(
                     )))
                 }
                 Ok((ast::Module::Platform { header }, parser_state)) => {
-                    // make a Package-Config module that ultimately exposes `main` to the host
-                    let pkg_config_module_msg = fabricate_pkg_config_module(
+                    // make a `platform` module that ultimately exposes `main` to the host
+                    let platform_module_msg = fabricate_platform_module(
                         arena,
                         shorthand,
                         Some(app_module_id),
@@ -2769,7 +2766,7 @@ fn load_pkg_config<'a>(
                     )
                     .1;
 
-                    Ok(pkg_config_module_msg)
+                    Ok(platform_module_msg)
                 }
                 Err(fail) => Err(LoadingProblem::ParsingFailed(
                     fail.map_problem(SyntaxError::Header)
@@ -3054,8 +3051,8 @@ fn parse_header<'a>(
             ))
         }
         Ok((ast::Module::App { header }, parse_state)) => {
-            let mut pkg_config_dir = filename.clone();
-            pkg_config_dir.pop();
+            let mut app_file_dir = filename.clone();
+            app_file_dir.pop();
 
             let packages = unspace(arena, header.packages.items);
 
@@ -3119,18 +3116,14 @@ fn parse_header<'a>(
                         ..
                     }) = opt_base_package
                     {
-                        let package = package_name.0;
-
                         // check whether we can find a Package-Config.roc file
-                        let mut pkg_config_roc = pkg_config_dir;
-                        pkg_config_roc.push(package);
-                        pkg_config_roc.push(PKG_CONFIG_FILE_NAME);
-                        pkg_config_roc.set_extension(ROC_FILE_EXTENSION);
+                        let mut platform_module_path = app_file_dir;
+                        platform_module_path.push(package_name.0);
 
-                        if pkg_config_roc.as_path().exists() {
+                        if platform_module_path.as_path().exists() {
                             let load_pkg_config_msg = load_pkg_config(
                                 arena,
-                                &pkg_config_roc,
+                                &platform_module_path,
                                 shorthand,
                                 module_id,
                                 module_ids,
@@ -3143,7 +3136,7 @@ fn parse_header<'a>(
                             ))
                         } else {
                             Err(LoadingProblem::FileProblem {
-                                filename: pkg_config_roc,
+                                filename: platform_module_path,
                                 error: io::ErrorKind::NotFound,
                             })
                         }
@@ -3155,7 +3148,7 @@ fn parse_header<'a>(
             }
         }
         Ok((ast::Module::Platform { header }, parse_state)) => {
-            Ok(fabricate_pkg_config_module(
+            Ok(fabricate_platform_module(
                 arena,
                 "", // Use a shorthand of "" - it will be fine for `roc check` and bindgen
                 None,
@@ -3493,7 +3486,7 @@ fn send_header_two<'a>(
         HashMap::with_capacity_and_hasher(num_exposes, default_hasher());
 
     // Add standard imports, if there is an app module.
-    // (There might not be, e.g. when running `roc check Package-Config.roc` or
+    // (There might not be, e.g. when running `roc check myplatform.roc` or
     // when generating bindings.)
     if let Some(app_module_id) = opt_app_module_id {
         imported_modules.insert(app_module_id, Region::zero());
@@ -3567,7 +3560,7 @@ fn send_header_two<'a>(
 
         {
             // If we don't have an app module id (e.g. because we're doing
-            // `roc check Package-Config.roc` or because we're doing bindgen),
+            // `roc check myplatform.roc` or because we're doing bindgen),
             // insert the `requires` symbols into the platform module's IdentIds.
             //
             // Otherwise, get them from the app module's IdentIds, because it
@@ -4055,7 +4048,7 @@ fn unspace<'a, T: Copy>(arena: &'a Bump, items: &[Loc<Spaced<'a, T>>]) -> &'a [L
 }
 
 #[allow(clippy::too_many_arguments)]
-fn fabricate_pkg_config_module<'a>(
+fn fabricate_platform_module<'a>(
     arena: &'a Bump,
     shorthand: &'a str,
     opt_app_module_id: Option<ModuleId>,
