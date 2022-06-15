@@ -37,6 +37,7 @@ use roc_mono::derive::{
 use roc_region::all::{LineInfo, Region};
 use roc_reporting::report::{type_problem, RocDocAllocator};
 use roc_types::{
+    pretty_print::{name_and_print_var, DebugPrint},
     subs::{
         AliasVariables, Content, ExposedTypesStorageSubs, FlatType, RecordFields, Subs, SubsIndex,
         SubsSlice, UnionTags, Variable,
@@ -60,6 +61,7 @@ fn check_derived_typechecks(
     interns: &Interns,
     exposed_encode_types: ExposedTypesStorageSubs,
     encode_abilities_store: AbilitiesStore,
+    expected_type: &str,
 ) {
     // constrain the derived
     let mut constraints = Constraints::new();
@@ -68,12 +70,13 @@ fn check_derived_typechecks(
         resolutions_to_make: Default::default(),
         home: test_module,
     };
+    let real_type = test_subs.fresh_unnamed_flex_var();
     let constr = constrain_expr(
         &mut constraints,
         &mut env,
         Region::zero(),
         &derived,
-        Expected::NoExpectation(Type::Variable(test_subs.fresh_unnamed_flex_var())),
+        Expected::NoExpectation(Type::Variable(real_type)),
     );
 
     // the derived depends on stuff from Encode, so
@@ -113,7 +116,7 @@ fn check_derived_typechecks(
         roc_debug_flags::ROC_PRINT_UNIFICATIONS_DERIVED,
         std::env::set_var(roc_debug_flags::ROC_PRINT_UNIFICATIONS_DERIVED, "1")
     );
-    let (_solved_subs, _, problems, _) = roc_solve::module::run_solve(
+    let (mut solved_subs, _, problems, _) = roc_solve::module::run_solve(
         &constraints,
         constr,
         RigidVariables::default(),
@@ -122,6 +125,7 @@ fn check_derived_typechecks(
         abilities_store,
         Default::default(),
     );
+    let subs = solved_subs.inner_mut();
 
     if !problems.is_empty() {
         let filename = PathBuf::from("Test.roc");
@@ -153,9 +157,14 @@ fn check_derived_typechecks(
 
         panic!("Derived does not typecheck:\n{}", buf);
     }
+
+    let pretty_type =
+        name_and_print_var(real_type, subs, test_module, interns, DebugPrint::NOTHING);
+
+    assert_eq!(expected_type, pretty_type);
 }
 
-fn derive_test<S>(synth_input: S, expected: &str)
+fn derive_test<S>(synth_input: S, expected_type: &str, expected_source: &str)
 where
     S: FnOnce(&mut Subs) -> Variable,
 {
@@ -201,7 +210,7 @@ where
 
     let ctx = Ctx { interns: &interns };
     let derived_program = pretty_print(&ctx, &derived);
-    assert_eq!(expected, derived_program);
+    assert_eq!(expected_source, derived_program);
 
     check_derived_typechecks(
         derived,
@@ -210,6 +219,7 @@ where
         &interns,
         exposed_encode_types,
         abilities_store,
+        expected_type,
     );
 }
 
@@ -416,6 +426,7 @@ test_hash_neq! {
 fn empty_record() {
     derive_test(
         v!(EMPTY_RECORD),
+        "{} -> Encoder fmt | fmt has EncoderFormatting",
         indoc!(
             r#"
             \Test.0 -> (Encode.record [ ])
@@ -428,6 +439,7 @@ fn empty_record() {
 fn zero_field_record() {
     derive_test(
         v!({}),
+        "{} -> Encoder fmt | fmt has EncoderFormatting",
         indoc!(
             r#"
             \Test.0 -> (Encode.record [ ])
@@ -440,6 +452,7 @@ fn zero_field_record() {
 fn one_field_record() {
     derive_test(
         v!({ a: v!(U8) }),
+        "{ a : val } -> Encoder fmt | fmt has EncoderFormatting, val has Encoding",
         indoc!(
             r#"
             \Test.0 ->
@@ -453,6 +466,7 @@ fn one_field_record() {
 fn two_field_record() {
     derive_test(
         v!({ a: v!(U8), b: v!(STR) }),
+        "{ a : val, b : a } -> Encoder fmt | a has Encoding, fmt has EncoderFormatting, val has Encoding",
         indoc!(
             r#"
             \Test.0 ->
