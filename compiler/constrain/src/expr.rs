@@ -4,7 +4,7 @@ use crate::builtins::{
 use crate::pattern::{constrain_pattern, PatternState};
 use roc_can::annotation::IntroducedVariables;
 use roc_can::constraint::{Constraint, Constraints, OpportunisticResolve};
-use roc_can::def::{Declaration, Def};
+use roc_can::def::{Declaration, Def, Expects};
 use roc_can::exhaustive::{sketch_pattern_to_rows, sketch_when_branches, ExhaustiveContext};
 use roc_can::expected::Expected::{self, *};
 use roc_can::expected::PExpected;
@@ -1309,6 +1309,9 @@ pub fn constrain_decls(
                 constraint =
                     constrain_recursive_defs(constraints, &mut env, defs, constraint, *cycle_mark);
             }
+            Declaration::Expects(expects) => {
+                constraint = constrain_expects(constraints, &mut env, expects, constraint);
+            }
             Declaration::InvalidCycle(_) => {
                 // invalid cycles give a canonicalization error. we skip them here.
                 continue;
@@ -1703,6 +1706,35 @@ fn attach_resolution_constraints(
     let resolution_constrs =
         constraints.and_constraint(env.resolutions_to_make.drain(..).map(Constraint::Resolve));
     constraints.and_constraint([constraint, resolution_constrs])
+}
+
+fn constrain_expects(
+    constraints: &mut Constraints,
+    env: &mut Env,
+    expects: &Expects,
+    body_con: Constraint,
+) -> Constraint {
+    let expect_bool = |region| {
+        let bool_type = Type::Variable(Variable::BOOL);
+        Expected::ForReason(Reason::ExpectCondition, bool_type, region)
+    };
+
+    let mut expect_constraints = Vec::with_capacity(expects.conditions.len());
+
+    let it = expects.regions.iter().zip(expects.conditions.iter());
+    for (region, condition) in it {
+        let expected = expect_bool(*region);
+        expect_constraints.push(constrain_expr(
+            constraints,
+            env,
+            *region,
+            condition,
+            expected,
+        ));
+    }
+
+    let defs_constraint = constraints.and_constraint(expect_constraints);
+    constraints.let_constraint([], [], [], defs_constraint, body_con)
 }
 
 fn constrain_def(

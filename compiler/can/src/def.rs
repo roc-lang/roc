@@ -84,11 +84,11 @@ pub(crate) struct CanDefs {
     aliases: VecMap<Symbol, Alias>,
 }
 
-#[derive(Debug)]
-struct Expects {
-    conditions: Vec<Expr>,
-    regions: Vec<Region>,
-    preceding_comment: Vec<Region>,
+#[derive(Clone, Debug)]
+pub struct Expects {
+    pub conditions: Vec<Expr>,
+    pub regions: Vec<Region>,
+    pub preceding_comment: Vec<Region>,
 }
 
 impl Expects {
@@ -219,6 +219,7 @@ pub enum Declaration {
     Declare(Def),
     DeclareRec(Vec<Def>, IllegalCycleMark),
     Builtin(Def),
+    Expects(Expects),
     /// If we know a cycle is illegal during canonicalization.
     /// Otherwise we will try to detect this during solving; see [`IllegalCycleMark`].
     InvalidCycle(Vec<CycleEntry>),
@@ -232,6 +233,7 @@ impl Declaration {
             DeclareRec(defs, _) => defs.len(),
             InvalidCycle { .. } => 0,
             Builtin(_) => 0,
+            Expects(_) => 0,
         }
     }
 
@@ -246,6 +248,10 @@ impl Declaration {
             Declaration::InvalidCycle(cycles) => Region::span_across(
                 &cycles.first().unwrap().expr_region,
                 &cycles.last().unwrap().expr_region,
+            ),
+            Declaration::Expects(expects) => Region::span_across(
+                &expects.regions.first().unwrap(),
+                &expects.regions.last().unwrap(),
             ),
         }
     }
@@ -1053,7 +1059,7 @@ pub(crate) fn sort_can_defs(
 ) -> (Vec<Declaration>, Output) {
     let CanDefs {
         mut defs,
-        expects: _,
+        expects,
         def_ordering,
         aliases,
     } = defs;
@@ -1163,6 +1169,8 @@ pub(crate) fn sort_can_defs(
             declarations.push(declaration);
         }
     }
+
+    declarations.push(Declaration::Expects(expects));
 
     (declarations, output)
 }
@@ -1617,6 +1625,10 @@ fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Loc<Expr> {
         }
         Declaration::Builtin(_) => {
             // Builtins should only be added to top-level decls, not to let-exprs!
+            unreachable!()
+        }
+        Declaration::Expects(_) => {
+            // Expects should only be added to top-level decls, not to let-exprs!
             unreachable!()
         }
     }
