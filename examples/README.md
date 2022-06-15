@@ -1,20 +1,20 @@
 # Examples
 
-Took a look around in this folder; `examples/benchmarks/` contains some larger examples.
-
 Run examples as follows:
 
-1. Navigate to the examples directory
+1. Navigate to this `examples` folder
 
     ```bash
     cd examples
     ```
 
-2. Run "Hello, World!" example
+2. Run a particualr example, such as Hello World:
 
     ```bash
-    cargo run hello-world/helloWorld.roc
+    roc run hello-world/main.roc
     ```
+
+`examples/benchmarks/` contains some larger examples.
 
 Some examples like `examples/benchmarks/NQueens.roc` require input after running.
 For NQueens, input 10 in the terminal and press enter.
