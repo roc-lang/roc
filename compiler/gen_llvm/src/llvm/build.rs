@@ -267,7 +267,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     }
 
     pub fn alignment_type(&self) -> IntType<'ctx> {
-        self.context.i32_type()
+        self.context.i64_type()
     }
 
     pub fn alignment_const(&self, alignment: u32) -> IntValue<'ctx> {

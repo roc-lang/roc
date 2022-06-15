@@ -7,14 +7,14 @@ pub fn WithOverflow(comptime T: type) type {
 }
 
 // If allocation fails, this must cxa_throw - it must not return a null pointer!
-extern fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*anyopaque;
+extern fn roc_alloc(size: usize, alignment: usize) callconv(.C) ?*anyopaque;
 
 // This should never be passed a null pointer.
 // If allocation fails, this must cxa_throw - it must not return a null pointer!
-extern fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*anyopaque;
+extern fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: usize) callconv(.C) ?*anyopaque;
 
 // This should never be passed a null pointer.
-extern fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void;
+extern fn roc_dealloc(c_ptr: *anyopaque, size: usize, alignment: usize) callconv(.C) void;
 
 // Signals to the host that the program has panicked
 extern fn roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void;
@@ -66,21 +66,21 @@ fn testing_roc_memcpy(dest: *anyopaque, src: *anyopaque, bytes: usize) callconv(
     return dest;
 }
 
-pub fn alloc(size: usize, alignment: u32) ?[*]u8 {
+pub fn alloc(size: usize, alignment: usize) ?[*]u8 {
     return @ptrCast(?[*]u8, @call(.{ .modifier = always_inline }, roc_alloc, .{ size, alignment }));
 }
 
-pub fn realloc(c_ptr: [*]u8, new_size: usize, old_size: usize, alignment: u32) [*]u8 {
+pub fn realloc(c_ptr: [*]u8, new_size: usize, old_size: usize, alignment: usize) [*]u8 {
     return @ptrCast([*]u8, @call(.{ .modifier = always_inline }, roc_realloc, .{ c_ptr, new_size, old_size, alignment }));
 }
 
-pub fn dealloc(c_ptr: [*]u8, alignment: u32) void {
-    return @call(.{ .modifier = always_inline }, roc_dealloc, .{ c_ptr, alignment });
+pub fn dealloc(c_ptr: [*]u8, size: usize, alignment: usize) void {
+    return @call(.{ .modifier = always_inline }, roc_dealloc, .{ c_ptr, size, alignment });
 }
 
 // must export this explicitly because right now it is not used from zig code
-pub fn panic(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
-    return @call(.{ .modifier = always_inline }, roc_panic, .{ c_ptr, alignment });
+pub fn panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
+    return @call(.{ .modifier = always_inline }, roc_panic, .{ c_ptr, tag_id });
 }
 
 pub fn memcpy(dst: [*]u8, src: [*]u8, size: usize) void {
@@ -89,9 +89,9 @@ pub fn memcpy(dst: [*]u8, src: [*]u8, size: usize) void {
 
 // indirection because otherwise zig creates an alias to the panic function which our LLVM code
 // does not know how to deal with
-pub fn test_panic(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
+pub fn test_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
     _ = c_ptr;
-    _ = alignment;
+    _ = tag_id;
     // const cstr = @ptrCast([*:0]u8, c_ptr);
 
     // const stderr = std.io.getStdErr().writer();
@@ -151,7 +151,8 @@ pub fn increfC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
 
 pub fn decrefC(
     bytes_or_null: ?[*]isize,
-    alignment: u32,
+    data_bytes: usize,
+    alignment: usize,
 ) callconv(.C) void {
     // IMPORTANT: bytes_or_null is this case is expected to be a pointer to the refcount
     // (NOT the start of the data, or the start of the allocation)
@@ -159,23 +160,24 @@ pub fn decrefC(
     // this is of course unsafe, but we trust what we get from the llvm side
     var bytes = @ptrCast([*]isize, bytes_or_null);
 
-    return @call(.{ .modifier = always_inline }, decref_ptr_to_refcount, .{ bytes, alignment });
+    return @call(.{ .modifier = always_inline }, decref_ptr_to_refcount, .{ bytes, data_bytes, alignment });
 }
 
 pub fn decrefCheckNullC(
     bytes_or_null: ?[*]u8,
-    alignment: u32,
+    data_bytes: usize,
+    alignment: usize,
 ) callconv(.C) void {
     if (bytes_or_null) |bytes| {
         const isizes: [*]isize = @ptrCast([*]isize, @alignCast(@sizeOf(isize), bytes));
-        return @call(.{ .modifier = always_inline }, decref_ptr_to_refcount, .{ isizes - 1, alignment });
+        return @call(.{ .modifier = always_inline }, decref_ptr_to_refcount, .{ isizes - 1, data_bytes, alignment });
     }
 }
 
 pub fn decref(
     bytes_or_null: ?[*]u8,
     data_bytes: usize,
-    alignment: u32,
+    alignment: usize,
 ) void {
     if (data_bytes == 0) {
         return;
@@ -185,12 +187,13 @@ pub fn decref(
 
     const isizes: [*]isize = @ptrCast([*]isize, @alignCast(@sizeOf(isize), bytes));
 
-    decref_ptr_to_refcount(isizes - 1, alignment);
+    decref_ptr_to_refcount(isizes - 1, data_bytes, alignment);
 }
 
 inline fn decref_ptr_to_refcount(
     refcount_ptr: [*]isize,
-    alignment: u32,
+    data_bytes: usize,
+    alignment: usize,
 ) void {
     if (RC_TYPE == Refcount.none) return;
     const extra_bytes = std.math.max(alignment, @sizeOf(usize));
@@ -198,7 +201,8 @@ inline fn decref_ptr_to_refcount(
         Refcount.normal => {
             const refcount: isize = refcount_ptr[0];
             if (refcount == REFCOUNT_ONE_ISIZE) {
-                dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
+                const ptr = @ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize));
+                dealloc(ptr, data_bytes + extra_bytes, alignment);
             } else if (refcount < REFCOUNT_MAX_ISIZE) {
                 refcount_ptr[0] = refcount - 1;
             }
@@ -224,7 +228,7 @@ pub fn allocateWithRefcountC(
 
 pub fn allocateWithRefcount(
     data_bytes: usize,
-    element_alignment: u32,
+    element_alignment: usize,
 ) [*]u8 {
     const ptr_width = @sizeOf(usize);
     const alignment = std.math.max(ptr_width, element_alignment);

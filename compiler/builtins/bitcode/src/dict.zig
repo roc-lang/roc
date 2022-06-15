@@ -68,6 +68,10 @@ const Alignment = extern struct {
 
     const VALUE_BEFORE_KEY_FLAG: u8 = 0b1000_0000;
 
+    fn toUsize(self: Alignment) usize {
+        return @intCast(usize, self.toU32());
+    }
+
     fn toU32(self: Alignment) u32 {
         if (self.bits >= VALUE_BEFORE_KEY_FLAG) {
             return self.bits ^ Alignment.VALUE_BEFORE_KEY_FLAG;
@@ -780,11 +784,11 @@ pub fn dictWalk(
     accum_width: usize,
     output: Opaque,
 ) callconv(.C) void {
-    const alignment_u32 = alignment.toU32();
+    const alignment_usize = alignment.toUsize();
     // allocate space to write the result of the stepper into
     // experimentally aliasing the accum and output pointers is not a good idea
     // TODO handle alloc failing!
-    const bytes_ptr: [*]u8 = utils.alloc(accum_width, alignment_u32) orelse unreachable;
+    const bytes_ptr: [*]u8 = utils.alloc(accum_width, alignment_usize) orelse unreachable;
     var b1 = output orelse unreachable;
     var b2 = bytes_ptr;
 
@@ -811,5 +815,5 @@ pub fn dictWalk(
     }
 
     @memcpy(output orelse unreachable, b2, accum_width);
-    utils.dealloc(bytes_ptr, alignment_u32);
+    utils.dealloc(bytes_ptr, accum_width, alignment_usize);
 }

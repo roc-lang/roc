@@ -42,7 +42,7 @@ pub const RocList = extern struct {
     }
 
     pub fn allocate(
-        alignment: u32,
+        alignment: usize,
         length: usize,
         element_size: usize,
     ) RocList {
@@ -495,7 +495,7 @@ pub fn listKeepOks(
         data,
         inc_n_data,
         data_is_owned,
-        alignment,
+        @intCast(usize, alignment),
         before_width,
         result_width,
         after_width,
@@ -526,7 +526,7 @@ pub fn listKeepErrs(
         data,
         inc_n_data,
         data_is_owned,
-        alignment,
+        @intCast(usize, alignment),
         before_width,
         result_width,
         after_width,
@@ -535,14 +535,14 @@ pub fn listKeepErrs(
     );
 }
 
-pub fn listKeepResult(
+fn listKeepResult(
     list: RocList,
     good_constructor: u16,
     caller: Caller1,
     data: Opaque,
     inc_n_data: IncN,
     data_is_owned: bool,
-    alignment: u32,
+    alignment: usize,
     before_width: usize,
     result_width: usize,
     after_width: usize,
@@ -581,7 +581,7 @@ pub fn listKeepResult(
             }
         }
 
-        utils.dealloc(temporary, alignment);
+        utils.dealloc(temporary, result_width, alignment);
 
         if (kept == 0) {
             utils.decref(output.bytes, size * after_width, alignment);
@@ -602,7 +602,7 @@ pub fn listWalk(
     inc_n_data: IncN,
     data_is_owned: bool,
     accum: Opaque,
-    alignment: u32,
+    alignment: usize,
     element_width: usize,
     accum_width: usize,
     output: Opaque,
@@ -639,7 +639,7 @@ pub fn listWalk(
     }
 
     @memcpy(output orelse unreachable, b2, accum_width);
-    utils.dealloc(bytes_ptr, alignment);
+    utils.dealloc(bytes_ptr, accum_width, alignment);
 }
 
 pub fn listWalkBackwards(
@@ -649,7 +649,7 @@ pub fn listWalkBackwards(
     inc_n_data: IncN,
     data_is_owned: bool,
     accum: Opaque,
-    alignment: u32,
+    alignment: usize,
     element_width: usize,
     accum_width: usize,
     output: Opaque,
@@ -687,7 +687,7 @@ pub fn listWalkBackwards(
     }
 
     @memcpy(output orelse unreachable, b2, accum_width);
-    utils.dealloc(bytes_ptr, alignment);
+    utils.dealloc(bytes_ptr, accum_width, alignment);
 }
 
 pub fn listWalkUntil(
@@ -697,7 +697,7 @@ pub fn listWalkUntil(
     inc_n_data: IncN,
     data_is_owned: bool,
     accum: Opaque,
-    alignment: u32,
+    alignment: usize,
     element_width: usize,
     continue_stop_width: usize,
     accum_width: usize,
@@ -749,7 +749,7 @@ pub fn listWalkUntil(
     }
 
     @memcpy(output orelse unreachable, bytes_ptr, accum_width);
-    utils.dealloc(bytes_ptr, alignment);
+    utils.dealloc(bytes_ptr, continue_stop_width, alignment);
 }
 
 // List.contains : List k, k -> Bool

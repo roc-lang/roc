@@ -219,7 +219,7 @@ fn decref_pointer<'a, 'ctx, 'env>(
     pointer: PointerValue<'ctx>,
     alignment: u32,
 ) {
-    let alignment = env.context.i32_type().const_int(alignment as _, false);
+    let alignment = env.ptr_int().const_int(alignment as _, false);
     call_void_bitcode_fn(
         env,
         &[
@@ -228,6 +228,7 @@ fn decref_pointer<'a, 'ctx, 'env>(
                 env.ptr_int().ptr_type(AddressSpace::Generic),
                 "to_isize_ptr",
             ),
+            env.ptr_int().const_zero().into(), // TODO this is the size, it should be a valid value
             alignment.into(),
         ],
         roc_builtins::bitcode::UTILS_DECREF,
@@ -240,7 +241,7 @@ pub fn decref_pointer_check_null<'a, 'ctx, 'env>(
     pointer: PointerValue<'ctx>,
     alignment: u32,
 ) {
-    let alignment = env.context.i32_type().const_int(alignment as _, false);
+    let alignment = env.ptr_int().const_int(alignment as _, false);
     call_void_bitcode_fn(
         env,
         &[
@@ -249,6 +250,7 @@ pub fn decref_pointer_check_null<'a, 'ctx, 'env>(
                 env.context.i8_type().ptr_type(AddressSpace::Generic),
                 "to_i8_ptr",
             ),
+            env.ptr_int().const_zero().into(), // TODO this is the size of the allocation, and should not be 0 usually
             alignment.into(),
         ],
         roc_builtins::bitcode::UTILS_DECREF_CHECK_NULL,

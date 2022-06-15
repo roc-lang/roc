@@ -132,11 +132,11 @@ pub fn getExpectFailuresC() callconv(.C) CSlice {
 }
 
 pub fn deinitFailures() void {
-    failures_mutex.lock();
-    defer failures_mutex.unlock();
-
-    utils.dealloc(@ptrCast([*]u8, failures), @alignOf(Failure));
-    failure_length = 0;
+    //    failures_mutex.lock();
+    //    defer failures_mutex.unlock();
+    //
+    //    utils.dealloc(@ptrCast([*]u8, failures), @alignOf(Failure));
+    //    failure_length = 0;
 }
 
 pub fn deinitFailuresC() callconv(.C) void {
