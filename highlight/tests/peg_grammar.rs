@@ -732,7 +732,7 @@ test1 =
 
     #[test]
     fn test_hello() {
-        let tokens = tokenize(&example_path("hello-world/helloWorld.roc"));
+        let tokens = tokenize(&example_path("hello-world/main.roc"));
 
         assert_eq!(tokenparser::module(&tokens), Ok(()));
     }
@@ -965,7 +965,7 @@ test1 =
             r#"5
     |>
       fun
-    
+
   "#,
         );
 
@@ -1028,7 +1028,7 @@ test1 =
     fn test_deeper_pizza() {
         let tokens = tokenize(
             r#"5
-  |> fun a 
+  |> fun a
   |> fun b"#,
         );
 
@@ -1039,7 +1039,7 @@ test1 =
     fn test_deeper_indented_pizza_a() {
         let tokens = tokenize(
             r#"5
-    |> fun a 
+    |> fun a
     |> fun b"#,
         );
 
@@ -1050,7 +1050,7 @@ test1 =
     fn test_deeper_indented_pizza_b() {
         let tokens = tokenize(
             r#"5
-    |> fun a 
+    |> fun a
     |> fun b
   "#,
         );
@@ -1225,7 +1225,7 @@ test1 =
           e = mkExpr n 1 # comment
           unoptimized = eval e
           optimized = eval (constFolding (reassoc e))
-          
+
           optimized"#,
         );
 
@@ -1310,7 +1310,7 @@ balance = \color ->
                 Node Red
 
             Node nColor ->
-                when key is  
+                when key is
                     GT ->
                         balance nColor"#,
         );
@@ -1390,7 +1390,7 @@ balance = \color ->
         let tokens = tokenize(
             r#"with = \path ->
     handle <- withOpen
-    
+
     4"#,
         );
 

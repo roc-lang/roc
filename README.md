@@ -23,7 +23,7 @@ Many programs can however be compiled correctly. Check out [examples](examples) 
 
 Run examples as follows:
 ```
-cargo run examples/hello-world/helloWorld.roc
+cargo run examples/hello-world/main.roc
 ```
 Some examples like `examples/benchmarks/NQueens.roc` require input after running.
 For NQueens, input 10 in the terminal and press enter.

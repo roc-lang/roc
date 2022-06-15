@@ -382,8 +382,8 @@ mod cli_run {
     // ]
     examples! {
         helloWorld:"hello-world" => Example {
-            filename: "helloWorld.roc",
-            executable_filename: "helloWorld",
+            filename: "main.roc",
+            executable_filename: "hello",
             stdin: &[],
             input_file: None,
             expected_ending:"Hello, World!\n",
