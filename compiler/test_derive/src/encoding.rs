@@ -1,6 +1,9 @@
 #![cfg(test)]
 
-use std::path::PathBuf;
+use std::{
+    hash::{BuildHasher, Hash, Hasher},
+    path::PathBuf,
+};
 
 use bumpalo::Bump;
 use indoc::indoc;
@@ -15,7 +18,7 @@ use roc_can::{
     expr::Expr,
     module::RigidVariables,
 };
-use roc_collections::VecSet;
+use roc_collections::{default_hasher, VecSet};
 use roc_constrain::{
     expr::constrain_expr,
     module::{ExposedByModule, ExposedForModule, ExposedModuleTypes},
@@ -23,17 +26,21 @@ use roc_constrain::{
 use roc_debug_flags::dbg_do;
 use roc_load_internal::file::{add_imports, default_aliases, LoadedModule, Threading};
 use roc_module::{
-    ident::ModuleName,
+    ident::{ModuleName, TagName},
     symbol::{IdentIds, Interns, ModuleId},
 };
 use roc_mono::derive::{
+    deriver_hash::EncodingHash,
     encoding::{self, Env},
     synth_var,
 };
 use roc_region::all::{LineInfo, Region};
 use roc_reporting::report::{type_problem, RocDocAllocator};
 use roc_types::{
-    subs::{Content, ExposedTypesStorageSubs, FlatType, RecordFields, Subs, Variable},
+    subs::{
+        Content, ExposedTypesStorageSubs, FlatType, RecordFields, Subs, SubsIndex, UnionTags,
+        Variable,
+    },
     types::{RecordField, Type},
 };
 
@@ -206,23 +213,154 @@ where
     );
 }
 
+fn check_hash<S1, S2>(eq: bool, synth1: S1, synth2: S2)
+where
+    S1: FnOnce(&mut Subs) -> Variable,
+    S2: FnOnce(&mut Subs) -> Variable,
+{
+    let mut subs = Subs::new();
+    let var1 = synth1(&mut subs);
+    let var2 = synth2(&mut subs);
+
+    let hash1 = EncodingHash::from_var(&subs, var1);
+    let hash2 = EncodingHash::from_var(&subs, var2);
+
+    let hash1 = {
+        let mut hasher = default_hasher().build_hasher();
+        hash1.hash(&mut hasher);
+        hasher.finish()
+    };
+    let hash2 = {
+        let mut hasher = default_hasher().build_hasher();
+        hash2.hash(&mut hasher);
+        hasher.finish()
+    };
+
+    if eq {
+        assert_eq!(hash1, hash2);
+    } else {
+        assert_ne!(hash1, hash2);
+    }
+}
+
 // Writing out the types into content is terrible, so let's use a DSL at least for testing
-macro_rules! synth {
-    ({ $($field:literal: $typ:expr),* }) => {
-        |subs| {
-            let fields = RecordFields::insert_into_subs(subs, vec![ $( ($field.into(), RecordField::Required($typ)) ,)* ]);
+macro_rules! v {
+    ({ $($field:ident: $make_v:expr),* }) => {
+        |subs: &mut Subs| {
+            $(let $field = $make_v(subs);)*
+            let fields = RecordFields::insert_into_subs(subs, vec![ $( (stringify!($field).into(), RecordField::Required($field)) ,)* ]);
             synth_var(subs, Content::Structure(FlatType::Record(fields, Variable::EMPTY_RECORD)))
         }
     };
-    (var $var:expr) => {
-        |_| { $var }
-    }
+    ([ $($tag:ident $($payload:expr)*),* ]) => {
+        |subs: &mut Subs| {
+            $(
+            let $tag = vec![ $( $payload(subs), )* ];
+            )*
+            let tags = UnionTags::insert_into_subs::<_, Vec<Variable>>(subs, vec![ $( (TagName(stringify!($tag).into()), $tag) ,)* ]);
+            synth_var(subs, Content::Structure(FlatType::TagUnion(tags, Variable::EMPTY_TAG_UNION)))
+        }
+    };
+    ([ $($tag:ident $($payload:expr)*),* ] as $rec_var:ident) => {
+        |subs: &mut Subs| {
+            let $rec_var = subs.fresh_unnamed_flex_var();
+            let rec_name_index =
+                SubsIndex::push_new(&mut subs.field_names, stringify!($rec).into());
+
+            $(
+            let $tag = vec![ $( $payload(subs), )* ];
+            )*
+            let tags = UnionTags::insert_into_subs::<_, Vec<Variable>>(subs, vec![ $( (TagName(stringify!($tag).into()), $tag) ,)* ]);
+            let tag_union_var = synth_var(subs, Content::Structure(FlatType::RecursiveTagUnion($rec_var, tags, Variable::EMPTY_TAG_UNION)));
+
+            subs.set_content(
+                $rec_var,
+                Content::RecursionVar {
+                    structure: tag_union_var,
+                    opt_name: Some(rec_name_index),
+                },
+            );
+            tag_union_var
+        }
+    };
+    (*$rec_var:ident) => {
+        |_: &mut Subs| { $rec_var }
+    };
+    ($var:ident) => {
+        |_: &mut Subs| { Variable::$var }
+    };
 }
+
+macro_rules! test_hash_eq {
+    ($($name:ident: $synth1:expr, $synth2:expr)*) => {$(
+        #[test]
+        fn $name() {
+            #![allow(non_snake_case)]
+            check_hash(true, $synth1, $synth2)
+        }
+    )*};
+}
+
+macro_rules! test_hash_neq {
+    ($($name:ident: $synth1:expr, $synth2:expr)*) => {$(
+        #[test]
+        fn $name() {
+            #![allow(non_snake_case)]
+            check_hash(false, $synth1, $synth2)
+        }
+    )*};
+}
+
+// {{{ hash tests
+
+test_hash_eq! {
+    same_record:
+        v!({ a: v!(U8) }), v!({ a: v!(U8) })
+    same_record_fields_diff_types:
+        v!({ a: v!(U8) }), v!({ a: v!(STR) })
+    same_record_fields_any_order:
+        v!({ a: v!(U8), b: v!(U8), c: v!(U8) }),
+        v!({ c: v!(U8), a: v!(U8), b: v!(U8) })
+    explicit_empty_record_and_implicit_empty_record:
+        v!(EMPTY_RECORD), v!({})
+
+    same_tag_union:
+        v!([ A v!(U8) v!(STR), B v!(STR) ]), v!([ A v!(U8) v!(STR), B v!(STR) ])
+    same_tag_union_tags_diff_types:
+        v!([ A v!(U8) v!(U8), B v!(U8) ]), v!([ A v!(STR) v!(STR), B v!(STR) ])
+    same_tag_union_tags_any_order:
+        v!([ A v!(U8) v!(U8), B v!(U8), C ]), v!([ C, B v!(STR), A v!(STR) v!(STR) ])
+    explicit_empty_tag_union_and_implicit_empty_tag_union:
+        v!(EMPTY_TAG_UNION), v!([])
+
+    same_recursive_tag_union:
+        v!([ Nil, Cons v!(*lst)] as lst), v!([ Nil, Cons v!(*lst)] as lst)
+    same_tag_union_and_recursive_tag_union_fields:
+        v!([ Nil, Cons v!(STR)]), v!([ Nil, Cons v!(*lst)] as lst)
+}
+
+test_hash_neq! {
+    different_record_fields:
+        v!({ a: v!(U8) }), v!({ b: v!(U8) })
+    record_empty_vs_nonempty:
+        v!(EMPTY_RECORD), v!({ a: v!(U8) })
+
+    different_tag_union_tags:
+        v!([ A v!(U8) ]), v!([ B v!(U8) ])
+    tag_union_empty_vs_nonempty:
+        v!(EMPTY_TAG_UNION), v!([ B v!(U8) ])
+    different_recursive_tag_union_tags:
+        v!([ Nil, Cons v!(*lst) ] as lst), v!([ Nil, Next v!(*lst) ] as lst)
+}
+
+// }}} hash tests
+
+// {{{ deriver tests
 
 #[test]
 fn empty_record() {
     derive_test(
-        synth!(var Variable::EMPTY_RECORD),
+        v!(EMPTY_RECORD),
         indoc!(
             r#"
             \Test.0 -> (Encode.record [ ])
@@ -234,7 +372,7 @@ fn empty_record() {
 #[test]
 fn zero_field_record() {
     derive_test(
-        synth!({}),
+        v!({}),
         indoc!(
             r#"
             \Test.0 -> (Encode.record [ ])
@@ -246,7 +384,7 @@ fn zero_field_record() {
 #[test]
 fn one_field_record() {
     derive_test(
-        synth!({ "a": Variable::U8 }),
+        v!({ a: v!(U8) }),
         indoc!(
             r#"
             \Test.0 ->
@@ -259,7 +397,7 @@ fn one_field_record() {
 #[test]
 fn two_field_record() {
     derive_test(
-        synth!({ "a": Variable::U8, "b": Variable::STR }),
+        v!({ a: v!(U8), b: v!(STR) }),
         indoc!(
             r#"
             \Test.0 ->
@@ -271,3 +409,5 @@ fn two_field_record() {
         ),
     )
 }
+
+// }}} deriver tests
