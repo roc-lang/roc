@@ -15,7 +15,8 @@ use roc_module::symbol::{
     Symbol,
 };
 use roc_mono::ir::{
-    Call, CallType, Expr, HostExposedLayouts, Proc, ProcLayout, SelfRecursive, Stmt, UpdateModeId,
+    Call, CallType, Expr, HostExposedLayouts, Literal, Proc, ProcLayout, SelfRecursive, Stmt,
+    UpdateModeId,
 };
 use roc_mono::layout::{Builtin, Layout};
 
@@ -40,14 +41,16 @@ fn build_app_mono<'a>(
     let app_proc = create_symbol(home, ident_ids, "app_proc");
     let js_call_result = create_symbol(home, ident_ids, "js_call_result");
     let host_call_result = create_symbol(home, ident_ids, "host_call_result");
-    let return_value = create_symbol(home, ident_ids, "return_value");
+    let bitflag = create_symbol(home, ident_ids, "bitflag");
+    let or1 = create_symbol(home, ident_ids, "or1");
+    let or2 = create_symbol(home, ident_ids, "or2");
 
     let js_call = Expr::Call(Call {
         call_type: CallType::Foreign {
             foreign_symbol: ForeignSymbol::from("js_called_directly_from_roc"),
             ret_layout: int_layout_ref,
         },
-        arguments: &[Symbol::ARG_1],
+        arguments: &[],
     });
 
     let host_call = Expr::Call(Call {
@@ -55,15 +58,27 @@ fn build_app_mono<'a>(
             foreign_symbol: ForeignSymbol::from("host_called_directly_from_roc"),
             ret_layout: int_layout_ref,
         },
-        arguments: &[Symbol::ARG_1],
+        arguments: &[],
     });
 
-    let add = Expr::Call(Call {
+    let mut bitflag_bytes = [0; 16];
+    bitflag_bytes[0] = 0x20;
+    let bitflag_literal = Expr::Literal(Literal::Int(bitflag_bytes));
+
+    let or1_expr = Expr::Call(Call {
         call_type: CallType::LowLevel {
-            op: LowLevel::NumAdd,
+            op: LowLevel::Or,
             update_mode: UpdateModeId::BACKEND_DUMMY,
         },
         arguments: arena.alloc([js_call_result, host_call_result]),
+    });
+
+    let or2_expr = Expr::Call(Call {
+        call_type: CallType::LowLevel {
+            op: LowLevel::Or,
+            update_mode: UpdateModeId::BACKEND_DUMMY,
+        },
+        arguments: arena.alloc([or1, bitflag]),
     });
 
     let body = Stmt::Let(
@@ -75,17 +90,28 @@ fn build_app_mono<'a>(
             host_call,
             int_layout,
             arena.alloc(Stmt::Let(
-                return_value,
-                add,
+                or1,
+                or1_expr,
                 int_layout,
-                arena.alloc(Stmt::Ret(return_value)),
+                arena.alloc(Stmt::Let(
+                    bitflag,
+                    bitflag_literal,
+                    int_layout,
+                    arena.alloc(Stmt::Let(
+                        or2,
+                        or2_expr,
+                        int_layout,
+                        //
+                        arena.alloc(Stmt::Ret(or2)),
+                    )),
+                )),
             )),
         )),
     );
 
     let proc = Proc {
         name: app_proc,
-        args: arena.alloc([(int_layout, Symbol::ARG_1)]),
+        args: &[],
         body,
         closure_data_layout: None,
         ret_layout: int_layout,
@@ -95,7 +121,7 @@ fn build_app_mono<'a>(
     };
 
     let proc_layout = ProcLayout {
-        arguments: arena.alloc([int_layout]),
+        arguments: &[],
         result: int_layout,
     };
 
@@ -161,19 +187,31 @@ fn load_bytes_into_runtime(bytes: &[u8]) -> wasmer::Instance {
 
     let import_object = wasmer::imports!(
         "env" => {
-            "js_called_indirectly_from_roc" => Function::new_native(&store, wasmer_import),
-            "js_called_indirectly_from_main" => Function::new_native(&store, wasmer_import),
-            "js_unused" => Function::new_native(&store, wasmer_import),
-            "js_called_directly_from_roc" => Function::new_native(&store, wasmer_import),
-            "js_called_directly_from_main" => Function::new_native(&store, wasmer_import),
+            "js_called_indirectly_from_roc" => Function::new_native(&store, js_called_indirectly_from_roc),
+            "js_called_indirectly_from_main" => Function::new_native(&store, js_called_indirectly_from_main),
+            "js_unused" => Function::new_native(&store, js_unused),
+            "js_called_directly_from_roc" => Function::new_native(&store, js_called_directly_from_roc),
+            "js_called_directly_from_main" => Function::new_native(&store, js_called_directly_from_main),
         }
     );
 
     wasmer::Instance::new(&wasmer_module, &import_object).unwrap()
 }
 
-fn wasmer_import(x: i32) -> i32 {
-    x + 100
+fn js_called_directly_from_roc() -> i32 {
+    return 0x01;
+}
+fn js_called_indirectly_from_roc() -> i32 {
+    return 0x02;
+}
+fn js_called_directly_from_main() -> i32 {
+    return 0x04;
+}
+fn js_called_indirectly_from_main() -> i32 {
+    return 0x08;
+}
+fn js_unused() -> i32 {
+    return 0x10;
 }
 
 fn get_wasm_result(instance: &wasmer::Instance) -> i32 {
@@ -196,7 +234,7 @@ fn get_native_result() -> i32 {
         .output()
         .expect(&format!("failed to run {}", LINKING_TEST_HOST_NATIVE));
 
-    let result_str = std::str::from_utf8(&output.stdout).unwrap();
+    let result_str = std::str::from_utf8(&output.stdout).unwrap().trim();
     result_str.parse().unwrap()
 }
 
@@ -222,6 +260,7 @@ fn test_linking_without_dce() {
             "js_unused",
             "js_called_directly_from_roc",
             "js_called_directly_from_main",
+            "roc__app_proc_1_exposed",
             "__indirect_function_table",
         ]
     );
@@ -279,6 +318,7 @@ fn test_linking_with_dce() {
             "js_unused",
             "js_called_directly_from_roc",
             "js_called_directly_from_main",
+            "roc__app_proc_1_exposed",
             "__indirect_function_table",
         ]
     );

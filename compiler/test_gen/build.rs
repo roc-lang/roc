@@ -23,6 +23,7 @@ fn main() {
 
 fn build_wasm_linking_test_host() {
     println!("cargo:rerun-if-changed={}", LINKING_TEST_HOST_SOURCE);
+    println!("cargo:rerun-if-changed={}", LINKING_TEST_IMPORT_SOURCE);
 
     if Path::new(LINKING_TEST_HOST_WASM).exists() {
         fs::remove_file(LINKING_TEST_HOST_WASM).unwrap();
