@@ -506,13 +506,14 @@ impl<'a> WasmModule<'a> {
                 );
 
                 // Update the name in the debug info
-                let (_, debug_name) = self
+                if let Some((_, debug_name)) = self
                     .names
                     .function_names
                     .iter_mut()
                     .find(|(i, _)| *i as usize == host_fn_index)
-                    .unwrap();
-                debug_name.clone_from(&swap_fn_name);
+                {
+                    debug_name.clone_from(&swap_fn_name);
+                }
             }
 
             // Remember to insert a dummy function at the beginning of the code section
@@ -523,13 +524,14 @@ impl<'a> WasmModule<'a> {
             self.function.signatures.insert(0, 0);
 
             // Update the debug name for the dummy
-            let (_, debug_name) = self
+            if let Some((_, debug_name)) = self
                 .names
                 .function_names
                 .iter_mut()
                 .find(|(i, _)| *i as usize == swap_fn_index)
-                .unwrap();
-            debug_name.clone_from(&"linking_dummy");
+            {
+                debug_name.clone_from(&"linking_dummy");
+            }
         }
     }
 
