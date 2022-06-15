@@ -298,6 +298,14 @@ macro_rules! v {
             synth_var(subs, Content::Alias(Symbol::$alias, alias_variables, real_var, AliasKind::Structural))
         }
     };
+    (@Symbol::$alias:ident $($arg:expr)* => $real_var:expr) => {
+        |subs: &mut Subs| {
+            let args = vec![$( $arg(subs) )*];
+            let alias_variables = AliasVariables::insert_into_subs::<Vec<_>, Vec<_>>(subs, args, vec![]);
+            let real_var = $real_var(subs);
+            synth_var(subs, Content::Alias(Symbol::$alias, alias_variables, real_var, AliasKind::Opaque))
+        }
+    };
     (*$rec_var:ident) => {
         |_: &mut Subs| { $rec_var }
     };
@@ -366,6 +374,14 @@ test_hash_eq! {
         v!(Symbol::BOOL_BOOL => v!([ True, False ])), v!([False, True])
     diff_alias_same_real_type:
         v!(Symbol::BOOL_BOOL => v!([ True, False ])), v!(Symbol::UNDERSCORE => v!([False, True]))
+
+    opaque_eq_real_type:
+        v!(@Symbol::BOOL_BOOL => v!([ True, False ])), v!([False, True])
+    diff_opaque_same_real_type:
+        v!(@Symbol::BOOL_BOOL => v!([ True, False ])), v!(@Symbol::UNDERSCORE => v!([False, True]))
+
+    opaque_real_type_eq_alias_real_type:
+        v!(@Symbol::BOOL_BOOL => v!([ True, False ])), v!(Symbol::UNDERSCORE => v!([False, True]))
 }
 
 test_hash_neq! {
@@ -385,6 +401,11 @@ test_hash_neq! {
         v!(Symbol::BOOL_BOOL => v!([ True, False ])), v!(Symbol::BOOL_BOOL => v!([ False, True, Maybe ]))
     diff_alias_diff_real_type:
         v!(Symbol::BOOL_BOOL => v!([ True, False ])), v!(Symbol::UNDERSCORE => v!([ False, True, Maybe ]))
+
+    same_opaque_diff_real_type:
+        v!(@Symbol::BOOL_BOOL => v!([ True, False ])), v!(@Symbol::BOOL_BOOL => v!([ False, True, Maybe ]))
+    diff_opaque_diff_real_type:
+        v!(@Symbol::BOOL_BOOL => v!([ True, False ])), v!(@Symbol::UNDERSCORE => v!([ False, True, Maybe ]))
 }
 
 // }}} hash tests

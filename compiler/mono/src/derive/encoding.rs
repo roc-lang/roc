@@ -178,6 +178,8 @@ impl FlatEncodable<'_> {
                 Symbol::NUM_DEC => FlatEncodable::Dec,
                 Symbol::NUM_F32 => FlatEncodable::F32,
                 Symbol::NUM_F64 => FlatEncodable::F64,
+                // TODO: I believe it is okay to unwrap opaques here because derivers are only used
+                // by the backend, and the backend treats opaques like structural aliases.
                 _ => Self::from_var(subs, real_var),
             },
             Content::RangedNumber(real_var, _) => Self::from_var(subs, real_var),
