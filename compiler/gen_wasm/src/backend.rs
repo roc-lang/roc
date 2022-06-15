@@ -1,3 +1,4 @@
+use bitvec::vec::BitVec;
 use bumpalo::collections::{String, Vec};
 
 use code_builder::Align;
@@ -53,7 +54,7 @@ pub struct WasmBackend<'a> {
     module: WasmModule<'a>,
     layout_ids: LayoutIds<'a>,
     pub fn_index_offset: u32,
-    called_preload_fns: Vec<'a, u32>,
+    called_preload_fns: BitVec<usize>,
     pub proc_lookup: Vec<'a, ProcLookupData<'a>>,
     host_lookup: Vec<'a, (&'a str, u32)>,
     helper_proc_gen: CodeGenHelp<'a>,
@@ -125,7 +126,7 @@ impl<'a> WasmBackend<'a> {
 
             layout_ids,
             fn_index_offset,
-            called_preload_fns: Vec::with_capacity_in(2, env.arena),
+            called_preload_fns: BitVec::repeat(false, host_lookup.len()),
             proc_lookup,
             host_lookup,
             helper_proc_gen,
@@ -273,7 +274,7 @@ impl<'a> WasmBackend<'a> {
         wasm_fn_index
     }
 
-    pub fn finalize(mut self) -> (WasmModule<'a>, Vec<'a, u32>) {
+    pub fn finalize(mut self) -> (WasmModule<'a>, BitVec<usize>) {
         self.maybe_call_host_main();
         let fn_table_size = 1 + self.module.element.max_table_index();
         self.module.table.function_table.limits = Limits::MinMax(fn_table_size, fn_table_size);
@@ -328,7 +329,7 @@ impl<'a> WasmBackend<'a> {
         self.code_builder.build_fn_header_and_footer(&[], 0, None);
         self.reset();
 
-        self.called_preload_fns.push(main_fn_index);
+        self.called_preload_fns.set(main_fn_index as usize, true);
     }
 
     /// Register the debug names of Symbols in a global lookup table
@@ -1250,7 +1251,7 @@ impl<'a> WasmBackend<'a> {
             .find(|(fn_name, _)| *fn_name == name)
             .unwrap_or_else(|| panic!("The Roc app tries to call `{}` but I can't find it!", name));
 
-        self.called_preload_fns.push(*fn_index);
+        self.called_preload_fns.set(*fn_index as usize, true);
         self.code_builder
             .call(*fn_index, num_wasm_args, has_return_val);
     }

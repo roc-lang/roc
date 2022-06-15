@@ -174,7 +174,7 @@ impl<'a> WasmModule<'a> {
         })
     }
 
-    pub fn eliminate_dead_code(&mut self, arena: &'a Bump, called_host_fns: &[u32]) {
+    pub fn eliminate_dead_code(&mut self, arena: &'a Bump, called_host_fns: BitVec<usize>) {
         if DEBUG_SETTINGS.skip_dead_code_elim {
             return;
         }
@@ -308,7 +308,7 @@ impl<'a> WasmModule<'a> {
     fn trace_live_host_functions<I: Iterator<Item = u32>>(
         &self,
         arena: &'a Bump,
-        called_host_fns: &[u32],
+        called_host_fns: BitVec<usize>,
         exported_fns: I,
         indirect_callees_and_signatures: Vec<'a, (u32, u32)>,
         host_fn_min: u32,
@@ -349,14 +349,10 @@ impl<'a> WasmModule<'a> {
         );
 
         // Loop variables for the main loop below
-        let capacity = host_fn_max as usize + self.code.code_builders.len();
-        let mut live_flags = BitVec::repeat(false, capacity);
-        let mut next_pass_fns = BitVec::repeat(false, capacity);
-        let mut current_pass_fns = BitVec::<usize>::repeat(false, capacity);
-
-        // Start with everything called from Roc and everything exported to JS
-        // Also include everything that can be indirectly called (crude, but good enough!)
-        for index in called_host_fns.iter().copied().chain(exported_fns) {
+        let mut live_flags = BitVec::repeat(false, called_host_fns.len());
+        let mut next_pass_fns = BitVec::repeat(false, called_host_fns.len());
+        let mut current_pass_fns = called_host_fns;
+        for index in exported_fns {
             current_pass_fns.set(index as usize, true);
         }
 
