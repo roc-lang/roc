@@ -116,6 +116,9 @@ impl<'a> WasmBackend<'a> {
         module.link_host_to_app_calls(host_to_app_map);
         module.code.code_builders.reserve(proc_lookup.len());
 
+        let host_function_count = module.import.imports.len()
+            + (module.code.dead_import_dummy_count + module.code.preloaded_count) as usize;
+
         WasmBackend {
             env,
             interns,
@@ -125,7 +128,7 @@ impl<'a> WasmBackend<'a> {
 
             layout_ids,
             fn_index_offset,
-            called_preload_fns: BitVec::repeat(false, host_lookup.len()),
+            called_preload_fns: BitVec::repeat(false, host_function_count),
             proc_lookup,
             host_lookup,
             helper_proc_gen,

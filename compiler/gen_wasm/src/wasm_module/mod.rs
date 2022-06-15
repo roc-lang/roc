@@ -352,7 +352,7 @@ impl<'a> WasmModule<'a> {
         let mut live_flags = BitVec::repeat(false, called_host_fns.len());
         let mut next_pass_fns = BitVec::repeat(false, called_host_fns.len());
         let mut current_pass_fns = called_host_fns;
-        for index in exported_fns {
+        for index in exported_fns.filter(|i| *i < host_fn_max) {
             current_pass_fns.set(index as usize, true);
         }
 
@@ -377,11 +377,11 @@ impl<'a> WasmModule<'a> {
                 for (offset, symbol) in call_offsets_and_symbols.iter() {
                     if *offset > code_start && *offset < code_end {
                         // Find out which other function is being called
-                        let called_fn_index = symbol_fn_indices[*symbol as usize];
+                        let callee = symbol_fn_indices[*symbol as usize];
 
                         // If it's not already marked live, include it in the next pass
-                        if !live_flags[called_fn_index as usize] {
-                            next_pass_fns.set(called_fn_index as usize, true);
+                        if live_flags.get(callee as usize).as_deref() == Some(&false) {
+                            next_pass_fns.set(callee as usize, true);
                         }
                     }
                 }
@@ -396,7 +396,7 @@ impl<'a> WasmModule<'a> {
                             .map(|(f, _)| *f);
                         // Mark them all as live
                         for f in potential_callees {
-                            if !live_flags[f as usize] {
+                            if live_flags.get(f as usize).as_deref() == Some(&false) {
                                 next_pass_fns.set(f as usize, true);
                             }
                         }
