@@ -877,7 +877,8 @@ pub struct ModuleTiming {
     pub constrain: Duration,
     pub solve: Duration,
     pub find_specializations: Duration,
-    pub make_specializations: Duration,
+    // indexed by make specializations pass
+    pub make_specializations: Vec<Duration>,
     // TODO pub monomorphize: Duration,
     /// Total duration will always be more than the sum of the other fields, due
     /// to things like state lookups in between phases, waiting on other threads, etc.
@@ -895,7 +896,7 @@ impl ModuleTiming {
             constrain: Duration::default(),
             solve: Duration::default(),
             find_specializations: Duration::default(),
-            make_specializations: Duration::default(),
+            make_specializations: Vec::with_capacity(2),
             start_time,
             end_time: start_time, // just for now; we'll overwrite this at the end
         }
@@ -921,8 +922,9 @@ impl ModuleTiming {
         } = self;
 
         let calculate = |t: Result<Duration, _>| -> Option<Duration> {
-            t.ok()?
-                .checked_sub(*make_specializations)?
+            make_specializations
+                .iter()
+                .fold(t.ok(), |t, pass_time| t?.checked_sub(*pass_time))?
                 .checked_sub(*find_specializations)?
                 .checked_sub(*solve)?
                 .checked_sub(*constrain)?
@@ -4407,9 +4409,11 @@ fn make_specializations<'a>(
     mono_env.home.register_debug_idents(mono_env.ident_ids);
 
     let make_specializations_end = SystemTime::now();
-    module_timing.make_specializations = make_specializations_end
-        .duration_since(make_specializations_start)
-        .unwrap();
+    module_timing.make_specializations.push(
+        make_specializations_end
+            .duration_since(make_specializations_start)
+            .unwrap(),
+    );
 
     Msg::MadeSpecializations {
         module_id: home,
