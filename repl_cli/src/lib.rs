@@ -257,6 +257,7 @@ fn gen_and_eval_llvm<'a>(
         interns,
         module,
         target_info,
+        opt_level,
         is_gen_test: true, // so roc_panic is generated
         // important! we don't want any procedures to get the C calling convention
         exposed_to_host: MutSet::default(),
@@ -266,12 +267,8 @@ fn gen_and_eval_llvm<'a>(
     // platform to provide them.
     add_default_roc_externs(&env);
 
-    let (main_fn_name, main_fn) = roc_gen_llvm::llvm::build::build_procedures_return_main(
-        &env,
-        opt_level,
-        procedures,
-        entry_point,
-    );
+    let (main_fn_name, main_fn) =
+        roc_gen_llvm::llvm::build::build_procedures_return_main(&env, procedures, entry_point);
 
     env.dibuilder.finalize();
 

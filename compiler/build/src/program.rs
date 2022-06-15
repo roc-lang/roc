@@ -255,6 +255,7 @@ pub fn gen_from_mono_module_llvm(
         interns: loaded.interns,
         module,
         target_info,
+        opt_level,
         // in gen_tests, the compiler provides roc_panic
         // and sets up the setjump/longjump exception handling
         is_gen_test: false,
@@ -263,7 +264,6 @@ pub fn gen_from_mono_module_llvm(
 
     roc_gen_llvm::llvm::build::build_procedures(
         &env,
-        opt_level,
         loaded.procedures,
         loaded.entry_point,
         Some(&app_ll_file),

@@ -174,6 +174,7 @@ pub struct Env<'a, 'ctx, 'env> {
     pub module: &'ctx Module<'ctx>,
     pub interns: Interns,
     pub target_info: TargetInfo,
+    pub opt_level: OptLevel,
     pub is_gen_test: bool,
     pub exposed_to_host: MutSet<Symbol>,
 }
@@ -2763,7 +2764,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
             bd.build_conditional_branch(condition, then_block, throw_block);
 
-            {
+            if let OptLevel::Development = env.opt_level {
                 bd.position_at_end(throw_block);
 
                 match env.target_info.ptr_width() {
@@ -2882,6 +2883,9 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                         throw_exception(env, "An expectation failed!");
                     }
                 }
+            } else {
+                bd.position_at_end(throw_block);
+                bd.build_unconditional_branch(then_block);
             }
 
             bd.position_at_end(then_block);
@@ -4200,23 +4204,20 @@ pub fn build_proc_headers<'a, 'ctx, 'env>(
 
 pub fn build_procedures<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     entry_point: EntryPoint<'a>,
     debug_output_file: Option<&Path>,
 ) {
-    build_procedures_help(env, opt_level, procedures, entry_point, debug_output_file);
+    build_procedures_help(env, procedures, entry_point, debug_output_file);
 }
 
 pub fn build_procedures_return_main<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     entry_point: EntryPoint<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
     let mod_solutions = build_procedures_help(
         env,
-        opt_level,
         procedures,
         entry_point,
         Some(Path::new("/tmp/test.ll")),
@@ -4227,7 +4228,6 @@ pub fn build_procedures_return_main<'a, 'ctx, 'env>(
 
 fn build_procedures_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     entry_point: EntryPoint<'a>,
     debug_output_file: Option<&Path>,
@@ -4237,7 +4237,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
 
     let it = procedures.iter().map(|x| x.1);
 
-    let solutions = match roc_alias_analysis::spec_program(opt_level, entry_point, it) {
+    let solutions = match roc_alias_analysis::spec_program(env.opt_level, entry_point, it) {
         Err(e) => panic!("Error in alias analysis: {}", e),
         Ok(solutions) => solutions,
     };
@@ -4253,7 +4253,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
     // because their bodies may reference each other.
     let headers = build_proc_headers(env, mod_solutions, procedures, &mut scope);
 
-    let (_, function_pass) = construct_optimization_passes(env.module, opt_level);
+    let (_, function_pass) = construct_optimization_passes(env.module, env.opt_level);
 
     for (proc, fn_vals) in headers {
         for (func_spec_solutions, fn_val) in fn_vals {
