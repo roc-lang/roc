@@ -1,7 +1,7 @@
 use roc_builtins::bitcode;
 use std::env;
-use std::fs;
 use std::ffi::OsStr;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -9,7 +9,9 @@ const PLATFORM_FILENAME: &str = "wasm_test_platform";
 const OUT_DIR_VAR: &str = "TEST_GEN_OUT";
 
 const LINKING_TEST_HOST_SOURCE: &str = "src/helpers/wasm_linking_test_host.zig";
-const LINKING_TEST_HOST_TARGET: &str = "src/helpers/wasm_linking_test_host.wasm";
+const LINKING_TEST_IMPORT_SOURCE: &str = "src/helpers/wasm_linking_host_imports.zig";
+const LINKING_TEST_HOST_WASM: &str = "build/wasm_linking_test_host.wasm";
+const LINKING_TEST_HOST_NATIVE: &str = "build/wasm_linking_test_host";
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -20,26 +22,52 @@ fn main() {
 }
 
 fn build_wasm_linking_test_host() {
-    if Path::new(LINKING_TEST_HOST_TARGET).exists() {
-        fs::remove_file(LINKING_TEST_HOST_TARGET).unwrap();
+    println!("cargo:rerun-if-changed={}", LINKING_TEST_HOST_SOURCE);
+
+    if Path::new(LINKING_TEST_HOST_WASM).exists() {
+        fs::remove_file(LINKING_TEST_HOST_WASM).unwrap();
     }
 
-    let args = [
-        "build-obj",
-        "-target",
-        "wasm32-freestanding-musl",
-        LINKING_TEST_HOST_SOURCE,
-        &format!("-femit-bin={}", LINKING_TEST_HOST_TARGET),
-    ];
+    Command::new("zig")
+        .args([
+            "build-obj",
+            "-target",
+            "wasm32-freestanding-musl",
+            LINKING_TEST_HOST_SOURCE,
+            &format!("-femit-bin={}", LINKING_TEST_HOST_WASM),
+        ])
+        .output()
+        .expect(&format!("failed to compile {}", LINKING_TEST_HOST_WASM));
 
-    // println!("zig {}", args.join(" "));
+    let host_obj = "build/wasm_linking_test_host.o";
+    Command::new("zig")
+        .args([
+            "build-obj",
+            LINKING_TEST_HOST_SOURCE,
+            &format!("-femit-bin={}", host_obj),
+        ])
+        .output()
+        .expect(&format!("failed to compile {}", host_obj));
+
+    let import_obj = "build/wasm_linking_host_imports.o";
+    Command::new("zig")
+        .args([
+            "build-obj",
+            LINKING_TEST_IMPORT_SOURCE,
+            &format!("-femit-bin={}", import_obj),
+        ])
+        .output()
+        .expect(&format!("failed to compile {}", import_obj));
 
     Command::new("zig")
-        .args(args)
+        .args([
+            "build-exe",
+            host_obj,
+            import_obj,
+            &format!("-femit-bin={}", LINKING_TEST_HOST_NATIVE),
+        ])
         .output()
-        .expect("failed to compile host");
-
-    println!("Built linking test host at {}", LINKING_TEST_HOST_TARGET);
+        .expect(&format!("failed to compile {}", LINKING_TEST_HOST_NATIVE));
 }
 
 fn build_wasm_test_host() {

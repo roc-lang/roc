@@ -3,6 +3,7 @@
 use bumpalo::Bump;
 use roc_gen_wasm::Env;
 use std::fs;
+use std::process::Command;
 
 use roc_builtins::bitcode::IntWidth;
 use roc_collections::{MutMap, MutSet};
@@ -18,7 +19,8 @@ use roc_mono::ir::{
 };
 use roc_mono::layout::{Builtin, Layout};
 
-const LINKING_TEST_HOST_TARGET: &str = "src/helpers/wasm_linking_test_host.wasm";
+const LINKING_TEST_HOST_WASM: &str = "build/wasm_linking_test_host.wasm";
+const LINKING_TEST_HOST_NATIVE: &str = "build/wasm_linking_test_host";
 
 fn create_symbol(home: ModuleId, ident_ids: &mut IdentIds, debug_name: &str) -> Symbol {
     let ident_id = ident_ids.add_str(debug_name);
@@ -113,7 +115,7 @@ struct BackendInputs<'a> {
 impl<'a> BackendInputs<'a> {
     fn new(arena: &'a Bump) -> Self {
         // Compile the host from an external source file
-        let host_bytes = fs::read(LINKING_TEST_HOST_TARGET).unwrap();
+        let host_bytes = fs::read(LINKING_TEST_HOST_WASM).unwrap();
         let host_module: WasmModule = roc_gen_wasm::parse_host(arena, &host_bytes).unwrap();
 
         // Identifier stuff to build the mono IR
@@ -174,7 +176,7 @@ fn wasmer_import(x: i32) -> i32 {
     x + 100
 }
 
-fn get_host_result(instance: &wasmer::Instance) -> i32 {
+fn get_wasm_result(instance: &wasmer::Instance) -> i32 {
     let memory = instance
         .exports
         .get_memory(roc_gen_wasm::MEMORY_NAME)
@@ -187,6 +189,15 @@ fn get_host_result(instance: &wasmer::Instance) -> i32 {
     let mut global_bytes = [0; 4];
     global_bytes.copy_from_slice(&memory_bytes[global_addr..][..4]);
     i32::from_le_bytes(global_bytes)
+}
+
+fn get_native_result() -> i32 {
+    let output = Command::new(LINKING_TEST_HOST_NATIVE)
+        .output()
+        .expect(&format!("failed to run {}", LINKING_TEST_HOST_NATIVE));
+
+    let result_str = std::str::from_utf8(&output.stdout).unwrap();
+    result_str.parse().unwrap()
 }
 
 #[test]
@@ -215,7 +226,6 @@ fn test_linking_without_dce() {
         ]
     );
 
-    // If linking between app and host fails, backend will panic
     let (final_module, _called_preload_fns, _roc_main_index) =
         roc_gen_wasm::build_app_module(&env, &mut interns, host_module, procedures);
 
@@ -243,8 +253,8 @@ fn test_linking_without_dce() {
     let instance = load_bytes_into_runtime(&buffer);
     let start = instance.exports.get_function("_start").unwrap();
     start.call(&[]).unwrap();
-    let host_result = get_host_result(&instance);
-    assert_eq!(host_result, 226);
+    let wasm_result = get_wasm_result(&instance);
+    assert_eq!(wasm_result, get_native_result());
 }
 
 #[test]
@@ -275,7 +285,6 @@ fn test_linking_with_dce() {
 
     assert!(&host_module.names.function_names.is_empty());
 
-    // If linking between app and host fails, backend will panic
     let (mut final_module, called_preload_fns, _roc_main_index) =
         roc_gen_wasm::build_app_module(&env, &mut interns, host_module, procedures);
 
@@ -315,6 +324,6 @@ fn test_linking_with_dce() {
     let start = instance.exports.get_function("_start").unwrap();
     start.call(&[]).unwrap();
 
-    let host_result = get_host_result(&instance);
-    assert_eq!(host_result, 226);
+    let wasm_result = get_wasm_result(&instance);
+    assert_eq!(wasm_result, get_native_result());
 }
