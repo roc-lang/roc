@@ -34,6 +34,7 @@ pub const CMD_DOCS: &str = "docs";
 pub const CMD_CHECK: &str = "check";
 pub const CMD_VERSION: &str = "version";
 pub const CMD_FORMAT: &str = "format";
+pub const CMD_TEST: &str = "test";
 
 pub const FLAG_DEBUG: &str = "debug";
 pub const FLAG_DEV: &str = "dev";
@@ -161,6 +162,15 @@ pub fn build_app<'a>() -> Command<'a> {
                     .default_value(DEFAULT_ROC_FILENAME),
             )
         )
+        .subcommand(Command::new(CMD_TEST)
+            .about("Run all top-level `expect`s in a root module and any modules it imports.")
+            .arg(
+                Arg::new(ROC_FILE)
+                    .help("The .roc file for the root module")
+                    .allow_invalid_utf8(true)
+                    .required(true),
+            )
+        )
         .subcommand(Command::new(CMD_REPL)
             .about("Launch the interactive Read Eval Print Loop (REPL)")
         )
@@ -256,6 +266,17 @@ pub enum BuildConfig {
 pub enum FormatMode {
     Format,
     CheckOnly,
+}
+
+pub fn test(triple: Triple) -> io::Result<i32> {
+    todo!("Run the tests");
+
+    // what needs to happen here?
+    // 1. Parse, canonicalize, and type-check.
+    // 2. Before mono, first create some new things to specialize - I guess top-level functions?
+
+    // yeah so like we need to create a bunch of top-level functions that the test runner
+    // can execute in parallel.
 }
 
 pub fn build(
