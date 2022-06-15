@@ -1,23 +1,23 @@
 # Building the Roc compiler from source
 
+Installation should be a smooth process, let us now if anything does not work perfectly on [Roc Zulip](https://roc.zulipchat.com) or by creating an issue.
+
 ## Using Nix
 
-### On Linux/MacOS/NixOS x86_64/aarch64/arm64
+### On Linux x86_64/aarch64 or MacOS aarch64/arm64/x86_64
 
 #### Install
 
-We highly recommend Using [nix](https://nixos.org/download.html) to automatically install all dependencies necessary to build roc.
+We highly recommend Using [nix](https://nixos.org/download.html) to quickly install all dependencies necessary to build roc.
 
 If you are running ArchLinux or a derivative like Manjaro, you'll need to run `sudo sysctl -w kernel.unprivileged_userns_clone=1` before installing nix.
 
 Install nix (not necessary on NixOS):
 ```
-curl -L https://nixos.org/nix/install | sh
+sh <(curl -L https://nixos.org/nix/install) --daemon
 ```
 
-Start a fresh terminal session (= open a new terminal).
-
-install nixFlakes in your environment:
+Open a new terminal and install nixFlakes in your environment:
 ```
 nix-env -iA nixpkgs.nixFlakes
 ```
@@ -27,8 +27,8 @@ Edit either `~/.config/nix/nix.conf` or `/etc/nix/nix.conf` and add:
 experimental-features = nix-command flakes
 ```
 
- If Nix was installed in multi-user mode, make sure to restart the nix-daemon.
- If you don't know how to do this, restarting your computer will also do the job.
+If Nix was installed in multi-user mode, make sure to restart the nix-daemon.
+If you don't know how to do this, restarting your computer will also do the job.
 
 #### Usage
 
@@ -43,38 +43,18 @@ Use `cargo build` to build the whole project.
 
 #### Extra tips
 
-If you want to load all dependencies automatically whenever you `cd` into `roc`, check out [direnv](https://direnv.net/) and [lorri](https://github.com/nix-community/lorri).
+If you want to load all dependencies automatically whenever you `cd` into `roc`, check out [direnv](https://direnv.net/).
 Then you will no longer need to execute `nix develop` first.
 
 ### Editor
 
 The editor is a :construction:WIP:construction: and not ready yet to replace your favorite editor, although if you want to try it out on nix, read on.
-`cargo run edit` should work from NixOS, if you use another OS, follow the instructions below.
+`cargo run edit` should work on NixOS and MacOS. If you use Linux x86_64, follow the instructions below.
 
-#### Nvidia GPU
-
+If you're not already in a nix shell, execute `nix develop` at the the root of the repo folder and then execute:
 ```
-nix run --override-input nixpkgs nixpkgs/nixos-21.11 --impure github:guibou/nixGL#nixVulkanNvidia -- cargo run edit
+nixVulkanIntel cargo run edit
 ```
-
-If you get an error like:
-```
-error: unable to execute '/nix/store/qk6...wjla-nixVulkanNvidia-470.103.01/bin/nixVulkanNvidia': No such file or directory
-```
-The intel command should work:
-```
-nix run --override-input nixpkgs nixpkgs/nixos-21.11 --impure github:guibou/nixGL#nixVulkanIntel -- cargo run edit
-```
-
-##### Integrated Intel Graphics
-
-```
-nix run --override-input nixpkgs nixpkgs/nixos-21.11 --impure github:guibou/nixGL#nixVulkanIntel -- cargo run edit
-```
-
-##### Other configs
-
-Check the [nixGL repo](https://github.com/guibou/nixGL) for other graphics configurations. Feel free to ask us for help if you get stuck.
 
 ## Troubleshooting
 

@@ -197,7 +197,7 @@ pub enum Expr<'a> {
     // Pattern Matching
     Closure(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>),
     /// Multiple defs in a row
-    Defs(&'a [&'a Loc<Def<'a>>], &'a Loc<Expr<'a>>),
+    Defs(&'a Defs<'a>, &'a Loc<Expr<'a>>),
     Backpassing(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
     Expect(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
 
@@ -346,6 +346,14 @@ pub struct Defs<'a> {
 }
 
 impl<'a> Defs<'a> {
+    pub fn is_empty(&self) -> bool {
+        self.tags.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.tags.len()
+    }
+
     pub fn defs(&self) -> impl Iterator<Item = Result<&TypeDef<'a>, &ValueDef<'a>>> {
         self.tags.iter().map(|tag| match tag.split() {
             Ok(type_index) => Ok(&self.type_defs[type_index.index()]),

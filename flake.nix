@@ -6,15 +6,16 @@
     rust-overlay.url = "github:oxalica/rust-overlay"; # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
     zig.url = "github:roarkanize/zig-overlay"; # using an overlay allows for quick updates after zig releases
     flake-utils.url = "github:numtide/flake-utils"; # to easily make configs for multiple architectures
+    nixgl.url = "github:guibou/nixGL"; # to be able to use vulkan system libs for editor graphics
   };
 
-  outputs = { self, nixpkgs, rust-overlay, zig, flake-utils }:
+  outputs = { self, nixpkgs, rust-overlay, zig, flake-utils, nixgl }:
     let
       supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-linux" "aarch64-darwin" ];
     in
     flake-utils.lib.eachSystem supportedSystems (system:
       let
-        overlays = [ (import rust-overlay) ];
+        overlays = [ (import rust-overlay) ] ++ (if system == "x86_64-linux" then [ nixgl.overlay ] else []);
         pkgs = import nixpkgs {
           inherit system overlays;
         };
@@ -95,6 +96,7 @@
 
           # faster builds - see https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
           llvmPkgs.lld
+          llvmPkgs.lldb
           debugir
           rust
         ]);
@@ -102,7 +104,7 @@
       {
 
         devShell = pkgs.mkShell {
-          buildInputs = sharedInputs ++ darwinInputs ++ linuxInputs;
+          buildInputs = sharedInputs ++ darwinInputs ++ linuxInputs ++  (if system == "x86_64-linux" then [ pkgs.nixgl.nixVulkanIntel ] else []);
 
           LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
           NIX_GLIBC_PATH = if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";

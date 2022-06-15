@@ -43,6 +43,9 @@ pub struct Dependencies<'a> {
     waiting_for: MutMap<Job<'a>, MutSet<Job<'a>>>,
     notifies: MutMap<Job<'a>, MutSet<Job<'a>>>,
     status: MutMap<Job<'a>, Status>,
+
+    /// module -> modules to make specializations after, whether a module comes before us
+    make_specializations_dependents: MutMap<ModuleId, (MutSet<ModuleId>, bool)>,
 }
 
 impl<'a> Dependencies<'a> {
@@ -83,8 +86,24 @@ impl<'a> Dependencies<'a> {
 
             if goal_phase >= MakeSpecializations {
                 self.add_dependency(dep, module_id, Phase::MakeSpecializations);
+
+                let dep_entry = self
+                    .make_specializations_dependents
+                    .entry(dep)
+                    .or_insert((MutSet::default(), false));
+                dep_entry.1 = true;
             }
         }
+
+        // Add make specialization dependents
+        let entry = self
+            .make_specializations_dependents
+            .entry(module_id)
+            .or_insert((MutSet::default(), false));
+        debug_assert!(entry.0.is_empty(), "already seen this dep");
+        entry
+            .0
+            .extend(dependencies.iter().map(|dep| *dep.as_inner()));
 
         // add dependencies for self
         // phase i + 1 of a file always depends on phase i being completed
@@ -280,6 +299,52 @@ impl<'a> Dependencies<'a> {
                 ),
             },
         }
+    }
+
+    /// Load the entire "make specializations" dependency graph and start from the top.
+    pub fn reload_make_specialization_pass(&mut self) -> MutSet<(ModuleId, Phase)> {
+        let mut output = MutSet::default();
+
+        let mut make_specializations_dependents = Default::default();
+        std::mem::swap(
+            &mut self.make_specializations_dependents,
+            &mut make_specializations_dependents,
+        );
+
+        for (&module, _) in make_specializations_dependents.iter() {
+            let job = Job::Step(module, Phase::MakeSpecializations);
+            let status = self.status.get_mut(&job).unwrap();
+            debug_assert!(
+                matches!(status, Status::Done),
+                "all previous make specializations should be done before reloading"
+            );
+            *status = Status::NotStarted;
+        }
+
+        // `add_dependency` borrows self as mut so we move `make_specializations_dependents` out
+        // for our local use. `add_dependency` should never grow the make specializations
+        // dependency graph.
+        for (&module, (succ, has_pred)) in make_specializations_dependents.iter() {
+            for &dependent in succ {
+                self.add_dependency(dependent, module, Phase::MakeSpecializations);
+            }
+
+            self.add_to_status(module, Phase::MakeSpecializations);
+            if !has_pred {
+                output.insert((module, Phase::MakeSpecializations));
+            }
+        }
+
+        std::mem::swap(
+            &mut self.make_specializations_dependents,
+            &mut make_specializations_dependents,
+        );
+        debug_assert!(
+            make_specializations_dependents.is_empty(),
+            "more modules were added to the graph"
+        );
+
+        output
     }
 }
 

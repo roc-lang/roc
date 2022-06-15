@@ -167,13 +167,7 @@ impl<'a> RelocationSection<'a> {
         }
     }
 
-    pub fn apply_relocs_u32(
-        &self,
-        section_bytes: &mut [u8],
-        section_bytes_offset: u32,
-        sym_index: u32,
-        value: u32,
-    ) {
+    pub fn apply_relocs_u32(&self, section_bytes: &mut [u8], sym_index: u32, value: u32) {
         for entry in self.entries.iter() {
             match entry {
                 RelocationEntry::Index {
@@ -182,7 +176,7 @@ impl<'a> RelocationSection<'a> {
                     symbol_index,
                 } if *symbol_index == sym_index => {
                     use IndexRelocType::*;
-                    let idx = (*offset - section_bytes_offset) as usize;
+                    let idx = *offset as usize;
                     match type_id {
                         FunctionIndexLeb | TypeIndexLeb | GlobalIndexLeb | EventIndexLeb
                         | TableNumberLeb => {
@@ -198,7 +192,7 @@ impl<'a> RelocationSection<'a> {
                     addend,
                 } if *symbol_index == sym_index => {
                     use OffsetRelocType::*;
-                    let idx = (*offset - section_bytes_offset) as usize;
+                    let idx = *offset as usize;
                     match type_id {
                         MemoryAddrLeb => {
                             overwrite_padded_u32(&mut section_bytes[idx..], value + *addend as u32);
@@ -577,40 +571,43 @@ impl<'a> LinkingSection<'a> {
         }
     }
 
-    pub fn find_internal_symbol(&self, target_name: &str) -> Option<u32> {
+    pub fn find_internal_symbol(&self, target_name: &str) -> Result<usize, String> {
         self.symbol_table
             .iter()
             .position(|sym| sym.name() == Some(target_name))
-            .map(|x| x as u32)
+            .ok_or_else(|| {
+                format!(
+                    "Linking failed! Can't find `{}` in host symbol table",
+                    target_name
+                )
+            })
     }
 
-    pub fn find_imported_function_symbol(&self, fn_index: u32) -> Option<u32> {
+    pub fn find_and_reindex_imported_fn(
+        &mut self,
+        old_fn_index: u32,
+        new_fn_index: u32,
+    ) -> Result<u32, String> {
         self.symbol_table
-            .iter()
+            .iter_mut()
             .position(|sym| match sym {
                 SymInfo::Function(WasmObjectSymbol::ImplicitlyNamed { flags, index, .. })
                 | SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { flags, index, .. }) => {
-                    flags & WASM_SYM_UNDEFINED != 0 && *index == fn_index
+                    let found = *flags & WASM_SYM_UNDEFINED != 0 && *index == old_fn_index;
+                    if found {
+                        *index = new_fn_index;
+                    }
+                    found
                 }
                 _ => false,
             })
             .map(|sym_index| sym_index as u32)
-    }
-
-    pub fn name_index_map(&self, arena: &'a Bump, prefix: &str) -> Vec<'a, (&'a str, u32)> {
-        let iter = self
-            .symbol_table
-            .iter()
-            .filter_map(|sym_info| match sym_info {
-                SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { flags, index, name })
-                    if flags & WASM_SYM_BINDING_LOCAL == 0 && name.starts_with(prefix) =>
-                {
-                    Some((*name, *index))
-                }
-                _ => None,
-            });
-
-        Vec::from_iter_in(iter, arena)
+            .ok_or_else(|| {
+                format!(
+                    "Linking failed! Can't find fn #{} in host symbol table",
+                    old_fn_index
+                )
+            })
     }
 }
 

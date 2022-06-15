@@ -22,8 +22,22 @@ Defs {
             ),
             @11-24 SpaceBefore(
                 Defs(
-                    [
-                        @11-17 Value(
+                    Defs {
+                        tags: [
+                            Index(2147483648),
+                        ],
+                        regions: [
+                            @11-17,
+                        ],
+                        space_before: [
+                            Slice(start = 0, length = 0),
+                        ],
+                        space_after: [
+                            Slice(start = 0, length = 0),
+                        ],
+                        spaces: [],
+                        type_defs: [],
+                        value_defs: [
                             Body(
                                 @11-12 Identifier(
                                     "i",
@@ -32,8 +46,8 @@ Defs {
                                     "64",
                                 ),
                             ),
-                        ),
-                    ],
+                        ],
+                    },
                     @23-24 SpaceBefore(
                         Var {
                             module_name: "",

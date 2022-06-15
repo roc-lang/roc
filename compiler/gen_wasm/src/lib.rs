@@ -67,7 +67,7 @@ pub fn build_app_binary<'a>(
     let (mut wasm_module, called_preload_fns, _) =
         build_app_module(env, interns, host_module, procedures);
 
-    wasm_module.remove_dead_preloads(env.arena, called_preload_fns);
+    wasm_module.eliminate_dead_code(env.arena, &called_preload_fns);
 
     let mut buffer = std::vec::Vec::with_capacity(wasm_module.size());
     wasm_module.serialize(&mut buffer);
@@ -135,7 +135,7 @@ pub fn build_app_module<'a>(
         CodeGenHelp::new(env.arena, TargetInfo::default_wasm32(), env.module_id),
     );
 
-    if DEBUG_LOG_SETTINGS.user_procs_ir {
+    if DEBUG_SETTINGS.user_procs_ir {
         println!("## procs");
         for proc in procs.iter() {
             println!("{}", proc.to_pretty(200));
@@ -153,7 +153,7 @@ pub fn build_app_module<'a>(
 
     backend.register_symbol_debug_names();
 
-    if DEBUG_LOG_SETTINGS.helper_procs_ir {
+    if DEBUG_SETTINGS.helper_procs_ir {
         println!("## helper_procs");
         for proc in helper_procs.iter() {
             println!("{}", proc.to_pretty(200));
@@ -247,7 +247,7 @@ macro_rules! round_up_to_alignment {
     };
 }
 
-pub struct WasmDebugLogSettings {
+pub struct WasmDebugSettings {
     proc_start_end: bool,
     user_procs_ir: bool,
     helper_procs_ir: bool,
@@ -255,9 +255,10 @@ pub struct WasmDebugLogSettings {
     instructions: bool,
     storage_map: bool,
     pub keep_test_binary: bool,
+    pub skip_dead_code_elim: bool,
 }
 
-pub const DEBUG_LOG_SETTINGS: WasmDebugLogSettings = WasmDebugLogSettings {
+pub const DEBUG_SETTINGS: WasmDebugSettings = WasmDebugSettings {
     proc_start_end: false && cfg!(debug_assertions),
     user_procs_ir: false && cfg!(debug_assertions),
     helper_procs_ir: false && cfg!(debug_assertions),
@@ -265,4 +266,5 @@ pub const DEBUG_LOG_SETTINGS: WasmDebugLogSettings = WasmDebugLogSettings {
     instructions: false && cfg!(debug_assertions),
     storage_map: false && cfg!(debug_assertions),
     keep_test_binary: false && cfg!(debug_assertions),
+    skip_dead_code_elim: false && cfg!(debug_assertions),
 };

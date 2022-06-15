@@ -63,31 +63,6 @@ fn new_op_call_expr<'a>(
     Loc { region, value }
 }
 
-fn desugar_def_helps<'a>(
-    arena: &'a Bump,
-    region: Region,
-    defs: &'a [&'a Loc<Def<'a>>],
-    loc_ret: &'a Loc<Expr<'a>>,
-) -> &'a Loc<Expr<'a>> {
-    let mut desugared_defs = Vec::with_capacity_in(defs.len(), arena);
-
-    for loc_def in defs.iter() {
-        let loc_def = Loc {
-            value: desugar_def(arena, &loc_def.value),
-            region: loc_def.region,
-        };
-
-        desugared_defs.push(&*arena.alloc(loc_def));
-    }
-
-    let desugared_defs = desugared_defs.into_bump_slice();
-
-    arena.alloc(Loc {
-        value: Defs(desugared_defs, desugar_expr(arena, loc_ret)),
-        region,
-    })
-}
-
 fn desugar_type_def<'a>(def: &'a TypeDef<'a>) -> TypeDef<'a> {
     use TypeDef::*;
 
@@ -135,7 +110,7 @@ pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
     }
 }
 
-pub fn desugar_toplevel_defs<'a>(arena: &'a Bump, defs: &mut roc_parse::ast::Defs<'a>) {
+pub fn desugar_defs<'a>(arena: &'a Bump, defs: &mut roc_parse::ast::Defs<'a>) {
     for value_def in defs.value_defs.iter_mut() {
         *value_def = desugar_value_def(arena, arena.alloc(*value_def));
     }
@@ -257,7 +232,14 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
             }
         }
         BinOps(lefts, right) => desugar_bin_ops(arena, loc_expr.region, lefts, right),
-        Defs(defs, loc_ret) => desugar_def_helps(arena, loc_expr.region, *defs, loc_ret),
+        Defs(defs, loc_ret) => {
+            let mut defs = (*defs).clone();
+            desugar_defs(arena, &mut defs);
+
+            let loc_ret = desugar_expr(arena, loc_ret);
+
+            arena.alloc(Loc::at(loc_expr.region, Defs(arena.alloc(defs), loc_ret)))
+        }
         Apply(loc_fn, loc_args, called_via) => {
             let mut desugared_args = Vec::with_capacity_in(loc_args.len(), arena);
 
