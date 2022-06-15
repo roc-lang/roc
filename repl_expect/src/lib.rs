@@ -1,4 +1,3 @@
-use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::{ir::ProcLayout, layout::LayoutCache};
 use roc_parse::ast::Expr;
 use roc_repl_eval::{
@@ -11,11 +10,9 @@ use roc_types::subs::{Subs, Variable};
 
 #[allow(clippy::too_many_arguments)]
 pub fn get_values<'a>(
-    home: ModuleId,
     target_info: TargetInfo,
     arena: &'a bumpalo::Bump,
     subs: &'a Subs,
-    interns: &'a Interns,
     start: *const u8,
     mut start_offset: usize,
     variables: &[Variable],
@@ -59,45 +56,6 @@ pub fn get_values<'a>(
     }
 
     Ok(result)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn get_value<'a>(
-    home: ModuleId,
-    target_info: TargetInfo,
-    arena: &'a bumpalo::Bump,
-    subs: &'a Subs,
-    interns: &'a Interns,
-    start: *const u8,
-    start_offset: usize,
-    variable: Variable,
-) -> Result<Expr<'a>, ToAstProblem> {
-    let memory = ExpectMemory { start };
-
-    let app = ExpectReplApp {
-        memory: arena.alloc(memory),
-        start_offset,
-    };
-
-    let content = subs.get_content_without_compacting(variable);
-
-    let mut layout_cache = LayoutCache::new(target_info);
-    let layout = layout_cache.from_var(arena, variable, subs).unwrap();
-
-    let proc_layout = ProcLayout {
-        arguments: &[],
-        result: layout,
-    };
-
-    jit_to_ast(
-        arena,
-        arena.alloc(app),
-        "expect_repl_main_fn",
-        proc_layout,
-        content,
-        subs,
-        target_info,
-    )
 }
 
 #[derive(Clone, Copy)]

@@ -13,8 +13,7 @@ use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_region::all::Region;
 use roc_reporting::error::r#type::error_type_to_doc;
-use roc_reporting::report::{Palette, Report, RocDocAllocator, RocDocBuilder};
-use roc_target::TargetInfo;
+use roc_reporting::report::{Report, RocDocAllocator};
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
@@ -648,14 +647,14 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
             .chain([std::ptr::null()])
             .collect_in(&arena);
 
-        //        match opt_level {
-        //            OptLevel::Development => roc_run_native_debug(executable, &argv, &envp),
-        //            OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => {
-        //                roc_run_native_fast(executable, &argv, &envp);
-        //            }
-        //        }
-
-        roc_run_native_debug(executable, &argv, &envp, expectations, interns)
+        match opt_level {
+            OptLevel::Development => {
+                roc_run_native_debug(executable, &argv, &envp, expectations, interns)
+            }
+            OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => {
+                roc_run_native_fast(executable, &argv, &envp);
+            }
+        }
     }
 
     Ok(1)
@@ -703,11 +702,8 @@ unsafe fn roc_run_native_debug(
     interns: Interns,
 ) {
     use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
-    use std::os::unix::ffi::OsStrExt;
 
     let mut signals = Signals::new(&[SIGCHLD, SIGUSR1]).unwrap();
-
-    let parent_pid = std::process::id();
 
     match libc::fork() {
         0 => {
@@ -829,17 +825,9 @@ fn render_expect_failure<'a>(
         })
         .collect();
 
-    let expressions = roc_repl_expect::get_values(
-        module_id,
-        target_info,
-        arena,
-        subs,
-        interns,
-        start,
-        start_offset,
-        &variables,
-    )
-    .unwrap();
+    let expressions =
+        roc_repl_expect::get_values(target_info, arena, subs, start, start_offset, &variables)
+            .unwrap();
 
     use roc_fmt::annotation::Formattable;
 
