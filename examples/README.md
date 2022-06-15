@@ -8,7 +8,7 @@ Run examples as follows:
     cd examples
     ```
 
-2. Run a particualr example, such as Hello World:
+2. Run a particular example, such as Hello World:
 
     ```bash
     roc run hello-world/main.roc
