@@ -1,5 +1,5 @@
 //! To avoid duplicating derived implementations for the same type, derived implementations are
-//! addressed by a hash of their type content. However, different derived implementations can be
+//! addressed by a key of their type content. However, different derived implementations can be
 //! reused based on different properties of the type. For example:
 //!
 //! - `Eq` does not care about surface type representations; its derived implementations can be
@@ -10,7 +10,7 @@
 //! - `Decoding` is like encoding, but has some differences. For one, it *does* need to distinguish
 //!   between required and optional record fields.
 //!
-//! For these reasons the content hashing is based on a [`Strategy`] as well.
+//! For these reasons the content keying is based on a [`Strategy`] as well.
 
 pub mod encoding;
 
@@ -27,7 +27,7 @@ enum Strategy {
 }
 
 #[derive(Hash)]
-pub struct DeriveHash<R>
+pub struct DeriveKey<R>
 where
     R: std::hash::Hash,
 {
@@ -35,9 +35,9 @@ where
     pub repr: R,
 }
 
-impl<'a> DeriveHash<FlatEncodable<'a>> {
+impl<'a> DeriveKey<FlatEncodable<'a>> {
     pub fn encoding(subs: &'a Subs, var: Variable) -> Self {
-        DeriveHash {
+        DeriveKey {
             strategy: Strategy::Encoding,
             repr: encoding::FlatEncodable::from_var(subs, var),
         }

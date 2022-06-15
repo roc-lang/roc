@@ -1,5 +1,5 @@
 [package]
-name = "roc_derive_hash"
+name = "roc_derive_key"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"

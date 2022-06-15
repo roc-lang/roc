@@ -8,8 +8,8 @@ use roc_can::abilities::AbilitiesStore;
 use roc_can::expr::{AnnotatedMark, ClosureData, Expr, Field, Recursive};
 use roc_can::pattern::Pattern;
 use roc_collections::SendMap;
-use roc_derive_hash::encoding::FlatEncodable;
-use roc_derive_hash::DeriveHash;
+use roc_derive_key::encoding::FlatEncodable;
+use roc_derive_key::DeriveKey;
 use roc_error_macros::internal_error;
 use roc_late_solve::{instantiate_rigids, AbilitiesView};
 use roc_module::called_via::CalledVia;
@@ -118,7 +118,7 @@ fn verify_signature(env: &mut Env<'_>, signature: Variable) {
 }
 
 pub fn derive_to_encoder(env: &mut Env<'_>, for_var: Variable) -> Expr {
-    match DeriveHash::encoding(env.subs, for_var).repr {
+    match DeriveKey::encoding(env.subs, for_var).repr {
         FlatEncodable::U8 => todo!(),
         FlatEncodable::U16 => todo!(),
         FlatEncodable::U32 => todo!(),
