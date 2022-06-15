@@ -3296,12 +3296,20 @@ fn expose_function_to_host<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     symbol: Symbol,
     roc_function: FunctionValue<'ctx>,
-    arguments: &[Layout<'a>],
+    arguments: &'a [Layout<'a>],
     return_layout: Layout<'a>,
+    layout_ids: &mut LayoutIds<'a>,
 ) {
-    // Assumption: there is only one specialization of a host-exposed function
     let ident_string = symbol.as_str(&env.interns);
-    let c_function_name: String = format!("roc__{}_1_exposed", ident_string);
+
+    let proc_layout = ProcLayout {
+        arguments,
+        result: return_layout,
+    };
+
+    let c_function_name: String = layout_ids
+        .get_toplevel(symbol, &proc_layout)
+        .to_exposed_symbol_string(symbol, &env.interns);
 
     expose_function_to_host_help_c_abi(
         env,
@@ -4077,6 +4085,7 @@ pub fn build_proc_headers<'a, 'ctx, 'env>(
     mod_solutions: &'a ModSolutions,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     scope: &mut Scope<'a, 'ctx>,
+    layout_ids: &mut LayoutIds<'a>,
     // alias_analysis_solutions: AliasAnalysisSolutions,
 ) -> Vec<
     'a,
@@ -4096,7 +4105,7 @@ pub fn build_proc_headers<'a, 'ctx, 'env>(
         let it = func_solutions.specs();
         let mut function_values = Vec::with_capacity_in(it.size_hint().0, env.arena);
         for specialization in it {
-            let fn_val = build_proc_header(env, *specialization, symbol, &proc);
+            let fn_val = build_proc_header(env, *specialization, symbol, &proc, layout_ids);
 
             if proc.args.is_empty() {
                 // this is a 0-argument thunk, i.e. a top-level constant definition
@@ -4167,7 +4176,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
-    let headers = build_proc_headers(env, mod_solutions, procedures, &mut scope);
+    let headers = build_proc_headers(env, mod_solutions, procedures, &mut scope, &mut layout_ids);
 
     let (_, function_pass) = construct_optimization_passes(env.module, opt_level);
 
@@ -4256,6 +4265,7 @@ fn build_proc_header<'a, 'ctx, 'env>(
     func_spec: FuncSpec,
     symbol: Symbol,
     proc: &roc_mono::ir::Proc<'a>,
+    layout_ids: &mut LayoutIds<'a>,
 ) -> FunctionValue<'ctx> {
     let args = proc.args;
     let arena = env.arena;
@@ -4293,6 +4303,7 @@ fn build_proc_header<'a, 'ctx, 'env>(
             fn_val,
             arguments.into_bump_slice(),
             proc.ret_layout,
+            layout_ids,
         );
     }
 
