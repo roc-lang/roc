@@ -95,10 +95,6 @@ impl<'a> WasmBackend<'a> {
             )
         });
 
-        module.link_host_to_app_calls(host_to_app_map);
-
-        module.code.code_builders.reserve(proc_lookup.len());
-
         let host_lookup = module.get_host_function_lookup(env.arena);
         if module.names.function_names.is_empty() {
             let import_fns = module.import.imports.iter().filter(|imp| imp.is_function());
@@ -116,6 +112,9 @@ impl<'a> WasmBackend<'a> {
             module.names.function_names.extend(names);
             module.names.function_names.sort_by_key(|(idx, _name)| *idx);
         }
+
+        module.link_host_to_app_calls(host_to_app_map);
+        module.code.code_builders.reserve(proc_lookup.len());
 
         WasmBackend {
             env,
