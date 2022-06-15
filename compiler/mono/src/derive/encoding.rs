@@ -9,7 +9,7 @@ use roc_can::expr::{AnnotatedMark, ClosureData, Expr, Field, Recursive};
 use roc_can::pattern::Pattern;
 use roc_collections::SendMap;
 use roc_error_macros::internal_error;
-use roc_late_solve::instantiate_rigids;
+use roc_late_solve::{instantiate_rigids, AbilitiesView};
 use roc_module::called_via::CalledVia;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
@@ -71,9 +71,10 @@ impl Env<'_> {
     fn unify(&mut self, left: Variable, right: Variable) {
         // NOTE: I don't believe the abilities store is necessary for unification at this point!
         roc_late_solve::unify(
+            self.home,
             self.arena,
             self.subs,
-            &AbilitiesStore::default(),
+            &AbilitiesView::Module(&AbilitiesStore::default()),
             left,
             right,
         )
