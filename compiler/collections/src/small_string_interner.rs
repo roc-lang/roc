@@ -252,14 +252,26 @@ impl SmallStringInterner {
 #[allow(dead_code)]
 fn find_i16_slice(slice: &[i16], key: i16) -> Option<usize> {
     // run with RUSTFLAGS="-C target-cpu=native" to enable
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "avx2"))]
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "avx",
+        target_feature = "avx2"
+    ))]
     return find_i16_slice_x86_64(slice, key);
 
-    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx", target_feature = "avx2")))]
+    #[cfg(not(all(
+        target_arch = "x86_64",
+        target_feature = "avx",
+        target_feature = "avx2"
+    )))]
     return find_i16_slice_fallback(slice, key);
 }
 
-#[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "avx2"))]
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "avx",
+    target_feature = "avx2"
+))]
 fn find_i16_slice_x86_64(slice: &[i16], key: i16) -> Option<usize> {
     use std::arch::x86_64::*;
 
@@ -333,7 +345,11 @@ mod test {
         assert!(interner.find_and_update("c", "cd").is_some());
     }
 
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx", target_feature = "avx2"))]
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "avx",
+        target_feature = "avx2"
+    ))]
     #[test]
     fn find_test_1() {
         use super::find_i16_slice;
