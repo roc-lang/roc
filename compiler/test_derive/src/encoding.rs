@@ -27,7 +27,7 @@ use roc_debug_flags::dbg_do;
 use roc_load_internal::file::{add_imports, default_aliases, LoadedModule, Threading};
 use roc_module::{
     ident::{ModuleName, TagName},
-    symbol::{IdentIds, Interns, ModuleId},
+    symbol::{IdentIds, Interns, ModuleId, Symbol},
 };
 use roc_mono::derive::{
     deriver_hash::EncodingHash,
@@ -38,10 +38,10 @@ use roc_region::all::{LineInfo, Region};
 use roc_reporting::report::{type_problem, RocDocAllocator};
 use roc_types::{
     subs::{
-        Content, ExposedTypesStorageSubs, FlatType, RecordFields, Subs, SubsIndex, UnionTags,
-        Variable,
+        AliasVariables, Content, ExposedTypesStorageSubs, FlatType, RecordFields, Subs, SubsIndex,
+        SubsSlice, UnionTags, Variable,
     },
-    types::{RecordField, Type},
+    types::{AliasKind, RecordField, Type},
 };
 
 fn encode_path() -> PathBuf {
@@ -283,6 +283,21 @@ macro_rules! v {
             tag_union_var
         }
     };
+    (Symbol::$sym:ident $($arg:expr)*) => {
+        |subs: &mut Subs| {
+            let $sym = vec![ $( $arg(subs) ,)* ];
+            let var_slice = SubsSlice::insert_into_subs(subs, $sym);
+            synth_var(subs, Content::Structure(FlatType::Apply(Symbol::$sym, var_slice)))
+        }
+    };
+    (Symbol::$alias:ident $($arg:expr)* => $real_var:expr) => {
+        |subs: &mut Subs| {
+            let args = vec![$( $arg(subs) )*];
+            let alias_variables = AliasVariables::insert_into_subs::<Vec<_>, Vec<_>>(subs, args, vec![]);
+            let real_var = $real_var(subs);
+            synth_var(subs, Content::Alias(Symbol::$alias, alias_variables, real_var, AliasKind::Structural))
+        }
+    };
     (*$rec_var:ident) => {
         |_: &mut Subs| { $rec_var }
     };
@@ -337,6 +352,20 @@ test_hash_eq! {
         v!([ Nil, Cons v!(*lst)] as lst), v!([ Nil, Cons v!(*lst)] as lst)
     same_tag_union_and_recursive_tag_union_fields:
         v!([ Nil, Cons v!(STR)]), v!([ Nil, Cons v!(*lst)] as lst)
+
+    list_list_diff_types:
+        v!(Symbol::LIST_LIST v!(STR)), v!(Symbol::LIST_LIST v!(U8))
+    set_set_diff_types:
+        v!(Symbol::SET_SET v!(STR)), v!(Symbol::SET_SET v!(U8))
+    dict_dict_diff_types:
+        v!(Symbol::DICT_DICT v!(STR) v!(STR)), v!(Symbol::DICT_DICT v!(U8) v!(U8))
+    str_str:
+        v!(Symbol::STR_STR), v!(Symbol::STR_STR)
+
+    alias_eq_real_type:
+        v!(Symbol::BOOL_BOOL => v!([ True, False ])), v!([False, True])
+    diff_alias_same_real_type:
+        v!(Symbol::BOOL_BOOL => v!([ True, False ])), v!(Symbol::UNDERSCORE => v!([False, True]))
 }
 
 test_hash_neq! {
@@ -351,6 +380,11 @@ test_hash_neq! {
         v!(EMPTY_TAG_UNION), v!([ B v!(U8) ])
     different_recursive_tag_union_tags:
         v!([ Nil, Cons v!(*lst) ] as lst), v!([ Nil, Next v!(*lst) ] as lst)
+
+    same_alias_diff_real_type:
+        v!(Symbol::BOOL_BOOL => v!([ True, False ])), v!(Symbol::BOOL_BOOL => v!([ False, True, Maybe ]))
+    diff_alias_diff_real_type:
+        v!(Symbol::BOOL_BOOL => v!([ True, False ])), v!(Symbol::UNDERSCORE => v!([ False, True, Maybe ]))
 }
 
 // }}} hash tests
