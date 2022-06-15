@@ -1,12 +1,12 @@
 [package]
-name = "test_derivers"
+name = "test_derive"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
 
 [[test]]
-name = "test_derives"
+name = "test_derive"
 path = "src/tests.rs"
 
 [dev-dependencies]

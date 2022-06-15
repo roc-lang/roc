@@ -19,7 +19,7 @@ use roc_types::subs::{
 };
 use roc_types::types::{AliasKind, RecordField};
 
-use crate::derivers::synth_var;
+use crate::derive::synth_var;
 
 macro_rules! bad_input {
     ($env:expr, $var:expr) => {

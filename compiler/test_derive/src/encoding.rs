@@ -26,8 +26,10 @@ use roc_module::{
     ident::ModuleName,
     symbol::{IdentIds, Interns, ModuleId},
 };
-use roc_mono::derivers::encoding::Env;
-use roc_mono::derivers::{encoding, synth_var};
+use roc_mono::derive::{
+    encoding::{self, Env},
+    synth_var,
+};
 use roc_region::all::{LineInfo, Region};
 use roc_reporting::report::{type_problem, RocDocAllocator};
 use roc_types::{

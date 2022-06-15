@@ -5,7 +5,7 @@
 pub mod borrow;
 pub mod code_gen_help;
 mod copy;
-pub mod derivers;
+pub mod derive;
 pub mod inc_dec;
 pub mod ir;
 pub mod layout;

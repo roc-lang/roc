@@ -4798,7 +4798,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "test_derivers"
+name = "test_derive"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
