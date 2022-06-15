@@ -89,7 +89,7 @@ fn insert_wrapper_metadata<'a>(
     wrapper_name: &'static str,
 ) {
     let index = (module.import.function_count() as u32)
-        + module.code.linking_dummy_count
+        + module.code.dead_import_dummy_count
         + module.code.preloaded_count
         + module.code.code_builders.len() as u32;
 

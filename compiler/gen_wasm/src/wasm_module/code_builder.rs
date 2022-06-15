@@ -8,12 +8,12 @@ use roc_module::symbol::Symbol;
 use super::opcodes::{OpCode, OpCode::*};
 use super::serialize::{SerialBuffer, Serialize};
 use crate::{
-    round_up_to_alignment, DEBUG_LOG_SETTINGS, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID,
+    round_up_to_alignment, DEBUG_SETTINGS, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID,
 };
 
 macro_rules! log_instruction {
     ($($x: expr),+) => {
-        if DEBUG_LOG_SETTINGS.instructions { println!($($x,)*); }
+        if DEBUG_SETTINGS.instructions { println!($($x,)*); }
     };
 }
 
@@ -394,7 +394,7 @@ impl<'a> CodeBuilder<'a> {
         if found {
             self.add_insertion(pushed_at, SETLOCAL, local_id.0);
         } else {
-            if DEBUG_LOG_SETTINGS.instructions {
+            if DEBUG_SETTINGS.instructions {
                 println!(
                     "{:?} has been popped implicitly. Leaving it on the stack.",
                     symbol
