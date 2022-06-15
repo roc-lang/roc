@@ -254,7 +254,8 @@ fn fast_eat_spaces(state: &State) -> FastSpaceState {
                 index += 1;
 
                 // try to use SIMD instructions explicitly
-                #[cfg(target_arch = "x86_64")]
+                // run with RUSTFLAGS="-C target-cpu=native" to enable
+                #[cfg(all(target_arch = "x86_64", target_feature = "sse2", target_feature = "sse4.2"))]
                 {
                     use std::arch::x86_64::*;
 
@@ -287,7 +288,7 @@ fn fast_eat_spaces(state: &State) -> FastSpaceState {
                     }
                 }
 
-                #[cfg(not(target_arch = "x86_64"))]
+                #[cfg(not(all(target_arch = "x86_64", target_feature = "sse2", target_feature = "sse4.2")))]
                 {
                     while index < length {
                         match bytes[index] {
@@ -431,7 +432,7 @@ fn eat_line_comment<'a>(
 
         let loop_start = index;
 
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(target_arch = "x86_64", target_feature = "sse2", target_feature = "sse4.2"))]
         {
             use std::arch::x86_64::*;
 
@@ -519,7 +520,7 @@ fn eat_line_comment<'a>(
             }
         }
 
-        #[cfg(not(target_arch = "x86_64"))]
+        #[cfg(not(all(target_arch = "x86_64", target_feature = "sse2", target_feature = "sse4.2")))]
         while index < length {
             match bytes[index] {
                 b'\t' => unreachable!(),
