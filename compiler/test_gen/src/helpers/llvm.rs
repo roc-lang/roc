@@ -213,12 +213,8 @@ fn create_llvm_module<'a>(
     // platform to provide them.
     add_default_roc_externs(&env);
 
-    let (main_fn_name, main_fn) = roc_gen_llvm::llvm::build::build_procedures_return_main(
-        &env,
-        opt_level,
-        procedures,
-        entry_point,
-    );
+    let (main_fn_name, main_fn) =
+        roc_gen_llvm::llvm::build::build_procedures_return_main(&env, procedures, entry_point);
 
     env.dibuilder.finalize();
 
