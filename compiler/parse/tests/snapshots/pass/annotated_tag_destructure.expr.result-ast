@@ -1,6 +1,46 @@
 Defs(
-    [
-        @26-46 Value(
+    Defs {
+        tags: [
+            Index(2147483648),
+        ],
+        regions: [
+            @0-46,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [
+            Alias {
+                header: TypeHeader {
+                    name: @0-6 "UserId",
+                    vars: [
+                        @7-8 Identifier(
+                            "x",
+                        ),
+                    ],
+                },
+                ann: @11-25 TagUnion {
+                    ext: None,
+                    tags: [
+                        @13-23 Apply {
+                            name: @13-19 "UserId",
+                            args: [
+                                @20-23 Apply(
+                                    "",
+                                    "I64",
+                                    [],
+                                ),
+                            ],
+                        },
+                    ],
+                },
+            },
+        ],
+        value_defs: [
             AnnotatedBody {
                 ann_pattern: @0-8 Apply(
                     @0-6 Tag(
@@ -50,8 +90,8 @@ Defs(
                     Space,
                 ),
             },
-        ),
-    ],
+        ],
+    },
     @48-49 SpaceBefore(
         Var {
             module_name: "",

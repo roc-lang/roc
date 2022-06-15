@@ -1,5 +1,6 @@
 use crate::procedure::References;
 use crate::scope::Scope;
+use bumpalo::Bump;
 use roc_collections::{MutMap, VecSet};
 use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_module::symbol::{IdentIdsByModule, ModuleId, ModuleIds, Symbol};
@@ -32,15 +33,19 @@ pub struct Env<'a> {
     pub qualified_type_lookups: VecSet<Symbol>,
 
     pub top_level_symbols: VecSet<Symbol>,
+
+    pub arena: &'a Bump,
 }
 
 impl<'a> Env<'a> {
     pub fn new(
+        arena: &'a Bump,
         home: ModuleId,
         dep_idents: &'a IdentIdsByModule,
         module_ids: &'a ModuleIds,
     ) -> Env<'a> {
         Env {
+            arena,
             home,
             dep_idents,
             module_ids,

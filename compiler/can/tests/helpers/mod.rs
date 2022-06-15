@@ -68,7 +68,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     );
 
     let dep_idents = IdentIds::exposed_builtins(0);
-    let mut env = Env::new(home, &dep_idents, &module_ids);
+    let mut env = Env::new(arena, home, &dep_idents, &module_ids);
     let (loc_expr, output) = canonicalize_expr(
         &mut env,
         &mut var_store,

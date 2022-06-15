@@ -1,7 +1,27 @@
 SpaceBefore(
     Defs(
-        [
-            @18-30 Value(
+        Defs {
+            tags: [
+                Index(2147483648),
+                Index(2147483649),
+            ],
+            regions: [
+                @18-30,
+                @31-36,
+            ],
+            space_before: [
+                Slice(start = 0, length = 0),
+                Slice(start = 0, length = 1),
+            ],
+            space_after: [
+                Slice(start = 0, length = 0),
+                Slice(start = 1, length = 0),
+            ],
+            spaces: [
+                Newline,
+            ],
+            type_defs: [],
+            value_defs: [
                 Body(
                     @18-26 RecordDestructure(
                         [
@@ -17,23 +37,16 @@ SpaceBefore(
                         "5",
                     ),
                 ),
-            ),
-            @31-36 SpaceBefore(
-                Value(
-                    Body(
-                        @31-32 Identifier(
-                            "y",
-                        ),
-                        @35-36 Num(
-                            "6",
-                        ),
+                Body(
+                    @31-32 Identifier(
+                        "y",
+                    ),
+                    @35-36 Num(
+                        "6",
                     ),
                 ),
-                [
-                    Newline,
-                ],
-            ),
-        ],
+            ],
+        },
         @38-40 SpaceBefore(
             Num(
                 "42",
