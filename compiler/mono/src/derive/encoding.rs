@@ -228,50 +228,53 @@ fn verify_signature(env: &mut Env<'_>, signature: Variable) {
 }
 
 pub fn derive_to_encoder(env: &mut Env<'_>, for_var: Variable) -> Expr {
-    to_encoder_from_var(env, for_var)
-}
+    match FlatEncodable::from_var(env.subs, for_var) {
+        FlatEncodable::U8 => todo!(),
+        FlatEncodable::U16 => todo!(),
+        FlatEncodable::U32 => todo!(),
+        FlatEncodable::U64 => todo!(),
+        FlatEncodable::U128 => todo!(),
+        FlatEncodable::I8 => todo!(),
+        FlatEncodable::I16 => todo!(),
+        FlatEncodable::I32 => todo!(),
+        FlatEncodable::I64 => todo!(),
+        FlatEncodable::I128 => todo!(),
+        FlatEncodable::Dec => todo!(),
+        FlatEncodable::F32 => todo!(),
+        FlatEncodable::F64 => todo!(),
+        FlatEncodable::List() => todo!(),
+        FlatEncodable::Set() => todo!(),
+        FlatEncodable::Dict() => todo!(),
+        FlatEncodable::Str => todo!(),
+        FlatEncodable::Record(fields) => {
+            // Generalized record var so we can reuse this impl between many records:
+            // if fields = { a, b }, this is { a: t1, b: t2 } for fresh t1, t2.
+            let flex_fields = fields
+                .iter()
+                .copied()
+                .cloned()
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|name| {
+                    (
+                        name,
+                        RecordField::Required(env.subs.fresh_unnamed_flex_var()),
+                    )
+                })
+                .collect::<Vec<(Lowercase, _)>>();
+            let fields = RecordFields::insert_into_subs(env.subs, flex_fields);
+            let record_var = synth_var(
+                env.subs,
+                Content::Structure(FlatType::Record(fields, Variable::EMPTY_RECORD)),
+            );
 
-fn to_encoder_from_var(env: &mut Env<'_>, mut var: Variable) -> Expr {
-    loop {
-        match *env.subs.get_content_without_compacting(var) {
-            Content::Alias(_, _, real_var, _) => var = real_var,
-            Content::RangedNumber(real_var, _) => var = real_var,
-
-            Content::RecursionVar { .. } => todo!(),
-            Content::LambdaSet(_) => todo!(),
-            Content::Structure(flat_type) => match flat_type {
-                FlatType::Record(fields, ext_var) => {
-                    return to_encoder_record(env, var, fields, ext_var)
-                }
-                FlatType::EmptyRecord => {
-                    return to_encoder_record(env, var, RecordFields::empty(), var)
-                }
-
-                FlatType::Apply(_, _) => todo!(),
-                FlatType::TagUnion(_, _) => todo!(),
-                FlatType::FunctionOrTagUnion(_, _, _) => todo!(),
-                FlatType::RecursiveTagUnion(_, _, _) => todo!(),
-                FlatType::EmptyTagUnion => todo!(),
-
-                FlatType::Func(..) => bad_input!(env.subs, var, "functions cannot be encoded"),
-                FlatType::Erroneous(_) => bad_input!(env.subs, var),
-            },
-
-            Content::FlexVar(_)
-            | Content::RigidVar(_)
-            | Content::FlexAbleVar(_, _)
-            | Content::RigidAbleVar(_, _) => bad_input!(env.subs, var, "unresolved variable"),
-            Content::Error => bad_input!(env.subs, var),
+            to_encoder_record(env, record_var, fields)
         }
+        FlatEncodable::TagUnion(_) => todo!(),
     }
 }
 
-fn to_encoder_record(
-    env: &mut Env<'_>,
-    record_var: Variable,
-    fields: RecordFields,
-    ext_var: Variable,
-) -> Expr {
+fn to_encoder_record(env: &mut Env<'_>, record_var: Variable, fields: RecordFields) -> Expr {
     // Suppose rcd = { a: t1, b: t2 }. Build
     //
     // \rcd -> Encode.record [
@@ -279,10 +282,6 @@ fn to_encoder_record(
     //      { key: "b", value: Encode.toEncoder rcd.b },
     //   ]
 
-    debug_assert!(matches!(
-        env.subs.get_content_without_compacting(ext_var),
-        Content::Structure(FlatType::EmptyRecord)
-    ));
     let rcd_sym = env.unique_symbol();
     let whole_rcd_var = env.subs.fresh_unnamed_flex_var(); // type of the { key, value } records in the list
 
