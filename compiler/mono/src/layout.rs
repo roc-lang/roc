@@ -2259,7 +2259,7 @@ where
 
             for (index, &(tag_name, arguments)) in tags_list.into_iter().enumerate() {
                 // reserve space for the tag discriminant
-                if matches!(nullable, Some((i, _)) if i  as usize == index) {
+                if matches!(nullable, Some((i, _)) if i as usize == index) {
                     debug_assert!(arguments.is_empty());
                     continue;
                 }

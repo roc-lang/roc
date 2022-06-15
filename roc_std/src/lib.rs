@@ -1,19 +1,24 @@
 #![crate_type = "lib"]
-// #![no_std]
+#![cfg_attr(feature = "no_std", no_std)]
+
+use core::cmp::Ordering;
 use core::ffi::c_void;
-use core::fmt;
+use core::fmt::{self, Debug};
+use core::hash::{Hash, Hasher};
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Drop;
 use core::str;
-use std::hash::{Hash, Hasher};
-use std::io::Write;
 
+use arrayvec::ArrayString;
+
+mod roc_box;
 mod roc_list;
 mod roc_str;
 mod storage;
 
+pub use roc_box::RocBox;
 pub use roc_list::RocList;
-pub use roc_str::RocStr;
+pub use roc_str::{InteriorNulError, RocStr};
 pub use storage::Storage;
 
 // A list of C functions that are being imported
@@ -27,17 +32,23 @@ extern "C" {
         alignment: u32,
     ) -> *mut c_void;
     pub fn roc_dealloc(ptr: *mut c_void, alignment: u32);
+    pub fn roc_panic(c_ptr: *mut c_void, tag_id: u32);
+    pub fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void;
+    pub fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut c_void;
 }
 
 /// # Safety
 /// This is only marked unsafe to typecheck without warnings in the rest of the code here.
 #[cfg(not(feature = "platform"))]
+#[no_mangle]
 pub unsafe extern "C" fn roc_alloc(_size: usize, _alignment: u32) -> *mut c_void {
     unimplemented!("It is not valid to call roc alloc from within the compiler. Please use the \"platform\" feature if this is a platform.")
 }
+
 /// # Safety
 /// This is only marked unsafe to typecheck without warnings in the rest of the code here.
 #[cfg(not(feature = "platform"))]
+#[no_mangle]
 pub unsafe extern "C" fn roc_realloc(
     _ptr: *mut c_void,
     _new_size: usize,
@@ -46,11 +57,35 @@ pub unsafe extern "C" fn roc_realloc(
 ) -> *mut c_void {
     unimplemented!("It is not valid to call roc realloc from within the compiler. Please use the \"platform\" feature if this is a platform.")
 }
+
 /// # Safety
 /// This is only marked unsafe to typecheck without warnings in the rest of the code here.
 #[cfg(not(feature = "platform"))]
+#[no_mangle]
 pub unsafe extern "C" fn roc_dealloc(_ptr: *mut c_void, _alignment: u32) {
     unimplemented!("It is not valid to call roc dealloc from within the compiler. Please use the \"platform\" feature if this is a platform.")
+}
+
+#[cfg(not(feature = "platform"))]
+#[no_mangle]
+pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
+    unimplemented!("It is not valid to call roc panic from within the compiler. Please use the \"platform\" feature if this is a platform.")
+}
+
+/// # Safety
+/// This is only marked unsafe to typecheck without warnings in the rest of the code here.
+#[cfg(not(feature = "platform"))]
+#[no_mangle]
+pub fn roc_memcpy(_dst: *mut c_void, _src: *mut c_void, _n: usize) -> *mut c_void {
+    unimplemented!("It is not valid to call roc memcpy from within the compiler. Please use the \"platform\" feature if this is a platform.")
+}
+
+/// # Safety
+/// This is only marked unsafe to typecheck without warnings in the rest of the code here.
+#[cfg(not(feature = "platform"))]
+#[no_mangle]
+pub fn roc_memset(_dst: *mut c_void, _c: i32, _n: usize) -> *mut c_void {
+    unimplemented!("It is not valid to call roc memset from within the compiler. Please use the \"platform\" feature if this is a platform.")
 }
 
 #[repr(u8)]
@@ -71,15 +106,23 @@ pub struct RocResult<T, E> {
     tag: RocResultTag,
 }
 
-impl<T, E> core::fmt::Debug for RocResult<T, E>
+impl<T, E> Debug for RocResult<T, E>
 where
-    T: core::fmt::Debug,
-    E: core::fmt::Debug,
+    T: Debug,
+    E: Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.as_result_of_refs() {
-            Ok(payload) => write!(f, "RocOk({:?})", payload),
-            Err(payload) => write!(f, "RocErr({:?})", payload),
+            Ok(payload) => {
+                f.write_str("RocOk(")?;
+                payload.fmt(f)?;
+                f.write_str(")")
+            }
+            Err(payload) => {
+                f.write_str("RocErr(")?;
+                payload.fmt(f)?;
+                f.write_str(")")
+            }
         }
     }
 }
@@ -306,73 +349,62 @@ impl RocDec {
         self.0
     }
 
-    fn to_str_helper(&self, bytes: &mut [u8; Self::MAX_STR_LENGTH]) -> usize {
+    fn to_str_helper(self, string: &mut ArrayString<{ Self::MAX_STR_LENGTH }>) -> &str {
+        use std::fmt::Write;
+
         if self.as_i128() == 0 {
-            write!(&mut bytes[..], "{}", "0").unwrap();
-            return 1;
+            return "0";
         }
 
-        let is_negative = (self.as_i128() < 0) as usize;
-
-        static_assertions::const_assert!(Self::DECIMAL_PLACES + 1 == 19);
         // The :019 in the following write! is computed as Self::DECIMAL_PLACES + 1. If you change
-        // Self::DECIMAL_PLACES, this assert should remind you to change that format string as
-        // well.
-        //
+        // Self::DECIMAL_PLACES, this assert should remind you to change that format string as well.
+        static_assertions::const_assert!(Self::DECIMAL_PLACES + 1 == 19);
+
         // By using the :019 format, we're guaranteeing that numbers less than 1, say 0.01234
-        // get their leading zeros placed in bytes for us. i.e. bytes = b"0012340000000000000"
-        write!(&mut bytes[..], "{:019}", self.as_i128()).unwrap();
+        // get their leading zeros placed in bytes for us. i.e. `string = b"0012340000000000000"`
+        write!(string, "{:019}", self.as_i128()).unwrap();
 
-        // If self represents 1234.5678, then bytes is b"1234567800000000000000".
-        let mut i = Self::MAX_STR_LENGTH - 1;
-        // Find the last place where we have actual data.
-        while bytes[i] == 0 {
-            i = i - 1;
-        }
-        // At this point i is 21 because bytes[21] is the final '0' in b"1234567800000000000000".
+        let is_negative = self.as_i128() < 0;
+        let decimal_location = string.len() - Self::DECIMAL_PLACES + (is_negative as usize);
 
-        let decimal_location = i - Self::DECIMAL_PLACES + 1 + is_negative;
-        // decimal_location = 4
+        // skip trailing zeros
+        let last_nonzero_byte = string.trim_end_matches('0').len();
 
-        while bytes[i] == ('0' as u8) && i >= decimal_location {
-            bytes[i] = 0;
-            i = i - 1;
-        }
-        // Now i = 7, because bytes[7] = '8', and bytes = b"12345678"
-
-        if i < decimal_location {
+        if last_nonzero_byte < decimal_location {
             // This means that we've removed trailing zeros and are left with an integer. Our
             // convention is to print these without a decimal point or trailing zeros, so we're done.
-            return i + 1;
+            string.truncate(decimal_location);
+            return string.as_str();
         }
 
-        let ret = i + 1;
-        while i >= decimal_location {
-            bytes[i + 1] = bytes[i];
-            i = i - 1;
-        }
-        bytes[i + 1] = bytes[i];
-        // Now i = 4, and bytes = b"123455678"
+        // otherwise, we're dealing with a fraction, and need to insert the decimal dot
 
-        bytes[decimal_location] = '.' as u8;
-        // Finally bytes = b"1234.5678"
+        // truncate all extra zeros off
+        string.truncate(last_nonzero_byte);
 
-        ret + 1
+        // push a dummy character so we have space for the decimal dot
+        string.push('$');
+
+        // Safety: at any time, the string only contains ascii characters, so it is always valid utf8
+        let bytes = unsafe { string.as_bytes_mut() };
+
+        // shift the fractional part by one
+        bytes.copy_within(decimal_location..last_nonzero_byte, decimal_location + 1);
+
+        // and put in the decimal dot in the right place
+        bytes[decimal_location] = b'.';
+
+        string.as_str()
     }
 
     pub fn to_str(&self) -> RocStr {
-        let mut bytes = [0 as u8; Self::MAX_STR_LENGTH];
-        let last_idx = self.to_str_helper(&mut bytes);
-        unsafe { RocStr::from_slice(&bytes[0..last_idx]) }
+        RocStr::from(self.to_str_helper(&mut ArrayString::new()))
     }
 }
 
 impl fmt::Display for RocDec {
-    fn fmt(&self, fmtr: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut bytes = [0 as u8; Self::MAX_STR_LENGTH];
-        let last_idx = self.to_str_helper(&mut bytes);
-        let result = unsafe { str::from_utf8_unchecked(&bytes[0..last_idx]) };
-        write!(fmtr, "{}", result)
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.to_str_helper(&mut ArrayString::new()))
     }
 }
 
@@ -394,52 +426,37 @@ impl From<I128> for i128 {
 
 impl fmt::Debug for I128 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let i128: i128 = (*self).into();
-
-        i128.fmt(f)
+        i128::from(*self).fmt(f)
     }
 }
 
 impl fmt::Display for I128 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let i128: i128 = (*self).into();
-
-        i128.fmt(f)
+        Debug::fmt(&i128::from(*self), f)
     }
 }
 
 impl PartialEq for I128 {
     fn eq(&self, other: &Self) -> bool {
-        let i128_self: i128 = (*self).into();
-        let i128_other: i128 = (*other).into();
-
-        i128_self.eq(&i128_other)
+        i128::from(*self).eq(&i128::from(*other))
     }
 }
 
 impl PartialOrd for I128 {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        let i128_self: i128 = (*self).into();
-        let i128_other: i128 = (*other).into();
-
-        i128_self.partial_cmp(&i128_other)
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        i128::from(*self).partial_cmp(&i128::from(*other))
     }
 }
 
 impl Ord for I128 {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let i128_self: i128 = (*self).into();
-        let i128_other: i128 = (*other).into();
-
-        i128_self.cmp(&i128_other)
+    fn cmp(&self, other: &Self) -> Ordering {
+        i128::from(*self).cmp(&i128::from(*other))
     }
 }
 
 impl Hash for I128 {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        let i128: i128 = (*self).into();
-
-        i128.hash(state);
+        i128::from(*self).hash(state);
     }
 }
 
@@ -461,51 +478,36 @@ impl From<U128> for u128 {
 
 impl fmt::Debug for U128 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let u128: u128 = (*self).into();
-
-        u128.fmt(f)
+        u128::from(*self).fmt(f)
     }
 }
 
 impl fmt::Display for U128 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let u128: u128 = (*self).into();
-
-        u128.fmt(f)
+        Debug::fmt(&u128::from(*self), f)
     }
 }
 
 impl PartialEq for U128 {
     fn eq(&self, other: &Self) -> bool {
-        let u128_self: u128 = (*self).into();
-        let u128_other: u128 = (*other).into();
-
-        u128_self.eq(&u128_other)
+        u128::from(*self).eq(&u128::from(*other))
     }
 }
 
 impl PartialOrd for U128 {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        let u128_self: u128 = (*self).into();
-        let u128_other: u128 = (*other).into();
-
-        u128_self.partial_cmp(&u128_other)
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        u128::from(*self).partial_cmp(&u128::from(*other))
     }
 }
 
 impl Ord for U128 {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let u128_self: u128 = (*self).into();
-        let u128_other: u128 = (*other).into();
-
-        u128_self.cmp(&u128_other)
+    fn cmp(&self, other: &Self) -> Ordering {
+        u128::from(*self).cmp(&u128::from(*other))
     }
 }
 
 impl Hash for U128 {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        let u128: u128 = (*self).into();
-
-        u128.hash(state);
+        u128::from(*self).hash(state);
     }
 }

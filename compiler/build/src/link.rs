@@ -313,6 +313,7 @@ pub fn build_zig_host_wasm32(
 pub fn build_c_host_native(
     env_path: &str,
     env_home: &str,
+    env_cpath: &str,
     dest: &str,
     sources: &[&str],
     opt_level: OptLevel,
@@ -322,6 +323,7 @@ pub fn build_c_host_native(
     command
         .env_clear()
         .env("PATH", &env_path)
+        .env("CPATH", &env_cpath)
         .env("HOME", &env_home)
         .args(sources)
         .args(&["-o", dest]);
@@ -417,6 +419,7 @@ pub fn rebuild_host(
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
     let env_home = env::var("HOME").unwrap_or_else(|_| "".to_string());
+    let env_cpath = env::var("CPATH").unwrap_or_else(|_| "".to_string());
 
     if zig_host_src.exists() {
         // Compile host.zig
@@ -531,6 +534,7 @@ pub fn rebuild_host(
             let output = build_c_host_native(
                 &env_path,
                 &env_home,
+                &env_cpath,
                 c_host_dest.to_str().unwrap(),
                 &[c_host_src.to_str().unwrap()],
                 opt_level,
@@ -586,6 +590,7 @@ pub fn rebuild_host(
             let output = build_c_host_native(
                 &env_path,
                 &env_home,
+                &env_cpath,
                 host_dest.to_str().unwrap(),
                 &[
                     c_host_src.to_str().unwrap(),
@@ -599,6 +604,7 @@ pub fn rebuild_host(
             let output = build_c_host_native(
                 &env_path,
                 &env_home,
+                &env_cpath,
                 c_host_dest.to_str().unwrap(),
                 &[c_host_src.to_str().unwrap()],
                 opt_level,
@@ -639,6 +645,7 @@ pub fn rebuild_host(
         let output = build_c_host_native(
             &env_path,
             &env_home,
+            &env_cpath,
             host_dest.to_str().unwrap(),
             &[c_host_src.to_str().unwrap()],
             opt_level,

@@ -70,7 +70,7 @@ impl FromWasmerMemory for RocStr {
             &memory_bytes[big_elem_ptr..][..big_length]
         };
 
-        unsafe { RocStr::from_slice(slice) }
+        unsafe { RocStr::from_slice_unchecked(slice) }
     }
 }
 

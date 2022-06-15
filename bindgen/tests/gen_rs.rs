@@ -11,7 +11,7 @@ mod test_gen_rs {
     use crate::helpers::generate_bindings;
 
     #[test]
-    fn record_aliased() {
+    fn basic_record_aliased() {
         let module = indoc!(
             r#"
             MyRcd : { a : U64, b : I128 }
@@ -28,11 +28,11 @@ mod test_gen_rs {
             indoc!(
                 r#"
                 #[cfg(any(
-                    target_arch = "x86_64",
-                    target_arch = "x86",
-                    target_arch = "aarch64",
                     target_arch = "arm",
-                    target_arch = "wasm32"
+                    target_arch = "aarch64",
+                    target_arch = "wasm32",
+                    target_arch = "x86",
+                    target_arch = "x86_64"
                 ))]
                 #[derive(Clone, Copy, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
@@ -65,23 +65,24 @@ mod test_gen_rs {
             indoc!(
                 r#"
                 #[cfg(any(
-                    target_arch = "x86_64",
-                    target_arch = "aarch64"
+                    target_arch = "arm",
+                    target_arch = "wasm32",
+                    target_arch = "x86"
                 ))]
                 #[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct Outer {
+                    pub x: Inner,
                     pub y: roc_std::RocStr,
                     pub z: roc_std::RocList<u8>,
-                    pub x: Inner,
                 }
 
                 #[cfg(any(
-                    target_arch = "x86_64",
-                    target_arch = "x86",
-                    target_arch = "aarch64",
                     target_arch = "arm",
-                    target_arch = "wasm32"
+                    target_arch = "aarch64",
+                    target_arch = "wasm32",
+                    target_arch = "x86",
+                    target_arch = "x86_64"
                 ))]
                 #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
@@ -91,16 +92,15 @@ mod test_gen_rs {
                 }
 
                 #[cfg(any(
-                    target_arch = "x86",
-                    target_arch = "arm",
-                    target_arch = "wasm32"
+                    target_arch = "aarch64",
+                    target_arch = "x86_64"
                 ))]
                 #[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct Outer {
-                    pub x: Inner,
                     pub y: roc_std::RocStr,
                     pub z: roc_std::RocList<u8>,
+                    pub x: Inner,
                 }
             "#
             )
@@ -118,11 +118,11 @@ mod test_gen_rs {
             indoc!(
                 r#"
                 #[cfg(any(
-                    target_arch = "x86_64",
-                    target_arch = "x86",
-                    target_arch = "aarch64",
                     target_arch = "arm",
-                    target_arch = "wasm32"
+                    target_arch = "aarch64",
+                    target_arch = "wasm32",
+                    target_arch = "x86",
+                    target_arch = "x86_64"
                 ))]
                 #[derive(Clone, Copy, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(C)]
@@ -146,23 +146,24 @@ mod test_gen_rs {
             indoc!(
                 r#"
                 #[cfg(any(
-                    target_arch = "x86_64",
-                    target_arch = "aarch64"
+                    target_arch = "arm",
+                    target_arch = "wasm32",
+                    target_arch = "x86"
                 ))]
                 #[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct R1 {
+                    pub x: R2,
                     pub y: roc_std::RocStr,
                     pub z: roc_std::RocList<u8>,
-                    pub x: R2,
                 }
 
                 #[cfg(any(
-                    target_arch = "x86_64",
-                    target_arch = "x86",
-                    target_arch = "aarch64",
                     target_arch = "arm",
-                    target_arch = "wasm32"
+                    target_arch = "aarch64",
+                    target_arch = "wasm32",
+                    target_arch = "x86",
+                    target_arch = "x86_64"
                 ))]
                 #[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
@@ -172,16 +173,15 @@ mod test_gen_rs {
                 }
 
                 #[cfg(any(
-                    target_arch = "x86",
-                    target_arch = "arm",
-                    target_arch = "wasm32"
+                    target_arch = "aarch64",
+                    target_arch = "x86_64"
                 ))]
                 #[derive(Clone, Debug, Default, PartialEq, PartialOrd)]
                 #[repr(C)]
                 pub struct R1 {
-                    pub x: R2,
                     pub y: roc_std::RocStr,
                     pub z: roc_std::RocList<u8>,
+                    pub x: R2,
                 }
             "#
             )
@@ -206,11 +206,11 @@ mod test_gen_rs {
             indoc!(
                 r#"
                 #[cfg(any(
-                    target_arch = "x86_64",
-                    target_arch = "x86",
-                    target_arch = "aarch64",
                     target_arch = "arm",
-                    target_arch = "wasm32"
+                    target_arch = "aarch64",
+                    target_arch = "wasm32",
+                    target_arch = "x86",
+                    target_arch = "x86_64"
                 ))]
                 #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
                 #[repr(u8)]
