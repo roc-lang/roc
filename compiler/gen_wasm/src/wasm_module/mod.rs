@@ -361,10 +361,12 @@ impl<'a> WasmModule<'a> {
         }
 
         while current_pass_fns.count_ones() > 0 {
+            // All functions in this pass are live (they have been reached by earlier passes)
+            debug_assert_eq!(live_flags.len(), current_pass_fns.len());
+            live_flags |= &current_pass_fns;
+
             // For each live function in the current pass
             for fn_index in current_pass_fns.iter_ones() {
-                live_flags.set(fn_index as usize, true);
-
                 // Skip JS imports and Roc functions
                 if fn_index < host_fn_min as usize || fn_index >= host_fn_max as usize {
                     continue;
