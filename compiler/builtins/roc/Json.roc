@@ -111,8 +111,7 @@ record = \fields ->
 tag = \name, payload ->
     custom \bytes, @Json {} ->
         # Idea: encode `A v1 v2` as `{"A": [v1, v2]}`
-
-        writePayload = \{buffer, itemsLeft}, encoder ->
+        writePayload = \{ buffer, itemsLeft }, encoder ->
             bufferWithValue = appendWith buffer encoder (@Json {})
             bufferWithSuffix =
                 if itemsLeft > 0 then
@@ -120,17 +119,17 @@ tag = \name, payload ->
                 else
                     bufferWithValue
 
-            {buffer: bufferWithSuffix, itemsLeft: itemsLeft - 1}
+            { buffer: bufferWithSuffix, itemsLeft: itemsLeft - 1 }
 
         bytesHead =
             List.append bytes (Num.toU8 '{')
-            |> List.append (Num.toU8 '"')
-            |> List.concat (Str.toUtf8 name)
-            |> List.append (Num.toU8 '"')
-            |> List.append (Num.toU8 ':')
-            |> List.append (Num.toU8 '[')
+                |> List.append (Num.toU8 '"')
+                |> List.concat (Str.toUtf8 name)
+                |> List.append (Num.toU8 '"')
+                |> List.append (Num.toU8 ':')
+                |> List.append (Num.toU8 '[')
 
         { buffer: bytesWithPayload } = List.walk payload { buffer: bytesHead, itemsLeft: List.len payload } writePayload
 
         List.append bytesWithPayload (Num.toU8 ']')
-        |> List.append (Num.toU8 '}')
+            |> List.append (Num.toU8 '}')
