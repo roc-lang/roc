@@ -12,9 +12,14 @@
 //!
 //! For these reasons the content hashing is based on a [`Strategy`] as well.
 
+pub mod encoding;
+
+use encoding::FlatEncodable;
+
 use roc_types::subs::{Subs, Variable};
 
 #[derive(Hash)]
+#[repr(u8)]
 enum Strategy {
     Encoding,
     #[allow(unused)]
@@ -22,24 +27,19 @@ enum Strategy {
 }
 
 #[derive(Hash)]
-struct DeriverHashImpl<H>
+pub struct DeriveHash<R>
 where
-    H: std::hash::Hash,
+    R: std::hash::Hash,
 {
     strategy: Strategy,
-    hash: H,
+    pub repr: R,
 }
 
-pub trait DeriverHash: std::hash::Hash {}
-
-impl<H> DeriverHash for DeriverHashImpl<H> where H: std::hash::Hash {}
-
-pub struct EncodingHash;
-impl EncodingHash {
-    pub fn from_var(subs: &Subs, var: Variable) -> impl DeriverHash + '_ {
-        DeriverHashImpl {
+impl<'a> DeriveHash<FlatEncodable<'a>> {
+    pub fn encoding(subs: &'a Subs, var: Variable) -> Self {
+        DeriveHash {
             strategy: Strategy::Encoding,
-            hash: super::encoding::FlatEncodable::from_var(subs, var),
+            repr: encoding::FlatEncodable::from_var(subs, var),
         }
     }
 }

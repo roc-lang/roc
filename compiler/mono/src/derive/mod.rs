@@ -15,6 +15,4 @@ pub fn synth_var(subs: &mut Subs, content: Content) -> Variable {
     subs.fresh(descriptor)
 }
 
-pub mod deriver_hash;
-
 pub mod encoding;

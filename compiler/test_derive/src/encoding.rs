@@ -24,13 +24,13 @@ use roc_constrain::{
     module::{ExposedByModule, ExposedForModule, ExposedModuleTypes},
 };
 use roc_debug_flags::dbg_do;
+use roc_derive_hash::DeriveHash;
 use roc_load_internal::file::{add_imports, default_aliases, LoadedModule, Threading};
 use roc_module::{
     ident::{ModuleName, TagName},
     symbol::{IdentIds, Interns, ModuleId, Symbol},
 };
 use roc_mono::derive::{
-    deriver_hash::EncodingHash,
     encoding::{self, Env},
     synth_var,
 };
@@ -232,8 +232,8 @@ where
     let var1 = synth1(&mut subs);
     let var2 = synth2(&mut subs);
 
-    let hash1 = EncodingHash::from_var(&subs, var1);
-    let hash2 = EncodingHash::from_var(&subs, var2);
+    let hash1 = DeriveHash::encoding(&subs, var1);
+    let hash2 = DeriveHash::encoding(&subs, var2);
 
     let hash1 = {
         let mut hasher = default_hasher().build_hasher();
