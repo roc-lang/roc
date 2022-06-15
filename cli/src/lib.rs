@@ -260,6 +260,8 @@ pub enum FormatMode {
     CheckOnly,
 }
 
+const SHM_SIZE: usize = 4096;
+
 pub fn build(
     matches: &ArgMatches,
     config: BuildConfig,
@@ -343,11 +345,11 @@ pub fn build(
         let shared_fd =
             libc::shm_open(cstring.as_ptr().cast(), libc::O_RDWR | libc::O_CREAT, 0o666);
 
-        libc::ftruncate(shared_fd, 1024);
+        libc::ftruncate(shared_fd, SHM_SIZE as _);
 
         let _shared_ptr = libc::mmap(
             std::ptr::null_mut(),
-            4096,
+            SHM_SIZE,
             libc::PROT_WRITE,
             libc::MAP_SHARED,
             shared_fd,
@@ -759,9 +761,11 @@ unsafe fn roc_run_native_debug(
                         let shared_fd =
                             libc::shm_open(cstring.as_ptr().cast(), libc::O_RDONLY, 0o666);
 
+                        libc::ftruncate(shared_fd, SHM_SIZE as _);
+
                         let shared_ptr = libc::mmap(
                             std::ptr::null_mut(),
-                            4096,
+                            SHM_SIZE,
                             libc::PROT_READ,
                             libc::MAP_SHARED,
                             shared_fd,
