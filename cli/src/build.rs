@@ -8,7 +8,10 @@ use roc_load::{LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
 use roc_reporting::report::RenderTarget;
 use roc_target::TargetInfo;
-use std::time::{Duration, SystemTime};
+use std::{
+    path::Path,
+    time::{Duration, SystemTime},
+};
 use std::{path::PathBuf, thread::JoinHandle};
 use target_lexicon::Triple;
 use tempfile::Builder;
@@ -94,9 +97,10 @@ pub fn build_file<'a>(
         binary_path.set_extension("wasm");
     }
 
-    let mut host_input_path = PathBuf::from(cwd);
-    let path_to_platform = loaded.platform_path.clone();
-    host_input_path.push(&*path_to_platform);
+    let mut host_input_path = Path::new(&*loaded.platform_path)
+        .parent()
+        .unwrap()
+        .to_path_buf();
     host_input_path.push("host");
     host_input_path.set_extension(host_extension);
 

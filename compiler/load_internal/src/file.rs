@@ -50,6 +50,7 @@ use roc_types::subs::{Subs, VarStore, Variable};
 use roc_types::types::{Alias, AliasKind};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
+use std::env::current_dir;
 use std::io;
 use std::iter;
 use std::ops::ControlFlow;
@@ -611,8 +612,8 @@ pub struct MonomorphizedModule<'a> {
     pub module_id: ModuleId,
     pub interns: Interns,
     pub subs: Subs,
-    pub output_path: Box<str>,
-    pub platform_path: Box<str>,
+    pub output_path: Box<Path>,
+    pub platform_path: Box<Path>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
@@ -2609,7 +2610,7 @@ fn finish_specialization(
         package_name.0
     };
 
-    let platform_path = path_to_platform.into();
+    let platform_path = Path::new(path_to_platform).into();
 
     let entry_point = {
         let symbol = match platform_data {
@@ -2639,10 +2640,15 @@ fn finish_specialization(
         }
     };
 
+    let output_path = match output_path {
+        Some(path_str) => Path::new(path_str).into(),
+        None => current_dir().unwrap().join(DEFAULT_APP_OUTPUT_PATH).into(),
+    };
+
     Ok(MonomorphizedModule {
         can_problems,
         type_problems,
-        output_path: output_path.unwrap_or(DEFAULT_APP_OUTPUT_PATH).into(),
+        output_path,
         platform_path,
         exposed_to_host,
         module_id: state.root_id,
