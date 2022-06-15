@@ -7,7 +7,7 @@ use crate::layout::{
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_can::abilities::{AbilitiesStore, SpecializationId};
+use roc_can::abilities::SpecializationId;
 use roc_can::expr::{AnnotatedMark, ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
 use roc_collections::VecMap;
@@ -19,7 +19,7 @@ use roc_debug_flags::{
 use roc_error_macros::todo_abilities;
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
 use roc_late_solve::{
-    instantiate_rigids, resolve_ability_specialization, Resolved, UnificationFailed,
+    instantiate_rigids, resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed,
 };
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -193,6 +193,12 @@ impl<'a> PartialProcs<'a> {
         );
 
         self.references.push((alias, real_symbol));
+    }
+
+    pub fn drain(self) -> impl Iterator<Item = (Symbol, PartialProc<'a>)> {
+        debug_assert_eq!(self.symbols.len(), self.partial_procs.len());
+
+        self.symbols.into_iter().zip(self.partial_procs.into_iter())
     }
 }
 
@@ -531,7 +537,7 @@ impl HostSpecializations {
 pub struct ExternalSpecializations {
     /// Not a bumpalo vec because bumpalo is not thread safe
     /// Separate array so we can search for membership quickly
-    symbols: std::vec::Vec<Symbol>,
+    pub symbols: std::vec::Vec<Symbol>,
     storage_subs: StorageSubs,
     /// For each symbol, what types to specialize it for, points into the storage_subs
     types_to_specialize: std::vec::Vec<std::vec::Vec<Variable>>,
@@ -897,6 +903,16 @@ impl<'a> SymbolSpecializations<'a> {
 }
 
 #[derive(Clone, Debug)]
+pub struct ProcsBase<'a> {
+    pub partial_procs: BumpMap<Symbol, PartialProc<'a>>,
+    pub module_thunks: &'a [Symbol],
+    /// A host-exposed function must be specialized; it's a seed for subsequent specializations
+    pub host_specializations: HostSpecializations,
+    pub runtime_errors: BumpMap<Symbol, &'a str>,
+    pub imported_module_thunks: &'a [Symbol],
+}
+
+#[derive(Clone, Debug)]
 pub struct Procs<'a> {
     pub partial_procs: PartialProcs<'a>,
     ability_member_aliases: AbilityAliases,
@@ -947,17 +963,27 @@ impl<'a> Procs<'a> {
     pub fn get_specialized_procs_without_rc(
         self,
         env: &mut Env<'a, '_>,
-    ) -> MutMap<(Symbol, ProcLayout<'a>), Proc<'a>> {
-        let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
+    ) -> (MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>, ProcsBase<'a>) {
+        let mut specialized_procs =
+            MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
 
         for (symbol, layout, mut proc) in self.specialized.into_iter_assert_done() {
             proc.make_tail_recursive(env);
 
             let key = (symbol, layout);
-            result.insert(key, proc);
+            specialized_procs.insert(key, proc);
         }
 
-        result
+        let restored_procs_base = ProcsBase {
+            partial_procs: self.partial_procs.drain().collect(),
+            module_thunks: self.module_thunks,
+            // This must now be empty
+            host_specializations: HostSpecializations::default(),
+            runtime_errors: self.runtime_errors,
+            imported_module_thunks: self.imported_module_thunks,
+        };
+
+        (specialized_procs, restored_procs_base)
     }
 
     // TODO trim these down
@@ -1242,7 +1268,7 @@ pub struct Env<'a, 'i> {
     pub target_info: TargetInfo,
     pub update_mode_ids: &'i mut UpdateModeIds,
     pub call_specialization_counter: u32,
-    pub abilities_store: &'i AbilitiesStore,
+    pub abilities: AbilitiesView<'i>,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
@@ -1273,7 +1299,14 @@ impl<'a, 'i> Env<'a, 'i> {
     /// Unifies two variables and performs lambda set compaction.
     /// Use this rather than [roc_unify::unify] directly!
     fn unify(&mut self, left: Variable, right: Variable) -> Result<(), UnificationFailed> {
-        roc_late_solve::unify(self.arena, self.subs, self.abilities_store, left, right)
+        roc_late_solve::unify(
+            self.home,
+            self.arena,
+            self.subs,
+            &self.abilities,
+            left,
+            right,
+        )
     }
 }
 
@@ -3742,10 +3775,13 @@ pub fn with_hole<'a>(
             specialize_naked_symbol(env, variable, procs, layout_cache, assigned, hole, symbol)
         }
         AbilityMember(_member, specialization_id, _) => {
-            let specialization_symbol = env
-                .abilities_store
-                .get_resolved(specialization_id)
-                .expect("Specialization was never made!");
+            let specialization_symbol =
+                env.abilities
+                    .with_module_abilities_store(env.home, |store| {
+                        store
+                            .get_resolved(specialization_id)
+                            .expect("Specialization was never made!")
+                    });
 
             specialize_naked_symbol(
                 env,
@@ -4752,7 +4788,10 @@ pub fn with_hole<'a>(
                         UnspecializedExpr(symbol) => {
                             match procs.ability_member_aliases.get(symbol).unwrap() {
                                 &self::AbilityMember(member) => {
-                                    let resolved_proc = resolve_ability_specialization(env.subs, env.abilities_store, member, fn_var).expect("Recorded as an ability member, but it doesn't have a specialization");
+                                    let resolved_proc = env.abilities.with_module_abilities_store(env.home, |store|
+                                        resolve_ability_specialization(env.subs, store, member, fn_var)
+                                            .expect("Recorded as an ability member, but it doesn't have a specialization")
+                                    );
 
                                     let resolved_proc = match resolved_proc {
                                         Resolved::Specialization(symbol) => symbol,
@@ -5127,7 +5166,11 @@ fn late_resolve_ability_specialization<'a>(
     specialization_id: SpecializationId,
     specialization_var: Variable,
 ) -> Symbol {
-    if let Some(spec_symbol) = env.abilities_store.get_resolved(specialization_id) {
+    let opt_resolved = env
+        .abilities
+        .with_module_abilities_store(env.home, |store| store.get_resolved(specialization_id));
+
+    if let Some(spec_symbol) = opt_resolved {
         // Fast path: specialization is monomorphic, was found during solving.
         spec_symbol
     } else if let Content::Structure(FlatType::Func(_, lambda_set, _)) =
@@ -5141,6 +5184,7 @@ fn late_resolve_ability_specialization<'a>(
             unspecialized,
             recursion_var: _,
         } = env.subs.get_lambda_set(*lambda_set);
+
         debug_assert!(unspecialized.is_empty());
         let mut iter_lambda_set = solved.iter_all();
         debug_assert_eq!(iter_lambda_set.len(), 1);
@@ -5148,13 +5192,12 @@ fn late_resolve_ability_specialization<'a>(
         env.subs[spec_symbol_index]
     } else {
         // Otherwise, resolve by checking the able var.
-        let specialization = resolve_ability_specialization(
-            env.subs,
-            env.abilities_store,
-            member,
-            specialization_var,
-        )
-        .expect("Ability specialization is unknown - code generation cannot proceed!");
+        let specialization = env
+            .abilities
+            .with_module_abilities_store(env.home, |store| {
+                resolve_ability_specialization(env.subs, store, member, specialization_var)
+                    .expect("Ability specialization is unknown - code generation cannot proceed!")
+            });
 
         match specialization {
             Resolved::Specialization(symbol) => symbol,
@@ -6987,7 +7030,11 @@ where
     // 1. Handle references to ability members - we could be aliasing an ability member, or another
     //    alias to an ability member.
     {
-        if env.abilities_store.is_ability_member_name(right) {
+        let is_ability_member = env
+            .abilities
+            .with_module_abilities_store(env.home, |store| store.is_ability_member_name(right));
+
+        if is_ability_member {
             procs
                 .ability_member_aliases
                 .insert(left, AbilityMember(right));

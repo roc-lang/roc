@@ -23,6 +23,7 @@ use roc_debug_flags::{
     ROC_PRINT_LOAD_LOG,
 };
 use roc_error_macros::internal_error;
+use roc_late_solve::{AbilitiesView, WorldAbilities};
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
     IdentIds, IdentIdsByModule, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds,
@@ -30,7 +31,7 @@ use roc_module::symbol::{
 };
 use roc_mono::ir::{
     CapturedSymbols, EntryPoint, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs,
-    UpdateModeIds,
+    ProcsBase, UpdateModeIds,
 };
 use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
 use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
@@ -132,6 +133,7 @@ struct ModuleCache<'a> {
     constrained: MutMap<ModuleId, ConstrainedModule>,
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
+    late_specializations: MutMap<ModuleId, LateSpecializationsModule<'a>>,
     external_specializations_requested: MutMap<ModuleId, Vec<ExternalSpecializations>>,
 
     /// Various information
@@ -179,6 +181,7 @@ impl Default for ModuleCache<'_> {
             constrained: Default::default(),
             typechecked: Default::default(),
             found_specializations: Default::default(),
+            late_specializations: Default::default(),
             external_specializations_requested: Default::default(),
             imports: Default::default(),
             top_level_thunks: Default::default(),
@@ -424,27 +427,59 @@ fn start_phase<'a>(
                 }
             }
             Phase::MakeSpecializations => {
-                let found_specializations = state
-                    .module_cache
-                    .found_specializations
-                    .remove(&module_id)
-                    .unwrap();
-
                 let specializations_we_must_make = state
                     .module_cache
                     .external_specializations_requested
                     .remove(&module_id)
                     .unwrap_or_default();
 
-                let FoundSpecializationsModule {
-                    module_id,
-                    ident_ids,
-                    subs,
-                    procs_base,
-                    layout_cache,
-                    module_timing,
-                    abilities_store,
-                } = found_specializations;
+                let (ident_ids, subs, procs_base, layout_cache, module_timing) =
+                    if state.make_specializations_pass.current_pass() == 1 {
+                        let found_specializations = state
+                            .module_cache
+                            .found_specializations
+                            .remove(&module_id)
+                            .unwrap();
+
+                        let FoundSpecializationsModule {
+                            ident_ids,
+                            subs,
+                            procs_base,
+                            layout_cache,
+                            module_timing,
+                            abilities_store,
+                        } = found_specializations;
+
+                        // Safety: by this point every module should have been solved, so there is no need
+                        // for our exposed types anymore, but the world does need them.
+                        let our_exposed_types = unsafe { state.exposed_types.remove(&module_id) }
+                            .unwrap_or_else(|| {
+                                internal_error!("Exposed types for {:?} missing", module_id)
+                            });
+
+                        // Add our abilities to the world.
+                        state.world_abilities.insert(
+                            module_id,
+                            abilities_store,
+                            our_exposed_types.exposed_types_storage_subs,
+                        );
+
+                        (ident_ids, subs, procs_base, layout_cache, module_timing)
+                    } else {
+                        let LateSpecializationsModule {
+                            ident_ids,
+                            subs,
+                            module_timing,
+                            layout_cache,
+                            procs_base,
+                        } = state
+                            .module_cache
+                            .late_specializations
+                            .remove(&module_id)
+                            .unwrap();
+
+                        (ident_ids, subs, procs_base, layout_cache, module_timing)
+                    };
 
                 BuildTask::MakeSpecializations {
                     module_id,
@@ -454,7 +489,7 @@ fn start_phase<'a>(
                     layout_cache,
                     specializations_we_must_make,
                     module_timing,
-                    abilities_store,
+                    world_abilities: state.world_abilities.clone_ref(),
                 }
             }
         }
@@ -557,13 +592,21 @@ pub struct TypeCheckedModule<'a> {
 
 #[derive(Debug)]
 struct FoundSpecializationsModule<'a> {
-    module_id: ModuleId,
     ident_ids: IdentIds,
     layout_cache: LayoutCache<'a>,
     procs_base: ProcsBase<'a>,
     subs: Subs,
     module_timing: ModuleTiming,
     abilities_store: AbilitiesStore,
+}
+
+#[derive(Debug)]
+struct LateSpecializationsModule<'a> {
+    ident_ids: IdentIds,
+    subs: Subs,
+    module_timing: ModuleTiming,
+    layout_cache: LayoutCache<'a>,
+    procs_base: ProcsBase<'a>,
 }
 
 #[derive(Debug)]
@@ -662,6 +705,7 @@ enum Msg<'a> {
         ident_ids: IdentIds,
         layout_cache: LayoutCache<'a>,
         external_specializations_requested: BumpMap<ModuleId, ExternalSpecializations>,
+        procs_base: ProcsBase<'a>,
         procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
         update_mode_ids: UpdateModeIds,
         module_timing: ModuleTiming,
@@ -704,6 +748,30 @@ struct PlatformData {
     provides: Symbol,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum MakeSpecializationsPass {
+    Pass(u8),
+}
+
+impl MakeSpecializationsPass {
+    fn inc(&mut self) {
+        match self {
+            &mut Self::Pass(n) => {
+                *self = Self::Pass(
+                    n.checked_add(1)
+                        .expect("way too many specialization passes!"),
+                )
+            }
+        }
+    }
+
+    fn current_pass(&self) -> u8 {
+        match self {
+            MakeSpecializationsPass::Pass(n) => *n,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct State<'a> {
     pub root_id: ModuleId,
@@ -744,6 +812,11 @@ struct State<'a> {
     pub layout_caches: std::vec::Vec<LayoutCache<'a>>,
 
     pub render: RenderTarget,
+
+    /// All abilities across all modules.
+    pub world_abilities: WorldAbilities,
+
+    make_specializations_pass: MakeSpecializationsPass,
 
     // cached subs (used for builtin modules, could include packages in the future too)
     cached_subs: CachedSubs,
@@ -789,6 +862,8 @@ impl<'a> State<'a> {
             layout_caches: std::vec::Vec::with_capacity(number_of_workers),
             cached_subs: Arc::new(Mutex::new(cached_subs)),
             render,
+            make_specializations_pass: MakeSpecializationsPass::Pass(1),
+            world_abilities: Default::default(),
         }
     }
 }
@@ -916,7 +991,7 @@ enum BuildTask<'a> {
         layout_cache: LayoutCache<'a>,
         specializations_we_must_make: Vec<ExternalSpecializations>,
         module_timing: ModuleTiming,
-        abilities_store: AbilitiesStore,
+        world_abilities: WorldAbilities,
     },
 }
 
@@ -1158,6 +1233,13 @@ pub enum Threading {
 ///     of any requests that were added in the course of completing other requests). Now
 ///     we have a map of specializations, and everything was assembled in parallel with
 ///     no unique specialization ever getting assembled twice (meaning no wasted effort).
+///
+///     a. Note that this might mean that we have to specialize certain modules multiple times.
+///        When might this happen? Well, abilities can introduce implicit edges in the dependency
+///        graph, and even cycles. For example, suppose module Ab provides "ability1" and a function
+///        "f" that uses "ability1", and module App implements "ability1" and calls "f" with the
+///        implementing type. Then the specialization of "Ab#f" depends on the specialization of
+///        "ability1" back in the App module.
 /// 12. Now that we have our final map of specializations, we can proceed to code gen!
 ///     As long as the specializations are stored in a per-ModuleId map, we can also
 ///     parallelize this code gen. (e.g. in dev builds, building separate LLVM modules
@@ -2200,7 +2282,6 @@ fn update<'a>(
                 .extend(procs_base.module_thunks.iter().copied());
 
             let found_specializations_module = FoundSpecializationsModule {
-                module_id,
                 ident_ids,
                 layout_cache,
                 procs_base,
@@ -2224,9 +2305,10 @@ fn update<'a>(
         }
         MadeSpecializations {
             module_id,
-            mut ident_ids,
+            ident_ids,
             mut update_mode_ids,
             subs,
+            procs_base,
             procedures,
             external_specializations_requested,
             module_timing,
@@ -2241,103 +2323,217 @@ fn update<'a>(
             let _ = layout_cache;
 
             state.procedures.extend(procedures);
-            state.timings.insert(module_id, module_timing);
+            state.module_cache.late_specializations.insert(
+                module_id,
+                LateSpecializationsModule {
+                    ident_ids,
+                    module_timing,
+                    subs,
+                    layout_cache,
+                    procs_base,
+                },
+            );
 
             let work = state
                 .dependencies
                 .notify(module_id, Phase::MakeSpecializations);
 
-            if work.is_empty() && state.dependencies.solved_all() {
-                if !external_specializations_requested.is_empty()
-                    || !state
+            for (module_id, requested) in external_specializations_requested {
+                let existing = match state
+                    .module_cache
+                    .external_specializations_requested
+                    .entry(module_id)
+                {
+                    Vacant(entry) => entry.insert(vec![]),
+                    Occupied(entry) => entry.into_mut(),
+                };
+
+                existing.push(requested);
+            }
+
+            enum NextStep {
+                Done,
+                RelaunchPhase,
+                MakingInPhase,
+            }
+
+            let all_work_done = work.is_empty() && state.dependencies.solved_all();
+            let next_step = if all_work_done {
+                if state
+                    .module_cache
+                    .external_specializations_requested
+                    .is_empty()
+                {
+                    NextStep::Done
+                } else {
+                    NextStep::RelaunchPhase
+                }
+            } else {
+                NextStep::MakingInPhase
+            };
+
+            match next_step {
+                NextStep::Done => {
+                    // We are all done with specializations across all modules.
+                    // Insert post-specialization operations and report our completion.
+
+                    if !state
                         .module_cache
                         .external_specializations_requested
                         .is_empty()
-                {
-                    internal_error!(
-                        "No more work left, but external specializations left over: {:?}, {:?}",
-                        external_specializations_requested,
-                        state.module_cache.external_specializations_requested
-                    )
+                    {
+                        internal_error!(
+                            "No more work left, but external specializations left over: {:?}",
+                            state.module_cache.external_specializations_requested
+                        );
+                    }
+
+                    // Flush late-specialization module information to the top-level of the state
+                    // where it will be visible to others, since we don't need late specialization
+                    // anymore.
+                    for (
+                        module_id,
+                        LateSpecializationsModule {
+                            ident_ids,
+                            subs,
+                            module_timing,
+                            layout_cache: _,
+                            procs_base: _,
+                        },
+                    ) in state.module_cache.late_specializations.drain()
+                    {
+                        state.constrained_ident_ids.insert(module_id, ident_ids);
+                        if module_id == state.root_id {
+                            state.root_subs = Some(subs);
+                        }
+                        state.timings.insert(module_id, module_timing);
+                    }
+
+                    log!("specializations complete from {:?}", module_id);
+
+                    debug_print_ir!(state, ROC_PRINT_IR_AFTER_SPECIALIZATION);
+
+                    let ident_ids = state.constrained_ident_ids.get_mut(&module_id).unwrap();
+
+                    Proc::insert_reset_reuse_operations(
+                        arena,
+                        module_id,
+                        ident_ids,
+                        &mut update_mode_ids,
+                        &mut state.procedures,
+                    );
+
+                    debug_print_ir!(state, ROC_PRINT_IR_AFTER_RESET_REUSE);
+
+                    Proc::insert_refcount_operations(
+                        arena,
+                        module_id,
+                        ident_ids,
+                        &mut update_mode_ids,
+                        &mut state.procedures,
+                    );
+
+                    debug_print_ir!(state, ROC_PRINT_IR_AFTER_REFCOUNT);
+
+                    // This is not safe with the new non-recursive RC updates that we do for tag unions
+                    //
+                    // Proc::optimize_refcount_operations(
+                    //     arena,
+                    //     module_id,
+                    //     &mut ident_ids,
+                    //     &mut state.procedures,
+                    // );
+
+                    // use the subs of the root module;
+                    // this is used in the repl to find the type of `main`
+                    let subs = state.root_subs.clone().unwrap();
+
+                    msg_tx
+                        .send(Msg::FinishedAllSpecialization {
+                            subs,
+                            // TODO thread through mono problems
+                            exposed_to_host: state.exposed_to_host.clone(),
+                        })
+                        .map_err(|_| LoadingProblem::MsgChannelDied)?;
+
+                    Ok(state)
                 }
 
-                log!("specializations complete from {:?}", module_id);
+                NextStep::RelaunchPhase => {
+                    // We passed through the dependency graph of modules to be specialized, but
+                    // there are still specializations left over. Restart the make specializations
+                    // phase in reverse topological order.
+                    //
+                    // This happens due to abilities. In detail, consider
+                    //
+                    //   # Default module
+                    //   interface Default exposes [default, getDefault]
+                    //
+                    //   Default has default : {} -> a | a has Default
+                    //
+                    //   getDefault = \{} -> default {}
+                    //
+                    //   # App module
+                    //   app "test" provides [main] imports [Default.{default, getDefault}]
+                    //
+                    //   Foo := {}
+                    //
+                    //   default = \{} -> @Foo {}
+                    //
+                    //   main =
+                    //     f : Foo
+                    //     f = getDefault {}
+                    //     f
+                    //
+                    // The syntactic make specializations graph (based on imports) will be
+                    // App -> Default, and in a pass will build the specializations `App#main` and
+                    // `Default#getDefault for Foo`. But now notice that `Default#getDefault` will
+                    // have gained an implicit dependency on the specialized `default` for `Foo`,
+                    // `App#Foo#default`. So for abilities, the syntactic import graph is not
+                    // enough to express the entire dependency graph.
+                    //
+                    // The simplest way to resolve these leftover, possibly circular
+                    // specializations is to relaunch the make-specializations phase in the import
+                    // order until there are no more specializations left to be made. This is a bit
+                    // unfortunate in that we may look again into modules that don't need any
+                    // specializations made, but there are also some nice properties:
+                    //
+                    // - no more specializations will be made than needed
+                    // - the number of phase relaunches scales linearly with the largest number of
+                    //   "bouncing back and forth" between ability calls, which is likely to be
+                    //   small in practice
+                    // - the phases will always terminate. suppose they didn't; then there must be
+                    //   an infinite chain of calls all of which have different layouts. In Roc
+                    //   this can only be true if the calls are all mutually recursive, and
+                    //   furthermore are polymorphically recursive. But polymorphic recursion is
+                    //   illegal in Roc, will have been enforced during type inference.
 
-                debug_print_ir!(state, ROC_PRINT_IR_AFTER_SPECIALIZATION);
-
-                Proc::insert_reset_reuse_operations(
-                    arena,
-                    module_id,
-                    &mut ident_ids,
-                    &mut update_mode_ids,
-                    &mut state.procedures,
-                );
-
-                debug_print_ir!(state, ROC_PRINT_IR_AFTER_RESET_REUSE);
-
-                Proc::insert_refcount_operations(
-                    arena,
-                    module_id,
-                    &mut ident_ids,
-                    &mut update_mode_ids,
-                    &mut state.procedures,
-                );
-
-                debug_print_ir!(state, ROC_PRINT_IR_AFTER_REFCOUNT);
-
-                // This is not safe with the new non-recursive RC updates that we do for tag unions
-                //
-                //                Proc::optimize_refcount_operations(
-                //                    arena,
-                //                    module_id,
-                //                    &mut ident_ids,
-                //                    &mut state.procedures,
-                //                );
-
-                state.constrained_ident_ids.insert(module_id, ident_ids);
-
-                // use the subs of the root module;
-                // this is used in the repl to find the type of `main`
-                let subs = if module_id == state.root_id {
-                    subs
-                } else {
-                    state.root_subs.clone().unwrap()
-                };
-
-                msg_tx
-                    .send(Msg::FinishedAllSpecialization {
-                        subs,
-                        // TODO thread through mono problems
-                        exposed_to_host: state.exposed_to_host.clone(),
-                    })
-                    .map_err(|_| LoadingProblem::MsgChannelDied)?;
-
-                Ok(state)
-            } else {
-                // record the subs of the root module;
-                // this is used in the repl to find the type of `main`
-                if module_id == state.root_id {
-                    state.root_subs = Some(subs);
-                }
-
-                state.constrained_ident_ids.insert(module_id, ident_ids);
-
-                for (module_id, requested) in external_specializations_requested {
-                    let existing = match state
+                    if state
                         .module_cache
                         .external_specializations_requested
-                        .entry(module_id)
+                        .is_empty()
                     {
-                        Vacant(entry) => entry.insert(vec![]),
-                        Occupied(entry) => entry.into_mut(),
-                    };
+                        internal_error!(
+                            "No specializations left over, but we were told to loop making specializations"
+                        );
+                    }
 
-                    existing.push(requested);
+                    log!("re-launching specializations pass");
+
+                    state.make_specializations_pass.inc();
+
+                    let work = state.dependencies.reload_make_specialization_pass();
+
+                    start_tasks(arena, &mut state, work, injector, worker_listeners)?;
+
+                    Ok(state)
                 }
 
-                start_tasks(arena, &mut state, work, injector, worker_listeners)?;
+                NextStep::MakingInPhase => {
+                    start_tasks(arena, &mut state, work, injector, worker_listeners)?;
 
-                Ok(state)
+                    Ok(state)
+                }
             }
         }
         Msg::FinishedAllTypeChecking { .. } => {
@@ -4166,7 +4362,7 @@ fn make_specializations<'a>(
     specializations_we_must_make: Vec<ExternalSpecializations>,
     mut module_timing: ModuleTiming,
     target_info: TargetInfo,
-    abilities_store: AbilitiesStore,
+    world_abilities: WorldAbilities,
 ) -> Msg<'a> {
     let make_specializations_start = SystemTime::now();
     let mut update_mode_ids = UpdateModeIds::new();
@@ -4180,7 +4376,7 @@ fn make_specializations<'a>(
         update_mode_ids: &mut update_mode_ids,
         // call_specialization_counter=0 is reserved
         call_specialization_counter: 1,
-        abilities_store: &abilities_store,
+        abilities: AbilitiesView::World(world_abilities),
     };
 
     let mut procs = Procs::new_in(arena);
@@ -4205,7 +4401,7 @@ fn make_specializations<'a>(
     );
 
     let external_specializations_requested = procs.externals_we_need.clone();
-    let procedures = procs.get_specialized_procs_without_rc(&mut mono_env);
+    let (procedures, restored_procs_base) = procs.get_specialized_procs_without_rc(&mut mono_env);
 
     // Turn `Bytes.Decode.IdentId(238)` into `Bytes.Decode.238`, we rely on this in mono tests
     mono_env.home.register_debug_idents(mono_env.ident_ids);
@@ -4219,22 +4415,13 @@ fn make_specializations<'a>(
         module_id: home,
         ident_ids,
         layout_cache,
+        procs_base: restored_procs_base,
         procedures,
         update_mode_ids,
         subs,
         external_specializations_requested,
         module_timing,
     }
-}
-
-#[derive(Clone, Debug)]
-struct ProcsBase<'a> {
-    partial_procs: BumpMap<Symbol, PartialProc<'a>>,
-    module_thunks: &'a [Symbol],
-    /// A host-exposed function must be specialized; it's a seed for subsequent specializations
-    host_specializations: roc_mono::ir::HostSpecializations,
-    runtime_errors: BumpMap<Symbol, &'a str>,
-    imported_module_thunks: &'a [Symbol],
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4275,7 +4462,10 @@ fn build_pending_specializations<'a>(
         update_mode_ids: &mut update_mode_ids,
         // call_specialization_counter=0 is reserved
         call_specialization_counter: 1,
-        abilities_store: &abilities_store,
+        // NB: for getting pending specializations the module view is enough because we only need
+        // to know the types and abilities in our modules. Only for building *all* specializations
+        // do we need a global view.
+        abilities: AbilitiesView::Module(&abilities_store),
     };
 
     // Add modules' decls to Procs
@@ -4587,7 +4777,7 @@ fn run_task<'a>(
             layout_cache,
             specializations_we_must_make,
             module_timing,
-            abilities_store,
+            world_abilities,
         } => Ok(make_specializations(
             arena,
             module_id,
@@ -4598,7 +4788,7 @@ fn run_task<'a>(
             specializations_we_must_make,
             module_timing,
             target_info,
-            abilities_store,
+            world_abilities,
         )),
     }?;
 

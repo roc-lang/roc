@@ -3855,6 +3855,8 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "roc_can",
+ "roc_collections",
+ "roc_module",
  "roc_solve",
  "roc_types",
  "roc_unify",
@@ -3909,6 +3911,7 @@ dependencies = [
  "roc_constrain",
  "roc_debug_flags",
  "roc_error_macros",
+ "roc_late_solve",
  "roc_module",
  "roc_mono",
  "roc_parse",
