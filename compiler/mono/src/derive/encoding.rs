@@ -5,7 +5,7 @@ use std::iter::once;
 use bumpalo::Bump;
 
 use roc_can::abilities::AbilitiesStore;
-use roc_can::expr::{AnnotatedMark, ClosureData, Expr, Field, Recursive};
+use roc_can::expr::{AnnotatedMark, ClosureData, Expr, Field, Recursive, WhenBranch};
 use roc_can::pattern::Pattern;
 use roc_collections::SendMap;
 use roc_derive_key::encoding::FlatEncodable;
@@ -17,8 +17,9 @@ use roc_module::ident::Lowercase;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{
-    Content, ExposedTypesStorageSubs, FlatType, GetSubsSlice, LambdaSet, OptVariable, RecordFields,
-    Subs, SubsFmtContent, SubsSlice, UnionLambdas, Variable, VariableSubsSlice,
+    Content, ExhaustiveMark, ExposedTypesStorageSubs, FlatType, GetSubsSlice, LambdaSet,
+    OptVariable, RecordFields, RedundantMark, Subs, SubsFmtContent, SubsSlice, UnionLambdas,
+    UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{AliasKind, RecordField};
 
@@ -160,7 +161,32 @@ pub fn derive_to_encoder(env: &mut Env<'_>, for_var: Variable) -> Expr {
 
             to_encoder_record(env, record_var, fields)
         }
-        FlatEncodable::TagUnion(_) => todo!(),
+        FlatEncodable::TagUnion(tags) => {
+            // Generalized tag union var so we can reuse this impl between many unions:
+            // if tags = [ A arity=2, B arity=1 ], this is [ A t1 t2, B t3 ] for fresh t1, t2, t3
+            let flex_tag_labels = tags
+                .iter()
+                .copied()
+                .map(|(label, arity)| (label.clone(), arity))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|(label, arity)| {
+                    let variables_slice =
+                        VariableSubsSlice::reserve_into_subs(env.subs, arity.into());
+                    for var_index in variables_slice {
+                        env.subs[var_index] = env.subs.fresh_unnamed_flex_var();
+                    }
+                    (label, variables_slice)
+                })
+                .collect::<Vec<_>>();
+            let union_tags = UnionTags::insert_slices_into_subs(env.subs, flex_tag_labels);
+            let tag_union_var = synth_var(
+                env.subs,
+                Content::Structure(FlatType::TagUnion(union_tags, Variable::EMPTY_TAG_UNION)),
+            );
+
+            to_encoder_tag_union(env, tag_union_var, union_tags)
+        }
     }
 }
 
@@ -348,5 +374,221 @@ fn to_encoder_record(env: &mut Env<'_>, record_var: Variable, fields: RecordFiel
             Loc::at_zero(Pattern::Identifier(rcd_sym)),
         )],
         loc_body: Box::new(Loc::at_zero(encode_record_call)),
+    })
+}
+
+fn to_encoder_tag_union(env: &mut Env<'_>, tag_union_var: Variable, tags: UnionTags) -> Expr {
+    // Suppose tag = [ A t1 t2, B t3 ]. Build
+    //
+    // \tag -> when tag is
+    //     A v1 v2 -> Encode.tag "A" [ Encode.toEncoder v1, Encode.toEncoder v2 ]
+    //     B v3 -> Encode.tag "B" [ Encode.toEncoder v3 ]
+
+    let tag_sym = env.unique_symbol();
+    let whole_tag_encoders_var = env.subs.fresh_unnamed_flex_var(); // type of the Encode.tag ... calls in the branch bodies
+
+    use Expr::*;
+
+    let branches = tags
+        .iter_all()
+        .map(|(tag_name_index, tag_vars_slice_index)| {
+            // A
+            let tag_name = &env.subs[tag_name_index].clone();
+            let vars_slice = env.subs[tag_vars_slice_index];
+            // t1 t2
+            let payload_vars = env.subs.get_subs_slice(vars_slice).to_vec();
+            // v1 v2
+            let payload_syms: Vec<_> = std::iter::repeat_with(|| env.unique_symbol())
+                .take(payload_vars.len())
+                .collect();
+
+            // `A v1 v2` pattern
+            let pattern = Pattern::AppliedTag {
+                whole_var: tag_union_var,
+                tag_name: tag_name.clone(),
+                ext_var: Variable::EMPTY_TAG_UNION,
+                // (t1, v1) (t2, v2)
+                arguments: (payload_vars.iter())
+                    .zip(payload_syms.iter())
+                    .map(|(var, sym)| (*var, Loc::at_zero(Pattern::Identifier(*sym))))
+                    .collect(),
+            };
+
+            // whole type of the elements in [ Encode.toEncoder v1, Encode.toEncoder v2 ]
+            let whole_payload_encoders_var = env.subs.fresh_unnamed_flex_var();
+            // [ Encode.toEncoder v1, Encode.toEncoder v2 ]
+            let payload_to_encoders = (payload_syms.iter())
+                .zip(payload_vars.iter())
+                .map(|(&sym, &sym_var)| {
+                    // build `toEncoder v1` type
+                    // expected: val -[uls]-> Encoder fmt | fmt has EncoderFormatting
+                    let to_encoder_fn_var = env.import_encode_symbol(Symbol::ENCODE_TO_ENCODER);
+
+                    // wanted: t1 -[clos]-> t'
+                    let var_slice_of_sym_var =
+                        VariableSubsSlice::insert_into_subs(env.subs, [sym_var]); // [ t1 ]
+                    let to_encoder_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
+                    let encoder_var = env.subs.fresh_unnamed_flex_var(); // t'
+                    let this_to_encoder_fn_var = synth_var(
+                        env.subs,
+                        Content::Structure(FlatType::Func(
+                            var_slice_of_sym_var,
+                            to_encoder_clos_var,
+                            encoder_var,
+                        )),
+                    );
+
+                    //   val -[uls]->  Encoder fmt | fmt has EncoderFormatting
+                    // ~ t1  -[clos]-> t'
+                    env.unify(to_encoder_fn_var, this_to_encoder_fn_var);
+
+                    // toEncoder : t1 -[clos]-> Encoder fmt | fmt has EncoderFormatting
+                    let to_encoder_fn = Box::new((
+                        this_to_encoder_fn_var,
+                        Loc::at_zero(Var(Symbol::ENCODE_TO_ENCODER)),
+                        to_encoder_clos_var,
+                        encoder_var,
+                    ));
+
+                    // toEncoder rcd.a
+                    let to_encoder_call = Call(
+                        to_encoder_fn,
+                        vec![(sym_var, Loc::at_zero(Var(sym)))],
+                        CalledVia::Space,
+                    );
+
+                    // NOTE: must be done to unify the lambda sets under `encoder_var`
+                    env.unify(encoder_var, whole_payload_encoders_var);
+
+                    Loc::at_zero(to_encoder_call)
+                })
+                .collect();
+
+            // typeof [ Encode.toEncoder v1, Encode.toEncoder v2 ]
+            let whole_encoders_var_slice =
+                VariableSubsSlice::insert_into_subs(env.subs, [whole_payload_encoders_var]);
+            let payload_encoders_list_var = synth_var(
+                env.subs,
+                Content::Structure(FlatType::Apply(Symbol::LIST_LIST, whole_encoders_var_slice)),
+            );
+
+            // [ Encode.toEncoder v1, Encode.toEncoder v2 ]
+            let payload_encoders_list = List {
+                elem_var: whole_payload_encoders_var,
+                loc_elems: payload_to_encoders,
+            };
+
+            // build `Encode.tag "A" [ ... ]` type
+            // expected: Str, List (Encoder fmt) -[uls]-> Encoder fmt | fmt has EncoderFormatting
+            let encode_tag_fn_var = env.import_encode_symbol(Symbol::ENCODE_TAG);
+
+            // wanted: Str, List whole_encoders_var -[clos]-> t'
+            // wanted: Str, List whole_encoders_var
+            let this_encode_tag_args_var_slice = VariableSubsSlice::insert_into_subs(
+                env.subs,
+                [Variable::STR, payload_encoders_list_var],
+            );
+            let this_encode_tag_clos_var = env.subs.fresh_unnamed_flex_var(); // -[clos]->
+            let this_encoder_var = env.subs.fresh_unnamed_flex_var(); // t'
+            let this_encode_tag_fn_var = synth_var(
+                env.subs,
+                Content::Structure(FlatType::Func(
+                    this_encode_tag_args_var_slice,
+                    this_encode_tag_clos_var,
+                    this_encoder_var,
+                )),
+            );
+
+            //   Str, List (Encoder fmt)      -[uls]->  Encoder fmt | fmt has EncoderFormatting
+            // ~ Str, List whole_encoders_var -[clos]-> t'
+            env.unify(encode_tag_fn_var, this_encode_tag_fn_var);
+
+            // Encode.tag : Str, List whole_encoders_var -[clos]-> Encoder fmt | fmt has EncoderFormatting
+            let encode_tag_fn = Box::new((
+                this_encode_tag_fn_var,
+                Loc::at_zero(Var(Symbol::ENCODE_TO_ENCODER)),
+                this_encode_tag_clos_var,
+                this_encoder_var,
+            ));
+
+            // Encode.tag "A" [ Encode.toEncoder v1, Encode.toEncoder v2 ]
+            let encode_tag_call = Call(
+                encode_tag_fn,
+                vec![
+                    // (Str, "A")
+                    (Variable::STR, Loc::at_zero(Str(tag_name.0.as_str().into()))),
+                    // (List (Encoder fmt), [ Encode.toEncoder v1, Encode.toEncoder v2 ])
+                    (
+                        payload_encoders_list_var,
+                        Loc::at_zero(payload_encoders_list),
+                    ),
+                ],
+                CalledVia::Space,
+            );
+
+            // NOTE: must be done to unify the lambda sets under `encoder_var`
+            // Encode.tag "A" [ Encode.toEncoder v1, Encode.toEncoder v2 ] ~ whole_encoders
+            env.unify(this_encoder_var, whole_tag_encoders_var);
+
+            WhenBranch {
+                patterns: vec![Loc::at_zero(pattern)],
+                value: Loc::at_zero(encode_tag_call),
+                guard: None,
+                redundant: RedundantMark::known_non_redundant(),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    // when tag is
+    //     A v1 v2 -> Encode.tag "A" [ Encode.toEncoder v1, Encode.toEncoder v2 ]
+    //     B v3 -> Encode.tag "B" [ Encode.toEncoder v3 ]
+    let when_branches = When {
+        loc_cond: Box::new(Loc::at_zero(Var(tag_sym))),
+        cond_var: tag_union_var,
+        expr_var: whole_tag_encoders_var,
+        region: Region::zero(),
+        branches,
+        branches_cond_var: tag_union_var,
+        exhaustive: ExhaustiveMark::known_exhaustive(),
+    };
+
+    let fn_name = env.unique_symbol();
+    let fn_name_labels = UnionLambdas::insert_into_subs(env.subs, once((fn_name, vec![])));
+    // -[fn_name]->
+    let fn_clos_var = synth_var(
+        env.subs,
+        Content::LambdaSet(LambdaSet {
+            solved: fn_name_labels,
+            recursion_var: OptVariable::NONE,
+            unspecialized: SubsSlice::default(),
+        }),
+    );
+    // tag_union_var -[fn_name]-> whole_tag_encoders_var
+    let tag_union_var_slice = SubsSlice::insert_into_subs(env.subs, once(tag_union_var));
+    let fn_var = synth_var(
+        env.subs,
+        Content::Structure(FlatType::Func(
+            tag_union_var_slice,
+            fn_clos_var,
+            whole_tag_encoders_var,
+        )),
+    );
+
+    // \tag -> when tag is
+    //     A v1 v2 -> Encode.tag "A" [ Encode.toEncoder v1, Encode.toEncoder v2 ]
+    //     B v3 -> Encode.tag "B" [ Encode.toEncoder v3 ]
+    Closure(ClosureData {
+        function_type: fn_var,
+        closure_type: fn_clos_var,
+        return_type: whole_tag_encoders_var,
+        name: fn_name,
+        captured_symbols: vec![],
+        recursive: Recursive::NotRecursive,
+        arguments: vec![(
+            tag_union_var,
+            AnnotatedMark::known_exhaustive(),
+            Loc::at_zero(Pattern::Identifier(tag_sym)),
+        )],
+        loc_body: Box::new(Loc::at_zero(when_branches)),
     })
 }
