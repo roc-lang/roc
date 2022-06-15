@@ -197,7 +197,6 @@ pub enum Expr<'a> {
     // Pattern Matching
     Closure(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>),
     /// Multiple defs in a row
-    // Defs(&'a [&'a Loc<Def<'a>>], &'a Loc<Expr<'a>>),
     Defs(&'a Defs<'a>, &'a Loc<Expr<'a>>),
     Backpassing(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
     Expect(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),

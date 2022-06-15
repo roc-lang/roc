@@ -26,8 +26,6 @@ impl<'a> Formattable for Defs<'a> {
             let spaces_before = &self.spaces[self.space_before[index].indices()];
             let spaces_after = &self.spaces[self.space_after[index].indices()];
 
-            dbg!(&spaces_before, &spaces_after);
-
             fmt_spaces(buf, spaces_before.iter(), indent);
 
             match def {
@@ -363,7 +361,6 @@ pub fn fmt_type_def<'a, 'buf>(buf: &mut Buf<'buf>, def: &roc_parse::ast::TypeDef
 }
 
 pub fn fmt_defs<'a, 'buf>(buf: &mut Buf<'buf>, defs: &Defs<'a>, indent: u16) {
-    dbg!(&defs);
     defs.format(buf, indent);
 }
 
