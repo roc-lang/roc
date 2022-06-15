@@ -22,7 +22,7 @@ pub enum HeaderFor<'a> {
     Builtin {
         generates_with: &'a [Symbol],
     },
-    PkgConfig {
+    Platform {
         /// usually `pf`
         config_shorthand: &'a str,
         /// the type scheme of the main function (required by the platform)
@@ -80,7 +80,7 @@ pub enum ModuleNameEnum<'a> {
     App(StrLiteral<'a>),
     Interface(ModuleName<'a>),
     Hosted(ModuleName<'a>),
-    PkgConfig,
+    Platform,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]

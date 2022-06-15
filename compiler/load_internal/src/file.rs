@@ -736,7 +736,7 @@ enum PlatformPath<'a> {
     Valid(To<'a>),
     RootIsInterface,
     RootIsHosted,
-    RootIsPkgConfig,
+    RootIsPlatformModule,
 }
 
 #[derive(Debug)]
@@ -1886,7 +1886,7 @@ fn update<'a>(
                     shorthands.insert(shorthand, *package_name);
                 }
 
-                if let PkgConfig {
+                if let Platform {
                     config_shorthand, ..
                 } = header.header_for
                 {
@@ -1899,7 +1899,7 @@ fn update<'a>(
                     debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                     state.platform_path = PlatformPath::Valid(to_platform);
                 }
-                PkgConfig { main_for_host, .. } => {
+                Platform { main_for_host, .. } => {
                     debug_assert!(matches!(state.platform_data, None));
 
                     state.platform_data = Some(PlatformData {
@@ -1909,7 +1909,7 @@ fn update<'a>(
 
                     if header.is_root_module {
                         debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
-                        state.platform_path = PlatformPath::RootIsPkgConfig;
+                        state.platform_path = PlatformPath::RootIsPlatformModule;
                     }
                 }
                 Builtin { .. } | Interface => {
@@ -2084,7 +2084,7 @@ fn update<'a>(
                         todo!("TODO gracefully handle a malformed string literal after `app` keyword.");
                     }
                 },
-                ModuleNameEnum::PkgConfig
+                ModuleNameEnum::Platform
                 | ModuleNameEnum::Interface(_)
                 | ModuleNameEnum::Hosted(_) => {}
             }
@@ -2701,8 +2701,8 @@ fn finish(
     }
 }
 
-/// Load a PkgConfig.roc file
-fn load_pkg_config<'a>(
+/// Load a `platform` module
+fn load_platform_module<'a>(
     arena: &'a Bump,
     src_dir: &Path,
     shorthand: &'a str,
@@ -3116,12 +3116,12 @@ fn parse_header<'a>(
                         ..
                     }) = opt_base_package
                     {
-                        // check whether we can find a Package-Config.roc file
+                        // check whether we can find a `platform` module file
                         let mut platform_module_path = app_file_dir;
                         platform_module_path.push(package_name.0);
 
                         if platform_module_path.as_path().exists() {
-                            let load_pkg_config_msg = load_pkg_config(
+                            let load_platform_module_msg = load_platform_module(
                                 arena,
                                 &platform_module_path,
                                 shorthand,
@@ -3132,7 +3132,7 @@ fn parse_header<'a>(
 
                             Ok((
                                 module_id,
-                                Msg::Many(vec![app_module_header_msg, load_pkg_config_msg]),
+                                Msg::Many(vec![app_module_header_msg, load_platform_module_msg]),
                             ))
                         } else {
                             Err(LoadingProblem::FileProblem {
@@ -3263,7 +3263,7 @@ fn send_header<'a>(
     } = info;
 
     let declared_name: ModuleName = match &loc_name.value {
-        PkgConfig => unreachable!(),
+        Platform => unreachable!(),
         App(_) => ModuleName::APP.into(),
         Interface(module_name) | Hosted(module_name) => {
             // TODO check to see if module_name is consistent with filename.
@@ -3634,7 +3634,7 @@ fn send_header_two<'a>(
     // We always need to send these, even if deps is empty,
     // because the coordinator thread needs to receive this message
     // to decrement its "pending" count.
-    let module_name = ModuleNameEnum::PkgConfig;
+    let module_name = ModuleNameEnum::Platform;
 
     let main_for_host = {
         let ident_id = ident_ids.get_or_insert(provides[0].value.as_str());
@@ -3642,7 +3642,7 @@ fn send_header_two<'a>(
         Symbol::new(home, ident_id)
     };
 
-    let extra = HeaderFor::PkgConfig {
+    let extra = HeaderFor::Platform {
         config_shorthand: shorthand,
         platform_main_type: requires[0].value,
         main_for_host,
@@ -4155,7 +4155,7 @@ fn canonicalize_and_constrain<'a>(
     // Generate documentation information
     // TODO: store timing information?
     let module_docs = match module_name {
-        ModuleNameEnum::PkgConfig => None,
+        ModuleNameEnum::Platform => None,
         ModuleNameEnum::App(_) => None,
         ModuleNameEnum::Interface(name) | ModuleNameEnum::Hosted(name) => {
             let docs = crate::docs::generate_module_docs(
@@ -4974,7 +4974,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
                     severity: Severity::RuntimeError,
                 }
             }
-            RootIsPkgConfig => {
+            RootIsPlatformModule => {
                 let doc = alloc.stack([
                                 alloc.reflow(r"The input file is a package config file, but only app modules can be ran."),
                                 alloc.concat([

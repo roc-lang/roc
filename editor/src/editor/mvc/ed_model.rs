@@ -311,11 +311,11 @@ pub mod test_ed_model {
 
         let platform_dir = temp_dir.path().join(PLATFORM_NAME);
         fs::create_dir(platform_dir.clone()).expect("Failed to create platform directory");
-        let package_config_path = platform_dir.join("Package-Config.roc");
-        let mut package_config_file =
-            File::create(package_config_path).expect("Failed to create Package-Config.roc");
-        writeln!(package_config_file, "{}", PLATFORM_STR)
-            .expect("Failed to write to Package-Config.roc");
+        let platform_module_path = platform_dir.join("platform.roc");
+        let mut platform_module_file =
+            File::create(platform_module_path).expect("Failed to create platform.roc");
+        writeln!(platform_module_file, "{}", PLATFORM_STR)
+            .expect("Failed to write to platform.roc");
 
         let temp_file_path_buf =
             PathBuf::from([Uuid::new_v4().to_string(), ".roc".to_string()].join(""));
