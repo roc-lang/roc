@@ -351,28 +351,27 @@ impl<'a> WasmModule<'a> {
         // Loop variables for the main loop below
         let capacity = host_fn_max as usize + self.code.code_builders.len();
         let mut live_flags = BitVec::repeat(false, capacity);
-        let mut next_pass_fns = Vec::with_capacity_in(capacity, arena);
-        let mut current_pass_fns = Vec::with_capacity_in(capacity, arena);
+        let mut next_pass_fns = BitVec::repeat(false, capacity);
+        let mut current_pass_fns = BitVec::<usize>::repeat(false, capacity);
 
         // Start with everything called from Roc and everything exported to JS
         // Also include everything that can be indirectly called (crude, but good enough!)
-        current_pass_fns.extend(called_host_fns.iter().copied().chain(exported_fns));
+        for index in called_host_fns.iter().copied().chain(exported_fns) {
+            current_pass_fns.set(index as usize, true);
+        }
 
-        while !current_pass_fns.is_empty() {
-            current_pass_fns.sort_unstable();
-            current_pass_fns.dedup();
-
+        while current_pass_fns.count_ones() > 0 {
             // For each live function in the current pass
-            for fn_index in current_pass_fns.iter().copied() {
+            for fn_index in current_pass_fns.iter_ones() {
                 live_flags.set(fn_index as usize, true);
 
                 // Skip JS imports and Roc functions
-                if fn_index < host_fn_min || fn_index >= host_fn_max {
+                if fn_index < host_fn_min as usize || fn_index >= host_fn_max as usize {
                     continue;
                 }
 
                 // Find where the function body is
-                let offset_index = (fn_index - host_fn_min) as usize;
+                let offset_index = fn_index - host_fn_min as usize;
                 let code_start = self.code.preloaded_offsets[offset_index];
                 let code_end = self.code.preloaded_offsets[offset_index + 1];
 
@@ -384,7 +383,7 @@ impl<'a> WasmModule<'a> {
 
                         // If it's not already marked live, include it in the next pass
                         if !live_flags[called_fn_index as usize] {
-                            next_pass_fns.push(called_fn_index);
+                            next_pass_fns.set(called_fn_index as usize, true);
                         }
                     }
                 }
@@ -400,15 +399,15 @@ impl<'a> WasmModule<'a> {
                         // Mark them all as live
                         for f in potential_callees {
                             if !live_flags[f as usize] {
-                                next_pass_fns.push(f);
+                                next_pass_fns.set(f as usize, true);
                             }
                         }
                     }
                 }
             }
 
-            current_pass_fns.clear();
             std::mem::swap(&mut current_pass_fns, &mut next_pass_fns);
+            next_pass_fns.fill(false);
         }
 
         live_flags
