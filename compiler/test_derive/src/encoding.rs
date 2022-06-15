@@ -1,4 +1,8 @@
 #![cfg(test)]
+// Even with #[allow(non_snake_case)] on individual idents, rust-analyzer issues diagnostics.
+// See https://github.com/rust-lang/rust-analyzer/issues/6541.
+// For the `v!` macro we use uppercase variables when constructing tag unions.
+#![allow(non_snake_case)]
 
 use std::{
     hash::{BuildHasher, Hash, Hasher},
@@ -328,7 +332,6 @@ macro_rules! test_hash_eq {
     ($($name:ident: $synth1:expr, $synth2:expr)*) => {$(
         #[test]
         fn $name() {
-            #![allow(non_snake_case)]
             check_hash(true, $synth1, $synth2)
         }
     )*};
@@ -338,7 +341,6 @@ macro_rules! test_hash_neq {
     ($($name:ident: $synth1:expr, $synth2:expr)*) => {$(
         #[test]
         fn $name() {
-            #![allow(non_snake_case)]
             check_hash(false, $synth1, $synth2)
         }
     )*};
@@ -474,6 +476,34 @@ fn two_field_record() {
                 { value: (Encode.toEncoder (Test.0).a), key: "a", },
                 { value: (Encode.toEncoder (Test.0).b), key: "b", },
               ])
+            "#
+        ),
+    )
+}
+
+#[test]
+#[ignore = "NOTE: this would never actually happen, because [] is uninhabited, and hence toEncoder can never be called with a value of []!
+Rightfully it induces broken assertions in other parts of the compiler, so we ignore it."]
+fn empty_tag_union() {
+    derive_test(
+        v!(EMPTY_TAG_UNION),
+        "[] -> Encoder fmt | fmt has EncoderFormatting",
+        indoc!(
+            r#"
+            \Test.0 -> when Test.0 is
+            "#
+        ),
+    )
+}
+
+#[test]
+fn tag_one_label_zero_args() {
+    derive_test(
+        v!([A]),
+        "[ A ] -> Encoder fmt | fmt has EncoderFormatting",
+        indoc!(
+            r#"
+            \Test.0 -> when Test.0 is (A) -> (Encode.toEncoder "A" [ ])
             "#
         ),
     )
