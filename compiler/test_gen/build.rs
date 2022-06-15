@@ -1,5 +1,6 @@
 use roc_builtins::bitcode;
 use std::env;
+use std::fs;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -7,14 +8,41 @@ use std::process::Command;
 const PLATFORM_FILENAME: &str = "wasm_test_platform";
 const OUT_DIR_VAR: &str = "TEST_GEN_OUT";
 
+const LINKING_TEST_HOST_SOURCE: &str = "src/helpers/wasm_linking_test_host.zig";
+const LINKING_TEST_HOST_TARGET: &str = "src/helpers/wasm_linking_test_host.wasm";
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     if feature_is_enabled("gen-wasm") {
-        build_wasm();
+        build_wasm_test_host();
+        build_wasm_linking_test_host();
     }
 }
 
-fn build_wasm() {
+fn build_wasm_linking_test_host() {
+    if Path::new(LINKING_TEST_HOST_TARGET).exists() {
+        fs::remove_file(LINKING_TEST_HOST_TARGET).unwrap();
+    }
+
+    let args = [
+        "build-obj",
+        "-target",
+        "wasm32-freestanding-musl",
+        LINKING_TEST_HOST_SOURCE,
+        &format!("-femit-bin={}", LINKING_TEST_HOST_TARGET),
+    ];
+
+    // println!("zig {}", args.join(" "));
+
+    Command::new("zig")
+        .args(args)
+        .output()
+        .expect("failed to compile host");
+
+    println!("Built linking test host at {}", LINKING_TEST_HOST_TARGET);
+}
+
+fn build_wasm_test_host() {
     let source_path = format!("src/helpers/{}.c", PLATFORM_FILENAME);
     println!("cargo:rerun-if-changed={}", source_path);
 

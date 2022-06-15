@@ -3,7 +3,6 @@
 use bumpalo::Bump;
 use roc_gen_wasm::Env;
 use std::fs;
-use std::process::Command;
 
 use roc_builtins::bitcode::IntWidth;
 use roc_collections::{MutMap, MutSet};
@@ -19,28 +18,7 @@ use roc_mono::ir::{
 };
 use roc_mono::layout::{Builtin, Layout};
 
-const TEST_HOST_SOURCE: &str = "src/helpers/wasm_linking_test_host.zig";
-const TEST_HOST_TARGET: &str = "src/helpers/wasm_linking_test_host.wasm";
-
-fn build_host() -> std::vec::Vec<u8> {
-    let args = [
-        "build-obj",
-        "-target",
-        "wasm32-freestanding-musl",
-        TEST_HOST_SOURCE,
-        &format!("-femit-bin={}", TEST_HOST_TARGET),
-    ];
-
-    // println!("zig {}", args.join(" "));
-
-    Command::new("zig")
-        .args(args)
-        .output()
-        .expect("failed to compile host");
-
-    println!("Built linking test host at {}", TEST_HOST_TARGET);
-    fs::read(TEST_HOST_TARGET).unwrap()
-}
+const LINKING_TEST_HOST_TARGET: &str = "src/helpers/wasm_linking_test_host.wasm";
 
 fn create_symbol(home: ModuleId, ident_ids: &mut IdentIds, debug_name: &str) -> Symbol {
     let ident_id = ident_ids.add_str(debug_name);
@@ -57,7 +35,7 @@ fn build_app_mono<'a>(
     let int_layout = Layout::Builtin(Builtin::Int(IntWidth::I32));
     let int_layout_ref = arena.alloc(int_layout);
 
-    let proc_name = create_symbol(home, ident_ids, "proc_name");
+    let app_proc = create_symbol(home, ident_ids, "app_proc");
     let js_call_result = create_symbol(home, ident_ids, "js_call_result");
     let host_call_result = create_symbol(home, ident_ids, "host_call_result");
     let return_value = create_symbol(home, ident_ids, "return_value");
@@ -104,7 +82,7 @@ fn build_app_mono<'a>(
     );
 
     let proc = Proc {
-        name: proc_name,
+        name: app_proc,
         args: arena.alloc([(int_layout, Symbol::ARG_1)]),
         body,
         closure_data_layout: None,
@@ -120,9 +98,9 @@ fn build_app_mono<'a>(
     };
 
     let mut app = MutMap::default();
-    app.insert((proc_name, proc_layout), proc);
+    app.insert((app_proc, proc_layout), proc);
 
-    (proc_name, app)
+    (app_proc, app)
 }
 
 struct BackendInputs<'a> {
@@ -135,7 +113,7 @@ struct BackendInputs<'a> {
 impl<'a> BackendInputs<'a> {
     fn new(arena: &'a Bump) -> Self {
         // Compile the host from an external source file
-        let host_bytes = build_host();
+        let host_bytes = fs::read(LINKING_TEST_HOST_TARGET).unwrap();
         let host_module: WasmModule = roc_gen_wasm::parse_host(arena, &host_bytes).unwrap();
 
         // Identifier stuff to build the mono IR
@@ -196,6 +174,21 @@ fn wasmer_import(x: i32) -> i32 {
     x + 100
 }
 
+fn get_host_result(instance: &wasmer::Instance) -> i32 {
+    let memory = instance
+        .exports
+        .get_memory(roc_gen_wasm::MEMORY_NAME)
+        .unwrap();
+    let memory_bytes = unsafe { memory.data_unchecked() };
+
+    // The Wasm Global tells us the memory location of the global value
+    let global = instance.exports.get_global("host_result").unwrap();
+    let global_addr = global.get().unwrap_i32() as usize;
+    let mut global_bytes = [0; 4];
+    global_bytes.copy_from_slice(&memory_bytes[global_addr..][..4]);
+    i32::from_le_bytes(global_bytes)
+}
+
 #[test]
 fn test_linking_without_dce() {
     let arena = Bump::new();
@@ -230,7 +223,7 @@ fn test_linking_without_dce() {
     final_module.serialize(&mut buffer);
 
     if std::env::var("DEBUG_WASM").is_ok() {
-        fs::write("tests/without_dce.wasm", &buffer).unwrap();
+        fs::write("src/helpers/without_dce.wasm", &buffer).unwrap();
     }
 
     let final_import_names = Vec::from_iter(final_module.import.imports.iter().map(|i| i.name));
@@ -250,6 +243,8 @@ fn test_linking_without_dce() {
     let instance = load_bytes_into_runtime(&buffer);
     let start = instance.exports.get_function("_start").unwrap();
     start.call(&[]).unwrap();
+    let host_result = get_host_result(&instance);
+    assert_eq!(host_result, 226);
 }
 
 #[test]
@@ -289,7 +284,7 @@ fn test_linking_with_dce() {
     let mut buffer = Vec::with_capacity(final_module.size());
     final_module.serialize(&mut buffer);
     if std::env::var("DEBUG_WASM").is_ok() {
-        fs::write("tests/with_dce.wasm", &buffer).unwrap();
+        fs::write("src/helpers/with_dce.wasm", &buffer).unwrap();
     }
 
     let final_import_names = Vec::from_iter(final_module.import.imports.iter().map(|i| i.name));
@@ -319,4 +314,7 @@ fn test_linking_with_dce() {
     let instance = load_bytes_into_runtime(&buffer);
     let start = instance.exports.get_function("_start").unwrap();
     start.call(&[]).unwrap();
+
+    let host_result = get_host_result(&instance);
+    assert_eq!(host_result, 226);
 }
