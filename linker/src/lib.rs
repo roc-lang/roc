@@ -340,7 +340,7 @@ fn preprocess_impl(
         // remove potentially trailing "@version".
         let name = sym.name().unwrap().split('@').next().unwrap().to_string();
 
-        // special exceptions for memcpy and memset.
+        // special exceptions for memcpy, memset, etc.
         match name.as_str() {
             "roc_memcpy" => md
                 .roc_symbol_vaddresses
