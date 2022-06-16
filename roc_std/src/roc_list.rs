@@ -471,43 +471,21 @@ where
     }
 }
 
+impl<'a, T> IntoIterator for &'a RocList<T> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_slice().iter()
+    }
+}
+
 impl<T> IntoIterator for RocList<T> {
     type Item = T;
     type IntoIter = IntoIter<T>;
 
     fn into_iter(self) -> Self::IntoIter {
         IntoIter { list: self, idx: 0 }
-    }
-}
-
-impl<'a, T> IntoIterator for &'a RocList<T> {
-    type Item = &'a T;
-    type IntoIter = Iter<'a, T>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        Iter { list: self, idx: 0 }
-    }
-}
-
-pub struct Iter<'a, T> {
-    list: &'a RocList<T>,
-    idx: usize,
-}
-
-impl<'a, T> Iterator for Iter<'a, T> {
-    type Item = &'a T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.list.len() <= self.idx {
-            return None;
-        }
-
-        let elements = self.list.elements?;
-        let element_ptr = unsafe { elements.as_ptr().add(self.idx) };
-        self.idx += 1;
-
-        // Return the element.
-        Some(unsafe { &*element_ptr })
     }
 }
 
