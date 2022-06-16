@@ -431,7 +431,7 @@ fn empty_record() {
         "{} -> Encoder fmt | fmt has EncoderFormatting",
         indoc!(
             r#"
-            \Test.0 -> (Encode.record [ ])
+            \Test.0 -> Encode.record []
             "#
         ),
     )
@@ -444,7 +444,7 @@ fn zero_field_record() {
         "{} -> Encoder fmt | fmt has EncoderFormatting",
         indoc!(
             r#"
-            \Test.0 -> (Encode.record [ ])
+            \Test.0 -> Encode.record []
             "#
         ),
     )
@@ -457,8 +457,7 @@ fn one_field_record() {
         "{ a : val } -> Encoder fmt | fmt has EncoderFormatting, val has Encoding",
         indoc!(
             r#"
-            \Test.0 ->
-              (Encode.record [ { value: (Encode.toEncoder (Test.0).a), key: "a", }, ])
+            \Test.0 -> Encode.record [{ value: Encode.toEncoder Test.0.a, key: "a", }]
             "#
         ),
     )
@@ -472,10 +471,10 @@ fn two_field_record() {
         indoc!(
             r#"
             \Test.0 ->
-              (Encode.record [
-                { value: (Encode.toEncoder (Test.0).a), key: "a", },
-                { value: (Encode.toEncoder (Test.0).b), key: "b", },
-              ])
+              Encode.record [
+                { value: Encode.toEncoder Test.0.a, key: "a", },
+                { value: Encode.toEncoder Test.0.b, key: "b", },
+              ]
             "#
         ),
     )
@@ -503,7 +502,7 @@ fn tag_one_label_zero_args() {
         "[A] -> Encoder fmt | fmt has EncoderFormatting",
         indoc!(
             r#"
-            \Test.0 -> when Test.0 is (A) -> (Encode.tag "A" [ ])
+            \Test.0 -> when Test.0 is A -> Encode.tag "A" []
             "#
         ),
     )
@@ -518,10 +517,8 @@ fn tag_one_label_two_args() {
             r#"
             \Test.0 ->
               when Test.0 is
-                  (ATest.1 Test.2) -> (Encode.tag "A" [
-                      (Encode.toEncoder Test.1),
-                      (Encode.toEncoder Test.2),
-                    ])
+                A Test.1 Test.2 ->
+                  Encode.tag "A" [Encode.toEncoder Test.1, Encode.toEncoder Test.2]
             "#
         ),
     )
@@ -530,17 +527,19 @@ fn tag_one_label_two_args() {
 #[test]
 fn tag_two_labels() {
     derive_test(
-        v!([A v!(U8) v!(STR), B v!(STR)]),
-        "[A val a, B b] -> Encoder fmt | a has Encoding, b has Encoding, fmt has EncoderFormatting, val has Encoding",
+        v!([A v!(U8) v!(STR) v!(U16), B v!(STR)]),
+        "[A val a b, B c] -> Encoder fmt | a has Encoding, b has Encoding, c has Encoding, fmt has EncoderFormatting, val has Encoding",
         indoc!(
             r#"
             \Test.0 ->
               when Test.0 is
-                  (ATest.1 Test.2) -> (Encode.tag "A" [
-                      (Encode.toEncoder Test.1),
-                      (Encode.toEncoder Test.2),
-                    ])
-                  (BTest.3) -> (Encode.tag "B" [ (Encode.toEncoder Test.3), ])
+                A Test.1 Test.2 Test.3 ->
+                  Encode.tag "A" [
+                    Encode.toEncoder Test.1,
+                    Encode.toEncoder Test.2,
+                    Encode.toEncoder Test.3,
+                  ]
+                B Test.4 -> Encode.tag "B" [Encode.toEncoder Test.4]
             "#
         ),
     )
