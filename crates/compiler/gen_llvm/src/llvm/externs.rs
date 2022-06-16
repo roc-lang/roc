@@ -125,6 +125,7 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
                 let fn_val = module.get_function("roc_dealloc").unwrap();
                 let mut params = fn_val.get_param_iter();
                 let ptr_arg = params.next().unwrap();
+                let _size_arg = params.next().unwrap();
                 let _alignment_arg = params.next().unwrap();
 
                 debug_assert!(params.next().is_none());
