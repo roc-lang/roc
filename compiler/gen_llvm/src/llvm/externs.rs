@@ -47,43 +47,41 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
         }
     }
 
-    //DISABLED FOR NOW - uncomment to restore, if and when it's used in builtins again
-    // // roc_memcpy
-    // {
-    //     // The type of this function (but not the implementation) should have
-    //     // already been defined by the builtins, which rely on it.
-    //     let fn_val = module.get_function("roc_memcpy").unwrap();
-    //     let mut params = fn_val.get_param_iter();
-    //     let dest_arg = params.next().unwrap();
-    //     let dest_alignment = 1;
-    //     let src_arg = params.next().unwrap();
-    //     let src_alignment = 1;
-    //     let bytes_arg = params.next().unwrap();
+    // roc_memcpy
+    if let Some(fn_val) = module.get_function("roc_memcpy") {
+        // The type of this function (but not the implementation) should have
+        // already been defined by the builtins, which rely on it.
+        let mut params = fn_val.get_param_iter();
+        let dest_arg = params.next().unwrap();
+        let dest_alignment = 1;
+        let src_arg = params.next().unwrap();
+        let src_alignment = 1;
+        let bytes_arg = params.next().unwrap();
 
-    //     debug_assert!(params.next().is_none());
+        debug_assert!(params.next().is_none());
 
-    //     // Add a basic block for the entry point
-    //     let entry = ctx.append_basic_block(fn_val, "entry");
+        // Add a basic block for the entry point
+        let entry = ctx.append_basic_block(fn_val, "entry");
 
-    //     builder.position_at_end(entry);
+        builder.position_at_end(entry);
 
-    //     // Call libc memcpy()
-    //     let _retval = builder
-    //         .build_memcpy(
-    //             dest_arg.into_pointer_value(),
-    //             dest_alignment,
-    //             src_arg.into_pointer_value(),
-    //             src_alignment,
-    //             bytes_arg.into_int_value(),
-    //         )
-    //         .unwrap();
+        // Call libc memcpy()
+        let _retval = builder
+            .build_memcpy(
+                dest_arg.into_pointer_value(),
+                dest_alignment,
+                src_arg.into_pointer_value(),
+                src_alignment,
+                bytes_arg.into_int_value(),
+            )
+            .unwrap();
 
-    //     builder.build_return(None);
+        builder.build_return(None);
 
-    //     if cfg!(debug_assertions) {
-    //         crate::llvm::build::verify_fn(fn_val);
-    //     }
-    // }
+        if cfg!(debug_assertions) {
+            crate::llvm::build::verify_fn(fn_val);
+        }
+    }
 
     // roc_realloc
     {
