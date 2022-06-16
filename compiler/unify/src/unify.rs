@@ -528,7 +528,6 @@ fn unify_two_aliases(
 
         outcome
     } else {
-        dbg!(args.len(), other_args.len());
         mismatch!("{:?}", _symbol)
     }
 }

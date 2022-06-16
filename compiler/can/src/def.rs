@@ -250,8 +250,8 @@ impl Declaration {
                 &cycles.last().unwrap().expr_region,
             ),
             Declaration::Expects(expects) => Region::span_across(
-                &expects.regions.first().unwrap(),
-                &expects.regions.last().unwrap(),
+                expects.regions.first().unwrap(),
+                expects.regions.last().unwrap(),
             ),
         }
     }
@@ -1170,7 +1170,9 @@ pub(crate) fn sort_can_defs(
         }
     }
 
-    declarations.push(Declaration::Expects(expects));
+    if !expects.conditions.is_empty() {
+        declarations.push(Declaration::Expects(expects));
+    }
 
     (declarations, output)
 }
@@ -1627,9 +1629,9 @@ fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Loc<Expr> {
             // Builtins should only be added to top-level decls, not to let-exprs!
             unreachable!()
         }
-        Declaration::Expects(_) => {
+        Declaration::Expects(expects) => {
             // Expects should only be added to top-level decls, not to let-exprs!
-            unreachable!()
+            unreachable!("{:?}", &expects)
         }
     }
 }
