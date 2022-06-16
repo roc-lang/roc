@@ -506,7 +506,7 @@ fn to_encoder_tag_union(env: &mut Env<'_>, tag_union_var: Variable, tags: UnionT
             // Encode.tag : Str, List whole_encoders_var -[clos]-> Encoder fmt | fmt has EncoderFormatting
             let encode_tag_fn = Box::new((
                 this_encode_tag_fn_var,
-                Loc::at_zero(Var(Symbol::ENCODE_TO_ENCODER)),
+                Loc::at_zero(Var(Symbol::ENCODE_TAG)),
                 this_encode_tag_clos_var,
                 this_encoder_var,
             ));

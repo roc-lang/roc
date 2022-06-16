@@ -500,10 +500,47 @@ fn empty_tag_union() {
 fn tag_one_label_zero_args() {
     derive_test(
         v!([A]),
-        "[ A ] -> Encoder fmt | fmt has EncoderFormatting",
+        "[A] -> Encoder fmt | fmt has EncoderFormatting",
         indoc!(
             r#"
-            \Test.0 -> when Test.0 is (A) -> (Encode.toEncoder "A" [ ])
+            \Test.0 -> when Test.0 is (A) -> (Encode.tag "A" [ ])
+            "#
+        ),
+    )
+}
+
+#[test]
+fn tag_one_label_two_args() {
+    derive_test(
+        v!([A v!(U8) v!(STR)]),
+        "[A val a] -> Encoder fmt | a has Encoding, fmt has EncoderFormatting, val has Encoding",
+        indoc!(
+            r#"
+            \Test.0 ->
+              when Test.0 is
+                  (ATest.1 Test.2) -> (Encode.tag "A" [
+                      (Encode.toEncoder Test.1),
+                      (Encode.toEncoder Test.2),
+                    ])
+            "#
+        ),
+    )
+}
+
+#[test]
+fn tag_two_labels() {
+    derive_test(
+        v!([A v!(U8) v!(STR), B v!(STR)]),
+        "[A val a, B b] -> Encoder fmt | a has Encoding, b has Encoding, fmt has EncoderFormatting, val has Encoding",
+        indoc!(
+            r#"
+            \Test.0 ->
+              when Test.0 is
+                  (ATest.1 Test.2) -> (Encode.tag "A" [
+                      (Encode.toEncoder Test.1),
+                      (Encode.toEncoder Test.2),
+                    ])
+                  (BTest.3) -> (Encode.tag "B" [ (Encode.toEncoder Test.3), ])
             "#
         ),
     )
