@@ -27,6 +27,22 @@ void* roc_memcpy(void* dest, const void* src, size_t n) {
 
 void* roc_memset(void* str, int c, size_t n) { return memset(str, c, n); }
 
+int roc_shm_open(char* name, int oflag, unsigned int mode) {
+    return shm_open(name, oflag, mode);
+}
+
+void* roc_mmap(void* addr, unsigned int length, int prot, int flags, int fd, unsigned int offset) {
+    return mmap(addr, length, prot, flags, fd, offset);
+}
+
+int roc_kill(int pid, int sig) {
+    return kill(pid, sig);
+}
+
+int roc_getppid() {
+    return getppid();
+}
+
 struct RocStr {
   char* bytes;
   size_t len;
