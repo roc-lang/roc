@@ -2710,16 +2710,13 @@ fn finish(
 /// Load a `platform` module
 fn load_platform_module<'a>(
     arena: &'a Bump,
-    src_dir: &Path,
+    filename: &Path,
     shorthand: &'a str,
     app_module_id: ModuleId,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
 ) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let module_start_time = SystemTime::now();
-
-    let filename = PathBuf::from(src_dir);
-
     let file_io_start = SystemTime::now();
     let file = fs::read(&filename);
     let file_io_duration = file_io_start.elapsed().unwrap();
@@ -2763,7 +2760,7 @@ fn load_platform_module<'a>(
                         arena,
                         shorthand,
                         Some(app_module_id),
-                        filename,
+                        filename.to_path_buf(),
                         parser_state,
                         module_ids.clone(),
                         ident_ids_by_module,
@@ -2776,13 +2773,13 @@ fn load_platform_module<'a>(
                 }
                 Err(fail) => Err(LoadingProblem::ParsingFailed(
                     fail.map_problem(SyntaxError::Header)
-                        .into_file_error(filename),
+                        .into_file_error(filename.to_path_buf()),
                 )),
             }
         }
 
         Err(err) => Err(LoadingProblem::FileProblem {
-            filename,
+            filename: filename.to_path_buf(),
             error: err.kind(),
         }),
     }
@@ -2938,8 +2935,8 @@ fn module_name_to_path<'a>(
             let shorthands = arc_shorthands.lock();
 
             match shorthands.get(shorthand) {
-                Some(PackageName(path)) => {
-                    filename.push(path);
+                Some(path) => {
+                    filename.push(path.to_str());
                 }
                 None => unreachable!("there is no shorthand named {:?}", shorthand),
             }
