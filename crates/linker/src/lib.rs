@@ -340,14 +340,29 @@ fn preprocess_impl(
         // remove potentially trailing "@version".
         let name = sym.name().unwrap().split('@').next().unwrap().to_string();
 
-        // special exceptions for memcpy and memset.
-        if &name == "roc_memcpy" {
-            md.roc_symbol_vaddresses
-                .insert("memcpy".to_string(), sym.address() as u64);
-        } else if name == "roc_memset" {
-            md.roc_symbol_vaddresses
-                .insert("memset".to_string(), sym.address() as u64);
-        }
+        // special exceptions for memcpy, memset, etc.
+        match name.as_str() {
+            "roc_memcpy" => md
+                .roc_symbol_vaddresses
+                .insert("memcpy".to_string(), sym.address() as u64),
+            "roc_memset" => md
+                .roc_symbol_vaddresses
+                .insert("memset".to_string(), sym.address() as u64),
+            "roc_shm_open" => md
+                .roc_symbol_vaddresses
+                .insert("shm_open".to_string(), sym.address() as u64),
+            "roc_mmap" => md
+                .roc_symbol_vaddresses
+                .insert("mmap".to_string(), sym.address() as u64),
+            "roc_kill" => md
+                .roc_symbol_vaddresses
+                .insert("kill".to_string(), sym.address() as u64),
+            "roc_getppid" => md
+                .roc_symbol_vaddresses
+                .insert("getppid".to_string(), sym.address() as u64),
+            _ => None,
+        };
+
         md.roc_symbol_vaddresses.insert(name, sym.address() as u64);
     }
 
