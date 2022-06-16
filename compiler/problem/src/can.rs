@@ -232,7 +232,7 @@ pub enum RuntimeError {
     /// An example would be:
     /// ```roc
     /// app "hello"
-    ///     packages { pf: "platform" }
+    ///     packages { pf: "platform/main.roc" }
     ///     imports [pf.Stdout]
     ///     provides [main] to pf
     ///

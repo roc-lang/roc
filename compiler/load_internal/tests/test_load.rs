@@ -684,7 +684,7 @@ mod test_load {
                 indoc!(
                     r#"
                         app "hello-world"
-                            packages { pf: "platform" }
+                            packages { pf: "platform/main.roc" }
                             imports []
                             provides [main] to pf
 
@@ -728,7 +728,7 @@ mod test_load {
                 indoc!(
                     r#"
                     app "hello-world"
-                        packages { pf: "platform" }
+                        packages { pf: "platform/main.roc" }
                         imports []
                         provides [main] to pf
 
@@ -841,7 +841,7 @@ mod test_load {
                 indoc!(
                     r#"
                     app "test"
-                        packages { pf: "platform" }
+                        packages { pf: "platform/main.roc" }
                         provides [main] to pf
 
                     main : DoesNotExist

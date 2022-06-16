@@ -6206,7 +6206,7 @@ All branches in an `if` must have the same type!
             indoc!(
                 r#"
                 app "test-base64"
-                    packages { pf: "platform" }
+                    packages { pf: "platform/main.roc" }
                     imports [pf.Task, Base64]
                     provides [main, @Foo] to pf
                 "#
@@ -9781,7 +9781,7 @@ All branches in an `if` must have the same type!
             indoc!(
                 r#"
                 app "test-missing-comma"
-                    packages { pf: "platform" }
+                    packages { pf: "platform/main.roc" }
                     imports [pf.Task Base64]
                     provides [main, @Foo] to pf
                 "#
@@ -9792,7 +9792,7 @@ All branches in an `if` must have the same type!
 
                 I am partway through parsing a imports list, but I got stuck here:
 
-                2│      packages { pf: "platform" }
+                2│      packages { pf: "platform/main.roc" }
                 3│      imports [pf.Task Base64]
                                          ^
 
