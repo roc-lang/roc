@@ -545,4 +545,21 @@ fn tag_two_labels() {
     )
 }
 
+#[test]
+fn recursive_tag_union() {
+    derive_test(
+        v!([Nil, Cons v!(U8) v!(*lst) ] as lst),
+        "[Cons val a, Nil] -> Encoder fmt | a has Encoding, fmt has EncoderFormatting, val has Encoding",
+        indoc!(
+            r#"
+            \Test.0 ->
+              when Test.0 is
+                Cons Test.1 Test.2 ->
+                  Encode.tag "Cons" [Encode.toEncoder Test.1, Encode.toEncoder Test.2]
+                Nil -> Encode.tag "Nil" []
+            "#
+        ),
+    )
+}
+
 // }}} deriver tests
