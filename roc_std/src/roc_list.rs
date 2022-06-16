@@ -45,6 +45,10 @@ impl<T> RocList<T> {
         }
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.into_iter()
+    }
+
     /// Used for both roc_alloc and roc_realloc - given the number of elements,
     /// returns the number of bytes needed to allocate, taking into account both the
     /// size of the elements as well as the size of Storage.
