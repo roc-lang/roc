@@ -3,7 +3,7 @@ extern crate const_format;
 
 use build::BuiltFile;
 use bumpalo::Bump;
-use clap::{Arg, ArgMatches, Command};
+use clap::{Arg, ArgMatches, Command, ValueSource};
 use roc_build::link::{LinkType, LinkingStrategy};
 use roc_error_macros::{internal_error, user_error};
 use roc_load::{LoadingProblem, Threading};
@@ -23,6 +23,8 @@ use tempfile::TempDir;
 pub mod build;
 mod format;
 pub use format::format;
+
+const DEFAULT_ROC_FILENAME: &str = "main.roc";
 
 pub const CMD_BUILD: &str = "build";
 pub const CMD_RUN: &str = "run";
@@ -57,13 +59,11 @@ pub fn build_app<'a>() -> Command<'a> {
     let flag_optimize = Arg::new(FLAG_OPTIMIZE)
         .long(FLAG_OPTIMIZE)
         .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
-        .requires(ROC_FILE)
         .required(false);
 
     let flag_max_threads = Arg::new(FLAG_MAX_THREADS)
         .long(FLAG_MAX_THREADS)
         .help("Limit the number of threads (and hence cores) used during compilation.")
-        .requires(ROC_FILE)
         .takes_value(true)
         .validator(|s| s.parse::<usize>())
         .required(false);
@@ -81,7 +81,6 @@ pub fn build_app<'a>() -> Command<'a> {
     let flag_debug = Arg::new(FLAG_DEBUG)
         .long(FLAG_DEBUG)
         .help("Store LLVM debug information in the generated program.")
-        .requires(ROC_FILE)
         .required(false);
 
     let flag_valgrind = Arg::new(FLAG_VALGRIND)
@@ -108,13 +107,17 @@ pub fn build_app<'a>() -> Command<'a> {
 
     let roc_file_to_run = Arg::new(ROC_FILE)
         .help("The .roc file of an app to run")
-        .allow_invalid_utf8(true);
+        .allow_invalid_utf8(true)
+        .required(false)
+        .default_value(DEFAULT_ROC_FILENAME);
 
     let args_for_app = Arg::new(ARGS_FOR_APP)
-        .help("Arguments to pass into the app being run")
-        .requires(ROC_FILE)
+        .help("Arguments to pass into the app being run, e.g. `roc run -- arg1 arg2`")
         .allow_invalid_utf8(true)
-        .multiple_values(true);
+        .multiple_values(true)
+        .takes_value(true)
+        .allow_hyphen_values(true)
+        .last(true);
 
     let app = Command::new("roc")
         .version(concatcp!(VERSION, "\n"))
@@ -154,7 +157,8 @@ pub fn build_app<'a>() -> Command<'a> {
                 Arg::new(ROC_FILE)
                     .help("The .roc file to build")
                     .allow_invalid_utf8(true)
-                    .required(true),
+                    .required(false)
+                    .default_value(DEFAULT_ROC_FILENAME),
             )
         )
         .subcommand(Command::new(CMD_REPL)
@@ -171,7 +175,7 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(flag_linker.clone())
             .arg(flag_precompiled.clone())
             .arg(flag_valgrind.clone())
-            .arg(roc_file_to_run.clone().required(true))
+            .arg(roc_file_to_run.clone())
             .arg(args_for_app.clone())
         )
         .subcommand(Command::new(CMD_FORMAT)
@@ -199,7 +203,8 @@ pub fn build_app<'a>() -> Command<'a> {
                 Arg::new(ROC_FILE)
                     .help("The .roc file of an app to check")
                     .allow_invalid_utf8(true)
-                    .required(true),
+                    .required(false)
+                    .default_value(DEFAULT_ROC_FILENAME),
             )
             )
         .subcommand(
@@ -317,9 +322,17 @@ pub fn build(
 
         match err.kind() {
             NotFound => {
-                match path.to_str() {
-                    Some(path_str) => println!("File not found: {}", path_str),
-                    None => println!("Malformed file path : {:?}", path),
+                let path_string = path.to_string_lossy();
+
+                // TODO these should use roc_reporting to display nicer error messages.
+                match matches.value_source(ROC_FILE) {
+                    Some(ValueSource::DefaultValue) => {
+                        eprintln!(
+                            "\nNo `.roc` file was specified, and the current directory does not contain a {} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n",
+                            DEFAULT_ROC_FILENAME
+                        )
+                    }
+                    _ => eprintln!("\nThis file was not found: {}\n\nYou can run `roc help` for more information on how to provide a .roc file.\n", path_string),
                 }
 
                 process::exit(1);
