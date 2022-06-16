@@ -2917,13 +2917,13 @@ fn module_name_to_path<'a>(
     module_name: PQModuleName<'a>,
     arc_shorthands: Arc<Mutex<MutMap<&'a str, PackageName<'a>>>>,
 ) -> (PathBuf, Option<&'a str>) {
-    let mut filename = PathBuf::new();
-
-    filename.push(src_dir);
-
+    let mut filename;
     let opt_shorthand;
+
     match module_name {
         PQModuleName::Unqualified(name) => {
+            filename = src_dir.to_path_buf();
+
             opt_shorthand = None;
             // Convert dots in module name to directories
             for part in name.split(MODULE_SEPARATOR) {
@@ -2936,7 +2936,14 @@ fn module_name_to_path<'a>(
 
             match shorthands.get(shorthand) {
                 Some(path) => {
-                    filename.push(path.to_str());
+                    let parent = Path::new(path.as_str()).parent().unwrap_or_else(|| {
+                        panic!(
+                            "platform module {:?} did not have a parent directory.",
+                            path
+                        )
+                    });
+
+                    filename = src_dir.join(parent)
                 }
                 None => unreachable!("there is no shorthand named {:?}", shorthand),
             }
