@@ -8,10 +8,7 @@ use roc_load::{LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
 use roc_reporting::report::RenderTarget;
 use roc_target::TargetInfo;
-use std::{
-    path::Path,
-    time::{Duration, SystemTime},
-};
+use std::time::{Duration, SystemTime};
 use std::{path::PathBuf, thread::JoinHandle};
 use target_lexicon::Triple;
 use tempfile::Builder;
@@ -35,7 +32,7 @@ pub fn build_file<'a>(
     arena: &'a Bump,
     target: &Triple,
     src_dir: PathBuf,
-    roc_file_path: PathBuf,
+    app_module_path: PathBuf,
     opt_level: OptLevel,
     emit_debug_info: bool,
     emit_timings: bool,
@@ -53,7 +50,7 @@ pub fn build_file<'a>(
 
     let loaded = roc_load::load_and_monomorphize(
         arena,
-        roc_file_path.clone(),
+        app_module_path.clone(),
         src_dir.as_path(),
         subs_by_module,
         target_info,
@@ -90,19 +87,17 @@ pub fn build_file<'a>(
         "o"
     };
 
-    let cwd = roc_file_path.parent().unwrap();
+    let cwd = app_module_path.parent().unwrap();
     let mut binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
 
     if emit_wasm {
         binary_path.set_extension("wasm");
     }
 
-    let mut host_input_path = Path::new(&*loaded.platform_path)
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    host_input_path.push("host");
-    host_input_path.set_extension(host_extension);
+    let host_input_path = cwd
+        .join(&*loaded.platform_path)
+        .with_file_name("host")
+        .with_extension(host_extension);
 
     // TODO this should probably be moved before load_and_monomorphize.
     // To do this we will need to preprocess files just for their exported symbols.
@@ -221,7 +216,7 @@ pub fn build_file<'a>(
     let code_gen_timing = program::gen_from_mono_module(
         arena,
         loaded,
-        &roc_file_path,
+        &app_module_path,
         target,
         app_o_file,
         opt_level,
