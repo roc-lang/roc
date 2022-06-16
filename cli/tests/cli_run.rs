@@ -94,21 +94,23 @@ mod cli_run {
         file: &'a Path,
         args: I,
         stdin: &[&str],
-        input_file: Option<PathBuf>,
+        opt_input_file: Option<PathBuf>,
     ) -> Out {
-        let compile_out = match input_file {
-            Some(input_file) => run_roc(
+        let compile_out = if let Some(input_file) = opt_input_file {
+            run_roc(
                 // converting these all to String avoids lifetime issues
                 args.into_iter().map(|arg| arg.to_string()).chain([
                     file.to_str().unwrap().to_string(),
+                    "--".to_string(),
                     input_file.to_str().unwrap().to_string(),
                 ]),
                 stdin,
-            ),
-            None => run_roc(
+            )
+        } else {
+            run_roc(
                 args.into_iter().chain(iter::once(file.to_str().unwrap())),
                 stdin,
-            ),
+            )
         };
 
         // If there is any stderr, it should be reporting the runtime and that's it!
@@ -131,7 +133,7 @@ mod cli_run {
         stdin: &[&str],
         executable_filename: &str,
         flags: &[&str],
-        input_file: Option<PathBuf>,
+        opt_input_file: Option<PathBuf>,
         expected_ending: &str,
         use_valgrind: bool,
     ) {
@@ -151,7 +153,7 @@ mod cli_run {
                     run_roc_on(file, iter::once(CMD_BUILD).chain(flags.clone()), &[], None);
 
                     if use_valgrind && ALLOW_VALGRIND {
-                        let (valgrind_out, raw_xml) = if let Some(ref input_file) = input_file {
+                        let (valgrind_out, raw_xml) = if let Some(ref input_file) = opt_input_file {
                             run_with_valgrind(
                                 stdin.iter().copied(),
                                 &[
@@ -201,7 +203,7 @@ mod cli_run {
                         }
 
                         valgrind_out
-                    } else if let Some(ref input_file) = input_file {
+                    } else if let Some(ref input_file) = opt_input_file {
                         run_cmd(
                             file.with_file_name(executable_filename).to_str().unwrap(),
                             stdin.iter().copied(),
@@ -215,12 +217,12 @@ mod cli_run {
                         )
                     }
                 }
-                CliMode::Roc => run_roc_on(file, flags.clone(), stdin, input_file.clone()),
+                CliMode::Roc => run_roc_on(file, flags.clone(), stdin, opt_input_file.clone()),
                 CliMode::RocRun => run_roc_on(
                     file,
                     iter::once(CMD_RUN).chain(flags.clone()),
                     stdin,
-                    input_file.clone(),
+                    opt_input_file.clone(),
                 ),
             };
 
@@ -382,8 +384,8 @@ mod cli_run {
     // ]
     examples! {
         helloWorld:"hello-world" => Example {
-            filename: "helloWorld.roc",
-            executable_filename: "helloWorld",
+            filename: "main.roc",
+            executable_filename: "hello",
             stdin: &[],
             input_file: None,
             expected_ending:"Hello, World!\n",
