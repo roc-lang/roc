@@ -2607,7 +2607,7 @@ fn finish_specialization(
             }
         };
 
-        package_name.0
+        package_name.into()
     };
 
     let platform_path = Path::new(path_to_platform).into();
@@ -3120,8 +3120,7 @@ fn parse_header<'a>(
                     }) = opt_base_package
                     {
                         // check whether we can find a `platform` module file
-                        let mut platform_module_path = app_file_dir;
-                        platform_module_path.push(package_name.0);
+                        let platform_module_path = app_file_dir.join(package_name.to_str());
 
                         if platform_module_path.as_path().exists() {
                             let load_platform_module_msg = load_platform_module(
