@@ -11,7 +11,7 @@ rustflags = ["-Copt-level=s", "-Clto=fat"]
 
 [target.'cfg(not(target = "wasm32-unknown-unknown"))']
 # Sets the avx, avx2, sse2 and sse4.2 target-features correctly based on your CPU.
-rustflags = ["-C target-cpu=native"]
+rustflags = ["-Ctarget-cpu=native"]
 
 [env]
 # Gives us the path of the workspace root for use in cargo tests without having
