@@ -35,6 +35,17 @@ extern "C" {
     pub fn roc_panic(c_ptr: *mut c_void, tag_id: u32);
     pub fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void;
     pub fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut c_void;
+    pub fn roc_shm_open(_name: *const i8, _oflag: i32, _mode: i32) -> i32;
+    pub fn roc_mmap(
+        _addr: *mut c_void,
+        _len: usize,
+        _prot: i32,
+        _flags: i32,
+        _fd: i32,
+        _offset: i64,
+    ) -> *mut c_void;
+    pub fn roc_kill(_pid: i32, _sig: i32) -> i32;
+    pub fn roc_getppid() -> i32;
 }
 
 /// # Safety
@@ -76,7 +87,7 @@ pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
 /// This is only marked unsafe to typecheck without warnings in the rest of the code here.
 #[cfg(not(feature = "platform"))]
 #[no_mangle]
-pub fn roc_memcpy(_dst: *mut c_void, _src: *mut c_void, _n: usize) -> *mut c_void {
+pub unsafe fn roc_memcpy(_dst: *mut c_void, _src: *mut c_void, _n: usize) -> *mut c_void {
     unimplemented!("It is not valid to call roc memcpy from within the compiler. Please use the \"platform\" feature if this is a platform.")
 }
 
@@ -86,6 +97,45 @@ pub fn roc_memcpy(_dst: *mut c_void, _src: *mut c_void, _n: usize) -> *mut c_voi
 #[no_mangle]
 pub fn roc_memset(_dst: *mut c_void, _c: i32, _n: usize) -> *mut c_void {
     unimplemented!("It is not valid to call roc memset from within the compiler. Please use the \"platform\" feature if this is a platform.")
+}
+
+/// # Safety
+/// This is only marked unsafe to typecheck without warnings in the rest of the code here.
+#[cfg(not(feature = "platform"))]
+#[no_mangle]
+pub unsafe extern "C" fn roc_shm_open(_name: *const i8, _oflag: i32, _mode: i32) -> i32 {
+    unimplemented!("It is not valid to call roc_shm_open from within the compiler. Please use the \"platform\" feature if this is a platform.")
+}
+
+/// # Safety
+/// This is only marked unsafe to typecheck without warnings in the rest of the code here.
+#[cfg(not(feature = "platform"))]
+#[no_mangle]
+pub unsafe extern "C" fn roc_mmap(
+    _addr: *mut c_void,
+    _len: usize,
+    _prot: i32,
+    _flags: i32,
+    _fd: i32,
+    _offset: i64,
+) -> *mut c_void {
+    unimplemented!("It is not valid to call roc_mmap from within the compiler. Please use the \"platform\" feature if this is a platform.")
+}
+
+/// # Safety
+/// This is only marked unsafe to typecheck without warnings in the rest of the code here.
+#[cfg(not(feature = "platform"))]
+#[no_mangle]
+pub unsafe extern "C" fn roc_kill(_pid: i32, _sig: i32) -> i32 {
+    unimplemented!("It is not valid to call roc_kill from within the compiler. Please use the \"platform\" feature if this is a platform.")
+}
+
+/// # Safety
+/// This is only marked unsafe to typecheck without warnings in the rest of the code here.
+#[cfg(not(feature = "platform"))]
+#[no_mangle]
+pub unsafe extern "C" fn roc_getppid() -> i32 {
+    unimplemented!("It is not valid to call roc_getppid from within the compiler. Please use the \"platform\" feature if this is a platform.")
 }
 
 #[repr(u8)]
