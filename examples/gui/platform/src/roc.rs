@@ -49,7 +49,7 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn roc_shm_open(name: *const i8, oflag: i32, mode: i32) -> i32 {
+pub unsafe extern "C" fn roc_shm_open(name: *const i8, oflag: i32, mode: u32) -> i32 {
     libc::shm_open(name, oflag, mode)
 }
 
