@@ -35,7 +35,7 @@ extern "C" {
     pub fn roc_panic(c_ptr: *mut c_void, tag_id: u32);
     pub fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void;
     pub fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut c_void;
-    pub fn roc_shm_open(_name: *const i8, _oflag: i32, _mode: i32) -> i32;
+    pub fn roc_shm_open(_name: *const i8, _oflag: i32, _mode: u32) -> i32;
     pub fn roc_mmap(
         _addr: *mut c_void,
         _len: usize,
@@ -103,7 +103,7 @@ pub fn roc_memset(_dst: *mut c_void, _c: i32, _n: usize) -> *mut c_void {
 /// This is only marked unsafe to typecheck without warnings in the rest of the code here.
 #[cfg(not(feature = "platform"))]
 #[no_mangle]
-pub unsafe extern "C" fn roc_shm_open(_name: *const i8, _oflag: i32, _mode: i32) -> i32 {
+pub unsafe extern "C" fn roc_shm_open(_name: *const i8, _oflag: i32, _mode: u32) -> i32 {
     unimplemented!("It is not valid to call roc_shm_open from within the compiler. Please use the \"platform\" feature if this is a platform.")
 }
 
