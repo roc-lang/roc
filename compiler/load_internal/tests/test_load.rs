@@ -290,6 +290,10 @@ mod test_load {
                 cycle @ InvalidCycle(_) => {
                     panic!("Unexpected cyclic def in module declarations: {:?}", cycle);
                 }
+                expects @ Expects(_) => {
+                    // at least at the moment this does not happen
+                    panic!("Unexpected expects in module declarations: {:?}", expects);
+                }
             };
         }
 
