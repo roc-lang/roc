@@ -562,6 +562,27 @@ impl ObligationCache<'_> {
                         return Err(var);
                     }
                 }
+                Alias(
+                    Symbol::NUM_U8
+                    | Symbol::NUM_U16
+                    | Symbol::NUM_U32
+                    | Symbol::NUM_U64
+                    | Symbol::NUM_U128
+                    | Symbol::NUM_I8
+                    | Symbol::NUM_I16
+                    | Symbol::NUM_I32
+                    | Symbol::NUM_I64
+                    | Symbol::NUM_I128
+                    | Symbol::NUM_NAT
+                    | Symbol::NUM_F32
+                    | Symbol::NUM_F64
+                    | Symbol::NUM_DEC,
+                    _,
+                    _,
+                    _,
+                ) => {
+                    // yes
+                }
                 Alias(_, arguments, real_type_var, _) => {
                     push_var_slice!(arguments.all_variables());
                     stack.push(*real_type_var);

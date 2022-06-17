@@ -18,6 +18,7 @@ members = [
     "compiler/mono",
     "compiler/alias_analysis",
     "compiler/test_mono",
+    "compiler/test_derive",
     "compiler/load",
     "compiler/load_internal",
     "compiler/gen_llvm",

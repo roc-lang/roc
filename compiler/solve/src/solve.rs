@@ -1873,7 +1873,7 @@ fn compact_lambda_set<P: Phase>(
                 //   Default has default : {} -> a | a has Default
                 //
                 //   {a, b} = default {}
-                //   #        ^^^^^^^ {} -[{a: t1, b: t2}:default:1]
+                //   #        ^^^^^^^ {} -[{a: t1, b: t2}:default:1]-> {a: t1, b: t2}
                 new_unspecialized.push(uls);
                 continue;
             }

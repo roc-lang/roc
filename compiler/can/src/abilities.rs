@@ -220,6 +220,73 @@ impl<Phase: ResolvePhase> IAbilitiesStore<Phase> {
         self.next_specialization_id += 1;
         id
     }
+
+    /// Creates a store from [`self`] that closes over the abilities/members given by the
+    /// imported `symbols`, and their specializations (if any).
+    pub fn closure_from_imported(&self, symbols: &VecSet<Symbol>) -> PendingAbilitiesStore {
+        let Self {
+            members_of_ability,
+            ability_members,
+            declared_specializations,
+
+            // Covered by `declared_specializations`
+            specialization_to_root: _,
+
+            // Taking closure for a new module, so specialization IDs can be fresh
+            next_specialization_id: _,
+            resolved_specializations: _,
+        } = self;
+
+        let mut new = PendingAbilitiesStore::default();
+
+        // 1. Figure out the abilities we need to introduce.
+        let mut abilities_to_introduce = VecSet::with_capacity(2);
+        symbols.iter().for_each(|symbol| {
+            if let Some(member_data) = ability_members.get(symbol) {
+                // If the symbol is member of an ability, we need to capture the entire ability.
+                abilities_to_introduce.insert(member_data.parent_ability);
+            }
+            if members_of_ability.contains_key(symbol) {
+                abilities_to_introduce.insert(*symbol);
+            }
+        });
+
+        // 2. Add each ability, and any specializations of its members we know about.
+        for ability in abilities_to_introduce.into_iter() {
+            let members = members_of_ability.get(&ability).unwrap();
+            let mut imported_member_data = Vec::with_capacity(members.len());
+            for member in members {
+                let AbilityMemberData {
+                    parent_ability,
+                    region,
+                    typ: _,
+                } = ability_members.get(member).unwrap().clone();
+                // All external members need to be marked as imported. We'll figure out their real
+                // type variables when it comes time to solve the module we're currently importing
+                // into.
+                let imported_data = AbilityMemberData {
+                    parent_ability,
+                    region,
+                    typ: PendingMemberType::Imported,
+                };
+
+                imported_member_data.push((*member, imported_data));
+            }
+
+            new.register_ability(ability, imported_member_data);
+
+            // Add any specializations of the ability's members we know about.
+            declared_specializations
+                .iter()
+                .filter(|((member, _), _)| members.contains(member))
+                .for_each(|(&(member, typ), specialization)| {
+                    new.register_specializing_symbol(specialization.symbol, member);
+                    new.import_specialization(member, typ, specialization);
+                });
+        }
+
+        new
+    }
 }
 
 impl IAbilitiesStore<Resolved> {
@@ -324,73 +391,6 @@ impl IAbilitiesStore<Pending> {
             },
         );
         debug_assert!(old_spec.is_none(), "Replacing existing specialization");
-    }
-
-    /// Creates a store from [`self`] that closes over the abilities/members given by the
-    /// imported `symbols`, and their specializations (if any).
-    pub fn closure_from_imported(&self, symbols: &VecSet<Symbol>) -> Self {
-        let Self {
-            members_of_ability,
-            ability_members,
-            declared_specializations,
-
-            // Covered by `declared_specializations`
-            specialization_to_root: _,
-
-            // Taking closure for a new module, so specialization IDs can be fresh
-            next_specialization_id: _,
-            resolved_specializations: _,
-        } = self;
-
-        let mut new = PendingAbilitiesStore::default();
-
-        // 1. Figure out the abilities we need to introduce.
-        let mut abilities_to_introduce = VecSet::with_capacity(2);
-        symbols.iter().for_each(|symbol| {
-            if let Some(member_data) = ability_members.get(symbol) {
-                // If the symbol is member of an ability, we need to capture the entire ability.
-                abilities_to_introduce.insert(member_data.parent_ability);
-            }
-            if members_of_ability.contains_key(symbol) {
-                abilities_to_introduce.insert(*symbol);
-            }
-        });
-
-        // 2. Add each ability, and any specializations of its members we know about.
-        for ability in abilities_to_introduce.into_iter() {
-            let members = members_of_ability.get(&ability).unwrap();
-            let mut imported_member_data = Vec::with_capacity(members.len());
-            for member in members {
-                let AbilityMemberData {
-                    parent_ability,
-                    region,
-                    typ: _,
-                } = ability_members.get(member).unwrap().clone();
-                // All external members need to be marked as imported. We'll figure out their real
-                // type variables when it comes time to solve the module we're currently importing
-                // into.
-                let imported_data = AbilityMemberData {
-                    parent_ability,
-                    region,
-                    typ: PendingMemberType::Imported,
-                };
-
-                imported_member_data.push((*member, imported_data));
-            }
-
-            new.register_ability(ability, imported_member_data);
-
-            // Add any specializations of the ability's members we know about.
-            declared_specializations
-                .iter()
-                .filter(|((member, _), _)| members.contains(member))
-                .for_each(|(&(member, typ), specialization)| {
-                    new.register_specializing_symbol(specialization.symbol, member);
-                    new.import_specialization(member, typ, specialization);
-                });
-        }
-
-        new
     }
 
     pub fn union(&mut self, other: Self) {
