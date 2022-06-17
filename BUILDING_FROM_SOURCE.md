@@ -4,11 +4,11 @@ Installation should be a smooth process, let us now if anything does not work pe
 
 ## Using Nix
 
+We highly recommend Using [nix](https://nixos.org/download.html) to quickly install all dependencies necessary to build roc.
+
 ### On Linux x86_64/aarch64 or MacOS aarch64/arm64/x86_64
 
 #### Install
-
-We highly recommend Using [nix](https://nixos.org/download.html) to quickly install all dependencies necessary to build roc.
 
 If you are running ArchLinux or a derivative like Manjaro, you'll need to run `sudo sysctl -w kernel.unprivileged_userns_clone=1` before installing nix.
 
