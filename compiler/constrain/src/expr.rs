@@ -801,12 +801,7 @@ pub fn constrain_expr(
             let branch_constraints = constraints.and_constraint(total_cons);
 
             constraints.exists(
-                [
-                    exhaustive.variable_for_introduction(),
-                    branches_cond_var,
-                    real_cond_var,
-                    *expr_var,
-                ],
+                [branches_cond_var, real_cond_var, *expr_var],
                 branch_constraints,
             )
         }

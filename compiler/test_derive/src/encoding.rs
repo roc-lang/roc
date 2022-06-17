@@ -1,4 +1,8 @@
 #![cfg(test)]
+// Even with #[allow(non_snake_case)] on individual idents, rust-analyzer issues diagnostics.
+// See https://github.com/rust-lang/rust-analyzer/issues/6541.
+// For the `v!` macro we use uppercase variables when constructing tag unions.
+#![allow(non_snake_case)]
 
 use std::{
     hash::{BuildHasher, Hash, Hasher},
@@ -328,7 +332,6 @@ macro_rules! test_hash_eq {
     ($($name:ident: $synth1:expr, $synth2:expr)*) => {$(
         #[test]
         fn $name() {
-            #![allow(non_snake_case)]
             check_hash(true, $synth1, $synth2)
         }
     )*};
@@ -338,7 +341,6 @@ macro_rules! test_hash_neq {
     ($($name:ident: $synth1:expr, $synth2:expr)*) => {$(
         #[test]
         fn $name() {
-            #![allow(non_snake_case)]
             check_hash(false, $synth1, $synth2)
         }
     )*};
@@ -429,7 +431,7 @@ fn empty_record() {
         "{} -> Encoder fmt | fmt has EncoderFormatting",
         indoc!(
             r#"
-            \Test.0 -> (Encode.record [ ])
+            \Test.0 -> Encode.record []
             "#
         ),
     )
@@ -442,7 +444,7 @@ fn zero_field_record() {
         "{} -> Encoder fmt | fmt has EncoderFormatting",
         indoc!(
             r#"
-            \Test.0 -> (Encode.record [ ])
+            \Test.0 -> Encode.record []
             "#
         ),
     )
@@ -455,8 +457,7 @@ fn one_field_record() {
         "{ a : val } -> Encoder fmt | fmt has EncoderFormatting, val has Encoding",
         indoc!(
             r#"
-            \Test.0 ->
-              (Encode.record [ { value: (Encode.toEncoder (Test.0).a), key: "a", }, ])
+            \Test.0 -> Encode.record [{ value: Encode.toEncoder Test.0.a, key: "a", }]
             "#
         ),
     )
@@ -470,10 +471,92 @@ fn two_field_record() {
         indoc!(
             r#"
             \Test.0 ->
-              (Encode.record [
-                { value: (Encode.toEncoder (Test.0).a), key: "a", },
-                { value: (Encode.toEncoder (Test.0).b), key: "b", },
-              ])
+              Encode.record [
+                { value: Encode.toEncoder Test.0.a, key: "a", },
+                { value: Encode.toEncoder Test.0.b, key: "b", },
+              ]
+            "#
+        ),
+    )
+}
+
+#[test]
+#[ignore = "NOTE: this would never actually happen, because [] is uninhabited, and hence toEncoder can never be called with a value of []!
+Rightfully it induces broken assertions in other parts of the compiler, so we ignore it."]
+fn empty_tag_union() {
+    derive_test(
+        v!(EMPTY_TAG_UNION),
+        "[] -> Encoder fmt | fmt has EncoderFormatting",
+        indoc!(
+            r#"
+            \Test.0 -> when Test.0 is
+            "#
+        ),
+    )
+}
+
+#[test]
+fn tag_one_label_zero_args() {
+    derive_test(
+        v!([A]),
+        "[A] -> Encoder fmt | fmt has EncoderFormatting",
+        indoc!(
+            r#"
+            \Test.0 -> when Test.0 is A -> Encode.tag "A" []
+            "#
+        ),
+    )
+}
+
+#[test]
+fn tag_one_label_two_args() {
+    derive_test(
+        v!([A v!(U8) v!(STR)]),
+        "[A val a] -> Encoder fmt | a has Encoding, fmt has EncoderFormatting, val has Encoding",
+        indoc!(
+            r#"
+            \Test.0 ->
+              when Test.0 is
+                A Test.1 Test.2 ->
+                  Encode.tag "A" [Encode.toEncoder Test.1, Encode.toEncoder Test.2]
+            "#
+        ),
+    )
+}
+
+#[test]
+fn tag_two_labels() {
+    derive_test(
+        v!([A v!(U8) v!(STR) v!(U16), B v!(STR)]),
+        "[A val a b, B c] -> Encoder fmt | a has Encoding, b has Encoding, c has Encoding, fmt has EncoderFormatting, val has Encoding",
+        indoc!(
+            r#"
+            \Test.0 ->
+              when Test.0 is
+                A Test.1 Test.2 Test.3 ->
+                  Encode.tag "A" [
+                    Encode.toEncoder Test.1,
+                    Encode.toEncoder Test.2,
+                    Encode.toEncoder Test.3,
+                  ]
+                B Test.4 -> Encode.tag "B" [Encode.toEncoder Test.4]
+            "#
+        ),
+    )
+}
+
+#[test]
+fn recursive_tag_union() {
+    derive_test(
+        v!([Nil, Cons v!(U8) v!(*lst) ] as lst),
+        "[Cons val a, Nil] -> Encoder fmt | a has Encoding, fmt has EncoderFormatting, val has Encoding",
+        indoc!(
+            r#"
+            \Test.0 ->
+              when Test.0 is
+                Cons Test.1 Test.2 ->
+                  Encode.tag "Cons" [Encode.toEncoder Test.1, Encode.toEncoder Test.2]
+                Nil -> Encode.tag "Nil" []
             "#
         ),
     )

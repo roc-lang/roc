@@ -13,10 +13,31 @@ pub struct Ctx<'a> {
 
 pub fn pretty_print(c: &Ctx, e: &Expr) -> String {
     let f = Arena::new();
-    expr(c, &f, e).append(f.hardline()).1.pretty(80).to_string()
+    expr(c, EPrec::Free, &f, e)
+        .append(f.hardline())
+        .1
+        .pretty(80)
+        .to_string()
 }
 
-fn expr<'a>(c: &Ctx, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, Arena<'a>> {
+macro_rules! maybe_paren {
+    ($paren_if_above:expr, $my_prec:expr, $doc:expr) => {
+        if $my_prec > $paren_if_above {
+            $doc.parens().group()
+        } else {
+            $doc
+        }
+    };
+}
+
+#[derive(PartialEq, PartialOrd)]
+enum EPrec {
+    Free,
+    CallArg,
+}
+
+fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, Arena<'a>> {
+    use EPrec::*;
     match e {
         Num(_, n, _, _) | Int(_, _, n, _, _) | Float(_, _, n, _, _) => f.text(&**n),
         Str(s) => f.text(format!(r#""{}""#, s)),
@@ -28,15 +49,26 @@ fn expr<'a>(c: &Ctx, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, Arena<'a>>
             .reflow("[")
             .append(
                 f.concat(loc_elems.iter().map(|le| {
-                    let elem = expr(c, f, &le.value);
-                    f.line().append(elem).append(",")
+                    f.hardline()
+                        .append(expr(c, Free, f, &le.value))
+                        .append(f.text(","))
                 }))
                 .group()
                 .nest(2),
             )
-            .append(f.line())
+            .append(f.line_())
             .append("]")
-            .group(),
+            .group()
+            .flat_alt(
+                f.reflow("[")
+                    .append(f.intersperse(
+                        loc_elems.iter().map(|le| expr(c, Free, f, &le.value)),
+                        f.reflow(", "),
+                    ))
+                    .append(f.line_())
+                    .append("]")
+                    .group(),
+            ),
         Var(sym) | AbilityMember(sym, _, _) => f.text(format!(
             "{}.{}",
             sym.module_string(c.interns),
@@ -46,11 +78,10 @@ fn expr<'a>(c: &Ctx, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, Arena<'a>>
             loc_cond, branches, ..
         } => f
             .reflow("when ")
-            .append(expr(c, f, &loc_cond.value))
+            .append(expr(c, Free, f, &loc_cond.value))
             .append(f.text(" is"))
             .append(
                 f.concat(branches.iter().map(|b| f.line().append(branch(c, f, b))))
-                    .nest(2)
                     .group(),
             )
             .nest(2)
@@ -63,13 +94,13 @@ fn expr<'a>(c: &Ctx, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, Arena<'a>>
             .concat(branches.iter().enumerate().map(|(i, (cond, body))| {
                 let head = if i == 0 { "if " } else { "else if " };
                 (f.reflow(head)
-                    .append(expr(c, f, &cond.value))
+                    .append(expr(c, Free, f, &cond.value))
                     .group()
                     .nest(2))
                 .append(f.line())
                 .append(
                     f.reflow("then")
-                        .append(f.softline().append(expr(c, f, &body.value)))
+                        .append(f.softline().append(expr(c, Free, f, &body.value)))
                         .group()
                         .nest(2),
                 )
@@ -77,7 +108,7 @@ fn expr<'a>(c: &Ctx, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, Arena<'a>>
             }))
             .append(
                 f.reflow("else ")
-                    .append(expr(c, f, &final_else.value))
+                    .append(expr(c, Free, f, &final_else.value))
                     .group()
                     .nest(2),
             )
@@ -86,12 +117,17 @@ fn expr<'a>(c: &Ctx, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, Arena<'a>>
         LetNonRec(_, _) => todo!(),
         Call(fun, args, _) => {
             let (_, fun, _, _) = &**fun;
-            f.text("(")
-                .append(expr(c, f, &fun.value))
-                .append(f.softline())
-                .append(f.intersperse(args.iter().map(|le| expr(c, f, &le.1.value)), f.softline()))
-                .append(f.text(")"))
-                .group()
+            maybe_paren!(
+                Free,
+                p,
+                expr(c, CallArg, f, &fun.value)
+                    .append(f.softline())
+                    .append(f.intersperse(
+                        args.iter().map(|le| expr(c, CallArg, f, &le.1.value)),
+                        f.softline()
+                    ))
+                    .group()
+            )
         }
         RunLowLevel { .. } => todo!(),
         ForeignCall { .. } => todo!(),
@@ -105,13 +141,13 @@ fn expr<'a>(c: &Ctx, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, Arena<'a>>
                 f.intersperse(
                     arguments
                         .iter()
-                        .map(|(_, _, arg)| pattern(c, f, &arg.value)),
+                        .map(|(_, _, arg)| pattern(c, PPrec::Free, f, &arg.value)),
                     f.text(", "),
                 ),
             )
             .append(f.text(" ->"))
             .append(f.line())
-            .append(expr(c, f, &loc_body.value))
+            .append(expr(c, Free, f, &loc_body.value))
             .nest(2)
             .group(),
         Record { fields, .. } => f
@@ -121,7 +157,7 @@ fn expr<'a>(c: &Ctx, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, Arena<'a>>
                     let field = f
                         .text(name.as_str())
                         .append(f.reflow(": "))
-                        .append(expr(c, f, &field.loc_expr.value))
+                        .append(expr(c, Free, f, &field.loc_expr.value))
                         .nest(2)
                         .group();
                     f.line().append(field).append(",")
@@ -135,10 +171,7 @@ fn expr<'a>(c: &Ctx, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, Arena<'a>>
         EmptyRecord => f.text("{}"),
         Access {
             loc_expr, field, ..
-        } => f
-            .text("(")
-            .append(expr(c, f, &loc_expr.value))
-            .append(f.text(")"))
+        } => expr(c, CallArg, f, &loc_expr.value)
             .append(f.text(format!(".{}", field.as_str())))
             .group(),
         Accessor(_) => todo!(),
@@ -161,21 +194,35 @@ fn branch<'a>(c: &Ctx, f: &'a Arena<'a>, b: &'a WhenBranch) -> DocBuilder<'a, Ar
     } = b;
 
     f.intersperse(
-        patterns.iter().map(|lp| pattern(c, f, &lp.value)),
+        patterns
+            .iter()
+            .map(|lp| pattern(c, PPrec::Free, f, &lp.value)),
         f.text(" | "),
     )
     .append(match guard {
-        Some(e) => f.text("if ").append(expr(c, f, &e.value)),
+        Some(e) => f.text("if ").append(expr(c, EPrec::Free, f, &e.value)),
         None => f.nil(),
     })
     .append(f.text(" ->"))
-    .append(f.softline())
-    .append(expr(c, f, &value.value))
+    .append(f.line())
+    .append(expr(c, EPrec::Free, f, &value.value))
     .nest(2)
     .group()
 }
 
-fn pattern<'a>(c: &Ctx, f: &'a Arena<'a>, p: &'a Pattern) -> DocBuilder<'a, Arena<'a>> {
+#[derive(PartialEq, PartialOrd)]
+enum PPrec {
+    Free,
+    AppArg,
+}
+
+fn pattern<'a>(
+    c: &Ctx,
+    prec: PPrec,
+    f: &'a Arena<'a>,
+    p: &'a Pattern,
+) -> DocBuilder<'a, Arena<'a>> {
+    use PPrec::*;
     use Pattern::*;
     match p {
         Identifier(sym)
@@ -190,19 +237,30 @@ fn pattern<'a>(c: &Ctx, f: &'a Arena<'a>, p: &'a Pattern) -> DocBuilder<'a, Aren
             tag_name,
             arguments,
             ..
-        } => f
-            .text(format!("({}", tag_name.0.as_str()))
-            .append(f.intersperse(
-                arguments.iter().map(|(_, lp)| pattern(c, f, &lp.value)),
-                f.space(),
-            ))
-            .append(")")
-            .group(),
+        } => maybe_paren!(
+            Free,
+            prec,
+            f.text(tag_name.0.as_str())
+                .append(if arguments.is_empty() {
+                    f.nil()
+                } else {
+                    f.space()
+                })
+                .append(
+                    f.intersperse(
+                        arguments
+                            .iter()
+                            .map(|(_, lp)| pattern(c, AppArg, f, &lp.value)),
+                        f.space(),
+                    )
+                )
+                .group()
+        ),
         UnwrappedOpaque {
             opaque, argument, ..
         } => f
             .text(format!("@{} ", opaque.module_string(c.interns)))
-            .append(pattern(c, f, &argument.1.value))
+            .append(pattern(c, Free, f, &argument.1.value))
             .group(),
         RecordDestructure { destructs, .. } => f
             .text("{")
@@ -214,11 +272,11 @@ fn pattern<'a>(c: &Ctx, f: &'a Arena<'a>, p: &'a Pattern) -> DocBuilder<'a, Aren
                             roc_can::pattern::DestructType::Optional(_, e) => f
                                 .text(label.as_str())
                                 .append(f.text(" ? "))
-                                .append(expr(c, f, &e.value)),
+                                .append(expr(c, EPrec::Free, f, &e.value)),
                             roc_can::pattern::DestructType::Guard(_, p) => f
                                 .text(label.as_str())
                                 .append(f.text(": "))
-                                .append(pattern(c, f, &p.value)),
+                                .append(pattern(c, Free, f, &p.value)),
                         },
                     ),
                     f.text(", "),

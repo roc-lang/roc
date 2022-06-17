@@ -1078,14 +1078,6 @@ impl ExhaustiveMark {
         Self(Variable::EMPTY_TAG_UNION)
     }
 
-    pub fn variable_for_introduction(&self) -> Variable {
-        debug_assert!(
-            self.0 != Variable::EMPTY_TAG_UNION,
-            "Attempting to introduce known mark"
-        );
-        self.0
-    }
-
     pub fn set_non_exhaustive(&self, subs: &mut Subs) {
         subs.set_content(self.0, Content::Error);
     }
@@ -1108,14 +1100,6 @@ impl RedundantMark {
     // Otherwise you will get unpleasant unification errors.
     pub fn known_non_redundant() -> Self {
         Self(Variable::EMPTY_TAG_UNION)
-    }
-
-    pub fn variable_for_introduction(&self) -> Variable {
-        debug_assert!(
-            self.0 != Variable::EMPTY_TAG_UNION,
-            "Attempting to introduce known mark"
-        );
-        self.0
     }
 
     pub fn set_redundant(&self, subs: &mut Subs) {
