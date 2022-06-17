@@ -6846,4 +6846,20 @@ mod solve_expr {
             "Str -> U8",
         )
     }
+
+    #[test]
+    fn mutual_recursion_with_inference_var() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                f : _ -> Str
+                f = \s -> g s
+                g = \s -> if True then s else f s
+
+                g
+                "#
+            ),
+            "Str -> Str",
+        )
+    }
 }

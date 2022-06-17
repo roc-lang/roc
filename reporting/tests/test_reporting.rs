@@ -1342,6 +1342,132 @@ mod test_reporting {
     }
 
     #[test]
+    fn polymorphic_recursion_inference_var() {
+        new_report_problem_as(
+            "polymorphic_recursion_inference_var",
+            indoc!(
+                r#"
+                f : _
+                f = \x -> f [x]
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+                
+                I'm inferring a weird self-referential type for `f`:
+                
+                5│      f = \x -> f [x]
+                        ^
+                
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+                
+                    List ∞ -> a
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn polymorphic_recursion_with_deep_inference_var() {
+        new_report_problem_as(
+            "polymorphic_recursion_with_deep_inference_var",
+            indoc!(
+                r#"
+                f : _ -> List _
+                f = \x -> f [x]
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `x`:
+
+                5│      f = \x -> f [x]
+                             ^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    List ∞
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn mutual_polymorphic_recursion_with_inference_var() {
+        new_report_problem_as(
+            "mutual_polymorphic_recursion_with_inference_var",
+            indoc!(
+                r#"
+                f : _ -> List _
+                f = \x -> g x
+                g = \x -> f [x]
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `x`:
+
+                5│      f = \x -> g x
+                             ^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    List ∞
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn mutual_polymorphic_recursion_with_inference_var_second() {
+        new_report_problem_as(
+            "mutual_polymorphic_recursion_with_inference_var_second",
+            indoc!(
+                r#"
+                f = \x -> g x
+                g : _ -> List _
+                g = \x -> f [x]
+
+                f
+                "#
+            ),
+            indoc!(
+                r#"
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `x`:
+
+                6│      g = \x -> f [x]
+                             ^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    List ∞
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn record_field_mismatch() {
         report_problem_as(
             indoc!(
