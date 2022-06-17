@@ -281,7 +281,7 @@ fn test_linking_without_dce() {
     final_module.serialize(&mut buffer);
 
     if std::env::var("DEBUG_WASM").is_ok() {
-        fs::write("src/helpers/without_dce.wasm", &buffer).unwrap();
+        fs::write("build/without_dce.wasm", &buffer).unwrap();
     }
 
     let final_import_names = Vec::from_iter(final_module.import.imports.iter().map(|i| i.name));
@@ -297,14 +297,7 @@ fn test_linking_without_dce() {
         ]
     );
 
-    let instance = match execute_wasm_bytes(&buffer) {
-        Ok(inst) => inst,
-        Err(e) => {
-            let filename = "build/without_dce.wasm";
-            fs::write(filename, &buffer).unwrap();
-            panic!("Error in {}:\n{}", filename, e);
-        }
-    };
+    let instance = execute_wasm_bytes(&buffer).unwrap();
 
     let wasm_result = get_wasm_result(&instance);
     assert_eq!(wasm_result, get_native_result());
@@ -347,7 +340,7 @@ fn test_linking_with_dce() {
     let mut buffer = Vec::with_capacity(final_module.size());
     final_module.serialize(&mut buffer);
     if std::env::var("DEBUG_WASM").is_ok() {
-        fs::write("src/helpers/with_dce.wasm", &buffer).unwrap();
+        fs::write("build/with_dce.wasm", &buffer).unwrap();
     }
 
     let final_import_names = Vec::from_iter(final_module.import.imports.iter().map(|i| i.name));
@@ -373,14 +366,7 @@ fn test_linking_with_dce() {
         ]
     );
 
-    let instance = match execute_wasm_bytes(&buffer) {
-        Ok(inst) => inst,
-        Err(e) => {
-            let filename = "build/with_dce.wasm";
-            fs::write(filename, &buffer).unwrap();
-            panic!("Error in {}:\n{}", filename, e);
-        }
-    };
+    let instance = execute_wasm_bytes(&buffer).unwrap();
 
     let wasm_result = get_wasm_result(&instance);
     assert_eq!(wasm_result, get_native_result());
