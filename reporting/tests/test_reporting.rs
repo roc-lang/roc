@@ -10203,7 +10203,7 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        "issue_1755",
+        issue_1755,
         indoc!(
             r#"
             Handle := {}
@@ -10245,6 +10245,6 @@ All branches in an `if` must have the same type!
             a `*`! Maybe the annotation  on `withOpen` should have a named type
             variable in place of the `*`?
             "#
-        ),
+        )
     );
 }
