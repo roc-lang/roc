@@ -4,10 +4,7 @@
 // For the `v!` macro we use uppercase variables when constructing tag unions.
 #![allow(non_snake_case)]
 
-use std::{
-    hash::{BuildHasher, Hash, Hasher},
-    path::PathBuf,
-};
+use std::path::PathBuf;
 
 use bumpalo::Bump;
 use indoc::indoc;
@@ -22,13 +19,13 @@ use roc_can::{
     expr::Expr,
     module::RigidVariables,
 };
-use roc_collections::{default_hasher, VecSet};
+use roc_collections::VecSet;
 use roc_constrain::{
     expr::constrain_expr,
     module::{ExposedByModule, ExposedForModule, ExposedModuleTypes},
 };
 use roc_debug_flags::dbg_do;
-use roc_derive_key::DeriveKey;
+use roc_derive_key::{encoding::FlatEncodableKey, Derived};
 use roc_load_internal::file::{add_imports, default_aliases, LoadedModule, Threading};
 use roc_module::{
     ident::{ModuleName, TagName},
@@ -199,6 +196,9 @@ where
         .all_ident_ids
         .insert(test_module, IdentIds::default());
 
+    let signature_var = synth_input(&mut test_subs);
+    let key = get_key(&test_subs, signature_var).into();
+
     let mut env = Env {
         home: test_module,
         arena: &arena,
@@ -207,9 +207,7 @@ where
         exposed_encode_types: &mut exposed_encode_types,
     };
 
-    let signature_var = synth_input(env.subs);
-
-    let derived = encoding::derive_to_encoder(&mut env, signature_var);
+    let derived = encoding::derive_to_encoder(&mut env, key);
     test_module.register_debug_idents(interns.all_ident_ids.get(&test_module).unwrap());
 
     let ctx = Ctx { interns: &interns };
@@ -227,7 +225,14 @@ where
     );
 }
 
-fn check_hash<S1, S2>(eq: bool, synth1: S1, synth2: S2)
+fn get_key(subs: &Subs, var: Variable) -> FlatEncodableKey {
+    match Derived::encoding(subs, var) {
+        Derived::Immediate(_) => unreachable!(),
+        Derived::Key(key) => key.repr,
+    }
+}
+
+fn check_key<S1, S2>(eq: bool, synth1: S1, synth2: S2)
 where
     S1: FnOnce(&mut Subs) -> Variable,
     S2: FnOnce(&mut Subs) -> Variable,
@@ -236,24 +241,13 @@ where
     let var1 = synth1(&mut subs);
     let var2 = synth2(&mut subs);
 
-    let hash1 = DeriveKey::encoding(&subs, var1);
-    let hash2 = DeriveKey::encoding(&subs, var2);
-
-    let hash1 = {
-        let mut hasher = default_hasher().build_hasher();
-        hash1.hash(&mut hasher);
-        hasher.finish()
-    };
-    let hash2 = {
-        let mut hasher = default_hasher().build_hasher();
-        hash2.hash(&mut hasher);
-        hasher.finish()
-    };
+    let key1 = Derived::encoding(&subs, var1);
+    let key2 = Derived::encoding(&subs, var2);
 
     if eq {
-        assert_eq!(hash1, hash2);
+        assert_eq!(key1, key2);
     } else {
-        assert_ne!(hash1, hash2);
+        assert_ne!(key1, key2);
     }
 }
 
@@ -332,7 +326,7 @@ macro_rules! test_hash_eq {
     ($($name:ident: $synth1:expr, $synth2:expr)*) => {$(
         #[test]
         fn $name() {
-            check_hash(true, $synth1, $synth2)
+            check_key(true, $synth1, $synth2)
         }
     )*};
 }
@@ -341,7 +335,7 @@ macro_rules! test_hash_neq {
     ($($name:ident: $synth1:expr, $synth2:expr)*) => {$(
         #[test]
         fn $name() {
-            check_hash(false, $synth1, $synth2)
+            check_key(false, $synth1, $synth2)
         }
     )*};
 }
