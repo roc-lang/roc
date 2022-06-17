@@ -21,7 +21,7 @@ use crate::storage::{Storage, StoredValue, StoredValueKind};
 use crate::wasm_module::linking::{DataSymbol, WasmObjectSymbol};
 use crate::wasm_module::sections::{
     ConstExpr, DataMode, DataSegment, Export, Global, GlobalType, Import, ImportDesc, Limits,
-    MemorySection,
+    MemorySection, NameSection,
 };
 use crate::wasm_module::{
     code_builder, CodeBuilder, ExportType, LocalId, Signature, SymInfo, ValueType, WasmModule,
@@ -96,21 +96,13 @@ impl<'a> WasmBackend<'a> {
         });
 
         let host_lookup = module.get_host_function_lookup(env.arena);
+
         if module.names.function_names.is_empty() {
-            let import_fns = module.import.imports.iter().filter(|imp| imp.is_function());
-            let import_names = Vec::from_iter_in(import_fns.map(|imp| imp.name), env.arena);
-            let symbols = module.linking.symbol_table.iter();
-            let names = symbols.filter_map(|sym_info| match sym_info {
-                SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { index, name, .. }) => {
-                    Some((*index, *name))
-                }
-                SymInfo::Function(WasmObjectSymbol::ImplicitlyNamed { index, .. }) => {
-                    Some((*index, import_names[*index as usize]))
-                }
-                _ => None,
-            });
-            module.names.function_names.extend(names);
-            module.names.function_names.sort_by_key(|(idx, _name)| *idx);
+            module.names = NameSection::from_imports_and_linking_data(
+                env.arena,
+                &module.import,
+                &module.linking,
+            )
         }
 
         module.link_host_to_app_calls(host_to_app_map);
