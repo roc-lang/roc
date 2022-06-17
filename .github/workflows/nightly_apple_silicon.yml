@@ -1,14 +1,16 @@
 on: [pull_request]
 
-name: Nightly Release Build
+name: Nightly Release Apple Silicon
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build:
-    name: Test and Build
+  test-and-build:
+    name: Rust tests, build and package nightly release
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 90
-    env:
-      FORCE_COLOR: 1 # for earthly logging
     steps:
       - uses: actions/checkout@v2
       - name: zig version

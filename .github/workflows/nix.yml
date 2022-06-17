@@ -14,8 +14,6 @@ jobs:
     name: nix-m1
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 90
-    env:
-      FORCE_COLOR: 1
     steps:
       - uses: actions/checkout@v2
         with:
