@@ -1417,7 +1417,17 @@ mod test_reporting {
                 "#
             ),
             indoc!(
-                // TODO: why is the latter duplicated?
+                // TODO: the second error is duplicated because when solving `f : _ -> List _`, we
+                // introduce the variable for `f` twice: once to solve `f` without generalization,
+                // and then a second time to properly generalize it. When a def is unannotated
+                // (like in `g`) the same variable gets used both times, because the type of `g` is
+                // only an unbound type variable. However, for `f`, we run `type_to_var` twice,
+                // receiving two separate variables, and the second variable doesn't have the cycle
+                // error already recorded for the first.
+                // The way to resolve this is to always give type annotation signatures an extra
+                // variables they can put themselves in, and to run the constraint algorithm
+                // against that extra variable, rather than possibly having to translate a `Type`
+                // again.
                 r#"
                 ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
