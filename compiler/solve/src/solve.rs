@@ -792,7 +792,9 @@ fn solve(
                         let result = offenders.len();
 
                         if result > 0 {
-                            dbg!(&subs, &offenders, &let_con.def_types);
+                            eprintln!("subs = {:?}", &subs);
+                            eprintln!("offenders = {:?}", &offenders);
+                            eprintln!("let_con.def_types = {:?}", &let_con.def_types);
                         }
 
                         result

@@ -4507,6 +4507,7 @@ fn build_pending_specializations<'a>(
                     )
                 }
             }
+            Expects(_) => todo!("toplevel expect codgen"),
             InvalidCycle(_) | DeclareRec(..) => {
                 // do nothing?
                 // this may mean the loc_symbols are not defined during codegen; is that a problem?
