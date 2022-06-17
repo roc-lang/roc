@@ -10373,4 +10373,34 @@ All branches in an `if` must have the same type!
             "#
         )
     );
+
+    test_report!(
+        "recursive_body_and_annotation_with_inference_disagree",
+        indoc!(
+            r#"
+            f : _ -> (_ -> Str)
+            f = \_ -> if True then {} else f {}
+
+            f
+            "#
+        ),
+        indoc!(
+            r#"
+            ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+            This expression is used in an unexpected way:
+
+            5│      f = \_ -> if True then {} else f {}
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+            It is a value of type:
+
+                {}
+
+            But you are trying to use it as:
+
+                a -> Str
+            "#
+        )
+    );
 }
