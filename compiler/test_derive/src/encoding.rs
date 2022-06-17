@@ -251,12 +251,29 @@ where
     }
 }
 
+fn check_immediate<S>(synth: S, immediate: Symbol)
+where
+    S: FnOnce(&mut Subs) -> Variable,
+{
+    let mut subs = Subs::new();
+    let var = synth(&mut subs);
+
+    let key = Derived::encoding(&subs, var);
+
+    assert_eq!(key, Derived::Immediate(immediate));
+}
+
 // Writing out the types into content is terrible, so let's use a DSL at least for testing
 macro_rules! v {
-    ({ $($field:ident: $make_v:expr),* }) => {
+    ({ $($field:ident: $make_v:expr,)* $(?$opt_field:ident : $make_opt_v:expr,)* }) => {
         |subs: &mut Subs| {
             $(let $field = $make_v(subs);)*
-            let fields = RecordFields::insert_into_subs(subs, vec![ $( (stringify!($field).into(), RecordField::Required($field)) ,)* ]);
+            $(let $opt_field = $make_opt_v(subs);)*
+            let fields = vec![
+                $( (stringify!($field).into(), RecordField::Required($field)) ,)*
+                $( (stringify!($opt_field).into(), RecordField::Required($opt_field)) ,)*
+            ];
+            let fields = RecordFields::insert_into_subs(subs, fields);
             synth_var(subs, Content::Structure(FlatType::Record(fields, Variable::EMPTY_RECORD)))
         }
     };
@@ -344,14 +361,17 @@ macro_rules! test_hash_neq {
 
 test_hash_eq! {
     same_record:
-        v!({ a: v!(U8) }), v!({ a: v!(U8) })
+        v!({ a: v!(U8), }), v!({ a: v!(U8), })
     same_record_fields_diff_types:
-        v!({ a: v!(U8) }), v!({ a: v!(STR) })
+        v!({ a: v!(U8), }), v!({ a: v!(STR), })
     same_record_fields_any_order:
-        v!({ a: v!(U8), b: v!(U8), c: v!(U8) }),
-        v!({ c: v!(U8), a: v!(U8), b: v!(U8) })
+        v!({ a: v!(U8), b: v!(U8), c: v!(U8), }),
+        v!({ c: v!(U8), a: v!(U8), b: v!(U8), })
     explicit_empty_record_and_implicit_empty_record:
         v!(EMPTY_RECORD), v!({})
+    same_record_fields_required_vs_optional:
+        v!({ a: v!(U8), b: v!(U8), }),
+        v!({ ?a: v!(U8), ?b: v!(U8), })
 
     same_tag_union:
         v!([ A v!(U8) v!(STR), B v!(STR) ]), v!([ A v!(U8) v!(STR), B v!(STR) ])
@@ -392,9 +412,9 @@ test_hash_eq! {
 
 test_hash_neq! {
     different_record_fields:
-        v!({ a: v!(U8) }), v!({ b: v!(U8) })
+        v!({ a: v!(U8), }), v!({ b: v!(U8), })
     record_empty_vs_nonempty:
-        v!(EMPTY_RECORD), v!({ a: v!(U8) })
+        v!(EMPTY_RECORD), v!({ a: v!(U8), })
 
     different_tag_union_tags:
         v!([ A v!(U8) ]), v!([ B v!(U8) ])
@@ -417,6 +437,24 @@ test_hash_neq! {
 // }}} hash tests
 
 // {{{ deriver tests
+
+#[test]
+fn immediates() {
+    check_immediate(v!(U8), Symbol::ENCODE_U8);
+    check_immediate(v!(U16), Symbol::ENCODE_U16);
+    check_immediate(v!(U32), Symbol::ENCODE_U32);
+    check_immediate(v!(U64), Symbol::ENCODE_U64);
+    check_immediate(v!(U128), Symbol::ENCODE_U128);
+    check_immediate(v!(I8), Symbol::ENCODE_I8);
+    check_immediate(v!(I16), Symbol::ENCODE_I16);
+    check_immediate(v!(I32), Symbol::ENCODE_I32);
+    check_immediate(v!(I64), Symbol::ENCODE_I64);
+    check_immediate(v!(I128), Symbol::ENCODE_I128);
+    check_immediate(v!(DEC), Symbol::ENCODE_DEC);
+    check_immediate(v!(F32), Symbol::ENCODE_F32);
+    check_immediate(v!(F64), Symbol::ENCODE_F64);
+    check_immediate(v!(STR), Symbol::ENCODE_STRING);
+}
 
 #[test]
 fn empty_record() {
@@ -447,7 +485,7 @@ fn zero_field_record() {
 #[test]
 fn one_field_record() {
     derive_test(
-        v!({ a: v!(U8) }),
+        v!({ a: v!(U8), }),
         "{ a : val } -> Encoder fmt | fmt has EncoderFormatting, val has Encoding",
         indoc!(
             r#"
@@ -460,7 +498,7 @@ fn one_field_record() {
 #[test]
 fn two_field_record() {
     derive_test(
-        v!({ a: v!(U8), b: v!(STR) }),
+        v!({ a: v!(U8), b: v!(STR), }),
         "{ a : val, b : a } -> Encoder fmt | a has Encoding, fmt has EncoderFormatting, val has Encoding",
         indoc!(
             r#"
