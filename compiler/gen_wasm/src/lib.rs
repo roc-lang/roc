@@ -85,7 +85,7 @@ pub fn build_app_module<'a>(
     host_module: WasmModule<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> (WasmModule<'a>, BitVec<usize>, u32) {
-    let layout_ids = LayoutIds::default();
+    let mut layout_ids = LayoutIds::default();
     let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
     let mut proc_lookup = Vec::with_capacity_in(procedures.len() * 2, env.arena);
     let mut host_to_app_map = Vec::with_capacity_in(env.exposed_to_host.len(), env.arena);
@@ -110,10 +110,13 @@ pub fn build_app_module<'a>(
         if env.exposed_to_host.contains(&sym) {
             maybe_main_fn_index = Some(fn_index);
 
-            // Assumption: there is only one specialization of a host-exposed function
-            let ident_string = sym.as_str(interns);
-            let c_function_name = bumpalo::format!(in env.arena, "roc__{}_1_exposed", ident_string);
-            host_to_app_map.push((c_function_name.into_bump_str(), fn_index));
+            let exposed_name = layout_ids
+                .get_toplevel(sym, &proc_layout)
+                .to_exposed_symbol_string(sym, interns);
+
+            let exposed_name_bump: &'a str = env.arena.alloc_str(&exposed_name);
+
+            host_to_app_map.push((exposed_name_bump, fn_index));
         }
 
         proc_lookup.push(ProcLookupData {

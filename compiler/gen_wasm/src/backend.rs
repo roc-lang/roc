@@ -252,6 +252,8 @@ impl<'a> WasmBackend<'a> {
             .to_symbol_string(symbol, self.interns);
         let name = String::from_str_in(&name, self.env.arena).into_bump_str();
 
+        // dbg!(name);
+
         self.proc_lookup.push(ProcLookupData {
             name: symbol,
             layout,

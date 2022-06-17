@@ -7,6 +7,7 @@ interface Json
     imports
         [
             Encode.{
+                Encoder,
                 custom,
                 appendWith,
                 u8,
@@ -25,6 +26,8 @@ interface Json
                 bool,
                 string,
                 list,
+                record,
+                tag,
             },
         ]
 
@@ -81,3 +84,52 @@ list = \lst, encodeElem ->
         withList = List.walk lst head (\bytes1, elem -> appendWith bytes1 (encodeElem elem) (@Json {}))
 
         List.append withList (Num.toU8 ']')
+
+record = \fields ->
+    custom \bytes, @Json {} ->
+        writeRecord = \{ buffer, fieldsLeft }, { key, value } ->
+            bufferWithKeyValue =
+                List.append buffer (Num.toU8 '"')
+                    |> List.concat (Str.toUtf8 key)
+                    |> List.append (Num.toU8 '"')
+                    |> List.append (Num.toU8 ':')
+                    |> appendWith value (@Json {})
+
+            bufferWithSuffix =
+                if fieldsLeft > 0 then
+                    List.append bufferWithKeyValue (Num.toU8 ',')
+                else
+                    bufferWithKeyValue
+
+            { buffer: bufferWithSuffix, fieldsLeft: fieldsLeft - 1 }
+
+        bytesHead = List.append bytes (Num.toU8 '{')
+        { buffer: bytesWithRecord } = List.walk fields { buffer: bytesHead, fieldsLeft: List.len fields } writeRecord
+
+        List.append bytesWithRecord (Num.toU8 '}')
+
+tag = \name, payload ->
+    custom \bytes, @Json {} ->
+        # Idea: encode `A v1 v2` as `{"A": [v1, v2]}`
+        writePayload = \{ buffer, itemsLeft }, encoder ->
+            bufferWithValue = appendWith buffer encoder (@Json {})
+            bufferWithSuffix =
+                if itemsLeft > 0 then
+                    List.append bufferWithValue (Num.toU8 ',')
+                else
+                    bufferWithValue
+
+            { buffer: bufferWithSuffix, itemsLeft: itemsLeft - 1 }
+
+        bytesHead =
+            List.append bytes (Num.toU8 '{')
+                |> List.append (Num.toU8 '"')
+                |> List.concat (Str.toUtf8 name)
+                |> List.append (Num.toU8 '"')
+                |> List.append (Num.toU8 ':')
+                |> List.append (Num.toU8 '[')
+
+        { buffer: bytesWithPayload } = List.walk payload { buffer: bytesHead, itemsLeft: List.len payload } writePayload
+
+        List.append bytesWithPayload (Num.toU8 ']')
+            |> List.append (Num.toU8 '}')
