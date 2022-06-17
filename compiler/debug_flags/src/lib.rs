@@ -62,7 +62,12 @@ flags! {
     // ===Solve===
 
     /// Prints type unifications, before and after they happen.
+    /// Only use this in single-threaded mode!
     ROC_PRINT_UNIFICATIONS
+
+    /// Like ROC_PRINT_UNIFICATIONS, in the context of typechecking derived implementations.
+    /// Only use this in single-threaded mode!
+    ROC_PRINT_UNIFICATIONS_DERIVED
 
     /// Prints all type mismatches hit during type unification.
     ROC_PRINT_MISMATCHES
