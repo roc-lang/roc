@@ -1230,9 +1230,7 @@ impl<'a> WasmBackend<'a> {
         low_level_call.generate(self);
     }
 
-    /// Generate a call instruction to a Zig builtin function.
-    /// And if we haven't seen it before, add an Import and linker data for it.
-    /// Zig calls use LLVM's "fast" calling convention rather than our usual C ABI.
+    /// Generate a call instruction to a host function or Zig builtin.
     pub fn call_host_fn_after_loading_args(
         &mut self,
         name: &str,
@@ -1246,8 +1244,15 @@ impl<'a> WasmBackend<'a> {
             .unwrap_or_else(|| panic!("The Roc app tries to call `{}` but I can't find it!", name));
 
         self.called_preload_fns.set(*fn_index as usize, true);
-        self.code_builder
-            .call(*fn_index, num_wasm_args, has_return_val);
+
+        let host_import_count = self.fn_index_offset - self.module.code.preloaded_count;
+        if *fn_index < host_import_count {
+            self.code_builder
+                .call_import(*fn_index, num_wasm_args, has_return_val);
+        } else {
+            self.code_builder
+                .call(*fn_index, num_wasm_args, has_return_val);
+        }
     }
 
     /// Call a helper procedure that implements `==` for a data structure (not numbers or Str)

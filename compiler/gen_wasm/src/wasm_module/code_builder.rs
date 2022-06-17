@@ -178,6 +178,10 @@ pub struct CodeBuilder<'a> {
     /// Our simulation model of the Wasm stack machine
     /// Nested blocks of instructions. A child block can't "see" the stack of its parent block
     vm_block_stack: Vec<'a, VmBlock<'a>>,
+
+    /// Relocations for calls to JS imports
+    /// When we remove unused imports, the live ones are re-indexed
+    import_relocations: Vec<'a, (usize, u32)>,
 }
 
 impl<'a> Serialize for CodeBuilder<'a> {
@@ -204,8 +208,15 @@ impl<'a> CodeBuilder<'a> {
             preamble: Vec::with_capacity_in(32, arena),
             inner_length: Vec::with_capacity_in(5, arena),
             vm_block_stack,
+            import_relocations: Vec::with_capacity_in(0, arena),
         }
     }
+
+    /**********************************************************
+
+        LINKING
+
+    ***********************************************************/
 
     /// Build a dummy function with just a single `unreachable` instruction
     pub fn dummy(arena: &'a Bump) -> Self {
@@ -213,6 +224,17 @@ impl<'a> CodeBuilder<'a> {
         builder.unreachable_();
         builder.build_fn_header_and_footer(&[], 0, None);
         builder
+    }
+
+    pub fn apply_import_relocs(&mut self, live_import_fns: &[usize]) {
+        for (code_index, fn_index) in self.import_relocations.iter() {
+            for (new_index, old_index) in live_import_fns.iter().enumerate() {
+                if *fn_index as usize == *old_index {
+                    self.code
+                        .overwrite_padded_u32(*code_index, new_index as u32);
+                }
+            }
+        }
     }
 
     /**********************************************************
@@ -667,7 +689,28 @@ impl<'a> CodeBuilder<'a> {
     instruction_no_args!(return_, RETURN, 0, false);
 
     pub fn call(&mut self, function_index: u32, n_args: usize, has_return_val: bool) {
+        self.call_impl(function_index, n_args, has_return_val, false)
+    }
+
+    pub fn call_import(&mut self, function_index: u32, n_args: usize, has_return_val: bool) {
+        self.call_impl(function_index, n_args, has_return_val, true)
+    }
+
+    #[inline(always)]
+    fn call_impl(
+        &mut self,
+        function_index: u32,
+        n_args: usize,
+        has_return_val: bool,
+        is_import: bool,
+    ) {
         self.inst_base(CALL, n_args, has_return_val);
+
+        if is_import {
+            self.import_relocations
+                .push((self.code.len(), function_index));
+        }
+
         self.code.encode_padded_u32(function_index);
 
         log_instruction!(

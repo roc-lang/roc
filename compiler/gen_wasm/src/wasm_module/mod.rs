@@ -264,11 +264,9 @@ impl<'a> WasmModule<'a> {
             self.names.function_names[old_index].1 = new_name;
         }
 
-        //
-        // Relocate Wasm calls to JS imports
+        // Relocate calls from host to JS imports
         // This must happen *before* we run dead code elimination on the code section,
         // so that byte offsets in the host's linking data will still be valid.
-        //
         for (new_index, &old_index) in live_import_fns.iter().enumerate() {
             if new_index == old_index {
                 continue;
@@ -282,6 +280,11 @@ impl<'a> WasmModule<'a> {
                 sym_index,
                 new_index as u32,
             );
+        }
+
+        // Relocate calls from Roc app to JS imports
+        for code_builder in self.code.code_builders.iter_mut() {
+            code_builder.apply_import_relocs(&live_import_fns);
         }
 
         //
