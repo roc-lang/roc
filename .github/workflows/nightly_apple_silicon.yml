@@ -20,7 +20,7 @@ jobs:
       - name: run tests 
         run: cargo test --locked # no --release yet until #3166 is fixed
       - name: write version to file
-        run: printf "nightly pre-release, built from commit " > version.txt && git log --pretty=format:'%h' -n 1 >> version.txt && printf " on: " >> version.txt && date >> version.txt
+        run: printf 'nightly pre-release, built from commit ' > version.txt && git log --pretty=format:'%h' -n 1 >> version.txt && printf ' on ' >> version.txt && date >> version.txt
       - name: build nightly release
         run: cargo build --locked --release
       - name: package release
