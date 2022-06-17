@@ -3671,6 +3671,18 @@ name = "roc_debug_flags"
 version = "0.1.0"
 
 [[package]]
+name = "roc_derive_key"
+version = "0.1.0"
+dependencies = [
+ "roc_can",
+ "roc_collections",
+ "roc_error_macros",
+ "roc_module",
+ "roc_region",
+ "roc_types",
+]
+
+[[package]]
 name = "roc_docs"
 version = "0.1.0"
 dependencies = [
@@ -3951,6 +3963,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_debug_flags",
+ "roc_derive_key",
  "roc_error_macros",
  "roc_exhaustive",
  "roc_late_solve",
@@ -4810,6 +4823,7 @@ dependencies = [
  "roc_collections",
  "roc_constrain",
  "roc_debug_flags",
+ "roc_derive_key",
  "roc_load_internal",
  "roc_module",
  "roc_mono",

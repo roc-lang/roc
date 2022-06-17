@@ -15,6 +15,7 @@ members = [
     "compiler/solve",
     "compiler/late_solve",
     "compiler/fmt",
+    "compiler/derive_key",
     "compiler/mono",
     "compiler/alias_analysis",
     "compiler/test_mono",
