@@ -87,16 +87,22 @@ insertNewLazy = \list, k, fun ->
 ## Runs in linear time (because we need to check for duplicates).
 insert : AssocList k v, k, v -> AssocList k v
 insert = \list, k, v ->
-    listFindIndex : (List elem), (elem -> Bool) -> (Result Nat [ NotFound ]*)
-    listFindIndex = \list, matcher ->
-        List.walkUntil list 0 (\index, elem -> if matcher elem then Stop index else Continue (index + 1))
 
-    when listFindIndex list k is
+    when listFindIndex list (\Pair key _ -> key == k) is
         Err NotFound ->
             insertFresh list k v
         Ok index ->
             List.set list index (Pair k v)
 
+
+# NOTE: This helper function might be moved into the List module someday:
+listFindIndex : (List elem), (elem -> Bool) -> (Result Nat [ NotFound ]*)
+listFindIndex = \list, matcher ->
+    foundIndex = List.walkUntil list 0 (\index, elem -> if matcher elem then Stop index else Continue (index + 1))
+    if foundIndex < List.len list then
+        Ok foundIndex
+    else
+        Err NotFound
 
 ## Returns the number of associations in the AssocList
 len : AssocList k v -> Nat
@@ -114,6 +120,34 @@ values : AssocList k v -> List v
 values = \list ->
     List.map list (\Pair _ v -> v)
 
-#  replace : AssocList k v, k, v -> AssocList k v
-#  replace = \list, key, newval ->
-#      when List.find (\Pair elem_key _ -> elem_key == key) is
+get : AssocList k v, k -> Result v [ KeyNotFound ]*
+get = \list, needle ->
+    list
+    |> List.find (\Pair key _ -> key == needle)
+    |> Result.map (\Pair _ v -> v)
+    |> Result.mapErr (\NotFound -> KeyNotFound)
+
+walk : AssocList k v, state, (state, k, v -> state) -> state
+walk = \list, initialState, transform ->
+    List.walk list initialState (\state, Pair k v-> transform state k v)
+
+## Removes the given key from the AssocList
+## (Returns the AssocList unchanged if it was not inside)
+##
+## Upon removal, the most recently inserted key-value pair
+## is moved into the place of the removed pair, for increased memory efficiency.
+## This means that after calling remove, insertion order is not maintained.
+remove : AssocList k v, k -> AssocList k v
+remove = \list, key ->
+    if List.isEmpty list then
+        list
+    else
+        when listFindIndex list (\Pair k _ -> k == key) is
+            Err NotFound ->
+                list
+            Ok index ->
+              lastIndex = (List.len list) - 1
+
+              list
+              |> List.swap index lastIndex
+              |> List.dropLast
