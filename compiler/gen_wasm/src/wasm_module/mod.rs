@@ -225,6 +225,7 @@ impl<'a> WasmModule<'a> {
         //
         let mut live_import_fns = Vec::with_capacity_in(import_count, arena);
         let mut fn_index = 0;
+        let mut eliminated_import_count = 0;
         self.import.imports.retain(|import| {
             if !matches!(import.description, ImportDesc::Func { .. }) {
                 true
@@ -232,24 +233,30 @@ impl<'a> WasmModule<'a> {
                 let live = live_flags[fn_index];
                 if live {
                     live_import_fns.push(fn_index);
+                } else {
+                    eliminated_import_count += 1;
                 }
                 fn_index += 1;
                 live
             }
         });
 
-        // signatures
-        let live_import_count = live_import_fns.len();
-        let dead_import_count = host_fn_min as usize - live_import_count;
+        // Update the count of JS imports to replace with Wasm dummies
+        // (In addition to the ones we already replaced for each host-to-app call)
+        self.code.dead_import_dummy_count += eliminated_import_count as u32;
+
+        // FunctionSection
+        // Insert function signatures for the new Wasm dummy functions
         let signature_count = self.function.signatures.len();
         self.function
             .signatures
-            .extend(repeat(0).take(dead_import_count));
+            .extend(repeat(0).take(eliminated_import_count));
         self.function
             .signatures
-            .copy_within(0..signature_count, dead_import_count);
+            .copy_within(0..signature_count, eliminated_import_count);
 
-        // debug names
+        // NameSection
+        // For each live import, swap its debug name to the right position
         for (new_index, &old_index) in live_import_fns.iter().enumerate() {
             let old_name: &str = self.names.function_names[old_index].1;
             let new_name: &str = self.names.function_names[new_index].1;
@@ -276,13 +283,6 @@ impl<'a> WasmModule<'a> {
                 new_index as u32,
             );
         }
-
-        //
-        // For every eliminated JS import, insert a dummy Wasm function at the same index.
-        // This avoids shifting the indices of Wasm functions, which would require more linking work.
-        //
-        let dead_import_count = host_fn_min - live_import_fns.len() as u32;
-        self.code.dead_import_dummy_count += dead_import_count;
 
         //
         // Dead code elimination. Replace dead functions with tiny dummies.
@@ -435,7 +435,11 @@ impl<'a> WasmModule<'a> {
     /// - Update all call sites for the swapped JS function
     /// - Update the FunctionSection to show the correct type signature for the swapped JS function
     /// - Insert a dummy function in the CodeSection, at the same index as the swapped JS function
-    pub fn link_host_to_app_calls(&mut self, host_to_app_map: Vec<'a, (&'a str, u32)>) {
+    pub fn link_host_to_app_calls(
+        &mut self,
+        arena: &'a Bump,
+        host_to_app_map: Vec<'a, (&'a str, u32)>,
+    ) {
         for (app_fn_name, app_fn_index) in host_to_app_map.into_iter() {
             // Find the host import, and the last imported function to swap with it.
             // Not all imports are functions, so the function index and import index may be different
@@ -532,7 +536,9 @@ impl<'a> WasmModule<'a> {
                 .iter_mut()
                 .find(|(i, _)| *i as usize == swap_fn_index)
             {
-                debug_name.clone_from(&"linking_dummy");
+                debug_name.clone_from(
+                    &bumpalo::format!(in arena, "linking_dummy_{}", debug_name).into_bump_str(),
+                );
             }
         }
     }

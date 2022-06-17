@@ -105,7 +105,7 @@ impl<'a> WasmBackend<'a> {
             )
         }
 
-        module.link_host_to_app_calls(host_to_app_map);
+        module.link_host_to_app_calls(env.arena, host_to_app_map);
         module.code.code_builders.reserve(proc_lookup.len());
 
         let host_function_count = module.import.imports.len()
