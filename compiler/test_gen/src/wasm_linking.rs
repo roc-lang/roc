@@ -179,11 +179,11 @@ impl<'a> BackendInputs<'a> {
     }
 }
 
-fn load_bytes_into_runtime(bytes: &[u8]) -> wasmer::Instance {
+fn execute_wasm_bytes(bytes: &[u8]) -> Result<wasmer::Instance, String> {
     use wasmer::{Function, Module, Store};
 
     let store = Store::default();
-    let wasmer_module = Module::new(&store, bytes).unwrap();
+    let wasmer_module = Module::new(&store, bytes).map_err(|e| e.to_string())?;
 
     let import_object = wasmer::imports!(
         "env" => {
@@ -195,7 +195,16 @@ fn load_bytes_into_runtime(bytes: &[u8]) -> wasmer::Instance {
         }
     );
 
-    wasmer::Instance::new(&wasmer_module, &import_object).unwrap()
+    let instance =
+        wasmer::Instance::new(&wasmer_module, &import_object).map_err(|e| e.to_string())?;
+
+    let start = instance
+        .exports
+        .get_function("_start")
+        .map_err(|e| e.to_string())?;
+    start.call(&[]).map_err(|e| e.to_string())?;
+
+    Ok(instance)
 }
 
 fn js_called_directly_from_roc() -> i32 {
@@ -288,10 +297,15 @@ fn test_linking_without_dce() {
         ]
     );
 
-    // Try to run it, make sure it doesn't crash
-    let instance = load_bytes_into_runtime(&buffer);
-    let start = instance.exports.get_function("_start").unwrap();
-    start.call(&[]).unwrap();
+    let instance = match execute_wasm_bytes(&buffer) {
+        Ok(inst) => inst,
+        Err(e) => {
+            let filename = "build/without_dce.wasm";
+            fs::write(filename, &buffer).unwrap();
+            panic!("Error in {}:\n{}", filename, e);
+        }
+    };
+
     let wasm_result = get_wasm_result(&instance);
     assert_eq!(wasm_result, get_native_result());
 }
@@ -359,10 +373,14 @@ fn test_linking_with_dce() {
         ]
     );
 
-    // Try to run it, make sure it doesn't crash
-    let instance = load_bytes_into_runtime(&buffer);
-    let start = instance.exports.get_function("_start").unwrap();
-    start.call(&[]).unwrap();
+    let instance = match execute_wasm_bytes(&buffer) {
+        Ok(inst) => inst,
+        Err(e) => {
+            let filename = "build/with_dce.wasm";
+            fs::write(filename, &buffer).unwrap();
+            panic!("Error in {}:\n{}", filename, e);
+        }
+    };
 
     let wasm_result = get_wasm_result(&instance);
     assert_eq!(wasm_result, get_native_result());
