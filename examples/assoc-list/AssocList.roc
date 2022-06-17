@@ -8,28 +8,12 @@ interface AssocList
 ##
 ## Because lists are represented in Roc as flat arrays that double their capacity when needed,
 ## it is much cheaper to append to a list than to prepend to it.
-## As such, insertion happens at the appending side of the list.
+## As such, insertion of new associations happens at the appending ('back') side of the list.
 ##
-## Note that an association list by itself does not care about duplicate keys.
-## Insertion, lookup and replacement functions exist in multiple flavours,
-## depending on how you want to deal with duplicate keys.
-AssocList k v : (List [Pair k v])
+## Insertion order is maintained, unless elements are removed or replaced in the meantime.
+AssocList k v : List [Pair k v]
 
-#  ## An empty dictionary.
-#  empty : Dict k v
-#  single : k, v -> Dict k v
-#  get : Dict k v, k -> Result v [KeyNotFound]*
-#  walk : Dict k v, state, (state, k, v -> state) -> state
-#  insert : Dict k v, k, v -> Dict k v
-#  len : Dict k v -> Nat
-#  remove : Dict k v, k -> Dict k v
-#  contains : Dict k v, k -> Bool
-
-#  ## Returns a [List] of the dictionary's keys.
-#  keys : Dict k v -> List k
-
-#  ## Returns a [List] of the dictionary's values.
-#  values : Dict k v -> List v
+# TODO:
 #  union : Dict k v, Dict k v -> Dict k v
 #  intersection : Dict k v, Dict k v -> Dict k v
 #  difference : Dict k v, Dict k v -> Dict k v
@@ -58,8 +42,8 @@ insertFresh = \list, k, v ->
 contains : AssocList k v, k -> Bool
 contains = \list, needle ->
     list
-    |> List.find (\Pair key _val -> key == needle)
-    |> Result.isOk
+        |> List.find (\Pair key _val -> key == needle)
+        |> Result.isOk
 
 ## Inserts a new association, but only if the key was not yet in the association list.
 ## Otherwise, returns the list unchanged.
@@ -94,11 +78,11 @@ insert = \list, k, v ->
         Ok index ->
             List.set list index (Pair k v)
 
-
 # NOTE: This helper function might be moved into the List module someday:
-listFindIndex : (List elem), (elem -> Bool) -> (Result Nat [ NotFound ]*)
+listFindIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]*
 listFindIndex = \list, matcher ->
     foundIndex = List.walkUntil list 0 (\index, elem -> if matcher elem then Stop index else Continue (index + 1))
+
     if foundIndex < List.len list then
         Ok foundIndex
     else
@@ -114,22 +98,21 @@ keys : AssocList k v -> List k
 keys = \list ->
     List.map list (\Pair k _ -> k)
 
-
 ## Returns a [List] of the AssocList's values
 values : AssocList k v -> List v
 values = \list ->
     List.map list (\Pair _ v -> v)
 
-get : AssocList k v, k -> Result v [ KeyNotFound ]*
+get : AssocList k v, k -> Result v [KeyNotFound]*
 get = \list, needle ->
     list
-    |> List.find (\Pair key _ -> key == needle)
-    |> Result.map (\Pair _ v -> v)
-    |> Result.mapErr (\NotFound -> KeyNotFound)
+        |> List.find (\Pair key _ -> key == needle)
+        |> Result.map (\Pair _ v -> v)
+        |> Result.mapErr (\NotFound -> KeyNotFound)
 
 walk : AssocList k v, state, (state, k, v -> state) -> state
 walk = \list, initialState, transform ->
-    List.walk list initialState (\state, Pair k v-> transform state k v)
+    List.walk list initialState (\state, Pair k v -> transform state k v)
 
 ## Removes the given key from the AssocList
 ## (Returns the AssocList unchanged if it was not inside)
@@ -146,8 +129,8 @@ remove = \list, key ->
             Err NotFound ->
                 list
             Ok index ->
-              lastIndex = (List.len list) - 1
+                lastIndex = List.len list - 1
 
-              list
-              |> List.swap index lastIndex
-              |> List.dropLast
+                list
+                    |> List.swap index lastIndex
+                    |> List.dropLast
