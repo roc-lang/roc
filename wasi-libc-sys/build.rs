@@ -4,13 +4,17 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+use roc_utils::{path_to_str, zig_cache_find};
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/dummy.c");
 
-    let out_dir = env::var("OUT_DIR").unwrap();
-    let zig_cache_dir = format!("{out_dir}/zig-cache");
-    let out_file = format!("{out_dir}/wasi-libc.a");
+    let out_dir_str = env::var("OUT_DIR").unwrap();
+    let out_dir = Path::new(&out_dir_str);
+    let zig_cache_dir = out_dir.join("zig-cache");
+    let zig_cache_dir_o = zig_cache_dir.join("o");// the files we need are in the o subdir
+    let out_file = out_dir.join("wasi-libc.a");
 
     // Compile a dummy C program with Zig, with our own private cache directory
     let zig = zig_executable();
@@ -25,21 +29,15 @@ fn main() {
             "-O",
             "ReleaseSmall",
             "--global-cache-dir",
-            &zig_cache_dir,
-            "src/dummy.c",
-            &format!("-femit-bin={}/dummy.wasm", out_dir),
+            path_to_str(&zig_cache_dir),
+            path_to_str(&Path::new("src").join("dummy.c")),
+            &format!("-femit-bin={}", path_to_str(&out_dir.join("dummy.wasm"))),
         ],
     );
 
     // Find the libc.a and compiler_rt.o files that Zig wrote (as a side-effect of compiling the dummy program)
-    let cwd = std::env::current_dir().unwrap();
-    let find_libc_output = run_command(&cwd, "find", [&zig_cache_dir, "-name", "libc.a"]);
-    // If `find` printed multiple results, take the first.
-    let zig_libc_path = find_libc_output.split('\n').next().unwrap();
-
-    let find_crt_output = run_command(&cwd, "find", [&zig_cache_dir, "-name", "compiler_rt.o"]);
-    // If `find` printed multiple results, take the first.
-    let zig_crt_path = find_crt_output.split('\n').next().unwrap();
+    let zig_libc_path = zig_cache_find(path_to_str(&zig_cache_dir_o), "libc.a");
+    let zig_crt_path = zig_cache_find(path_to_str(&zig_cache_dir_o), "compiler_rt.o");
 
     // Copy libc to where Cargo expects the output of this crate
     fs::copy(&zig_libc_path, &out_file).unwrap();
@@ -47,9 +45,9 @@ fn main() {
     // Generate some Rust code to indicate where the file is
     let generated_rust = [
         "pub const WASI_LIBC_PATH: &str =",
-        &format!("    \"{}\";", out_file),
+        &format!("    \"{}\";", path_to_str(&out_file).replace("\\", "\\\\")),
         "pub const WASI_COMPILER_RT_PATH: &str =",
-        &format!("  \"{}\";", zig_crt_path),
+        &format!("  \"{}\";", zig_crt_path.replace("\\", "\\\\")),
         "",
     ]
     .join("\n");

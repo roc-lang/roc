@@ -3891,6 +3891,7 @@ dependencies = [
  "roc_reporting",
  "roc_target",
  "roc_types",
+ "roc_utils",
 ]
 
 [[package]]
@@ -4057,6 +4058,7 @@ dependencies = [
  "roc_reporting",
  "roc_target",
  "roc_types",
+ "roc_utils",
  "wasm-bindgen",
  "wasm-bindgen-futures",
 ]
@@ -5150,6 +5152,9 @@ checksum = "fd6fbd9a79829dd1ad0cc20627bf1ed606756a7f77edff7b66b7064f9cb327c6"
 [[package]]
 name = "wasi_libc_sys"
 version = "0.1.0"
+dependencies = [
+ "roc_utils",
+]
 
 [[package]]
 name = "wasm-bindgen"

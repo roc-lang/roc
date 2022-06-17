@@ -21,4 +21,5 @@ roc_builtins = { path = "../builtins" }
 roc_module = { path = "../module" }
 roc_reporting = { path = "../../reporting" }
 roc_target = { path = "../roc_target" }
+roc_utils = { path = "../../utils" }
 bumpalo = { version = "3.8.0", features = ["collections"] }

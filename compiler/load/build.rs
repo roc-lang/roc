@@ -1,8 +1,9 @@
-use std::path::PathBuf;
+use std::path::{PathBuf, Path};
 
 use bumpalo::Bump;
 use roc_load_internal::file::Threading;
 use roc_module::symbol::ModuleId;
+use roc_utils::path_to_str;
 
 const MODULES: &[(ModuleId, &str)] = &[
     (ModuleId::BOOL, "Bool.roc"),
@@ -25,7 +26,8 @@ fn main() {
 
 fn write_subs_for_module(module_id: ModuleId, filename: &str) {
     // Tell Cargo that if the given file changes, to rerun this build script.
-    println!("cargo:rerun-if-changed=../builtins/roc/{}", filename);
+    let builtins_path = Path::new("..").join("builtins").join("roc").join(filename);
+    println!("cargo:rerun-if-changed={}", path_to_str(&builtins_path));
 
     let arena = Bump::new();
     let src_dir = PathBuf::from(".");

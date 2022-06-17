@@ -1,5 +1,7 @@
 use snafu::OptionExt;
+use std::path::{PathBuf, Path};
 use std::{collections::HashMap, slice::SliceIndex};
+use std::fs;
 use util_error::{IndexOfFailed, KeyNotFound, OutOfBounds, UtilResult};
 
 pub mod util_error;
@@ -92,4 +94,43 @@ pub fn first_last_index_of<T: ::std::fmt::Debug + std::cmp::Eq>(
         }
         .fail()
     }
+}
+
+pub fn zig_cache_find(dir: &str, filename: &str) -> String {
+    #[cfg(unix)]
+    return find(dir, filename);
+    #[cfg(not(unix))]
+    path_to_str(&zig_cache_find_no_unix(dir, filename)).to_string()
+}
+
+#[cfg(unix)]
+fn find(dir: &str, filename: &str) -> String {
+    run_command(
+        &std::env::current_dir().unwrap(),
+        "find",
+        [dir, "-name", filename]
+    ).split('\n').next().unwrap().to_string()
+}
+
+#[cfg(not(unix))]
+fn zig_cache_find_no_unix(dir: &str, filename: &str) -> PathBuf {
+    let dir_contents = fs::read_dir(dir).unwrap();
+
+    for dir_entry in dir_contents {
+        let files_in_sub_dir =  fs::read_dir(dir_entry.unwrap().path()).unwrap();
+        
+        for dir_entry in files_in_sub_dir {
+            let file = dir_entry.unwrap();
+
+            if file.file_name() == filename {
+                return file.path()
+            }
+        }
+    }
+
+    panic!("Could not find {} in {}", filename, dir)
+}
+
+pub fn path_to_str(path: &Path) -> &str {
+    path.as_os_str().to_str().unwrap()
 }

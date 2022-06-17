@@ -4,22 +4,23 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use roc_builtins::bitcode;
+use roc_utils::{path_to_str, zig_cache_find};
 
 const PLATFORM_FILENAME: &str = "repl_platform";
-const PRE_LINKED_BINARY: &str = "data/pre_linked_binary.o";
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    let source_path = format!("src/{}.c", PLATFORM_FILENAME);
-    println!("cargo:rerun-if-changed={}", source_path);
+    let source_path = Path::new("src").join(format!("{}.c", PLATFORM_FILENAME));
+    println!("cargo:rerun-if-changed={}", path_to_str(&source_path));
 
-    std::fs::create_dir_all("./data").unwrap();
+    std::fs::create_dir_all(Path::new(".").join("data")).unwrap();
 
     // Zig can produce *either* an object containing relocations OR an object containing libc code
     // But we want both, so we have to compile twice with different flags, then link them
 
     // Create an object file with relocations
-    let out_dir = env::var("OUT_DIR").unwrap();
+    let out_dir_str = env::var("OUT_DIR").unwrap();
+    let out_dir = Path::new(&out_dir_str);
     let platform_obj = build_wasm_platform(&out_dir, &source_path);
 
     // Compile again to get libc path
@@ -27,6 +28,8 @@ fn main() {
     let mut libc_pathbuf = PathBuf::from(&libc_archive);
     libc_pathbuf.pop();
     let libc_dir = libc_pathbuf.to_str().unwrap();
+
+    let pre_linked_binary_path = Path::new("data").join("pre_linked_binary.o");
 
     let args = &[
         "wasm-ld",
@@ -37,7 +40,7 @@ fn main() {
         libc_dir,
         "-lc",
         "-o",
-        PRE_LINKED_BINARY,
+        path_to_str(&pre_linked_binary_path),
         "--export-all",
         "--no-entry",
         "--relocatable",
@@ -57,8 +60,9 @@ fn zig_executable() -> String {
     }
 }
 
-fn build_wasm_platform(out_dir: &str, source_path: &str) -> String {
-    let platform_obj = format!("{}/{}.o", out_dir, PLATFORM_FILENAME);
+fn build_wasm_platform(out_dir: &Path, source_path: &Path) -> String {
+    let platform_obj_path = out_dir.join(format!("{}.o", PLATFORM_FILENAME));
+    let platform_obj_path_str = path_to_str(&platform_obj_path);
 
     run_command(
         &zig_executable(),
@@ -67,16 +71,20 @@ fn build_wasm_platform(out_dir: &str, source_path: &str) -> String {
             "-target",
             "wasm32-wasi",
             "-lc",
-            source_path,
-            &format!("-femit-bin={}", &platform_obj),
+            path_to_str(source_path),
+            &format!("-femit-bin={}", platform_obj_path_str),
         ],
     );
 
-    platform_obj
+    platform_obj_path_str.to_string()
 }
 
-fn build_wasm_libc_compilerrt(out_dir: &str, source_path: &str) -> (String, String) {
-    let zig_cache_dir = format!("{}/zig-cache-wasm32", out_dir);
+fn build_wasm_libc_compilerrt(out_dir: &Path, source_path: &Path) -> (String, String) {
+    let zig_cache_dir = out_dir.join("zig-cache-wasm32");
+    #[cfg(unix)]
+    let the_void = "/dev/null";
+    #[cfg(windows)]
+    let the_void = "NUL";
 
     run_command(
         &zig_executable(),
@@ -86,16 +94,18 @@ fn build_wasm_libc_compilerrt(out_dir: &str, source_path: &str) -> (String, Stri
             "-target",
             "wasm32-wasi",
             "-lc",
-            source_path,
-            "-femit-bin=/dev/null",
+            path_to_str(source_path),
+            &format!("-femit-bin={}", the_void),
             "--global-cache-dir",
-            &zig_cache_dir,
+            &path_to_str(&zig_cache_dir),
         ],
     );
 
+    // the files we need are in the o subdir
+    let zig_cache_dir_o = zig_cache_dir.join("o");
     (
-        run_command("find", &[&zig_cache_dir, "-name", "libc.a"]),
-        run_command("find", &[&zig_cache_dir, "-name", "compiler_rt.o"]),
+        zig_cache_find(&path_to_str(&zig_cache_dir_o), "libc.a"),
+        zig_cache_find(&path_to_str(&zig_cache_dir_o), "compiler_rt.o"),
     )
 }
 
