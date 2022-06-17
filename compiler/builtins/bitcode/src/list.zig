@@ -13,6 +13,8 @@ const IncN = fn (?[*]u8, usize) callconv(.C) void;
 const Dec = fn (?[*]u8) callconv(.C) void;
 const HasTagId = fn (u16, ?[*]u8) callconv(.C) extern struct { matched: bool, data: ?[*]u8 };
 
+const Alignment = usize;
+
 pub const RocList = extern struct {
     bytes: ?[*]u8,
     length: usize,
@@ -42,7 +44,7 @@ pub const RocList = extern struct {
     }
 
     pub fn allocate(
-        alignment: usize,
+        alignment: Alignment,
         length: usize,
         element_size: usize,
     ) RocList {
@@ -55,7 +57,7 @@ pub const RocList = extern struct {
         };
     }
 
-    pub fn makeUniqueExtra(self: RocList, alignment: u32, element_width: usize, update_mode: UpdateMode) RocList {
+    pub fn makeUniqueExtra(self: RocList, alignment: Alignment, element_width: usize, update_mode: UpdateMode) RocList {
         if (update_mode == .InPlace) {
             return self;
         } else {
@@ -63,7 +65,7 @@ pub const RocList = extern struct {
         }
     }
 
-    pub fn makeUnique(self: RocList, alignment: u32, element_width: usize) RocList {
+    pub fn makeUnique(self: RocList, alignment: Alignment, element_width: usize) RocList {
         if (self.isEmpty()) {
             return self;
         }
@@ -90,7 +92,7 @@ pub const RocList = extern struct {
 
     pub fn reallocate(
         self: RocList,
-        alignment: u32,
+        alignment: Alignment,
         new_length: usize,
         element_width: usize,
     ) RocList {
@@ -108,7 +110,7 @@ pub const RocList = extern struct {
     /// reallocate by explicitly making a new allocation and copying elements over
     fn reallocateFresh(
         self: RocList,
-        alignment: u32,
+        alignment: Alignment,
         new_length: usize,
         element_width: usize,
     ) RocList {
@@ -145,7 +147,7 @@ const Caller2 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 const Caller3 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 const Caller4 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 
-pub fn listReverse(list: RocList, alignment: u32, element_width: usize, update_mode: UpdateMode) callconv(.C) RocList {
+pub fn listReverse(list: RocList, alignment: Alignment, element_width: usize, update_mode: UpdateMode) callconv(.C) RocList {
     if (list.bytes) |source_ptr| {
         const size = list.len();
 
@@ -189,7 +191,7 @@ pub fn listMap(
     data: Opaque,
     inc_n_data: IncN,
     data_is_owned: bool,
-    alignment: u32,
+    alignment: Alignment,
     old_element_width: usize,
     new_element_width: usize,
 ) callconv(.C) RocList {
@@ -220,7 +222,7 @@ pub fn listMapWithIndex(
     data: Opaque,
     inc_n_data: IncN,
     data_is_owned: bool,
-    alignment: u32,
+    alignment: Alignment,
     old_element_width: usize,
     new_element_width: usize,
 ) callconv(.C) RocList {
@@ -262,7 +264,7 @@ pub fn listMap2(
     data: Opaque,
     inc_n_data: IncN,
     data_is_owned: bool,
-    alignment: u32,
+    alignment: Alignment,
     a_width: usize,
     b_width: usize,
     c_width: usize,
@@ -310,7 +312,7 @@ pub fn listMap3(
     data: Opaque,
     inc_n_data: IncN,
     data_is_owned: bool,
-    alignment: u32,
+    alignment: Alignment,
     a_width: usize,
     b_width: usize,
     c_width: usize,
@@ -367,7 +369,7 @@ pub fn listMap4(
     data: Opaque,
     inc_n_data: IncN,
     data_is_owned: bool,
-    alignment: u32,
+    alignment: Alignment,
     a_width: usize,
     b_width: usize,
     c_width: usize,
@@ -428,7 +430,7 @@ pub fn listKeepIf(
     data: Opaque,
     inc_n_data: IncN,
     data_is_owned: bool,
-    alignment: u32,
+    alignment: Alignment,
     element_width: usize,
     inc: Inc,
     dec: Dec,
@@ -479,7 +481,7 @@ pub fn listKeepOks(
     data: Opaque,
     inc_n_data: IncN,
     data_is_owned: bool,
-    alignment: u32,
+    alignment: Alignment,
     before_width: usize,
     result_width: usize,
     after_width: usize,
@@ -510,7 +512,7 @@ pub fn listKeepErrs(
     data: Opaque,
     inc_n_data: IncN,
     data_is_owned: bool,
-    alignment: u32,
+    alignment: Alignment,
     before_width: usize,
     result_width: usize,
     after_width: usize,
@@ -542,7 +544,7 @@ fn listKeepResult(
     data: Opaque,
     inc_n_data: IncN,
     data_is_owned: bool,
-    alignment: usize,
+    alignment: Alignment,
     before_width: usize,
     result_width: usize,
     after_width: usize,
@@ -602,7 +604,7 @@ pub fn listWalk(
     inc_n_data: IncN,
     data_is_owned: bool,
     accum: Opaque,
-    alignment: usize,
+    alignment: Alignment,
     element_width: usize,
     accum_width: usize,
     output: Opaque,
@@ -649,7 +651,7 @@ pub fn listWalkBackwards(
     inc_n_data: IncN,
     data_is_owned: bool,
     accum: Opaque,
-    alignment: usize,
+    alignment: Alignment,
     element_width: usize,
     accum_width: usize,
     output: Opaque,
@@ -697,7 +699,7 @@ pub fn listWalkUntil(
     inc_n_data: IncN,
     data_is_owned: bool,
     accum: Opaque,
-    alignment: usize,
+    alignment: Alignment,
     element_width: usize,
     continue_stop_width: usize,
     accum_width: usize,
@@ -768,7 +770,7 @@ pub fn listContains(list: RocList, key: Opaque, key_width: usize, is_eq: EqFn) c
     return false;
 }
 
-pub fn listRepeat(count: usize, alignment: u32, element: Opaque, element_width: usize, inc_n_element: IncN) callconv(.C) RocList {
+pub fn listRepeat(count: usize, alignment: Alignment, element: Opaque, element_width: usize, inc_n_element: IncN) callconv(.C) RocList {
     if (count == 0) {
         return RocList.empty();
     }
@@ -791,7 +793,7 @@ pub fn listRepeat(count: usize, alignment: u32, element: Opaque, element_width: 
     }
 }
 
-pub fn listSingle(alignment: u32, element: Opaque, element_width: usize) callconv(.C) RocList {
+pub fn listSingle(alignment: Alignment, element: Opaque, element_width: usize) callconv(.C) RocList {
     var output = RocList.allocate(alignment, 1, element_width);
 
     if (output.bytes) |target| {
@@ -803,7 +805,7 @@ pub fn listSingle(alignment: u32, element: Opaque, element_width: usize) callcon
     return output;
 }
 
-pub fn listAppend(list: RocList, alignment: u32, element: Opaque, element_width: usize, update_mode: UpdateMode) callconv(.C) RocList {
+pub fn listAppend(list: RocList, alignment: Alignment, element: Opaque, element_width: usize, update_mode: UpdateMode) callconv(.C) RocList {
     const old_length = list.len();
     var output = list.reallocate(alignment, old_length + 1, element_width);
 
@@ -819,7 +821,7 @@ pub fn listAppend(list: RocList, alignment: u32, element: Opaque, element_width:
     return output;
 }
 
-pub fn listPrepend(list: RocList, alignment: u32, element: Opaque, element_width: usize) callconv(.C) RocList {
+pub fn listPrepend(list: RocList, alignment: Alignment, element: Opaque, element_width: usize) callconv(.C) RocList {
     const old_length = list.len();
     var output = list.reallocate(alignment, old_length + 1, element_width);
 
@@ -845,7 +847,7 @@ pub fn listPrepend(list: RocList, alignment: u32, element: Opaque, element_width
 
 pub fn listSwap(
     list: RocList,
-    alignment: u32,
+    alignment: Alignment,
     element_width: usize,
     index_1: usize,
     index_2: usize,
@@ -873,7 +875,7 @@ pub fn listSwap(
 
 pub fn listSublist(
     list: RocList,
-    alignment: u32,
+    alignment: Alignment,
     element_width: usize,
     start: usize,
     len: usize,
@@ -922,7 +924,7 @@ pub fn listSublist(
 
 pub fn listDropAt(
     list: RocList,
-    alignment: u32,
+    alignment: Alignment,
     element_width: usize,
     drop_index: usize,
     dec: Dec,
@@ -1081,7 +1083,7 @@ pub fn listSortWith(
     data: Opaque,
     inc_n_data: IncN,
     data_is_owned: bool,
-    alignment: u32,
+    alignment: Alignment,
     element_width: usize,
 ) callconv(.C) RocList {
     var list = input.makeUnique(alignment, element_width);
@@ -1200,7 +1202,7 @@ fn swapElements(source_ptr: [*]u8, element_width: usize, index_1: usize, index_2
     return swap(element_width, element_at_i, element_at_j);
 }
 
-pub fn listJoin(list_of_lists: RocList, alignment: u32, element_width: usize) callconv(.C) RocList {
+pub fn listJoin(list_of_lists: RocList, alignment: Alignment, element_width: usize) callconv(.C) RocList {
     var total_length: usize = 0;
 
     const slice_of_lists = @ptrCast([*]RocList, @alignCast(@alignOf(RocList), list_of_lists.bytes));
@@ -1228,7 +1230,7 @@ pub fn listJoin(list_of_lists: RocList, alignment: u32, element_width: usize) ca
     return output;
 }
 
-pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_width: usize) callconv(.C) RocList {
+pub fn listConcat(list_a: RocList, list_b: RocList, alignment: Alignment, element_width: usize) callconv(.C) RocList {
     if (list_a.isEmpty()) {
         return list_b;
     } else if (list_b.isEmpty()) {
@@ -1239,7 +1241,7 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
         if (list_a.bytes) |source| {
             const new_source = utils.unsafeReallocate(
                 source,
-                alignment,
+                @intCast(u32, alignment),
                 list_a.len(),
                 total_length,
                 element_width,
@@ -1286,7 +1288,7 @@ pub fn listReplaceInPlace(
 
 pub fn listReplace(
     list: RocList,
-    alignment: u32,
+    alignment: Alignment,
     index: usize,
     element: Opaque,
     element_width: usize,

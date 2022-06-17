@@ -221,7 +221,7 @@ inline fn decref_ptr_to_refcount(
 
 pub fn allocateWithRefcountC(
     data_bytes: usize,
-    element_alignment: u32,
+    element_alignment: usize,
 ) callconv(.C) [*]u8 {
     return allocateWithRefcount(data_bytes, element_alignment);
 }
@@ -250,7 +250,7 @@ pub const CSlice = extern struct {
 
 pub fn unsafeReallocate(
     source_ptr: [*]u8,
-    alignment: u32,
+    alignment: usize,
     old_length: usize,
     new_length: usize,
     element_width: usize,
