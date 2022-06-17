@@ -1417,19 +1417,46 @@ mod test_reporting {
                 "#
             ),
             indoc!(
+                // TODO: why is the latter duplicated?
                 r#"
                 ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                I'm inferring a weird self-referential type for `x`:
+                I'm inferring a weird self-referential type for `g`:
 
-                5│      f = \x -> g x
-                             ^
+                6│      g = \x -> f [x]
+                        ^
 
                 Here is my best effort at writing down the type. You will see ∞ for
                 parts of the type that repeat something already printed out
                 infinitely.
 
-                    List ∞
+                    List ∞ -> List a
+
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `f`:
+
+                5│      f = \x -> g x
+                        ^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    List ∞ -> List a
+
+                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                I'm inferring a weird self-referential type for `f`:
+
+                5│      f = \x -> g x
+                        ^
+
+                Here is my best effort at writing down the type. You will see ∞ for
+                parts of the type that repeat something already printed out
+                infinitely.
+
+                    List ∞ -> List a
                 "#
             ),
         )
