@@ -6831,19 +6831,18 @@ mod solve_expr {
         )
     }
 
-    // TODO: this is a bug... technically not a soundness bug, but nearly as bad
     #[test]
     fn self_recursion_with_inference_var() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                f : Str -> U8
-                f = \s -> f s
+                f : _ -> _
+                f = \_ -> if False then "" else f ""
 
                 f
                 "#
             ),
-            "Str -> U8",
+            "Str -> Str",
         )
     }
 

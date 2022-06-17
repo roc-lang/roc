@@ -14,7 +14,7 @@ use roc_types::types::{
     TypeExtension,
 };
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct PatternState {
     pub headers: SendMap<Symbol, Loc<Type>>,
     pub vars: Vec<Variable>,
