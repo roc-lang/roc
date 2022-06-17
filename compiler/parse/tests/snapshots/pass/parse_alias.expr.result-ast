@@ -1,6 +1,19 @@
 Defs(
-    [
-        @0-26 Type(
+    Defs {
+        tags: [
+            Index(0),
+        ],
+        regions: [
+            @0-26,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [
             Alias {
                 header: TypeHeader {
                     name: @0-4 "Blah",
@@ -26,8 +39,9 @@ Defs(
                     ],
                 ),
             },
-        ),
-    ],
+        ],
+        value_defs: [],
+    },
     @28-30 SpaceBefore(
         Num(
             "42",

@@ -13,10 +13,13 @@ members = [
     "compiler/constrain",
     "compiler/unify",
     "compiler/solve",
+    "compiler/late_solve",
     "compiler/fmt",
+    "compiler/derive_key",
     "compiler/mono",
     "compiler/alias_analysis",
     "compiler/test_mono",
+    "compiler/test_derive",
     "compiler/load",
     "compiler/load_internal",
     "compiler/gen_llvm",
@@ -27,7 +30,6 @@ members = [
     "compiler/test_gen",
     "compiler/roc_target",
     "compiler/debug_flags",
-    "vendor/ena",
     "vendor/inkwell",
     "vendor/pathfinding",
     "vendor/pretty",
@@ -51,6 +53,8 @@ members = [
     "wasi-libc-sys",
 ]
 exclude = [
+    # Examples sometimes have Rust hosts in their platforms. The compiler should ignore those.
+    "examples",
     "ci/bench-runner",
     # Ignore building these normally. They are only imported by tests.
     # The tests will still correctly build them.

@@ -123,7 +123,6 @@ pub enum LowLevel {
     Or,
     Not,
     Hash,
-    ExpectTrue,
     PtrCast,
     RefCountInc,
     RefCountDec,

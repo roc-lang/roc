@@ -1,6 +1,19 @@
 Defs(
-    [
-        @0-37 Type(
+    Defs {
+        tags: [
+            Index(0),
+        ],
+        regions: [
+            @0-37,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [
             Ability {
                 header: TypeHeader {
                     name: @0-4 "Hash",
@@ -37,8 +50,9 @@ Defs(
                     },
                 ],
             },
-        ),
-    ],
+        ],
+        value_defs: [],
+    },
     @39-40 SpaceBefore(
         Num(
             "1",

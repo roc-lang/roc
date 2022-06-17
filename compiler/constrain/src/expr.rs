@@ -103,7 +103,6 @@ fn constrain_untyped_closure(
 
     fn_var: Variable,
     closure_var: Variable,
-    closure_ext_var: Variable,
     ret_var: Variable,
     arguments: &[(Variable, AnnotatedMark, Loc<Pattern>)],
     loc_body_expr: &Loc<Expr>,
@@ -122,7 +121,6 @@ fn constrain_untyped_closure(
 
     vars.push(ret_var);
     vars.push(closure_var);
-    vars.push(closure_ext_var);
     vars.push(fn_var);
 
     let body_type = NoExpectation(return_type);
@@ -147,7 +145,6 @@ fn constrain_untyped_closure(
         region,
         captured_symbols,
         closure_var,
-        closure_ext_var,
         &mut vars,
     );
 
@@ -452,7 +449,6 @@ pub fn constrain_expr(
         Closure(ClosureData {
             function_type: fn_var,
             closure_type: closure_var,
-            closure_ext_var,
             return_type: ret_var,
             arguments,
             loc_body: boxed,
@@ -468,7 +464,6 @@ pub fn constrain_expr(
                 expected,
                 *fn_var,
                 *closure_var,
-                *closure_ext_var,
                 *ret_var,
                 arguments,
                 boxed,
@@ -477,7 +472,11 @@ pub fn constrain_expr(
             )
         }
 
-        Expect(loc_cond, continuation) => {
+        Expect {
+            loc_condition,
+            loc_continuation,
+            lookups_in_cond,
+        } => {
             let expect_bool = |region| {
                 let bool_type = Type::Variable(Variable::BOOL);
                 Expected::ForReason(Reason::ExpectCondition, bool_type, region)
@@ -486,20 +485,38 @@ pub fn constrain_expr(
             let cond_con = constrain_expr(
                 constraints,
                 env,
-                loc_cond.region,
-                &loc_cond.value,
-                expect_bool(loc_cond.region),
+                loc_condition.region,
+                &loc_condition.value,
+                expect_bool(loc_condition.region),
             );
 
             let continuation_con = constrain_expr(
                 constraints,
                 env,
-                continuation.region,
-                &continuation.value,
+                loc_continuation.region,
+                &loc_continuation.value,
                 expected,
             );
 
-            constraints.exists_many([], [cond_con, continuation_con])
+            // + 2 for cond_con and continuation_con
+            let mut all_constraints = Vec::with_capacity(lookups_in_cond.len() + 2);
+
+            all_constraints.push(cond_con);
+            all_constraints.push(continuation_con);
+
+            let mut vars = Vec::with_capacity(lookups_in_cond.len());
+
+            for (symbol, var) in lookups_in_cond.iter() {
+                vars.push(*var);
+
+                all_constraints.push(constraints.lookup(
+                    *symbol,
+                    NoExpectation(Type::Variable(*var)),
+                    Region::zero(),
+                ));
+            }
+
+            constraints.exists_many(vars, all_constraints)
         }
 
         If {
@@ -822,12 +839,7 @@ pub fn constrain_expr(
             let branch_constraints = constraints.and_constraint(total_cons);
 
             constraints.exists(
-                [
-                    exhaustive.variable_for_introduction(),
-                    branches_cond_var,
-                    real_cond_var,
-                    *expr_var,
-                ],
+                [branches_cond_var, real_cond_var, *expr_var],
                 branch_constraints,
             )
         }
@@ -875,7 +887,6 @@ pub fn constrain_expr(
             field,
             record_var,
             closure_var,
-            closure_ext_var,
             ext_var,
             field_var,
         }) => {
@@ -897,7 +908,7 @@ pub fn constrain_expr(
 
             let lambda_set = Type::ClosureTag {
                 name: *closure_name,
-                ext: *closure_ext_var,
+                captures: vec![],
             };
 
             let closure_type = Type::Variable(*closure_var);
@@ -926,14 +937,7 @@ pub fn constrain_expr(
             ];
 
             constraints.exists_many(
-                [
-                    *record_var,
-                    *function_var,
-                    *closure_var,
-                    *closure_ext_var,
-                    field_var,
-                    ext_var,
-                ],
+                [*record_var, *function_var, *closure_var, field_var, ext_var],
                 cons,
             )
         }
@@ -1254,7 +1258,6 @@ fn constrain_function_def(
             let mut vars = Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
             let ret_var = function_def.return_type;
             let closure_var = function_def.closure_type;
-            let closure_ext_var = function_def.closure_ext_var;
 
             let (arg_types, signature_closure_type, ret_type) = match &signature {
                 Type::Function(arg_types, signature_closure_type, ret_type) => {
@@ -1268,7 +1271,6 @@ fn constrain_function_def(
 
             vars.push(ret_var);
             vars.push(closure_var);
-            vars.push(closure_ext_var);
 
             let mut def_pattern_state = PatternState::default();
 
@@ -1315,7 +1317,6 @@ fn constrain_function_def(
                 region,
                 &function_def.captured_symbols,
                 closure_var,
-                closure_ext_var,
                 &mut vars,
             );
 
@@ -1389,7 +1390,6 @@ fn constrain_function_def(
                 NoExpectation(expr_type),
                 expr_var,
                 function_def.closure_type,
-                function_def.closure_ext_var,
                 function_def.return_type,
                 &function_def.arguments,
                 loc_expr,
@@ -1762,6 +1762,21 @@ pub fn constrain_decls(
                 constraint =
                     constrain_value_def(constraints, &mut env, declarations, index, constraint);
             }
+            Expectation => {
+                let loc_expr = &declarations.expressions[index];
+
+                let bool_type = Type::Variable(Variable::BOOL);
+                let expected =
+                    Expected::ForReason(Reason::ExpectCondition, bool_type, loc_expr.region);
+
+                constraint = constrain_expr(
+                    constraints,
+                    &mut env,
+                    loc_expr.region,
+                    &loc_expr.value,
+                    expected,
+                );
+            }
             Function(function_def_index) => {
                 constraint = constrain_function_def(
                     constraints,
@@ -1910,7 +1925,6 @@ fn constrain_typed_def(
             Closure(ClosureData {
                 function_type: fn_var,
                 closure_type: closure_var,
-                closure_ext_var,
                 return_type: ret_var,
                 captured_symbols,
                 arguments,
@@ -1935,12 +1949,10 @@ fn constrain_typed_def(
             let mut vars = Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
             let ret_var = *ret_var;
             let closure_var = *closure_var;
-            let closure_ext_var = *closure_ext_var;
             let ret_type = *ret_type.clone();
 
             vars.push(ret_var);
             vars.push(closure_var);
-            vars.push(closure_ext_var);
 
             constrain_typed_function_arguments(
                 constraints,
@@ -1958,7 +1970,6 @@ fn constrain_typed_def(
                 region,
                 captured_symbols,
                 closure_var,
-                closure_ext_var,
                 &mut vars,
             );
 
@@ -2433,13 +2444,11 @@ fn constrain_closure_size(
     region: Region,
     captured_symbols: &[(Symbol, Variable)],
     closure_var: Variable,
-    closure_ext_var: Variable,
     variables: &mut Vec<Variable>,
 ) -> Constraint {
     debug_assert!(variables.iter().any(|s| *s == closure_var));
-    debug_assert!(variables.iter().any(|s| *s == closure_ext_var));
 
-    let mut tag_arguments = Vec::with_capacity(captured_symbols.len());
+    let mut captured_types = Vec::with_capacity(captured_symbols.len());
     let mut captured_symbols_constraints = Vec::with_capacity(captured_symbols.len());
 
     for (symbol, var) in captured_symbols {
@@ -2447,7 +2456,7 @@ fn constrain_closure_size(
         variables.push(*var);
 
         // this symbol is captured, so it must be part of the closure type
-        tag_arguments.push(Type::Variable(*var));
+        captured_types.push(Type::Variable(*var));
 
         // make the variable equal to the looked-up type of symbol
         captured_symbols_constraints.push(constraints.lookup(
@@ -2458,17 +2467,9 @@ fn constrain_closure_size(
     }
 
     // pick a more efficient representation if we don't actually capture anything
-    let closure_type = if tag_arguments.is_empty() {
-        Type::ClosureTag {
-            name,
-            ext: closure_ext_var,
-        }
-    } else {
-        let tag_name = TagName::Closure(name);
-        Type::TagUnion(
-            vec![(tag_name, tag_arguments)],
-            TypeExtension::from_type(Type::Variable(closure_ext_var)),
-        )
+    let closure_type = Type::ClosureTag {
+        name,
+        captures: captured_types,
     };
 
     let finalizer = constraints.equal_types_var(
@@ -2648,7 +2649,6 @@ fn constraint_recursive_function(
                 NoExpectation(expr_type),
                 expr_var,
                 function_def.closure_type,
-                function_def.closure_ext_var,
                 function_def.return_type,
                 &function_def.arguments,
                 loc_expr,
@@ -2715,12 +2715,10 @@ fn constraint_recursive_function(
             let mut vars = Vec::with_capacity(argument_pattern_state.vars.capacity() + 1);
             let ret_var = function_def.return_type;
             let closure_var = function_def.closure_type;
-            let closure_ext_var = function_def.closure_ext_var;
             let ret_type = *ret_type.clone();
 
             vars.push(ret_var);
             vars.push(closure_var);
-            vars.push(closure_ext_var);
 
             let mut def_pattern_state = PatternState::default();
 
@@ -2754,7 +2752,6 @@ fn constraint_recursive_function(
                 region,
                 &function_def.captured_symbols,
                 closure_var,
-                closure_ext_var,
                 &mut vars,
             );
 
@@ -3092,7 +3089,6 @@ pub fn rec_defs_help(
                         Closure(ClosureData {
                             function_type: fn_var,
                             closure_type: closure_var,
-                            closure_ext_var,
                             return_type: ret_var,
                             captured_symbols,
                             arguments,
@@ -3118,12 +3114,10 @@ pub fn rec_defs_help(
                         let mut vars = Vec::with_capacity(state.vars.capacity() + 1);
                         let ret_var = *ret_var;
                         let closure_var = *closure_var;
-                        let closure_ext_var = *closure_ext_var;
                         let ret_type = *ret_type.clone();
 
                         vars.push(ret_var);
                         vars.push(closure_var);
-                        vars.push(closure_ext_var);
 
                         constrain_typed_function_arguments(
                             constraints,
@@ -3142,7 +3136,6 @@ pub fn rec_defs_help(
                             region,
                             captured_symbols,
                             closure_var,
-                            closure_ext_var,
                             &mut vars,
                         );
 
@@ -3253,10 +3246,10 @@ pub fn rec_defs_help(
     //    the let-generalization.
     // 2. Introduce all symbols of the untyped defs, but don't generalize them yet. Now, solve
     //    the untyped defs' bodies. This way, when checking something like
-    //      f = \x -> f [ x ]
-    //    we introduce `f: b -> c`, then constrain the call `f [ x ]`,
+    //      f = \x -> f [x]
+    //    we introduce `f: b -> c`, then constrain the call `f [x]`,
     //    forcing `b -> c ~ List b -> c` and correctly picking up a recursion error.
-    //    Had we generalized `b -> c`, the call `f [ x ]` would have been generalized, and this
+    //    Had we generalized `b -> c`, the call `f [x]` would have been generalized, and this
     //    error would not be found.
     // 3. Now properly let-generalize the untyped body defs, since we now know their types and
     //    that they don't have circular type errors.

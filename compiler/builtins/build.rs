@@ -7,6 +7,9 @@ use std::path::Path;
 use std::process::Command;
 use std::str;
 
+#[cfg(target_os = "macos")]
+use tempfile::tempdir;
+
 /// To debug the zig code with debug prints, we need to disable the wasm code gen
 const DEBUG: bool = false;
 
@@ -20,19 +23,16 @@ fn zig_executable() -> String {
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
-    // When we build on Netlify, zig is not installed (but also not used,
-    // since all we're doing is generating docs), so we can skip the steps
-    // that require having zig installed.
-    if env::var_os("NO_ZIG_INSTALLED").is_some() {
-        // We still need to do the other things before this point, because
-        // setting the env vars is needed for other parts of the build.
-        return;
-    }
-
     // "." is relative to where "build.rs" is
     // dunce can be removed once ziglang/zig#5109 is fixed
     let build_script_dir_path = dunce::canonicalize(Path::new(".")).unwrap();
     let bitcode_path = build_script_dir_path.join("bitcode");
+
+    // workaround for github.com/ziglang/zig/issues/9711
+    #[cfg(target_os = "macos")]
+    let zig_cache_dir = tempdir().expect("Failed to create temp directory for zig cache");
+    #[cfg(target_os = "macos")]
+    std::env::set_var("ZIG_GLOBAL_CACHE_DIR", zig_cache_dir.path().as_os_str());
 
     // LLVM .bc FILES
 
@@ -75,6 +75,11 @@ fn main() {
         );
     })
     .unwrap();
+
+    #[cfg(target_os = "macos")]
+    zig_cache_dir
+        .close()
+        .expect("Failed to delete temp dir zig_cache_dir.");
 }
 
 fn generate_object_file(
@@ -128,6 +133,10 @@ fn generate_bc_file(bitcode_path: &Path, zig_object: &str, file_name: &str) {
     let dest_bc_64bit = bc_path.to_str().expect("Invalid dest bc path");
     println!("Compiling 64-bit bitcode to: {}", dest_bc_64bit);
 
+    // workaround for github.com/ziglang/zig/issues/9711
+    #[cfg(target_os = "macos")]
+    let _ = fs::remove_dir_all("./bitcode/zig-cache");
+
     run_command(
         &bitcode_path,
         &zig_executable(),
@@ -135,7 +144,7 @@ fn generate_bc_file(bitcode_path: &Path, zig_object: &str, file_name: &str) {
     );
 }
 
-fn run_command<S, I, P: AsRef<Path>>(path: P, command_str: &str, args: I)
+fn run_command<S, I: Copy, P: AsRef<Path> + Copy>(path: P, command_str: &str, args: I)
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -144,6 +153,7 @@ where
         .current_dir(path)
         .args(args)
         .output();
+
     match output_result {
         Ok(output) => match output.status.success() {
             true => (),
@@ -152,7 +162,13 @@ where
                     Ok(stderr) => stderr.to_string(),
                     Err(_) => format!("Failed to run \"{}\"", command_str),
                 };
-                panic!("{} failed: {}", command_str, error_str);
+
+                // flaky test error that only occurs sometimes inside MacOS ci run
+                if error_str.contains("unable to build stage1 zig object: FileNotFound") {
+                    run_command(path, command_str, args)
+                } else {
+                    panic!("{} failed: {}", command_str, error_str);
+                }
             }
         },
         Err(reason) => panic!("{} failed: {}", command_str, reason),

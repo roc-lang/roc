@@ -1,10 +1,9 @@
-use crate::abilities::AbilitiesStore;
+use crate::abilities::PendingAbilitiesStore;
 use crate::annotation::canonicalize_annotation;
 use crate::def::{canonicalize_defs, Def};
 use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
 use crate::expr::{ClosureData, Declarations, Expr, Output, PendingDerives};
-use crate::operator::desugar_def;
 use crate::pattern::{BindingsFromPattern, Pattern};
 use crate::scope::Scope;
 use bumpalo::Bump;
@@ -12,7 +11,7 @@ use roc_collections::{MutMap, SendMap, VecSet};
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{IdentIds, IdentIdsByModule, ModuleId, ModuleIds, Symbol};
-use roc_parse::ast::{self, TypeAnnotation};
+use roc_parse::ast::{Defs, TypeAnnotation};
 use roc_parse::header::HeaderFor;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
@@ -30,7 +29,7 @@ pub struct Module {
     /// all aliases. `bool` indicates whether it is exposed
     pub aliases: MutMap<Symbol, (bool, Alias)>,
     pub rigid_variables: RigidVariables,
-    pub abilities_store: AbilitiesStore,
+    pub abilities_store: PendingAbilitiesStore,
 }
 
 #[derive(Debug, Default)]
@@ -160,14 +159,14 @@ fn has_no_implementation(expr: &Expr) -> bool {
 #[allow(clippy::too_many_arguments)]
 pub fn canonicalize_module_defs<'a>(
     arena: &'a Bump,
-    loc_defs: &'a [Loc<ast::Def<'a>>],
+    loc_defs: &'a mut Defs<'a>,
     header_for: &roc_parse::header::HeaderFor,
     home: ModuleId,
     module_ids: &'a ModuleIds,
     exposed_ident_ids: IdentIds,
     dep_idents: &'a IdentIdsByModule,
     aliases: MutMap<Symbol, Alias>,
-    imported_abilities_state: AbilitiesStore,
+    imported_abilities_state: PendingAbilitiesStore,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     exposed_symbols: &VecSet<Symbol>,
     symbols_from_requires: &[(Loc<Symbol>, Loc<TypeAnnotation<'a>>)],
@@ -175,7 +174,7 @@ pub fn canonicalize_module_defs<'a>(
 ) -> ModuleOutput {
     let mut can_exposed_imports = MutMap::default();
     let mut scope = Scope::new(home, exposed_ident_ids, imported_abilities_state);
-    let mut env = Env::new(home, dep_idents, module_ids);
+    let mut env = Env::new(arena, home, dep_idents, module_ids);
     let num_deps = dep_idents.len();
 
     for (name, alias) in aliases.into_iter() {
@@ -198,22 +197,14 @@ pub fn canonicalize_module_defs<'a>(
     // visited a BinOp node we'd recursively try to apply this to each of its nested
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
-    let mut desugared =
-        bumpalo::collections::Vec::with_capacity_in(loc_defs.len() + num_deps, arena);
-
-    for loc_def in loc_defs.iter() {
-        desugared.push(&*arena.alloc(Loc {
-            value: desugar_def(arena, &loc_def.value),
-            region: loc_def.region,
-        }));
-    }
+    crate::operator::desugar_defs(arena, loc_defs);
 
     let mut lookups = Vec::with_capacity(num_deps);
     let mut rigid_variables = RigidVariables::default();
 
     // Exposed values are treated like defs that appear before any others, e.g.
     //
-    // imports [ Foo.{ bar, baz } ]
+    // imports [Foo.{ bar, baz }]
     //
     // ...is basically the same as if we'd added these extra defs at the start of the module:
     //
@@ -233,7 +224,7 @@ pub fn canonicalize_module_defs<'a>(
                 Ok(()) => {
                     // Add an entry to exposed_imports using the current module's name
                     // as the key; e.g. if this is the Foo module and we have
-                    // exposes [ Bar.{ baz } ] then insert Foo.baz as the key, so when
+                    // exposes [Bar.{ baz }] then insert Foo.baz as the key, so when
                     // anything references `baz` in this Foo module, it will resolve to Bar.baz.
                     can_exposed_imports.insert(symbol, expr_var);
 
@@ -287,7 +278,7 @@ pub fn canonicalize_module_defs<'a>(
         Output::default(),
         var_store,
         &mut scope,
-        &desugared,
+        loc_defs,
         PatternType::TopLevelDef,
     );
 
@@ -544,6 +535,7 @@ pub fn canonicalize_module_defs<'a>(
             MutualRecursion { .. } => {
                 // the declarations of this group will be treaded individually by later iterations
             }
+            Expectation => { /* ignore */ }
         }
     }
 
@@ -662,6 +654,10 @@ pub fn canonicalize_module_defs<'a>(
             MutualRecursion { .. } => {
                 // the declarations of this group will be treaded individually by later iterations
             }
+            Expectation => {
+                let loc_expr = &mut declarations.expressions[index];
+                fix_values_captured_in_closure_expr(&mut loc_expr.value, &mut VecSet::default());
+            }
         }
     }
 
@@ -775,9 +771,13 @@ fn fix_values_captured_in_closure_expr(
             fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols);
         }
 
-        Expect(condition, loc_expr) => {
-            fix_values_captured_in_closure_expr(&mut condition.value, no_capture_symbols);
-            fix_values_captured_in_closure_expr(&mut loc_expr.value, no_capture_symbols);
+        Expect {
+            loc_condition,
+            loc_continuation,
+            lookups_in_cond: _,
+        } => {
+            fix_values_captured_in_closure_expr(&mut loc_condition.value, no_capture_symbols);
+            fix_values_captured_in_closure_expr(&mut loc_continuation.value, no_capture_symbols);
         }
 
         Closure(ClosureData {

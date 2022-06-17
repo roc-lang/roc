@@ -29,6 +29,7 @@ mod test_load {
     use roc_reporting::report::RocDocAllocator;
     use roc_target::TargetInfo;
     use roc_types::pretty_print::name_and_print_var;
+    use roc_types::pretty_print::DebugPrint;
     use roc_types::subs::Subs;
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -228,6 +229,29 @@ mod test_load {
         loaded_module
     }
 
+<<<<<<< HEAD
+=======
+    fn expect_def(
+        interns: &Interns,
+        subs: &mut Subs,
+        home: ModuleId,
+        def: &Def,
+        expected_types: &mut HashMap<&str, &str>,
+    ) {
+        for (symbol, expr_var) in &def.pattern_vars {
+            let actual_str =
+                name_and_print_var(*expr_var, subs, home, interns, DebugPrint::NOTHING);
+            let fully_qualified = symbol.fully_qualified(interns, home).to_string();
+            let expected_type = expected_types
+                .remove(fully_qualified.as_str())
+                .unwrap_or_else(|| {
+                    panic!("Defs included an unexpected symbol: {:?}", fully_qualified)
+                });
+
+            assert_eq!((&symbol, expected_type), (&symbol, actual_str.as_str()));
+        }
+    }
+
     fn expect_types(mut loaded_module: LoadedModule, mut expected_types: HashMap<&str, &str>) {
         let home = loaded_module.module_id;
         let mut subs = loaded_module.solved.into_inner();
@@ -242,6 +266,8 @@ mod test_load {
             .unwrap_or_default()
             .is_empty());
 
+        let debug_print =  DebugPrint { print_lambda_sets: false, print_only_under_alias: false };
+
         let interns = &loaded_module.interns;
         let declarations = loaded_module.declarations_by_id.remove(&home).unwrap();
         for index in 0..declarations.len() {
@@ -252,7 +278,7 @@ mod test_load {
                     let symbol = declarations.symbols[index].value;
                     let expr_var = declarations.variables[index];
 
-                    let actual_str = name_and_print_var(expr_var, &mut subs, home, interns);
+                    let actual_str = name_and_print_var(expr_var, &mut subs, home, interns, debug_print);
                     let fully_qualified = symbol.fully_qualified(interns, home).to_string();
                     let expected_type = expected_types
                         .remove(fully_qualified.as_str())
@@ -265,7 +291,8 @@ mod test_load {
                 Destructure(d_index) => {
                     let pattern_vars = &declarations.destructs[d_index.index()].pattern_vars;
                     for (symbol, expr_var) in pattern_vars.iter() {
-                        let actual_str = name_and_print_var(*expr_var, &mut subs, home, interns);
+                        let actual_str = name_and_print_var(*expr_var, &mut subs, home, interns, debug_print);
+
                         let fully_qualified = symbol.fully_qualified(interns, home).to_string();
                         let expected_type = expected_types
                             .remove(fully_qualified.as_str())
@@ -279,7 +306,11 @@ mod test_load {
                 MutualRecursion { cycle_mark, .. } => {
                     assert!(!cycle_mark.is_illegal(&subs));
                 }
-            }
+                Expectation => {
+                    // at least at the moment this does not happen
+                    panic!("Unexpected expectation in module declarations");
+                }
+            };
         }
 
         assert_eq!(
@@ -300,12 +331,12 @@ mod test_load {
                 "RBTree",
                 indoc!(
                     r#"
-                        interface RBTree exposes [ RedBlackTree, empty ] imports []
+                        interface RBTree exposes [RedBlackTree, empty] imports []
 
                         # The color of a node. Leaves are considered Black.
-                        NodeColor : [ Red, Black ]
+                        NodeColor : [Red, Black]
 
-                        RedBlackTree k v : [ Node NodeColor k v (RedBlackTree k v) (RedBlackTree k v), Empty ]
+                        RedBlackTree k v : [Node NodeColor k v (RedBlackTree k v) (RedBlackTree k v), Empty]
 
                         # Create an empty dictionary.
                         empty : RedBlackTree k v
@@ -318,7 +349,7 @@ mod test_load {
                 "Main",
                 indoc!(
                     r#"
-                        interface Other exposes [ empty ] imports [ RBTree ]
+                        interface Other exposes [empty] imports [RBTree]
 
                         empty : RBTree.RedBlackTree I64 I64
                         empty = RBTree.empty
@@ -439,8 +470,8 @@ mod test_load {
             loaded_module,
             hashmap! {
                 "swap" => "Nat, Nat, List a -> List a",
-                "partition" => "Nat, Nat, List (Num a) -> [ Pair Nat (List (Num a)) ]",
-                "partitionHelp" => "Nat, Nat, List (Num a), Nat, Num a -> [ Pair Nat (List (Num a)) ]",
+                "partition" => "Nat, Nat, List (Num a) -> [Pair Nat (List (Num a))]",
+                "partitionHelp" => "Nat, Nat, List (Num a), Nat, Num a -> [Pair Nat (List (Num a))]",
                 "quicksort" => "List (Num a), Nat, Nat -> List (Num a)",
             },
         );
@@ -468,8 +499,8 @@ mod test_load {
             loaded_module,
             hashmap! {
                 "swap" => "Nat, Nat, List a -> List a",
-                "partition" => "Nat, Nat, List (Num a) -> [ Pair Nat (List (Num a)) ]",
-                "partitionHelp" => "Nat, Nat, List (Num a), Nat, Num a -> [ Pair Nat (List (Num a)) ]",
+                "partition" => "Nat, Nat, List (Num a) -> [Pair Nat (List (Num a))]",
+                "partitionHelp" => "Nat, Nat, List (Num a), Nat, Num a -> [Pair Nat (List (Num a))]",
                 "quicksort" => "List (Num a), Nat, Nat -> List (Num a)",
             },
         );
@@ -483,12 +514,12 @@ mod test_load {
         expect_types(
             loaded_module,
             hashmap! {
-                "findPath" => "{ costFunction : position, position -> F64, end : position, moveFunction : position -> Set position, start : position } -> Result (List position) [ KeyNotFound ]*",
+                "findPath" => "{ costFunction : position, position -> F64, end : position, moveFunction : position -> Set position, start : position } -> Result (List position) [KeyNotFound]*",
                 "initialModel" => "position -> Model position",
                 "reconstructPath" => "Dict position position, position -> List position",
                 "updateCost" => "position, position, Model position -> Model position",
-                "cheapestOpen" => "(position -> F64), Model position -> Result position [ KeyNotFound ]*",
-                "astar" => "(position, position -> F64), (position -> Set position), position, Model position -> [ Err [ KeyNotFound ]*, Ok (List position) ]*",
+                "cheapestOpen" => "(position -> F64), Model position -> Result position [KeyNotFound]*",
+                "astar" => "(position, position -> F64), (position -> Set position), position, Model position -> [Err [KeyNotFound]*, Ok (List position)]*",
             },
         );
     }
@@ -570,7 +601,7 @@ mod test_load {
             "Main",
             indoc!(
                 r#"
-                interface Main exposes [ main ] imports []
+                interface Main exposes [main] imports []
 
                 main = [
                 "#
@@ -589,7 +620,7 @@ mod test_load {
                     3│  main = [
                                 ^
 
-                    You could change it to something like [ 1, 2, 3 ] or even just [].
+                    You could change it to something like [1, 2, 3] or even just [].
                     Anything where there is an open and a close square bracket, and where
                     the elements of the list are separated by commas.
 
@@ -636,8 +667,8 @@ mod test_load {
                 r#"
                 app "example"
                     packages { pf: "./zzz-does-not-exist" }
-                    imports [ ]
-                    provides [ main ] to pf
+                    imports []
+                    provides [main] to pf
 
                 main = ""
                 "#
@@ -669,7 +700,7 @@ mod test_load {
                             exposes []
                             packages {}
                             imports []
-                            provides [ mainForHost ]
+                            provides [mainForHost]
                             blah 1 2 3 # causing a parse error on purpose
 
                         mainForHost : Str
@@ -683,7 +714,7 @@ mod test_load {
                         app "hello-world"
                             packages { pf: "platform" }
                             imports []
-                            provides [ main ] to pf
+                            provides [main] to pf
 
                         main = "Hello, World!\n"
                     "#
@@ -713,7 +744,7 @@ mod test_load {
                         exposes []
                         packages {}
                         imports []
-                        provides [ mainForHost ]
+                        provides [mainForHost]
 
                     mainForHost : { content: Str, other: Str }
                     mainForHost = main
@@ -727,7 +758,7 @@ mod test_load {
                     app "hello-world"
                         packages { pf: "platform" }
                         imports []
-                        provides [ main ] to pf
+                        provides [main] to pf
 
                     main = { content: "Hello, World!\n", other: "" }
                     "#
@@ -745,7 +776,7 @@ mod test_load {
                 "Age",
                 indoc!(
                     r#"
-                    interface Age exposes [ Age ] imports []
+                    interface Age exposes [Age] imports []
 
                     Age := U32
                     "#
@@ -755,7 +786,7 @@ mod test_load {
                 "Main",
                 indoc!(
                     r#"
-                    interface Main exposes [ twenty, readAge ] imports [ Age.{ Age } ]
+                    interface Main exposes [twenty, readAge] imports [Age.{ Age }]
 
                     twenty = @Age 20
 
@@ -780,8 +811,8 @@ mod test_load {
 
                 is imported from another module:
 
-                1│  interface Main exposes [ twenty, readAge ] imports [ Age.{ Age } ]
-                                                                         ^^^^^^^^^^^
+                1│  interface Main exposes [twenty, readAge] imports [Age.{ Age }]
+                                                                      ^^^^^^^^^^^
 
                 Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
 
@@ -794,8 +825,8 @@ mod test_load {
 
                 is imported from another module:
 
-                1│  interface Main exposes [ twenty, readAge ] imports [ Age.{ Age } ]
-                                                                         ^^^^^^^^^^^
+                1│  interface Main exposes [twenty, readAge] imports [Age.{ Age }]
+                                                                      ^^^^^^^^^^^
 
                 Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
 
@@ -803,8 +834,8 @@ mod test_load {
 
                 Nothing from Age is used in this module.
 
-                1│  interface Main exposes [ twenty, readAge ] imports [ Age.{ Age } ]
-                                                                         ^^^^^^^^^^^
+                1│  interface Main exposes [twenty, readAge] imports [Age.{ Age }]
+                                                                      ^^^^^^^^^^^
 
                 Since Age isn't used, you don't need to import it.
                 "#
@@ -826,7 +857,7 @@ mod test_load {
                         exposes []
                         packages {}
                         imports []
-                        provides [ mainForHost ]
+                        provides [mainForHost]
 
                     mainForHost : Str
                     mainForHost = main
@@ -839,7 +870,7 @@ mod test_load {
                     r#"
                     app "test"
                         packages { pf: "platform" }
-                        provides [ main ] to pf
+                        provides [main] to pf
 
                     main : DoesNotExist
                     main = 1

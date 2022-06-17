@@ -5,16 +5,15 @@ use roc_error_macros::internal_error;
 
 use roc_module::symbol::Symbol;
 
-use super::linking::{IndexRelocType, OffsetRelocType, RelocationEntry};
 use super::opcodes::{OpCode, OpCode::*};
 use super::serialize::{SerialBuffer, Serialize};
 use crate::{
-    round_up_to_alignment, DEBUG_LOG_SETTINGS, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID,
+    round_up_to_alignment, DEBUG_SETTINGS, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID,
 };
 
 macro_rules! log_instruction {
     ($($x: expr),+) => {
-        if DEBUG_LOG_SETTINGS.instructions { println!($($x,)*); }
+        if DEBUG_SETTINGS.instructions { println!($($x,)*); }
     };
 }
 
@@ -153,7 +152,7 @@ macro_rules! instruction_memargs {
 
 #[derive(Debug)]
 pub struct CodeBuilder<'a> {
-    arena: &'a Bump,
+    pub arena: &'a Bump,
 
     /// The main container for the instructions
     code: Vec<'a, u8>,
@@ -179,10 +178,6 @@ pub struct CodeBuilder<'a> {
     /// Our simulation model of the Wasm stack machine
     /// Nested blocks of instructions. A child block can't "see" the stack of its parent block
     vm_block_stack: Vec<'a, VmBlock<'a>>,
-
-    /// Linker info to help combine the Roc module with builtin & platform modules,
-    /// e.g. to modify call instructions when function indices change
-    relocations: Vec<'a, RelocationEntry>,
 }
 
 impl<'a> Serialize for CodeBuilder<'a> {
@@ -209,8 +204,15 @@ impl<'a> CodeBuilder<'a> {
             preamble: Vec::with_capacity_in(32, arena),
             inner_length: Vec::with_capacity_in(5, arena),
             vm_block_stack,
-            relocations: Vec::with_capacity_in(32, arena),
         }
+    }
+
+    /// Build a dummy function with just a single `unreachable` instruction
+    pub fn dummy(arena: &'a Bump) -> Self {
+        let mut builder = Self::new(arena);
+        builder.unreachable_();
+        builder.build_fn_header_and_footer(&[], 0, None);
+        builder
     }
 
     /**********************************************************
@@ -392,7 +394,7 @@ impl<'a> CodeBuilder<'a> {
         if found {
             self.add_insertion(pushed_at, SETLOCAL, local_id.0);
         } else {
-            if DEBUG_LOG_SETTINGS.instructions {
+            if DEBUG_SETTINGS.instructions {
                 println!(
                     "{:?} has been popped implicitly. Leaving it on the stack.",
                     symbol
@@ -525,56 +527,6 @@ impl<'a> CodeBuilder<'a> {
         buffer.append_slice(&self.code[code_pos..self.code.len()]);
     }
 
-    /// Serialize all byte vectors in the right order
-    /// Also update relocation offsets relative to the base offset (code section body start)
-    pub fn serialize_with_relocs<T: SerialBuffer>(
-        &self,
-        buffer: &mut T,
-        final_relocs: &mut Vec<'a, RelocationEntry>,
-        reloc_base_offset: usize,
-    ) {
-        buffer.append_slice(&self.inner_length);
-        buffer.append_slice(&self.preamble);
-
-        // Do the insertions & update relocation offsets
-        let mut reloc_index = 0;
-        let mut code_pos = 0;
-        let mut insert_iter = self.insertions.iter();
-
-        loop {
-            let next_insert = insert_iter.next();
-            let next_pos = match next_insert {
-                Some(Insertion { at, .. }) => *at,
-                None => self.code.len(),
-            };
-
-            // Relocation offset needs to be an index into the body of the code section, but
-            // at this point it is an index into self.code. Need to adjust for all previous functions
-            // in the code section, and for insertions in the current function.
-            let section_body_pos = buffer.size() - reloc_base_offset;
-            while reloc_index < self.relocations.len()
-                && self.relocations[reloc_index].offset() < next_pos as u32
-            {
-                let mut reloc_clone = self.relocations[reloc_index].clone();
-                *reloc_clone.offset_mut() += (section_body_pos - code_pos) as u32;
-                final_relocs.push(reloc_clone);
-                reloc_index += 1;
-            }
-
-            buffer.append_slice(&self.code[code_pos..next_pos]);
-
-            match next_insert {
-                Some(Insertion { at, start, end }) => {
-                    buffer.append_slice(&self.insert_bytes[*start..*end]);
-                    code_pos = *at;
-                }
-                None => {
-                    break;
-                }
-            }
-        }
-    }
-
     /**********************************************************
 
         INSTRUCTION HELPER METHODS
@@ -652,19 +604,6 @@ impl<'a> CodeBuilder<'a> {
         );
     }
 
-    /// Insert a const reference to a memory address
-    pub fn i32_const_mem_addr(&mut self, addr: u32, symbol_index: u32) {
-        self.inst_base(I32CONST, 0, true);
-        let offset = self.code.len() as u32;
-        self.code.encode_padded_u32(addr);
-        self.relocations.push(RelocationEntry::Offset {
-            type_id: OffsetRelocType::MemoryAddrLeb,
-            offset,
-            symbol_index,
-            addend: 0,
-        });
-    }
-
     /**********************************************************
 
         INSTRUCTION METHODS
@@ -727,26 +666,9 @@ impl<'a> CodeBuilder<'a> {
 
     instruction_no_args!(return_, RETURN, 0, false);
 
-    pub fn call(
-        &mut self,
-        function_index: u32,
-        symbol_index: u32,
-        n_args: usize,
-        has_return_val: bool,
-    ) {
+    pub fn call(&mut self, function_index: u32, n_args: usize, has_return_val: bool) {
         self.inst_base(CALL, n_args, has_return_val);
-
-        let offset = self.code.len() as u32;
         self.code.encode_padded_u32(function_index);
-
-        // Make a RelocationEntry so the linker can see that this byte offset relates to a function by name.
-        // Here we initialise the offset to an index of self.code. After completing the function, we'll add
-        // other factors to make it relative to the code section. (All insertions will be known then.)
-        self.relocations.push(RelocationEntry::Index {
-            type_id: IndexRelocType::FunctionIndexLeb,
-            offset,
-            symbol_index,
-        });
 
         log_instruction!(
             "{:10}\t{}\t{:?}",

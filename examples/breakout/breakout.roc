@@ -1,7 +1,7 @@
 app "breakout"
     packages { pf: "platform" }
-    imports [ pf.Game.{ Bounds, Elem, Event } ]
-    provides [ program ] { Model } to pf
+    imports [pf.Game.{ Bounds, Elem, Event }]
+    provides [program] { Model } to pf
 
 paddleWidth = 0.2# width of the paddle, as a % of screen width
 paddleHeight = 50# height of the paddle, in pixels
@@ -136,7 +136,7 @@ render = \model ->
                     color,
                 }
 
-                [ outer, inner ]
+                [outer, inner]
 
     ball =
         color = { r: 0.7, g: 0.3, b: 0.9, a: 1.0 }
@@ -156,6 +156,6 @@ render = \model ->
 
         Rect { left, top, width, height, color }
 
-    List.concat rects [ paddle, ball ]
+    List.concat rects [paddle, ball]
 
 program = { init, update, render }

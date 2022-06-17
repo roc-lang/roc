@@ -2,15 +2,15 @@
 
 use crate::layout::{
     Builtin, ClosureRepresentation, LambdaSet, Layout, LayoutCache, LayoutProblem,
-    RawFunctionLayout, TagIdIntType, UnionLayout, WrappedVariant,
+    RawFunctionLayout, TagIdIntType, TagOrClosure, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_can::abilities::{AbilitiesStore, SpecializationId};
+use roc_can::abilities::SpecializationId;
 use roc_can::expr::{AnnotatedMark, ClosureData, IntValue};
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
-use roc_collections::{MutSet, VecMap};
+use roc_collections::VecMap;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::{
@@ -18,19 +18,20 @@ use roc_debug_flags::{
 };
 use roc_error_macros::todo_abilities;
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
+use roc_late_solve::{
+    instantiate_rigids, resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed,
+};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::{RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
-use roc_solve::ability::{resolve_ability_specialization, Resolved};
 use roc_std::RocDec;
 use roc_target::TargetInfo;
 use roc_types::subs::{
     Content, ExhaustiveMark, FlatType, RedundantMark, StorageSubs, Subs, Variable,
     VariableSubsSlice,
 };
-use roc_unify::unify::Mode;
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
@@ -76,7 +77,7 @@ macro_rules! return_on_layout_error {
 }
 
 macro_rules! return_on_layout_error_help {
-    ($env:expr, $error:expr) => {
+    ($env:expr, $error:expr) => {{
         match $error {
             LayoutProblem::UnresolvedTypeVar(_) => {
                 return Stmt::RuntimeError($env.arena.alloc(format!(
@@ -93,7 +94,7 @@ macro_rules! return_on_layout_error_help {
                 )));
             }
         }
-    };
+    }};
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -192,6 +193,12 @@ impl<'a> PartialProcs<'a> {
         );
 
         self.references.push((alias, real_symbol));
+    }
+
+    pub fn drain(self) -> impl Iterator<Item = (Symbol, PartialProc<'a>)> {
+        debug_assert_eq!(self.symbols.len(), self.partial_procs.len());
+
+        self.symbols.into_iter().zip(self.partial_procs.into_iter())
     }
 }
 
@@ -530,7 +537,7 @@ impl HostSpecializations {
 pub struct ExternalSpecializations {
     /// Not a bumpalo vec because bumpalo is not thread safe
     /// Separate array so we can search for membership quickly
-    symbols: std::vec::Vec<Symbol>,
+    pub symbols: std::vec::Vec<Symbol>,
     storage_subs: StorageSubs,
     /// For each symbol, what types to specialize it for, points into the storage_subs
     types_to_specialize: std::vec::Vec<std::vec::Vec<Variable>>,
@@ -896,6 +903,16 @@ impl<'a> SymbolSpecializations<'a> {
 }
 
 #[derive(Clone, Debug)]
+pub struct ProcsBase<'a> {
+    pub partial_procs: BumpMap<Symbol, PartialProc<'a>>,
+    pub module_thunks: &'a [Symbol],
+    /// A host-exposed function must be specialized; it's a seed for subsequent specializations
+    pub host_specializations: HostSpecializations,
+    pub runtime_errors: BumpMap<Symbol, &'a str>,
+    pub imported_module_thunks: &'a [Symbol],
+}
+
+#[derive(Clone, Debug)]
 pub struct Procs<'a> {
     pub partial_procs: PartialProcs<'a>,
     ability_member_aliases: AbilityAliases,
@@ -946,17 +963,27 @@ impl<'a> Procs<'a> {
     pub fn get_specialized_procs_without_rc(
         self,
         env: &mut Env<'a, '_>,
-    ) -> MutMap<(Symbol, ProcLayout<'a>), Proc<'a>> {
-        let mut result = MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
+    ) -> (MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>, ProcsBase<'a>) {
+        let mut specialized_procs =
+            MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
 
         for (symbol, layout, mut proc) in self.specialized.into_iter_assert_done() {
             proc.make_tail_recursive(env);
 
             let key = (symbol, layout);
-            result.insert(key, proc);
+            specialized_procs.insert(key, proc);
         }
 
-        result
+        let restored_procs_base = ProcsBase {
+            partial_procs: self.partial_procs.drain().collect(),
+            module_thunks: self.module_thunks,
+            // This must now be empty
+            host_specializations: HostSpecializations::default(),
+            runtime_errors: self.runtime_errors,
+            imported_module_thunks: self.imported_module_thunks,
+        };
+
+        (specialized_procs, restored_procs_base)
     }
 
     // TODO trim these down
@@ -1241,7 +1268,7 @@ pub struct Env<'a, 'i> {
     pub target_info: TargetInfo,
     pub update_mode_ids: &'i mut UpdateModeIds,
     pub call_specialization_counter: u32,
-    pub abilities_store: &'i mut AbilitiesStore,
+    pub abilities: AbilitiesView<'i>,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
@@ -1267,6 +1294,19 @@ impl<'a, 'i> Env<'a, 'i> {
 
     pub fn is_imported_symbol(&self, symbol: Symbol) -> bool {
         symbol.module_id() != self.home
+    }
+
+    /// Unifies two variables and performs lambda set compaction.
+    /// Use this rather than [roc_unify::unify] directly!
+    fn unify(&mut self, left: Variable, right: Variable) -> Result<(), UnificationFailed> {
+        roc_late_solve::unify(
+            self.home,
+            self.arena,
+            self.subs,
+            &self.abilities,
+            left,
+            right,
+        )
     }
 }
 
@@ -1326,6 +1366,14 @@ pub enum Stmt<'a> {
     },
     Ret(Symbol),
     Refcounting(ModifyRc, &'a Stmt<'a>),
+    Expect {
+        condition: Symbol,
+        region: Region,
+        lookups: &'a [Symbol],
+        layouts: &'a [Layout<'a>],
+        /// what happens after the expect
+        remainder: &'a Stmt<'a>,
+    },
     /// a join point `join f <params> = <continuation> in remainder`
     Join {
         id: JoinPointId,
@@ -1455,11 +1503,11 @@ pub enum Literal<'a> {
     /// Closed tag unions containing exactly two (0-arity) tags compile to Expr::Bool,
     /// so they can (at least potentially) be emitted as 1-bit machine bools.
     ///
-    /// So [ True, False ] compiles to this, and so do [ A, B ] and [ Foo, Bar ].
-    /// However, a union like [ True, False, Other Int ] would not.
+    /// So [True, False] compiles to this, and so do [A, B] and [Foo, Bar].
+    /// However, a union like [True, False, Other Int] would not.
     Bool(bool),
     /// Closed tag unions containing between 3 and 256 tags (all of 0 arity)
-    /// compile to bytes, e.g. [ Blue, Black, Red, Green, White ]
+    /// compile to bytes, e.g. [Blue, Black, Red, Green, White]
     Byte(u8),
 }
 
@@ -1636,7 +1684,7 @@ pub enum Expr<'a> {
 
     Tag {
         tag_layout: UnionLayout<'a>,
-        tag_name: TagName,
+        tag_name: TagOrClosure,
         tag_id: TagIdIntType,
         arguments: &'a [Symbol],
     },
@@ -1680,7 +1728,7 @@ pub enum Expr<'a> {
         update_mode: UpdateModeId,
         // normal Tag fields
         tag_layout: UnionLayout<'a>,
-        tag_name: TagName,
+        tag_name: TagOrClosure,
         tag_id: TagIdIntType,
         arguments: &'a [Symbol],
     },
@@ -1768,8 +1816,8 @@ impl<'a> Expr<'a> {
                 ..
             } => {
                 let doc_tag = match tag_name {
-                    TagName::Tag(s) => alloc.text(s.as_str()),
-                    TagName::Closure(s) => alloc
+                    TagOrClosure::Tag(TagName(s)) => alloc.text(s.as_str()),
+                    TagOrClosure::Closure(s) => alloc
                         .text("ClosureTag(")
                         .append(symbol_to_doc(alloc, *s))
                         .append(")"),
@@ -1789,8 +1837,8 @@ impl<'a> Expr<'a> {
                 ..
             } => {
                 let doc_tag = match tag_name {
-                    TagName::Tag(s) => alloc.text(s.as_str()),
-                    TagName::Closure(s) => alloc
+                    TagOrClosure::Tag(TagName(s)) => alloc.text(s.as_str()),
+                    TagOrClosure::Closure(s) => alloc
                         .text("ClosureTag(")
                         .append(symbol_to_doc(alloc, *s))
                         .append(")"),
@@ -1911,6 +1959,10 @@ impl<'a> Stmt<'a> {
                 .to_doc(alloc)
                 .append(alloc.hardline())
                 .append(cont.to_doc(alloc)),
+
+            Expect { condition, .. } => alloc
+                .text("expect ")
+                .append(symbol_to_doc(alloc, *condition)),
 
             Ret(symbol) => alloc
                 .text("ret ")
@@ -2246,14 +2298,7 @@ fn from_can_let<'a>(
                             needed_specializations.next().unwrap();
 
                         // Unify the expr_var with the requested specialization once.
-                        let _res = roc_unify::unify::unify(env.subs, var, def.expr_var, Mode::EQ);
-
-                        resolve_abilities_in_specialized_body(
-                            env,
-                            procs,
-                            &def.loc_expr.value,
-                            def.expr_var,
-                        );
+                        let _res = env.unify(var, def.expr_var);
 
                         with_hole(
                             env,
@@ -2285,15 +2330,7 @@ fn from_can_let<'a>(
                             "expr marked as having specializations, but it has no type variables!",
                         );
 
-                            let _res =
-                                roc_unify::unify::unify(env.subs, var, new_def_expr_var, Mode::EQ);
-
-                            resolve_abilities_in_specialized_body(
-                                env,
-                                procs,
-                                &def.loc_expr.value,
-                                def.expr_var,
-                            );
+                            let _res = env.unify(var, new_def_expr_var);
 
                             stmt = with_hole(
                                 env,
@@ -2349,8 +2386,6 @@ fn from_can_let<'a>(
     } else {
         let outer_symbol = env.unique_symbol();
         stmt = store_pattern(env, procs, layout_cache, &mono_pattern, outer_symbol, stmt);
-
-        resolve_abilities_in_specialized_body(env, procs, &def.loc_expr.value, def.expr_var);
 
         // convert the def body, store in outer_symbol
         with_hole(
@@ -2738,7 +2773,10 @@ fn generate_runtime_error_function<'a>(
     )
     .unwrap();
 
-    eprintln!("emitted runtime error function {:?}", &msg);
+    eprintln!(
+        "emitted runtime error function {:?} for layout {:?}",
+        &msg, layout
+    );
 
     let runtime_error = Stmt::RuntimeError(msg.into_bump_str());
 
@@ -2769,125 +2807,6 @@ fn generate_runtime_error_function<'a>(
     }
 }
 
-fn resolve_abilities_in_specialized_body<'a>(
-    env: &mut Env<'a, '_>,
-    procs: &Procs<'a>,
-    specialized_body: &roc_can::expr::Expr,
-    body_var: Variable,
-) -> std::vec::Vec<SpecializationId> {
-    use roc_can::expr::Expr;
-    use roc_can::traverse::{walk_expr, Visitor};
-    use roc_unify::unify::unify;
-
-    struct Resolver<'a> {
-        subs: &'a mut Subs,
-        procs: &'a Procs<'a>,
-        abilities_store: &'a mut AbilitiesStore,
-        seen_defs: MutSet<Symbol>,
-        specialized: std::vec::Vec<SpecializationId>,
-    }
-    impl Visitor for Resolver<'_> {
-        fn visit_expr(&mut self, expr: &Expr, _region: Region, var: Variable) {
-            match expr {
-                Expr::Closure(..) => {
-                    // Don't walk down closure bodies. They will have their types refined when they
-                    // are themselves specialized, so we'll handle ability resolution in them at
-                    // that time too.
-                }
-                Expr::LetRec(..) | Expr::LetNonRec(..) => {
-                    // Also don't walk down let-bindings. These may be generalized and we won't
-                    // know their specializations until we collect them while building up the def.
-                    // So, we'll resolve any nested abilities when we know their specialized type
-                    // during def construction.
-                }
-                Expr::AbilityMember(member_sym, specialization_id, _specialization_var) => {
-                    let (specialization, specialization_def) = match self
-                        .abilities_store
-                        .get_resolved(*specialization_id)
-                    {
-                        Some(specialization) => (
-                            specialization,
-                            // If we know the specialization at this point, the specialization must
-                            // be static. That means the relevant type state was populated during
-                            // solving, so we don't need additional unification here.
-                            //
-                            // However, we do need to walk the specialization def, because it may
-                            // itself contain unspecialized defs.
-                            self.procs
-                                .partial_procs
-                                .get_symbol(specialization)
-                                .expect("Specialization found, but it's not in procs"),
-                        ),
-                        None => {
-                            let specialization = resolve_ability_specialization(
-                                self.subs,
-                                self.abilities_store,
-                                *member_sym,
-                                var,
-                            )
-                            .expect("Ability specialization is unknown - code generation cannot proceed!");
-
-                            let specialization = match specialization {
-                                Resolved::Specialization(symbol) => symbol,
-                                Resolved::NeedsGenerated => {
-                                    todo_abilities!("Generate impls for structural types")
-                                }
-                            };
-
-                            self.abilities_store
-                                .insert_resolved(*specialization_id, specialization);
-
-                            debug_assert!(!self.specialized.contains(specialization_id));
-                            self.specialized.push(*specialization_id);
-
-                            // We must now refine the current type state to account for this specialization,
-                            // since `var` may only have partial specialization information - enough to
-                            // figure out what specialization we need, but not the types of all arguments
-                            // and return types. So, unify with the variable with the specialization's type.
-                            let specialization_def = self
-                                .procs
-                                .partial_procs
-                                .get_symbol(specialization)
-                                .expect("Specialization found, but it's not in procs");
-                            let specialization_var = specialization_def.annotation;
-
-                            let unified = unify(self.subs, var, specialization_var, Mode::EQ);
-                            unified.expect_success(
-                                "Specialization does not unify - this is a typechecker bug!",
-                            );
-
-                            (specialization, specialization_def)
-                        }
-                    };
-
-                    // Now walk the specialization def to pick up any more needed types. Of course,
-                    // we only want to pass through it once to avoid unbounded recursion.
-                    if !self.seen_defs.contains(&specialization) {
-                        self.visit_expr(
-                            &specialization_def.body,
-                            Region::zero(),
-                            specialization_def.body_var,
-                        );
-                        self.seen_defs.insert(specialization);
-                    }
-                }
-                _ => walk_expr(self, expr, var),
-            }
-        }
-    }
-
-    let mut resolver = Resolver {
-        subs: env.subs,
-        procs,
-        abilities_store: env.abilities_store,
-        seen_defs: MutSet::default(),
-        specialized: vec![],
-    };
-    resolver.visit_expr(specialized_body, Region::zero(), body_var);
-
-    resolver.specialized
-}
-
 fn specialize_external<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
@@ -2904,12 +2823,7 @@ fn specialize_external<'a>(
     let snapshot = env.subs.snapshot();
     let cache_snapshot = layout_cache.snapshot();
 
-    let _unified = roc_unify::unify::unify(
-        env.subs,
-        partial_proc.annotation,
-        fn_var,
-        roc_unify::unify::Mode::EQ,
-    );
+    let _unified = env.unify(partial_proc.annotation, fn_var);
 
     // This will not hold for programs with type errors
     // let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));
@@ -3023,16 +2937,8 @@ fn specialize_external<'a>(
     };
 
     let body = partial_proc.body.clone();
-    let resolved_ability_specializations =
-        resolve_abilities_in_specialized_body(env, procs, &body, partial_proc.body_var);
 
     let mut specialized_body = from_can(env, partial_proc.body_var, body, procs, layout_cache);
-
-    // reset the resolved ability specializations so as not to interfere with other specializations
-    // of this proc.
-    resolved_ability_specializations
-        .into_iter()
-        .for_each(|sid| env.abilities_store.remove_resolved(sid));
 
     match specialized {
         SpecializedLayout::FunctionPointerBody {
@@ -3249,6 +3155,7 @@ fn specialize_external<'a>(
     }
 }
 
+#[derive(Debug)]
 enum SpecializedLayout<'a> {
     /// A body like `foo = \a,b,c -> ...`
     FunctionBody {
@@ -3480,7 +3387,6 @@ where
     F: FnOnce(&mut Env<'a, '_>) -> Variable,
 {
     // add the specializations that other modules require of us
-    use roc_solve::solve::instantiate_rigids;
 
     let snapshot = env.subs.snapshot();
     let cache_snapshot = layout_cache.snapshot();
@@ -3857,7 +3763,7 @@ pub fn with_hole<'a>(
         Var(mut symbol) => {
             // If this symbol is a raw value, find the real name we gave to its specialized usage.
             if let ReuseSymbol::Value(_symbol) =
-                can_reuse_symbol(env, procs, &roc_can::expr::Expr::Var(symbol))
+                can_reuse_symbol(env, procs, &roc_can::expr::Expr::Var(symbol), variable)
             {
                 let real_symbol =
                     procs
@@ -3869,10 +3775,13 @@ pub fn with_hole<'a>(
             specialize_naked_symbol(env, variable, procs, layout_cache, assigned, hole, symbol)
         }
         AbilityMember(_member, specialization_id, _) => {
-            let specialization_symbol = env
-                .abilities_store
-                .get_resolved(specialization_id)
-                .expect("Specialization was never made!");
+            let specialization_symbol =
+                env.abilities
+                    .with_module_abilities_store(env.home, |store| {
+                        store
+                            .get_resolved(specialization_id)
+                            .expect("Specialization was never made!")
+                    });
 
             specialize_naked_symbol(
                 env,
@@ -3954,7 +3863,7 @@ pub fn with_hole<'a>(
         OpaqueRef { argument, .. } => {
             let (arg_var, loc_arg_expr) = *argument;
 
-            match can_reuse_symbol(env, procs, &loc_arg_expr.value) {
+            match can_reuse_symbol(env, procs, &loc_arg_expr.value, arg_var) {
                 // Opaques decay to their argument.
                 ReuseSymbol::Value(symbol) => {
                     let real_name = procs.symbol_specializations.get_or_insert(
@@ -4009,26 +3918,30 @@ pub fn with_hole<'a>(
                 // TODO how should function pointers be handled here?
                 use ReuseSymbol::*;
                 match fields.remove(&label) {
-                    Some(field) => match can_reuse_symbol(env, procs, &field.loc_expr.value) {
-                        Imported(symbol) | LocalFunction(symbol) | UnspecializedExpr(symbol) => {
-                            field_symbols.push(symbol);
-                            can_fields.push(Field::Function(symbol, variable));
+                    Some(field) => {
+                        match can_reuse_symbol(env, procs, &field.loc_expr.value, field.var) {
+                            Imported(symbol)
+                            | LocalFunction(symbol)
+                            | UnspecializedExpr(symbol) => {
+                                field_symbols.push(symbol);
+                                can_fields.push(Field::Function(symbol, variable));
+                            }
+                            Value(symbol) => {
+                                let reusable = procs.symbol_specializations.get_or_insert(
+                                    env,
+                                    layout_cache,
+                                    symbol,
+                                    field.var,
+                                );
+                                field_symbols.push(reusable);
+                                can_fields.push(Field::ValueSymbol);
+                            }
+                            NotASymbol => {
+                                field_symbols.push(env.unique_symbol());
+                                can_fields.push(Field::Field(field));
+                            }
                         }
-                        Value(symbol) => {
-                            let reusable = procs.symbol_specializations.get_or_insert(
-                                env,
-                                layout_cache,
-                                symbol,
-                                field.var,
-                            );
-                            field_symbols.push(reusable);
-                            can_fields.push(Field::ValueSymbol);
-                        }
-                        NotASymbol => {
-                            field_symbols.push(env.unique_symbol());
-                            can_fields.push(Field::Field(field));
-                        }
-                    },
+                    }
                     None => {
                         // this field was optional, but not given
                         continue;
@@ -4087,7 +4000,7 @@ pub fn with_hole<'a>(
 
         EmptyRecord => let_empty_struct(assigned, hole),
 
-        Expect(_, _) => unreachable!("I think this is unreachable"),
+        Expect { .. } => unreachable!("I think this is unreachable"),
 
         If {
             cond_var,
@@ -4742,16 +4655,15 @@ pub fn with_hole<'a>(
                         hole,
                     )
                 }
-                roc_can::expr::Expr::AbilityMember(_, specialization_id, _) => {
-                    let proc_name = env.abilities_store.get_resolved(specialization_id).expect(
-                        "Ability specialization is unknown - code generation cannot proceed!",
-                    );
+                roc_can::expr::Expr::AbilityMember(member, specialization_id, _) => {
+                    let specialization_proc_name =
+                        late_resolve_ability_specialization(env, member, specialization_id, fn_var);
 
                     call_by_name(
                         env,
                         procs,
                         fn_var,
-                        proc_name,
+                        specialization_proc_name,
                         loc_args,
                         layout_cache,
                         assigned,
@@ -4798,7 +4710,7 @@ pub fn with_hole<'a>(
                     // re-use that symbol, and don't define its value again
                     let mut result;
                     use ReuseSymbol::*;
-                    match can_reuse_symbol(env, procs, &loc_expr.value) {
+                    match can_reuse_symbol(env, procs, &loc_expr.value, fn_var) {
                         LocalFunction(_) => {
                             unreachable!("if this was known to be a function, we would not be here")
                         }
@@ -4876,7 +4788,10 @@ pub fn with_hole<'a>(
                         UnspecializedExpr(symbol) => {
                             match procs.ability_member_aliases.get(symbol).unwrap() {
                                 &self::AbilityMember(member) => {
-                                    let resolved_proc = resolve_ability_specialization(env.subs, env.abilities_store, member, fn_var).expect("Recorded as an ability member, but it doesn't have a specialization");
+                                    let resolved_proc = env.abilities.with_module_abilities_store(env.home, |store|
+                                        resolve_ability_specialization(env.subs, store, member, fn_var)
+                                            .expect("Recorded as an ability member, but it doesn't have a specialization")
+                                    );
 
                                     let resolved_proc = match resolved_proc {
                                         Resolved::Specialization(symbol) => symbol,
@@ -5244,6 +5159,55 @@ pub fn with_hole<'a>(
     }
 }
 
+#[inline(always)]
+fn late_resolve_ability_specialization<'a>(
+    env: &mut Env<'a, '_>,
+    member: Symbol,
+    specialization_id: SpecializationId,
+    specialization_var: Variable,
+) -> Symbol {
+    let opt_resolved = env
+        .abilities
+        .with_module_abilities_store(env.home, |store| store.get_resolved(specialization_id));
+
+    if let Some(spec_symbol) = opt_resolved {
+        // Fast path: specialization is monomorphic, was found during solving.
+        spec_symbol
+    } else if let Content::Structure(FlatType::Func(_, lambda_set, _)) =
+        env.subs.get_content_without_compacting(specialization_var)
+    {
+        // Fast path: the member is a function, so the lambda set will tell us the
+        // specialization.
+        use roc_types::subs::LambdaSet;
+        let LambdaSet {
+            solved,
+            unspecialized,
+            recursion_var: _,
+        } = env.subs.get_lambda_set(*lambda_set);
+
+        debug_assert!(unspecialized.is_empty());
+        let mut iter_lambda_set = solved.iter_all();
+        debug_assert_eq!(iter_lambda_set.len(), 1);
+        let spec_symbol_index = iter_lambda_set.next().unwrap().0;
+        env.subs[spec_symbol_index]
+    } else {
+        // Otherwise, resolve by checking the able var.
+        let specialization = env
+            .abilities
+            .with_module_abilities_store(env.home, |store| {
+                resolve_ability_specialization(env.subs, store, member, specialization_var)
+                    .expect("Ability specialization is unknown - code generation cannot proceed!")
+            });
+
+        match specialization {
+            Resolved::Specialization(symbol) => symbol,
+            Resolved::NeedsGenerated => {
+                todo_abilities!("Generate impls for structural types")
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn construct_closure_data<'a, I>(
     env: &mut Env<'a, '_>,
@@ -5265,7 +5229,7 @@ where
         ClosureRepresentation::Union {
             tag_id,
             alphabetic_order_fields: field_layouts,
-            tag_name,
+            closure_name: tag_name,
             union_layout,
         } => {
             // captured variables are in symbol-alphabetic order, but now we want
@@ -5290,7 +5254,7 @@ where
             let expr = Expr::Tag {
                 tag_id,
                 tag_layout: union_layout,
-                tag_name,
+                tag_name: tag_name.into(),
                 arguments: symbols,
             };
 
@@ -5394,12 +5358,14 @@ fn convert_tag_union<'a>(
         Unit | UnitWithArguments => Stmt::Let(assigned, Expr::Struct(&[]), Layout::UNIT, hole),
         BoolUnion { ttrue, .. } => Stmt::Let(
             assigned,
-            Expr::Literal(Literal::Bool(tag_name == ttrue)),
+            Expr::Literal(Literal::Bool(&tag_name == ttrue.expect_tag_ref())),
             Layout::Builtin(Builtin::Bool),
             hole,
         ),
         ByteUnion(tag_names) => {
-            let opt_tag_id = tag_names.iter().position(|key| key == &tag_name);
+            let opt_tag_id = tag_names
+                .iter()
+                .position(|key| key.expect_tag_ref() == &tag_name);
 
             match opt_tag_id {
                 Some(tag_id) => Stmt::Let(
@@ -5480,7 +5446,7 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name,
+                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -5491,7 +5457,7 @@ fn convert_tag_union<'a>(
                     tag_name: wrapped_tag_name,
                     ..
                 } => {
-                    debug_assert_eq!(tag_name, wrapped_tag_name);
+                    debug_assert_eq!(TagOrClosure::Tag(tag_name.clone()), wrapped_tag_name);
 
                     field_symbols = {
                         let mut temp = Vec::with_capacity_in(field_symbols_temp.len(), arena);
@@ -5503,7 +5469,7 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name,
+                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -5528,7 +5494,7 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name,
+                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -5555,7 +5521,7 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name,
+                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -5573,7 +5539,7 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name,
+                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -5771,7 +5737,6 @@ fn register_capturing_closure<'a>(
             function_type,
             return_type,
             closure_type,
-            closure_ext_var,
             recursive,
             arguments,
             loc_body: boxed_body,
@@ -5817,7 +5782,7 @@ fn register_capturing_closure<'a>(
                     &captured_symbols,
                     layout_cache.raw_from_var(env.arena, function_type, env.subs),
                     env.subs,
-                    (function_type, closure_type, closure_ext_var),
+                    (function_type, closure_type),
                 );
                 CapturedSymbols::None
             }
@@ -5928,39 +5893,43 @@ pub fn from_can<'a>(
             stmt
         }
 
-        Expect(condition, rest) => {
-            let rest = from_can(env, variable, rest.value, procs, layout_cache);
-
-            let bool_layout = Layout::Builtin(Builtin::Bool);
+        Expect {
+            loc_condition,
+            loc_continuation,
+            lookups_in_cond,
+        } => {
+            let rest = from_can(env, variable, loc_continuation.value, procs, layout_cache);
             let cond_symbol = env.unique_symbol();
 
-            let op = LowLevel::ExpectTrue;
-            let call_type = CallType::LowLevel {
-                op,
-                update_mode: env.next_update_mode_id(),
-            };
-            let arguments = env.arena.alloc([cond_symbol]);
-            let call = self::Call {
-                call_type,
-                arguments,
+            let lookups = Vec::from_iter_in(lookups_in_cond.iter().map(|t| t.0), env.arena);
+
+            let mut layouts = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
+
+            for (_, var) in lookups_in_cond {
+                let res_layout = layout_cache.from_var(env.arena, var, env.subs);
+                let layout = return_on_layout_error!(env, res_layout);
+                layouts.push(layout);
+            }
+
+            let mut stmt = Stmt::Expect {
+                condition: cond_symbol,
+                region: loc_condition.region,
+                lookups: lookups.into_bump_slice(),
+                layouts: layouts.into_bump_slice(),
+                remainder: env.arena.alloc(rest),
             };
 
-            let rest = Stmt::Let(
-                env.unique_symbol(),
-                Expr::Call(call),
-                bool_layout,
-                env.arena.alloc(rest),
-            );
-
-            with_hole(
+            stmt = with_hole(
                 env,
-                condition.value,
+                loc_condition.value,
                 variable,
                 procs,
                 layout_cache,
                 cond_symbol,
-                env.arena.alloc(rest),
-            )
+                env.arena.alloc(stmt),
+            );
+
+            stmt
         }
 
         LetRec(defs, cont, _cycle_mark) => {
@@ -6297,6 +6266,26 @@ fn substitute_in_stmt_help<'a>(
             // TODO should we substitute in the ModifyRc?
             match substitute_in_stmt_help(arena, cont, subs) {
                 Some(cont) => Some(arena.alloc(Refcounting(*modify, cont))),
+                None => None,
+            }
+        }
+
+        Expect {
+            condition,
+            region,
+            lookups,
+            layouts,
+            remainder,
+        } => {
+            // TODO should we substitute in the ModifyRc?
+            match substitute_in_stmt_help(arena, remainder, subs) {
+                Some(cont) => Some(arena.alloc(Expect {
+                    condition: *condition,
+                    region: *region,
+                    lookups,
+                    layouts,
+                    remainder: cont,
+                })),
                 None => None,
             }
         }
@@ -6973,15 +6962,15 @@ fn can_reuse_symbol<'a>(
     env: &mut Env<'a, '_>,
     procs: &Procs<'a>,
     expr: &roc_can::expr::Expr,
+    expr_var: Variable,
 ) -> ReuseSymbol {
     use roc_can::expr::Expr::*;
     use ReuseSymbol::*;
 
     let symbol = match expr {
-        AbilityMember(_, specialization_id, _) => env
-            .abilities_store
-            .get_resolved(*specialization_id)
-            .expect("Specialization must be known!"),
+        AbilityMember(member, specialization_id, _) => {
+            late_resolve_ability_specialization(env, *member, *specialization_id, expr_var)
+        }
         Var(symbol) => *symbol,
         _ => return NotASymbol,
     };
@@ -7016,7 +7005,7 @@ fn possible_reuse_symbol_or_specialize<'a>(
     expr: &roc_can::expr::Expr,
     var: Variable,
 ) -> Symbol {
-    match can_reuse_symbol(env, procs, expr) {
+    match can_reuse_symbol(env, procs, expr, var) {
         ReuseSymbol::Value(symbol) => {
             procs
                 .symbol_specializations
@@ -7041,7 +7030,11 @@ where
     // 1. Handle references to ability members - we could be aliasing an ability member, or another
     //    alias to an ability member.
     {
-        if env.abilities_store.is_ability_member_name(right) {
+        let is_ability_member = env
+            .abilities
+            .with_module_abilities_store(env.home, |store| store.is_ability_member_name(right));
+
+        if is_ability_member {
             procs
                 .ability_member_aliases
                 .insert(left, AbilityMember(right));
@@ -7328,7 +7321,7 @@ fn assign_to_symbol<'a>(
     result: Stmt<'a>,
 ) -> Stmt<'a> {
     use ReuseSymbol::*;
-    match can_reuse_symbol(env, procs, &loc_arg.value) {
+    match can_reuse_symbol(env, procs, &loc_arg.value, arg_var) {
         Imported(original) | LocalFunction(original) | UnspecializedExpr(original) => {
             // for functions we must make sure they are specialized correctly
             specialize_symbol(
@@ -8285,36 +8278,39 @@ fn from_can_pattern_help<'a>(
                         }],
                     },
                 },
-                BoolUnion { ttrue, ffalse } => Pattern::BitLiteral {
-                    value: tag_name == &ttrue,
-                    tag_name: tag_name.clone(),
-                    union: Union {
-                        render_as: RenderAs::Tag,
-                        alternatives: vec![
-                            Ctor {
-                                tag_id: TagId(0),
-                                name: CtorName::Tag(ffalse),
-                                arity: 0,
-                            },
-                            Ctor {
-                                tag_id: TagId(1),
-                                name: CtorName::Tag(ttrue),
-                                arity: 0,
-                            },
-                        ],
-                    },
-                },
+                BoolUnion { ttrue, ffalse } => {
+                    let (ttrue, ffalse) = (ttrue.expect_tag(), ffalse.expect_tag());
+                    Pattern::BitLiteral {
+                        value: tag_name == &ttrue,
+                        tag_name: tag_name.clone(),
+                        union: Union {
+                            render_as: RenderAs::Tag,
+                            alternatives: vec![
+                                Ctor {
+                                    tag_id: TagId(0),
+                                    name: CtorName::Tag(ffalse),
+                                    arity: 0,
+                                },
+                                Ctor {
+                                    tag_id: TagId(1),
+                                    name: CtorName::Tag(ttrue),
+                                    arity: 0,
+                                },
+                            ],
+                        },
+                    }
+                }
                 ByteUnion(tag_names) => {
                     let tag_id = tag_names
                         .iter()
-                        .position(|key| key == tag_name)
+                        .position(|key| tag_name == key.expect_tag_ref())
                         .expect("tag must be in its own type");
 
                     let mut ctors = std::vec::Vec::with_capacity(tag_names.len());
                     for (i, tag_name) in tag_names.into_iter().enumerate() {
                         ctors.push(Ctor {
                             tag_id: TagId(i as _),
-                            name: CtorName::Tag(tag_name),
+                            name: CtorName::Tag(tag_name.expect_tag()),
                             arity: 0,
                         })
                     }
@@ -8411,7 +8407,7 @@ fn from_can_pattern_help<'a>(
                             for (i, (tag_name, args)) in tags.iter().enumerate() {
                                 ctors.push(Ctor {
                                     tag_id: TagId(i as _),
-                                    name: CtorName::Tag(tag_name.clone()),
+                                    name: CtorName::Tag(tag_name.expect_tag_ref().clone()),
                                     arity: args.len(),
                                 })
                             }
@@ -8463,7 +8459,7 @@ fn from_can_pattern_help<'a>(
                             for (i, (tag_name, args)) in tags.iter().enumerate() {
                                 ctors.push(Ctor {
                                     tag_id: TagId(i as _),
-                                    name: CtorName::Tag(tag_name.clone()),
+                                    name: CtorName::Tag(tag_name.expect_tag_ref().clone()),
                                     // don't include tag discriminant in arity
                                     arity: args.len() - 1,
                                 })
@@ -8505,7 +8501,7 @@ fn from_can_pattern_help<'a>(
                             tag_name: w_tag_name,
                             fields,
                         } => {
-                            debug_assert_eq!(&w_tag_name, tag_name);
+                            debug_assert_eq!(w_tag_name.expect_tag_ref(), tag_name);
 
                             ctors.push(Ctor {
                                 tag_id: TagId(0),
@@ -8557,7 +8553,7 @@ fn from_can_pattern_help<'a>(
                                 if i == nullable_id as usize {
                                     ctors.push(Ctor {
                                         tag_id: TagId(i as _),
-                                        name: CtorName::Tag(nullable_name.clone()),
+                                        name: CtorName::Tag(nullable_name.expect_tag_ref().clone()),
                                         // don't include tag discriminant in arity
                                         arity: 0,
                                     });
@@ -8567,7 +8563,7 @@ fn from_can_pattern_help<'a>(
 
                                 ctors.push(Ctor {
                                     tag_id: TagId(i as _),
-                                    name: CtorName::Tag(tag_name.clone()),
+                                    name: CtorName::Tag(tag_name.expect_tag_ref().clone()),
                                     // don't include tag discriminant in arity
                                     arity: args.len() - 1,
                                 });
@@ -8578,7 +8574,7 @@ fn from_can_pattern_help<'a>(
                             if i == nullable_id as usize {
                                 ctors.push(Ctor {
                                     tag_id: TagId(i as _),
-                                    name: CtorName::Tag(nullable_name.clone()),
+                                    name: CtorName::Tag(nullable_name.expect_tag_ref().clone()),
                                     // don't include tag discriminant in arity
                                     arity: 0,
                                 });
@@ -8591,7 +8587,7 @@ fn from_can_pattern_help<'a>(
 
                             let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
 
-                            let it = if tag_name == &nullable_name {
+                            let it = if tag_name == nullable_name.expect_tag_ref() {
                                 [].iter()
                             } else {
                                 argument_layouts.iter()
@@ -8629,13 +8625,13 @@ fn from_can_pattern_help<'a>(
 
                             ctors.push(Ctor {
                                 tag_id: TagId(nullable_id as _),
-                                name: CtorName::Tag(nullable_name.clone()),
+                                name: CtorName::Tag(nullable_name.expect_tag_ref().clone()),
                                 arity: 0,
                             });
 
                             ctors.push(Ctor {
                                 tag_id: TagId(!nullable_id as _),
-                                name: CtorName::Tag(nullable_name.clone()),
+                                name: CtorName::Tag(nullable_name.expect_tag_ref().clone()),
                                 // FIXME drop tag
                                 arity: other_fields.len() - 1,
                             });
@@ -8647,7 +8643,7 @@ fn from_can_pattern_help<'a>(
 
                             let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
 
-                            let it = if tag_name == &nullable_name {
+                            let it = if tag_name == nullable_name.expect_tag_ref() {
                                 [].iter()
                             } else {
                                 // FIXME drop tag

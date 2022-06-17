@@ -90,7 +90,7 @@ use roc_std::{RocList, RocStr};
 
 //                 "#
 //         ),
-//         RocStr::from_slice(b"JJJJJJJJJJJJJJJJJJJJJJJJJ"),
+//         RocStr::from_slice_unchecked(b"JJJJJJJJJJJJJJJJJJJJJJJJJ"),
 //         RocStr
 //     );
 // }
@@ -108,7 +108,7 @@ use roc_std::{RocList, RocStr};
 //                         _ -> ""
 //                 "#
 //         ),
-//         RocStr::from_slice(b"JJJ"),
+//         RocStr::from_slice_unchecked(b"JJJ"),
 //         RocStr
 //     );
 // }
@@ -122,9 +122,9 @@ use roc_std::{RocList, RocStr};
 //                 "#
 //         ),
 //         RocList::from_slice(&[
-//             RocStr::from_slice(b"01234567789abcdefghi"),
-//             RocStr::from_slice(b"01234567789abcdefghi")
-//         ]),
+//             RocStr::from_slice_unchecked(b"01234567789abcdefghi"),
+//             RocStr::from_slice_unchecked(b"01234567789abcdefghi")
+//        ]),
 //         RocList<RocStr>
 //     );
 
@@ -135,9 +135,9 @@ use roc_std::{RocList, RocStr};
 //                 "#
 //         ),
 //         RocList::from_slice(&[
-//             RocStr::from_slice(b"01234567789abcdefghi "),
-//             RocStr::from_slice(b" 01234567789abcdefghi")
-//         ]),
+//             RocStr::from_slice_unchecked(b"01234567789abcdefghi "),
+//             RocStr::from_slice_unchecked(b" 01234567789abcdefghi")
+//        ]),
 //         RocList<RocStr>
 //     );
 // }
@@ -151,10 +151,10 @@ use roc_std::{RocList, RocStr};
 //                 "#
 //         ),
 //         RocList::from_slice(&[
-//             RocStr::from_slice(b"J"),
-//             RocStr::from_slice(b"J"),
-//             RocStr::from_slice(b"J")
-//         ]),
+//             RocStr::from_slice_unchecked(b"J"),
+//             RocStr::from_slice_unchecked(b"J"),
+//             RocStr::from_slice_unchecked(b"J")
+//        ]),
 //         RocList<RocStr>
 //     );
 // }
@@ -169,7 +169,7 @@ use roc_std::{RocList, RocStr};
 //                         "than the delimiter which happens to be very very long"
 //                 "#
 //         ),
-//         RocList::from_slice(&[RocStr::from_slice(b"string to split is shorter")]),
+//         RocList::from_slice(&[RocStr::from_slice_unchecked(b"string to split is shorter")]),
 //         RocList<RocStr>
 //     );
 // }
@@ -182,7 +182,7 @@ use roc_std::{RocList, RocStr};
 //                     Str.split "" ""
 //                 "#
 //         ),
-//         RocList::from_slice(&[RocStr::from_slice(b"")]),
+//         RocList::from_slice(&[RocStr::from_slice_unchecked(b"")]),
 //         RocList<RocStr>
 //     );
 // }
@@ -195,7 +195,7 @@ use roc_std::{RocList, RocStr};
 //                     Str.split "a," ","
 //                 "#
 //         ),
-//         RocList::from_slice(&[RocStr::from_slice(b"a"), RocStr::from_slice(b"")]),
+//         RocList::from_slice(&[RocStr::from_slice_unchecked(b"a"), RocStr::from_slice_unchecked(b"")]),
 //         RocList<RocStr>
 //     )
 // }
@@ -224,10 +224,10 @@ use roc_std::{RocList, RocStr};
 //                 "#
 //         ),
 //         RocList::from_slice(&[
-//             RocStr::from_slice(b"1"),
-//             RocStr::from_slice(b"2"),
-//             RocStr::from_slice(b"")
-//         ]),
+//             RocStr::from_slice_unchecked(b"1"),
+//             RocStr::from_slice_unchecked(b"2"),
+//             RocStr::from_slice_unchecked(b"")
+//        ]),
 //         RocList<RocStr>
 //     );
 // }
@@ -243,10 +243,10 @@ use roc_std::{RocList, RocStr};
 //                 "#
 //         ),
 //         RocList::from_slice(&[
-//             RocStr::from_slice(b"3"),
-//             RocStr::from_slice(b"4"),
-//             RocStr::from_slice(b"")
-//         ]),
+//             RocStr::from_slice_unchecked(b"3"),
+//             RocStr::from_slice_unchecked(b"4"),
+//             RocStr::from_slice_unchecked(b"")
+//        ]),
 //         RocList<RocStr>
 //     );
 // }
@@ -261,7 +261,7 @@ use roc_std::{RocList, RocStr};
 //                         "Second string that is also fairly long. Two long strings test things that might not appear with short strings."
 //                 "#
 //             ),
-//             RocStr::from_slice(b"First string that is fairly long. Longer strings make for different errors. Second string that is also fairly long. Two long strings test things that might not appear with short strings."),
+//             RocStr::from_slice_unchecked(b"First string that is fairly long. Longer strings make for different errors. Second string that is also fairly long. Two long strings test things that might not appear with short strings."),
 //             RocStr
 //         );
 // }
@@ -287,7 +287,7 @@ fn small_str_zeroed_literal() {
     assert_evals_to!(
         indoc!(
             r#"
-                app "test" provides [ main ] to "./platform"
+                app "test" provides [main] to "./platform"
 
                 createStr = \isForRealThisTime ->
                     if isForRealThisTime then
@@ -493,12 +493,12 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 97 ] is
+//                     when Str.fromUtf8 [97] is
 //                         Ok val -> val
 //                         Err _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("a".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("a".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -508,12 +508,12 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 97, 98, 99, 0x7E ] is
+//                     when Str.fromUtf8 [97, 98, 99, 0x7E] is
 //                         Ok val -> val
 //                         Err _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("abc~".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("abc~".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -523,12 +523,12 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 0xE2, 0x88, 0x86 ] is
+//                     when Str.fromUtf8 [0xE2, 0x88, 0x86] is
 //                         Ok val -> val
 //                         Err _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("∆".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("∆".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -538,12 +538,12 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 0xE2, 0x88, 0x86, 0xC5, 0x93, 0xC2, 0xAC ] is
+//                     when Str.fromUtf8 [0xE2, 0x88, 0x86, 0xC5, 0x93, 0xC2, 0xAC] is
 //                         Ok val -> val
 //                         Err _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("∆œ¬".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("∆œ¬".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -553,12 +553,12 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 0xF0, 0x9F, 0x92, 0x96 ] is
+//                     when Str.fromUtf8 [0xF0, 0x9F, 0x92, 0x96] is
 //                         Ok val -> val
 //                         Err _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("💖".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("💖".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -568,12 +568,12 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 0xF0, 0x9F, 0x92, 0x96, 0xF0, 0x9F, 0xA4, 0xA0, 0xF0, 0x9F, 0x9A, 0x80 ] is
+//                     when Str.fromUtf8 [0xF0, 0x9F, 0x92, 0x96, 0xF0, 0x9F, 0xA4, 0xA0, 0xF0, 0x9F, 0x9A, 0x80] is
 //                         Ok val -> val
 //                         Err _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("💖🤠🚀".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("💖🤠🚀".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -583,12 +583,12 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 0xF0, 0x9F, 0x92, 0x96, 98, 0xE2, 0x88, 0x86 ] is
+//                     when Str.fromUtf8 [0xF0, 0x9F, 0x92, 0x96, 98, 0xE2, 0x88, 0x86] is
 //                         Ok val -> val
 //                         Err _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("💖b∆".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("💖b∆".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -598,7 +598,7 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 97, 98, 0x80, 99 ] is
+//                     when Str.fromUtf8 [97, 98, 0x80, 99] is
 //                         Err (BadUtf8 InvalidStartByte byteIndex) ->
 //                             if byteIndex == 2 then
 //                                 "a"
@@ -607,7 +607,7 @@ fn str_starts_with_false_small_str() {
 //                         _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("a".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("a".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -617,7 +617,7 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 97, 98, 99, 0xC2 ] is
+//                     when Str.fromUtf8 [97, 98, 99, 0xC2] is
 //                         Err (BadUtf8 UnexpectedEndOfSequence byteIndex) ->
 //                             if byteIndex == 3 then
 //                                 "a"
@@ -626,7 +626,7 @@ fn str_starts_with_false_small_str() {
 //                         _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("a".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("a".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -636,7 +636,7 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 97, 98, 99, 0xC2, 0x00 ] is
+//                     when Str.fromUtf8 [97, 98, 99, 0xC2, 0x00] is
 //                         Err (BadUtf8 ExpectedContinuation byteIndex) ->
 //                             if byteIndex == 3 then
 //                                 "a"
@@ -645,7 +645,7 @@ fn str_starts_with_false_small_str() {
 //                         _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("a".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("a".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -655,7 +655,7 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 97, 0xF0, 0x80, 0x80, 0x80 ] is
+//                     when Str.fromUtf8 [97, 0xF0, 0x80, 0x80, 0x80] is
 //                         Err (BadUtf8 OverlongEncoding byteIndex) ->
 //                             if byteIndex == 1 then
 //                                 "a"
@@ -664,7 +664,7 @@ fn str_starts_with_false_small_str() {
 //                         _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("a".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("a".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -674,7 +674,7 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 97, 0xF4, 0x90, 0x80, 0x80 ] is
+//                     when Str.fromUtf8 [97, 0xF4, 0x90, 0x80, 0x80] is
 //                         Err (BadUtf8 CodepointTooLarge byteIndex) ->
 //                             if byteIndex == 1 then
 //                                 "a"
@@ -683,7 +683,7 @@ fn str_starts_with_false_small_str() {
 //                         _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("a".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("a".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -693,7 +693,7 @@ fn str_starts_with_false_small_str() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                     when Str.fromUtf8 [ 97, 98, 0xED, 0xA0, 0x80 ] is
+//                     when Str.fromUtf8 [97, 98, 0xED, 0xA0, 0x80] is
 //                         Err (BadUtf8 EncodesSurrogateHalf byteIndex) ->
 //                             if byteIndex == 2 then
 //                                 "a"
@@ -702,7 +702,7 @@ fn str_starts_with_false_small_str() {
 //                         _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice("a".as_bytes()),
+//         roc_std::RocStr::from_slice_unchecked("a".as_bytes()),
 //         roc_std::RocStr
 //     );
 // }
@@ -724,7 +724,7 @@ fn str_equality() {
 //     assert_evals_to!(
 //         indoc!(
 //             r#"
-//                 Expr : [ Add Expr Expr, Val I64, Var I64 ]
+//                 Expr : [Add Expr Expr, Val I64, Var I64]
 
 //                 expr : Expr
 //                 expr = Add (Add (Val 3) (Val 1)) (Add (Val 1) (Var 1))
@@ -744,7 +744,7 @@ fn str_equality() {
 //                 printExpr expr
 //                 "#
 //         ),
-//         RocStr::from_slice(b"Add (Add (Val 3) (Val 1)) (Add (Val 1) (Var 1))"),
+//         RocStr::from_slice_unchecked(b"Add (Add (Val 3) (Val 1)) (Add (Val 1) (Var 1))"),
 //         RocStr
 //     );
 // }

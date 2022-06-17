@@ -3459,6 +3459,7 @@ dependencies = [
  "cli_utils",
  "ctor",
  "dircpy",
+ "indexmap",
  "indoc",
  "pretty_assertions",
  "roc_builtins",
@@ -3473,6 +3474,8 @@ dependencies = [
  "roc_target",
  "roc_test_utils",
  "roc_types",
+ "strum",
+ "strum_macros",
  "target-lexicon",
  "tempfile",
 ]
@@ -3559,6 +3562,7 @@ dependencies = [
  "roc_region",
  "roc_target",
  "roc_types",
+ "tempfile",
 ]
 
 [[package]]
@@ -3589,7 +3593,9 @@ dependencies = [
  "cli_utils",
  "const_format",
  "criterion 0.3.5 (git+https://github.com/Anton-4/criterion.rs)",
+ "errno",
  "indoc",
+ "libc",
  "mimalloc",
  "pretty_assertions",
  "roc_build",
@@ -3663,6 +3669,18 @@ dependencies = [
 [[package]]
 name = "roc_debug_flags"
 version = "0.1.0"
+
+[[package]]
+name = "roc_derive_key"
+version = "0.1.0"
+dependencies = [
+ "roc_can",
+ "roc_collections",
+ "roc_error_macros",
+ "roc_module",
+ "roc_region",
+ "roc_types",
+]
 
 [[package]]
 name = "roc_docs"
@@ -3821,6 +3839,7 @@ dependencies = [
 name = "roc_gen_wasm"
 version = "0.1.0"
 dependencies = [
+ "bitvec 1.0.0",
  "bumpalo",
  "roc_builtins",
  "roc_collections",
@@ -3842,6 +3861,19 @@ dependencies = [
 [[package]]
 name = "roc_ident"
 version = "0.1.0"
+
+[[package]]
+name = "roc_late_solve"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "roc_can",
+ "roc_collections",
+ "roc_module",
+ "roc_solve",
+ "roc_types",
+ "roc_unify",
+]
 
 [[package]]
 name = "roc_linker"
@@ -3892,6 +3924,7 @@ dependencies = [
  "roc_constrain",
  "roc_debug_flags",
  "roc_error_macros",
+ "roc_late_solve",
  "roc_module",
  "roc_mono",
  "roc_parse",
@@ -3930,16 +3963,16 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_debug_flags",
+ "roc_derive_key",
  "roc_error_macros",
  "roc_exhaustive",
+ "roc_late_solve",
  "roc_module",
  "roc_problem",
  "roc_region",
- "roc_solve",
  "roc_std",
  "roc_target",
  "roc_types",
- "roc_unify",
  "static_assertions 1.1.0",
  "ven_pretty",
 ]
@@ -4104,6 +4137,7 @@ dependencies = [
 name = "roc_std"
 version = "0.1.0"
 dependencies = [
+ "arrayvec 0.7.2",
  "static_assertions 0.1.1",
 ]
 
@@ -4111,6 +4145,8 @@ dependencies = [
 name = "roc_target"
 version = "0.1.0"
 dependencies = [
+ "strum",
+ "strum_macros",
  "target-lexicon",
 ]
 
@@ -4133,7 +4169,6 @@ dependencies = [
  "roc_module",
  "roc_region",
  "static_assertions 1.1.0",
- "ven_ena",
 ]
 
 [[package]]
@@ -4776,6 +4811,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_derive"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "indoc",
+ "lazy_static",
+ "pretty_assertions",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_constrain",
+ "roc_debug_flags",
+ "roc_derive_key",
+ "roc_load_internal",
+ "roc_module",
+ "roc_mono",
+ "roc_region",
+ "roc_reporting",
+ "roc_solve",
+ "roc_target",
+ "roc_types",
+ "ven_pretty",
+]
+
+[[package]]
 name = "test_gen"
 version = "0.1.0"
 dependencies = [
@@ -5067,13 +5127,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc5cf98d8186244414c848017f0e2676b3fcb46807f6668a97dfe67359a3c4b7"
 dependencies = [
  "getrandom",
-]
-
-[[package]]
-name = "ven_ena"
-version = "0.13.1"
-dependencies = [
- "log",
 ]
 
 [[package]]

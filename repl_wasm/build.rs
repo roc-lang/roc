@@ -13,15 +13,6 @@ fn main() {
     let source_path = format!("src/{}.c", PLATFORM_FILENAME);
     println!("cargo:rerun-if-changed={}", source_path);
 
-    // When we build on Netlify, zig is not installed (but also not used,
-    // since all we're doing is generating docs), so we can skip the steps
-    // that require having zig installed.
-    if env::var_os("NO_ZIG_INSTALLED").is_some() {
-        // We still need to do the other things before this point, because
-        // setting the env vars is needed for other parts of the build.
-        return;
-    }
-
     std::fs::create_dir_all("./data").unwrap();
 
     // Zig can produce *either* an object containing relocations OR an object containing libc code
@@ -49,6 +40,7 @@ fn main() {
         PRE_LINKED_BINARY,
         "--export-all",
         "--no-entry",
+        "--relocatable",
     ];
 
     let zig = zig_executable();

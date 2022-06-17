@@ -1,6 +1,6 @@
 use crate::annotation::{Formattable, Newlines, Parens};
-use crate::collection::fmt_collection;
-use crate::def::fmt_def;
+use crate::collection::{fmt_collection, Braces};
+use crate::def::fmt_defs;
 use crate::pattern::fmt_pattern;
 use crate::spaces::{count_leading_newlines, fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
@@ -116,7 +116,6 @@ impl<'a> Formattable for Expr<'a> {
     ) {
         use self::Expr::*;
 
-        //dbg!(self);
         let apply_needs_parens = parens == Parens::InApply;
 
         match self {
@@ -132,10 +131,24 @@ impl<'a> Formattable for Expr<'a> {
                 if parens == Parens::NotNeeded && !sub_expr_requests_parens(sub_expr) {
                     sub_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
                 } else {
+                    let should_add_newlines = match sub_expr {
+                        Expr::Closure(..)
+                        | Expr::SpaceBefore(..)
+                        | Expr::SpaceAfter(Closure(..), ..) => false,
+                        _ => sub_expr.is_multiline(),
+                    };
+
                     buf.indent(indent);
                     buf.push('(');
-                    let next_indent = if starts_with_newline(sub_expr) {
-                        indent + INDENT
+                    if should_add_newlines {
+                        buf.newline();
+                    }
+
+                    let next_indent = if starts_with_newline(sub_expr) || should_add_newlines {
+                        match sub_expr {
+                            Expr::Closure(..) | Expr::SpaceAfter(Closure(..), ..) => indent,
+                            _ => indent + INDENT,
+                        }
                     } else {
                         indent
                     };
@@ -146,6 +159,10 @@ impl<'a> Formattable for Expr<'a> {
                         Newlines::Yes,
                         next_indent,
                     );
+
+                    if !matches!(sub_expr, Expr::SpaceAfter(..)) && should_add_newlines {
+                        buf.newline();
+                    }
                     buf.indent(indent);
                     buf.push(')');
                 }
@@ -308,9 +325,7 @@ impl<'a> Formattable for Expr<'a> {
                 // (Canonicalization can remove defs later, but that hasn't happened yet!)
                 debug_assert!(!defs.is_empty());
 
-                for loc_def in defs.iter() {
-                    fmt_def(buf, &loc_def.value, indent);
-                }
+                fmt_defs(buf, defs, indent);
 
                 match &ret.value {
                     SpaceBefore(sub_expr, spaces) => {
@@ -353,7 +368,7 @@ impl<'a> Formattable for Expr<'a> {
                 fmt_if(buf, branches, final_else, self.is_multiline(), indent);
             }
             When(loc_condition, branches) => fmt_when(buf, loc_condition, branches, indent),
-            List(items) => fmt_collection(buf, indent, '[', ']', *items, Newlines::No),
+            List(items) => fmt_collection(buf, indent, Braces::Square, *items, Newlines::No),
             BinOps(lefts, right) => fmt_bin_ops(buf, lefts, right, false, parens, indent),
             UnaryOp(sub_expr, unary_op) => {
                 buf.indent(indent);

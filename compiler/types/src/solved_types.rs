@@ -38,7 +38,7 @@ pub enum SolvedType {
     Rigid(Lowercase),
     Flex(VarId),
     Wildcard,
-    /// Inline type alias, e.g. `as List a` in `[ Cons a (List a), Nil ] as List a`
+    /// Inline type alias, e.g. `as List a` in `[Cons a (List a), Nil] as List a`
     Record {
         fields: Vec<(Lowercase, RecordField<SolvedType>)>,
         /// The row type variable in an open record, e.g. the `r` in `{ name: Str }r`.
@@ -47,6 +47,7 @@ pub enum SolvedType {
     },
     EmptyRecord,
     TagUnion(Vec<(TagName, Vec<SolvedType>)>, Box<SolvedType>),
+    LambdaTag(Symbol, Vec<SolvedType>),
     FunctionOrTagUnion(TagName, Symbol, Box<SolvedType>),
     RecursiveTagUnion(VarId, Vec<(TagName, Vec<SolvedType>)>, Box<SolvedType>),
     EmptyTagUnion,
@@ -175,6 +176,18 @@ pub fn to_type(
             };
 
             Type::TagUnion(new_tags, ext)
+        }
+        LambdaTag(name, args) => {
+            let mut new_args = Vec::with_capacity(args.len());
+
+            for arg in args.iter() {
+                new_args.push(to_type(arg, free_vars, var_store));
+            }
+
+            Type::ClosureTag {
+                name: *name,
+                captures: new_args,
+            }
         }
         FunctionOrTagUnion(tag_name, symbol, ext) => {
             let ext = match ext.as_ref() {

@@ -562,6 +562,27 @@ impl ObligationCache<'_> {
                         return Err(var);
                     }
                 }
+                Alias(
+                    Symbol::NUM_U8
+                    | Symbol::NUM_U16
+                    | Symbol::NUM_U32
+                    | Symbol::NUM_U64
+                    | Symbol::NUM_U128
+                    | Symbol::NUM_I8
+                    | Symbol::NUM_I16
+                    | Symbol::NUM_I32
+                    | Symbol::NUM_I64
+                    | Symbol::NUM_I128
+                    | Symbol::NUM_NAT
+                    | Symbol::NUM_F32
+                    | Symbol::NUM_F64
+                    | Symbol::NUM_DEC,
+                    _,
+                    _,
+                    _,
+                ) => {
+                    // yes
+                }
                 Alias(_, arguments, real_type_var, _) => {
                     push_var_slice!(arguments.all_variables());
                     stack.push(*real_type_var);
@@ -569,6 +590,7 @@ impl ObligationCache<'_> {
                 RangedNumber(..) => {
                     // yes, all numbers can
                 }
+                LambdaSet(..) => return Err(var),
                 Error => {
                     return Err(var);
                 }
@@ -624,15 +646,14 @@ pub fn resolve_ability_specialization(
         .member_def(ability_member)
         .expect("Not an ability member symbol");
 
+    // Figure out the ability we're resolving in a temporary subs snapshot.
     let snapshot = subs.snapshot();
 
-    let signature_var = member_def
-        .signature_var()
-        .unwrap_or_else(|| internal_error!("Signature var not resolved for {:?}", ability_member));
+    let signature_var = member_def.signature_var();
 
     instantiate_rigids(subs, signature_var);
-    let (_, must_implement_ability) = unify(subs, specialization_var, signature_var, Mode::EQ)
-        .expect_success(
+    let (_vars, must_implement_ability, _lambda_sets_to_specialize) =
+        unify(subs, specialization_var, signature_var, Mode::EQ).expect_success(
             "If resolving a specialization, the specialization must be known to typecheck.",
         );
 

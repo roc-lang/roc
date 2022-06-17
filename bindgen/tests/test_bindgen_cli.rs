@@ -112,10 +112,22 @@ mod bindgen_cli_run {
         union_without_padding:"union-without-padding" => indoc!(r#"
             tag_union was: NonRecursive::Foo("This is a test")
             `Foo "small str"` is: NonRecursive::Foo("small str")
-            `Foo "A long enough string to not be small"` is: NonRecursive::Foo("A long enough string to not be small")
             `Bar 123` is: NonRecursive::Bar(123)
             `Baz` is: NonRecursive::Baz
             `Blah 456` is: NonRecursive::Blah(456)
+        "#),
+        nullable_unwrapped:"nullable-unwrapped" => indoc!(r#"
+            tag_union was: StrConsList::Cons("World!", StrConsList::Cons("Hello ", StrConsList::Nil))
+            `Cons "small str" Nil` is: StrConsList::Cons("small str", StrConsList::Nil)
+            `Nil` is: StrConsList::Nil
+        "#),
+        basic_recursive_union:"basic-recursive-union" => indoc!(r#"
+            tag_union was: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
+            `Concat (String "Hello, ") (String "World!")` is: Expr::Concat(Expr::String("Hello, "), Expr::String("World!"))
+            `String "this is a test"` is: Expr::String("this is a test")
+        "#),
+        advanced_recursive_union:"advanced-recursive-union" => indoc!(r#"
+            rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { tool: Tool::SystemTool(R4 { name: "test", num: 42 }) }), inputFiles: ["foo"] }) }
         "#),
     }
 

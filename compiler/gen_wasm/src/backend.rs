@@ -1,5 +1,4 @@
-use bumpalo::{self, collections::Vec};
-use std::fmt::Write;
+use bumpalo::collections::{String, Vec};
 
 use code_builder::Align;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
@@ -18,14 +17,17 @@ use roc_std::RocDec;
 use crate::layout::{CallConv, ReturnMethod, WasmLayout};
 use crate::low_level::{call_higher_order_lowlevel, LowLevelCall};
 use crate::storage::{Storage, StoredValue, StoredValueKind};
-use crate::wasm_module::linking::{DataSymbol, LinkingSegment, WasmObjectSymbol};
-use crate::wasm_module::sections::{DataMode, DataSegment, Limits};
+use crate::wasm_module::linking::{DataSymbol, WasmObjectSymbol};
+use crate::wasm_module::sections::{
+    ConstExpr, DataMode, DataSegment, Export, Global, GlobalType, Import, ImportDesc, Limits,
+    MemorySection,
+};
 use crate::wasm_module::{
     code_builder, CodeBuilder, ExportType, LocalId, Signature, SymInfo, ValueType, WasmModule,
 };
 use crate::{
-    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, DEBUG_LOG_SETTINGS, PTR_SIZE,
-    PTR_TYPE, TARGET_INFO,
+    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, DEBUG_SETTINGS, MEMORY_NAME,
+    PTR_SIZE, PTR_TYPE, TARGET_INFO,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -40,7 +42,6 @@ pub enum ProcSource {
 pub struct ProcLookupData<'a> {
     pub name: Symbol,
     pub layout: ProcLayout<'a>,
-    pub linker_index: u32,
     pub source: ProcSource,
 }
 
@@ -51,11 +52,12 @@ pub struct WasmBackend<'a> {
     // Module-level data
     module: WasmModule<'a>,
     layout_ids: LayoutIds<'a>,
-    next_constant_addr: u32,
     pub fn_index_offset: u32,
     called_preload_fns: Vec<'a, u32>,
     pub proc_lookup: Vec<'a, ProcLookupData<'a>>,
+    host_lookup: Vec<'a, (&'a str, u32)>,
     helper_proc_gen: CodeGenHelp<'a>,
+    can_relocate_heap: bool,
 
     // Function-level data
     pub code_builder: CodeBuilder<'a>,
@@ -67,40 +69,52 @@ pub struct WasmBackend<'a> {
 }
 
 impl<'a> WasmBackend<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         env: &'a Env<'a>,
         interns: &'a mut Interns,
         layout_ids: LayoutIds<'a>,
         proc_lookup: Vec<'a, ProcLookupData<'a>>,
+        host_to_app_map: Vec<'a, (&'a str, u32)>,
         mut module: WasmModule<'a>,
         fn_index_offset: u32,
         helper_proc_gen: CodeGenHelp<'a>,
     ) -> Self {
-        // The preloaded builtins object file exports all functions, but the final app binary doesn't.
-        // Remove the function exports and use them to populate the Name section (debug info)
-        let platform_and_builtins_exports =
-            std::mem::replace(&mut module.export.exports, bumpalo::vec![in env.arena]);
-        let mut app_exports = Vec::with_capacity_in(32, env.arena);
-        for ex in platform_and_builtins_exports.into_iter() {
-            match ex.ty {
-                ExportType::Func => module.names.append_function(ex.index, ex.name),
-                _ => app_exports.push(ex),
-            }
-        }
+        // TODO: get this from a CLI parameter with some default
+        const STACK_SIZE: u32 = 1024 * 1024;
+        let can_relocate_heap = Self::set_memory_layout(env, &mut module, STACK_SIZE);
 
-        // The preloaded binary has a global to tell us where its data section ends
-        // Note: We need this to account for zero data (.bss), which doesn't have an explicit DataSegment!
-        let data_end_name = "__data_end".as_bytes();
-        let data_end_idx = app_exports
-            .iter()
-            .find(|ex| ex.name == data_end_name)
-            .map(|ex| ex.index)
-            .unwrap_or_else(|| {
-                internal_error!("Preloaded Wasm binary must export global constant `__data_end`")
+        Self::export_globals(&mut module);
+
+        // We don't want to import any Memory or Tables
+        module.import.imports.retain(|import| {
+            !matches!(
+                import.description,
+                ImportDesc::Mem { .. } | ImportDesc::Table { .. }
+            )
+        });
+
+        module.link_host_to_app_calls(host_to_app_map);
+
+        module.code.code_builders.reserve(proc_lookup.len());
+
+        let host_lookup = module.get_host_function_lookup(env.arena);
+        if module.names.function_names.is_empty() {
+            let import_fns = module.import.imports.iter().filter(|imp| imp.is_function());
+            let import_names = Vec::from_iter_in(import_fns.map(|imp| imp.name), env.arena);
+            let symbols = module.linking.symbol_table.iter();
+            let names = symbols.filter_map(|sym_info| match sym_info {
+                SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { index, name, .. }) => {
+                    Some((*index, *name))
+                }
+                SymInfo::Function(WasmObjectSymbol::ImplicitlyNamed { index, .. }) => {
+                    Some((*index, import_names[*index as usize]))
+                }
+                _ => None,
             });
-        let next_constant_addr = module.global.parse_u32_at_index(data_end_idx);
-
-        module.export.exports = app_exports;
+            module.names.function_names.extend(names);
+            module.names.function_names.sort_by_key(|(idx, _name)| *idx);
+        }
 
         WasmBackend {
             env,
@@ -110,17 +124,117 @@ impl<'a> WasmBackend<'a> {
             module,
 
             layout_ids,
-            next_constant_addr,
             fn_index_offset,
             called_preload_fns: Vec::with_capacity_in(2, env.arena),
             proc_lookup,
+            host_lookup,
             helper_proc_gen,
+            can_relocate_heap,
 
             // Function-level data
             block_depth: 0,
             joinpoint_label_map: MutMap::default(),
             code_builder: CodeBuilder::new(env.arena),
             storage: Storage::new(env.arena),
+        }
+    }
+
+    /// A Wasm module's memory is all in one contiguous block, unlike native executables.
+    /// The standard layout is: constant data, then stack, then heap.
+    /// Since they're all in one block, they can't grow independently. Only the highest one can grow.
+    /// Also, there's no "invalid region" below the stack, so stack overflow will overwrite constants!
+    /// TODO: Detect stack overflow in function prologue... at least in Roc code...
+    fn set_memory_layout(env: &'a Env<'a>, module: &mut WasmModule<'a>, stack_size: u32) -> bool {
+        let mut stack_heap_boundary = module.data.end_addr + stack_size;
+        stack_heap_boundary = round_up_to_alignment!(stack_heap_boundary, MemorySection::PAGE_SIZE);
+
+        // Stack pointer
+        // This should be an imported global in the host
+        // In the final binary, it's an internally defined global
+        let sp_type = GlobalType {
+            value_type: ValueType::I32,
+            is_mutable: true,
+        };
+        {
+            // Check that __stack_pointer is the only imported global
+            // If there were more, we'd have to relocate them, and we don't
+            let imported_globals = Vec::from_iter_in(
+                module
+                    .import
+                    .imports
+                    .iter()
+                    .filter(|import| matches!(import.description, ImportDesc::Global { .. })),
+                env.arena,
+            );
+            if imported_globals.len() != 1
+                || imported_globals[0]
+                    != &(Import {
+                        module: "env",
+                        name: "__stack_pointer",
+                        description: ImportDesc::Global { ty: sp_type },
+                    })
+            {
+                panic!("I can't link this host file. I expected it to have one imported Global called env.__stack_pointer")
+            }
+        }
+        module
+            .import
+            .imports
+            .retain(|import| !matches!(import.description, ImportDesc::Global { .. }));
+        module.global.append(Global {
+            ty: sp_type,
+            init: ConstExpr::I32(stack_heap_boundary as i32),
+        });
+
+        // Set the initial size of the memory
+        module.memory =
+            MemorySection::new(env.arena, stack_heap_boundary + MemorySection::PAGE_SIZE);
+
+        // Export the memory so that JS can interact with it
+        module.export.append(Export {
+            name: MEMORY_NAME,
+            ty: ExportType::Mem,
+            index: 0,
+        });
+
+        // Set the constant that malloc uses to know where the heap begins
+        module
+            .relocate_internal_symbol("__heap_base", stack_heap_boundary)
+            .is_ok()
+    }
+
+    /// If the host has some `extern` global variables, we need to create them in the final binary
+    /// and make them visible to JavaScript by exporting them
+    fn export_globals(module: &mut WasmModule<'a>) {
+        for (sym_index, sym) in module.linking.symbol_table.iter().enumerate() {
+            match sym {
+                SymInfo::Data(DataSymbol::Imported { name, .. }) if *name != "__heap_base" => {
+                    let global_value_addr = module.data.end_addr;
+                    module.data.end_addr += PTR_SIZE;
+
+                    module.reloc_code.apply_relocs_u32(
+                        &mut module.code.preloaded_bytes,
+                        sym_index as u32,
+                        global_value_addr,
+                    );
+
+                    let global_index = module.global.count;
+                    module.global.append(Global {
+                        ty: GlobalType {
+                            value_type: ValueType::I32,
+                            is_mutable: false,
+                        },
+                        init: ConstExpr::I32(global_value_addr as i32),
+                    });
+
+                    module.export.append(Export {
+                        name,
+                        ty: ExportType::Global,
+                        index: global_index,
+                    });
+                }
+                _ => {}
+            }
         }
     }
 
@@ -136,21 +250,22 @@ impl<'a> WasmBackend<'a> {
     ) -> u32 {
         let proc_index = self.proc_lookup.len();
         let wasm_fn_index = self.fn_index_offset + proc_index as u32;
-        let linker_sym_index = self.module.linking.symbol_table.len() as u32;
 
         let name = self
             .layout_ids
             .get_toplevel(symbol, &layout)
             .to_symbol_string(symbol, self.interns);
+        let name = String::from_str_in(&name, self.env.arena).into_bump_str();
+
+        // dbg!(name);
 
         self.proc_lookup.push(ProcLookupData {
             name: symbol,
             layout,
-            linker_index: linker_sym_index,
             source,
         });
 
-        let linker_symbol = SymInfo::Function(WasmObjectSymbol::Defined {
+        let linker_symbol = SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed {
             flags: 0,
             index: wasm_fn_index,
             name,
@@ -161,9 +276,61 @@ impl<'a> WasmBackend<'a> {
     }
 
     pub fn finalize(mut self) -> (WasmModule<'a>, Vec<'a, u32>) {
+        self.maybe_call_host_main();
         let fn_table_size = 1 + self.module.element.max_table_index();
         self.module.table.function_table.limits = Limits::MinMax(fn_table_size, fn_table_size);
         (self.module, self.called_preload_fns)
+    }
+
+    /// If the host has a `main` function then we need to insert a `_start` to call it.
+    /// This is something linkers do, and this backend is also a linker!
+    fn maybe_call_host_main(&mut self) {
+        let main_symbol_index = match self.module.linking.find_internal_symbol("main") {
+            Ok(x) => x,
+            Err(_) => return,
+        };
+
+        let main_fn_index: u32 = match &self.module.linking.symbol_table[main_symbol_index] {
+            SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { index, .. }) => *index,
+            _ => {
+                return;
+            }
+        };
+
+        const START: &str = "_start";
+
+        if let Ok(sym_index) = self.module.linking.find_internal_symbol(START) {
+            let fn_index = match self.module.linking.symbol_table[sym_index] {
+                SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { index, .. }) => index,
+                _ => panic!("linker symbol `{}` is not a function", START),
+            };
+            self.module.export.append(Export {
+                name: START,
+                ty: ExportType::Func,
+                index: fn_index,
+            });
+            return;
+        }
+
+        self.module.add_function_signature(Signature {
+            param_types: bumpalo::vec![in self.env.arena],
+            ret_type: None,
+        });
+
+        self.module.export.append(Export {
+            name: START,
+            ty: ExportType::Func,
+            index: self.fn_index_offset + self.module.code.code_builders.len() as u32,
+        });
+
+        self.code_builder.i32_const(0); // argc=0
+        self.code_builder.i32_const(0); // argv=NULL
+        self.code_builder.call(main_fn_index, 2, true);
+        self.code_builder.drop_();
+        self.code_builder.build_fn_header_and_footer(&[], 0, None);
+        self.reset();
+
+        self.called_preload_fns.push(main_fn_index);
     }
 
     /// Register the debug names of Symbols in a global lookup table
@@ -214,7 +381,7 @@ impl<'a> WasmBackend<'a> {
     ***********************************************************/
 
     pub fn build_proc(&mut self, proc: &Proc<'a>) {
-        if DEBUG_LOG_SETTINGS.proc_start_end {
+        if DEBUG_SETTINGS.proc_start_end {
             println!("\ngenerating procedure {:?}\n", proc.name);
         }
 
@@ -227,7 +394,7 @@ impl<'a> WasmBackend<'a> {
         self.finalize_proc();
         self.reset();
 
-        if DEBUG_LOG_SETTINGS.proc_start_end {
+        if DEBUG_SETTINGS.proc_start_end {
             println!("\nfinished generating {:?}\n", proc.name);
         }
     }
@@ -283,7 +450,7 @@ impl<'a> WasmBackend<'a> {
             self.storage.stack_frame_pointer,
         );
 
-        if DEBUG_LOG_SETTINGS.storage_map {
+        if DEBUG_SETTINGS.storage_map {
             println!("\nStorage:");
             for (sym, storage) in self.storage.symbol_storage_map.iter() {
                 println!("{:?} => {:?}", sym, storage);
@@ -299,10 +466,8 @@ impl<'a> WasmBackend<'a> {
             .unwrap();
         let wasm_fn_index = self.fn_index_offset + proc_index as u32;
 
-        let mut debug_name = bumpalo::collections::String::with_capacity_in(64, self.env.arena);
-        write!(debug_name, "{:?}", sym).unwrap();
-        let name_bytes = debug_name.into_bytes().into_bump_slice();
-        self.module.names.append_function(wasm_fn_index, name_bytes);
+        let name = String::from_str_in(sym.as_str(self.interns), self.env.arena).into_bump_str();
+        self.module.names.append_function(wasm_fn_index, name);
     }
 
     /// Build a wrapper around a Roc procedure so that it can be called from our higher-order Zig builtins.
@@ -404,15 +569,10 @@ impl<'a> WasmBackend<'a> {
         }
 
         // Call the wrapped inner function
-        let lookup = &self.proc_lookup[inner_lookup_idx];
         let inner_wasm_fn_index = self.fn_index_offset + inner_lookup_idx as u32;
         let has_return_val = ret_type_and_size.is_some();
-        self.code_builder.call(
-            inner_wasm_fn_index,
-            lookup.linker_index,
-            n_inner_wasm_args,
-            has_return_val,
-        );
+        self.code_builder
+            .call(inner_wasm_fn_index, n_inner_wasm_args, has_return_val);
 
         // If the inner function returns a primitive, store it to the address we loaded at the very beginning
         if let Some((ty, size)) = ret_type_and_size {
@@ -472,6 +632,8 @@ impl<'a> WasmBackend<'a> {
 
             Stmt::Refcounting(modify, following) => self.stmt_refcounting(modify, following),
 
+            Stmt::Expect { .. } => todo!("expect is not implemented in the wasm backend"),
+
             Stmt::RuntimeError(msg) => self.stmt_runtime_error(msg),
         }
     }
@@ -498,7 +660,7 @@ impl<'a> WasmBackend<'a> {
     fn stmt_let(&mut self, stmt: &Stmt<'a>) {
         let mut current_stmt = stmt;
         while let Stmt::Let(sym, expr, layout, following) = current_stmt {
-            if DEBUG_LOG_SETTINGS.let_stmt_ir {
+            if DEBUG_SETTINGS.let_stmt_ir {
                 println!("let {:?} = {}", sym, expr.to_pretty(200)); // ignore `following`! Too confusing otherwise.
             }
 
@@ -741,15 +903,13 @@ impl<'a> WasmBackend<'a> {
         bytes.push(0);
 
         // Store it in the app's data section
-        let sym = self.create_symbol(msg);
-        let (linker_sym_index, elements_addr) = self.store_bytes_in_data_section(&bytes, sym);
+        let elements_addr = self.store_bytes_in_data_section(&bytes);
 
         // Pass its address to roc_panic
         let tag_id = 0;
-        self.code_builder
-            .i32_const_mem_addr(elements_addr, linker_sym_index);
+        self.code_builder.i32_const(elements_addr as i32);
         self.code_builder.i32_const(tag_id);
-        self.call_zig_builtin_after_loading_args("roc_panic", 2, false);
+        self.call_host_fn_after_loading_args("roc_panic", 2, false);
 
         self.code_builder.unreachable_();
     }
@@ -762,7 +922,7 @@ impl<'a> WasmBackend<'a> {
 
     fn expr(&mut self, sym: Symbol, expr: &Expr<'a>, layout: &Layout<'a>, storage: &StoredValue) {
         match expr {
-            Expr::Literal(lit) => self.expr_literal(lit, storage, sym),
+            Expr::Literal(lit) => self.expr_literal(lit, storage),
 
             Expr::Call(roc_mono::ir::Call {
                 call_type,
@@ -824,7 +984,7 @@ impl<'a> WasmBackend<'a> {
      * Literals
      *******************************************************************/
 
-    fn expr_literal(&mut self, lit: &Literal<'a>, storage: &StoredValue, sym: Symbol) {
+    fn expr_literal(&mut self, lit: &Literal<'a>, storage: &StoredValue) {
         let invalid_error =
             || internal_error!("Literal value {:?} has invalid storage {:?}", lit, storage);
 
@@ -899,13 +1059,11 @@ impl<'a> WasmBackend<'a> {
                             self.code_builder.i32_store(Align::Bytes4, offset + 8);
                         } else {
                             let bytes = string.as_bytes();
-                            let (linker_sym_index, elements_addr) =
-                                self.store_bytes_in_data_section(bytes, sym);
+                            let elements_addr = self.store_bytes_in_data_section(bytes);
 
                             // ptr
                             self.code_builder.get_local(local_id);
-                            self.code_builder
-                                .i32_const_mem_addr(elements_addr, linker_sym_index);
+                            self.code_builder.i32_const(elements_addr as i32);
                             self.code_builder.i32_store(Align::Bytes4, offset);
 
                             // len
@@ -929,12 +1087,12 @@ impl<'a> WasmBackend<'a> {
 
     /// Create a string constant in the module data section
     /// Return the data we need for code gen: linker symbol index and memory address
-    fn store_bytes_in_data_section(&mut self, bytes: &[u8], sym: Symbol) -> (u32, u32) {
+    fn store_bytes_in_data_section(&mut self, bytes: &[u8]) -> u32 {
         // Place the segment at a 4-byte aligned offset
-        let segment_addr = round_up_to_alignment!(self.next_constant_addr, PTR_SIZE);
+        let segment_addr = round_up_to_alignment!(self.module.data.end_addr, PTR_SIZE);
         let elements_addr = segment_addr + PTR_SIZE;
         let length_with_refcount = 4 + bytes.len();
-        self.next_constant_addr = segment_addr + length_with_refcount as u32;
+        self.module.data.end_addr = segment_addr + length_with_refcount as u32;
 
         let mut segment = DataSegment {
             mode: DataMode::active_at(segment_addr),
@@ -946,33 +1104,9 @@ impl<'a> WasmBackend<'a> {
         segment.init.extend_from_slice(&refcount_max_bytes);
         segment.init.extend_from_slice(bytes);
 
-        let segment_index = self.module.data.append_segment(segment);
+        self.module.data.append_segment(segment);
 
-        // Generate linker symbol
-        let name = self
-            .layout_ids
-            .get(sym, &Layout::Builtin(Builtin::Str))
-            .to_symbol_string(sym, self.interns);
-
-        let linker_symbol = SymInfo::Data(DataSymbol::Defined {
-            flags: 0,
-            name: name.clone(),
-            segment_index,
-            segment_offset: 4,
-            size: bytes.len() as u32,
-        });
-
-        // Ensure the linker keeps the segment aligned when relocating it
-        self.module.linking.segment_info.push(LinkingSegment {
-            name,
-            alignment: Align::Bytes4,
-            flags: 0,
-        });
-
-        let linker_sym_index = self.module.linking.symbol_table.len();
-        self.module.linking.symbol_table.push(linker_symbol);
-
-        (linker_sym_index as u32, elements_addr)
+        elements_addr
     }
 
     /*******************************************************************
@@ -1016,7 +1150,24 @@ impl<'a> WasmBackend<'a> {
                 call_higher_order_lowlevel(self, ret_sym, ret_layout, *higher_order_lowlevel)
             }
 
-            CallType::Foreign { .. } => todo!("CallType::Foreign"),
+            CallType::Foreign {
+                foreign_symbol,
+                ret_layout,
+            } => {
+                let name = foreign_symbol.as_str();
+                let wasm_layout = WasmLayout::new(ret_layout);
+                let (num_wasm_args, has_return_val, ret_zig_packed_struct) =
+                    self.storage.load_symbols_for_call(
+                        self.env.arena,
+                        &mut self.code_builder,
+                        arguments,
+                        ret_sym,
+                        &wasm_layout,
+                        CallConv::C,
+                    );
+                debug_assert!(!ret_zig_packed_struct); // only true in another place where we use the same helper fn
+                self.call_host_fn_after_loading_args(name, num_wasm_args, has_return_val)
+            }
         }
     }
 
@@ -1049,31 +1200,23 @@ impl<'a> WasmBackend<'a> {
             );
         debug_assert!(!ret_zig_packed_struct);
 
-        for (roc_proc_index, lookup) in self.proc_lookup.iter().enumerate() {
-            let ProcLookupData {
-                name: ir_sym,
-                layout: pl,
-                linker_index: linker_sym_index,
-                ..
-            } = lookup;
-            if *ir_sym == func_sym && pl == proc_layout {
-                let wasm_fn_index = self.fn_index_offset + roc_proc_index as u32;
-                self.code_builder.call(
-                    wasm_fn_index,
-                    *linker_sym_index,
-                    num_wasm_args,
-                    has_return_val,
+        let roc_proc_index = self
+            .proc_lookup
+            .iter()
+            .position(|lookup| lookup.name == func_sym && &lookup.layout == proc_layout)
+            .unwrap_or_else(|| {
+                internal_error!(
+                    "Could not find procedure {:?} with proc_layout:\n{:#?}\nKnown procedures:\n{:#?}",
+                    func_sym,
+                    proc_layout,
+                    self.proc_lookup
                 );
-                return;
-            }
-        }
+            });
 
-        internal_error!(
-            "Could not find procedure {:?} with proc_layout:\n{:#?}\nKnown procedures:\n{:#?}",
-            func_sym,
-            proc_layout,
-            self.proc_lookup
-        );
+        let wasm_fn_index = self.fn_index_offset + roc_proc_index as u32;
+
+        self.code_builder
+            .call(wasm_fn_index, num_wasm_args, has_return_val);
     }
 
     fn expr_call_low_level(
@@ -1097,18 +1240,21 @@ impl<'a> WasmBackend<'a> {
     /// Generate a call instruction to a Zig builtin function.
     /// And if we haven't seen it before, add an Import and linker data for it.
     /// Zig calls use LLVM's "fast" calling convention rather than our usual C ABI.
-    pub fn call_zig_builtin_after_loading_args(
+    pub fn call_host_fn_after_loading_args(
         &mut self,
-        name: &'a str,
+        name: &str,
         num_wasm_args: usize,
         has_return_val: bool,
     ) {
-        let fn_index = self.module.names.functions[name.as_bytes()];
-        self.called_preload_fns.push(fn_index);
-        let linker_symbol_index = u32::MAX;
+        let (_, fn_index) = self
+            .host_lookup
+            .iter()
+            .find(|(fn_name, _)| *fn_name == name)
+            .unwrap_or_else(|| panic!("The Roc app tries to call `{}` but I can't find it!", name));
 
+        self.called_preload_fns.push(*fn_index);
         self.code_builder
-            .call(fn_index, linker_symbol_index, num_wasm_args, has_return_val);
+            .call(*fn_index, num_wasm_args, has_return_val);
     }
 
     /// Call a helper procedure that implements `==` for a data structure (not numbers or Str)
@@ -1571,6 +1717,10 @@ impl<'a> WasmBackend<'a> {
         alignment_bytes: u32,
         initial_refcount: u32,
     ) {
+        if !self.can_relocate_heap {
+            // This will probably only happen for test hosts.
+            panic!("The app tries to allocate heap memory but the host doesn't support that. It needs to export __heap_base");
+        }
         // Add extra bytes for the refcount
         let extra_bytes = alignment_bytes.max(PTR_SIZE);
 
@@ -1588,7 +1738,7 @@ impl<'a> WasmBackend<'a> {
         self.code_builder.i32_const(alignment_bytes as i32);
 
         // Call the foreign function. (Zig and C calling conventions are the same for this signature)
-        self.call_zig_builtin_after_loading_args("roc_alloc", 2, true);
+        self.call_host_fn_after_loading_args("roc_alloc", 2, true);
 
         // Save the allocation address to a temporary local variable
         let local_id = self.storage.create_anonymous_local(ValueType::I32);

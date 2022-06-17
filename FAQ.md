@@ -96,7 +96,7 @@ and `Optional` (like in Java).
 By design, Roc does not have one of these. There are several reasons for this.
 
 First, if a function returns a potential error, Roc has the convention to use `Result` with an error type that
-has a single tag describing what went wrong. (For example, `List.first : List a -> Result a [ ListWasEmpty ]*`
+has a single tag describing what went wrong. (For example, `List.first : List a -> Result a [ListWasEmpty]*`
 instead of `List.first : List a -> Maybe a`.) This is not only more self-descriptive, it also composes better with
 other operations that can fail; there's no need to have functions like `Result.toMaybe` or `Maybe.toResult`,
 because in Roc, the convention is that operations that can fail always use `Result`.
@@ -108,8 +108,8 @@ more descriptive than something like `Maybe`. For example, if a record type has 
 information may not be available, compare these three alternative ways to represent that:
 
 * `artist : Maybe Artist`
-* `artist : [ Loading, Loaded Artist ]`
-* `artist : [ Unspecified, Specified Artist ]`
+* `artist : [Loading, Loaded Artist]`
+* `artist : [Unspecified, Specified Artist]`
 
 All three versions tell us that we might not have access to an `Artist`. However, the `Maybe` version doesn't
 tell us why that might be. The `Loading`/`Loaded` version tells us we don't have one *yet*, because we're
@@ -117,8 +117,8 @@ still loading it, whereas the `Unspecified`/`Specified` version tells us we don'
 to have one later if we wait, because it wasn't specified.
 
 Naming aside, using explicit tag unions also makes it easier to transition to richer data models. For example,
-after using `[ Loading, Loaded Artist ]` for awhile, we might realize that there's another possible state: loading
-failed due to an error. If we modify this to be `[ Loading, Loaded Artist, Errored LoadingErr ]`, all
+after using `[Loading, Loaded Artist]` for awhile, we might realize that there's another possible state: loading
+failed due to an error. If we modify this to be `[Loading, Loaded Artist, Errored LoadingErr]`, all
 of our code for the `Loading` and `Loaded` states will still work.
 
 In contrast, if we'd had `Maybe Artist` and were using helper functions like `Maybe.isNone` (a common argument
@@ -126,7 +126,7 @@ for using `Maybe` even when it's less self-descriptive), we'd have to rewrite al
 helper functions. As such, a subtle downside of these helper functions is that they discourage any change to
 the data model that would break their call sites, even if that change would improve the data model overall.
 
-On a historical note, `Maybe` may have been thought of as a substitute for null references—as opposed to something that emerged organically based on specific motivating use cases after `Result` already existed. That said, in languages that do not have an equivalent of Roc's tag unions, it's much less ergonomic to write something like `Result a [ ListWasEmpty ]*`, so that design would not fit those languages as well as it fits Roc.
+On a historical note, `Maybe` may have been thought of as a substitute for null references—as opposed to something that emerged organically based on specific motivating use cases after `Result` already existed. That said, in languages that do not have an equivalent of Roc's tag unions, it's much less ergonomic to write something like `Result a [ListWasEmpty]*`, so that design would not fit those languages as well as it fits Roc.
 
 ## Why doesn't Roc have higher-kinded polymorphism or arbitrary-rank types?
 
@@ -226,7 +226,6 @@ So why does Roc have the specific syntax changes it does? Here are some brief ex
 
 * `#` instead of `--` for comments - this allows [hashbang](https://senthilnayagan.medium.com/shebang-hashbang-10966b8f28a8)s to work without needing special syntax. That isn't a use case Elm supports, but it is one Roc is designed to support.
 * `{}` instead of `()` for the unit type - Elm has both, and they can both be used as a unit type. Since `{}` has other uses in the type system, but `()` doesn't, I consider it redundant and took it out.
-* No tuples - I wanted to try simplifying the language and seeing how much we'd miss them. Anything that could be represented as a tuple can be represented with either a record or a single-tag union instead (e.g. `Pair x y = ...`), so is it really necessary to have a third syntax for representing a group of fields with potentially different types?
 * `when`...`is` instead of `case`...`of` - I predict it will be easier for beginners to pick up, because usually the way I explain `case`...`of` to beginners is by saying the words "when" and "is" out loud - e.g. "when `color` is `Red`, it runs this first branch; when `color` is `Blue`, it runs this other branch..."
 * `:` instead of `=` for record field definitions (e.g. `{ foo: bar }` where Elm syntax would be `{ foo = bar }`): I like `=` being reserved for definitions, and `:` is the most popular alternative.
 * Backpassing syntax - since Roc is designed to be used for use cases like command-line apps, shell scripts, and servers, I expect chained effects to come up a lot more often than they do in Elm. I think backpassing is nice for those use cases, similarly to how `do` notation is nice for them in Haskell.
@@ -287,7 +286,7 @@ In Roc, this code produces `"Hello, World!"`
 
 This is because Roc's `|>` operator uses the expression before the `|>` as the *first* argument to the function
 after it.  For functions where both arguments have the same type, but it's obvious which argument goes where (e.g.
-`Str.concat "Hello, " "World!"`, `List.concat [ 1, 2 ] [ 3, 4 ]`), this works out well. Another example would
+`Str.concat "Hello, " "World!"`, `List.concat [1, 2] [3, 4]`), this works out well. Another example would
 be `|> Num.sub 1`, which subtracts 1 from whatever came before the `|>`.
 
 For this reason, "pipeline-friendliness" in Roc means that the first argument to each function is typically

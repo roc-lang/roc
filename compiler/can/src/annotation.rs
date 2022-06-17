@@ -359,7 +359,7 @@ pub(crate) fn make_apply_symbol(
 /// Retrieves all symbols in an annotations that reference a type definition, that is either an
 /// alias or an opaque type.
 ///
-/// For example, in `[ A Age U8, B Str {} ]`, there are three type definition references - `Age`,
+/// For example, in `[A Age U8, B Str {}]`, there are three type definition references - `Age`,
 /// `U8`, and `Str`.
 pub fn find_type_def_symbols(
     scope: &mut Scope,
@@ -1317,7 +1317,7 @@ fn can_tags<'a>(
                         arg_types.push(ann);
                     }
 
-                    let tag_name = TagName::Tag(name);
+                    let tag_name = TagName(name);
                     tag_types.push((tag_name.clone(), arg_types));
 
                     break 'inner tag_name;

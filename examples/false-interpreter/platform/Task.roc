@@ -1,10 +1,10 @@
 interface Task
-    exposes [ Task, succeed, fail, await, map, onFail, attempt, fromResult, loop ]
-    imports [ pf.Effect ]
+    exposes [Task, succeed, fail, await, map, onFail, attempt, fromResult, loop]
+    imports [pf.Effect]
 
 Task ok err : Effect.Effect (Result ok err)
 
-loop : state, (state -> Task [ Step state, Done done ] err) -> Task done err
+loop : state, (state -> Task [Step state, Done done] err) -> Task done err
 loop = \state, step ->
     looper = \current ->
         step current

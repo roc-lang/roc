@@ -10,8 +10,10 @@ use crate::helpers::wasm::assert_evals_to;
 #[cfg(test)]
 use indoc::indoc;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gen-llvm"))]
 use roc_std::RocList;
+#[cfg(all(test, feature = "gen-llvm"))]
+use roc_std::RocStr;
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
@@ -19,7 +21,7 @@ fn hash_specialization() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             Hash has
                 hash : a -> U64 | a has Hash
@@ -42,7 +44,7 @@ fn hash_specialization_multiple_add() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             Hash has
                 hash : a -> U64 | a has Hash
@@ -69,7 +71,7 @@ fn alias_member_specialization() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ main ] to "./platform"
+            app "test" provides [main] to "./platform"
 
             Hash has
                 hash : a -> U64 | a has Hash
@@ -94,7 +96,7 @@ fn ability_constrained_in_non_member_usage() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ result ] to "./platform"
+            app "test" provides [result] to "./platform"
 
             Hash has
                 hash : a -> U64 | a has Hash
@@ -119,7 +121,7 @@ fn ability_constrained_in_non_member_usage_inferred() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ result ] to "./platform"
+            app "test" provides [result] to "./platform"
 
             Hash has
                 hash : a -> U64 | a has Hash
@@ -143,7 +145,7 @@ fn ability_constrained_in_non_member_multiple_specializations() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ result ] to "./platform"
+            app "test" provides [result] to "./platform"
 
             Hash has
                 hash : a -> U64 | a has Hash
@@ -171,7 +173,7 @@ fn ability_constrained_in_non_member_multiple_specializations_inferred() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ result ] to "./platform"
+            app "test" provides [result] to "./platform"
 
             Hash has
                 hash : a -> U64 | a has Hash
@@ -198,7 +200,7 @@ fn ability_used_as_type_still_compiles() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ result ] to "./platform"
+            app "test" provides [result] to "./platform"
 
             Hash has
                 hash : a -> U64 | a has Hash
@@ -226,7 +228,7 @@ fn encode() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ myU8Bytes ] to "./platform"
+            app "test" provides [myU8Bytes] to "./platform"
 
             Encoder fmt := List U8, fmt -> List U8 | fmt has Format
 
@@ -243,7 +245,7 @@ fn encode() {
             toBytes = \val, fmt -> appendWith [] (toEncoder val) fmt
 
 
-            Linear := {} 
+            Linear := {}
 
             # impl Format for Linear
             u8 = \n -> @Encoder (\lst, @Linear {} -> List.append lst n)
@@ -272,9 +274,9 @@ fn decode() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [ myU8 ] to "./platform"
+            app "test" provides [myU8] to "./platform"
 
-            DecodeError : [ TooShort, Leftover (List U8) ]
+            DecodeError : [TooShort, Leftover (List U8)]
 
             Decoder val fmt := List U8, fmt -> { result: Result val DecodeError, rest: List U8 } | fmt has DecoderFormatting
 
@@ -314,7 +316,7 @@ fn decode() {
                 { result: Result.map result (\n -> @MyU8 n), rest }
 
             myU8 =
-                when fromBytes [ 15 ] (@Linear {}) is
+                when fromBytes [15] (@Linear {}) is
                     Ok (@MyU8 n) -> n
                     _ -> 27u8
             "#
@@ -322,4 +324,32 @@ fn decode() {
         15,
         u8
     );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn encode_use_stdlib() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ toEncoder }, Json]
+                provides [main] to "./platform"
+
+            HelloWorld := {}
+            toEncoder = \@HelloWorld {} ->
+                Encode.custom \bytes, fmt ->
+                    bytes
+                        |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
+
+            main =
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.format)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from("\"Hello, World!\n\""),
+        RocStr
+    )
 }

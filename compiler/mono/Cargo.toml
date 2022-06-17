@@ -12,8 +12,8 @@ roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 roc_types = { path = "../types" }
 roc_can = { path = "../can" }
-roc_unify = { path = "../unify" }
-roc_solve = { path = "../solve" }
+roc_derive_key = { path = "../derive_key" }
+roc_late_solve = { path = "../late_solve" }
 roc_std = { path = "../../roc_std", default-features = false }
 roc_problem = { path = "../problem" }
 roc_builtins = { path = "../builtins" }

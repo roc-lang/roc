@@ -1,7 +1,7 @@
 app "breakout"
     packages { pf: "platform" }
-    imports [ pf.Game.{ Bounds, Elem, Event } ]
-    provides [ program ] { Model } to pf
+    imports [pf.Game.{ Bounds, Elem, Event }]
+    provides [program] { Model } to pf
 
 Model : { text : Str }
 
@@ -12,6 +12,6 @@ update : Model, Event -> Model
 update = \model, _ -> model
 
 render : Model -> List Elem
-render = \model -> [ Text model.text ]
+render = \model -> [Text model.text]
 
 program = { init, update, render }

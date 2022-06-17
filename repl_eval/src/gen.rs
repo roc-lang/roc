@@ -130,7 +130,7 @@ pub fn compile_to_mono<'a>(
 
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer =
-        String::from("app \"app\" provides [ replOutput ] to \"./platform\"\n\nreplOutput =\n");
+        String::from("app \"app\" provides [replOutput] to \"./platform\"\n\nreplOutput =\n");
 
     for line in src.lines() {
         // indent the body!

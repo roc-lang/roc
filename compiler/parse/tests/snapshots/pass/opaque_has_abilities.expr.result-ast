@@ -1,6 +1,32 @@
 Defs(
-    [
-        @0-7 Type(
+    Defs {
+        tags: [
+            Index(0),
+            Index(1),
+            Index(2),
+        ],
+        regions: [
+            @0-7,
+            @24-44,
+            @61-81,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+            Slice(start = 0, length = 2),
+            Slice(start = 2, length = 2),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+            Slice(start = 2, length = 0),
+            Slice(start = 4, length = 0),
+        ],
+        spaces: [
+            Newline,
+            Newline,
+            Newline,
+            Newline,
+        ],
+        type_defs: [
             Opaque {
                 header: TypeHeader {
                     name: @0-1 "A",
@@ -28,103 +54,88 @@ Defs(
                     ),
                 ),
             },
-        ),
-        @24-44 SpaceBefore(
-            Type(
-                Opaque {
-                    header: TypeHeader {
-                        name: @24-25 "A",
-                        vars: [],
-                    },
-                    typ: @29-44 Where(
-                        @29-30 BoundVariable(
-                            "a",
-                        ),
+            Opaque {
+                header: TypeHeader {
+                    name: @24-25 "A",
+                    vars: [],
+                },
+                typ: @29-44 Where(
+                    @29-30 BoundVariable(
+                        "a",
+                    ),
+                    [
+                        @33-44 HasClause {
+                            var: @33-34 "a",
+                            ability: @39-44 Apply(
+                                "",
+                                "Other",
+                                [],
+                            ),
+                        },
+                    ],
+                ),
+                derived: Some(
+                    @49-59 Has(
                         [
-                            @33-44 HasClause {
-                                var: @33-34 "a",
-                                ability: @39-44 Apply(
-                                    "",
-                                    "Other",
-                                    [],
-                                ),
-                            },
+                            @50-52 Apply(
+                                "",
+                                "Eq",
+                                [],
+                            ),
+                            @54-58 Apply(
+                                "",
+                                "Hash",
+                                [],
+                            ),
                         ],
                     ),
-                    derived: Some(
-                        @49-59 Has(
+                ),
+            },
+            Opaque {
+                header: TypeHeader {
+                    name: @61-62 "A",
+                    vars: [],
+                },
+                typ: @66-81 Where(
+                    @66-67 BoundVariable(
+                        "a",
+                    ),
+                    [
+                        @70-81 HasClause {
+                            var: @70-71 "a",
+                            ability: @76-81 Apply(
+                                "",
+                                "Other",
+                                [],
+                            ),
+                        },
+                    ],
+                ),
+                derived: Some(
+                    @91-101 SpaceBefore(
+                        Has(
                             [
-                                @50-52 Apply(
+                                @92-94 Apply(
                                     "",
                                     "Eq",
                                     [],
                                 ),
-                                @54-58 Apply(
+                                @96-100 Apply(
                                     "",
                                     "Hash",
                                     [],
                                 ),
                             ],
                         ),
-                    ),
-                },
-            ),
-            [
-                Newline,
-                Newline,
-            ],
-        ),
-        @61-81 SpaceBefore(
-            Type(
-                Opaque {
-                    header: TypeHeader {
-                        name: @61-62 "A",
-                        vars: [],
-                    },
-                    typ: @66-81 Where(
-                        @66-67 BoundVariable(
-                            "a",
-                        ),
                         [
-                            @70-81 HasClause {
-                                var: @70-71 "a",
-                                ability: @76-81 Apply(
-                                    "",
-                                    "Other",
-                                    [],
-                                ),
-                            },
+                            Newline,
                         ],
                     ),
-                    derived: Some(
-                        @91-101 SpaceBefore(
-                            Has(
-                                [
-                                    @92-94 Apply(
-                                        "",
-                                        "Eq",
-                                        [],
-                                    ),
-                                    @96-100 Apply(
-                                        "",
-                                        "Hash",
-                                        [],
-                                    ),
-                                ],
-                            ),
-                            [
-                                Newline,
-                            ],
-                        ),
-                    ),
-                },
-            ),
-            [
-                Newline,
-                Newline,
-            ],
-        ),
-    ],
+                ),
+            },
+        ],
+        value_defs: [],
+    },
     @103-104 SpaceBefore(
         Num(
             "0",

@@ -1,5 +1,5 @@
 interface Principal
-    exposes [ identity, intVal ]
+    exposes [identity, intVal]
     imports []
 
 identity = \a -> a

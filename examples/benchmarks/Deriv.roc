@@ -1,7 +1,7 @@
 app "deriv"
     packages { pf: "platform" }
-    imports [ pf.Task ]
-    provides [ main ] to pf
+    imports [pf.Task]
+    provides [main] to pf
 
 # based on: https://github.com/koka-lang/koka/blob/master/test/bench/haskell/deriv.hs
 IO a : Task.Task a []
@@ -26,7 +26,7 @@ nest = \f, n, e -> Task.loop { s: n, f, m: n, x: e } nestHelp
 
 State : { s : I64, f : I64, Expr -> IO Expr, m : I64, x : Expr }
 
-nestHelp : State -> IO [ Step State, Done Expr ]
+nestHelp : State -> IO [Step State, Done Expr]
 nestHelp = \{ s, f, m, x } ->
     when m is
         0 ->
@@ -36,9 +36,9 @@ nestHelp = \{ s, f, m, x } ->
 
             Task.succeed (Step { s, f, m: (m - 1), x: w })
 
-Expr : [ Val I64, Var Str, Add Expr Expr, Mul Expr Expr, Pow Expr Expr, Ln Expr ]
+Expr : [Val I64, Var Str, Add Expr Expr, Mul Expr Expr, Pow Expr Expr, Ln Expr]
 
-divmod : I64, I64 -> Result { div : I64, mod : I64 } [ DivByZero ]*
+divmod : I64, I64 -> Result { div : I64, mod : I64 } [DivByZero]*
 divmod = \l, r ->
     when Pair (Num.divTruncChecked l r) (Num.remChecked l r) is
         Pair (Ok div) (Ok mod) ->

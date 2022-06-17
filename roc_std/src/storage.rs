@@ -1,6 +1,14 @@
 use core::num::NonZeroIsize;
 
-const REFCOUNT_1: isize = isize::MIN;
+/// # Safety
+///
+/// isize::MIN is definitely not zero. This can become
+/// https://doc.rust-lang.org/std/num/struct.NonZeroIsize.html#associatedconstant.MIN
+/// once it has been stabilized.
+const REFCOUNT_1: NonZeroIsize = unsafe { NonZeroIsize::new_unchecked(isize::MIN) };
+
+const _ASSERT_STORAGE_SIZE: () =
+    assert!(std::mem::size_of::<isize>() == std::mem::size_of::<Storage>());
 
 #[derive(Clone, Copy, Debug)]
 pub enum Storage {
@@ -10,7 +18,7 @@ pub enum Storage {
 
 impl Storage {
     pub fn new_reference_counted() -> Self {
-        Self::ReferenceCounted(NonZeroIsize::new(REFCOUNT_1).unwrap())
+        Self::ReferenceCounted(REFCOUNT_1)
     }
 
     /// Increment the reference count.
@@ -37,11 +45,11 @@ impl Storage {
         match self {
             Storage::Readonly => false,
             Storage::ReferenceCounted(rc) => {
-                let rc_as_isize = rc.get();
-                if rc_as_isize == REFCOUNT_1 {
+                if *rc == REFCOUNT_1 {
                     true
                 } else {
-                    *rc = NonZeroIsize::new(rc_as_isize - 1).unwrap();
+                    *rc = NonZeroIsize::new(rc.get() - 1).expect("A reference count was decremented all the way to zero, which should never happen.");
+
                     false
                 }
             }
@@ -50,5 +58,9 @@ impl Storage {
 
     pub fn is_readonly(&self) -> bool {
         matches!(self, Self::Readonly)
+    }
+
+    pub fn is_unique(&self) -> bool {
+        matches!(self, Self::ReferenceCounted(REFCOUNT_1))
     }
 }

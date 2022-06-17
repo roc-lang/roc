@@ -1,5 +1,6 @@
 use crate::procedure::References;
 use crate::scope::Scope;
+use bumpalo::Bump;
 use roc_collections::{MutMap, VecSet};
 use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_module::symbol::{IdentIdsByModule, ModuleId, ModuleIds, Symbol};
@@ -32,15 +33,19 @@ pub struct Env<'a> {
     pub qualified_type_lookups: VecSet<Symbol>,
 
     pub top_level_symbols: VecSet<Symbol>,
+
+    pub arena: &'a Bump,
 }
 
 impl<'a> Env<'a> {
     pub fn new(
+        arena: &'a Bump,
         home: ModuleId,
         dep_idents: &'a IdentIdsByModule,
         module_ids: &'a ModuleIds,
     ) -> Env<'a> {
         Env {
+            arena,
             home,
             dep_idents,
             module_ids,
@@ -70,14 +75,13 @@ impl<'a> Env<'a> {
         let is_type_name = ident.starts_with(|c: char| c.is_uppercase());
 
         let module_name = ModuleName::from(module_name_str);
-        let ident = Ident::from(ident);
 
         match self.module_ids.get_id(&module_name) {
-            Some(&module_id) => {
+            Some(module_id) => {
                 // You can do qualified lookups on your own module, e.g.
                 // if I'm in the Foo module, I can do a `Foo.bar` lookup.
                 if module_id == self.home {
-                    match scope.locals.ident_ids.get_id(&ident) {
+                    match scope.locals.ident_ids.get_id(ident) {
                         Some(ident_id) => {
                             let symbol = Symbol::new(module_id, ident_id);
 
@@ -92,7 +96,7 @@ impl<'a> Env<'a> {
                         None => {
                             let error = RuntimeError::LookupNotInScope(
                                 Loc {
-                                    value: ident,
+                                    value: Ident::from(ident),
                                     region,
                                 },
                                 scope
@@ -107,7 +111,7 @@ impl<'a> Env<'a> {
                     }
                 } else {
                     match self.dep_idents.get(&module_id) {
-                        Some(exposed_ids) => match exposed_ids.get_id(&ident) {
+                        Some(exposed_ids) => match exposed_ids.get_id(ident) {
                             Some(ident_id) => {
                                 let symbol = Symbol::new(module_id, ident_id);
 
@@ -129,7 +133,7 @@ impl<'a> Env<'a> {
                                     .collect();
                                 Err(RuntimeError::ValueNotExposed {
                                     module_name,
-                                    ident,
+                                    ident: Ident::from(ident),
                                     region,
                                     exposed_values,
                                 })

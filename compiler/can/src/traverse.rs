@@ -5,9 +5,9 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 
 use crate::{
-    abilities::SpecializationId,
+    abilities::AbilitiesStore,
     def::{Annotation, Declaration, Def},
-    expr::{AccessorData, ClosureData, Expr, Field, WhenBranch},
+    expr::{self, AccessorData, ClosureData, Expr, Field},
     pattern::{DestructType, Pattern, RecordDestruct},
 };
 
@@ -30,6 +30,12 @@ pub fn walk_decl<V: Visitor>(visitor: &mut V, decl: &Declaration) {
         }
         Declaration::DeclareRec(defs, _cycle_mark) => {
             visit_list!(visitor, visit_def, defs)
+        }
+        Declaration::Expects(expects) => {
+            let it = expects.regions.iter().zip(expects.conditions.iter());
+            for (region, condition) in it {
+                visitor.visit_expr(condition, *region, Variable::BOOL);
+            }
         }
         Declaration::Builtin(def) => visitor.visit_def(def),
         Declaration::InvalidCycle(_cycles) => {
@@ -163,10 +169,18 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
             let (var, le) = &**argument;
             visitor.visit_expr(&le.value, le.region, *var);
         }
-        Expr::Expect(e1, e2) => {
-            // TODO: what type does an expect have?
-            visitor.visit_expr(&e1.value, e1.region, Variable::NULL);
-            visitor.visit_expr(&e2.value, e2.region, Variable::NULL);
+        Expr::Expect {
+            loc_condition,
+            loc_continuation,
+            lookups_in_cond: _,
+        } => {
+            // TODO: what type does an expect have? bool
+            visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::NULL);
+            visitor.visit_expr(
+                &loc_continuation.value,
+                loc_continuation.region,
+                Variable::NULL,
+            );
         }
         Expr::TypedHole(_) => { /* terminal */ }
         Expr::RuntimeError(..) => { /* terminal */ }
@@ -195,7 +209,7 @@ pub fn walk_when<V: Visitor>(
     cond_var: Variable,
     expr_var: Variable,
     loc_cond: &Loc<Expr>,
-    branches: &[WhenBranch],
+    branches: &[expr::WhenBranch],
 ) {
     visitor.visit_expr(&loc_cond.value, loc_cond.region, cond_var);
 
@@ -205,8 +219,12 @@ pub fn walk_when<V: Visitor>(
 }
 
 #[inline(always)]
-pub fn walk_when_branch<V: Visitor>(visitor: &mut V, branch: &WhenBranch, expr_var: Variable) {
-    let WhenBranch {
+pub fn walk_when_branch<V: Visitor>(
+    visitor: &mut V,
+    branch: &expr::WhenBranch,
+    expr_var: Variable,
+) {
+    let expr::WhenBranch {
         patterns,
         value,
         guard,
@@ -274,32 +292,48 @@ pub fn walk_record_fields<'a, V: Visitor>(
 }
 
 pub trait Visitor: Sized {
+    /// Most default implementations will call [Visitor::should_visit] to decide whether they
+    /// should descend into a node. Return `false` to skip visiting.
+    fn should_visit(&mut self, _region: Region) -> bool {
+        true
+    }
+
     fn visit_decls(&mut self, decls: &[Declaration]) {
         walk_decls(self, decls);
     }
 
     fn visit_decl(&mut self, decl: &Declaration) {
-        walk_decl(self, decl);
+        if self.should_visit(decl.region()) {
+            walk_decl(self, decl);
+        }
     }
 
     fn visit_def(&mut self, def: &Def) {
-        walk_def(self, def);
+        if self.should_visit(def.region()) {
+            walk_def(self, def);
+        }
     }
 
     fn visit_annotation(&mut self, _pat: &Annotation) {
         // ignore by default
     }
 
-    fn visit_expr(&mut self, expr: &Expr, _region: Region, var: Variable) {
-        walk_expr(self, expr, var);
+    fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
+        if self.should_visit(region) {
+            walk_expr(self, expr, var);
+        }
     }
 
-    fn visit_pattern(&mut self, pattern: &Pattern, _region: Region, _opt_var: Option<Variable>) {
-        walk_pattern(self, pattern);
+    fn visit_pattern(&mut self, pattern: &Pattern, region: Region, _opt_var: Option<Variable>) {
+        if self.should_visit(region) {
+            walk_pattern(self, pattern);
+        }
     }
 
-    fn visit_record_destruct(&mut self, destruct: &RecordDestruct, _region: Region) {
-        walk_record_destruct(self, destruct);
+    fn visit_record_destruct(&mut self, destruct: &RecordDestruct, region: Region) {
+        if self.should_visit(region) {
+            walk_record_destruct(self, destruct);
+        }
     }
 }
 
@@ -347,15 +381,18 @@ struct TypeAtVisitor {
 }
 
 impl Visitor for TypeAtVisitor {
+    fn should_visit(&mut self, region: Region) -> bool {
+        region.contains(&self.region)
+    }
+
     fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
         if region == self.region {
             debug_assert!(self.typ.is_none());
             self.typ = Some(var);
             return;
         }
-        if region.contains(&self.region) {
-            walk_expr(self, expr, var);
-        }
+
+        walk_expr(self, expr, var);
     }
 
     fn visit_pattern(&mut self, pat: &Pattern, region: Region, opt_var: Option<Variable>) {
@@ -364,9 +401,8 @@ impl Visitor for TypeAtVisitor {
             self.typ = opt_var;
             return;
         }
-        if region.contains(&self.region) {
-            walk_pattern(self, pat)
-        }
+
+        walk_pattern(self, pat)
     }
 }
 
@@ -377,35 +413,89 @@ pub fn find_type_at(region: Region, decls: &[Declaration]) -> Option<Variable> {
     visitor.typ
 }
 
-pub fn find_ability_member_at(
+/// Given an ability Foo has foo : ..., returns (T, foo1) if the symbol at the given region is a
+/// symbol foo1 that specializes foo for T. Otherwise if the symbol is foo but the specialization
+/// is unknown, (Foo, foo) is returned. Otherwise [None] is returned.
+pub fn find_ability_member_and_owning_type_at(
     region: Region,
     decls: &[Declaration],
-) -> Option<(Symbol, SpecializationId)> {
+    abilities_store: &AbilitiesStore,
+) -> Option<(Symbol, Symbol)> {
     let mut visitor = Finder {
         region,
         found: None,
+        abilities_store,
     };
     visitor.visit_decls(decls);
     return visitor.found;
 
-    struct Finder {
+    struct Finder<'a> {
         region: Region,
-        found: Option<(Symbol, SpecializationId)>,
+        abilities_store: &'a AbilitiesStore,
+        found: Option<(Symbol, Symbol)>,
     }
 
-    impl Visitor for Finder {
+    impl Visitor for Finder<'_> {
+        fn should_visit(&mut self, region: Region) -> bool {
+            region.contains(&self.region)
+        }
+
+        fn visit_pattern(&mut self, pattern: &Pattern, region: Region, _opt_var: Option<Variable>) {
+            if region == self.region {
+                if let Pattern::AbilityMemberSpecialization {
+                    ident: spec_symbol,
+                    specializes: _,
+                } = pattern
+                {
+                    debug_assert!(self.found.is_none());
+                    let spec_type =
+                        find_specialization_type_of_symbol(*spec_symbol, self.abilities_store)
+                            .unwrap();
+                    self.found = Some((spec_type, *spec_symbol))
+                }
+            }
+
+            walk_pattern(self, pattern);
+        }
+
         fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
             if region == self.region {
-                if let &Expr::AbilityMember(symbol, specialization_id, _) = expr {
+                if let &Expr::AbilityMember(member_symbol, specialization_id, _var) = expr {
                     debug_assert!(self.found.is_none());
-                    self.found = Some((symbol, specialization_id));
+                    self.found = match self.abilities_store.get_resolved(specialization_id) {
+                        Some(spec_symbol) => {
+                            let spec_type = find_specialization_type_of_symbol(
+                                spec_symbol,
+                                self.abilities_store,
+                            )
+                            .unwrap();
+                            Some((spec_type, spec_symbol))
+                        }
+                        None => {
+                            let parent_ability = self
+                                .abilities_store
+                                .member_def(member_symbol)
+                                .unwrap()
+                                .parent_ability;
+                            Some((parent_ability, member_symbol))
+                        }
+                    };
                     return;
                 }
             }
-            if region.contains(&self.region) {
-                walk_expr(self, expr, var);
-            }
+
+            walk_expr(self, expr, var);
         }
+    }
+
+    fn find_specialization_type_of_symbol(
+        symbol: Symbol,
+        abilities_store: &AbilitiesStore,
+    ) -> Option<Symbol> {
+        abilities_store
+            .iter_specializations()
+            .find(|(_, ms)| ms.symbol == symbol)
+            .map(|(spec, _)| spec.1)
     }
 }
 

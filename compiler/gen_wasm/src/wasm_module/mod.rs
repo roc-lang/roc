@@ -1,21 +1,27 @@
 pub mod code_builder;
-mod dead_code;
 pub mod linking;
 pub mod opcodes;
+pub mod parse;
 pub mod sections;
 pub mod serialize;
 
-use bumpalo::{collections::Vec, Bump};
+use std::iter::repeat;
+
 pub use code_builder::{Align, CodeBuilder, LocalId, ValueType, VmSymbolState};
-pub use linking::SymInfo;
-use roc_error_macros::internal_error;
+pub use linking::{OffsetRelocType, RelocationEntry, SymInfo};
 pub use sections::{ConstExpr, Export, ExportType, Global, GlobalType, Signature};
 
-use self::linking::{LinkingSection, RelocationSection};
+use bitvec::vec::BitVec;
+use bumpalo::{collections::Vec, Bump};
+
+use crate::DEBUG_SETTINGS;
+
+use self::linking::{IndexRelocType, LinkingSection, RelocationSection, WasmObjectSymbol};
+use self::parse::{Parse, ParseError};
 use self::sections::{
     CodeSection, DataSection, ElementSection, ExportSection, FunctionSection, GlobalSection,
-    ImportSection, MemorySection, NameSection, OpaqueSection, Section, SectionId, TableSection,
-    TypeSection,
+    ImportDesc, ImportSection, MemorySection, NameSection, OpaqueSection, Section, SectionId,
+    TableSection, TypeSection,
 };
 use self::serialize::{SerialBuffer, Serialize};
 
@@ -34,9 +40,10 @@ pub struct WasmModule<'a> {
     pub element: ElementSection<'a>,
     pub code: CodeSection<'a>,
     pub data: DataSection<'a>,
-    pub names: NameSection<'a>,
     pub linking: LinkingSection<'a>,
-    pub relocations: RelocationSection<'a>,
+    pub reloc_code: RelocationSection<'a>,
+    pub reloc_data: RelocationSection<'a>,
+    pub names: NameSection<'a>,
 }
 
 impl<'a> WasmModule<'a> {
@@ -68,42 +75,6 @@ impl<'a> WasmModule<'a> {
         self.names.serialize(buffer);
     }
 
-    /// Serialize the module to bytes
-    /// (Mutates some data related to linking)
-    pub fn serialize_with_linker_data_mut<T: SerialBuffer>(&mut self, buffer: &mut T) {
-        buffer.append_u8(0);
-        buffer.append_slice("asm".as_bytes());
-        buffer.write_unencoded_u32(Self::WASM_VERSION);
-
-        // Keep track of (non-empty) section indices for linking
-        let mut counter = SectionCounter {
-            buffer_size: buffer.size(),
-            section_index: 0,
-        };
-
-        counter.serialize_and_count(buffer, &self.types);
-        counter.serialize_and_count(buffer, &self.import);
-        counter.serialize_and_count(buffer, &self.function);
-        counter.serialize_and_count(buffer, &self.table);
-        counter.serialize_and_count(buffer, &self.memory);
-        counter.serialize_and_count(buffer, &self.global);
-        counter.serialize_and_count(buffer, &self.export);
-        counter.serialize_and_count(buffer, &self.start);
-        counter.serialize_and_count(buffer, &self.element);
-
-        // Code section is the only one with relocations so we can stop counting
-        let code_section_index = counter.section_index;
-        self.code
-            .serialize_with_relocs(buffer, &mut self.relocations.entries);
-
-        self.data.serialize(buffer);
-
-        self.linking.serialize(buffer);
-
-        self.relocations.target_section_index = Some(code_section_index);
-        self.relocations.serialize(buffer);
-    }
-
     /// Module size in bytes (assuming no linker data)
     /// May be slightly overestimated. Intended for allocating buffer capacity.
     pub fn size(&self) -> usize {
@@ -121,54 +92,70 @@ impl<'a> WasmModule<'a> {
             + self.names.size()
     }
 
-    pub fn preload(arena: &'a Bump, bytes: &[u8]) -> Self {
+    pub fn preload(arena: &'a Bump, bytes: &[u8]) -> Result<Self, ParseError> {
         let is_valid_magic_number = &bytes[0..4] == "\0asm".as_bytes();
         let is_valid_version = bytes[4..8] == Self::WASM_VERSION.to_le_bytes();
         if !is_valid_magic_number || !is_valid_version {
-            internal_error!("Invalid Wasm object file header for platform & builtins");
+            return Err(ParseError {
+                offset: 0,
+                message: "This file is not a WebAssembly binary. The file header is not valid."
+                    .into(),
+            });
         }
 
         let mut cursor: usize = 8;
 
-        let mut types = TypeSection::preload(arena, bytes, &mut cursor);
-        types.parse_offsets();
+        let types = TypeSection::parse(arena, bytes, &mut cursor)?;
+        let import = ImportSection::parse(arena, bytes, &mut cursor)?;
+        let function = FunctionSection::parse(arena, bytes, &mut cursor)?;
+        let table = TableSection::parse((), bytes, &mut cursor)?;
+        let memory = MemorySection::parse(arena, bytes, &mut cursor)?;
+        let global = GlobalSection::parse(arena, bytes, &mut cursor)?;
+        let export = ExportSection::parse(arena, bytes, &mut cursor)?;
+        let start = OpaqueSection::parse((arena, SectionId::Start), bytes, &mut cursor)?;
+        let element = ElementSection::parse(arena, bytes, &mut cursor)?;
+        let _data_count = OpaqueSection::parse((arena, SectionId::DataCount), bytes, &mut cursor)?;
+        let code = CodeSection::parse(arena, bytes, &mut cursor)?;
+        let data = DataSection::parse(arena, bytes, &mut cursor)?;
+        let linking = LinkingSection::parse(arena, bytes, &mut cursor)?;
+        let reloc_code = RelocationSection::parse((arena, "reloc.CODE"), bytes, &mut cursor)?;
+        let reloc_data = RelocationSection::parse((arena, "reloc.DATA"), bytes, &mut cursor)?;
+        let names = NameSection::parse(arena, bytes, &mut cursor)?;
 
-        let mut import = ImportSection::preload(arena, bytes, &mut cursor);
-        let imported_fn_signatures = import.parse(arena);
+        let mut module_errors = String::new();
+        if types.is_empty() {
+            module_errors.push_str("Missing Type section\n");
+        }
+        if function.signatures.is_empty() {
+            module_errors.push_str("Missing Function section\n");
+        }
+        if code.preloaded_bytes.is_empty() {
+            module_errors.push_str("Missing Code section\n");
+        }
+        if linking.symbol_table.is_empty() {
+            module_errors.push_str("Missing \"linking\" Custom section\n");
+        }
+        if reloc_code.entries.is_empty() {
+            module_errors.push_str("Missing \"reloc.CODE\" Custom section\n");
+        }
+        if global.count != 0 {
+            let global_err_msg =
+                format!("All globals in a relocatable Wasm module should be imported, but found {} internally defined", global.count);
+            module_errors.push_str(&global_err_msg);
+        }
 
-        let function = FunctionSection::preload(arena, bytes, &mut cursor);
-        let defined_fn_signatures = function.parse(arena);
+        if !module_errors.is_empty() {
+            return Err(ParseError {
+                offset: 0,
+                message: format!("{}\n{}\n{}",
+                    "The host file has the wrong structure. I need a relocatable WebAssembly binary file.",
+                    "If you're using wasm-ld, try the --relocatable option.",
+                    module_errors,
+                )
+            });
+        }
 
-        let table = TableSection::preload(bytes, &mut cursor);
-
-        let memory = MemorySection::preload(arena, bytes, &mut cursor);
-
-        let global = GlobalSection::preload(arena, bytes, &mut cursor);
-
-        let export = ExportSection::preload(arena, bytes, &mut cursor);
-
-        let start = OpaqueSection::preload(SectionId::Start, arena, bytes, &mut cursor);
-
-        let element = ElementSection::preload(arena, bytes, &mut cursor);
-        let indirect_callees = element.indirect_callees(arena);
-
-        let code = CodeSection::preload(
-            arena,
-            bytes,
-            &mut cursor,
-            &imported_fn_signatures,
-            &defined_fn_signatures,
-            &indirect_callees,
-        );
-
-        let data = DataSection::preload(arena, bytes, &mut cursor);
-
-        // Metadata sections
-        let names = NameSection::parse(arena, bytes, &mut cursor);
-        let linking = LinkingSection::new(arena);
-        let relocations = RelocationSection::new(arena, "reloc.CODE");
-
-        WasmModule {
+        Ok(WasmModule {
             types,
             import,
             function,
@@ -180,59 +167,418 @@ impl<'a> WasmModule<'a> {
             element,
             code,
             data,
-            names,
             linking,
-            relocations,
-        }
+            reloc_code,
+            reloc_data,
+            names,
+        })
     }
 
-    pub fn remove_dead_preloads<T: IntoIterator<Item = u32>>(
-        &mut self,
-        arena: &'a Bump,
-        called_preload_fns: T,
-    ) {
-        let exported_fn_iter = self
+    pub fn eliminate_dead_code(&mut self, arena: &'a Bump, called_host_fns: &[u32]) {
+        if DEBUG_SETTINGS.skip_dead_code_elim {
+            return;
+        }
+        //
+        // Mark all live host functions
+        //
+
+        let import_count = self.import.imports.len();
+        let host_fn_min = import_count as u32 + self.code.dead_import_dummy_count;
+        let host_fn_max = host_fn_min + self.code.preloaded_count;
+
+        // All functions exported to JS must be kept alive
+        let exported_fns = self
             .export
             .exports
             .iter()
             .filter(|ex| ex.ty == ExportType::Func)
             .map(|ex| ex.index);
-        let function_indices = Vec::from_iter_in(exported_fn_iter, arena);
 
-        self.code.remove_dead_preloads(
+        // Indirect calls (function pointers) need special treatment
+        let indirect_callees_and_signatures = Vec::from_iter_in(
+            self.element
+                .segments
+                .iter()
+                .flat_map(|seg| seg.fn_indices.iter().copied())
+                .map(|fn_index| {
+                    let sig = self.function.signatures[fn_index as usize - import_count];
+                    (fn_index, sig)
+                }),
             arena,
-            self.import.function_count,
-            &function_indices,
-            called_preload_fns,
-        )
+        );
+
+        // Trace callees of the live functions, and mark those as live too
+        let live_flags = self.trace_live_host_functions(
+            arena,
+            called_host_fns,
+            exported_fns,
+            indirect_callees_and_signatures,
+            host_fn_min,
+            host_fn_max,
+        );
+
+        //
+        // Remove all unused JS imports
+        // We don't want to force the web page to provide dummy JS functions, it's a pain!
+        //
+        let mut live_import_fns = Vec::with_capacity_in(import_count, arena);
+        let mut fn_index = 0;
+        self.import.imports.retain(|import| {
+            if !matches!(import.description, ImportDesc::Func { .. }) {
+                true
+            } else {
+                let live = live_flags[fn_index];
+                if live {
+                    live_import_fns.push(fn_index);
+                }
+                fn_index += 1;
+                live
+            }
+        });
+
+        // signatures
+        let live_import_count = live_import_fns.len();
+        let dead_import_count = host_fn_min as usize - live_import_count;
+        let signature_count = self.function.signatures.len();
+        self.function
+            .signatures
+            .extend(repeat(0).take(dead_import_count));
+        self.function
+            .signatures
+            .copy_within(0..signature_count, dead_import_count);
+
+        // debug names
+        for (new_index, &old_index) in live_import_fns.iter().enumerate() {
+            let old_name: &str = self.names.function_names[old_index].1;
+            let new_name: &str = self.names.function_names[new_index].1;
+            self.names.function_names[new_index].1 = old_name;
+            self.names.function_names[old_index].1 = new_name;
+        }
+
+        //
+        // Relocate Wasm calls to JS imports
+        // This must happen *before* we run dead code elimination on the code section,
+        // so that byte offsets in the host's linking data will still be valid.
+        //
+        for (new_index, &old_index) in live_import_fns.iter().enumerate() {
+            if new_index == old_index {
+                continue;
+            }
+            let sym_index = self
+                .linking
+                .find_and_reindex_imported_fn(old_index as u32, new_index as u32)
+                .unwrap();
+            self.reloc_code.apply_relocs_u32(
+                &mut self.code.preloaded_bytes,
+                sym_index,
+                new_index as u32,
+            );
+        }
+
+        //
+        // For every eliminated JS import, insert a dummy Wasm function at the same index.
+        // This avoids shifting the indices of Wasm functions, which would require more linking work.
+        //
+        let dead_import_count = host_fn_min - live_import_fns.len() as u32;
+        self.code.dead_import_dummy_count += dead_import_count;
+
+        //
+        // Dead code elimination. Replace dead functions with tiny dummies.
+        // This is fast. Live function indices are unchanged, so no relocations are needed.
+        //
+        let dummy = CodeBuilder::dummy(arena);
+        let mut dummy_bytes = Vec::with_capacity_in(dummy.size(), arena);
+        dummy.serialize(&mut dummy_bytes);
+
+        let mut buffer = Vec::with_capacity_in(self.code.preloaded_bytes.len(), arena);
+        self.code.preloaded_count.serialize(&mut buffer);
+        for (i, fn_index) in (host_fn_min..host_fn_max).enumerate() {
+            if live_flags[fn_index as usize] {
+                let code_start = self.code.preloaded_offsets[i] as usize;
+                let code_end = self.code.preloaded_offsets[i + 1] as usize;
+                buffer.extend_from_slice(&self.code.preloaded_bytes[code_start..code_end]);
+            } else {
+                buffer.extend_from_slice(&dummy_bytes);
+            }
+        }
+
+        self.code.preloaded_bytes = buffer;
     }
-}
 
-/// Helper struct to count non-empty sections.
-/// Needed to generate linking data, which refers to target sections by index.
-struct SectionCounter {
-    buffer_size: usize,
-    section_index: u32,
-}
+    fn trace_live_host_functions<I: Iterator<Item = u32>>(
+        &self,
+        arena: &'a Bump,
+        called_host_fns: &[u32],
+        exported_fns: I,
+        indirect_callees_and_signatures: Vec<'a, (u32, u32)>,
+        host_fn_min: u32,
+        host_fn_max: u32,
+    ) -> BitVec<usize> {
+        let reloc_len = self.reloc_code.entries.len();
 
-impl SectionCounter {
-    /// Update the section counter if buffer size increased since last call
-    #[inline]
-    fn update<SB: SerialBuffer>(&mut self, buffer: &mut SB) {
-        let new_size = buffer.size();
-        if new_size > self.buffer_size {
-            self.section_index += 1;
-            self.buffer_size = new_size;
+        let mut call_offsets_and_symbols = Vec::with_capacity_in(reloc_len, arena);
+        let mut indirect_call_offsets_and_types = Vec::with_capacity_in(reloc_len, arena);
+        for entry in self.reloc_code.entries.iter() {
+            match entry {
+                RelocationEntry::Index {
+                    type_id: IndexRelocType::FunctionIndexLeb,
+                    offset,
+                    symbol_index,
+                } => call_offsets_and_symbols.push((*offset, *symbol_index)),
+                RelocationEntry::Index {
+                    type_id: IndexRelocType::TypeIndexLeb,
+                    offset,
+                    symbol_index,
+                } => indirect_call_offsets_and_types.push((*offset, *symbol_index)),
+                _ => {}
+            }
+        }
+
+        // Create a fast lookup from symbol index to function index, for the inner loop below
+        // (Do all the matching and dereferencing outside the loop)
+        let symbol_fn_indices: Vec<'a, u32> = Vec::from_iter_in(
+            self.linking
+                .symbol_table
+                .iter()
+                .map(|sym_info| match sym_info {
+                    SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { index, .. }) => *index,
+                    SymInfo::Function(WasmObjectSymbol::ImplicitlyNamed { index, .. }) => *index,
+                    _ => u32::MAX, // just use a dummy value for non-function symbols
+                }),
+            arena,
+        );
+
+        // Loop variables for the main loop below
+        let capacity = host_fn_max as usize + self.code.code_builders.len();
+        let mut live_flags = BitVec::repeat(false, capacity);
+        let mut next_pass_fns = BitVec::repeat(false, capacity);
+        let mut current_pass_fns = BitVec::<usize>::repeat(false, capacity);
+
+        // Start with everything called from Roc and everything exported to JS
+        // Also include everything that can be indirectly called (crude, but good enough!)
+        for index in called_host_fns.iter().copied().chain(exported_fns) {
+            current_pass_fns.set(index as usize, true);
+        }
+
+        while current_pass_fns.count_ones() > 0 {
+            // All functions in this pass are live (they have been reached by earlier passes)
+            debug_assert_eq!(live_flags.len(), current_pass_fns.len());
+            live_flags |= &current_pass_fns;
+
+            // For each live function in the current pass
+            for fn_index in current_pass_fns.iter_ones() {
+                // Skip JS imports and Roc functions
+                if fn_index < host_fn_min as usize || fn_index >= host_fn_max as usize {
+                    continue;
+                }
+
+                // Find where the function body is
+                let offset_index = fn_index - host_fn_min as usize;
+                let code_start = self.code.preloaded_offsets[offset_index];
+                let code_end = self.code.preloaded_offsets[offset_index + 1];
+
+                // For each call in the body
+                for (offset, symbol) in call_offsets_and_symbols.iter() {
+                    if *offset > code_start && *offset < code_end {
+                        // Find out which other function is being called
+                        let called_fn_index = symbol_fn_indices[*symbol as usize];
+
+                        // If it's not already marked live, include it in the next pass
+                        if !live_flags[called_fn_index as usize] {
+                            next_pass_fns.set(called_fn_index as usize, true);
+                        }
+                    }
+                }
+
+                // For each indirect call in the body
+                for (offset, signature) in indirect_call_offsets_and_types.iter() {
+                    if *offset > code_start && *offset < code_end {
+                        // Find which functions have the right type signature for this call
+                        let potential_callees = indirect_callees_and_signatures
+                            .iter()
+                            .filter(|(_, sig)| sig == signature)
+                            .map(|(f, _)| *f);
+                        // Mark them all as live
+                        for f in potential_callees {
+                            if !live_flags[f as usize] {
+                                next_pass_fns.set(f as usize, true);
+                            }
+                        }
+                    }
+                }
+            }
+
+            std::mem::swap(&mut current_pass_fns, &mut next_pass_fns);
+            next_pass_fns.fill(false);
+        }
+
+        live_flags
+    }
+
+    pub fn relocate_internal_symbol(&mut self, sym_name: &str, value: u32) -> Result<u32, String> {
+        self.linking
+            .find_internal_symbol(sym_name)
+            .map(|sym_index| {
+                self.reloc_code.apply_relocs_u32(
+                    &mut self.code.preloaded_bytes,
+                    sym_index as u32,
+                    value,
+                );
+
+                sym_index as u32
+            })
+    }
+
+    /// Linking steps for host-to-app functions like `roc__mainForHost_1_exposed`
+    /// (See further explanation in the gen_wasm README)
+    /// - Remove the target function from the ImportSection. It's not a JS import but the host declared it as one.
+    /// - Update all of its call sites to the new index in the app
+    /// - Swap the _last_ JavaScript import into the slot we just vacated
+    /// - Update all call sites for the swapped JS function
+    /// - Update the FunctionSection to show the correct type signature for the swapped JS function
+    /// - Insert a dummy function in the CodeSection, at the same index as the swapped JS function
+    pub fn link_host_to_app_calls(&mut self, host_to_app_map: Vec<'a, (&'a str, u32)>) {
+        for (app_fn_name, app_fn_index) in host_to_app_map.into_iter() {
+            // Find the host import, and the last imported function to swap with it.
+            // Not all imports are functions, so the function index and import index may be different
+            // (We could support imported globals if we relocated them, although we don't at the time of this comment)
+            let mut host_fn = None;
+            let mut swap_fn = None;
+            self.import
+                .imports
+                .iter()
+                .enumerate()
+                .filter(|(_import_index, import)| {
+                    matches!(import.description, ImportDesc::Func { .. })
+                })
+                .enumerate()
+                .for_each(|(fn_index, (import_index, import))| {
+                    swap_fn = Some((import_index, fn_index));
+                    if import.name == app_fn_name {
+                        host_fn = Some((import_index, fn_index));
+                    }
+                });
+
+            let (host_import_index, host_fn_index) = match host_fn {
+                Some(x) => x,
+                None => {
+                    // The Wasm host doesn't call our app function, so it must be called from JS. Export it.
+                    self.export.append(Export {
+                        name: app_fn_name,
+                        ty: ExportType::Func,
+                        index: app_fn_index,
+                    });
+                    continue;
+                }
+            };
+            let (swap_import_index, swap_fn_index) = swap_fn.unwrap();
+
+            // Note: swap_remove will not work, because some imports may not be functions.
+            let swap_import = self.import.imports.remove(swap_import_index);
+            if swap_import_index != host_import_index {
+                self.import.imports[host_import_index] = swap_import;
+            }
+
+            // Find the host's symbol for the function we're linking
+            let host_sym_index = self
+                .linking
+                .find_and_reindex_imported_fn(host_fn_index as u32, app_fn_index)
+                .unwrap();
+
+            // Update calls to use the app function instead of the host import
+            self.reloc_code.apply_relocs_u32(
+                &mut self.code.preloaded_bytes,
+                host_sym_index,
+                app_fn_index,
+            );
+
+            if swap_import_index != host_import_index {
+                // get the name using the old host import index because we already swapped it!
+                let swap_fn_name = self.import.imports[host_import_index].name;
+
+                // Find the symbol for the swapped JS import
+                let swap_sym_index = self
+                    .linking
+                    .find_and_reindex_imported_fn(swap_fn_index as u32, host_fn_index as u32)
+                    .unwrap();
+
+                // Update calls to the swapped JS import
+                self.reloc_code.apply_relocs_u32(
+                    &mut self.code.preloaded_bytes,
+                    swap_sym_index,
+                    host_fn_index as u32,
+                );
+
+                // Update the name in the debug info
+                let (_, debug_name) = self
+                    .names
+                    .function_names
+                    .iter_mut()
+                    .find(|(i, _)| *i as usize == host_fn_index)
+                    .unwrap();
+                debug_name.clone_from(&swap_fn_name);
+            }
+
+            // Remember to insert a dummy function at the beginning of the code section
+            // to compensate for having one less import, so that function indices don't change.
+            self.code.dead_import_dummy_count += 1;
+
+            // Insert any type signature for the dummy. Signature index 0 will do.
+            self.function.signatures.insert(0, 0);
+
+            // Update the debug name for the dummy
+            let (_, debug_name) = self
+                .names
+                .function_names
+                .iter_mut()
+                .find(|(i, _)| *i as usize == swap_fn_index)
+                .unwrap();
+            debug_name.clone_from(&"linking_dummy");
         }
     }
 
-    #[inline]
-    fn serialize_and_count<SB: SerialBuffer, S: Serialize>(
-        &mut self,
-        buffer: &mut SB,
-        section: &S,
-    ) {
-        section.serialize(buffer);
-        self.update(buffer);
+    /// Create a name->index lookup table for host functions that may be called from the app
+    pub fn get_host_function_lookup(&self, arena: &'a Bump) -> Vec<'a, (&'a str, u32)> {
+        // Functions beginning with `roc_` go first, since they're most likely to be called
+        let roc_global_fns =
+            self.linking
+                .symbol_table
+                .iter()
+                .filter_map(|sym_info| match sym_info {
+                    SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { flags, index, name })
+                        if flags & linking::WASM_SYM_BINDING_LOCAL == 0
+                            && name.starts_with("roc_") =>
+                    {
+                        Some((*name, *index))
+                    }
+                    _ => None,
+                });
+
+        let other_global_fns =
+            self.linking
+                .symbol_table
+                .iter()
+                .filter_map(|sym_info| match sym_info {
+                    SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { flags, index, name })
+                        if flags & linking::WASM_SYM_BINDING_LOCAL == 0
+                            && !name.starts_with("roc_") =>
+                    {
+                        Some((*name, *index))
+                    }
+                    _ => None,
+                });
+
+        let import_fns = self
+            .import
+            .imports
+            .iter()
+            .filter(|import| matches!(import.description, ImportDesc::Func { .. }))
+            .enumerate()
+            .map(|(fn_index, import)| (import.name, fn_index as u32));
+
+        Vec::from_iter_in(
+            roc_global_fns.chain(other_global_fns).chain(import_fns),
+            arena,
+        )
     }
 }

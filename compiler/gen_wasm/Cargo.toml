@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+bitvec = "1"
 bumpalo = { version = "3.8.0", features = ["collections"] }
 roc_builtins = { path = "../builtins" }
 roc_collections = { path = "../collections" }

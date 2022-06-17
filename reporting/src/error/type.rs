@@ -1216,7 +1216,7 @@ fn to_expr_report<'b>(
                     region,
                     Some(expr_region),
                     alloc.concat([
-                        alloc.string(format!("The {} argument to ", ith)),
+                        alloc.string(format!("The {ith} argument to ")),
                         this_function.clone(),
                         alloc.text(" is not what I expect:"),
                     ]),
@@ -1224,7 +1224,7 @@ fn to_expr_report<'b>(
                     alloc.concat([
                         alloc.text("But "),
                         this_function,
-                        alloc.string(format!(" needs the {} argument to be:", ith)),
+                        alloc.string(format!(" needs the {ith} argument to be:")),
                     ]),
                     None,
                 )
@@ -1640,7 +1640,7 @@ fn format_category<'b>(
         ),
 
         TagApply {
-            tag_name: TagName::Tag(name),
+            tag_name: TagName(name),
             args_count: 0,
         } => (
             alloc.concat([
@@ -1656,7 +1656,7 @@ fn format_category<'b>(
         ),
 
         TagApply {
-            tag_name: TagName::Tag(name),
+            tag_name: TagName(name),
             args_count: _,
         } => (
             alloc.concat([
@@ -1666,10 +1666,6 @@ fn format_category<'b>(
             ]),
             alloc.text(" has the type:"),
         ),
-        TagApply {
-            tag_name: TagName::Closure(_name),
-            args_count: _,
-        } => unreachable!("closure tags are for internal use only"),
 
         Record => (
             alloc.concat([this_is, alloc.text(" a record")]),
@@ -3242,7 +3238,7 @@ mod report_text {
             };
 
             let starts =
-                std::iter::once(alloc.reflow("[ ")).chain(std::iter::repeat(alloc.reflow(", ")));
+                std::iter::once(alloc.reflow("[")).chain(std::iter::repeat(alloc.reflow(", ")));
 
             let entries_doc = alloc.concat(
                 entries
@@ -3251,7 +3247,7 @@ mod report_text {
                     .map(|(entry, start)| start.append(entry_to_doc(entry))),
             );
 
-            entries_doc.append(alloc.reflow(" ]")).append(ext_doc)
+            entries_doc.append(alloc.reflow("]")).append(ext_doc)
         }
     }
 
@@ -3281,7 +3277,7 @@ mod report_text {
             };
 
             let starts =
-                std::iter::once(alloc.reflow("[ ")).chain(std::iter::repeat(alloc.reflow(", ")));
+                std::iter::once(alloc.reflow("[")).chain(std::iter::repeat(alloc.reflow(", ")));
 
             let entries_doc = alloc.concat(
                 entries
@@ -3291,7 +3287,7 @@ mod report_text {
             );
 
             entries_doc
-                .append(alloc.reflow(" ]"))
+                .append(alloc.reflow("]"))
                 .append(ext_doc)
                 .append(alloc.text(" as "))
                 .append(rec_var)
@@ -3380,9 +3376,9 @@ fn type_problem_to_pretty<'b>(
         (TagTypo(typo, possibilities_tn), _) => {
             let possibilities: Vec<IdentStr> = possibilities_tn
                 .into_iter()
-                .map(|tag_name| tag_name.as_ident_str(alloc.interns, alloc.home))
+                .map(|tag_name| tag_name.as_ident_str())
                 .collect();
-            let typo_str = format!("{}", typo.as_ident_str(alloc.interns, alloc.home));
+            let typo_str = format!("{}", typo.as_ident_str());
             let suggestions = suggest::sort(&typo_str, possibilities);
 
             match suggestions.get(0) {
@@ -3866,7 +3862,7 @@ fn pattern_to_doc_help<'b>(
                     // #Guard <fake-condition-tag> <unexhausted-pattern>
                     debug_assert!(union.alternatives[tag_id.0 as usize]
                         .name
-                        .is_tag(&TagName::Tag(GUARD_CTOR.into())));
+                        .is_tag(&TagName(GUARD_CTOR.into())));
                     debug_assert!(args.len() == 2);
                     let tag = pattern_to_doc_help(alloc, args[1].clone(), in_type_param);
                     alloc.concat([
@@ -3904,7 +3900,7 @@ fn pattern_to_doc_help<'b>(
                 RenderAs::Tag | RenderAs::Opaque => {
                     let ctor = &union.alternatives[tag_id.0 as usize];
                     match &ctor.name {
-                        CtorName::Tag(TagName::Tag(name)) if name.as_str() == NONEXHAUSIVE_CTOR => {
+                        CtorName::Tag(TagName(name)) if name.as_str() == NONEXHAUSIVE_CTOR => {
                             return pattern_to_doc_help(
                                 alloc,
                                 roc_exhaustive::Pattern::Anything,

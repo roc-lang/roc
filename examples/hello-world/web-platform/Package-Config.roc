@@ -3,7 +3,7 @@ platform "hello-world-in-web-assembly"
     exposes []
     packages {}
     imports []
-    provides [ mainForHost ]
+    provides [mainForHost]
 
 mainForHost : Str
 mainForHost = main

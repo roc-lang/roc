@@ -9,23 +9,25 @@ use roc_can::constraint::{Constraints, Cycle, LetConstraint, OpportunisticResolv
 use roc_can::expected::{Expected, PExpected};
 use roc_can::expr::PendingDerives;
 use roc_collections::all::MutMap;
+use roc_collections::{VecMap, VecSet};
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
 use roc_error_macros::internal_error;
 use roc_module::ident::TagName;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_problem::can::CycleEntry;
 use roc_region::all::{Loc, Region};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{
-    AliasVariables, Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields, Subs,
-    SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
+    self, AliasVariables, Content, Descriptor, FlatType, GetSubsSlice, LambdaSet, Mark,
+    OptVariable, Rank, RecordFields, Subs, SubsIndex, SubsSlice, UlsOfVar, UnionLabels,
+    UnionLambdas, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
     gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, ErrorType, OptAbleType,
-    OptAbleVar, PatternCategory, Reason, TypeExtension,
+    OptAbleVar, PatternCategory, Reason, TypeExtension, Uls,
 };
 use roc_unify::unify::{unify, Mode, Obligated, Unified::*};
 
@@ -425,7 +427,7 @@ impl Env {
 const DEFAULT_POOLS: usize = 8;
 
 #[derive(Clone, Debug)]
-pub(crate) struct Pools(Vec<Vec<Variable>>);
+pub struct Pools(Vec<Vec<Variable>>);
 
 impl Default for Pools {
     fn default() -> Self {
@@ -440,6 +442,10 @@ impl Pools {
 
     pub fn len(&self) -> usize {
         self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 
     pub fn get_mut(&mut self, rank: Rank) -> &mut Vec<Variable> {
@@ -473,6 +479,57 @@ impl Pools {
         for _ in self.len()..n {
             self.0.push(Vec::new());
         }
+    }
+}
+
+/// What phase in the compiler is reaching out to solve types.
+/// This is important to distinguish subtle differences in the behavior of the solving algorithm.
+pub trait Phase {
+    /// The regular type-solving phase, or during some later phase of compilation.
+    /// During the solving phase we must anticipate that some information is still unknown and react to
+    /// that; during late phases, we expect that all information is resolved.
+    const IS_LATE: bool;
+
+    fn with_module_abilities_store<T, F>(&self, module: ModuleId, f: F) -> T
+    where
+        F: FnMut(&AbilitiesStore) -> T;
+
+    fn copy_lambda_set_var_to_home_subs(
+        &self,
+        external_lambda_set_var: Variable,
+        external_module_id: ModuleId,
+        home_subs: &mut Subs,
+    ) -> Variable;
+}
+
+struct SolvePhase<'a> {
+    abilities_store: &'a AbilitiesStore,
+}
+impl Phase for SolvePhase<'_> {
+    const IS_LATE: bool = false;
+
+    fn with_module_abilities_store<T, F>(&self, _module: ModuleId, mut f: F) -> T
+    where
+        F: FnMut(&AbilitiesStore) -> T,
+    {
+        // During solving we're only aware of our module's abilities store.
+        f(self.abilities_store)
+    }
+
+    fn copy_lambda_set_var_to_home_subs(
+        &self,
+        external_lambda_set_var: Variable,
+        _external_module_id: ModuleId,
+        home_subs: &mut Subs,
+    ) -> Variable {
+        // During solving we're only aware of our module's abilities store, the var must
+        // be in our module store. Even if the specialization lambda set comes from another
+        // module, we should have taken care to import it before starting solving in this module.
+        debug_assert!(matches!(
+            home_subs.get_content_without_compacting(external_lambda_set_var),
+            Content::LambdaSet(..)
+        ));
+        external_lambda_set_var
     }
 }
 
@@ -526,6 +583,10 @@ fn run_in_place(
     let pending_derives = PendingDerivesTable::new(subs, aliases, pending_derives);
     let mut deferred_obligations = DeferredObligations::new(pending_derives);
 
+    // Because we don't know what ability specializations are available until the entire module is
+    // solved, we must wait to solve unspecialized lambda sets then.
+    let mut deferred_uls_to_resolve = UlsOfVar::default();
+
     let state = solve(
         &arena,
         constraints,
@@ -538,6 +599,7 @@ fn run_in_place(
         constraint,
         abilities_store,
         &mut deferred_obligations,
+        &mut deferred_uls_to_resolve,
     );
 
     // Now that the module has been solved, we can run through and check all
@@ -545,6 +607,14 @@ fn run_in_place(
     // are legal, which we need to register.
     let (obligation_problems, _derived) = deferred_obligations.check_all(subs, abilities_store);
     problems.extend(obligation_problems);
+
+    compact_lambda_sets_of_vars(
+        subs,
+        &arena,
+        &mut pools,
+        deferred_uls_to_resolve,
+        &SolvePhase { abilities_store },
+    );
 
     state.env
 }
@@ -598,6 +668,7 @@ fn solve(
     constraint: &Constraint,
     abilities_store: &mut AbilitiesStore,
     deferred_obligations: &mut DeferredObligations,
+    deferred_uls_to_resolve: &mut UlsOfVar,
 ) -> State {
     let initial = Work::Constraint {
         env: &Env::default(),
@@ -658,6 +729,7 @@ fn solve(
                         abilities_store,
                         problems,
                         deferred_obligations,
+                        deferred_uls_to_resolve,
                         *symbol,
                         *loc_var,
                     );
@@ -720,7 +792,9 @@ fn solve(
                         let result = offenders.len();
 
                         if result > 0 {
-                            dbg!(&subs, &offenders, &let_con.def_types);
+                            eprintln!("subs = {:?}", &subs);
+                            eprintln!("offenders = {:?}", &offenders);
+                            eprintln!("let_con.def_types = {:?}", &let_con.def_types);
                         }
 
                         result
@@ -763,6 +837,7 @@ fn solve(
                         abilities_store,
                         problems,
                         deferred_obligations,
+                        deferred_uls_to_resolve,
                         *symbol,
                         *loc_var,
                     );
@@ -814,6 +889,7 @@ fn solve(
                     Success {
                         vars,
                         must_implement_ability,
+                        lambda_sets_to_specialize,
                     } => {
                         introduce(subs, rank, pools, &vars);
                         if !must_implement_ability.is_empty() {
@@ -822,6 +898,7 @@ fn solve(
                                 AbilityImplError::BadExpr(*region, category.clone(), actual),
                             );
                         }
+                        deferred_uls_to_resolve.union(lambda_sets_to_specialize);
 
                         state
                     }
@@ -866,8 +943,11 @@ fn solve(
                         vars,
                         // ERROR NOT REPORTED
                         must_implement_ability: _,
+                        lambda_sets_to_specialize,
                     } => {
                         introduce(subs, rank, pools, &vars);
+
+                        deferred_uls_to_resolve.union(lambda_sets_to_specialize);
 
                         state
                     }
@@ -921,6 +1001,7 @@ fn solve(
                             Success {
                                 vars,
                                 must_implement_ability,
+                                lambda_sets_to_specialize,
                             } => {
                                 introduce(subs, rank, pools, &vars);
                                 if !must_implement_ability.is_empty() {
@@ -933,6 +1014,7 @@ fn solve(
                                         ),
                                     );
                                 }
+                                deferred_uls_to_resolve.union(lambda_sets_to_specialize);
 
                                 state
                             }
@@ -998,6 +1080,7 @@ fn solve(
                     Success {
                         vars,
                         must_implement_ability,
+                        lambda_sets_to_specialize,
                     } => {
                         introduce(subs, rank, pools, &vars);
                         if !must_implement_ability.is_empty() {
@@ -1006,6 +1089,7 @@ fn solve(
                                 AbilityImplError::BadPattern(*region, category.clone(), actual),
                             );
                         }
+                        deferred_uls_to_resolve.union(lambda_sets_to_specialize);
 
                         state
                     }
@@ -1160,6 +1244,7 @@ fn solve(
                     Success {
                         vars,
                         must_implement_ability,
+                        lambda_sets_to_specialize,
                     } => {
                         introduce(subs, rank, pools, &vars);
                         if !must_implement_ability.is_empty() {
@@ -1172,6 +1257,7 @@ fn solve(
                                 ),
                             );
                         }
+                        deferred_uls_to_resolve.union(lambda_sets_to_specialize);
 
                         state
                     }
@@ -1264,6 +1350,7 @@ fn solve(
                     Success {
                         vars,
                         must_implement_ability,
+                        lambda_sets_to_specialize,
                     } => {
                         subs.commit_snapshot(snapshot);
 
@@ -1271,6 +1358,8 @@ fn solve(
                         if !must_implement_ability.is_empty() {
                             internal_error!("Didn't expect ability vars to land here");
                         }
+
+                        deferred_uls_to_resolve.union(lambda_sets_to_specialize);
 
                         // Case 1: unify error types, but don't check exhaustiveness.
                         // Case 2: run exhaustiveness to check for redundant branches.
@@ -1492,16 +1581,15 @@ fn check_ability_specialization(
     abilities_store: &mut AbilitiesStore,
     problems: &mut Vec<TypeError>,
     deferred_obligations: &mut DeferredObligations,
+    deferred_uls_to_resolve: &mut UlsOfVar,
     symbol: Symbol,
     symbol_loc_var: Loc<Variable>,
 ) {
     // If the symbol specializes an ability member, we need to make sure that the
     // inferred type for the specialization actually aligns with the expected
     // implementation.
-    if let Some((root_symbol, root_data)) = abilities_store.root_name_and_def(symbol) {
-        let root_signature_var = root_data
-            .signature_var()
-            .unwrap_or_else(|| internal_error!("Signature var not resolved for {:?}", root_symbol));
+    if let Some((ability_member, root_data)) = abilities_store.root_name_and_def(symbol) {
+        let root_signature_var = root_data.signature_var();
         let parent_ability = root_data.parent_ability;
 
         // Check if they unify - if they don't, then the claimed specialization isn't really one,
@@ -1520,6 +1608,7 @@ fn check_ability_specialization(
             Success {
                 vars,
                 must_implement_ability,
+                lambda_sets_to_specialize,
             } => {
                 let specialization_type =
                     type_implementing_specialization(&must_implement_ability, parent_ability);
@@ -1531,13 +1620,20 @@ fn check_ability_specialization(
                         subs.commit_snapshot(snapshot);
                         introduce(subs, rank, pools, &vars);
 
+                        let (other_lambda_sets_to_specialize, specialization_lambda_sets) =
+                            find_specialization_lambda_sets(
+                                subs,
+                                opaque,
+                                ability_member,
+                                lambda_sets_to_specialize,
+                            );
+                        deferred_uls_to_resolve.union(other_lambda_sets_to_specialize);
+
                         let specialization_region = symbol_loc_var.region;
-                        let specialization = MemberSpecialization {
-                            symbol,
-                            region: specialization_region,
-                        };
+                        let specialization =
+                            MemberSpecialization::new(symbol, specialization_lambda_sets);
                         abilities_store.register_specialization_for_type(
-                            root_symbol,
+                            ability_member,
                             opaque,
                             specialization,
                         );
@@ -1567,7 +1663,7 @@ fn check_ability_specialization(
                             region: symbol_loc_var.region,
                             typ,
                             ability: parent_ability,
-                            member: root_symbol,
+                            member: ability_member,
                         };
 
                         problems.push(problem);
@@ -1585,13 +1681,13 @@ fn check_ability_specialization(
                         let (actual_type, _problems) = subs.var_to_error_type(symbol_loc_var.value);
 
                         let reason = Reason::GeneralizedAbilityMemberSpecialization {
-                            member_name: root_symbol,
+                            member_name: ability_member,
                             def_region: root_data.region,
                         };
 
                         let problem = TypeError::BadExpr(
                             symbol_loc_var.region,
-                            Category::AbilityMemberSpecialization(root_symbol),
+                            Category::AbilityMemberSpecialization(ability_member),
                             actual_type,
                             Expected::ForReason(reason, expected_type, symbol_loc_var.region),
                         );
@@ -1606,14 +1702,14 @@ fn check_ability_specialization(
                 introduce(subs, rank, pools, &vars);
 
                 let reason = Reason::InvalidAbilityMemberSpecialization {
-                    member_name: root_symbol,
+                    member_name: ability_member,
                     def_region: root_data.region,
                     unimplemented_abilities,
                 };
 
                 let problem = TypeError::BadExpr(
                     symbol_loc_var.region,
-                    Category::AbilityMemberSpecialization(root_symbol),
+                    Category::AbilityMemberSpecialization(ability_member),
                     actual_type,
                     Expected::ForReason(reason, expected_type, symbol_loc_var.region),
                 );
@@ -1627,6 +1723,250 @@ fn check_ability_specialization(
                 problems.push(TypeError::BadType(problem));
             }
         }
+    }
+}
+
+/// Finds the lambda sets in an ability member specialization.
+///
+/// Suppose we have
+///
+///   Default has default : {} -[[] + a:default:1]-> a | a has Default
+///   
+///   A := {}
+///   default = \{} -[[closA]]-> @A {}
+///
+/// Now after solving the `default` specialization we have unified it with the ability signature,
+/// yielding
+///   
+///   {} -[[closA] + A:default:1]-> A
+///
+/// But really, what we want is to only keep around the original lambda sets, and associate
+/// `A:default:1` to resolve to the lambda set `[[closA]]`. There might be other unspecialized lambda
+/// sets in the lambda sets for this implementation, which we need to account for as well; that is,
+/// it may really be `[[closA] + v123:otherAbilityMember:4 + ...]`.
+#[inline(always)]
+fn find_specialization_lambda_sets(
+    subs: &mut Subs,
+    opaque: Symbol,
+    ability_member: Symbol,
+    uls: UlsOfVar,
+) -> (UlsOfVar, VecMap<u8, Variable>) {
+    // unspecialized lambda sets that don't belong to our specialization, and should be resolved
+    // later.
+    let mut leftover_uls = UlsOfVar::default();
+    let mut specialization_lambda_sets: VecMap<u8, Variable> = VecMap::with_capacity(uls.len());
+
+    for (spec_var, lambda_sets) in uls.drain() {
+        if !matches!(subs.get_content_without_compacting(spec_var), Content::Alias(name, _, _, AliasKind::Opaque) if *name == opaque)
+        {
+            // These lambda sets aren't resolved to the current specialization, they need to be
+            // solved at a later time.
+            leftover_uls.extend(spec_var, lambda_sets);
+            continue;
+        }
+
+        for lambda_set in lambda_sets {
+            let &LambdaSet {
+                solved,
+                recursion_var,
+                unspecialized,
+            } = match subs.get_content_without_compacting(lambda_set) {
+                Content::LambdaSet(lambda_set) => lambda_set,
+                _ => internal_error!("Not a lambda set"),
+            };
+
+            // Figure out the unspecailized lambda set that corresponds to our specialization
+            // (`A:default:1` in the example), and those that need to stay part of the lambda set.
+            let mut split_index_and_region = None;
+            let uls_slice = subs.get_subs_slice(unspecialized).to_owned();
+            for (i, &Uls(var, _sym, region)) in uls_slice.iter().enumerate() {
+                if var == spec_var {
+                    debug_assert!(split_index_and_region.is_none());
+                    debug_assert!(_sym == ability_member, "unspecialized lambda set var is the same as the specialization, but points to a different ability member");
+                    split_index_and_region = Some((i, region));
+                }
+            }
+
+            let (split_index, specialized_lset_region) =
+                split_index_and_region.expect("no unspecialization lambda set found");
+            let (uls_before, uls_after) =
+                (&uls_slice[0..split_index], &uls_slice[split_index + 1..]);
+
+            let new_unspecialized = SubsSlice::extend_new(
+                &mut subs.unspecialized_lambda_sets,
+                uls_before.iter().chain(uls_after.iter()).copied(),
+            );
+
+            let new_lambda_set_content = Content::LambdaSet(LambdaSet {
+                solved,
+                recursion_var,
+                unspecialized: new_unspecialized,
+            });
+            subs.set_content(lambda_set, new_lambda_set_content);
+
+            let old_specialized =
+                specialization_lambda_sets.insert(specialized_lset_region, lambda_set);
+            debug_assert!(
+                old_specialized.is_none(),
+                "Specialization of lambda set already exists"
+            );
+        }
+    }
+
+    (leftover_uls, specialization_lambda_sets)
+}
+
+pub fn compact_lambda_sets_of_vars<P: Phase>(
+    subs: &mut Subs,
+    arena: &Bump,
+    pools: &mut Pools,
+    uls_of_var: UlsOfVar,
+    phase: &P,
+) {
+    let mut seen = VecSet::default();
+    for (_, lambda_sets) in uls_of_var.drain() {
+        for lset in lambda_sets {
+            let root_lset = subs.get_root_key_without_compacting(lset);
+            if seen.contains(&root_lset) {
+                continue;
+            }
+
+            compact_lambda_set(subs, arena, pools, root_lset, phase);
+
+            seen.insert(root_lset);
+        }
+    }
+}
+
+fn compact_lambda_set<P: Phase>(
+    subs: &mut Subs,
+    arena: &Bump,
+    pools: &mut Pools,
+    this_lambda_set: Variable,
+    phase: &P,
+) {
+    let LambdaSet {
+        solved,
+        recursion_var,
+        unspecialized,
+    } = subs.get_lambda_set(this_lambda_set);
+    let target_rank = subs.get_rank(this_lambda_set);
+
+    if unspecialized.is_empty() {
+        return;
+    }
+
+    let mut new_unspecialized = vec![];
+    let mut specialized_to_unify_with = Vec::with_capacity(1);
+    for uls_index in unspecialized.into_iter() {
+        let uls @ Uls(var, member, region) = subs[uls_index];
+
+        use Content::*;
+        let opaque = match subs.get_content_without_compacting(var) {
+            FlexAbleVar(_, _) => {
+                /* not specialized yet */
+                new_unspecialized.push(uls);
+                continue;
+            }
+            Structure(_) | Alias(_, _, _, AliasKind::Structural) => {
+                // TODO: figure out a convention for references to structural types in the
+                // unspecialized lambda set. This may very well happen, for example
+                //
+                //   Default has default : {} -> a | a has Default
+                //
+                //   {a, b} = default {}
+                //   #        ^^^^^^^ {} -[{a: t1, b: t2}:default:1]-> {a: t1, b: t2}
+                new_unspecialized.push(uls);
+                continue;
+            }
+            Alias(opaque, _, _, AliasKind::Opaque) => opaque,
+            Error => {
+                /* skip */
+                continue;
+            }
+            RigidVar(..)
+            | RigidAbleVar(..)
+            | FlexVar(..)
+            | RecursionVar { .. }
+            | LambdaSet(..)
+            | RangedNumber(_, _) => {
+                internal_error!("unexpected")
+            }
+        };
+
+        enum Spec {
+            Some(Variable),
+            Skip,
+        }
+
+        let opaque_home = opaque.module_id();
+        let specialized_lambda_set =
+            phase.with_module_abilities_store(opaque_home, |abilities_store| {
+                let opt_specialization = abilities_store.get_specialization(member, *opaque);
+                match (P::IS_LATE, opt_specialization) {
+                    (false, None) => {
+                        // doesn't specialize, we'll have reported an error for this
+                        Spec::Skip
+                    }
+                    (true, None) => {
+                        internal_error!(
+                            "expected to know a specialization for {:?}#{:?}, but it wasn't found",
+                            opaque,
+                            member,
+                        );
+                    }
+                    (_, Some(specialization)) => {
+                        let specialized_lambda_set = *specialization
+                            .specialization_lambda_sets
+                            .get(&region)
+                            .expect("lambda set region not resolved");
+                        Spec::Some(specialized_lambda_set)
+                    }
+                }
+            });
+
+        let specialized_lambda_set = match specialized_lambda_set {
+            Spec::Some(lset) => phase.copy_lambda_set_var_to_home_subs(lset, opaque_home, subs),
+            Spec::Skip => continue,
+        };
+
+        // Ensure the specialization lambda set is already compacted.
+        if subs.get_root_key(specialized_lambda_set) != subs.get_root_key(this_lambda_set) {
+            compact_lambda_set(subs, arena, pools, specialized_lambda_set, phase);
+        }
+
+        // Ensure the specialization lambda set we'll unify with is not a generalized one, but one
+        // at the rank of the lambda set being compacted.
+        let copy_specialized_lambda_set =
+            deep_copy_var_in(subs, target_rank, pools, specialized_lambda_set, arena);
+
+        specialized_to_unify_with.push(copy_specialized_lambda_set);
+    }
+
+    let new_unspecialized_slice =
+        SubsSlice::extend_new(&mut subs.unspecialized_lambda_sets, new_unspecialized);
+    let partial_compacted_lambda_set = Content::LambdaSet(LambdaSet {
+        solved,
+        recursion_var,
+        unspecialized: new_unspecialized_slice,
+    });
+    subs.set_content(this_lambda_set, partial_compacted_lambda_set);
+
+    for other_specialized in specialized_to_unify_with.into_iter() {
+        let (vars, must_implement_ability, lambda_sets_to_specialize) =
+            unify(subs, this_lambda_set, other_specialized, Mode::EQ)
+                .expect_success("lambda sets don't unify");
+
+        introduce(subs, subs.get_rank(this_lambda_set), pools, &vars);
+
+        debug_assert!(
+            must_implement_ability.is_empty(),
+            "didn't expect abilities instantiated in this position"
+        );
+        debug_assert!(
+            lambda_sets_to_specialize.is_empty(),
+            "didn't expect more lambda sets in this position"
+        );
     }
 }
 
@@ -1686,6 +2026,7 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
 }
 
 use std::cell::RefCell;
+use std::ops::ControlFlow;
 std::thread_local! {
     /// Scratchpad arena so we don't need to allocate a new one all the time
     static SCRATCHPAD: RefCell<Option<bumpalo::Bump>> = RefCell::new(Some(bumpalo::Bump::with_capacity(4 * 1024)));
@@ -1873,16 +2214,31 @@ fn type_to_variable<'a>(
                 register_with_known_var(subs, destination, rank, pools, content)
             }
 
-            ClosureTag { name, ext } => {
-                let tag_name = TagName::Closure(*name);
-                let tag_names = SubsSlice::new(subs.tag_names.len() as u32, 1);
+            ClosureTag { name, captures } => {
+                let union_lambdas =
+                    create_union_lambda(subs, rank, pools, arena, *name, captures, &mut stack);
 
-                subs.tag_names.push(tag_name);
+                let content = Content::LambdaSet(subs::LambdaSet {
+                    solved: union_lambdas,
+                    // We may figure out the lambda set is recursive during solving, but it never
+                    // is to begin with.
+                    recursion_var: OptVariable::NONE,
+                    unspecialized: SubsSlice::default(),
+                });
 
-                // the first VariableSubsSlice in the array is a zero-length slice
-                let union_tags = UnionTags::from_slices(tag_names, SubsSlice::new(0, 1));
+                register_with_known_var(subs, destination, rank, pools, content)
+            }
+            UnspecializedLambdaSet(uls) => {
+                let unspecialized = SubsSlice::extend_new(
+                    &mut subs.unspecialized_lambda_sets,
+                    std::iter::once(*uls),
+                );
 
-                let content = Content::Structure(FlatType::TagUnion(union_tags, *ext));
+                let content = Content::LambdaSet(subs::LambdaSet {
+                    unspecialized,
+                    solved: UnionLabels::default(),
+                    recursion_var: OptVariable::NONE,
+                });
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
@@ -2380,8 +2736,9 @@ fn insert_tags_fast_path<'a>(
     tags: &'a [(TagName, Vec<Type>)],
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> UnionTags {
-    if let [(TagName::Tag(tag_name), arguments)] = tags {
-        let variable_slice = register_tag_arguments(subs, rank, pools, arena, stack, arguments);
+    if let [(TagName(tag_name), arguments)] = tags {
+        let variable_slice =
+            register_tag_arguments(subs, rank, pools, arena, stack, arguments.as_slice());
         let new_variable_slices =
             SubsSlice::extend_new(&mut subs.variable_slices, [variable_slice]);
 
@@ -2408,7 +2765,7 @@ fn insert_tags_fast_path<'a>(
 
             for (variable_slice_index, (_, arguments)) in it {
                 subs.variable_slices[variable_slice_index] =
-                    register_tag_arguments(subs, rank, pools, arena, stack, arguments);
+                    register_tag_arguments(subs, rank, pools, arena, stack, arguments.as_slice());
             }
 
             UnionTags::from_slices(new_tag_names, new_variable_slices)
@@ -2422,7 +2779,7 @@ fn insert_tags_fast_path<'a>(
 
             for ((variable_slice_index, tag_name_index), (tag_name, arguments)) in it {
                 subs.variable_slices[variable_slice_index] =
-                    register_tag_arguments(subs, rank, pools, arena, stack, arguments);
+                    register_tag_arguments(subs, rank, pools, arena, stack, arguments.as_slice());
 
                 subs.tag_names[tag_name_index] = tag_name.clone();
             }
@@ -2442,6 +2799,7 @@ fn insert_tags_slow_path<'a>(
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
 ) -> UnionTags {
     for (tag, tag_argument_types) in tags {
+        let tag_argument_types: &[Type] = tag_argument_types.as_slice();
         let new_slice = VariableSubsSlice::reserve_into_subs(subs, tag_argument_types.len());
 
         for (i, arg) in (new_slice.indices()).zip(tag_argument_types) {
@@ -2506,6 +2864,23 @@ fn type_to_union_tags<'a>(
     }
 }
 
+fn create_union_lambda<'a>(
+    subs: &mut Subs,
+    rank: Rank,
+    pools: &mut Pools,
+    arena: &'_ bumpalo::Bump,
+    closure: Symbol,
+    capture_types: &'a [Type],
+    stack: &mut bumpalo::collections::Vec<'_, TypeToVar<'a>>,
+) -> UnionLambdas {
+    let variable_slice = register_tag_arguments(subs, rank, pools, arena, stack, capture_types);
+    let new_variable_slices = SubsSlice::extend_new(&mut subs.variable_slices, [variable_slice]);
+
+    let lambda_name_slice = SubsSlice::extend_new(&mut subs.closure_names, [closure]);
+
+    UnionLambdas::from_slices(lambda_name_slice, new_variable_slices)
+}
+
 fn check_for_infinite_type(
     subs: &mut Subs,
     problems: &mut Vec<TypeError>,
@@ -2515,10 +2890,17 @@ fn check_for_infinite_type(
     let var = loc_var.value;
 
     while let Err((recursive, _chain)) = subs.occurs(var) {
-        // try to make a tag union recursive, see if that helps
+        // try to make a union recursive, see if that helps
         match subs.get_content_without_compacting(recursive) {
             &Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
                 subs.mark_tag_union_recursive(recursive, tags, ext_var);
+            }
+            &Content::LambdaSet(subs::LambdaSet {
+                solved,
+                recursion_var: _,
+                unspecialized,
+            }) => {
+                subs.mark_lambda_set_recursive(recursive, solved, unspecialized);
             }
 
             _other => circular_error(subs, problems, symbol, &loc_var),
@@ -2751,12 +3133,12 @@ fn adjust_rank_content(
                     // Normally this is not a problem because of the loop below that maximizes the
                     // rank from nested types in the union. But suppose we have the simple tag
                     // union
-                    //   [ Z ]{}
+                    //   [Z]{}
                     // there are no nested types in the tags, and the empty tag union is at rank 0,
                     // so we promote the tag union to rank 0. Now if we introduce the presence
                     // constraint
-                    //   [ Z ]{} += [ S a ]
-                    // we'll wind up with [ Z, S a ]{}, but it will be at rank 0, and "a" will get
+                    //   [Z]{} += [S a]
+                    // we'll wind up with [Z, S a]{}, but it will be at rank 0, and "a" will get
                     // over-generalized. Really, the empty tag union should be introduced at
                     // whatever current group rank we're at, and so that's how we encode it here.
                     if *ext_var == Variable::EMPTY_TAG_UNION && rank.is_none() {
@@ -2798,7 +3180,7 @@ fn adjust_rank_content(
                     // For example, see the `recursion_var_specialization_error` reporting test -
                     // there, we have
                     //
-                    //      Job a : [ Job (List (Job a)) a ]
+                    //      Job a : [Job (List (Job a)) a]
                     //
                     //      job : Job Str
                     //
@@ -2858,6 +3240,49 @@ fn adjust_rank_content(
             rank = rank.max(adjust_rank(
                 subs, young_mark, visit_mark, group_rank, *real_var,
             ));
+
+            rank
+        }
+
+        LambdaSet(subs::LambdaSet {
+            solved,
+            recursion_var,
+            unspecialized,
+        }) => {
+            let mut rank = group_rank;
+
+            for (_, index) in solved.iter_all() {
+                let slice = subs[index];
+                for var_index in slice {
+                    let var = subs[var_index];
+                    rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+                }
+            }
+
+            for uls_index in *unspecialized {
+                let Uls(var, _, _) = subs[uls_index];
+                rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+            }
+
+            if let (true, Some(rec_var)) = (cfg!(debug_assertions), recursion_var.into_variable()) {
+                // THEORY: unlike the situation for recursion vars under recursive tag unions,
+                // recursive vars inside lambda sets can't escape into higher let-generalized regions
+                // because lambda sets aren't user-facing.
+                //
+                // So the recursion var should be fully accounted by everything else in the lambda set
+                // (since it appears in the lambda set), and if the rank is higher, it's either a
+                // bug or our theory is wrong and indeed they can escape into higher regions.
+                let rec_var_rank = adjust_rank(subs, young_mark, visit_mark, group_rank, rec_var);
+
+                debug_assert!(
+                    rank >= rec_var_rank,
+                    "rank was {:?} but recursion var <{:?}>{:?} has higher rank {:?}",
+                    rank,
+                    rec_var,
+                    subs.get_content_without_compacting(rec_var),
+                    rec_var_rank
+                );
+            }
 
             rank
         }
@@ -3014,6 +3439,24 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
 
                 stack.push(var);
             }
+            LambdaSet(subs::LambdaSet {
+                solved,
+                recursion_var,
+                unspecialized,
+            }) => {
+                for slice_index in solved.variables() {
+                    let slice = subs.variable_slices[slice_index.index as usize];
+                    stack.extend(var_slice!(slice));
+                }
+
+                if let Some(rec_var) = recursion_var.into_variable() {
+                    stack.push(rec_var);
+                }
+
+                for Uls(var, _, _) in subs.get_subs_slice(*unspecialized) {
+                    stack.push(*var);
+                }
+            }
             &RangedNumber(typ, _) => {
                 stack.push(typ);
             }
@@ -3043,15 +3486,22 @@ fn deep_copy_var_in(
     let mut visited = bumpalo::collections::Vec::with_capacity_in(256, arena);
 
     let pool = pools.get_mut(rank);
-    let copy = deep_copy_var_help(subs, rank, pool, &mut visited, var);
 
-    // we have tracked all visited variables, and can now traverse them
-    // in one go (without looking at the UnificationTable) and clear the copy field
-    for var in visited {
-        subs.set_copy_unchecked(var, OptVariable::NONE);
+    let var = subs.get_root_key(var);
+    match deep_copy_var_decision(subs, rank, var) {
+        ControlFlow::Break(copy) => copy,
+        ControlFlow::Continue(copy) => {
+            deep_copy_var_help(subs, rank, pool, &mut visited, var, copy);
+
+            // we have tracked all visited variables, and can now traverse them
+            // in one go (without looking at the UnificationTable) and clear the copy field
+            for var in visited {
+                subs.set_copy_unchecked(var, OptVariable::NONE);
+            }
+
+            copy
+        }
     }
-
-    copy
 }
 
 #[inline]
@@ -3067,58 +3517,78 @@ fn has_trivial_copy(subs: &Subs, root_var: Variable) -> Option<Variable> {
     }
 }
 
+#[inline]
+fn deep_copy_var_decision(
+    subs: &mut Subs,
+    max_rank: Rank,
+    var: Variable,
+) -> ControlFlow<Variable, Variable> {
+    let var = subs.get_root_key(var);
+    if let Some(copy) = has_trivial_copy(subs, var) {
+        ControlFlow::Break(copy)
+    } else {
+        let copy_descriptor = Descriptor {
+            content: Content::Structure(FlatType::EmptyTagUnion),
+            rank: max_rank,
+            mark: Mark::NONE,
+            copy: OptVariable::NONE,
+        };
+
+        let copy = subs.fresh(copy_descriptor);
+
+        // Link the original variable to the new variable. This lets us
+        // avoid making multiple copies of the variable we are instantiating.
+        //
+        // Need to do this before recursively copying to avoid looping.
+        subs.set_mark_unchecked(var, Mark::NONE);
+        subs.set_copy_unchecked(var, copy.into());
+
+        ControlFlow::Continue(copy)
+    }
+}
+
 fn deep_copy_var_help(
     subs: &mut Subs,
     max_rank: Rank,
     pool: &mut Vec<Variable>,
     visited: &mut bumpalo::collections::Vec<'_, Variable>,
-    var: Variable,
+    initial_source: Variable,
+    initial_copy: Variable,
 ) -> Variable {
     use roc_types::subs::Content::*;
     use roc_types::subs::FlatType::*;
 
-    let subs_len = subs.len();
-    let var = subs.get_root_key(var);
-
-    // either this variable has been copied before, or does not have NONE rank
-    if let Some(copy) = has_trivial_copy(subs, var) {
-        return copy;
+    struct DeepCopyVarWork {
+        source: Variable,
+        copy: Variable,
     }
 
-    // Safety: Here we make a variable that is 1 position out of bounds.
-    // The reason is that we can now keep the mutable reference to `desc`
-    // Below, we actually push a new variable onto subs meaning the `copy`
-    // variable is in-bounds before it is ever used.
-    let copy = unsafe { Variable::from_index(subs_len as u32) };
-
-    visited.push(var);
-    pool.push(copy);
-
-    // Link the original variable to the new variable. This lets us
-    // avoid making multiple copies of the variable we are instantiating.
-    //
-    // Need to do this before recursively copying to avoid looping.
-    subs.set_mark_unchecked(var, Mark::NONE);
-    subs.set_copy_unchecked(var, copy.into());
-
-    let content = *subs.get_content_unchecked(var);
-
-    let copy_descriptor = Descriptor {
-        content,
-        rank: max_rank,
-        mark: Mark::NONE,
-        copy: OptVariable::NONE,
+    let initial = DeepCopyVarWork {
+        source: initial_source,
+        copy: initial_copy,
     };
+    let mut stack = vec![initial];
 
-    let actual_copy = subs.fresh(copy_descriptor);
-    debug_assert_eq!(copy, actual_copy);
+    macro_rules! work {
+        ($variable:expr) => {{
+            let var = subs.get_root_key($variable);
+            match deep_copy_var_decision(subs, max_rank, var) {
+                ControlFlow::Break(copy) => copy,
+                ControlFlow::Continue(copy) => {
+                    stack.push(DeepCopyVarWork { source: var, copy });
+
+                    copy
+                }
+            }
+        }};
+    }
 
     macro_rules! copy_sequence {
         ($length:expr, $variables:expr) => {{
             let new_variables = SubsSlice::reserve_into_subs(subs, $length as _);
             for (target_index, var_index) in (new_variables.indices()).zip($variables) {
                 let var = subs[var_index];
-                let copy_var = deep_copy_var_help(subs, max_rank, pool, visited, var);
+                let copy_var = work!(var);
                 subs.variables[target_index] = copy_var;
             }
 
@@ -3126,153 +3596,188 @@ fn deep_copy_var_help(
         }};
     }
 
-    // Now we recursively copy the content of the variable.
-    // We have already marked the variable as copied, so we
-    // will not repeat this work or crawl this variable again.
-    match content {
-        Structure(flat_type) => {
-            let new_flat_type = match flat_type {
-                Apply(symbol, arguments) => {
-                    let new_arguments = copy_sequence!(arguments.len(), arguments);
+    macro_rules! copy_union {
+        ($tags:expr) => {{
+            let new_variable_slices = SubsSlice::reserve_variable_slices(subs, $tags.len());
 
-                    Apply(symbol, new_arguments)
-                }
+            let it = (new_variable_slices.indices()).zip($tags.variables());
+            for (target_index, index) in it {
+                let slice = subs[index];
 
-                Func(arguments, closure_var, ret_var) => {
-                    let new_ret_var = deep_copy_var_help(subs, max_rank, pool, visited, ret_var);
-                    let new_closure_var =
-                        deep_copy_var_help(subs, max_rank, pool, visited, closure_var);
+                let new_variables = copy_sequence!(slice.len(), slice);
+                subs.variable_slices[target_index] = new_variables;
+            }
 
-                    let new_arguments = copy_sequence!(arguments.len(), arguments);
+            UnionLabels::from_slices($tags.labels(), new_variable_slices)
+        }};
+    }
 
-                    Func(new_arguments, new_closure_var, new_ret_var)
-                }
+    while let Some(DeepCopyVarWork { source: var, copy }) = stack.pop() {
+        visited.push(var);
+        pool.push(copy);
 
-                same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
+        let content = *subs.get_content_unchecked(var);
 
-                Record(fields, ext_var) => {
-                    let record_fields = {
-                        let new_variables = copy_sequence!(fields.len(), fields.iter_variables());
+        // Now we recursively copy the content of the variable.
+        // We have already marked the variable as copied, so we
+        // will not repeat this work or crawl this variable again.
+        match content {
+            Structure(flat_type) => {
+                let new_flat_type = match flat_type {
+                    Apply(symbol, arguments) => {
+                        let new_arguments = copy_sequence!(arguments.len(), arguments);
 
-                        RecordFields {
-                            length: fields.length,
-                            field_names_start: fields.field_names_start,
-                            variables_start: new_variables.start,
-                            field_types_start: fields.field_types_start,
-                        }
-                    };
-
-                    Record(
-                        record_fields,
-                        deep_copy_var_help(subs, max_rank, pool, visited, ext_var),
-                    )
-                }
-
-                TagUnion(tags, ext_var) => {
-                    let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
-
-                    let it = (new_variable_slices.indices()).zip(tags.variables());
-                    for (target_index, index) in it {
-                        let slice = subs[index];
-
-                        let new_variables = copy_sequence!(slice.len(), slice);
-                        subs.variable_slices[target_index] = new_variables;
+                        Apply(symbol, new_arguments)
                     }
 
-                    let union_tags = UnionTags::from_slices(tags.tag_names(), new_variable_slices);
+                    Func(arguments, closure_var, ret_var) => {
+                        let new_ret_var = work!(ret_var);
+                        let new_closure_var = work!(closure_var);
 
-                    let new_ext = deep_copy_var_help(subs, max_rank, pool, visited, ext_var);
-                    TagUnion(union_tags, new_ext)
-                }
+                        let new_arguments = copy_sequence!(arguments.len(), arguments);
 
-                FunctionOrTagUnion(tag_name, symbol, ext_var) => FunctionOrTagUnion(
-                    tag_name,
-                    symbol,
-                    deep_copy_var_help(subs, max_rank, pool, visited, ext_var),
-                ),
-
-                RecursiveTagUnion(rec_var, tags, ext_var) => {
-                    let new_variable_slices = SubsSlice::reserve_variable_slices(subs, tags.len());
-
-                    let it = (new_variable_slices.indices()).zip(tags.variables());
-                    for (target_index, index) in it {
-                        let slice = subs[index];
-
-                        let new_variables = copy_sequence!(slice.len(), slice);
-                        subs.variable_slices[target_index] = new_variables;
+                        Func(new_arguments, new_closure_var, new_ret_var)
                     }
 
-                    let union_tags = UnionTags::from_slices(tags.tag_names(), new_variable_slices);
+                    same @ EmptyRecord | same @ EmptyTagUnion | same @ Erroneous(_) => same,
 
-                    let new_ext = deep_copy_var_help(subs, max_rank, pool, visited, ext_var);
-                    let new_rec_var = deep_copy_var_help(subs, max_rank, pool, visited, rec_var);
+                    Record(fields, ext_var) => {
+                        let record_fields = {
+                            let new_variables =
+                                copy_sequence!(fields.len(), fields.iter_variables());
 
-                    RecursiveTagUnion(new_rec_var, union_tags, new_ext)
-                }
-            };
+                            RecordFields {
+                                length: fields.length,
+                                field_names_start: fields.field_names_start,
+                                variables_start: new_variables.start,
+                                field_types_start: fields.field_types_start,
+                            }
+                        };
 
-            subs.set_content_unchecked(copy, Structure(new_flat_type));
+                        Record(record_fields, work!(ext_var))
+                    }
 
-            copy
-        }
+                    TagUnion(tags, ext_var) => {
+                        let union_tags = copy_union!(tags);
 
-        FlexVar(_) | FlexAbleVar(_, _) | Error => copy,
+                        TagUnion(union_tags, work!(ext_var))
+                    }
 
-        RecursionVar {
-            opt_name,
-            structure,
-        } => {
-            let new_structure = deep_copy_var_help(subs, max_rank, pool, visited, structure);
+                    FunctionOrTagUnion(tag_name, symbol, ext_var) => {
+                        FunctionOrTagUnion(tag_name, symbol, work!(ext_var))
+                    }
 
-            let content = RecursionVar {
+                    RecursiveTagUnion(rec_var, tags, ext_var) => {
+                        let union_tags = copy_union!(tags);
+
+                        RecursiveTagUnion(work!(rec_var), union_tags, work!(ext_var))
+                    }
+                };
+
+                subs.set_content_unchecked(copy, Structure(new_flat_type));
+            }
+
+            FlexVar(_) | FlexAbleVar(_, _) | Error => {
+                subs.set_content_unchecked(copy, content);
+            }
+
+            RecursionVar {
                 opt_name,
-                structure: new_structure,
-            };
+                structure,
+            } => {
+                let content = RecursionVar {
+                    opt_name,
+                    structure: work!(structure),
+                };
 
-            subs.set_content_unchecked(copy, content);
+                subs.set_content_unchecked(copy, content);
+            }
 
-            copy
+            RigidVar(name) => {
+                subs.set_content_unchecked(copy, FlexVar(Some(name)));
+            }
+
+            RigidAbleVar(name, ability) => {
+                subs.set_content_unchecked(copy, FlexAbleVar(Some(name), ability));
+            }
+
+            Alias(symbol, arguments, real_type_var, kind) => {
+                let new_variables =
+                    copy_sequence!(arguments.all_variables_len, arguments.all_variables());
+
+                let new_arguments = AliasVariables {
+                    variables_start: new_variables.start,
+                    ..arguments
+                };
+
+                let new_real_type_var = work!(real_type_var);
+                let new_content = Alias(symbol, new_arguments, new_real_type_var, kind);
+
+                subs.set_content_unchecked(copy, new_content);
+            }
+
+            LambdaSet(subs::LambdaSet {
+                solved,
+                recursion_var,
+                unspecialized,
+            }) => {
+                let lambda_set_var = copy;
+
+                let new_solved = copy_union!(solved);
+                let new_rec_var = recursion_var.map(|v| work!(v));
+                let new_unspecialized = SubsSlice::reserve_uls_slice(subs, unspecialized.len());
+
+                for (new_uls_index, uls_index) in
+                    (new_unspecialized.into_iter()).zip(unspecialized.into_iter())
+                {
+                    let Uls(var, sym, region) = subs[uls_index];
+                    let new_var = work!(var);
+
+                    deep_copy_uls_precondition(subs, var, new_var);
+
+                    subs[new_uls_index] = Uls(new_var, sym, region);
+
+                    subs.uls_of_var.add(new_var, lambda_set_var);
+                }
+
+                subs.set_content_unchecked(
+                    lambda_set_var,
+                    LambdaSet(subs::LambdaSet {
+                        solved: new_solved,
+                        recursion_var: new_rec_var,
+                        unspecialized: new_unspecialized,
+                    }),
+                );
+            }
+
+            RangedNumber(typ, range) => {
+                let new_content = RangedNumber(work!(typ), range);
+
+                subs.set_content_unchecked(copy, new_content);
+            }
         }
+    }
 
-        RigidVar(name) => {
-            subs.set_content_unchecked(copy, FlexVar(Some(name)));
+    initial_copy
+}
 
-            copy
-        }
+#[inline(always)]
+fn deep_copy_uls_precondition(subs: &Subs, original_var: Variable, new_var: Variable) {
+    if cfg!(debug_assertions) {
+        let content = subs.get_content_without_compacting(original_var);
 
-        RigidAbleVar(name, ability) => {
-            subs.set_content_unchecked(copy, FlexAbleVar(Some(name), ability));
-
-            copy
-        }
-
-        Alias(symbol, arguments, real_type_var, kind) => {
-            let new_variables =
-                copy_sequence!(arguments.all_variables_len, arguments.all_variables());
-
-            let new_arguments = AliasVariables {
-                variables_start: new_variables.start,
-                ..arguments
-            };
-
-            let new_real_type_var =
-                deep_copy_var_help(subs, max_rank, pool, visited, real_type_var);
-            let new_content = Alias(symbol, new_arguments, new_real_type_var, kind);
-
-            subs.set_content_unchecked(copy, new_content);
-
-            copy
-        }
-
-        RangedNumber(typ, range) => {
-            let new_type_var = deep_copy_var_help(subs, max_rank, pool, visited, typ);
-
-            let new_content = RangedNumber(new_type_var, range);
-
-            subs.set_content_unchecked(copy, new_content);
-
-            copy
-        }
+        debug_assert!(
+            matches!(
+                content,
+                Content::FlexAbleVar(..) | Content::RigidAbleVar(..)
+            ),
+            "var in unspecialized lamba set is not bound to an ability, it is {:?}",
+            roc_types::subs::SubsFmtContent(content, subs)
+        );
+        debug_assert!(
+            original_var != new_var,
+            "unspecialized lamba set var was not instantiated"
+        );
     }
 }
 

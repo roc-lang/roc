@@ -7,7 +7,6 @@ The user needs to analyse the Wasm module's memory to decode the result.
 use bumpalo::{collections::Vec, Bump};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
-use roc_std::ReferenceCount;
 use roc_target::TargetInfo;
 
 use crate::wasm32_sized::Wasm32Sized;
@@ -22,7 +21,7 @@ pub trait Wasm32Result {
     fn insert_wrapper<'a>(
         arena: &'a Bump,
         module: &mut WasmModule<'a>,
-        wrapper_name: &str,
+        wrapper_name: &'static str,
         main_function_index: u32,
     ) {
         insert_wrapper_metadata(arena, module, wrapper_name);
@@ -38,7 +37,7 @@ pub trait Wasm32Result {
 pub fn insert_wrapper_for_layout<'a>(
     arena: &'a Bump,
     module: &mut WasmModule<'a>,
-    wrapper_name: &str,
+    wrapper_name: &'static str,
     main_fn_index: u32,
     layout: &Layout<'a>,
 ) {
@@ -84,8 +83,13 @@ pub fn insert_wrapper_for_layout<'a>(
     }
 }
 
-fn insert_wrapper_metadata<'a>(arena: &'a Bump, module: &mut WasmModule<'a>, wrapper_name: &str) {
-    let index = module.import.function_count
+fn insert_wrapper_metadata<'a>(
+    arena: &'a Bump,
+    module: &mut WasmModule<'a>,
+    wrapper_name: &'static str,
+) {
+    let index = (module.import.function_count() as u32)
+        + module.code.dead_import_dummy_count
         + module.code.preloaded_count
         + module.code.code_builders.len() as u32;
 
@@ -95,15 +99,15 @@ fn insert_wrapper_metadata<'a>(arena: &'a Bump, module: &mut WasmModule<'a>, wra
     });
 
     module.export.append(Export {
-        name: arena.alloc_slice_copy(wrapper_name.as_bytes()),
+        name: wrapper_name,
         ty: ExportType::Func,
         index,
     });
 
-    let linker_symbol = SymInfo::Function(WasmObjectSymbol::Defined {
+    let linker_symbol = SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed {
         flags: 0,
         index,
-        name: wrapper_name.to_string(),
+        name: wrapper_name,
     });
     module.linking.symbol_table.push(linker_symbol);
 }
@@ -115,11 +119,9 @@ macro_rules! build_wrapper_body_primitive {
             let frame_pointer = Some(frame_pointer_id);
             let local_types = &[ValueType::I32];
             let frame_size = 8;
-            // Main's symbol index is the same as its function index, since the first symbols we created were for procs
-            let main_symbol_index = main_function_index;
 
             code_builder.get_local(frame_pointer_id);
-            code_builder.call(main_function_index, main_symbol_index, 0, true);
+            code_builder.call(main_function_index, 0, true);
             code_builder.$store_instruction($align, 0);
             code_builder.get_local(frame_pointer_id);
 
@@ -144,11 +146,9 @@ fn build_wrapper_body_stack_memory(
     let local_id = LocalId(0);
     let local_types = &[ValueType::I32];
     let frame_pointer = Some(local_id);
-    // Main's symbol index is the same as its function index, since the first symbols we created were for procs
-    let main_symbol_index = main_function_index;
 
     code_builder.get_local(local_id);
-    code_builder.call(main_function_index, main_symbol_index, 0, true);
+    code_builder.call(main_function_index, 0, true);
     code_builder.get_local(local_id);
     code_builder.build_fn_header_and_footer(local_types, size as i32, frame_pointer);
 }
@@ -193,7 +193,7 @@ impl Wasm32Result for RocStr {
     }
 }
 
-impl<T: Wasm32Result + ReferenceCount> Wasm32Result for RocList<T> {
+impl<T: Wasm32Result> Wasm32Result for RocList<T> {
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
         build_wrapper_body_stack_memory(code_builder, main_function_index, 12)
     }
@@ -214,9 +214,7 @@ where
 
 impl Wasm32Result for () {
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
-        // Main's symbol index is the same as its function index, since the first symbols we created were for procs
-        let main_symbol_index = main_function_index;
-        code_builder.call(main_function_index, main_symbol_index, 0, false);
+        code_builder.call(main_function_index, 0, false);
         code_builder.get_global(0);
         code_builder.build_fn_header_and_footer(&[], 0, None);
     }

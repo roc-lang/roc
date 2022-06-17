@@ -31,13 +31,13 @@ macro_rules! macro_magic {
 /// Some builtins cannot be constructed in code gen alone, and need to be defined
 /// as separate Roc defs. For example, List.get has this type:
 ///
-/// List.get : List elem, Nat -> Result elem [ OutOfBounds ]*
+/// List.get : List elem, Nat -> Result elem [OutOfBounds]*
 ///
 /// Because this returns an open tag union for its Err type, it's not possible
 /// for code gen to return a hardcoded value for OutOfBounds. For example,
-/// if this Result unifies to [ Foo, OutOfBounds ] then OutOfBOunds will
+/// if this Result unifies to [Foo, OutOfBounds] then OutOfBOunds will
 /// get assigned the number 1 (because Foo got 0 alphabetically), whereas
-/// if it unifies to [ OutOfBounds, Qux ] then OutOfBounds will get the number 0.
+/// if it unifies to [OutOfBounds, Qux] then OutOfBounds will get the number 0.
 ///
 /// Getting these numbers right requires having List.get participate in the
 /// normal type-checking and monomorphization processes. As such, this function
@@ -574,7 +574,7 @@ fn to_num_checked(symbol: Symbol, var_store: &mut VarStore, lowlevel: LowLevel) 
 
 macro_rules! num_to_checked {
     ($($fn:ident)*) => {$(
-        // Num.toXXXChecked : Int * -> Result XXX [ OutOfBounds ]*
+        // Num.toXXXChecked : Int * -> Result XXX [OutOfBounds]*
         fn $fn(symbol: Symbol, var_store: &mut VarStore) -> Def {
             // Use the generic `NumToIntChecked`; we'll figure out exactly what layout(s) we need
             // during code generation after types are resolved.
@@ -869,7 +869,7 @@ fn num_overflow_checked(symbol: Symbol, var_store: &mut VarStore, lowlevel: LowL
     )
 }
 
-/// Num.addChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+/// Num.addChecked : Num a, Num a -> Result (Num a) [Overflow]*
 fn num_add_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_overflow_checked(symbol, var_store, LowLevel::NumAddChecked)
 }
@@ -889,7 +889,7 @@ fn num_sub_wrap(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumSubWrap)
 }
 
-/// Num.subChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+/// Num.subChecked : Num a, Num a -> Result (Num a) [Overflow]*
 fn num_sub_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_overflow_checked(symbol, var_store, LowLevel::NumSubChecked)
 }
@@ -909,7 +909,7 @@ fn num_mul_wrap(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumMulWrap)
 }
 
-/// Num.mulChecked : Num a, Num a -> Result (Num a) [ Overflow ]*
+/// Num.mulChecked : Num a, Num a -> Result (Num a) [Overflow]*
 fn num_mul_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_overflow_checked(symbol, var_store, LowLevel::NumMulChecked)
 }
@@ -934,7 +934,7 @@ fn num_lte(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_num_other_binop(symbol, var_store, LowLevel::NumLte)
 }
 
-/// Num.compare : Num a, Num a -> [ LT, EQ, GT ]
+/// Num.compare : Num a, Num a -> [LT, EQ, GT]
 fn num_compare(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_num_other_binop(symbol, var_store, LowLevel::NumCompare)
 }
@@ -1178,7 +1178,7 @@ fn num_sqrt(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_unaryop(symbol, var_store, LowLevel::NumSqrtUnchecked)
 }
 
-/// Num.sqrtChecked : Frac a -> Result (Frac a) [ SqrtOfNegative ]*
+/// Num.sqrtChecked : Frac a -> Result (Frac a) [SqrtOfNegative]*
 fn num_sqrt_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let frac_var = var_store.fresh();
@@ -1232,7 +1232,7 @@ fn num_log(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_unaryop(symbol, var_store, LowLevel::NumLogUnchecked)
 }
 
-/// Num.logChecked : Frac a -> Result (Frac a) [ LogNeedsPositive ]*
+/// Num.logChecked : Frac a -> Result (Frac a) [LogNeedsPositive]*
 fn num_log_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let frac_var = var_store.fresh();
@@ -1442,12 +1442,12 @@ fn num_asin(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Num.bytesToU16 : List U8, Nat -> Result U16 [ OutOfBounds ]
+/// Num.bytesToU16 : List U8, Nat -> Result U16 [OutOfBounds]
 fn num_bytes_to_u16(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_bytes_to(symbol, var_store, 1, LowLevel::NumBytesToU16)
 }
 
-/// Num.bytesToU32 : List U8, Nat -> Result U32 [ OutOfBounds ]
+/// Num.bytesToU32 : List U8, Nat -> Result U32 [OutOfBounds]
 fn num_bytes_to_u32(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_bytes_to(symbol, var_store, 3, LowLevel::NumBytesToU32)
 }
@@ -1573,7 +1573,7 @@ fn str_trim_right(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::StrTrimRight, var_store)
 }
 
-/// Str.toNum : Str -> Result (Num *) [ InvalidNumStr ]*
+/// Str.toNum : Str -> Result (Num *) [InvalidNumStr]*
 fn str_to_num(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let str_var = var_store.fresh();
@@ -1805,7 +1805,7 @@ fn str_count_graphemes(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// Str.fromUtf8 : List U8 -> Result Str [ BadUtf8 { byteIndex : Nat, problem : Utf8Problem  } } ]*
+/// Str.fromUtf8 : List U8 -> Result Str [BadUtf8 { byteIndex : Nat, problem : Utf8Problem  } }]*
 fn str_from_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bytes_var = var_store.fresh();
     let bool_var = var_store.fresh();
@@ -1908,7 +1908,7 @@ fn str_from_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
         ret_var,
     )
 }
-/// Str.fromUtf8Range : List U8, { start : Nat, count : Nat } -> Result Str [ BadUtf8 { byteIndex : Nat, problem : Utf8Problem  } } ]*
+/// Str.fromUtf8Range : List U8, { start : Nat, count : Nat } -> Result Str [BadUtf8 { byteIndex : Nat, problem : Utf8Problem  } }]*
 fn str_from_utf8_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bytes_var = var_store.fresh();
     let bool_var = var_store.fresh();
@@ -2173,12 +2173,12 @@ fn list_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// List.get : List elem, Int -> Result elem [ OutOfBounds ]*
+/// List.get : List elem, Int -> Result elem [OutOfBounds]*
 ///
 /// List.get :
 ///     Attr (* | u) (List (Attr u a)),
 ///     Attr * Int
-///     -> Attr * (Result (Attr u a) (Attr * [ OutOfBounds ]*))
+///     -> Attr * (Result (Attr u a) (Attr * [OutOfBounds]*))
 fn list_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_list = Symbol::ARG_1;
     let arg_index = Symbol::ARG_2;
@@ -2620,7 +2620,6 @@ fn list_intersperse(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let clos = Closure(ClosureData {
         function_type: clos_var,
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: clos_acc_var,
         name: clos_sym,
         recursive: Recursive::NotRecursive,
@@ -2712,7 +2711,6 @@ fn list_split(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let clos = Closure(ClosureData {
         function_type: clos_fun_var,
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: clos_ret_var,
         name: clos_sym,
         recursive: Recursive::NotRecursive,
@@ -2863,7 +2861,7 @@ fn list_drop_at(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// List.dropFirst : List elem -> Result { first: elem, others : List elem } [ ListWasEmpty ]*
+/// List.dropFirst : List elem -> Result { first: elem, others : List elem } [ListWasEmpty]*
 fn list_drop_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list_var = var_store.fresh();
     let index_var = var_store.fresh();
@@ -2906,7 +2904,6 @@ fn list_drop_if(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let keep_predicate = Closure(ClosureData {
         function_type: t_keep_predicate,
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: Variable::BOOL,
         name: Symbol::LIST_DROP_IF_PREDICATE,
         recursive: Recursive::NotRecursive,
@@ -3074,7 +3071,7 @@ fn list_walk_backwards(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_3(symbol, LowLevel::ListWalkBackwards, var_store)
 }
 
-/// List.walkUntil : List elem, state, (state, elem -> [ Continue state, Stop state ]) -> state
+/// List.walkUntil : List elem, state, (state, elem -> [Continue state, Stop state]) -> state
 fn list_walk_until(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_3(symbol, LowLevel::ListWalkUntil, var_store)
 }
@@ -3093,7 +3090,6 @@ fn list_join_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let concat_clos = Closure(ClosureData {
         function_type: t_concat_clos,
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: list_after,
         name: Symbol::LIST_JOIN_MAP_CONCAT,
         recursive: Recursive::NotRecursive,
@@ -3164,7 +3160,7 @@ fn list_join_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-// min :  List (Num a) -> Result (Num a) [ ListWasEmpty ]*
+// min :  List (Num a) -> Result (Num a) [ListWasEmpty]*
 fn list_min(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_var = var_store.fresh();
     let bool_var = var_store.fresh();
@@ -3305,7 +3301,7 @@ fn list_min_lt(list_elem_var: Variable, var_store: &mut VarStore) -> Expr {
     )
 }
 
-// max :  List (Num a) -> Result (Num a) [ ListWasEmpty ]*
+// max :  List (Num a) -> Result (Num a) [ListWasEmpty]*
 fn list_max(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_var = var_store.fresh();
     let bool_var = var_store.fresh();
@@ -3632,7 +3628,6 @@ fn list_sort_desc(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let closure = Closure(ClosureData {
         function_type: closure_var,
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: compare_ret_var,
         name: Symbol::LIST_SORT_DESC_COMPARE,
         recursive: Recursive::NotRecursive,
@@ -3693,7 +3688,7 @@ fn list_all(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListAll, var_store)
 }
 
-/// List.find : List elem, (elem -> Bool) -> Result elem [ NotFound ]*
+/// List.find : List elem, (elem -> Bool) -> Result elem [NotFound]*
 fn list_find(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let list = Symbol::ARG_1;
     let find_predicate = Symbol::ARG_2;
@@ -3859,7 +3854,7 @@ fn dict_contains(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::DictContains, var_store)
 }
 
-/// Dict.get : Dict k v, k -> Result v [ KeyNotFound ]*
+/// Dict.get : Dict k v, k -> Result v [KeyNotFound]*
 fn dict_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_dict = Symbol::ARG_1;
     let arg_key = Symbol::ARG_2;
@@ -4116,7 +4111,6 @@ fn set_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let wrapper = Closure(ClosureData {
         function_type: wrapper_var,
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: accum_var,
         name: Symbol::SET_WALK_USER_FUNCTION,
         recursive: Recursive::NotRecursive,
@@ -4169,7 +4163,7 @@ fn num_rem(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumRemUnchecked)
 }
 
-/// Num.remChecked : Int a, Int a -> Result (Int a) [ DivByZero ]*
+/// Num.remChecked : Int a, Int a -> Result (Int a) [DivByZero]*
 fn num_rem_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let num_var = var_store.fresh();
     let unbound_zero_var = var_store.fresh();
@@ -4276,7 +4270,7 @@ fn num_div_frac(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumDivUnchecked)
 }
 
-/// Num.divChecked : Frac, Frac -> Result Frac [ DivByZero ]*
+/// Num.divChecked : Frac, Frac -> Result Frac [DivByZero]*
 fn num_div_frac_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let num_var = var_store.fresh();
@@ -4347,7 +4341,7 @@ fn num_div_trunc(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumDivUnchecked)
 }
 
-/// Num.divTruncChecked : Int a , Int a -> Result (Int a) [ DivByZero ]*
+/// Num.divTruncChecked : Int a , Int a -> Result (Int a) [DivByZero]*
 fn num_div_trunc_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let num_var = var_store.fresh();
@@ -4423,7 +4417,7 @@ fn num_div_ceil(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumDivCeilUnchecked)
 }
 
-/// Num.divCeilChecked : Int a , Int a -> Result (Int a) [ DivByZero ]*
+/// Num.divCeilChecked : Int a , Int a -> Result (Int a) [DivByZero]*
 fn num_div_ceil_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let num_var = var_store.fresh();
@@ -4494,11 +4488,11 @@ fn num_div_ceil_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// List.first : List elem -> Result elem [ ListWasEmpty ]*
+/// List.first : List elem -> Result elem [ListWasEmpty]*
 ///
 /// List.first :
 ///     Attr (* | u) (List (Attr u a)),
-///     -> Attr * (Result (Attr u a) (Attr * [ OutOfBounds ]*))
+///     -> Attr * (Result (Attr u a) (Attr * [OutOfBounds]*))
 fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let bool_var = var_store.fresh();
     let list_var = var_store.fresh();
@@ -4580,11 +4574,11 @@ fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// List.last : List elem -> Result elem [ ListWasEmpty ]*
+/// List.last : List elem -> Result elem [ListWasEmpty]*
 ///
 /// List.last :
 ///     Attr (* | u) (List (Attr u a)),
-///     -> Attr * (Result (Attr u a) (Attr * [ OutOfBounds ]*))
+///     -> Attr * (Result (Attr u a) (Attr * [OutOfBounds]*))
 fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_var = var_store.fresh();
     let bool_var = var_store.fresh();
@@ -4712,7 +4706,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
             CalledVia::Space,
         );
 
-        let tag_name = TagName::Tag("Ok".into());
+        let tag_name = TagName("Ok".into());
 
         // ok branch
         let ok = Tag {
@@ -4744,7 +4738,7 @@ fn result_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Tag("Err".into());
+        let tag_name = TagName("Err".into());
 
         let err = Tag {
             variant_var: var_store.fresh(),
@@ -4813,7 +4807,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
             CalledVia::Space,
         );
 
-        let tag_name = TagName::Tag("Err".into());
+        let tag_name = TagName("Err".into());
 
         // ok branch
         let ok = Tag {
@@ -4845,7 +4839,7 @@ fn result_map_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Tag("Ok".into());
+        let tag_name = TagName("Ok".into());
 
         let err = Tag {
             variant_var: var_store.fresh(),
@@ -4901,7 +4895,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // ok branch
-        let tag_name = TagName::Tag("Ok".into());
+        let tag_name = TagName("Ok".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -4922,7 +4916,7 @@ fn result_with_default(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Tag("Err".into());
+        let tag_name = TagName("Err".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -4968,7 +4962,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // ok branch
-        let tag_name = TagName::Tag("Ok".into());
+        let tag_name = TagName("Ok".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -4980,7 +4974,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
         let false_expr = Tag {
             variant_var: var_store.fresh(),
             ext_var: var_store.fresh(),
-            name: TagName::Tag("False".into()),
+            name: TagName("False".into()),
             arguments: vec![],
         };
 
@@ -4996,7 +4990,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Tag("Err".into());
+        let tag_name = TagName("Err".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -5008,7 +5002,7 @@ fn result_is_err(symbol: Symbol, var_store: &mut VarStore) -> Def {
         let true_expr = Tag {
             variant_var: var_store.fresh(),
             ext_var: var_store.fresh(),
-            name: TagName::Tag("True".into()),
+            name: TagName("True".into()),
             arguments: vec![],
         };
 
@@ -5049,7 +5043,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // ok branch
-        let tag_name = TagName::Tag("Ok".into());
+        let tag_name = TagName("Ok".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -5061,7 +5055,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
         let true_expr = Tag {
             variant_var: var_store.fresh(),
             ext_var: var_store.fresh(),
-            name: TagName::Tag("True".into()),
+            name: TagName("True".into()),
             arguments: vec![],
         };
 
@@ -5077,7 +5071,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Tag("Err".into());
+        let tag_name = TagName("Err".into());
 
         let pattern = Pattern::AppliedTag {
             whole_var: result_var,
@@ -5089,7 +5083,7 @@ fn result_is_ok(symbol: Symbol, var_store: &mut VarStore) -> Def {
         let false_expr = Tag {
             variant_var: var_store.fresh(),
             ext_var: var_store.fresh(),
-            name: TagName::Tag("False".into()),
+            name: TagName("False".into()),
             arguments: vec![],
         };
 
@@ -5143,7 +5137,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
             CalledVia::Space,
         );
 
-        let tag_name = TagName::Tag("Ok".into());
+        let tag_name = TagName("Ok".into());
 
         // ok branch
         let ok = call_func;
@@ -5170,7 +5164,7 @@ fn result_after(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
     {
         // err branch
-        let tag_name = TagName::Tag("Err".into());
+        let tag_name = TagName("Err".into());
 
         let err = Tag {
             variant_var: var_store.fresh(),
@@ -5231,7 +5225,7 @@ fn tag(name: &'static str, args: Vec<Expr>, var_store: &mut VarStore) -> Expr {
     Expr::Tag {
         variant_var: var_store.fresh(),
         ext_var: var_store.fresh(),
-        name: TagName::Tag(name.into()),
+        name: TagName(name.into()),
         arguments: args
             .into_iter()
             .map(|expr| (var_store.fresh(), no_region(expr)))
@@ -5404,7 +5398,6 @@ fn defn_help(
     Closure(ClosureData {
         function_type: var_store.fresh(),
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: ret_var,
         name: fn_name,
         captured_symbols: Vec::new(),

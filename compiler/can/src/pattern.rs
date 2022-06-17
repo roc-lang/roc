@@ -35,7 +35,7 @@ pub enum Pattern {
         // definition, which we then use during constraint generation. For example
         // suppose we have
         //
-        //   Id n := [ Id U64 n ]
+        //   Id n := [Id U64 n]
         //   strToBool : Str -> Bool
         //
         //   f = \@Id who -> strToBool who
@@ -45,7 +45,7 @@ pub enum Pattern {
         // the variable "n".
         // That's what `specialized_def_type` and `type_arguments` are for; they are specialized
         // for the expression from the opaque definition. `type_arguments` is something like
-        // [(n, fresh1)], and `specialized_def_type` becomes "[ Id U64 fresh1 ]".
+        // [(n, fresh1)], and `specialized_def_type` becomes "[Id U64 fresh1]".
         specialized_def_type: Box<Type>,
         type_arguments: Vec<OptAbleVar>,
         lambda_set_variables: Vec<LambdaSet>,
@@ -260,7 +260,7 @@ pub fn canonicalize_pattern<'a>(
             Pattern::AppliedTag {
                 whole_var: var_store.fresh(),
                 ext_var: var_store.fresh(),
-                tag_name: TagName::Tag((*name).into()),
+                tag_name: TagName((*name).into()),
                 arguments: vec![],
             }
         }
@@ -290,7 +290,7 @@ pub fn canonicalize_pattern<'a>(
 
             match tag.value {
                 Tag(name) => {
-                    let tag_name = TagName::Tag(name.into());
+                    let tag_name = TagName(name.into());
                     Pattern::AppliedTag {
                         whole_var: var_store.fresh(),
                         ext_var: var_store.fresh(),

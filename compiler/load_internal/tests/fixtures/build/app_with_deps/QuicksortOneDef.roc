@@ -1,4 +1,4 @@
-app "quicksort" provides [ quicksort ] to "./platform"
+app "quicksort" provides [quicksort] to "./platform"
 
 quicksort = \originalList ->
     quicksortHelp : List (Num a), Nat, Nat -> List (Num a)
@@ -24,7 +24,7 @@ quicksort = \originalList ->
             _ ->
                 []
 
-    partition : Nat, Nat, List (Num a) -> [ Pair Nat (List (Num a)) ]
+    partition : Nat, Nat, List (Num a) -> [Pair Nat (List (Num a))]
     partition = \low, high, initialList ->
         when List.get initialList high is
             Ok pivot ->
@@ -36,7 +36,7 @@ quicksort = \originalList ->
                 Pair (low - 1) initialList
 
 
-    partitionHelp : Nat, Nat, List (Num a), Nat, (Num a) -> [ Pair Nat (List (Num a)) ]
+    partitionHelp : Nat, Nat, List (Num a), Nat, (Num a) -> [Pair Nat (List (Num a))]
     partitionHelp = \i, j, list, high, pivot ->
         if j < high then
             when List.get list j is

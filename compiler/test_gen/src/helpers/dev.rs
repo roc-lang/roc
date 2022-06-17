@@ -11,7 +11,7 @@ use roc_mono::ir::pretty_print_ir_symbols;
 
 #[allow(dead_code)]
 fn promote_expr_to_module(src: &str) -> String {
-    let mut buffer = String::from("app \"test\" provides [ main ] to \"./platform\"\n\nmain =\n");
+    let mut buffer = String::from("app \"test\" provides [main] to \"./platform\"\n\nmain =\n");
 
     for line in src.lines() {
         // indent the body!
@@ -98,11 +98,9 @@ pub fn helper(
     let main_fn_layout = loaded.entry_point.layout;
 
     let mut layout_ids = roc_mono::layout::LayoutIds::default();
-    let main_fn_name_base = layout_ids
+    let main_fn_name = layout_ids
         .get_toplevel(main_fn_symbol, &main_fn_layout)
-        .to_symbol_string(main_fn_symbol, &interns);
-
-    let main_fn_name = format!("roc_{}_exposed", main_fn_name_base);
+        .to_exposed_symbol_string(main_fn_symbol, &interns);
 
     let mut lines = Vec::new();
     // errors whose reporting we delay (so we can see that code gen generates runtime errors)

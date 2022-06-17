@@ -1,20 +1,18 @@
-use crate::bindgen::{self, Env};
-use crate::types::Types;
+use crate::types::{Env, Types};
 use bumpalo::Bump;
 use roc_load::{LoadedModule, Threading};
-use roc_mono::layout::LayoutCache;
 use roc_reporting::report::RenderTarget;
+use roc_target::{Architecture, TargetInfo};
 use std::io;
 use std::path::{Path, PathBuf};
+use strum::IntoEnumIterator;
 use target_lexicon::Triple;
 
 pub fn load_types(
     full_file_path: PathBuf,
     dir: &Path,
     threading: Threading,
-) -> Result<Types, io::Error> {
-    // TODO: generate both 32-bit and 64-bit #[cfg] macros if structs are different
-    // depending on 32-bit vs 64-bit targets.
+) -> Result<Vec<(Types, TargetInfo)>, io::Error> {
     let target_info = (&Triple::host()).into();
 
     let arena = &Bump::new();
@@ -52,35 +50,35 @@ pub fn load_types(
         );
     }
 
-    let mut layout_cache = LayoutCache::new(target_info);
-    let mut env = Env {
-        arena,
-        layout_cache: &mut layout_cache,
-        interns: &interns,
-        struct_names: Default::default(),
-        enum_names: Default::default(),
-        subs,
-    };
-
-    let mut types = Types::default();
-
-    for index in 0..decls.len() {
+    let variables = (0..decls.len()).filter_map(|index| {
         use roc_can::expr::DeclarationTag::*;
 
         match decls.declarations[index] {
-            Value | Function(_) | Recursive(_) | TailRecursive(_) => {
-                let var = decls.variables[index];
-                bindgen::add_type(&mut env, var, &mut types);
-            }
+            Value | Function(_) | Recursive(_) | TailRecursive(_) => Some(decls.variables[index]),
             Destructure(_) => {
                 // figure out if we need to export non-identifier defs - when would that
                 // happen?
+                None
             }
             MutualRecursion { .. } => {
                 // handled by future iterations
+                None
+            }
+            Expectation => {
+                // not publicly visible
+                None
             }
         }
-    }
+    });
 
-    Ok(types)
+    let types_and_targets = Architecture::iter()
+        .map(|arch| {
+            let target_info = arch.into();
+            let mut env = Env::new(arena, subs, &interns, target_info);
+
+            (env.vars_to_types(variables.clone()), target_info)
+        })
+        .collect();
+
+    Ok(types_and_targets)
 }

@@ -1,11 +1,10 @@
 use crate::ast;
+use crate::ast::Defs;
 use crate::module::module_defs;
-// use crate::module::module_defs;
 use crate::parser::Parser;
 use crate::parser::SourceError;
 use crate::parser::SyntaxError;
 use crate::state::State;
-use bumpalo::collections::Vec as BumpVec;
 use bumpalo::Bump;
 use roc_region::all::Loc;
 use roc_region::all::Position;
@@ -32,10 +31,7 @@ pub fn parse_loc_with<'a>(
     }
 }
 
-pub fn parse_defs_with<'a>(
-    arena: &'a Bump,
-    input: &'a str,
-) -> Result<BumpVec<'a, Loc<ast::Def<'a>>>, SyntaxError<'a>> {
+pub fn parse_defs_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Defs<'a>, SyntaxError<'a>> {
     let state = State::new(input.trim().as_bytes());
 
     match module_defs().parse(arena, state) {

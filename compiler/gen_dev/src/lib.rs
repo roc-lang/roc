@@ -6,7 +6,7 @@ use bumpalo::{collections::Vec, Bump};
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
 use roc_error_macros::internal_error;
-use roc_module::ident::{ModuleName, TagName};
+use roc_module::ident::ModuleName;
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::code_gen_help::CodeGenHelp;
@@ -14,7 +14,9 @@ use roc_mono::ir::{
     BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, Param, Proc, ProcLayout,
     SelfRecursive, Stmt,
 };
-use roc_mono::layout::{Builtin, Layout, LayoutId, LayoutIds, TagIdIntType, UnionLayout};
+use roc_mono::layout::{
+    Builtin, Layout, LayoutId, LayoutIds, TagIdIntType, TagOrClosure, UnionLayout,
+};
 
 mod generic64;
 mod object_builder;
@@ -914,10 +916,10 @@ trait Backend<'a> {
                     } => {
                         self.set_last_seen(*symbol, stmt);
                         match tag_name {
-                            TagName::Closure(sym) => {
+                            TagOrClosure::Closure(sym) => {
                                 self.set_last_seen(*sym, stmt);
                             }
-                            TagName::Tag(_) => {}
+                            TagOrClosure::Tag(_) => {}
                         }
                         for sym in *arguments {
                             self.set_last_seen(*sym, stmt);
@@ -979,6 +981,9 @@ trait Backend<'a> {
                     self.set_last_seen(*sym, stmt);
                 }
             }
+
+            Stmt::Expect { .. } => todo!("expect is not implemented in the wasm backend"),
+
             Stmt::RuntimeError(_) => {}
         }
     }

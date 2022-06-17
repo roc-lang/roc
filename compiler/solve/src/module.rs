@@ -1,12 +1,13 @@
 use crate::solve::{self, Aliases};
-use roc_can::abilities::{AbilitiesStore, SolvedSpecializations};
+use roc_can::abilities::{AbilitiesStore, ResolvedSpecializations};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::expr::PendingDerives;
 use roc_can::module::RigidVariables;
 use roc_collections::all::MutMap;
+use roc_collections::VecMap;
 use roc_module::symbol::Symbol;
 use roc_types::solved_types::Solved;
-use roc_types::subs::{StorageSubs, Subs, Variable};
+use roc_types::subs::{ExposedTypesStorageSubs, StorageSubs, Subs, Variable};
 use roc_types::types::Alias;
 
 #[derive(Debug)]
@@ -27,9 +28,8 @@ pub struct SolvedModule {
     pub exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
 
     /// Used when importing this module into another module
-    pub stored_vars_by_symbol: Vec<(Symbol, Variable)>,
-    pub storage_subs: StorageSubs,
-    pub solved_specializations: SolvedSpecializations,
+    pub solved_specializations: ResolvedSpecializations,
+    pub exposed_types: ExposedTypesStorageSubs,
 }
 
 pub fn run_solve(
@@ -76,18 +76,36 @@ pub fn run_solve(
     (solved_subs, solved_env, problems, abilities_store)
 }
 
+/// Copies exposed types and all ability specializations, which may be implicitly exposed.
 pub fn exposed_types_storage_subs(
     solved_subs: &mut Solved<Subs>,
     exposed_vars_by_symbol: &[(Symbol, Variable)],
-) -> (StorageSubs, Vec<(Symbol, Variable)>) {
+    solved_specializations: &ResolvedSpecializations,
+) -> ExposedTypesStorageSubs {
     let subs = solved_subs.inner_mut();
     let mut storage_subs = StorageSubs::new(Subs::new());
-    let mut stored_vars_by_symbol = Vec::with_capacity(exposed_vars_by_symbol.len());
+    let mut stored_vars_by_symbol = VecMap::with_capacity(exposed_vars_by_symbol.len());
+    let mut stored_specialization_lambda_set_vars =
+        VecMap::with_capacity(solved_specializations.len());
 
     for (symbol, var) in exposed_vars_by_symbol.iter() {
         let new_var = storage_subs.import_variable_from(subs, *var).variable;
-        stored_vars_by_symbol.push((*symbol, new_var));
+        stored_vars_by_symbol.insert(*symbol, new_var);
     }
 
-    (storage_subs, stored_vars_by_symbol)
+    for (_, member_specialization) in solved_specializations.iter() {
+        for (_, &specialization_lset_var) in member_specialization.specialization_lambda_sets.iter()
+        {
+            let new_var = storage_subs
+                .import_variable_from(subs, specialization_lset_var)
+                .variable;
+            stored_specialization_lambda_set_vars.insert(specialization_lset_var, new_var);
+        }
+    }
+
+    ExposedTypesStorageSubs {
+        storage_subs,
+        stored_vars_by_symbol,
+        stored_specialization_lambda_set_vars,
+    }
 }

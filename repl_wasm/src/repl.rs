@@ -12,7 +12,7 @@ use roc_repl_eval::{
 };
 use roc_reporting::report::DEFAULT_PALETTE_HTML;
 use roc_target::TargetInfo;
-use roc_types::pretty_print::name_and_print_var;
+use roc_types::pretty_print::{name_and_print_var, DebugPrint};
 
 use crate::{js_create_app, js_get_result_and_memory, js_run_app};
 
@@ -184,7 +184,13 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
     let main_fn_var = *main_fn_var;
 
     // pretty-print the expr type string for later.
-    let expr_type_str = name_and_print_var(main_fn_var, &mut subs, module_id, &interns);
+    let expr_type_str = name_and_print_var(
+        main_fn_var,
+        &mut subs,
+        module_id,
+        &interns,
+        DebugPrint::NOTHING,
+    );
     let content = subs.get_content_without_compacting(main_fn_var);
 
     let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
@@ -204,10 +210,11 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         };
 
         let (mut module, called_preload_fns, main_fn_index) = {
-            roc_gen_wasm::build_module_unserialized(
+            let host_module = roc_gen_wasm::parse_host(env.arena, pre_linked_binary).unwrap();
+            roc_gen_wasm::build_app_module(
                 &env,
                 &mut interns, // NOTE: must drop this mutable ref before jit_to_ast
-                pre_linked_binary,
+                host_module,
                 procedures,
             )
         };
@@ -220,7 +227,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
             &main_fn_layout.result,
         );
 
-        module.remove_dead_preloads(env.arena, called_preload_fns);
+        module.eliminate_dead_code(env.arena, &called_preload_fns);
 
         let mut buffer = Vec::with_capacity_in(module.size(), arena);
         module.serialize(&mut buffer);
@@ -243,8 +250,6 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         "", // main_fn_name is ignored (only passed to WasmReplApp methods)
         main_fn_layout,
         content,
-        &interns,
-        module_id,
         &subs,
         target_info,
     );

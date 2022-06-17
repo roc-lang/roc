@@ -222,7 +222,7 @@ impl From<String> for IdentStr {
 
 impl fmt::Debug for IdentStr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // IdentStr { is_small_str: false, storage: Refcounted(3), elements: [ 1,2,3,4] }
+        // IdentStr { is_small_str: false, storage: Refcounted(3), elements: [1,2,3,4] }
         f.debug_struct("IdentStr")
             //.field("is_small_str", &self.is_small_str())
             .field("string", &self.as_str())
@@ -233,7 +233,7 @@ impl fmt::Debug for IdentStr {
 
 impl fmt::Display for IdentStr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // IdentStr { is_small_str: false, storage: Refcounted(3), elements: [ 1,2,3,4] }
+        // IdentStr { is_small_str: false, storage: Refcounted(3), elements: [1,2,3,4] }
         f.write_str(self.as_str())
     }
 }
@@ -272,7 +272,15 @@ impl std::hash::Hash for IdentStr {
 
 impl Clone for IdentStr {
     fn clone(&self) -> Self {
-        Self::from_str(self.as_str())
+        if self.is_empty() || self.is_small_str() {
+            // we can just copy the bytes
+            Self {
+                elements: self.elements,
+                length: self.length,
+            }
+        } else {
+            Self::from_str(self.as_str())
+        }
     }
 }
 

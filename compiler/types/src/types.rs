@@ -231,11 +231,16 @@ pub enum Type {
     Record(SendMap<Lowercase, RecordField<Type>>, TypeExtension),
     TagUnion(Vec<(TagName, Vec<Type>)>, TypeExtension),
     FunctionOrTagUnion(TagName, Symbol, TypeExtension),
-    /// A function name that is used in our defunctionalization algorithm
+    /// A function name that is used in our defunctionalization algorithm. For example in
+    ///   g = \a ->
+    ///     f = \{} -> a
+    ///     f
+    /// the closure under "f" has name "f" and captures "a".
     ClosureTag {
         name: Symbol,
-        ext: Variable,
+        captures: Vec<Type>,
     },
+    UnspecializedLambdaSet(Uls),
     DelayedAlias(AliasCommon),
     Alias {
         symbol: Symbol,
@@ -258,6 +263,23 @@ pub enum Type {
     RangedNumber(Box<Type>, NumericRange),
     /// A type error, which will code gen to a runtime error
     Erroneous(Problem),
+}
+
+/// A lambda set under an arrow in a ability member signature. For example, in
+///   Default has default : {} -> a | a has Default
+/// the unspecialized lambda set for the arrow "{} -> a" would be `a:default:1`.
+///
+/// Lambda sets in member signatures are never known until those members are specialized at a
+/// usage site. Unspecialized lambda sets aid us in recovering those lambda sets; when we
+/// instantiate `a` with a proper type `T`, we'll know to resolve the lambda set by extracting
+/// it at region "1" from the specialization of "default" for `T`.
+#[derive(PartialEq, Eq, Clone, Copy, PartialOrd, Ord)]
+pub struct Uls(pub Variable, pub Symbol, pub u8);
+
+impl std::fmt::Debug for Uls {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Uls({:?}:{:?}:{:?})", self.0, self.1, self.2)
+    }
 }
 
 static mut TYPE_CLONE_COUNT: std::sync::atomic::AtomicUsize =
@@ -289,10 +311,11 @@ impl Clone for Type {
             Self::FunctionOrTagUnion(arg0, arg1, arg2) => {
                 Self::FunctionOrTagUnion(arg0.clone(), *arg1, arg2.clone())
             }
-            Self::ClosureTag { name, ext } => Self::ClosureTag {
+            Self::ClosureTag { name, captures } => Self::ClosureTag {
                 name: *name,
-                ext: *ext,
+                captures: captures.clone(),
             },
+            Self::UnspecializedLambdaSet(uls) => Self::UnspecializedLambdaSet(*uls),
             Self::DelayedAlias(arg0) => Self::DelayedAlias(arg0.clone()),
             Self::Alias {
                 symbol,
@@ -363,6 +386,14 @@ impl TypeExtension {
             TypeExtension::Closed => true,
         }
     }
+
+    #[inline(always)]
+    fn iter_mut(&mut self) -> impl Iterator<Item = &mut Type> {
+        match self {
+            TypeExtension::Open(ext) => Some(ext.as_mut()).into_iter(),
+            TypeExtension::Closed => None.into_iter(),
+        }
+    }
 }
 
 impl<'a> IntoIterator for &'a TypeExtension {
@@ -376,6 +407,28 @@ impl<'a> IntoIterator for &'a TypeExtension {
             TypeExtension::Closed => None.into_iter(),
         }
     }
+}
+
+fn write_tags<'a>(
+    f: &mut fmt::Formatter,
+    tags: impl ExactSizeIterator<Item = &'a (TagName, Vec<Type>)>,
+) -> fmt::Result {
+    write!(f, "[")?;
+
+    let mut it = tags.peekable();
+    while let Some((label, arguments)) = it.next() {
+        write!(f, "{:?}", label)?;
+
+        for argument in arguments {
+            write!(f, " {:?}", argument)?;
+        }
+
+        if it.peek().is_some() {
+            write!(f, ", ")?;
+        }
+    }
+
+    write!(f, "]")
 }
 
 impl fmt::Debug for Type {
@@ -531,30 +584,7 @@ impl fmt::Debug for Type {
                 }
             }
             Type::TagUnion(tags, ext) => {
-                write!(f, "[")?;
-
-                if !tags.is_empty() {
-                    write!(f, " ")?;
-                }
-
-                let mut it = tags.iter().peekable();
-                while let Some((label, arguments)) = it.next() {
-                    write!(f, "{:?}", label)?;
-
-                    for argument in arguments {
-                        write!(f, " {:?}", argument)?;
-                    }
-
-                    if it.peek().is_some() {
-                        write!(f, ", ")?;
-                    }
-                }
-
-                if !tags.is_empty() {
-                    write!(f, " ")?;
-                }
-
-                write!(f, "]")?;
+                write_tags(f, tags.iter())?;
 
                 match ext {
                     TypeExtension::Closed => {
@@ -565,8 +595,8 @@ impl fmt::Debug for Type {
                         // This is an open tag union, so print the variable
                         // right after the ']'
                         //
-                        // e.g. the "*" at the end of `[ Foo ]*`
-                        // or the "r" at the end of `[ DivByZero ]r`
+                        // e.g. the "*" at the end of `[Foo]*`
+                        // or the "r" at the end of `[DivByZero]r`
                         other.fmt(f)
                     }
                 }
@@ -585,46 +615,24 @@ impl fmt::Debug for Type {
                         // This is an open tag union, so print the variable
                         // right after the ']'
                         //
-                        // e.g. the "*" at the end of `[ Foo ]*`
-                        // or the "r" at the end of `[ DivByZero ]r`
+                        // e.g. the "*" at the end of `[Foo]*`
+                        // or the "r" at the end of `[DivByZero]r`
                         other.fmt(f)
                     }
                 }
             }
-            Type::ClosureTag { name, ext } => {
+            Type::ClosureTag { name, captures } => {
                 write!(f, "ClosureTag(")?;
 
-                name.fmt(f)?;
-                write!(f, ", ")?;
-                ext.fmt(f)?;
+                write!(f, "{:?}, ", name)?;
+                for capture in captures {
+                    write!(f, "{:?}, ", capture)?;
+                }
 
                 write!(f, ")")
             }
             Type::RecursiveTagUnion(rec, tags, ext) => {
-                write!(f, "[")?;
-
-                if !tags.is_empty() {
-                    write!(f, " ")?;
-                }
-
-                let mut it = tags.iter().peekable();
-                while let Some((label, arguments)) = it.next() {
-                    write!(f, "{:?}", label)?;
-
-                    for argument in arguments {
-                        write!(f, " {:?}", argument)?;
-                    }
-
-                    if it.peek().is_some() {
-                        write!(f, ", ")?;
-                    }
-                }
-
-                if !tags.is_empty() {
-                    write!(f, " ")?;
-                }
-
-                write!(f, "]")?;
+                write_tags(f, tags.iter())?;
 
                 match ext {
                     TypeExtension::Closed => {
@@ -635,8 +643,8 @@ impl fmt::Debug for Type {
                         // This is an open tag union, so print the variable
                         // right after the ']'
                         //
-                        // e.g. the "*" at the end of `[ Foo ]*`
-                        // or the "r" at the end of `[ DivByZero ]r`
+                        // e.g. the "*" at the end of `[Foo]*`
+                        // or the "r" at the end of `[DivByZero]r`
                         other.fmt(f)
                     }
                 }?;
@@ -645,6 +653,9 @@ impl fmt::Debug for Type {
             }
             Type::RangedNumber(typ, range_vars) => {
                 write!(f, "Ranged({:?}, {:?})", typ, range_vars)
+            }
+            Type::UnspecializedLambdaSet(uls) => {
+                write!(f, "{:?}", uls)
             }
         }
     }
@@ -691,7 +702,7 @@ impl Type {
 
         while let Some(typ) = stack.pop() {
             match typ {
-                ClosureTag { ext: v, .. } | Variable(v) => {
+                Variable(v) => {
                     if let Some(replacement) = substitutions.get(v) {
                         *typ = replacement.clone();
                     }
@@ -701,6 +712,7 @@ impl Type {
                     stack.push(closure);
                     stack.push(ret);
                 }
+                ClosureTag { name: _, captures } => stack.extend(captures),
                 TagUnion(tags, ext) => {
                     for (_, args) in tags {
                         stack.extend(args.iter_mut());
@@ -784,6 +796,12 @@ impl Type {
                 RangedNumber(typ, _) => {
                     stack.push(typ);
                 }
+                UnspecializedLambdaSet(Uls(v, _, _)) => {
+                    debug_assert!(
+                        substitutions.get(v).is_none(),
+                        "unspecialized lambda sets should never be substituted before solving"
+                    );
+                }
 
                 EmptyRec | EmptyTagUnion | Erroneous(_) => {}
             }
@@ -797,7 +815,7 @@ impl Type {
 
         while let Some(typ) = stack.pop() {
             match typ {
-                ClosureTag { ext: v, .. } | Variable(v) => {
+                Variable(v) => {
                     if let Some(replacement) = substitutions.get(v) {
                         *v = *replacement;
                     }
@@ -806,6 +824,9 @@ impl Type {
                     stack.extend(args);
                     stack.push(closure);
                     stack.push(ret);
+                }
+                ClosureTag { name: _, captures } => {
+                    stack.extend(captures);
                 }
                 TagUnion(tags, ext) => {
                     for (_, args) in tags {
@@ -891,6 +912,12 @@ impl Type {
                 }
                 RangedNumber(typ, _) => {
                     stack.push(typ);
+                }
+                UnspecializedLambdaSet(Uls(v, _, _)) => {
+                    debug_assert!(
+                        substitutions.get(v).is_none(),
+                        "unspecialized lambda sets should never be substituted before solving"
+                    );
                 }
 
                 EmptyRec | EmptyTagUnion | Erroneous(_) => {}
@@ -989,6 +1016,7 @@ impl Type {
                 Ok(())
             }
             RangedNumber(typ, _) => typ.substitute_alias(rep_symbol, rep_args, actual),
+            UnspecializedLambdaSet(..) => Ok(()),
             EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => Ok(()),
         }
     }
@@ -1045,6 +1073,7 @@ impl Type {
             Apply(symbol, _, _) if *symbol == rep_symbol => true,
             Apply(_, args, _) => args.iter().any(|arg| arg.contains_symbol(rep_symbol)),
             RangedNumber(typ, _) => typ.contains_symbol(rep_symbol),
+            UnspecializedLambdaSet(Uls(_, sym, _)) => *sym == rep_symbol,
             EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => false,
         }
     }
@@ -1060,13 +1089,17 @@ impl Type {
         use Type::*;
 
         match self {
-            ClosureTag { ext: v, .. } | Variable(v) => *v == rep_variable,
+            Variable(v) => *v == rep_variable,
             Function(args, closure, ret) => {
                 ret.contains_variable(rep_variable)
                     || closure.contains_variable(rep_variable)
                     || args.iter().any(|arg| arg.contains_variable(rep_variable))
             }
             FunctionOrTagUnion(_, _, ext) => Self::contains_variable_ext(ext, rep_variable),
+            ClosureTag { name: _, captures } => {
+                captures.iter().any(|t| t.contains_variable(rep_variable))
+            }
+            UnspecializedLambdaSet(Uls(v, _, _)) => *v == rep_variable,
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
                 Self::contains_variable_ext(ext, rep_variable)
                     || tags
@@ -1356,8 +1389,17 @@ impl Type {
             RangedNumber(typ, _) => {
                 typ.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
             }
+            UnspecializedLambdaSet(..) => {}
             EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
         }
+    }
+
+    pub fn instantiate_lambda_sets_as_unspecialized(
+        &mut self,
+        able_var: Variable,
+        ability_member: Symbol,
+    ) {
+        instantiate_lambda_sets_as_unspecialized(self, able_var, ability_member)
     }
 
     pub fn is_tag_union_like(&self) -> bool {
@@ -1380,17 +1422,17 @@ impl Type {
     ///
     /// ```roc
     /// U8
-    /// [ A I8 ]
-    /// [ A [ B [ C U8 ] ] ]
-    /// [ A (R a) ] as R a
+    /// [A I8]
+    /// [A [B [C U8]]]
+    /// [A (R a)] as R a
     /// ```
     ///
     /// The following are not:
     ///
     /// ```roc
-    /// [ A I8, B U8 ]
-    /// [ A [ B [ Result U8 {} ] ] ]         (Result U8 {} is actually [ Ok U8, Err {} ])
-    /// [ A { lst: List (R a) } ] as R a     (List a is morally [ Cons (List a), Nil ] as List a)
+    /// [A I8, B U8 ]
+    /// [A [B [Result U8 {}]]]         (Result U8 {} is actually [Ok U8, Err {}])
+    /// [A { lst: List (R a) }] as R a     (List a is morally [Cons (List a), Nil] as List a)
     /// ```
     pub fn is_narrow(&self) -> bool {
         match self.shallow_dealias() {
@@ -1485,6 +1527,9 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
             RangedNumber(typ, _) => {
                 stack.push(typ);
             }
+            UnspecializedLambdaSet(Uls(_, _sym, _)) => {
+                // ignore the member symbol because unspecialized lambda sets are internal-only
+            }
             EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
         }
     }
@@ -1501,7 +1546,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
     match tipe {
         EmptyRec | EmptyTagUnion | Erroneous(_) => (),
 
-        ClosureTag { ext: v, .. } | Variable(v) => {
+        Variable(v) => {
             accum.insert(*v);
         }
 
@@ -1526,6 +1571,14 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             if let TypeExtension::Open(ext) = ext {
                 variables_help(ext, accum);
             }
+        }
+        ClosureTag { name: _, captures } => {
+            for t in captures {
+                variables_help(t, accum);
+            }
+        }
+        UnspecializedLambdaSet(Uls(v, _, _)) => {
+            accum.insert(*v);
         }
         TagUnion(tags, ext) => {
             for (_, args) in tags {
@@ -1625,7 +1678,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
     match tipe {
         EmptyRec | EmptyTagUnion | Erroneous(_) => (),
 
-        ClosureTag { ext: v, .. } | Variable(v) => {
+        Variable(v) => {
             accum.type_variables.insert(*v);
         }
 
@@ -1656,6 +1709,11 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
                 variables_help_detailed(ext, accum);
             }
         }
+        ClosureTag { name: _, captures } => {
+            for t in captures {
+                variables_help_detailed(t, accum);
+            }
+        }
         TagUnion(tags, ext) => {
             for (_, args) in tags {
                 for x in args {
@@ -1671,6 +1729,9 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             if let TypeExtension::Open(ext) = ext {
                 variables_help_detailed(ext, accum);
             }
+        }
+        UnspecializedLambdaSet(Uls(var, _, _)) => {
+            accum.type_variables.insert(*var);
         }
         RecursiveTagUnion(rec, tags, ext) => {
             for (_, args) in tags {
@@ -1920,8 +1981,8 @@ pub enum PatternCategory {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum AliasKind {
     /// A structural alias is something like
-    ///   List a : [ Nil, Cons a (List a) ]
-    /// It is typed structurally, so that a `List U8` is always equal to a `[ Nil ]_`, for example.
+    ///   List a : [Nil, Cons a (List a)]
+    /// It is typed structurally, so that a `List U8` is always equal to a `[Nil]_`, for example.
     Structural,
     /// An opaque alias corresponds to an opaque type from the language syntax, like
     ///   Age := U32
@@ -2665,5 +2726,181 @@ pub fn gather_tags(subs: &Subs, other_fields: UnionTags, var: Variable) -> TagUn
     TagUnionStructure {
         fields: result,
         ext,
+    }
+}
+
+fn instantiate_lambda_sets_as_unspecialized(
+    typ: &mut Type,
+    able_var: Variable,
+    ability_member: Symbol,
+) {
+    // We want to pop and assign lambda sets pre-order for readability, so types
+    // should be pushed onto the stack in post-order
+    let mut stack = vec![typ];
+    let mut region = 0;
+
+    let mut new_uls = || {
+        region += 1;
+        Type::UnspecializedLambdaSet(Uls(able_var, ability_member, region))
+    };
+
+    while let Some(typ) = stack.pop() {
+        match typ {
+            Type::EmptyRec => {}
+            Type::EmptyTagUnion => {}
+            Type::Function(args, lambda_set, ret) => {
+                debug_assert!(
+                    matches!(**lambda_set, Type::Variable(..)),
+                    "lambda set already bound"
+                );
+
+                **lambda_set = new_uls();
+                stack.push(ret);
+                stack.extend(args.iter_mut().rev());
+            }
+            Type::Record(fields, ext) => {
+                stack.extend(ext.iter_mut());
+                for (_, x) in fields.iter_mut() {
+                    stack.push(x.as_inner_mut());
+                }
+            }
+            Type::TagUnion(tags, ext) | Type::RecursiveTagUnion(_, tags, ext) => {
+                stack.extend(ext.iter_mut());
+                for (_, ts) in tags {
+                    for t in ts.iter_mut().rev() {
+                        stack.push(t);
+                    }
+                }
+            }
+            Type::FunctionOrTagUnion(_, _, ext) => {
+                stack.extend(ext.iter_mut());
+            }
+            Type::ClosureTag { name: _, captures } => {
+                stack.extend(captures.iter_mut().rev());
+            }
+            Type::UnspecializedLambdaSet(..) => {
+                internal_error!("attempting to re-instantiate ULS")
+            }
+            Type::DelayedAlias(AliasCommon {
+                symbol: _,
+                type_arguments,
+                lambda_set_variables,
+            }) => {
+                for lambda_set in lambda_set_variables.iter_mut() {
+                    debug_assert!(matches!(lambda_set.0, Type::Variable(_)));
+                    lambda_set.0 = new_uls();
+                }
+                stack.extend(type_arguments.iter_mut().rev());
+            }
+            Type::Alias {
+                symbol: _,
+                type_arguments,
+                lambda_set_variables,
+                actual,
+                kind: _,
+            } => {
+                for lambda_set in lambda_set_variables.iter_mut() {
+                    debug_assert!(matches!(lambda_set.0, Type::Variable(_)));
+                    lambda_set.0 = new_uls();
+                }
+                stack.push(actual);
+                stack.extend(type_arguments.iter_mut().rev().map(|t| &mut t.typ));
+            }
+            Type::HostExposedAlias {
+                name: _,
+                type_arguments,
+                lambda_set_variables,
+                actual_var: _,
+                actual,
+            } => {
+                for lambda_set in lambda_set_variables.iter_mut() {
+                    debug_assert!(matches!(lambda_set.0, Type::Variable(_)));
+                    lambda_set.0 = new_uls();
+                }
+                stack.push(actual);
+                stack.extend(type_arguments.iter_mut().rev());
+            }
+            Type::Apply(_sym, args, _region) => {
+                stack.extend(args.iter_mut().rev());
+            }
+            Type::Variable(_) => {}
+            Type::RangedNumber(t, _) => {
+                stack.push(t);
+            }
+            Type::Erroneous(_) => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn instantiate_lambda_sets_as_unspecialized() {
+        let mut var_store = VarStore::default();
+        let l1 = Box::new(Type::Variable(var_store.fresh()));
+        let l2 = Box::new(Type::Variable(var_store.fresh()));
+        let l3 = Box::new(Type::Variable(var_store.fresh()));
+        let mut typ = Type::Function(
+            vec![Type::Function(vec![], l2, Box::new(Type::EmptyRec))],
+            l1,
+            Box::new(Type::TagUnion(
+                vec![(
+                    TagName("A".into()),
+                    vec![Type::Function(vec![], l3, Box::new(Type::EmptyRec))],
+                )],
+                TypeExtension::Closed,
+            )),
+        );
+
+        let able_var = var_store.fresh();
+        let member = Symbol::UNDERSCORE;
+        typ.instantiate_lambda_sets_as_unspecialized(able_var, member);
+
+        macro_rules! check_uls {
+            ($typ:expr, $region:literal) => {{
+                match $typ {
+                    Type::UnspecializedLambdaSet(Uls(var1, member1, $region)) => {
+                        assert!(var1 == able_var && member1 == member)
+                    }
+                    _ => panic!(),
+                }
+            }};
+        }
+
+        match typ {
+            Type::Function(args, l1, ret) => {
+                check_uls!(*l1, 1);
+
+                match args.as_slice() {
+                    [Type::Function(args, l2, ret)] => {
+                        check_uls!(**l2, 2);
+                        assert!(args.is_empty());
+                        assert!(matches!(**ret, Type::EmptyRec));
+                    }
+                    _ => panic!(),
+                }
+
+                match *ret {
+                    Type::TagUnion(tags, TypeExtension::Closed) => match tags.as_slice() {
+                        [(name, args)] => {
+                            assert_eq!(name.0.as_str(), "A");
+                            match args.as_slice() {
+                                [Type::Function(args, l3, ret)] => {
+                                    check_uls!(**l3, 3);
+                                    assert!(args.is_empty());
+                                    assert!(matches!(**ret, Type::EmptyRec));
+                                }
+                                _ => panic!(),
+                            }
+                        }
+                        _ => panic!(),
+                    },
+                    _ => panic!(),
+                }
+            }
+            _ => panic!(),
+        }
     }
 }

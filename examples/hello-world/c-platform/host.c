@@ -54,7 +54,7 @@ size_t roc_str_len(struct RocStr str) {
   }
 }
 
-extern void roc__mainForHost_1_exposed_generic(*RocStr);
+extern void roc__mainForHost_1_exposed_generic(struct RocStr *string);
 
 int main() {
 

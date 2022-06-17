@@ -1,4 +1,4 @@
-interface AStar exposes [ findPath, Model, initialModel, cheapestOpen, reconstructPath ] imports [ Quicksort ]
+interface AStar exposes [findPath, Model, initialModel, cheapestOpen, reconstructPath] imports [Quicksort]
 
 findPath = \costFn, moveFn, start, end ->
     astar costFn moveFn end (initialModel start)
@@ -25,11 +25,11 @@ cheapestOpen = \costFn, model ->
         |> Set.toList
         |> List.keepOks
             (\position ->
-                    when Dict.get model.costs position is
-                        Err _ ->
-                            Err {}
-                        Ok cost ->
-                            Ok { cost: cost + costFn position, position }
+                when Dict.get model.costs position is
+                    Err _ ->
+                        Err {}
+                    Ok cost ->
+                        Ok { cost: cost + costFn position, position }
             )
         |> Quicksort.sortBy .cost
         |> List.first

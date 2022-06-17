@@ -17,7 +17,7 @@ pub fn generate_bindings(decl_src: &str) -> String {
                 exposes []
                 packages {}
                 imports []
-                provides [ main ]
+                provides [main]
 
         "#
     )
@@ -25,7 +25,7 @@ pub fn generate_bindings(decl_src: &str) -> String {
 
     src.push_str(decl_src);
 
-    let types = {
+    let pairs = {
         let dir = tempdir().expect("Unable to create tempdir");
         let filename = PathBuf::from("Package-Config.roc");
         let file_path = dir.path().join(filename);
@@ -40,13 +40,7 @@ pub fn generate_bindings(decl_src: &str) -> String {
         result.expect("had problems loading")
     };
 
-    // Reuse the `src` allocation since we're done with it.
-    let mut buf = src;
-    buf.clear();
-
-    bindgen_rs::write_types(&types, &mut buf).expect("I/O error when writing bindgen string");
-
-    buf
+    bindgen_rs::emit(&pairs)
 }
 
 #[allow(dead_code)]

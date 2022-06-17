@@ -8,7 +8,8 @@ pub mod wasm_module;
 pub mod wasm32_result;
 pub mod wasm32_sized;
 
-use bumpalo::{self, collections::Vec, Bump};
+use bumpalo::collections::Vec;
+use bumpalo::{self, Bump};
 
 use roc_collections::all::{MutMap, MutSet};
 use roc_module::low_level::LowLevelWrapperType;
@@ -17,11 +18,10 @@ use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::LayoutIds;
 use roc_target::TargetInfo;
+use wasm_module::parse::ParseError;
 
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
-use crate::wasm_module::{
-    Align, CodeBuilder, Export, ExportType, LocalId, SymInfo, ValueType, WasmModule,
-};
+use crate::wasm_module::{Align, CodeBuilder, LocalId, ValueType, WasmModule};
 
 const TARGET_INFO: TargetInfo = TargetInfo::default_wasm32();
 const PTR_SIZE: u32 = {
@@ -47,21 +47,27 @@ pub struct Env<'a> {
     pub exposed_to_host: MutSet<Symbol>,
 }
 
+/// Parse the preprocessed host binary
+/// If successful, the module can be passed to build_app_binary
+pub fn parse_host<'a>(arena: &'a Bump, host_bytes: &[u8]) -> Result<WasmModule<'a>, ParseError> {
+    WasmModule::preload(arena, host_bytes)
+}
+
 /// Generate a Wasm module in binary form, ready to write to a file. Entry point from roc_build.
 ///   env            environment data from previous compiler stages
 ///   interns        names of functions and variables (as memory-efficient interned strings)
-///   preload_bytes  preloaded bytes from a Wasm object file containing all non-Roc code
+///   host_module    parsed module from a Wasm object file containing all of the non-Roc code
 ///   procedures     Roc code in monomorphized intermediate representation
-pub fn build_module<'a>(
+pub fn build_app_binary<'a>(
     env: &'a Env<'a>,
     interns: &'a mut Interns,
-    preload_bytes: &[u8],
+    host_module: WasmModule<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> std::vec::Vec<u8> {
     let (mut wasm_module, called_preload_fns, _) =
-        build_module_unserialized(env, interns, preload_bytes, procedures);
+        build_app_module(env, interns, host_module, procedures);
 
-    wasm_module.remove_dead_preloads(env.arena, called_preload_fns);
+    wasm_module.eliminate_dead_code(env.arena, &called_preload_fns);
 
     let mut buffer = std::vec::Vec::with_capacity(wasm_module.size());
     wasm_module.serialize(&mut buffer);
@@ -72,22 +78,25 @@ pub fn build_module<'a>(
 /// Shared by all consumers of gen_wasm: roc_build, roc_repl_wasm, and test_gen
 /// (roc_repl_wasm and test_gen will add more generated code for a wrapper function
 /// that defines a common interface to `main`, independent of return type.)
-pub fn build_module_unserialized<'a>(
+pub fn build_app_module<'a>(
     env: &'a Env<'a>,
     interns: &'a mut Interns,
-    preload_bytes: &[u8],
+    host_module: WasmModule<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> (WasmModule<'a>, Vec<'a, u32>, u32) {
     let mut layout_ids = LayoutIds::default();
     let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
     let mut proc_lookup = Vec::with_capacity_in(procedures.len() * 2, env.arena);
-    let mut linker_symbols = Vec::with_capacity_in(procedures.len() * 2, env.arena);
-    let mut exports = Vec::with_capacity_in(4, env.arena);
+    let mut host_to_app_map = Vec::with_capacity_in(env.exposed_to_host.len(), env.arena);
     let mut maybe_main_fn_index = None;
 
-    // Collect the symbols & names for the procedures,
-    // and filter out procs we're going to inline
-    let mut fn_index: u32 = 0;
+    // Adjust Wasm function indices to account for functions from the object file
+    let fn_index_offset: u32 =
+        host_module.import.function_count() as u32 + host_module.code.preloaded_count;
+
+    // Pre-pass over the procedure names & layouts
+    // Filter out procs we're going to inline & gather some data for lookups
+    let mut fn_index: u32 = fn_index_offset;
     for ((sym, proc_layout), proc) in procedures.into_iter() {
         if matches!(
             LowLevelWrapperType::from_symbol(sym),
@@ -97,52 +106,39 @@ pub fn build_module_unserialized<'a>(
         }
         procs.push(proc);
 
-        let fn_name = layout_ids
-            .get_toplevel(sym, &proc_layout)
-            .to_symbol_string(sym, interns);
-
         if env.exposed_to_host.contains(&sym) {
             maybe_main_fn_index = Some(fn_index);
-            exports.push(Export {
-                name: env.arena.alloc_slice_copy(fn_name.as_bytes()),
-                ty: ExportType::Func,
-                index: fn_index,
-            });
+
+            let exposed_name = layout_ids
+                .get_toplevel(sym, &proc_layout)
+                .to_exposed_symbol_string(sym, interns);
+
+            let exposed_name_bump: &'a str = env.arena.alloc_str(&exposed_name);
+
+            host_to_app_map.push((exposed_name_bump, fn_index));
         }
 
-        let linker_sym = SymInfo::for_function(fn_index, fn_name);
-        let linker_sym_index = linker_symbols.len() as u32;
-
-        // linker_sym_index is redundant for these procs from user code, but needed for generated helpers!
         proc_lookup.push(ProcLookupData {
             name: sym,
             layout: proc_layout,
-            linker_index: linker_sym_index,
             source: ProcSource::Roc,
         });
-        linker_symbols.push(linker_sym);
 
         fn_index += 1;
     }
-
-    // Pre-load the WasmModule with data from the platform & builtins object file
-    let initial_module = WasmModule::preload(env.arena, preload_bytes);
-
-    // Adjust Wasm function indices to account for functions from the object file
-    let fn_index_offset: u32 =
-        initial_module.import.function_count + initial_module.code.preloaded_count;
 
     let mut backend = WasmBackend::new(
         env,
         interns,
         layout_ids,
         proc_lookup,
-        initial_module,
+        host_to_app_map,
+        host_module,
         fn_index_offset,
         CodeGenHelp::new(env.arena, TargetInfo::default_wasm32(), env.module_id),
     );
 
-    if DEBUG_LOG_SETTINGS.user_procs_ir {
+    if DEBUG_SETTINGS.user_procs_ir {
         println!("## procs");
         for proc in procs.iter() {
             println!("{}", proc.to_pretty(200));
@@ -160,7 +156,7 @@ pub fn build_module_unserialized<'a>(
 
     backend.register_symbol_debug_names();
 
-    if DEBUG_LOG_SETTINGS.helper_procs_ir {
+    if DEBUG_SETTINGS.helper_procs_ir {
         println!("## helper_procs");
         for proc in helper_procs.iter() {
             println!("{}", proc.to_pretty(200));
@@ -187,7 +183,7 @@ pub fn build_module_unserialized<'a>(
     }
 
     let (module, called_preload_fns) = backend.finalize();
-    let main_function_index = maybe_main_fn_index.unwrap() + fn_index_offset;
+    let main_function_index = maybe_main_fn_index.unwrap();
 
     (module, called_preload_fns, main_function_index)
 }
@@ -254,7 +250,7 @@ macro_rules! round_up_to_alignment {
     };
 }
 
-pub struct WasmDebugLogSettings {
+pub struct WasmDebugSettings {
     proc_start_end: bool,
     user_procs_ir: bool,
     helper_procs_ir: bool,
@@ -262,9 +258,10 @@ pub struct WasmDebugLogSettings {
     instructions: bool,
     storage_map: bool,
     pub keep_test_binary: bool,
+    pub skip_dead_code_elim: bool,
 }
 
-pub const DEBUG_LOG_SETTINGS: WasmDebugLogSettings = WasmDebugLogSettings {
+pub const DEBUG_SETTINGS: WasmDebugSettings = WasmDebugSettings {
     proc_start_end: false && cfg!(debug_assertions),
     user_procs_ir: false && cfg!(debug_assertions),
     helper_procs_ir: false && cfg!(debug_assertions),
@@ -272,4 +269,5 @@ pub const DEBUG_LOG_SETTINGS: WasmDebugLogSettings = WasmDebugLogSettings {
     instructions: false && cfg!(debug_assertions),
     storage_map: false && cfg!(debug_assertions),
     keep_test_binary: false && cfg!(debug_assertions),
+    skip_dead_code_elim: false && cfg!(debug_assertions),
 };

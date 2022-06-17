@@ -28,8 +28,12 @@ mod cli_run {
     const VALGRIND_FLAG: &str = concatcp!("--", roc_cli::FLAG_VALGRIND);
     const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER);
     const CHECK_FLAG: &str = concatcp!("--", roc_cli::FLAG_CHECK);
+    const PRECOMPILED_HOST: &str = concatcp!("--", roc_cli::FLAG_PRECOMPILED, "=true");
     #[allow(dead_code)]
     const TARGET_FLAG: &str = concatcp!("--", roc_cli::FLAG_TARGET);
+
+    use std::sync::Once;
+    static BENCHMARKS_BUILD_PLATFORM: Once = Once::new();
 
     #[derive(Debug, EnumIter)]
     enum CliMode {
@@ -90,21 +94,23 @@ mod cli_run {
         file: &'a Path,
         args: I,
         stdin: &[&str],
-        input_file: Option<PathBuf>,
+        opt_input_file: Option<PathBuf>,
     ) -> Out {
-        let compile_out = match input_file {
-            Some(input_file) => run_roc(
+        let compile_out = if let Some(input_file) = opt_input_file {
+            run_roc(
                 // converting these all to String avoids lifetime issues
                 args.into_iter().map(|arg| arg.to_string()).chain([
                     file.to_str().unwrap().to_string(),
+                    "--".to_string(),
                     input_file.to_str().unwrap().to_string(),
                 ]),
                 stdin,
-            ),
-            None => run_roc(
+            )
+        } else {
+            run_roc(
                 args.into_iter().chain(iter::once(file.to_str().unwrap())),
                 stdin,
-            ),
+            )
         };
 
         // If there is any stderr, it should be reporting the runtime and that's it!
@@ -127,7 +133,7 @@ mod cli_run {
         stdin: &[&str],
         executable_filename: &str,
         flags: &[&str],
-        input_file: Option<PathBuf>,
+        opt_input_file: Option<PathBuf>,
         expected_ending: &str,
         use_valgrind: bool,
     ) {
@@ -147,7 +153,7 @@ mod cli_run {
                     run_roc_on(file, iter::once(CMD_BUILD).chain(flags.clone()), &[], None);
 
                     if use_valgrind && ALLOW_VALGRIND {
-                        let (valgrind_out, raw_xml) = if let Some(ref input_file) = input_file {
+                        let (valgrind_out, raw_xml) = if let Some(ref input_file) = opt_input_file {
                             run_with_valgrind(
                                 stdin.iter().copied(),
                                 &[
@@ -197,7 +203,7 @@ mod cli_run {
                         }
 
                         valgrind_out
-                    } else if let Some(ref input_file) = input_file {
+                    } else if let Some(ref input_file) = opt_input_file {
                         run_cmd(
                             file.with_file_name(executable_filename).to_str().unwrap(),
                             stdin.iter().copied(),
@@ -211,12 +217,12 @@ mod cli_run {
                         )
                     }
                 }
-                CliMode::Roc => run_roc_on(file, flags.clone(), stdin, input_file.clone()),
+                CliMode::Roc => run_roc_on(file, flags.clone(), stdin, opt_input_file.clone()),
                 CliMode::RocRun => run_roc_on(
                     file,
                     iter::once(CMD_RUN).chain(flags.clone()),
                     stdin,
-                    input_file.clone(),
+                    opt_input_file.clone(),
                 ),
             };
 
@@ -378,8 +384,8 @@ mod cli_run {
     // ]
     examples! {
         helloWorld:"hello-world" => Example {
-            filename: "helloWorld.roc",
-            executable_filename: "helloWorld",
+            filename: "main.roc",
+            executable_filename: "hello",
             stdin: &[],
             input_file: None,
             expected_ending:"Hello, World!\n",
@@ -545,22 +551,44 @@ mod cli_run {
                         _ => {}
                     }
 
-                    // Check with and without optimizations
-                    check_output_with_stdin(
-                        &file_name,
-                        benchmark.stdin,
-                        benchmark.executable_filename,
-                        &[],
-                        benchmark.input_file.and_then(|file| Some(examples_dir("benchmarks").join(file))),
-                        benchmark.expected_ending,
-                        benchmark.use_valgrind,
-                    );
+                    let mut ran_without_optimizations = false;
+
+                    BENCHMARKS_BUILD_PLATFORM.call_once( || {
+                        // Check with and without optimizations
+                        check_output_with_stdin(
+                            &file_name,
+                            benchmark.stdin,
+                            benchmark.executable_filename,
+                            &[],
+                            benchmark.input_file.and_then(|file| Some(examples_dir("benchmarks").join(file))),
+                            benchmark.expected_ending,
+                            benchmark.use_valgrind,
+                        );
+
+                        ran_without_optimizations = true;
+                    });
+
+                    // now we can pass the `PRECOMPILED_HOST` flag, because the `call_once` will
+                    // have compiled the host
+
+                    if !ran_without_optimizations {
+                        // Check with and without optimizations
+                        check_output_with_stdin(
+                            &file_name,
+                            benchmark.stdin,
+                            benchmark.executable_filename,
+                            &[PRECOMPILED_HOST],
+                            benchmark.input_file.and_then(|file| Some(examples_dir("benchmarks").join(file))),
+                            benchmark.expected_ending,
+                            benchmark.use_valgrind,
+                        );
+                    }
 
                     check_output_with_stdin(
                         &file_name,
                         benchmark.stdin,
                         benchmark.executable_filename,
-                        &[OPTIMIZE_FLAG],
+                        &[PRECOMPILED_HOST, OPTIMIZE_FLAG],
                         benchmark.input_file.and_then(|file| Some(examples_dir("benchmarks").join(file))),
                         benchmark.expected_ending,
                         benchmark.use_valgrind,
@@ -958,8 +986,8 @@ mod cli_run {
 
                 Nothing from Symbol is used in this module.
 
-                3│      imports [ Symbol.{ Ident } ]
-                                  ^^^^^^^^^^^^^^^^
+                3│      imports [Symbol.{ Ident }]
+                                 ^^^^^^^^^^^^^^^^
 
                 Since Symbol isn't used, you don't need to import it.
 
@@ -981,8 +1009,8 @@ mod cli_run {
 
                 I don't know how to generate the foobar function.
 
-                4│      generates Effect with [ after, map, always, foobar ]
-                                                                    ^^^^^^
+                4│      generates Effect with [after, map, always, foobar]
+                                                                   ^^^^^^
 
                 Only specific functions like `after` and `map` can be generated.Learn
                 more about hosted modules at TODO.

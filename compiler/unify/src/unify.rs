@@ -8,10 +8,11 @@ use roc_module::symbol::Symbol;
 use roc_types::num::NumericRange;
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
-    AliasVariables, Descriptor, ErrorTypeContext, FlatType, GetSubsSlice, Mark, OptVariable,
-    RecordFields, Subs, SubsIndex, SubsSlice, UnionTags, Variable, VariableSubsSlice,
+    AliasVariables, Descriptor, ErrorTypeContext, FlatType, GetSubsSlice, LambdaSet, Mark,
+    OptVariable, RecordFields, Subs, SubsIndex, SubsSlice, UlsOfVar, UnionLabels, UnionLambdas,
+    UnionTags, Variable, VariableSubsSlice,
 };
-use roc_types::types::{AliasKind, DoesNotImplementAbility, ErrorType, Mismatch, RecordField};
+use roc_types::types::{AliasKind, DoesNotImplementAbility, ErrorType, Mismatch, RecordField, Uls};
 
 macro_rules! mismatch {
     () => {{
@@ -22,7 +23,7 @@ macro_rules! mismatch {
                 line!(),
                 column!()
             );
-        })
+        });
 
         Outcome {
             mismatches: vec![Mismatch::TypeMismatch],
@@ -98,13 +99,6 @@ bitflags! {
         ///
         /// For example, t1 += [A Str] says we should "add" the tag "A Str" to the type of "t1".
         const PRESENT = 1 << 1;
-        /// Instructs the unifier to treat rigids exactly like flex vars.
-        /// Usually rigids can only unify with flex vars, because rigids are named and bound
-        /// explicitly.
-        /// However, when checking type ranges, as we do for `RangedNumber` types, we must loosen
-        /// this restriction because otherwise an admissible range will appear inadmissible.
-        /// For example, Int * is in the range <I8, U8, ...>.
-        const RIGID_AS_FLEX = 1 << 2;
     }
 }
 
@@ -125,11 +119,7 @@ impl Mode {
 
     #[cfg(debug_assertions)]
     fn pretty_print(&self) -> &str {
-        if self.contains(Mode::EQ | Mode::RIGID_AS_FLEX) {
-            "~*"
-        } else if self.contains(Mode::PRESENT | Mode::RIGID_AS_FLEX) {
-            "+=*"
-        } else if self.contains(Mode::EQ) {
+        if self.contains(Mode::EQ) {
             "~"
         } else if self.contains(Mode::PRESENT) {
             "+="
@@ -153,18 +143,23 @@ pub enum Unified {
     Success {
         vars: Pool,
         must_implement_ability: MustImplementConstraints,
+        lambda_sets_to_specialize: UlsOfVar,
     },
     Failure(Pool, ErrorType, ErrorType, DoesNotImplementAbility),
     BadType(Pool, roc_types::types::Problem),
 }
 
 impl Unified {
-    pub fn expect_success(self, err_msg: &'static str) -> (Pool, MustImplementConstraints) {
+    pub fn expect_success(
+        self,
+        err_msg: &'static str,
+    ) -> (Pool, MustImplementConstraints, UlsOfVar) {
         match self {
             Unified::Success {
                 vars,
                 must_implement_ability,
-            } => (vars, must_implement_ability),
+                lambda_sets_to_specialize,
+            } => (vars, must_implement_ability, lambda_sets_to_specialize),
             _ => internal_error!("{}", err_msg),
         }
     }
@@ -222,6 +217,9 @@ pub struct Outcome {
     /// We defer these checks until the end of a solving phase.
     /// NOTE: this vector is almost always empty!
     must_implement_ability: MustImplementConstraints,
+    /// We defer resolution of these lambda sets to the caller of [unify].
+    /// See also [merge_flex_able_with_concrete].
+    lambda_sets_to_specialize: UlsOfVar,
 }
 
 impl Outcome {
@@ -229,6 +227,8 @@ impl Outcome {
         self.mismatches.extend(other.mismatches);
         self.must_implement_ability
             .extend(other.must_implement_ability);
+        self.lambda_sets_to_specialize
+            .union(other.lambda_sets_to_specialize);
     }
 }
 
@@ -238,12 +238,14 @@ pub fn unify(subs: &mut Subs, var1: Variable, var2: Variable, mode: Mode) -> Uni
     let Outcome {
         mismatches,
         must_implement_ability,
+        lambda_sets_to_specialize,
     } = unify_pool(subs, &mut vars, var1, var2, mode);
 
     if mismatches.is_empty() {
         Unified::Success {
             vars,
             must_implement_ability,
+            lambda_sets_to_specialize,
         }
     } else {
         let error_context = if mismatches.contains(&Mismatch::TypeNotInRange) {
@@ -343,8 +345,8 @@ fn debug_print_unified_types(subs: &mut Subs, ctx: &Context, opt_outcome: Option
             "{}{}({:?}-{:?}): {:?} {:?} {} {:?} {:?}",
             " ".repeat(use_depth),
             prefix,
-            ctx.first,
-            ctx.second,
+            subs.get_root_key_without_compacting(ctx.first),
+            subs.get_root_key_without_compacting(ctx.second),
             ctx.first,
             SubsFmtContent(&content_1, subs),
             mode,
@@ -363,14 +365,10 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
     // This #[allow] is needed in release builds, where `result` is no longer used.
     #[allow(clippy::let_and_return)]
     let result = match &ctx.first_desc.content {
-        FlexVar(opt_name) => unify_flex(subs, &ctx, opt_name, None, &ctx.second_desc.content),
-        FlexAbleVar(opt_name, ability) => unify_flex(
-            subs,
-            &ctx,
-            opt_name,
-            Some(*ability),
-            &ctx.second_desc.content,
-        ),
+        FlexVar(opt_name) => unify_flex(subs, &ctx, opt_name, &ctx.second_desc.content),
+        FlexAbleVar(opt_name, ability) => {
+            unify_flex_able(subs, &ctx, opt_name, *ability, &ctx.second_desc.content)
+        }
         RecursionVar {
             opt_name,
             structure,
@@ -382,9 +380,9 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
             *structure,
             &ctx.second_desc.content,
         ),
-        RigidVar(name) => unify_rigid(subs, &ctx, name, None, &ctx.second_desc.content),
+        RigidVar(name) => unify_rigid(subs, &ctx, name, &ctx.second_desc.content),
         RigidAbleVar(name, ability) => {
-            unify_rigid(subs, &ctx, name, Some(*ability), &ctx.second_desc.content)
+            unify_rigid_able(subs, &ctx, name, *ability, &ctx.second_desc.content)
         }
         Structure(flat_type) => {
             unify_structure(subs, pool, &ctx, flat_type, &ctx.second_desc.content)
@@ -395,6 +393,7 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
         Alias(symbol, args, real_var, AliasKind::Opaque) => {
             unify_opaque(subs, pool, &ctx, *symbol, *args, *real_var)
         }
+        LambdaSet(lset) => unify_lambda_set(subs, pool, &ctx, *lset, &ctx.second_desc.content),
         &RangedNumber(typ, range_vars) => unify_ranged_number(subs, pool, &ctx, typ, range_vars),
         Error => {
             // Error propagates. Whatever we're comparing it to doesn't matter!
@@ -438,6 +437,7 @@ fn unify_ranged_number(
             }
             // TODO: We should probably check that "range_vars" and "other_range_vars" intersect
         }
+        LambdaSet(..) => mismatch!(),
         Error => merge(subs, ctx, Error),
     };
 
@@ -462,6 +462,7 @@ fn check_valid_range(subs: &mut Subs, var: Variable, range: NumericRange) -> Out
                     let outcome = Outcome {
                         mismatches: vec![Mismatch::TypeNotInRange],
                         must_implement_ability: Default::default(),
+                        lambda_sets_to_specialize: Default::default(),
                     };
 
                     return outcome;
@@ -527,7 +528,6 @@ fn unify_two_aliases(
 
         outcome
     } else {
-        dbg!(args.len(), other_args.len());
         mismatch!("{:?}", _symbol)
     }
 }
@@ -582,6 +582,7 @@ fn unify_alias(
                 outcome
             }
         }
+        LambdaSet(..) => mismatch!("cannot unify alias {:?} with lambda set {:?}: lambda sets should never be directly behind an alias!", ctx.first, other_content),
         Error => merge(subs, ctx, Error),
     }
 }
@@ -606,12 +607,14 @@ fn unify_opaque(
         }
         FlexAbleVar(_, ability) if args.is_empty() => {
             // Opaque type wins
-            let mut outcome = merge(subs, ctx, Alias(symbol, args, real_var, kind));
-            outcome.must_implement_ability.push(MustImplementAbility {
-                typ: Obligated::Opaque(symbol),
-                ability: *ability,
-            });
-            outcome
+            merge_flex_able_with_concrete(
+                subs,
+                ctx,
+                ctx.second,
+                *ability,
+                Alias(symbol, args, real_var, kind),
+                Obligated::Opaque(symbol),
+            )
         }
         Alias(_, _, other_real_var, AliasKind::Structural) => {
             unify_pool(subs, pool, ctx.first, *other_real_var, ctx.mode)
@@ -684,13 +687,15 @@ fn unify_structure(
             outcome
         }
         FlexAbleVar(_, ability) => {
-            let mut outcome = merge(subs, ctx, Structure(*flat_type));
-            let must_implement_ability = MustImplementAbility {
-                typ: Obligated::Adhoc(ctx.first),
-                ability: *ability,
-            };
-            outcome.must_implement_ability.push(must_implement_ability);
-            outcome
+            // Structure wins
+            merge_flex_able_with_concrete(
+                subs,
+                ctx,
+                ctx.second,
+                *ability,
+                Structure(*flat_type),
+                Obligated::Adhoc(ctx.first),
+            )
         }
         // _name has an underscore because it's unused in --release builds
         RigidVar(_name) => {
@@ -766,6 +771,15 @@ fn unify_structure(
                 )
             }
         },
+        LambdaSet(..) => {
+            mismatch!(
+                "Cannot unify structure \n{:?} \nwith lambda set\n {:?}",
+                roc_types::subs::SubsFmtContent(&Content::Structure(*flat_type), subs),
+                roc_types::subs::SubsFmtContent(other, subs),
+                // &flat_type,
+                // other
+            )
+        }
         RangedNumber(other_real_var, other_range_vars) => {
             let outcome = unify_pool(subs, pool, ctx.first, *other_real_var, ctx.mode);
             if outcome.mismatches.is_empty() {
@@ -778,14 +792,173 @@ fn unify_structure(
     }
 }
 
+#[inline(always)]
+fn unify_lambda_set(
+    subs: &mut Subs,
+    pool: &mut Pool,
+    ctx: &Context,
+    lambda_set: LambdaSet,
+    other: &Content,
+) -> Outcome {
+    match other {
+        FlexVar(_) => merge(subs, ctx, Content::LambdaSet(lambda_set)),
+        Content::LambdaSet(other_lambda_set) => {
+            unify_lambda_set_help(subs, pool, ctx, lambda_set, *other_lambda_set)
+        }
+        RecursionVar { structure, .. } => {
+            // suppose that the recursion var is a lambda set
+            unify_pool(subs, pool, ctx.first, *structure, ctx.mode)
+        }
+        RigidVar(..) | RigidAbleVar(..) => mismatch!("Lambda sets never unify with rigid"),
+        FlexAbleVar(..) => mismatch!("Lambda sets should never have abilities attached to them"),
+        Structure(..) => mismatch!("Lambda set cannot unify with non-lambda set structure"),
+        RangedNumber(..) => mismatch!("Lambda sets are never numbers"),
+        Alias(..) => mismatch!("Lambda set can never be directly under an alias!"),
+        Error => merge(subs, ctx, Error),
+    }
+}
+
+fn unify_lambda_set_help(
+    subs: &mut Subs,
+    pool: &mut Pool,
+    ctx: &Context,
+    lset1: self::LambdaSet,
+    lset2: self::LambdaSet,
+) -> Outcome {
+    // LambdaSets unify like TagUnions, but can grow unbounded regardless of the extension
+    // variable.
+
+    let LambdaSet {
+        solved: solved1,
+        recursion_var: rec1,
+        unspecialized: uls1,
+    } = lset1;
+    let LambdaSet {
+        solved: solved2,
+        recursion_var: rec2,
+        unspecialized: uls2,
+    } = lset2;
+
+    debug_assert!(
+        (rec1.into_variable().into_iter())
+            .chain(rec2.into_variable().into_iter())
+            .all(|v| is_recursion_var(subs, v)),
+        "Recursion var is present, but it doesn't have a recursive content!"
+    );
+
+    let Separate {
+        only_in_1,
+        only_in_2,
+        in_both,
+    } = separate_union_lambdas(subs, solved1, solved2);
+
+    let num_shared = in_both.len();
+
+    let mut joined_lambdas = vec![];
+    for (tag_name, (vars1, vars2)) in in_both {
+        let mut matching_vars = vec![];
+
+        if vars1.len() != vars2.len() {
+            continue; // this is a type mismatch; not adding the tag will trigger it below.
+        }
+
+        let num_vars = vars1.len();
+        for (var1, var2) in (vars1.into_iter()).zip(vars2.into_iter()) {
+            let (var1, var2) = (subs[var1], subs[var2]);
+
+            // Lambda sets are effectively tags under another name, and their usage can also result
+            // in the arguments of a lambda name being recursive. It very well may happen that
+            // during unification, a lambda set previously marked as not recursive becomes
+            // recursive. See the docs of [LambdaSet] for one example, or https://github.com/rtfeldman/roc/pull/2307.
+            //
+            // Like with tag unions, if it has, we'll always pass through this branch. So, take
+            // this opportunity to promote the lambda set to recursive if need be.
+            maybe_mark_union_recursive(subs, var1);
+            maybe_mark_union_recursive(subs, var2);
+
+            let outcome = unify_pool(subs, pool, var1, var2, ctx.mode);
+
+            if outcome.mismatches.is_empty() {
+                matching_vars.push(var1);
+            }
+        }
+
+        if matching_vars.len() == num_vars {
+            joined_lambdas.push((tag_name, matching_vars));
+        }
+    }
+
+    if joined_lambdas.len() == num_shared {
+        let all_lambdas = joined_lambdas;
+        let all_lambdas = merge_sorted(
+            all_lambdas,
+            only_in_1.into_iter().map(|(name, subs_slice)| {
+                let vec = subs.get_subs_slice(subs_slice).to_vec();
+                (name, vec)
+            }),
+        );
+        let all_lambdas = merge_sorted(
+            all_lambdas,
+            only_in_2.into_iter().map(|(name, subs_slice)| {
+                let vec = subs.get_subs_slice(subs_slice).to_vec();
+                (name, vec)
+            }),
+        );
+
+        let recursion_var = match (rec1.into_variable(), rec2.into_variable()) {
+            // Prefer left when it's available.
+            (Some(rec), _) | (_, Some(rec)) => OptVariable::from(rec),
+            (None, None) => OptVariable::NONE,
+        };
+
+        // Combine the unspecialized lambda sets as needed. Note that we don't need to update the
+        // bookkeeping of variable -> lambda set to be resolved, because if we had v1 -> lset1, and
+        // now lset1 ~ lset2, then afterward either lset1 still resolves to itself or re-points to
+        // lset2. In either case the merged unspecialized lambda sets will be there.
+        let merged_unspecialized = match (uls1.is_empty(), uls2.is_empty()) {
+            (true, true) => SubsSlice::default(),
+            (false, true) => uls1,
+            (true, false) => uls2,
+            (false, false) => {
+                let mut all_uls = (subs.get_subs_slice(uls1).iter())
+                    .chain(subs.get_subs_slice(uls2))
+                    .map(|&Uls(var, sym, region)| {
+                        // Take the root key to deduplicate
+                        Uls(subs.get_root_key_without_compacting(var), sym, region)
+                    })
+                    .collect::<Vec<_>>();
+                all_uls.sort();
+                all_uls.dedup();
+
+                SubsSlice::extend_new(&mut subs.unspecialized_lambda_sets, all_uls)
+            }
+        };
+
+        let new_solved = UnionLabels::insert_into_subs(subs, all_lambdas);
+        let new_lambda_set = Content::LambdaSet(LambdaSet {
+            solved: new_solved,
+            recursion_var,
+            unspecialized: merged_unspecialized,
+        });
+
+        merge(subs, ctx, new_lambda_set)
+    } else {
+        mismatch!(
+            "Problem with lambda sets: there should be {:?} matching lambda, but only found {:?}",
+            num_shared,
+            &joined_lambdas
+        )
+    }
+}
+
 /// Ensures that a non-recursive tag union, when unified with a recursion var to become a recursive
 /// tag union, properly contains a recursion variable that recurses on itself.
 //
 // When might this not be the case? For example, in the code
 //
-//   Indirect : [ Indirect ConsList ]
+//   Indirect : [Indirect ConsList]
 //
-//   ConsList : [ Nil, Cons Indirect ]
+//   ConsList : [Nil, Cons Indirect]
 //
 //   l : ConsList
 //   l = Cons (Indirect (Cons (Indirect Nil)))
@@ -793,10 +966,10 @@ fn unify_structure(
 //   #                  ~~~~~~~~~~~~~~~~~~~~~  region-b
 //   l
 //
-// Suppose `ConsList` has the expanded type `[ Nil, Cons [ Indirect <rec> ] ] as <rec>`.
+// Suppose `ConsList` has the expanded type `[Nil, Cons [Indirect <rec>]] as <rec>`.
 // After unifying the tag application annotated "region-b" with the recursion variable `<rec>`,
 // the tentative total-type of the application annotated "region-a" would be
-// `<v> = [ Nil, Cons [ Indirect <v> ] ] as <rec>`. That is, the type of the recursive tag union
+// `<v> = [Nil, Cons [Indirect <v>]] as <rec>`. That is, the type of the recursive tag union
 // would be inlined at the site "v", rather than passing through the correct recursion variable
 // "rec" first.
 //
@@ -956,6 +1129,8 @@ fn unify_shared_fields(
     let mut matching_fields = Vec::with_capacity(shared_fields.len());
     let num_shared_fields = shared_fields.len();
 
+    let mut whole_outcome = Outcome::default();
+
     for (name, (actual, expected)) in shared_fields {
         let local_outcome = unify_pool(
             subs,
@@ -989,6 +1164,7 @@ fn unify_shared_fields(
             };
 
             matching_fields.push((name, actual));
+            whole_outcome.union(local_outcome);
         }
     }
 
@@ -1037,7 +1213,9 @@ fn unify_shared_fields(
 
         let flat_type = FlatType::Record(fields, new_ext_var);
 
-        merge(subs, ctx, Structure(flat_type))
+        let merge_outcome = merge(subs, ctx, Structure(flat_type));
+        whole_outcome.union(merge_outcome);
+        whole_outcome
     } else {
         mismatch!("in unify_shared_fields")
     }
@@ -1127,7 +1305,7 @@ where
     let input1_len = it1.size_hint().0;
     let input2_len = it2.size_hint().0;
 
-    let max_common = input1_len.min(input2_len);
+    let max_common = std::cmp::min(input1_len, input2_len);
 
     let mut result = Separate {
         only_in_1: Vec::with_capacity(input1_len),
@@ -1175,6 +1353,19 @@ fn separate_union_tags(
     (separate(it1, it2), new_ext1, new_ext2)
 }
 
+fn separate_union_lambdas(
+    subs: &Subs,
+    fields1: UnionLambdas,
+    fields2: UnionLambdas,
+) -> Separate<Symbol, VariableSubsSlice> {
+    debug_assert!(fields1.is_sorted_no_duplicates(subs));
+    debug_assert!(fields2.is_sorted_no_duplicates(subs));
+    let it1 = fields1.iter_all().map(|(s, vars)| (subs[s], subs[vars]));
+    let it2 = fields2.iter_all().map(|(s, vars)| (subs[s], subs[vars]));
+
+    separate(it1, it2)
+}
+
 #[derive(Debug, Copy, Clone)]
 enum Rec {
     None,
@@ -1184,7 +1375,7 @@ enum Rec {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn unify_tag_union_new(
+fn unify_tag_unions(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
@@ -1323,13 +1514,13 @@ fn unify_tag_union_new(
         // This is inspired by
         //
         //
-        //      f : [ Red, Green ] -> Bool
+        //      f : [Red, Green] -> Bool
         //      f = \_ -> True
         //
         //      f Blue
         //
-        //  In this case, we want the mismatch to be between `[ Blue ]a` and `[ Red, Green ]`, but
-        //  without rolling back, the mismatch is between `[ Blue, Red, Green ]a` and `[ Red, Green ]`.
+        //  In this case, we want the mismatch to be between `[Blue]a` and `[Red, Green]`, but
+        //  without rolling back, the mismatch is between `[Blue, Red, Green]a` and `[Red, Green]`.
         //  TODO is this also required for the other cases?
 
         let snapshot = subs.snapshot();
@@ -1363,32 +1554,41 @@ enum OtherTags2 {
     ),
 }
 
-fn maybe_mark_tag_union_recursive(subs: &mut Subs, tag_union_var: Variable) {
-    'outer: while let Err((recursive, chain)) = subs.occurs(tag_union_var) {
-        let description = subs.get(recursive);
-        if let Content::Structure(FlatType::TagUnion(tags, ext_var)) = description.content {
-            subs.mark_tag_union_recursive(recursive, tags, ext_var);
-        } else {
-            // walk the chain till we find a tag union
-            for v in &chain[..chain.len() - 1] {
-                let description = subs.get(*v);
-                if let Content::Structure(FlatType::TagUnion(tags, ext_var)) = description.content {
-                    subs.mark_tag_union_recursive(*v, tags, ext_var);
+/// Promotes a non-recursive tag union or lambda set to its recursive variant, if it is found to be
+/// recursive.
+fn maybe_mark_union_recursive(subs: &mut Subs, union_var: Variable) {
+    'outer: while let Err((_, chain)) = subs.occurs(union_var) {
+        // walk the chain till we find a tag union or lambda set, starting from the variable that
+        // occurred recursively, which is always at the end of the chain.
+        for &v in chain.iter().rev() {
+            let description = subs.get(v);
+            match description.content {
+                Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
+                    subs.mark_tag_union_recursive(v, tags, ext_var);
                     continue 'outer;
                 }
+                LambdaSet(self::LambdaSet {
+                    solved,
+                    recursion_var: OptVariable::NONE,
+                    unspecialized,
+                }) => {
+                    subs.mark_lambda_set_recursive(v, solved, unspecialized);
+                    continue 'outer;
+                }
+                _ => { /* fall through */ }
             }
+        }
 
-            // Might not be any tag union if we only pass through `Apply`s. Otherwise, we have a bug!
-            if chain.iter().all(|&v| {
-                matches!(
-                    subs.get_content_without_compacting(v),
-                    Content::Structure(FlatType::Apply(..))
-                )
-            }) {
-                return;
-            } else {
-                internal_error!("recursive loop does not contain a tag union")
-            }
+        // Might not be any tag union if we only pass through `Apply`s. Otherwise, we have a bug!
+        if chain.iter().all(|&v| {
+            matches!(
+                subs.get_content_without_compacting(v),
+                Content::Structure(FlatType::Apply(..))
+            )
+        }) {
+            return;
+        } else {
+            internal_error!("recursive loop does not contain a tag union")
         }
     }
 }
@@ -1417,7 +1617,7 @@ fn unify_shared_tags_new(
             let expected = subs[expected_index];
             // NOTE the arguments of a tag can be recursive. For instance in the expression
             //
-            //  ConsList a : [ Nil, Cons a (ConsList a) ]
+            //  ConsList a : [Nil, Cons a (ConsList a)]
             //
             //  Cons 1 (Cons "foo" Nil)
             //
@@ -1430,11 +1630,11 @@ fn unify_shared_tags_new(
             // The strategy is to expand the recursive tag union as deeply as the non-recursive one
             // is.
             //
-            // > RecursiveTagUnion(rvar, [ Cons a rvar, Nil ], ext)
+            // > RecursiveTagUnion(rvar, [Cons a rvar, Nil], ext)
             //
             // Conceptually becomes
             //
-            // > RecursiveTagUnion(rvar, [ Cons a [ Cons a rvar, Nil ], Nil ], ext)
+            // > RecursiveTagUnion(rvar, [Cons a [Cons a rvar, Nil], Nil], ext)
             //
             // and so on until the whole non-recursive tag union can be unified with it.
             //
@@ -1443,8 +1643,8 @@ fn unify_shared_tags_new(
             // since we're expanding tag unions to equal depths as described above,
             // we'll always pass through this branch. So, we promote tag unions to recursive
             // ones here if it turns out they are that.
-            maybe_mark_tag_union_recursive(subs, actual);
-            maybe_mark_tag_union_recursive(subs, expected);
+            maybe_mark_union_recursive(subs, actual);
+            maybe_mark_union_recursive(subs, expected);
 
             let mut outcome = Outcome::default();
 
@@ -1573,7 +1773,7 @@ fn unify_flat_type(
         }
 
         (TagUnion(tags1, ext1), TagUnion(tags2, ext2)) => {
-            unify_tag_union_new(subs, pool, ctx, *tags1, *ext1, *tags2, *ext2, Rec::None)
+            unify_tag_unions(subs, pool, ctx, *tags1, *ext1, *tags2, *ext2, Rec::None)
         }
 
         (RecursiveTagUnion(recursion_var, tags1, ext1), TagUnion(tags2, ext2)) => {
@@ -1582,7 +1782,7 @@ fn unify_flat_type(
 
             let rec = Rec::Left(*recursion_var);
 
-            unify_tag_union_new(subs, pool, ctx, *tags1, *ext1, *tags2, *ext2, rec)
+            unify_tag_unions(subs, pool, ctx, *tags1, *ext1, *tags2, *ext2, rec)
         }
 
         (TagUnion(tags1, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
@@ -1590,7 +1790,7 @@ fn unify_flat_type(
 
             let rec = Rec::Right(*recursion_var);
 
-            unify_tag_union_new(subs, pool, ctx, *tags1, *ext1, *tags2, *ext2, rec)
+            unify_tag_unions(subs, pool, ctx, *tags1, *ext1, *tags2, *ext2, rec)
         }
 
         (RecursiveTagUnion(rec1, tags1, ext1), RecursiveTagUnion(rec2, tags2, ext2)) => {
@@ -1598,8 +1798,7 @@ fn unify_flat_type(
             debug_assert!(is_recursion_var(subs, *rec2));
 
             let rec = Rec::Both(*rec1, *rec2);
-            let mut outcome =
-                unify_tag_union_new(subs, pool, ctx, *tags1, *ext1, *tags2, *ext2, rec);
+            let mut outcome = unify_tag_unions(subs, pool, ctx, *tags1, *ext1, *tags2, *ext2, rec);
             outcome.union(unify_pool(subs, pool, *rec1, *rec2, ctx.mode));
 
             outcome
@@ -1680,18 +1879,18 @@ fn unify_flat_type(
                 let tags1 = UnionTags::from_tag_name_index(*tag_name_1);
                 let tags2 = UnionTags::from_tag_name_index(*tag_name_2);
 
-                unify_tag_union_new(subs, pool, ctx, tags1, *ext1, tags2, *ext2, Rec::None)
+                unify_tag_unions(subs, pool, ctx, tags1, *ext1, tags2, *ext2, Rec::None)
             }
         }
         (TagUnion(tags1, ext1), FunctionOrTagUnion(tag_name, _, ext2)) => {
             let tags2 = UnionTags::from_tag_name_index(*tag_name);
 
-            unify_tag_union_new(subs, pool, ctx, *tags1, *ext1, tags2, *ext2, Rec::None)
+            unify_tag_unions(subs, pool, ctx, *tags1, *ext1, tags2, *ext2, Rec::None)
         }
         (FunctionOrTagUnion(tag_name, _, ext1), TagUnion(tags2, ext2)) => {
             let tags1 = UnionTags::from_tag_name_index(*tag_name);
 
-            unify_tag_union_new(subs, pool, ctx, tags1, *ext1, *tags2, *ext2, Rec::None)
+            unify_tag_unions(subs, pool, ctx, tags1, *ext1, *tags2, *ext2, Rec::None)
         }
 
         (RecursiveTagUnion(recursion_var, tags1, ext1), FunctionOrTagUnion(tag_name, _, ext2)) => {
@@ -1701,7 +1900,7 @@ fn unify_flat_type(
             let tags2 = UnionTags::from_tag_name_index(*tag_name);
             let rec = Rec::Left(*recursion_var);
 
-            unify_tag_union_new(subs, pool, ctx, *tags1, *ext1, tags2, *ext2, rec)
+            unify_tag_unions(subs, pool, ctx, *tags1, *ext1, tags2, *ext2, rec)
         }
 
         (FunctionOrTagUnion(tag_name, _, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
@@ -1710,7 +1909,7 @@ fn unify_flat_type(
             let tags1 = UnionTags::from_tag_name_index(*tag_name);
             let rec = Rec::Right(*recursion_var);
 
-            unify_tag_union_new(subs, pool, ctx, tags1, *ext1, *tags2, *ext2, rec)
+            unify_tag_unions(subs, pool, ctx, tags1, *ext1, *tags2, *ext2, rec)
         }
 
         // these have underscores because they're unused in --release builds
@@ -1750,7 +1949,6 @@ fn unify_rigid(
     subs: &mut Subs,
     ctx: &Context,
     name: &SubsIndex<Lowercase>,
-    opt_able_bound: Option<Symbol>,
     other: &Content,
 ) -> Outcome {
     match other {
@@ -1759,63 +1957,60 @@ fn unify_rigid(
             merge(subs, ctx, RigidVar(*name))
         }
         FlexAbleVar(_, other_ability) => {
-            match opt_able_bound {
-                Some(ability) => {
-                    if ability == *other_ability {
-                        // The ability bounds are the same, so rigid wins!
-                        merge(subs, ctx, RigidAbleVar(*name, ability))
-                    } else {
-                        // Mismatch for now.
-                        // TODO check ability hierarchies.
-                        mismatch!(
-                            %not_able, ctx.second, ability,
-                            "RigidAble {:?} with ability {:?} not compatible with ability {:?}",
-                            ctx.first,
-                            ability,
-                            other_ability
-                        )
-                    }
-                }
-                None => {
-                    // Mismatch - Rigid can unify with FlexAble only when the Rigid has an ability
-                    // bound as well, otherwise the user failed to correctly annotate the bound.
-                    mismatch!(
-                        %not_able, ctx.first, *other_ability,
-                        "Rigid {:?} with FlexAble {:?}", ctx.first, other
-                    )
-                }
-            }
+            // Mismatch - Rigid can unify with FlexAble only when the Rigid has an ability
+            // bound as well, otherwise the user failed to correctly annotate the bound.
+            mismatch!(
+                %not_able, ctx.first, *other_ability,
+                "Rigid {:?} with FlexAble {:?}", ctx.first, other
+            )
         }
 
-        RigidVar(_) | RecursionVar { .. } | Structure(_) | Alias(_, _, _, _) | RangedNumber(..)
-            if ctx.mode.contains(Mode::RIGID_AS_FLEX) =>
-        {
-            // Usually rigids can only unify with flex, but the mode indicates we are treating
-            // rigid vars as flex, so admit this.
-            match (opt_able_bound, other) {
-                (None, other) => merge(subs, ctx, *other),
-                (Some(ability), Alias(opaque_name, vars, _real_var, AliasKind::Opaque))
-                    if vars.is_empty() =>
-                {
-                    let mut output = merge(subs, ctx, *other);
-                    let must_implement_ability = MustImplementAbility {
-                        typ: Obligated::Opaque(*opaque_name),
-                        ability,
-                    };
-                    output.must_implement_ability.push(must_implement_ability);
-                    output
-                }
+        RigidVar(_)
+        | RigidAbleVar(..)
+        | RecursionVar { .. }
+        | Structure(_)
+        | Alias(..)
+        | RangedNumber(..)
+        | LambdaSet(..) => {
+            // Type mismatch! Rigid can only unify with flex, even if the
+            // rigid names are the same.
+            mismatch!("Rigid {:?} with {:?}", ctx.first, &other)
+        }
 
-                // these have underscores because they're unused in --release builds
-                (Some(_ability), _other) => {
-                    // For now, only allow opaque types with no type variables to implement abilities.
-                    mismatch!(
-                        %not_able, ctx.second, _ability,
-                        "RigidAble {:?} with non-opaque or opaque with type variables {:?}",
-                        ctx.first,
-                        &_other
-                    )
-                }
+        Error => {
+            // Error propagates.
+            merge(subs, ctx, Error)
+        }
+    }
+}
+
+#[inline(always)]
+fn unify_rigid_able(
+    subs: &mut Subs,
+    ctx: &Context,
+    name: &SubsIndex<Lowercase>,
+    ability: Symbol,
+    other: &Content,
+) -> Outcome {
+    match other {
+        FlexVar(_) => {
+            // If the other is flex, rigid wins!
+            merge(subs, ctx, RigidVar(*name))
+        }
+        FlexAbleVar(_, other_ability) => {
+            if ability == *other_ability {
+                // The ability bounds are the same, so rigid wins!
+                merge(subs, ctx, RigidAbleVar(*name, ability))
+            } else {
+                // Mismatch for now.
+                // TODO check ability hierarchies.
+                mismatch!(
+                    %not_able, ctx.second, ability,
+                    "RigidAble {:?} with ability {:?} not compatible with ability {:?}",
+                    ctx.first,
+                    ability,
+                    other_ability
+                )
             }
         }
 
@@ -1824,7 +2019,8 @@ fn unify_rigid(
         | RecursionVar { .. }
         | Structure(_)
         | Alias(..)
-        | RangedNumber(..) => {
+        | RangedNumber(..)
+        | LambdaSet(..) => {
             // Type mismatch! Rigid can only unify with flex, even if the
             // rigid names are the same.
             mismatch!("Rigid {:?} with {:?}", ctx.first, &other)
@@ -1842,45 +2038,19 @@ fn unify_flex(
     subs: &mut Subs,
     ctx: &Context,
     opt_name: &Option<SubsIndex<Lowercase>>,
-    opt_able_bound: Option<Symbol>,
     other: &Content,
 ) -> Outcome {
     match other {
         FlexVar(other_opt_name) => {
             // Prefer using right's name.
             let opt_name = opt_name.or(*other_opt_name);
-            match opt_able_bound {
-                Some(ability) => merge(subs, ctx, FlexAbleVar(opt_name, ability)),
-                None => merge(subs, ctx, FlexVar(opt_name)),
-            }
+            merge(subs, ctx, FlexVar(opt_name))
         }
 
-        FlexAbleVar(opt_other_name, other_ability) => {
-            // Prefer the right's name when possible.
+        FlexAbleVar(opt_other_name, ability) => {
+            // Prefer using right's name.
             let opt_name = (opt_other_name).or(*opt_name);
-
-            match opt_able_bound {
-                Some(ability) => {
-                    if ability == *other_ability {
-                        // The ability bounds are the same! Keep the name around if it exists.
-                        merge(subs, ctx, FlexAbleVar(opt_name, ability))
-                    } else {
-                        // Ability names differ; mismatch for now.
-                        // TODO check ability hierarchies.
-                        mismatch!(
-                            %not_able, ctx.second, ability,
-                            "FlexAble {:?} with ability {:?} not compatible with ability {:?}",
-                            ctx.first,
-                            ability,
-                            other_ability
-                        )
-                    }
-                }
-                None => {
-                    // Right has an ability bound, but left might have the name. Combine them.
-                    merge(subs, ctx, FlexAbleVar(opt_name, *other_ability))
-                }
-            }
+            merge(subs, ctx, FlexAbleVar(opt_name, *ability))
         }
 
         RigidVar(_)
@@ -1888,7 +2058,8 @@ fn unify_flex(
         | RecursionVar { .. }
         | Structure(_)
         | Alias(_, _, _, _)
-        | RangedNumber(..) => {
+        | RangedNumber(..)
+        | LambdaSet(..) => {
             // TODO special-case boolean here
             // In all other cases, if left is flex, defer to right.
             merge(subs, ctx, *other)
@@ -1896,6 +2067,114 @@ fn unify_flex(
 
         Error => merge(subs, ctx, Error),
     }
+}
+
+#[inline(always)]
+fn unify_flex_able(
+    subs: &mut Subs,
+    ctx: &Context,
+    opt_name: &Option<SubsIndex<Lowercase>>,
+    ability: Symbol,
+    other: &Content,
+) -> Outcome {
+    match other {
+        FlexVar(opt_other_name) => {
+            // Prefer using right's name.
+            let opt_name = (opt_other_name).or(*opt_name);
+            merge(subs, ctx, FlexAbleVar(opt_name, ability))
+        }
+
+        FlexAbleVar(opt_other_name, other_ability) => {
+            // Prefer the right's name when possible.
+            let opt_name = (opt_other_name).or(*opt_name);
+
+            if ability == *other_ability {
+                merge(subs, ctx, FlexAbleVar(opt_name, ability))
+            } else {
+                // Ability names differ; mismatch for now.
+                // TODO check ability hierarchies.
+                mismatch!(
+                    %not_able, ctx.second, ability,
+                    "FlexAble {:?} with ability {:?} not compatible with ability {:?}",
+                    ctx.first,
+                    ability,
+                    other_ability
+                )
+            }
+        }
+
+        RigidAbleVar(_, other_ability) => {
+            if ability == *other_ability {
+                merge(subs, ctx, *other)
+            } else {
+                mismatch!(%not_able, ctx.second, ability, "RigidAble {:?} vs {:?}", ability, other_ability)
+            }
+        }
+
+        RigidVar(_) => mismatch!("FlexAble can never unify with non-able Rigid"),
+        RecursionVar { .. } => mismatch!("FlexAble with RecursionVar"),
+        LambdaSet(..) => mismatch!("FlexAble with LambdaSet"),
+
+        Alias(name, args, _real_var, AliasKind::Opaque) => {
+            if args.is_empty() {
+                // Opaque type wins
+                merge_flex_able_with_concrete(
+                    subs,
+                    ctx,
+                    ctx.first,
+                    ability,
+                    *other,
+                    Obligated::Opaque(*name),
+                )
+            } else {
+                mismatch!("FlexAble vs Opaque with type vars")
+            }
+        }
+
+        Structure(_) | Alias(_, _, _, AliasKind::Structural) | RangedNumber(..) => {
+            // Structural type wins.
+            merge_flex_able_with_concrete(
+                subs,
+                ctx,
+                ctx.first,
+                ability,
+                *other,
+                Obligated::Adhoc(ctx.second),
+            )
+        }
+
+        Error => merge(subs, ctx, Error),
+    }
+}
+
+fn merge_flex_able_with_concrete(
+    subs: &mut Subs,
+    ctx: &Context,
+    flex_able_var: Variable,
+    ability: Symbol,
+    concrete_content: Content,
+    concrete_obligation: Obligated,
+) -> Outcome {
+    let mut outcome = merge(subs, ctx, concrete_content);
+    let must_implement_ability = MustImplementAbility {
+        typ: concrete_obligation,
+        ability,
+    };
+    outcome.must_implement_ability.push(must_implement_ability);
+
+    // Figure which, if any, lambda sets should be specialized thanks to the flex able var
+    // being instantiated. Now as much as I would love to do that here, we don't, because we might
+    // be in the middle of solving a module and not resolved all available ability implementations
+    // yet! Instead we chuck it up in the [Outcome] and let our caller do the resolution.
+    //
+    // If we ever organize ability implementations so that they are well-known before any other
+    // unification is done, they can be solved in-band here!
+    let uls_of_concrete = subs.remove_dependent_unspecialized_lambda_sets(flex_able_var);
+    outcome
+        .lambda_sets_to_specialize
+        .extend(flex_able_var, uls_of_concrete);
+
+    outcome
 }
 
 #[inline(always)]
@@ -1966,6 +2245,11 @@ fn unify_recursion(
             ctx.first,
             &other
         ),
+
+        LambdaSet(..) => {
+            // suppose that the recursion var is a lambda set
+            unify_pool(subs, pool, structure, ctx.second, ctx.mode)
+        }
 
         Error => merge(subs, ctx, Error),
     }
@@ -2040,11 +2324,12 @@ fn unify_function_or_tag_union_and_func(
     };
 
     {
-        let tag_name = TagName::Closure(tag_symbol);
-        let union_tags = UnionTags::tag_without_arguments(subs, tag_name);
-
-        let lambda_set_ext = subs.fresh_unnamed_flex_var();
-        let lambda_set_content = Structure(FlatType::TagUnion(union_tags, lambda_set_ext));
+        let union_tags = UnionLambdas::tag_without_arguments(subs, tag_symbol);
+        let lambda_set_content = LambdaSet(self::LambdaSet {
+            solved: union_tags,
+            recursion_var: OptVariable::NONE,
+            unspecialized: SubsSlice::default(),
+        });
 
         let tag_lambda_set = register(
             subs,

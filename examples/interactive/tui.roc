@@ -1,7 +1,7 @@
 app "tui"
     packages { pf: "tui-platform" }
-    imports [ pf.Program.{ Program } ]
-    provides [ main ] { Model } to pf
+    imports [pf.Program.{ Program }]
+    provides [main] { Model } to pf
 
 Model : Str
 

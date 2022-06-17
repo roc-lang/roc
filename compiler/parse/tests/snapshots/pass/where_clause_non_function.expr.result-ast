@@ -1,6 +1,20 @@
 Defs(
-    [
-        @0-15 Value(
+    Defs {
+        tags: [
+            Index(2147483648),
+        ],
+        regions: [
+            @0-15,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
             Annotation(
                 @0-1 Identifier(
                     "f",
@@ -21,8 +35,8 @@ Defs(
                     ],
                 ),
             ),
-        ),
-    ],
+        ],
+    },
     @17-18 SpaceBefore(
         Var {
             module_name: "",

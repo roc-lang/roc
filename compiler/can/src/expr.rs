@@ -16,7 +16,7 @@ use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{self, EscapedChar, StrLiteral};
+use roc_parse::ast::{self, Defs, EscapedChar, StrLiteral};
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
@@ -203,7 +203,7 @@ pub enum Expr {
         // definition, which we then use during constraint generation. For example
         // suppose we have
         //
-        //   Id n := [ Id U64 n ]
+        //   Id n := [Id U64 n]
         //   @Id "sasha"
         //
         // Then `opaque` is "Id", `argument` is "sasha", but this is not enough for us to
@@ -211,14 +211,18 @@ pub enum Expr {
         // the variable "n".
         // That's what `specialized_def_type` and `type_arguments` are for; they are specialized
         // for the expression from the opaque definition. `type_arguments` is something like
-        // [(n, fresh1)], and `specialized_def_type` becomes "[ Id U64 fresh1 ]".
+        // [(n, fresh1)], and `specialized_def_type` becomes "[Id U64 fresh1]".
         specialized_def_type: Box<Type>,
         type_arguments: Vec<OptAbleVar>,
         lambda_set_variables: Vec<LambdaSet>,
     },
 
-    /// Test
-    Expect(Box<Loc<Expr>>, Box<Loc<Expr>>),
+    // Test
+    Expect {
+        loc_condition: Box<Loc<Expr>>,
+        loc_continuation: Box<Loc<Expr>>,
+        lookups_in_cond: Vec<(Symbol, Variable)>,
+    },
 
     /// Rendered as empty box in editor
     TypedHole(Variable),
@@ -262,7 +266,7 @@ impl Expr {
                 args_count: 0,
             },
             &Self::OpaqueRef { name, .. } => Category::OpaqueWrap(name),
-            Self::Expect(..) => Category::Expect,
+            Self::Expect { .. } => Category::Expect,
 
             // these nodes place no constraints on the expression's type
             Self::TypedHole(_) | Self::RuntimeError(..) => Category::Unknown,
@@ -300,7 +304,6 @@ impl AnnotatedMark {
 pub struct ClosureData {
     pub function_type: Variable,
     pub closure_type: Variable,
-    pub closure_ext_var: Variable,
     pub return_type: Variable,
     pub name: Symbol,
     pub captured_symbols: Vec<(Symbol, Variable)>,
@@ -321,7 +324,6 @@ pub struct AccessorData {
     pub function_var: Variable,
     pub record_var: Variable,
     pub closure_var: Variable,
-    pub closure_ext_var: Variable,
     pub ext_var: Variable,
     pub field_var: Variable,
     pub field: Lowercase,
@@ -334,7 +336,6 @@ impl AccessorData {
             function_var,
             record_var,
             closure_var,
-            closure_ext_var,
             ext_var,
             field_var,
             field,
@@ -366,7 +367,6 @@ impl AccessorData {
         ClosureData {
             function_type: function_var,
             closure_type: closure_var,
-            closure_ext_var,
             return_type: field_var,
             name,
             captured_symbols: vec![],
@@ -729,7 +729,8 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::Defs(loc_defs, loc_ret) => {
             // The body expression gets a new scope for canonicalization,
             scope.inner_scope(|inner_scope| {
-                can_defs_with_return(env, var_store, inner_scope, loc_defs, loc_ret)
+                let defs: Defs = (*loc_defs).clone();
+                can_defs_with_return(env, var_store, inner_scope, env.arena.alloc(defs), loc_ret)
             })
         }
         ast::Expr::Backpassing(_, _, _) => {
@@ -810,7 +811,6 @@ pub fn canonicalize_expr<'a>(
                 record_var: var_store.fresh(),
                 ext_var: var_store.fresh(),
                 closure_var: var_store.fresh(),
-                closure_ext_var: var_store.fresh(),
                 field_var: var_store.fresh(),
                 field: (*field).into(),
             }),
@@ -824,7 +824,7 @@ pub fn canonicalize_expr<'a>(
 
             (
                 ZeroArgumentTag {
-                    name: TagName::Tag((*tag).into()),
+                    name: TagName((*tag).into()),
                     variant_var,
                     closure_name: symbol,
                     ext_var,
@@ -848,6 +848,10 @@ pub fn canonicalize_expr<'a>(
             let (loc_condition, output1) =
                 canonicalize_expr(env, var_store, scope, condition.region, &condition.value);
 
+            // Get all the lookups that were referenced in the condition,
+            // so we can print their values later.
+            let lookups_in_cond = get_lookup_symbols(&loc_condition.value, var_store);
+
             let (loc_continuation, output2) = canonicalize_expr(
                 env,
                 var_store,
@@ -860,7 +864,11 @@ pub fn canonicalize_expr<'a>(
             output.union(output2);
 
             (
-                Expect(Box::new(loc_condition), Box::new(loc_continuation)),
+                Expect {
+                    loc_condition: Box::new(loc_condition),
+                    loc_continuation: Box::new(loc_continuation),
+                    lookups_in_cond,
+                },
                 output,
             )
         }
@@ -1135,7 +1143,6 @@ fn canonicalize_closure_body<'a>(
     let closure_data = ClosureData {
         function_type: var_store.fresh(),
         closure_type: var_store.fresh(),
-        closure_ext_var: var_store.fresh(),
         return_type: var_store.fresh(),
         name: symbol,
         captured_symbols,
@@ -1516,18 +1523,26 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             }
         }
 
-        Expect(loc_condition, loc_expr) => {
+        Expect {
+            loc_condition,
+            loc_continuation,
+            lookups_in_cond,
+        } => {
             let loc_condition = Loc {
                 region: loc_condition.region,
                 value: inline_calls(var_store, scope, loc_condition.value),
             };
 
-            let loc_expr = Loc {
-                region: loc_expr.region,
-                value: inline_calls(var_store, scope, loc_expr.value),
+            let loc_continuation = Loc {
+                region: loc_continuation.region,
+                value: inline_calls(var_store, scope, loc_continuation.value),
             };
 
-            Expect(Box::new(loc_condition), Box::new(loc_expr))
+            Expect {
+                loc_condition: Box::new(loc_condition),
+                loc_continuation: Box::new(loc_continuation),
+                lookups_in_cond,
+            }
         }
 
         LetRec(defs, loc_expr, mark) => {
@@ -1577,7 +1592,6 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         Closure(ClosureData {
             function_type,
             closure_type,
-            closure_ext_var,
             return_type,
             recursive,
             name,
@@ -1594,7 +1608,6 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             Closure(ClosureData {
                 function_type,
                 closure_type,
-                closure_ext_var,
                 return_type,
                 recursive,
                 name,
@@ -1993,7 +2006,6 @@ impl Declarations {
 
         let function_def = FunctionDef {
             closure_type: loc_closure_data.value.closure_type,
-            closure_ext_var: loc_closure_data.value.closure_ext_var,
             return_type: loc_closure_data.value.return_type,
             captured_symbols: loc_closure_data.value.captured_symbols,
             arguments: loc_closure_data.value.arguments,
@@ -2036,7 +2048,6 @@ impl Declarations {
 
         let function_def = FunctionDef {
             closure_type: loc_closure_data.value.closure_type,
-            closure_ext_var: loc_closure_data.value.closure_ext_var,
             return_type: loc_closure_data.value.return_type,
             captured_symbols: loc_closure_data.value.captured_symbols,
             arguments: loc_closure_data.value.arguments,
@@ -2162,7 +2173,6 @@ impl Declarations {
             Expr::Closure(closure_data) => {
                 let function_def = FunctionDef {
                     closure_type: closure_data.closure_type,
-                    closure_ext_var: closure_data.closure_ext_var,
                     return_type: closure_data.return_type,
                     captured_symbols: closure_data.captured_symbols,
                     arguments: closure_data.arguments,
@@ -2226,6 +2236,7 @@ roc_error_macros::assert_sizeof_default!(DeclarationTag, 8);
 #[derive(Clone, Copy, Debug)]
 pub enum DeclarationTag {
     Value,
+    Expectation,
     Function(Index<Loc<FunctionDef>>),
     Recursive(Index<Loc<FunctionDef>>),
     TailRecursive(Index<Loc<FunctionDef>>),
@@ -2243,6 +2254,7 @@ impl DeclarationTag {
             DeclarationTag::Recursive(_) => 1,
             DeclarationTag::TailRecursive(_) => 1,
             DeclarationTag::Value => 1,
+            DeclarationTag::Expectation => 1,
             DeclarationTag::Destructure(_) => 1,
             DeclarationTag::MutualRecursion { length, .. } => length as usize + 1,
         }
@@ -2252,7 +2264,6 @@ impl DeclarationTag {
 #[derive(Clone, Debug)]
 pub struct FunctionDef {
     pub closure_type: Variable,
-    pub closure_ext_var: Variable,
     pub return_type: Variable,
     pub captured_symbols: Vec<(Symbol, Variable)>,
     pub arguments: Vec<(Variable, AnnotatedMark, Loc<Pattern>)>,
@@ -2262,4 +2273,109 @@ pub struct FunctionDef {
 pub struct DestructureDef {
     pub loc_pattern: Loc<Pattern>,
     pub pattern_vars: VecMap<Symbol, Variable>,
+}
+
+fn get_lookup_symbols(expr: &Expr, var_store: &mut VarStore) -> Vec<(Symbol, Variable)> {
+    let mut stack: Vec<&Expr> = vec![expr];
+    let mut symbols = Vec::new();
+
+    while let Some(expr) = stack.pop() {
+        match expr {
+            Expr::Var(symbol) | Expr::Update { symbol, .. } | Expr::AbilityMember(symbol, _, _) => {
+                // Don't introduce duplicates, or make unused variables
+                if !symbols.iter().any(|(sym, _)| sym == symbol) {
+                    symbols.push((*symbol, var_store.fresh()));
+                }
+            }
+            Expr::List { loc_elems, .. } => {
+                stack.extend(loc_elems.iter().map(|loc_elem| &loc_elem.value));
+            }
+            Expr::When {
+                loc_cond, branches, ..
+            } => {
+                stack.push(&loc_cond.value);
+
+                stack.reserve(branches.len());
+
+                for branch in branches {
+                    stack.push(&branch.value.value);
+
+                    if let Some(guard) = &branch.guard {
+                        stack.push(&guard.value);
+                    }
+                }
+            }
+            Expr::If {
+                branches,
+                final_else,
+                ..
+            } => {
+                stack.reserve(1 + branches.len() * 2);
+
+                for (loc_cond, loc_body) in branches {
+                    stack.push(&loc_cond.value);
+                    stack.push(&loc_body.value);
+                }
+
+                stack.push(&final_else.value);
+            }
+            Expr::LetRec(_, _, _) => todo!(),
+            Expr::LetNonRec { .. } => todo!(),
+            Expr::Call(boxed_expr, args, _called_via) => {
+                stack.reserve(1 + args.len());
+
+                match &boxed_expr.1.value {
+                    Expr::Var(_) => {
+                        // do nothing
+                    }
+                    function_expr => {
+                        // add the expr being called
+                        stack.push(function_expr);
+                    }
+                }
+
+                for (_var, loc_arg) in args {
+                    stack.push(&loc_arg.value);
+                }
+            }
+            Expr::Tag { arguments, .. } => {
+                stack.extend(arguments.iter().map(|(_var, loc_expr)| &loc_expr.value));
+            }
+            Expr::RunLowLevel { args, .. } | Expr::ForeignCall { args, .. } => {
+                stack.extend(args.iter().map(|(_var, arg)| arg));
+            }
+            Expr::OpaqueRef { argument, .. } => {
+                stack.push(&argument.1.value);
+            }
+            Expr::Access { loc_expr, .. }
+            | Expr::Closure(ClosureData {
+                loc_body: loc_expr, ..
+            }) => {
+                stack.push(&loc_expr.value);
+            }
+            Expr::Record { fields, .. } => {
+                stack.extend(fields.iter().map(|(_, field)| &field.loc_expr.value));
+            }
+            Expr::Expect {
+                loc_continuation, ..
+            } => {
+                stack.push(&(*loc_continuation).value);
+
+                // Intentionally ignore the lookups in the nested `expect` condition itself,
+                // because they couldn't possibly influence the outcome of this `expect`!
+            }
+            Expr::Num(_, _, _, _)
+            | Expr::Float(_, _, _, _, _)
+            | Expr::Int(_, _, _, _, _)
+            | Expr::Str(_)
+            | Expr::ZeroArgumentTag { .. }
+            | Expr::Accessor(_)
+            | Expr::SingleQuote(_)
+            | Expr::EmptyRecord
+            | Expr::TypedHole(_)
+            | Expr::RuntimeError(_) => {}
+        }
+    }
+
+    symbols
 }

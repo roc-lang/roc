@@ -2737,6 +2737,81 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             }
         }
 
+        Expect {
+            condition: cond,
+            region: _,
+            lookups: _,
+            layouts: _,
+            remainder,
+        } => {
+            // do stuff
+
+            let bd = env.builder;
+            let context = env.context;
+
+            let (cond, _cond_layout) = load_symbol_and_layout(scope, cond);
+
+            let condition = bd.build_int_compare(
+                IntPredicate::EQ,
+                cond.into_int_value(),
+                context.bool_type().const_int(1, false),
+                "is_true",
+            );
+
+            let then_block = context.append_basic_block(parent, "then_block");
+            let throw_block = context.append_basic_block(parent, "throw_block");
+
+            bd.build_conditional_branch(condition, then_block, throw_block);
+
+            {
+                bd.position_at_end(throw_block);
+
+                match env.target_info.ptr_width() {
+                    roc_target::PtrWidth::Bytes8 => {
+                        let func = env
+                            .module
+                            .get_function(bitcode::UTILS_EXPECT_FAILED)
+                            .unwrap();
+                        // TODO get the actual line info instead of
+                        // hardcoding as zero!
+                        let callable = CallableValue::try_from(func).unwrap();
+                        let start_line = context.i32_type().const_int(0, false);
+                        let end_line = context.i32_type().const_int(0, false);
+                        let start_col = context.i16_type().const_int(0, false);
+                        let end_col = context.i16_type().const_int(0, false);
+
+                        bd.build_call(
+                            callable,
+                            &[
+                                start_line.into(),
+                                end_line.into(),
+                                start_col.into(),
+                                end_col.into(),
+                            ],
+                            "call_expect_failed",
+                        );
+
+                        bd.build_unconditional_branch(then_block);
+                    }
+                    roc_target::PtrWidth::Bytes4 => {
+                        // temporary WASM implementation
+                        throw_exception(env, "An expectation failed!");
+                    }
+                }
+            }
+
+            bd.position_at_end(then_block);
+
+            build_exp_stmt(
+                env,
+                layout_ids,
+                func_spec_solutions,
+                scope,
+                parent,
+                remainder,
+            )
+        }
+
         RuntimeError(error_msg) => {
             throw_exception(env, error_msg);
 
@@ -3221,12 +3296,20 @@ fn expose_function_to_host<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     symbol: Symbol,
     roc_function: FunctionValue<'ctx>,
-    arguments: &[Layout<'a>],
+    arguments: &'a [Layout<'a>],
     return_layout: Layout<'a>,
+    layout_ids: &mut LayoutIds<'a>,
 ) {
-    // Assumption: there is only one specialization of a host-exposed function
     let ident_string = symbol.as_str(&env.interns);
-    let c_function_name: String = format!("roc__{}_1_exposed", ident_string);
+
+    let proc_layout = ProcLayout {
+        arguments,
+        result: return_layout,
+    };
+
+    let c_function_name: String = layout_ids
+        .get_toplevel(symbol, &proc_layout)
+        .to_exposed_symbol_string(symbol, &env.interns);
 
     expose_function_to_host_help_c_abi(
         env,
@@ -4002,6 +4085,7 @@ pub fn build_proc_headers<'a, 'ctx, 'env>(
     mod_solutions: &'a ModSolutions,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     scope: &mut Scope<'a, 'ctx>,
+    layout_ids: &mut LayoutIds<'a>,
     // alias_analysis_solutions: AliasAnalysisSolutions,
 ) -> Vec<
     'a,
@@ -4021,7 +4105,7 @@ pub fn build_proc_headers<'a, 'ctx, 'env>(
         let it = func_solutions.specs();
         let mut function_values = Vec::with_capacity_in(it.size_hint().0, env.arena);
         for specialization in it {
-            let fn_val = build_proc_header(env, *specialization, symbol, &proc);
+            let fn_val = build_proc_header(env, *specialization, symbol, &proc, layout_ids);
 
             if proc.args.is_empty() {
                 // this is a 0-argument thunk, i.e. a top-level constant definition
@@ -4092,7 +4176,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
     // Add all the Proc headers to the module.
     // We have to do this in a separate pass first,
     // because their bodies may reference each other.
-    let headers = build_proc_headers(env, mod_solutions, procedures, &mut scope);
+    let headers = build_proc_headers(env, mod_solutions, procedures, &mut scope, &mut layout_ids);
 
     let (_, function_pass) = construct_optimization_passes(env.module, opt_level);
 
@@ -4181,6 +4265,7 @@ fn build_proc_header<'a, 'ctx, 'env>(
     func_spec: FuncSpec,
     symbol: Symbol,
     proc: &roc_mono::ir::Proc<'a>,
+    layout_ids: &mut LayoutIds<'a>,
 ) -> FunctionValue<'ctx> {
     let args = proc.args;
     let arena = env.arena;
@@ -4218,6 +4303,7 @@ fn build_proc_header<'a, 'ctx, 'env>(
             fn_val,
             arguments.into_bump_slice(),
             proc.ret_layout,
+            layout_ids,
         );
     }
 
@@ -5652,7 +5738,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             list_join(env, list, element_layout)
         }
         ListGetUnsafe => {
-            // List.get : List elem, Nat -> [ Ok elem, OutOfBounds ]*
+            // List.get : List elem, Nat -> [Ok elem, OutOfBounds]*
             debug_assert_eq!(args.len(), 2);
 
             let (wrapper_struct, list_layout) = load_symbol_and_layout(scope, &args[0]);
@@ -6126,67 +6212,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (set, _set_layout) = load_symbol_and_layout(scope, &args[0]);
 
             set
-        }
-        ExpectTrue => {
-            debug_assert_eq!(args.len(), 1);
-
-            let context = env.context;
-            let bd = env.builder;
-
-            let (cond, _cond_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let condition = bd.build_int_compare(
-                IntPredicate::EQ,
-                cond.into_int_value(),
-                context.bool_type().const_int(1, false),
-                "is_true",
-            );
-
-            let then_block = context.append_basic_block(parent, "then_block");
-            let throw_block = context.append_basic_block(parent, "throw_block");
-
-            bd.build_conditional_branch(condition, then_block, throw_block);
-
-            {
-                bd.position_at_end(throw_block);
-
-                match env.target_info.ptr_width() {
-                    roc_target::PtrWidth::Bytes8 => {
-                        let func = env
-                            .module
-                            .get_function(bitcode::UTILS_EXPECT_FAILED)
-                            .unwrap();
-                        // TODO get the actual line info instead of
-                        // hardcoding as zero!
-                        let callable = CallableValue::try_from(func).unwrap();
-                        let start_line = context.i32_type().const_int(0, false);
-                        let end_line = context.i32_type().const_int(0, false);
-                        let start_col = context.i16_type().const_int(0, false);
-                        let end_col = context.i16_type().const_int(0, false);
-
-                        bd.build_call(
-                            callable,
-                            &[
-                                start_line.into(),
-                                end_line.into(),
-                                start_col.into(),
-                                end_col.into(),
-                            ],
-                            "call_expect_failed",
-                        );
-
-                        bd.build_unconditional_branch(then_block);
-                    }
-                    roc_target::PtrWidth::Bytes4 => {
-                        // temporary WASM implementation
-                        throw_exception(env, "An expectation failed!");
-                    }
-                }
-            }
-
-            bd.position_at_end(then_block);
-
-            cond
         }
 
         ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk
@@ -7258,7 +7283,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
             )
         }
         NumToIntChecked => {
-            // return_layout : Result N [ OutOfBounds ]* ~ { result: N, out_of_bounds: bool }
+            // return_layout : Result N [OutOfBounds]* ~ { result: N, out_of_bounds: bool }
 
             let target_int_width = match return_layout {
                 Layout::Struct { field_layouts, .. } if field_layouts.len() == 2 => {
