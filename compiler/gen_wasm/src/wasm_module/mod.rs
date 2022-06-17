@@ -194,7 +194,9 @@ impl<'a> WasmModule<'a> {
             .filter(|ex| ex.ty == ExportType::Func)
             .map(|ex| ex.index);
 
-        // Indirect calls (function pointers) need special treatment
+        // The ElementSection lists all functions whose "address" is taken.
+        // Find their signatures so we can trace all possible indirect calls.
+        // (The call_indirect instruction specifies a function signature.)
         let indirect_callees_and_signatures = Vec::from_iter_in(
             self.element
                 .segments
