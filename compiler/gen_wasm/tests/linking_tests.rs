@@ -34,6 +34,12 @@ fn build_host() -> std::vec::Vec<u8> {
         .output()
         .expect("failed to compile host");
 
+    // need to run this twice on MacOS for some reason
+    Command::new("zig")
+        .args(args)
+        .output()
+        .expect("failed to compile host");
+
     println!("Built linking test host at {}", TEST_HOST_TARGET);
     fs::read(TEST_HOST_TARGET).unwrap()
 }
