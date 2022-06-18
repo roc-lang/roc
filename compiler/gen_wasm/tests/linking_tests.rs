@@ -30,6 +30,9 @@ fn build_host() -> std::vec::Vec<u8> {
     ];
 
     // println!("zig {}", args.join(" "));
+    println!("zig cmd out: {:?}", Command::new("zig")
+    .args(args)
+    .output());
 
     Command::new("zig")
         .args(args)
