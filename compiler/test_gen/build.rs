@@ -38,7 +38,7 @@ fn build_wasm_linking_test_host() {
             &format!("-femit-bin={}", LINKING_TEST_HOST_WASM),
         ])
         .output()
-        .expect(&format!("failed to compile {}", LINKING_TEST_HOST_WASM));
+        .unwrap();
 
     let host_obj = "build/wasm_linking_test_host.o";
     Command::new("zig")
@@ -48,7 +48,7 @@ fn build_wasm_linking_test_host() {
             &format!("-femit-bin={}", host_obj),
         ])
         .output()
-        .expect(&format!("failed to compile {}", host_obj));
+        .unwrap();
 
     let import_obj = "build/wasm_linking_host_imports.o";
     Command::new("zig")
@@ -58,7 +58,7 @@ fn build_wasm_linking_test_host() {
             &format!("-femit-bin={}", import_obj),
         ])
         .output()
-        .expect(&format!("failed to compile {}", import_obj));
+        .unwrap();
 
     Command::new("zig")
         .args([
@@ -68,7 +68,7 @@ fn build_wasm_linking_test_host() {
             &format!("-femit-bin={}", LINKING_TEST_HOST_NATIVE),
         ])
         .output()
-        .expect(&format!("failed to compile {}", LINKING_TEST_HOST_NATIVE));
+        .unwrap();
 }
 
 fn build_wasm_test_host() {
