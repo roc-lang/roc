@@ -29,11 +29,6 @@ fn build_host() -> std::vec::Vec<u8> {
         &format!("-femit-bin={}", TEST_HOST_TARGET),
     ];
 
-    // println!("zig {}", args.join(" "));
-    println!("zig cmd out: {:?}", Command::new("zig")
-    .args(args)
-    .output());
-
     Command::new("zig")
         .args(args)
         .output()
