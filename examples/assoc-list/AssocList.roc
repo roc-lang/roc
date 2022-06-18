@@ -53,7 +53,7 @@ contains = \@AssocList list, needle ->
 ## Runs in linear time (because we need to check for duplicates).
 insertNew : AssocList k v, k, v -> AssocList k v
 insertNew = \assocList, k, v ->
-    insertNewLazy assocList k (\Unit -> v)
+    insertNewLazy assocList k (\{} -> v)
 
 ## Inserts a new association, but only if the key was not yet in the association list.
 ## Otherwise, returns the list unchanged.
@@ -61,12 +61,12 @@ insertNew = \assocList, k, v ->
 ## Variant of [insertNew] that only builds the new value if it will be used.
 ##
 ## Runs in linear time (because we need to check for duplicates).
-insertNewLazy : AssocList k v, k, ([Unit] -> v) -> AssocList k v
+insertNewLazy : AssocList k v, k, ({} -> v) -> AssocList k v
 insertNewLazy = \assocList, k, fun ->
     if contains assocList k then
         assocList
     else
-        insertFresh assocList k (fun Unit)
+        insertFresh assocList k (fun {})
 
 ## Inserts a new association, overriding an existing one if an association of k already existed.
 ##
