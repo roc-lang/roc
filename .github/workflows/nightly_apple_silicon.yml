@@ -15,29 +15,25 @@ jobs:
       - uses: actions/checkout@v2
       - name: zig version
         run: zig version
-      - name: which zig
-        run: which zig  
-      - name: zig env
-        run: zig env
       - name: llvm version
         run: llc --version | grep LLVM
       - name: run tests 
         run: cargo test --locked # no --release yet until #3166 is fixed
       - name: write version to file
-        run: printf 'nightly pre-release, built from commit ' > version.txt && git log --pretty=format:'%h' -n 1 >> version.txt && printf ' on ' >> version.txt && date >> version.txt
+        run: ./ci/write_version.sh
       - name: build nightly release
         run: cargo build --locked --release
       - name: package release
-        run: cd ./target/release && tar -czvf roc_darwin_apple_silicon.tar.gz ./roc ../../LICENSE ../../LEGAL_DETAILS ../../examples/hello-world ../../compiler/builtins/bitcode/src/ ../../roc_std
-      # - name: Create pre-release with test_archive.tar.gz
-      #   uses: WebFreak001/deploy-nightly@v1.1.0
-      #   env:
-      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # automatically provided by github actions
-      #   with:
-      #     upload_url: https://uploads.github.com/repos/rtfeldman/roc/releases/51880579/assets{?name,label}
-      #     release_id: 51880579
-      #     asset_path: ./roc_darwin_apple_silicon.tar.gz
-      #     asset_name: roc_nightly-darwin_apple_silicon-$$.tar.gz # $$ inserts date (YYYYMMDD) and 6 letter commit hash
-      #     asset_content_type: application/gzip
-      #     max_releases: 3
+        run: ./ci/package_release.sh roc_darwin_apple_silicon.tar.gz
+      - name: Create pre-release with test_archive.tar.gz
+        uses: WebFreak001/deploy-nightly@v1.1.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # automatically provided by github actions
+        with:
+          upload_url: https://uploads.github.com/repos/rtfeldman/roc/releases/51880579/assets{?name,label}
+          release_id: 51880579
+          asset_path: ./roc_darwin_apple_silicon.tar.gz
+          asset_name: roc_nightly-darwin_apple_silicon-$$.tar.gz # $$ inserts date (YYYYMMDD) and 6 letter commit hash
+          asset_content_type: application/gzip
+          max_releases: 6
 

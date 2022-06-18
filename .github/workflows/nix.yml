@@ -1,6 +1,6 @@
 on: [pull_request]
 
-name: Nix M1 cargo test
+name: Nix apple silicon cargo test
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -10,8 +10,8 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  nix-m1:
-    name: nix-m1
+  nix-apple-silicon:
+    name: nix-apple-silicon
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 90
     steps:
@@ -23,4 +23,4 @@ jobs:
         run: nix develop -c cargo test --locked --release --no-run
 
       - name: execute tests with guaranteed success
-        run: nix develop -c cargo test --locked --release --no-fail-fast || true # || true to return a successful exit code so that test failures can be observed
+        run: nix develop -c cargo test --locked  # no --release yet until #3166 is fixed
