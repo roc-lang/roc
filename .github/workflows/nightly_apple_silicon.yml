@@ -32,7 +32,7 @@ jobs:
         with:
           upload_url: https://uploads.github.com/repos/rtfeldman/roc/releases/51880579/assets{?name,label}
           release_id: 51880579
-          asset_path: ./target/release/roc_darwin_apple_silicon.tar.gz
+          asset_path: ./roc_darwin_apple_silicon.tar.gz
           asset_name: roc_nightly-darwin_apple_silicon-$$.tar.gz # $$ inserts date (YYYYMMDD) and 6 letter commit hash
           asset_content_type: application/gzip
           max_releases: 6
