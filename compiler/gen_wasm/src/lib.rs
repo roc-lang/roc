@@ -8,6 +8,7 @@ pub mod wasm_module;
 pub mod wasm32_result;
 pub mod wasm32_sized;
 
+use bitvec::prelude::BitVec;
 use bumpalo::collections::Vec;
 use bumpalo::{self, Bump};
 
@@ -67,7 +68,7 @@ pub fn build_app_binary<'a>(
     let (mut wasm_module, called_preload_fns, _) =
         build_app_module(env, interns, host_module, procedures);
 
-    wasm_module.eliminate_dead_code(env.arena, &called_preload_fns);
+    wasm_module.eliminate_dead_code(env.arena, called_preload_fns);
 
     let mut buffer = std::vec::Vec::with_capacity(wasm_module.size());
     wasm_module.serialize(&mut buffer);
@@ -83,7 +84,7 @@ pub fn build_app_module<'a>(
     interns: &'a mut Interns,
     host_module: WasmModule<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> (WasmModule<'a>, Vec<'a, u32>, u32) {
+) -> (WasmModule<'a>, BitVec<usize>, u32) {
     let mut layout_ids = LayoutIds::default();
     let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
     let mut proc_lookup = Vec::with_capacity_in(procedures.len() * 2, env.arena);
