@@ -683,9 +683,9 @@ pub struct {name} {{
                     opt_impl.clone(),
                     target_info,
                     format!(
-                        r#"/// Unsafely assume the given {name} has a .discriminant() of {tag_name} and convert it to {tag_name}'s payload.
-    /// (Always examine .discriminant() first to make sure this is the correct variant!)
-    /// Panics in debug builds if the .discriminant() doesn't return {tag_name}.
+                        r#"/// Unsafely assume the given `{name}` has a `.discriminant()` of `{tag_name}` and convert it to `{tag_name}`'s payload.
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `{tag_name}`.
     pub unsafe fn into_{tag_name}({self_for_into}) -> {owned_ret_type} {{
         debug_assert_eq!(self.discriminant(), {discriminant_name}::{tag_name});
 
@@ -701,9 +701,9 @@ pub struct {name} {{
                     opt_impl.clone(),
                     target_info,
                     format!(
-                        r#"/// Unsafely assume the given {name} has a .discriminant() of {tag_name} and return its payload.
-    /// (Always examine .discriminant() first to make sure this is the correct variant!)
-    /// Panics in debug builds if the .discriminant() doesn't return {tag_name}.
+                        r#"/// Unsafely assume the given `{name}` has a `.discriminant()` of `{tag_name}` and return its payload.
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `{tag_name}`.
     pub unsafe fn as_{tag_name}(&self) -> {borrowed_ret_type} {{
         debug_assert_eq!(self.discriminant(), {discriminant_name}::{tag_name});
 
@@ -1473,9 +1473,9 @@ pub struct {name} {{
                 opt_impl.clone(),
                 target_info,
                 format!(
-                    r#"/// Unsafely assume the given {name} has a .discriminant() of {non_null_tag} and convert it to {non_null_tag}'s payload.
-    /// (Always examine .discriminant() first to make sure this is the correct variant!)
-    /// Panics in debug builds if the .discriminant() doesn't return {non_null_tag}.
+                    r#"/// Unsafely assume the given `{name}` has a `.discriminant()` of `{non_null_tag}` and convert it to `{non_null_tag}`'s payload.
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return {non_null_tag}.
     pub unsafe fn into_{non_null_tag}(self) -> {owned_ret_type} {{
         debug_assert_eq!(self.discriminant(), {discriminant_name}::{non_null_tag});
 
@@ -1494,9 +1494,9 @@ pub struct {name} {{
             opt_impl.clone(),
             target_info,
             format!(
-                r#"/// Unsafely assume the given {name} has a .discriminant() of {non_null_tag} and return its payload.
-    /// (Always examine .discriminant() first to make sure this is the correct variant!)
-    /// Panics in debug builds if the .discriminant() doesn't return {non_null_tag}.
+                r#"/// Unsafely assume the given `{name}` has a `.discriminant()` of `{non_null_tag}` and return its payload.
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `{non_null_tag}`.
     pub unsafe fn as_{non_null_tag}(&self) -> {borrowed_ret_type} {{
         debug_assert_eq!(self.discriminant(), {discriminant_name}::{non_null_tag});
 
