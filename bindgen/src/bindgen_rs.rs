@@ -608,9 +608,9 @@ pub struct {name} {{
                             "arg".to_string()
                         };
                     }
-                    RocType::Struct { fields, .. } => {
+                    RocType::Struct { fields, name } => {
                         let answer =
-                            tag_union_struct_help(fields.iter(), *payload_id, types, false);
+                            tag_union_struct_help(name, fields.iter(), *payload_id, types, false);
 
                         owned_ret = answer.owned_ret;
                         borrowed_ret = answer.borrowed_ret;
@@ -619,8 +619,9 @@ pub struct {name} {{
                         payload_args = answer.payload_args;
                         args_to_payload = answer.args_to_payload;
                     }
-                    RocType::TagUnionPayload { fields, .. } => {
-                        let answer = tag_union_struct_help(fields.iter(), *payload_id, types, true);
+                    RocType::TagUnionPayload { fields, name } => {
+                        let answer =
+                            tag_union_struct_help(name, fields.iter(), *payload_id, types, true);
 
                         owned_ret = answer.owned_ret;
                         borrowed_ret = answer.borrowed_ret;
@@ -671,7 +672,7 @@ pub struct {name} {{
                         opt_impl.clone(),
                         target_info,
                         format!(
-                            r#"/// Construct a tag named {tag_name}, with the appropriate payload
+                            r#"/// Construct a tag named `{tag_name}`, with the appropriate payload
     pub fn {tag_name}({payload_args}) -> Self {{{body}
     }}"#
                         ),
@@ -1391,8 +1392,9 @@ pub struct {name} {{
                 owned_ret = "payload".to_string();
                 borrowed_ret = format!("&{owned_ret}");
             }
-            RocType::Struct { fields, .. } => {
-                let answer = tag_union_struct_help(fields.iter(), non_null_payload, types, false);
+            RocType::Struct { fields, name } => {
+                let answer =
+                    tag_union_struct_help(name, fields.iter(), non_null_payload, types, false);
 
                 payload_args = answer.payload_args;
                 args_to_payload = answer.args_to_payload;
@@ -1401,8 +1403,9 @@ pub struct {name} {{
                 owned_ret_type = answer.owned_ret_type;
                 borrowed_ret_type = answer.borrowed_ret_type;
             }
-            RocType::TagUnionPayload { fields, .. } => {
-                let answer = tag_union_struct_help(fields.iter(), non_null_payload, types, true);
+            RocType::TagUnionPayload { fields, name } => {
+                let answer =
+                    tag_union_struct_help(name, fields.iter(), non_null_payload, types, true);
 
                 payload_args = answer.payload_args;
                 args_to_payload = answer.args_to_payload;
@@ -1434,7 +1437,7 @@ pub struct {name} {{
             opt_impl.clone(),
             target_info,
             format!(
-                r#"/// Construct a tag named {non_null_tag}, with the appropriate payload
+                r#"/// Construct a tag named `{non_null_tag}`, with the appropriate payload
     pub fn {non_null_tag}({payload_args}) -> Self {{
         let payload_align = core::mem::align_of::<{payload_type_name}>();
         let self_align = core::mem::align_of::<Self>();
@@ -1707,6 +1710,7 @@ struct StructIngredients {
 }
 
 fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + PartialOrd + 'a>(
+    name: &str,
     fields: I,
     payload_id: TypeId,
     types: &Types,
@@ -1716,7 +1720,13 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
 
     sorted_fields.sort_by(|(label1, _), (label2, _)| label1.partial_cmp(label2).unwrap());
 
-    let mut ret_types = Vec::new();
+    let mut ret_types = if is_tag_union_payload {
+        // This will be a tuple we create when iterating over the fields.
+        Vec::new()
+    } else {
+        vec![name.to_string()]
+    };
+
     let mut ret_values = Vec::new();
 
     for (label, type_id) in sorted_fields.iter() {
@@ -1729,7 +1739,11 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
         };
 
         ret_values.push(format!("payload.{label}"));
-        ret_types.push(type_name(*type_id, types));
+
+        if is_tag_union_payload {
+            // Build up the tuple we'll return.
+            ret_types.push(type_name(*type_id, types));
+        }
     }
 
     let payload_type_name = type_name(payload_id, types);
@@ -1739,7 +1753,8 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
         .map(|(index, typ)| format!("arg{index}: {typ}"))
         .collect::<Vec<String>>()
         .join(", ");
-    let args_to_payload = format!(
+    let args_to_payload = if is_tag_union_payload {
+        format!(
         "core::mem::ManuallyDrop::new({payload_type_name} {{\n{}\n{INDENT}{INDENT}{INDENT}{INDENT}}})",
         sorted_fields
             .iter()
@@ -1751,19 +1766,18 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
                     indents.push_str(INDENT);
                 }
 
-                let label = if is_tag_union_payload {
-                    // Tag union payload fields need "f" prefix
-                    // because they're numbers
-                    format!("f{}", label)
-                } else {
-                    format!("{}", label)
-                };
+                // Tag union payload fields need "f" prefix
+                // because they're numbers
+                let label = format!("f{}", label);
 
                 format!("{indents}{label}: arg{index},")
             })
             .collect::<Vec<String>>()
             .join("\n")
-    );
+    )
+    } else {
+        "core::mem::ManuallyDrop::new(arg0)".to_string()
+    };
     let owned_ret;
     let borrowed_ret;
     let owned_ret_type;
@@ -1773,9 +1787,16 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
         owned_ret_type = ret_types.join("");
         borrowed_ret_type = format!("&{owned_ret_type}");
 
-        let ret_val = ret_values.first().unwrap();
-        owned_ret = format!("\n{INDENT}{INDENT}{ret_val}");
-        borrowed_ret = format!("\n{INDENT}{INDENT}&{ret_val}");
+        if is_tag_union_payload {
+            let ret_val = ret_values.first().unwrap();
+
+            owned_ret = format!("\n{INDENT}{INDENT}{ret_val}");
+            borrowed_ret = format!("\n{INDENT}{INDENT}&{ret_val}");
+        } else {
+            owned_ret = format!("\n{INDENT}{INDENT}payload");
+            // We already define `let payload = &...` so no need for an extra `&` here.
+            borrowed_ret = owned_ret.clone();
+        };
     } else {
         owned_ret_type = format!("({})", ret_types.join(", "));
         borrowed_ret_type = format!(
