@@ -26,7 +26,7 @@ fn main() {
         .args([
             "wasm-ld",
             bitcode::BUILTINS_WASM32_OBJ_PATH,
-            &platform_obj,
+            platform_obj.to_str().unwrap(),
             WASI_COMPILER_RT_PATH,
             WASI_LIBC_PATH,
             "-o",
@@ -46,8 +46,9 @@ fn zig_executable() -> String {
     }
 }
 
-fn build_wasm_platform(out_dir: &str, source_path: &str) -> String {
-    let platform_obj = format!("{}/{}.o", out_dir, PLATFORM_FILENAME);
+fn build_wasm_platform(out_dir: &str, source_path: &str) -> PathBuf {
+    let mut platform_obj = PathBuf::from(out_dir).join(PLATFORM_FILENAME);
+    platform_obj.set_extension("o");
 
     Command::new(&zig_executable())
         .args([
@@ -56,7 +57,7 @@ fn build_wasm_platform(out_dir: &str, source_path: &str) -> String {
             "wasm32-wasi",
             "-lc",
             source_path,
-            &format!("-femit-bin={}", &platform_obj),
+            &format!("-femit-bin={}", platform_obj.to_str().unwrap()),
         ])
         .output()
         .unwrap();
