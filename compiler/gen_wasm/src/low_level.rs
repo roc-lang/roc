@@ -938,16 +938,7 @@ impl<'a> LowLevelCall<'a> {
         locations: [StackMemoryLocation; 2],
     ) {
         match format {
-            StackMemoryFormat::Decimal => {
-                // Both args are finite
-                num_is_finite(backend, self.arguments[0]);
-                num_is_finite(backend, self.arguments[1]);
-                backend.code_builder.i32_and();
-
-                // AND they have the same bytes
-                Self::eq_num128_bytes(backend, locations);
-                backend.code_builder.i32_and();
-            }
+            StackMemoryFormat::Decimal => Self::eq_num128_bytes(backend, locations),
 
             StackMemoryFormat::Int128 => Self::eq_num128_bytes(backend, locations),
 
