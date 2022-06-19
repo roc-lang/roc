@@ -468,7 +468,7 @@ fn f32_float_alias() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn f64_sqrt() {
     assert_evals_to!(
         indoc!(
@@ -484,7 +484,7 @@ fn f64_sqrt() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn f64_log() {
     assert_evals_to!(
         indoc!(
@@ -498,7 +498,7 @@ fn f64_log() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn f64_log_checked_one() {
     assert_evals_to!(
         indoc!(
@@ -514,7 +514,7 @@ fn f64_log_checked_one() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn f64_sqrt_zero() {
     assert_evals_to!(
         indoc!(
@@ -530,7 +530,7 @@ fn f64_sqrt_zero() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn f64_sqrt_checked_negative() {
     assert_evals_to!(
         indoc!(
@@ -546,7 +546,7 @@ fn f64_sqrt_checked_negative() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn f64_log_checked_zero() {
     assert_evals_to!(
         indoc!(
@@ -562,7 +562,7 @@ fn f64_log_checked_zero() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn f64_log_negative() {
     assert_evals_to!(
         indoc!(
@@ -1170,21 +1170,21 @@ fn gen_is_even() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn sin() {
     assert_evals_to!("Num.sin 0", 0.0, f64);
     assert_evals_to!("Num.sin 1.41421356237", 0.9877659459922529, f64);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn cos() {
     assert_evals_to!("Num.cos 0", 1.0, f64);
     assert_evals_to!("Num.cos 3.14159265359", -1.0, f64);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn tan() {
     assert_evals_to!("Num.tan 0", 0.0, f64);
     assert_evals_to!("Num.tan 1", 1.557407724654902, f64);
@@ -1634,7 +1634,7 @@ fn float_compare() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn pow() {
     assert_evals_to!("Num.pow 2.0 2.0", 4.0, f64);
 }

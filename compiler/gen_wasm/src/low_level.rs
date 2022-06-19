@@ -578,10 +578,39 @@ impl<'a> LowLevelCall<'a> {
                     _ => todo!("{:?} for {:?}", self.lowlevel, self.ret_layout),
                 }
             }
-            NumSin => todo!("{:?}", self.lowlevel),
-            NumCos => todo!("{:?}", self.lowlevel),
-            NumSqrtUnchecked => todo!("{:?}", self.lowlevel),
-            NumLogUnchecked => todo!("{:?}", self.lowlevel),
+            NumSin => match self.ret_layout {
+                Layout::Builtin(Builtin::Float(width)) => {
+                    self.load_args_and_call_zig(backend, &bitcode::NUM_SIN[width]);
+                }
+                _ => panic_ret_type(),
+            },
+            NumCos => match self.ret_layout {
+                Layout::Builtin(Builtin::Float(width)) => {
+                    self.load_args_and_call_zig(backend, &bitcode::NUM_COS[width]);
+                }
+                _ => panic_ret_type(),
+            },
+            NumSqrtUnchecked => {
+                self.load_args(backend);
+                match self.ret_layout {
+                    Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                        backend.code_builder.f32_sqrt()
+                    }
+                    Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                        backend.code_builder.f64_sqrt()
+                    }
+                    Layout::Builtin(Builtin::Float(FloatWidth::F128)) => {
+                        todo!("sqrt for f128")
+                    }
+                    _ => panic_ret_type(),
+                }
+            }
+            NumLogUnchecked => match self.ret_layout {
+                Layout::Builtin(Builtin::Float(width)) => {
+                    self.load_args_and_call_zig(backend, &bitcode::NUM_LOG[width]);
+                }
+                _ => panic_ret_type(),
+            },
             NumToFrac => {
                 self.load_args(backend);
                 let ret_type = CodeGenNumType::from(self.ret_layout);
@@ -600,7 +629,12 @@ impl<'a> LowLevelCall<'a> {
                     _ => todo!("{:?}: {:?} -> {:?}", self.lowlevel, arg_type, ret_type),
                 }
             }
-            NumPow => todo!("{:?}", self.lowlevel),
+            NumPow => match self.ret_layout {
+                Layout::Builtin(Builtin::Float(width)) => {
+                    self.load_args_and_call_zig(backend, &bitcode::NUM_POW[width]);
+                }
+                _ => panic_ret_type(),
+            },
             NumRound => {
                 self.load_args(backend);
                 let arg_type = CodeGenNumType::for_symbol(backend, self.arguments[0]);
