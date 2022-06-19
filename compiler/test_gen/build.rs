@@ -1,6 +1,6 @@
 use roc_builtins::bitcode;
 use std::env;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -87,8 +87,8 @@ fn build_wasm_test_host() {
     let platform_path = build_wasm_platform(&out_dir, &source_path);
 
     // Compile again to get libc path
-    let (libc_path, compiler_rt_path) = build_wasm_libc_compilerrt(&out_dir, &source_path);
-    let mut libc_pathbuf = PathBuf::from(&libc_path);
+    let (mut libc_pathbuf, compiler_rt_pathbuf) =
+        build_wasm_libc_compilerrt(&out_dir, &source_path);
     libc_pathbuf.pop();
     let libc_dir = libc_pathbuf.to_str().unwrap();
 
@@ -96,7 +96,7 @@ fn build_wasm_test_host() {
         "wasm-ld",
         bitcode::BUILTINS_WASM32_OBJ_PATH,
         &platform_path,
-        &compiler_rt_path,
+        compiler_rt_pathbuf.to_str().unwrap(),
         "-L",
         libc_dir,
         "-lc",
@@ -138,12 +138,12 @@ fn build_wasm_platform(out_dir: &str, source_path: &str) -> String {
     platform_path
 }
 
-fn build_wasm_libc_compilerrt(out_dir: &str, source_path: &str) -> (String, String) {
+fn build_wasm_libc_compilerrt(out_dir: &str, source_path: &str) -> (PathBuf, PathBuf) {
     let zig_cache_dir = format!("{}/zig-cache-wasm32", out_dir);
+    let zig_cache_path = PathBuf::from(&zig_cache_dir);
 
-    run_command(
-        &zig_executable(),
-        &[
+    Command::new(&zig_executable())
+        .args([
             "build-lib",
             "-dynamic", // ensure libc code is actually generated (not just linked against header)
             "-target",
@@ -153,21 +153,35 @@ fn build_wasm_libc_compilerrt(out_dir: &str, source_path: &str) -> (String, Stri
             "-femit-bin=/dev/null",
             "--global-cache-dir",
             &zig_cache_dir,
-        ],
-    );
+        ])
+        .output()
+        .unwrap();
 
-    let libc_path = run_command("find", &[&zig_cache_dir, "-name", "libc.a"])
-        .split('\n')
-        .next()
+    let libc_path = find(&zig_cache_path, &OsString::from("libc.a"))
         .unwrap()
-        .into();
-    let compiler_rt_path = run_command("find", &[&zig_cache_dir, "-name", "compiler_rt.o"])
-        .split('\n')
-        .next()
+        .unwrap();
+
+    let compiler_rt_path = find(&zig_cache_path, &OsString::from("compiler_rt.o"))
         .unwrap()
-        .into();
+        .unwrap();
 
     (libc_path, compiler_rt_path)
+}
+
+fn find(dir: &Path, filename: &OsString) -> std::io::Result<Option<PathBuf>> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            let found = find(&path, filename)?;
+            if found.is_some() {
+                return Ok(found);
+            }
+        } else if &entry.file_name() == filename {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
 }
 
 fn feature_is_enabled(feature_name: &str) -> bool {
@@ -176,37 +190,4 @@ fn feature_is_enabled(feature_name: &str) -> bool {
         feature_name.replace('-', "_").to_uppercase()
     );
     env::var(cargo_env_var).is_ok()
-}
-
-fn run_command(command_str: &str, args: &[&str]) -> String {
-    let output_result = Command::new(OsStr::new(&command_str))
-        .current_dir(Path::new("."))
-        .args(args)
-        .output();
-
-    let fail = |err: String| {
-        panic!(
-            "\n\nFailed command:\n\t{} {}\n\n{}",
-            command_str,
-            args.join(" "),
-            err
-        );
-    };
-
-    match output_result {
-        Ok(output) => match output.status.success() {
-            true => std::str::from_utf8(&output.stdout)
-                .unwrap()
-                .trim()
-                .to_string(),
-            false => {
-                let error_str = match std::str::from_utf8(&output.stderr) {
-                    Ok(stderr) => stderr.to_string(),
-                    Err(_) => format!("Failed to run \"{}\"", command_str),
-                };
-                fail(error_str)
-            }
-        },
-        Err(reason) => fail(reason.to_string()),
-    }
 }
