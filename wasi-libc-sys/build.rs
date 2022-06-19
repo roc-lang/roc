@@ -13,18 +13,21 @@ fn main() {
     let out_file = PathBuf::from(&out_dir).join("wasi-libc.a");
 
     // Compile a dummy C program with Zig, with our own private cache directory
-    Command::new(&zig_executable()).args([
-        "build-exe",
-        "-target",
-        "wasm32-wasi",
-        "-lc",
-        "-O",
-        "ReleaseSmall",
-        "--global-cache-dir",
-        zig_cache_dir.to_str().unwrap(),
-        "src/dummy.c",
-        &format!("-femit-bin={}/dummy.wasm", out_dir),
-    ]).output().unwrap();
+    Command::new(&zig_executable())
+        .args([
+            "build-exe",
+            "-target",
+            "wasm32-wasi",
+            "-lc",
+            "-O",
+            "ReleaseSmall",
+            "--global-cache-dir",
+            zig_cache_dir.to_str().unwrap(),
+            "src/dummy.c",
+            &format!("-femit-bin={}/dummy.wasm", out_dir),
+        ])
+        .output()
+        .unwrap();
 
     let libc_path = find(&zig_cache_dir, &OsString::from("libc.a"))
         .unwrap()
