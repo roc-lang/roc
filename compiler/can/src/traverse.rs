@@ -7,7 +7,7 @@ use roc_types::subs::Variable;
 use crate::{
     abilities::AbilitiesStore,
     def::{Annotation, Declaration, Def},
-    expr::{self, AccessorData, ClosureData, Expr, Field},
+    expr::{self, AccessorData, ClosureData, Declarations, Expr, Field},
     pattern::{DestructType, Pattern, RecordDestruct},
 };
 
@@ -19,11 +19,27 @@ macro_rules! visit_list {
     };
 }
 
-pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &[Declaration]) {
-    visit_list!(visitor, visit_decl, decls)
+pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
+    use crate::expr::DeclarationTag::*;
+
+    for (index, tag) in decls.declarations.iter().enumerate() {
+        match tag {
+            Value => todo!(),
+            Expectation => {
+                let loc_condition = &decls.expressions[index];
+
+                visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::BOOL);
+            }
+            Function(_) => todo!(),
+            Recursive(_) => todo!(),
+            TailRecursive(_) => todo!(),
+            Destructure(_) => todo!(),
+            MutualRecursion { length, cycle_mark } => todo!(),
+        }
+    }
 }
 
-pub fn walk_decl<V: Visitor>(visitor: &mut V, decl: &Declaration) {
+fn walk_decl<V: Visitor>(visitor: &mut V, decl: &Declaration) {
     match decl {
         Declaration::Declare(def) => {
             visitor.visit_def(def);
@@ -298,7 +314,7 @@ pub trait Visitor: Sized {
         true
     }
 
-    fn visit_decls(&mut self, decls: &[Declaration]) {
+    fn visit_decls(&mut self, decls: &Declarations) {
         walk_decls(self, decls);
     }
 
@@ -407,7 +423,7 @@ impl Visitor for TypeAtVisitor {
 }
 
 /// Attempts to find the type of an expression at `region`, if it exists.
-pub fn find_type_at(region: Region, decls: &[Declaration]) -> Option<Variable> {
+pub fn find_type_at(region: Region, decls: &Declarations) -> Option<Variable> {
     let mut visitor = TypeAtVisitor { region, typ: None };
     visitor.visit_decls(decls);
     visitor.typ

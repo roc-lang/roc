@@ -229,8 +229,6 @@ mod test_load {
         loaded_module
     }
 
-<<<<<<< HEAD
-=======
     fn expect_def(
         interns: &Interns,
         subs: &mut Subs,
@@ -266,7 +264,10 @@ mod test_load {
             .unwrap_or_default()
             .is_empty());
 
-        let debug_print =  DebugPrint { print_lambda_sets: false, print_only_under_alias: false };
+        let debug_print = DebugPrint {
+            print_lambda_sets: false,
+            print_only_under_alias: false,
+        };
 
         let interns = &loaded_module.interns;
         let declarations = loaded_module.declarations_by_id.remove(&home).unwrap();
@@ -278,7 +279,8 @@ mod test_load {
                     let symbol = declarations.symbols[index].value;
                     let expr_var = declarations.variables[index];
 
-                    let actual_str = name_and_print_var(expr_var, &mut subs, home, interns, debug_print);
+                    let actual_str =
+                        name_and_print_var(expr_var, &mut subs, home, interns, debug_print);
                     let fully_qualified = symbol.fully_qualified(interns, home).to_string();
                     let expected_type = expected_types
                         .remove(fully_qualified.as_str())
@@ -291,7 +293,8 @@ mod test_load {
                 Destructure(d_index) => {
                     let pattern_vars = &declarations.destructs[d_index.index()].pattern_vars;
                     for (symbol, expr_var) in pattern_vars.iter() {
-                        let actual_str = name_and_print_var(*expr_var, &mut subs, home, interns, debug_print);
+                        let actual_str =
+                            name_and_print_var(*expr_var, &mut subs, home, interns, debug_print);
 
                         let fully_qualified = symbol.fully_qualified(interns, home).to_string();
                         let expected_type = expected_types
@@ -401,6 +404,7 @@ mod test_load {
                     def_count += 1;
                 }
                 MutualRecursion { .. } => { /* do nothing, not a def */ }
+                Expectation => { /* do nothing, not a def */ }
             }
         }
 

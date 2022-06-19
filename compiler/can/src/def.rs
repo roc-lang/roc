@@ -1248,6 +1248,10 @@ pub(crate) fn sort_can_defs_new(
         }
     }
 
+    for (condition, region) in expects.conditions.into_iter().zip(expects.regions) {
+        declarations.push_expect(Loc::at(region, condition));
+    }
+
     (declarations, output)
 }
 

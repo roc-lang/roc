@@ -2072,6 +2072,19 @@ impl Declarations {
         index
     }
 
+    pub fn push_expect(&mut self, loc_expr: Loc<Expr>) -> usize {
+        let index = self.declarations.len();
+
+        self.declarations.push(DeclarationTag::Expectation);
+        self.variables.push(Variable::BOOL);
+        self.symbols.push(Loc::at_zero(Symbol::ATTR_ATTR));
+        self.annotations.push(None);
+
+        self.expressions.push(loc_expr);
+
+        index
+    }
+
     pub fn push_value_def(
         &mut self,
         symbol: Loc<Symbol>,

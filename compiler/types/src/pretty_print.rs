@@ -48,6 +48,7 @@ macro_rules! write_parens {
     };
 }
 
+#[derive(Clone, Copy)]
 pub struct DebugPrint {
     pub print_lambda_sets: bool,
     pub print_only_under_alias: bool,

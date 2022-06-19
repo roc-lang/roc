@@ -1,3 +1,4 @@
+use bitvec::vec::BitVec;
 use bumpalo::collections::{String, Vec};
 
 use code_builder::Align;
@@ -20,7 +21,7 @@ use crate::storage::{Storage, StoredValue, StoredValueKind};
 use crate::wasm_module::linking::{DataSymbol, WasmObjectSymbol};
 use crate::wasm_module::sections::{
     ConstExpr, DataMode, DataSegment, Export, Global, GlobalType, Import, ImportDesc, Limits,
-    MemorySection,
+    MemorySection, NameSection,
 };
 use crate::wasm_module::{
     code_builder, CodeBuilder, ExportType, LocalId, Signature, SymInfo, ValueType, WasmModule,
@@ -53,7 +54,7 @@ pub struct WasmBackend<'a> {
     module: WasmModule<'a>,
     layout_ids: LayoutIds<'a>,
     pub fn_index_offset: u32,
-    called_preload_fns: Vec<'a, u32>,
+    called_preload_fns: BitVec<usize>,
     pub proc_lookup: Vec<'a, ProcLookupData<'a>>,
     host_lookup: Vec<'a, (&'a str, u32)>,
     helper_proc_gen: CodeGenHelp<'a>,
@@ -94,27 +95,21 @@ impl<'a> WasmBackend<'a> {
             )
         });
 
-        module.link_host_to_app_calls(host_to_app_map);
+        let host_lookup = module.get_host_function_lookup(env.arena);
 
+        if module.names.function_names.is_empty() {
+            module.names = NameSection::from_imports_and_linking_data(
+                env.arena,
+                &module.import,
+                &module.linking,
+            )
+        }
+
+        module.link_host_to_app_calls(env.arena, host_to_app_map);
         module.code.code_builders.reserve(proc_lookup.len());
 
-        let host_lookup = module.get_host_function_lookup(env.arena);
-        if module.names.function_names.is_empty() {
-            let import_fns = module.import.imports.iter().filter(|imp| imp.is_function());
-            let import_names = Vec::from_iter_in(import_fns.map(|imp| imp.name), env.arena);
-            let symbols = module.linking.symbol_table.iter();
-            let names = symbols.filter_map(|sym_info| match sym_info {
-                SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { index, name, .. }) => {
-                    Some((*index, *name))
-                }
-                SymInfo::Function(WasmObjectSymbol::ImplicitlyNamed { index, .. }) => {
-                    Some((*index, import_names[*index as usize]))
-                }
-                _ => None,
-            });
-            module.names.function_names.extend(names);
-            module.names.function_names.sort_by_key(|(idx, _name)| *idx);
-        }
+        let host_function_count = module.import.imports.len()
+            + (module.code.dead_import_dummy_count + module.code.preloaded_count) as usize;
 
         WasmBackend {
             env,
@@ -125,7 +120,7 @@ impl<'a> WasmBackend<'a> {
 
             layout_ids,
             fn_index_offset,
-            called_preload_fns: Vec::with_capacity_in(2, env.arena),
+            called_preload_fns: BitVec::repeat(false, host_function_count),
             proc_lookup,
             host_lookup,
             helper_proc_gen,
@@ -275,7 +270,7 @@ impl<'a> WasmBackend<'a> {
         wasm_fn_index
     }
 
-    pub fn finalize(mut self) -> (WasmModule<'a>, Vec<'a, u32>) {
+    pub fn finalize(mut self) -> (WasmModule<'a>, BitVec<usize>) {
         self.maybe_call_host_main();
         let fn_table_size = 1 + self.module.element.max_table_index();
         self.module.table.function_table.limits = Limits::MinMax(fn_table_size, fn_table_size);
@@ -330,7 +325,7 @@ impl<'a> WasmBackend<'a> {
         self.code_builder.build_fn_header_and_footer(&[], 0, None);
         self.reset();
 
-        self.called_preload_fns.push(main_fn_index);
+        self.called_preload_fns.set(main_fn_index as usize, true);
     }
 
     /// Register the debug names of Symbols in a global lookup table
@@ -1237,9 +1232,7 @@ impl<'a> WasmBackend<'a> {
         low_level_call.generate(self);
     }
 
-    /// Generate a call instruction to a Zig builtin function.
-    /// And if we haven't seen it before, add an Import and linker data for it.
-    /// Zig calls use LLVM's "fast" calling convention rather than our usual C ABI.
+    /// Generate a call instruction to a host function or Zig builtin.
     pub fn call_host_fn_after_loading_args(
         &mut self,
         name: &str,
@@ -1252,9 +1245,16 @@ impl<'a> WasmBackend<'a> {
             .find(|(fn_name, _)| *fn_name == name)
             .unwrap_or_else(|| panic!("The Roc app tries to call `{}` but I can't find it!", name));
 
-        self.called_preload_fns.push(*fn_index);
-        self.code_builder
-            .call(*fn_index, num_wasm_args, has_return_val);
+        self.called_preload_fns.set(*fn_index as usize, true);
+
+        let host_import_count = self.fn_index_offset - self.module.code.preloaded_count;
+        if *fn_index < host_import_count {
+            self.code_builder
+                .call_import(*fn_index, num_wasm_args, has_return_val);
+        } else {
+            self.code_builder
+                .call(*fn_index, num_wasm_args, has_return_val);
+        }
     }
 
     /// Call a helper procedure that implements `==` for a data structure (not numbers or Str)

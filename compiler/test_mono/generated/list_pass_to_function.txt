@@ -1,19 +1,19 @@
-procedure List.3 (List.63, List.64, List.65):
-    let List.140 : {List I64, I64} = CallByName List.57 List.63 List.64 List.65;
-    let List.139 : List I64 = StructAtIndex 0 List.140;
-    inc List.139;
-    dec List.140;
-    ret List.139;
+procedure List.3 (List.64, List.65, List.66):
+    let List.141 : {List I64, I64} = CallByName List.57 List.64 List.65 List.66;
+    let List.140 : List I64 = StructAtIndex 0 List.141;
+    inc List.140;
+    dec List.141;
+    ret List.140;
 
 procedure List.57 (#Attr.2, #Attr.3, #Attr.4):
-    let List.145 : U64 = lowlevel ListLen #Attr.2;
-    let List.143 : Int1 = lowlevel NumLt #Attr.3 List.145;
-    if List.143 then
-        let List.144 : {List I64, I64} = lowlevel ListReplaceUnsafe #Attr.2 #Attr.3 #Attr.4;
-        ret List.144;
+    let List.146 : U64 = lowlevel ListLen #Attr.2;
+    let List.144 : Int1 = lowlevel NumLt #Attr.3 List.146;
+    if List.144 then
+        let List.145 : {List I64, I64} = lowlevel ListReplaceUnsafe #Attr.2 #Attr.3 #Attr.4;
+        ret List.145;
     else
-        let List.142 : {List I64, I64} = Struct {#Attr.2, #Attr.4};
-        ret List.142;
+        let List.143 : {List I64, I64} = Struct {#Attr.2, #Attr.4};
+        ret List.143;
 
 procedure Test.2 (Test.3):
     let Test.6 : U64 = 0i64;

@@ -1,20 +1,79 @@
 use roc_builtins::bitcode;
 use std::env;
 use std::ffi::OsStr;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const PLATFORM_FILENAME: &str = "wasm_test_platform";
 const OUT_DIR_VAR: &str = "TEST_GEN_OUT";
 
+const LINKING_TEST_HOST_SOURCE: &str = "src/helpers/wasm_linking_test_host.zig";
+const LINKING_TEST_IMPORT_SOURCE: &str = "src/helpers/wasm_linking_host_imports.zig";
+const LINKING_TEST_HOST_WASM: &str = "build/wasm_linking_test_host.wasm";
+const LINKING_TEST_HOST_NATIVE: &str = "build/wasm_linking_test_host";
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     if feature_is_enabled("gen-wasm") {
-        build_wasm();
+        build_wasm_test_host();
+        build_wasm_linking_test_host();
     }
 }
 
-fn build_wasm() {
+fn build_wasm_linking_test_host() {
+    println!("cargo:rerun-if-changed={}", LINKING_TEST_HOST_SOURCE);
+    println!("cargo:rerun-if-changed={}", LINKING_TEST_IMPORT_SOURCE);
+
+    fs::create_dir("build").unwrap();
+
+    if Path::new(LINKING_TEST_HOST_WASM).exists() {
+        fs::remove_file(LINKING_TEST_HOST_WASM).unwrap();
+    }
+
+    Command::new("zig")
+        .args([
+            "build-obj",
+            "-target",
+            "wasm32-freestanding-musl",
+            LINKING_TEST_HOST_SOURCE,
+            &format!("-femit-bin={}", LINKING_TEST_HOST_WASM),
+        ])
+        .output()
+        .unwrap();
+
+    let host_obj = "build/wasm_linking_test_host.o";
+    Command::new("zig")
+        .args([
+            "build-obj",
+            LINKING_TEST_HOST_SOURCE,
+            &format!("-femit-bin={}", host_obj),
+        ])
+        .output()
+        .unwrap();
+
+    let import_obj = "build/wasm_linking_host_imports.o";
+    Command::new("zig")
+        .args([
+            "build-obj",
+            LINKING_TEST_IMPORT_SOURCE,
+            &format!("-femit-bin={}", import_obj),
+        ])
+        .output()
+        .unwrap();
+
+    Command::new("zig")
+        .args([
+            "build-exe",
+            host_obj,
+            import_obj,
+            &format!("-femit-bin={}", LINKING_TEST_HOST_NATIVE),
+        ])
+        .output()
+        .unwrap();
+}
+
+fn build_wasm_test_host() {
     let source_path = format!("src/helpers/{}.c", PLATFORM_FILENAME);
     println!("cargo:rerun-if-changed={}", source_path);
 
