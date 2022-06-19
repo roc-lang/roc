@@ -42,7 +42,7 @@ fn path_to_roc_binary() -> PathBuf {
 fn repl_eval(input: &str) -> Out {
     let mut cmd = Command::new(path_to_roc_binary());
 
-    cmd.arg("repl").arg("--no-history");
+    cmd.arg("repl").current_dir("tmp");
 
     let mut child = cmd
         .stdin(Stdio::piped())

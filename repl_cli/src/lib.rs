@@ -430,7 +430,7 @@ pub fn main(with_history: bool) -> io::Result<()> {
                 |path| match touch(path.clone()).map(|path| editor.load_history(&path)) {
                     Ok(_) => Some(path),
                     Err(_) => {
-                        println!("Failed to load or initialize global history");
+                        eprintln!("Failed to load or initialize global history");
                         None
                     }
                 },
@@ -444,7 +444,7 @@ pub fn main(with_history: bool) -> io::Result<()> {
         match touch(local_history_path()).map(|path| editor.load_history(&path)) {
             Ok(_) => Some(local_history_path()),
             Err(_) => {
-                println!("Failed to load or initialize local history");
+                eprintln!("Failed to load or initialize local history");
                 None
             }
         }
