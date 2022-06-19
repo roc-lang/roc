@@ -687,8 +687,8 @@ impl<'a> LowLevelCall<'a> {
                 }
                 _ => panic_ret_type(),
             },
-            NumBytesToU16 => todo!("{:?}", self.lowlevel),
-            NumBytesToU32 => todo!("{:?}", self.lowlevel),
+            NumBytesToU16 => self.load_args_and_call_zig(backend, bitcode::NUM_BYTES_TO_U16),
+            NumBytesToU32 => self.load_args_and_call_zig(backend, bitcode::NUM_BYTES_TO_U32),
             NumBitwiseAnd => {
                 self.load_args(backend);
                 match CodeGenNumType::from(self.ret_layout) {

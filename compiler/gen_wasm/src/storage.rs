@@ -471,18 +471,21 @@ impl<'a> Storage<'a> {
                 alignment_bytes,
                 ..
             } => {
-                let (from_ptr, from_offset) = location.local_and_offset(self.stack_frame_pointer);
-                copy_memory(
-                    code_builder,
-                    CopyMemoryConfig {
-                        from_ptr,
-                        from_offset,
-                        to_ptr,
-                        to_offset,
-                        size,
-                        alignment_bytes,
-                    },
-                );
+                if size > 0 {
+                    let (from_ptr, from_offset) =
+                        location.local_and_offset(self.stack_frame_pointer);
+                    copy_memory(
+                        code_builder,
+                        CopyMemoryConfig {
+                            from_ptr,
+                            from_offset,
+                            to_ptr,
+                            to_offset,
+                            size,
+                            alignment_bytes,
+                        },
+                    );
+                }
                 size
             }
 

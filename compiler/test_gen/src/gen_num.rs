@@ -2647,7 +2647,7 @@ fn is_multiple_of() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn bytes_to_u16_clearly_out_of_bounds() {
     assert_evals_to!(
         indoc!(
@@ -2664,7 +2664,7 @@ fn bytes_to_u16_clearly_out_of_bounds() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn bytes_to_u16_subtly_out_of_bounds() {
     assert_evals_to!(
         indoc!(
@@ -2681,7 +2681,7 @@ fn bytes_to_u16_subtly_out_of_bounds() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn bytes_to_u32_clearly_out_of_bounds() {
     assert_evals_to!(
         indoc!(
@@ -2698,7 +2698,7 @@ fn bytes_to_u32_clearly_out_of_bounds() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn bytes_to_u32_subtly_out_of_bounds() {
     assert_evals_to!(
         indoc!(
@@ -2715,7 +2715,7 @@ fn bytes_to_u32_subtly_out_of_bounds() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn bytes_to_u16_max_u8s() {
     assert_evals_to!(
         indoc!(
@@ -2731,7 +2731,7 @@ fn bytes_to_u16_max_u8s() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn bytes_to_u16_min_u8s() {
     assert_evals_to!(
         indoc!(
@@ -2747,7 +2747,7 @@ fn bytes_to_u16_min_u8s() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn bytes_to_u16_random_u8s() {
     assert_evals_to!(
         indoc!(
@@ -2763,7 +2763,7 @@ fn bytes_to_u16_random_u8s() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn bytes_to_u32_min_u8s() {
     assert_evals_to!(
         indoc!(
@@ -2779,7 +2779,7 @@ fn bytes_to_u32_min_u8s() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn bytes_to_u32_max_u8s() {
     assert_evals_to!(
         indoc!(
@@ -2795,7 +2795,7 @@ fn bytes_to_u32_max_u8s() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn bytes_to_u32_random_u8s() {
     assert_evals_to!(
         indoc!(
