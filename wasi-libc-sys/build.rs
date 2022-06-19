@@ -1,7 +1,7 @@
 use std::env;
-use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
@@ -9,47 +9,40 @@ fn main() {
     println!("cargo:rerun-if-changed=src/dummy.c");
 
     let out_dir = env::var("OUT_DIR").unwrap();
-    let zig_cache_dir = format!("{out_dir}/zig-cache");
-    let out_file = format!("{out_dir}/wasi-libc.a");
+    let zig_cache_dir = PathBuf::from(&out_dir).join("zig-cache");
+    let out_file = PathBuf::from(&out_dir).join("wasi-libc.a");
 
     // Compile a dummy C program with Zig, with our own private cache directory
-    let zig = zig_executable();
-    run_command(
-        Path::new("."),
-        &zig,
-        [
-            "build-exe",
-            "-target",
-            "wasm32-wasi",
-            "-lc",
-            "-O",
-            "ReleaseSmall",
-            "--global-cache-dir",
-            &zig_cache_dir,
-            "src/dummy.c",
-            &format!("-femit-bin={}/dummy.wasm", out_dir),
-        ],
-    );
+    Command::new(&zig_executable()).args([
+        "build-exe",
+        "-target",
+        "wasm32-wasi",
+        "-lc",
+        "-O",
+        "ReleaseSmall",
+        "--global-cache-dir",
+        zig_cache_dir.to_str().unwrap(),
+        "src/dummy.c",
+        &format!("-femit-bin={}/dummy.wasm", out_dir),
+    ]).output().unwrap();
 
-    // Find the libc.a and compiler_rt.o files that Zig wrote (as a side-effect of compiling the dummy program)
-    let cwd = std::env::current_dir().unwrap();
-    let find_libc_output = run_command(&cwd, "find", [&zig_cache_dir, "-name", "libc.a"]);
-    // If `find` printed multiple results, take the first.
-    let zig_libc_path = find_libc_output.split('\n').next().unwrap();
+    let libc_path = find(&zig_cache_dir, &OsString::from("libc.a"))
+        .unwrap()
+        .unwrap();
 
-    let find_crt_output = run_command(&cwd, "find", [&zig_cache_dir, "-name", "compiler_rt.o"]);
-    // If `find` printed multiple results, take the first.
-    let zig_crt_path = find_crt_output.split('\n').next().unwrap();
+    let compiler_rt_path = find(&zig_cache_dir, &OsString::from("compiler_rt.o"))
+        .unwrap()
+        .unwrap();
 
     // Copy libc to where Cargo expects the output of this crate
-    fs::copy(&zig_libc_path, &out_file).unwrap();
+    fs::copy(&libc_path, &out_file).unwrap();
 
     // Generate some Rust code to indicate where the file is
     let generated_rust = [
         "pub const WASI_LIBC_PATH: &str =",
-        &format!("    \"{}\";", out_file),
+        &format!("    \"{}\";", out_file.to_str().unwrap()),
         "pub const WASI_COMPILER_RT_PATH: &str =",
-        &format!("  \"{}\";", zig_crt_path),
+        &format!("  \"{}\";", compiler_rt_path.to_str().unwrap()),
         "",
     ]
     .join("\n");
@@ -64,26 +57,18 @@ fn zig_executable() -> String {
     }
 }
 
-fn run_command<S, I, P: AsRef<Path>>(path: P, command_str: &str, args: I) -> String
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    let output_result = Command::new(OsStr::new(&command_str))
-        .current_dir(path)
-        .args(args)
-        .output();
-    match output_result {
-        Ok(output) => match output.status.success() {
-            true => std::str::from_utf8(&output.stdout).unwrap().to_string(),
-            false => {
-                let error_str = match std::str::from_utf8(&output.stderr) {
-                    Ok(stderr) => stderr.to_string(),
-                    Err(_) => format!("Failed to run \"{}\"", command_str),
-                };
-                panic!("{} failed: {}", command_str, error_str);
+fn find(dir: &Path, filename: &OsString) -> std::io::Result<Option<PathBuf>> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            let found = find(&path, filename)?;
+            if found.is_some() {
+                return Ok(found);
             }
-        },
-        Err(reason) => panic!("{} failed: {}", command_str, reason),
+        } else if &entry.file_name() == filename {
+            return Ok(Some(path));
+        }
     }
+    Ok(None)
 }
