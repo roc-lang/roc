@@ -1,9 +1,10 @@
 use roc_builtins::bitcode;
 use std::env;
-use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
+
+use wasi_libc_sys::{WASI_COMPILER_RT_PATH, WASI_LIBC_PATH};
 
 const PLATFORM_FILENAME: &str = "wasm_test_platform";
 const OUT_DIR_VAR: &str = "TEST_GEN_OUT";
@@ -80,37 +81,23 @@ fn build_wasm_test_host() {
     let out_dir = env::var("OUT_DIR").unwrap();
     println!("cargo:rustc-env={}={}", OUT_DIR_VAR, out_dir);
 
-    // Zig can produce *either* an object containing relocations OR an object containing libc code
-    // But we want both, so we have to compile twice with different flags, then link them
-
     // Create an object file with relocations
     let platform_path = build_wasm_platform(&out_dir, &source_path);
 
-    // Compile again to get libc path
-    let (mut libc_pathbuf, compiler_rt_pathbuf) =
-        build_wasm_libc_compilerrt(&out_dir, &source_path);
-    libc_pathbuf.pop();
-    let libc_dir = libc_pathbuf.to_str().unwrap();
-
-    let args = &[
-        "wasm-ld",
-        bitcode::BUILTINS_WASM32_OBJ_PATH,
-        &platform_path,
-        compiler_rt_pathbuf.to_str().unwrap(),
-        "-L",
-        libc_dir,
-        "-lc",
-        "-o",
-        &format!("{}/{}.o", out_dir, PLATFORM_FILENAME),
-        "--no-entry",
-        "--relocatable",
-    ];
-
-    let zig = zig_executable();
-
-    // println!("{} {}", zig, args.join(" "));
-
-    run_command(&zig, args);
+    Command::new(&zig_executable())
+        .args([
+            "wasm-ld",
+            bitcode::BUILTINS_WASM32_OBJ_PATH,
+            &platform_path,
+            WASI_COMPILER_RT_PATH,
+            WASI_LIBC_PATH,
+            "-o",
+            &format!("{}/{}.o", out_dir, PLATFORM_FILENAME),
+            "--no-entry",
+            "--relocatable",
+        ])
+        .output()
+        .unwrap();
 }
 
 fn zig_executable() -> String {
@@ -123,65 +110,19 @@ fn zig_executable() -> String {
 fn build_wasm_platform(out_dir: &str, source_path: &str) -> String {
     let platform_path = format!("{}/{}.o", out_dir, PLATFORM_FILENAME);
 
-    run_command(
-        &zig_executable(),
-        &[
+    Command::new(&zig_executable())
+        .args([
             "build-lib",
             "-target",
             "wasm32-wasi",
             "-lc",
             source_path,
             &format!("-femit-bin={}", &platform_path),
-        ],
-    );
-
-    platform_path
-}
-
-fn build_wasm_libc_compilerrt(out_dir: &str, source_path: &str) -> (PathBuf, PathBuf) {
-    let zig_cache_dir = format!("{}/zig-cache-wasm32", out_dir);
-    let zig_cache_path = PathBuf::from(&zig_cache_dir);
-
-    Command::new(&zig_executable())
-        .args([
-            "build-lib",
-            "-dynamic", // ensure libc code is actually generated (not just linked against header)
-            "-target",
-            "wasm32-wasi",
-            "-lc",
-            source_path,
-            "-femit-bin=/dev/null",
-            "--global-cache-dir",
-            &zig_cache_dir,
         ])
         .output()
         .unwrap();
 
-    let libc_path = find(&zig_cache_path, &OsString::from("libc.a"))
-        .unwrap()
-        .unwrap();
-
-    let compiler_rt_path = find(&zig_cache_path, &OsString::from("compiler_rt.o"))
-        .unwrap()
-        .unwrap();
-
-    (libc_path, compiler_rt_path)
-}
-
-fn find(dir: &Path, filename: &OsString) -> std::io::Result<Option<PathBuf>> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            let found = find(&path, filename)?;
-            if found.is_some() {
-                return Ok(found);
-            }
-        } else if &entry.file_name() == filename {
-            return Ok(Some(path));
-        }
-    }
-    Ok(None)
+    platform_path
 }
 
 fn feature_is_enabled(feature_name: &str) -> bool {
