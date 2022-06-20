@@ -1,5 +1,18 @@
 interface AssocList
-    exposes []
+    exposes [
+         empty,
+         single,
+        insertNew,
+        insertNewLazy,
+        insert,
+        contains,
+        len,
+        keys,
+        values,
+        get,
+        walk,
+        remove
+        ]
     imports [List.{ List }]
 
 ## An Association List is a list of key-value pairs.

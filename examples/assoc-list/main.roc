@@ -1,29 +1,28 @@
 app "main"
     packages { pf: "cli-platform" }
-    imports [pf.Stdin, pf.Stdout, pf.Task.{ await, loop, succeed }]
+    imports [pf.Stdin, pf.Stdout, pf.Task.{ await, loop, succeed }, AssocList]
     provides [main] to pf
 
 main =
-    _ <- await (Stdout.line "Please input some lines")
-    lines <- readLines []
-    _ <- printLines lines
-    # -- joinedLines = Str.joinWith lines ", "
-    # -- _ <- await (Stdout.line "You input \(joinedLines)")
+    _ <- await (Stdout.line "Input pairs of lines which will be used to build an association.\nQuit by inputting an empty line.")
+    _assocs <- readAssociations AssocList.empty
     succeed {}
 
 
-readLines = \lines, after ->
-    line <- await Stdin.line
-    if line == "" then
-        after lines
+readAssociations = \assocs, after ->
+    key <- await Stdin.line
+    if key == "" then
+        _ <- printAssociations assocs
+        after assocs
     else
-        lines
-        |> List.append line
-        |> readLines after
+        value <- await Stdin.line
+        res = AssocList.insert assocs key value
+        readAssociations res after
 
-printLines = \lines, after ->
-    lines
-        |> List.walk (succeed {}) \_, line ->
-            _ <- await (Stdout.line "You input: \(line)")
+printAssociations = \assocs, after ->
+    _ <- await (Stdout.line "Associations right now:")
+    assocs
+        |> AssocList.walk (succeed {}) \_, key, value ->
+            _ <- await (Stdout.line "\(key) => \(value)")
             succeed {}
         |> after
