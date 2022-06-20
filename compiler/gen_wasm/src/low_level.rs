@@ -819,7 +819,36 @@ impl<'a> LowLevelCall<'a> {
                 todo!("implement toF32 and toF64");
             }
             NumToIntChecked => {
-                todo!()
+                let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
+
+                let (arg_width, ret_width) = match (arg_layout, self.ret_layout) {
+                    (
+                        Layout::Builtin(Builtin::Int(arg_width)),
+                        Layout::Struct {
+                            field_layouts: &[Layout::Builtin(Builtin::Int(ret_width)), ..],
+                            ..
+                        },
+                    ) => (arg_width, ret_width),
+                    _ => {
+                        internal_error!(
+                            "NumToIntChecked is not defined for signature {:?} -> {:?}",
+                            arg_layout,
+                            self.ret_layout
+                        );
+                    }
+                };
+
+                if arg_width.is_signed() {
+                    self.load_args_and_call_zig(
+                        backend,
+                        &bitcode::NUM_INT_TO_INT_CHECKING_MAX_AND_MIN[ret_width][arg_width],
+                    )
+                } else {
+                    self.load_args_and_call_zig(
+                        backend,
+                        &bitcode::NUM_INT_TO_INT_CHECKING_MAX[ret_width][arg_width],
+                    )
+                }
             }
             NumToFloatChecked => {
                 todo!("implement toF32Checked and toF64Checked");

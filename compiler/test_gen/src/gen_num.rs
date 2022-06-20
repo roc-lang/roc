@@ -2487,7 +2487,7 @@ num_conversion_tests! {
 macro_rules! to_int_checked_tests {
     ($($fn:expr, $typ:ty, ($($test_name:ident, $input:expr, $output:expr)*))*) => {$($(
         #[test]
-        #[cfg(any(feature = "gen-llvm"))]
+        #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
         fn $test_name() {
             let sentinel = 23;
             // Some n = Ok n, None = OutOfBounds

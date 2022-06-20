@@ -1017,7 +1017,7 @@ impl<'a> WasmBackend<'a> {
                         let (upper_bits, lower_bits) = RocDec::from_ne_bytes(*bytes).as_bits();
                         write128(lower_bits as i64, upper_bits);
                     }
-                    Literal::Int(x) => {
+                    Literal::Int(x) | Literal::U128(x) => {
                         let lower_bits = (i128::from_ne_bytes(*x) & 0xffff_ffff_ffff_ffff) as i64;
                         let upper_bits = (i128::from_ne_bytes(*x) >> 64) as i64;
                         write128(lower_bits, upper_bits);
@@ -1070,7 +1070,8 @@ impl<'a> WasmBackend<'a> {
                             self.code_builder.i32_store(Align::Bytes4, offset + 8);
                         };
                     }
-                    _ => invalid_error(),
+                    // Bools and bytes should not be stored in the stack frame
+                    Literal::Bool(_) | Literal::Byte(_) => invalid_error(),
                 }
             }
 
