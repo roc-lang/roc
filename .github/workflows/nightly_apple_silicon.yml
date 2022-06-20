@@ -1,4 +1,6 @@
-on: [pull_request]
+on:
+  schedule:
+    - cron:  '0 9 * * *'
 
 name: Nightly Release Apple Silicon
 
