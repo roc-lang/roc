@@ -139,16 +139,13 @@ walk = \@AssocList list, initialState, transform ->
 ## This means that after calling remove, insertion order is not maintained.
 remove : AssocList k v, k -> AssocList k v
 remove = \@AssocList list, key ->
-    if List.isEmpty list then
-        @AssocList list
-    else
-        when listFindIndex list (\Pair k _ -> k == key) is
-            Err NotFound ->
-                @AssocList list
-            Ok index ->
-                lastIndex = List.len list - 1
+    when listFindIndex list (\Pair k _ -> k == key) is
+        Err NotFound ->
+            @AssocList list
+        Ok index ->
+            lastIndex = List.len list - 1
 
-                list
-                    |> List.swap index lastIndex
-                    |> List.dropLast
-                    |> @AssocList
+            list
+                |> List.swap index lastIndex
+                |> List.dropLast
+                |> @AssocList
