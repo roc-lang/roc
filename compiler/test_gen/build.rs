@@ -38,7 +38,9 @@ fn build_wasm_linking_test_host() {
     println!("cargo:rerun-if-changed={}", host_source);
     println!("cargo:rerun-if-changed={}", import_source);
 
-    fs::create_dir("build").unwrap();
+    if !Path::new("build").exists() {
+        fs::create_dir("build").unwrap();
+    }
 
     if Path::new(host_wasm).exists() {
         fs::remove_file(host_wasm).unwrap();
@@ -103,7 +105,7 @@ fn build_wasm_test_host() {
     let platform_path = build_wasm_platform(&out_dir, source_path.to_str().unwrap());
 
     let mut outfile = PathBuf::from(out_dir).join(PLATFORM_FILENAME);
-    outfile.set_extension(".o");
+    outfile.set_extension("o");
 
     Command::new(&zig_executable())
         .args([
@@ -130,7 +132,7 @@ fn zig_executable() -> String {
 
 fn build_wasm_platform(out_dir: &str, source_path: &str) -> PathBuf {
     let mut outfile = PathBuf::from(out_dir).join(PLATFORM_FILENAME);
-    outfile.set_extension(".o");
+    outfile.set_extension("o");
 
     Command::new(&zig_executable())
         .args([
