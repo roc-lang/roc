@@ -3,6 +3,7 @@ const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 const math = std.math;
 const RocList = @import("list.zig").RocList;
 const RocStr = @import("str.zig").RocStr;
+const WithOverflow = @import("utils.zig").WithOverflow;
 
 pub fn NumParseResult(comptime T: type) type {
     // on the roc side we sort by alignment; putting the errorcode last
@@ -193,4 +194,28 @@ pub fn bytesToU32C(arg: RocList, position: usize) callconv(.C) u32 {
 fn bytesToU32(arg: RocList, position: usize) u32 {
     const bytes = @ptrCast([*]const u8, arg.bytes);
     return @bitCast(u32, [_]u8{ bytes[position], bytes[position + 1], bytes[position + 2], bytes[position + 3] });
+}
+
+fn addWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
+    switch (@typeInfo(T)) {
+        .Int => {
+            var answer: T = undefined;
+            const overflowed = @addWithOverflow(T, self, other, &answer);
+            return .{ .value = answer, .has_overflowed = overflowed };
+        },
+        else => {
+            const answer = self + other;
+            const overflowed = !std.math.isFinite(answer);
+            return .{ .value = answer, .has_overflowed = overflowed };
+        }
+    }
+}
+
+pub fn exportAddWithOverflow(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(self: T, other: T) callconv(.C) WithOverflow(T) {
+            return @call(.{ .modifier = always_inline }, addWithOverflow, .{ T, self, other });
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }

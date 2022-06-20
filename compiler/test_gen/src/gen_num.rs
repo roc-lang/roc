@@ -1679,7 +1679,7 @@ fn int_add_overflow() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_add_checked() {
     assert_evals_to!(
         indoc!(
@@ -1721,7 +1721,7 @@ fn int_add_wrap() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_add_checked_pass() {
     assert_evals_to!(
         indoc!(
@@ -1737,7 +1737,7 @@ fn float_add_checked_pass() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_add_checked_fail() {
     assert_evals_to!(
         indoc!(

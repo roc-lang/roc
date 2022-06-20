@@ -349,7 +349,18 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
             NumToStr => todo!("{:?}", self.lowlevel),
-            NumAddChecked => todo!("{:?}", self.lowlevel),
+            NumAddChecked => {
+                let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
+                match arg_layout {
+                    Layout::Builtin(Builtin::Int(width)) => {
+                        self.load_args_and_call_zig(backend, &bitcode::NUM_ADD_WITH_OVERFLOW_INT[width])
+                    }
+                    Layout::Builtin(Builtin::Float(width)) => {
+                        self.load_args_and_call_zig(backend, &bitcode::NUM_ADD_WITH_OVERFLOW_FLOAT[width])
+                    }
+                    x => internal_error!("NumAddChecked is not defined for {:?}", x),
+                }
+            }
             NumAddSaturated => todo!("{:?}", self.lowlevel),
             NumSub => {
                 self.load_args(backend);

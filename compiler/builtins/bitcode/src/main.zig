@@ -109,6 +109,8 @@ comptime {
 
         num.exportRoundF32(FROM, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f32.");
         num.exportRoundF64(FROM, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f64.");
+
+        num.exportAddWithOverflow(FROM, ROC_BUILTINS ++ "." ++ NUM ++ ".add_with_overflow.");
     }
 
     inline for (FLOATS) |T| {
@@ -121,6 +123,8 @@ comptime {
 
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow.");
         num.exportLog(T, ROC_BUILTINS ++ "." ++ NUM ++ ".log.");
+
+        num.exportAddWithOverflow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_with_overflow.");
 
         num.exportIsFinite(T, ROC_BUILTINS ++ "." ++ NUM ++ ".is_finite.");
     }
