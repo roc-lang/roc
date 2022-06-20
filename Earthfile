@@ -133,15 +133,12 @@ test-all:
 
 build-nightly-release:
     FROM +test-rust
-    COPY --dir .git LICENSE LEGAL_DETAILS ./
+    COPY --dir .git LICENSE LEGAL_DETAILS ci ./
     # version.txt is used by the CLI: roc --version
-    RUN printf "nightly pre-release, built from commit " > version.txt
-    RUN git log --pretty=format:'%h' -n 1 >> version.txt
-    RUN printf " on: " >> version.txt
-    RUN date >> version.txt
+    RUN ./ci/write_version.sh
     RUN RUSTFLAGS="-C target-cpu=x86-64" cargo build --features with_sound --release
-    RUN cd ./target/release && tar -czvf roc_linux_x86_64.tar.gz ./roc ../../LICENSE ../../LEGAL_DETAILS ../../examples/hello-world ../../compiler/builtins/bitcode/src/ ../../roc_std
-    SAVE ARTIFACT ./target/release/roc_linux_x86_64.tar.gz AS LOCAL roc_linux_x86_64.tar.gz
+    RUN ./ci/package_release.sh roc_linux_x86_64.tar.gz
+    SAVE ARTIFACT ./roc_linux_x86_64.tar.gz AS LOCAL roc_linux_x86_64.tar.gz
 
 # compile everything needed for benchmarks and output a self-contained dir from which benchmarks can be run.
 prep-bench-folder:
