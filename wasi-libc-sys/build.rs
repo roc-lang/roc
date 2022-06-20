@@ -45,12 +45,12 @@ fn main() {
         "pub const WASI_LIBC_PATH: &str =",
         &format!(
             "    \"{}\";",
-            out_file.to_str().unwrap().replace("\\", "\\\\")
+            out_file.to_str().unwrap().replace('\\', "\\\\")
         ),
         "pub const WASI_COMPILER_RT_PATH: &str =",
         &format!(
             "  \"{}\";",
-            compiler_rt_path.to_str().unwrap().replace("\\", "\\\\")
+            compiler_rt_path.to_str().unwrap().replace('\\', "\\\\")
         ),
         "",
     ]
