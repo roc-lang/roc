@@ -196,7 +196,7 @@ fn i8_hex_int_alias() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn u128_signed_int_alias() {
     assert_evals_to!(
         indoc!(
@@ -277,7 +277,7 @@ fn u8_signed_int_alias() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn u128_hex_int_alias() {
     assert_evals_to!(
         indoc!(
@@ -451,7 +451,7 @@ fn f64_float_alias() {
     );
 }
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn f32_float_alias() {
     assert_evals_to!(
         indoc!(
@@ -722,7 +722,7 @@ fn gen_wrap_add_nums() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_div_f64() {
     assert_evals_to!(
         indoc!(
@@ -1032,7 +1032,7 @@ fn gen_mul_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_div_i64() {
     assert_evals_to!(
         indoc!(
@@ -1078,7 +1078,7 @@ fn gen_div_checked_by_zero_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_rem_i64() {
     assert_evals_to!(
         indoc!(
@@ -3193,7 +3193,7 @@ fn monomorphized_ints_names_dont_conflict() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn monomorphized_ints_aliased() {
     assert_evals_to!(
         indoc!(
@@ -3290,7 +3290,7 @@ fn upcast_of_int_checked_is_zext() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn modulo_of_unsigned() {
     assert_evals_to!(
         indoc!(
@@ -3304,7 +3304,7 @@ fn modulo_of_unsigned() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn div_of_unsigned() {
     assert_evals_to!(
         indoc!(

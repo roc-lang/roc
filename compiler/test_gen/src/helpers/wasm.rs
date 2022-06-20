@@ -50,7 +50,7 @@ pub fn compile_and_load<'a, T: Wasm32Result>(
         save_wasm_file(&compiled_bytes, build_dir_hash)
     };
 
-    load_bytes_into_runtime(compiled_bytes)
+    load_bytes_into_runtime(&compiled_bytes)
 }
 
 fn get_preprocessed_host_path() -> PathBuf {
@@ -151,7 +151,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         index: init_refcount_idx,
     });
 
-    module.eliminate_dead_code(env.arena, &called_preload_fns);
+    module.eliminate_dead_code(env.arena, called_preload_fns);
 
     let mut app_module_bytes = std::vec::Vec::with_capacity(module.size());
     module.serialize(&mut app_module_bytes);
@@ -173,12 +173,12 @@ fn save_wasm_file(app_module_bytes: &[u8], build_dir_hash: u64) {
     );
 }
 
-fn load_bytes_into_runtime(bytes: Vec<u8>) -> wasmer::Instance {
+fn load_bytes_into_runtime(bytes: &[u8]) -> wasmer::Instance {
     use wasmer::{Module, Store};
     use wasmer_wasi::WasiState;
 
     let store = Store::default();
-    let wasmer_module = Module::new(&store, &bytes).unwrap();
+    let wasmer_module = Module::new(&store, bytes).unwrap();
 
     // First, we create the `WasiEnv`
     let mut wasi_env = WasiState::new("hello").finalize().unwrap();
