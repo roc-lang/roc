@@ -146,6 +146,8 @@ build-nightly-release:
 # compile everything needed for benchmarks and output a self-contained dir from which benchmarks can be run.
 prep-bench-folder:
     FROM +copy-dirs
+    # to make use of avx, avx2, sse2, sse4.2... instructions
+    ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld -C target-cpu=native"
     ARG BENCH_SUFFIX=branch
     RUN cargo criterion -V
     RUN --mount=type=cache,target=$SCCACHE_DIR cd cli && cargo criterion --no-run
