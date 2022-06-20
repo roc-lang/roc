@@ -4,10 +4,6 @@ on:
 
 name: Nightly Release Apple Silicon
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   test-and-build:
     name: Rust tests, build and package nightly release
