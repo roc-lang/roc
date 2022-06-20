@@ -17,7 +17,7 @@ use roc_std::RocDec;
 
 use crate::layout::{CallConv, ReturnMethod, WasmLayout};
 use crate::low_level::{call_higher_order_lowlevel, LowLevelCall};
-use crate::storage::{Storage, StoredValue, StoredValueKind};
+use crate::storage::{Storage, StoredValue, StoredVarKind};
 use crate::wasm_module::linking::{DataSymbol, WasmObjectSymbol};
 use crate::wasm_module::sections::{
     ConstExpr, DataMode, DataSegment, Export, Global, GlobalType, Import, ImportDesc, Limits,
@@ -414,10 +414,8 @@ impl<'a> WasmBackend<'a> {
         // We never use the `return` instruction. Instead, we break from this block.
         self.start_block();
 
-        for (layout, symbol) in proc.args {
-            self.storage
-                .allocate(*layout, *symbol, StoredValueKind::Parameter);
-        }
+        self.storage
+            .allocate_args(proc.args, &mut self.code_builder, self.env.arena);
 
         if let Some(ty) = ret_type {
             let ret_var = self.storage.create_anonymous_local(ty);
@@ -660,8 +658,8 @@ impl<'a> WasmBackend<'a> {
             }
 
             let kind = match following {
-                Stmt::Ret(ret_sym) if *sym == *ret_sym => StoredValueKind::ReturnValue,
-                _ => StoredValueKind::Variable,
+                Stmt::Ret(ret_sym) if *sym == *ret_sym => StoredVarKind::ReturnValue,
+                _ => StoredVarKind::Variable,
             };
 
             self.stmt_let_store_expr(*sym, layout, expr, kind);
@@ -677,9 +675,9 @@ impl<'a> WasmBackend<'a> {
         sym: Symbol,
         layout: &Layout<'a>,
         expr: &Expr<'a>,
-        kind: StoredValueKind,
+        kind: StoredVarKind,
     ) {
-        let sym_storage = self.storage.allocate(*layout, sym, kind);
+        let sym_storage = self.storage.allocate_var(*layout, sym, kind);
 
         self.expr(sym, expr, layout, &sym_storage);
 
@@ -817,10 +815,10 @@ impl<'a> WasmBackend<'a> {
         // make locals for join pointer parameters
         let mut jp_param_storages = Vec::with_capacity_in(parameters.len(), self.env.arena);
         for parameter in parameters.iter() {
-            let mut param_storage = self.storage.allocate(
+            let mut param_storage = self.storage.allocate_var(
                 parameter.layout,
                 parameter.symbol,
-                StoredValueKind::Variable,
+                StoredVarKind::Variable,
             );
             param_storage = self.storage.ensure_value_has_local(
                 &mut self.code_builder,
@@ -1420,7 +1418,7 @@ impl<'a> WasmBackend<'a> {
                             elem_sym,
                             elem_layout,
                             &expr,
-                            StoredValueKind::Variable,
+                            StoredVarKind::Variable,
                         );
 
                         elem_sym
