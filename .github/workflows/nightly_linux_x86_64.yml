@@ -27,5 +27,5 @@ jobs:
           asset_path: ./roc_linux_x86_64.tar.gz
           asset_name: roc_nightly-linux_x86_64-$$.tar.gz # $$ inserts date (YYYYMMDD) and 6 letter commit hash
           asset_content_type: application/gzip
-          max_releases: 6
+          max_releases: 3
 

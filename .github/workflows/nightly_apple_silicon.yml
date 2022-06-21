@@ -33,5 +33,5 @@ jobs:
           asset_path: ./roc_darwin_apple_silicon.tar.gz
           asset_name: roc_nightly-darwin_apple_silicon-$$.tar.gz # $$ inserts date (YYYYMMDD) and 6 letter commit hash
           asset_content_type: application/gzip
-          max_releases: 6
+          max_releases: 3
 
