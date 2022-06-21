@@ -221,22 +221,19 @@ pub fn exportAddWithOverflow(comptime T: type, comptime name: []const u8) void {
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }
 
-pub fn exportAddSaturatedInt(comptime T: type, comptime Wider: type, comptime name: []const u8) void {
+pub fn exportAddSaturatedInt(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(self: T, other: T) callconv(.C) T {
-            const self_w: Wider = self;
-            const other_w: Wider = other;
-            const answer = self_w + other_w;
-
-            const max = std.math.maxInt(T);
-            const min = std.math.minInt(T);
-
-            if (answer > max) {
-                return max;
-            } else if (answer < min) {
-                return min;
+            const result = addWithOverflow(T, self, other);
+            if (result.has_overflowed) {
+                // We can unambiguously tell which way it wrapped, because we have N+1 bits including the overflow bit
+                if (result.value < 0) {
+                    return std.math.maxInt(T);
+                } else {
+                    return std.math.minInt(T);
+                }
             } else {
-                return @intCast(T, answer);
+                return result.value;
             }
         }
     }.func;

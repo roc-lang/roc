@@ -1664,7 +1664,7 @@ fn atan() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
 fn int_add_overflow() {
     assert_evals_to!(
@@ -1753,8 +1753,7 @@ fn float_add_checked_fail() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
-#[should_panic(expected = r#"Roc failed with message: "float addition overflowed!"#)]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_add_overflow() {
     assert_evals_to!(
         indoc!(
@@ -1762,7 +1761,7 @@ fn float_add_overflow() {
                     1.7976931348623157e308 + 1.7976931348623157e308
                     "#
         ),
-        0.0,
+        f64::INFINITY,
         f64
     );
 }
@@ -3095,7 +3094,7 @@ fn u8_mul_greater_than_i8() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn add_saturated() {
     assert_evals_to!(
         indoc!(

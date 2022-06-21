@@ -231,7 +231,22 @@ pub const RocDec = extern struct {
         const answer = RocDec.addWithOverflow(self, other);
 
         if (answer.has_overflowed) {
-            @panic("TODO runtime exception for overflow!");
+            roc_panic("Dec overflow", 1);
+            unreachable;
+        } else {
+            return answer.value;
+        }
+    }
+
+    pub fn addSaturated(self: RocDec, other: RocDec) RocDec {
+        const answer = RocDec.addWithOverflow(self, other);
+        if (answer.has_overflowed) {
+            // We can unambiguously tell which way it wrapped, because we have 129 bits including the overflow bit
+            if (answer.value.num < 0) {
+                return RocDec.max;
+            } else {
+                return RocDec.min;
+            }
         } else {
             return answer.value;
         }
@@ -1096,12 +1111,9 @@ pub fn divC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
 }
 
 pub fn addOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
-    const result = arg1.addWithOverflow(arg2);
-    if (result.has_overflowed) {
-        const todo_why_does_this_argument_exist = 1;
-        roc_panic("Dec overflow", todo_why_does_this_argument_exist);
-        unreachable;
-    } else {
-        return result.value;
-    }
+    return @call(.{ .modifier = always_inline }, RocDec.add, .{ arg1, arg2 });
+}
+
+pub fn addSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
+    return @call(.{ .modifier = always_inline }, RocDec.addSaturated, .{ arg1, arg2 });
 }

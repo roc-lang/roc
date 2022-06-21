@@ -1059,7 +1059,7 @@ fn call_with_bad_record_runtime_error() {
 
 #[test]
 #[cfg(any(feature = "gen-wasm"))]
-#[should_panic(expected = r#"Can't create record with improper layout"#)]
+#[should_panic(expected = r#"Roc failed with message: "Can't create record with improper layout"#)]
 fn call_with_bad_record_runtime_error() {
     expect_runtime_error_panic!(indoc!(
         r#"
