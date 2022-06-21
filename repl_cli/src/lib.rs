@@ -9,9 +9,9 @@ use rustyline::history::History;
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
 use rustyline_derive::{Completer, Helper, Hinter};
 use std::borrow::Cow;
-use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{PathBuf, MAIN_SEPARATOR};
+use std::{env, fs};
 use target_lexicon::Triple;
 
 use roc_build::link::module_to_dylib;
@@ -49,8 +49,7 @@ pub const INSTRUCTIONS: &str = "Enter an expression, or :help, or :exit/:q.\n";
 pub const PROMPT: &str = concatcp!("\n", BLUE, "»", END_COL, " ");
 pub const CONT_PROMPT: &str = concatcp!(BLUE, "…", END_COL, " ");
 
-pub const HISTORY_PATH: &str = ".roc_cache/repl_history.dat";
-
+pub const HISTORY_PATH: &str = concatcp!(".roc_cache", MAIN_SEPARATOR, "repl_history.dat");
 #[derive(Completer, Helper, Hinter)]
 struct ReplHelper {
     validator: InputValidator,
@@ -180,10 +179,16 @@ impl CommandHistories {
     }
 }
 fn local_history_path() -> PathBuf {
-    PathBuf::from(HISTORY_PATH)
+    match env::var_os("ROC_REPL_LOCAL_HISTORY_PATH") {
+        None => PathBuf::from(HISTORY_PATH),
+        Some(path) => PathBuf::from(path),
+    }
 }
 fn global_history_path() -> Option<PathBuf> {
-    home_dir().map(|path| path.join(PathBuf::from(HISTORY_PATH)))
+    match env::var_os("ROC_REPL_GLOBAL_HISTORY_PATH") {
+        None => home_dir().map(|path| path.join(PathBuf::from(HISTORY_PATH))),
+        Some(path) => Some(PathBuf::from(path)),
+    }
 }
 fn touch(path: PathBuf) -> Result<PathBuf, std::io::Error> {
     match fs::File::options()

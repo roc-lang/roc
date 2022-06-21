@@ -42,6 +42,9 @@ fn path_to_roc_binary() -> PathBuf {
 fn repl_eval(input: &str) -> Out {
     let mut cmd = Command::new(path_to_roc_binary());
 
+    env::set_var("ROC_REPL_LOCAL_HISTORY_PATH", "local_history.dat");
+    env::set_var("ROC_REPL_GLOBAL_HISTORY_PATH", "global_history.dat");
+
     cmd.arg("repl").current_dir("tmp");
 
     let mut child = cmd
