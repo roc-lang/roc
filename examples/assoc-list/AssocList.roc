@@ -11,7 +11,11 @@ interface AssocList
         values,
         get,
         walk,
-        remove
+        remove,
+        normalize,
+        union,
+        intersection,
+        difference
         ]
     imports [List.{ List }]
 
@@ -24,12 +28,12 @@ interface AssocList
 ## As such, insertion of new associations happens at the appending ('back') side of the list.
 ##
 ## Insertion order is maintained, unless elements are removed or replaced in the meantime.
+##
+## Two AssocLists only compare equal (with `==`) if their internal order of associations is the same.
+## If you want to compare whether two AssocLists contain the same key-values,
+## call [normalize] on them first.
 AssocList k v := List [Pair k v]
 
-# TODO:
-#  union : Dict k v, Dict k v -> Dict k v
-#  intersection : Dict k v, Dict k v -> Dict k v
-#  difference : Dict k v, Dict k v -> Dict k v
 
 ## Creates a new, empty AssocList
 ##
@@ -149,3 +153,27 @@ remove = \@AssocList list, key ->
                 |> List.swap index lastIndex
                 |> List.dropLast
                 |> @AssocList
+
+## Normalizes an AssocList, storing all keys internally in the same order.
+##
+## As mentioned in the module documentation, an AssocList keeps track of insertion order
+## (as long as only insertions happen).
+## This does mean that two AssocLists might not compare equal (with ==),
+## even if they contain the same key-value associations.
+##
+## To make sure that two AssocLists containing the same keys compare equal,
+## call normalize on both of them before comparison.
+##
+## Internally, normalization happens by sorting the associations
+## in an implementation-defined order (which might change between releases).
+## As such, this procedure takes linearithmic (`O(n*log(n))`) time.
+normalize : AssocList k v -> AssocList k v
+normalize = \@AssocList list ->
+    list
+      |> List.sort
+      |> @AssocList
+
+# TODO:
+#  union : Dict k v, Dict k v -> Dict k v
+#  intersection : Dict k v, Dict k v -> Dict k v
+#  difference : Dict k v, Dict k v -> Dict k v
