@@ -15,7 +15,7 @@
 
 pub mod encoding;
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex};
 
 use encoding::{FlatEncodable, FlatEncodableKey};
 
@@ -114,4 +114,4 @@ impl DerivedSymbols {
 }
 
 /// Thread-sharable [`DerivedMethods`].
-pub type GlobalDerivedSymbols = Arc<RwLock<DerivedSymbols>>;
+pub type GlobalDerivedSymbols = Arc<Mutex<DerivedSymbols>>;

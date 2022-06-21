@@ -1809,7 +1809,7 @@ fn compact_lambda_set<P: Phase>(
                         let specialization_symbol = match derived {
                             Derived::Immediate(symbol) => symbol,
                             Derived::Key(derive_key) => {
-                                let mut derived_symbols = derived_symbols.write().unwrap();
+                                let mut derived_symbols = derived_symbols.lock().unwrap();
                                 derived_symbols.get_or_insert(derive_key)
                             }
                         };

@@ -2701,7 +2701,7 @@ fn finish(
         .into_module_ids();
 
     // Steal the derived symbols and put them in the global ident ids
-    let derived_ident_ids = state.derived_symbols.write().unwrap().steal();
+    let derived_ident_ids = state.derived_symbols.lock().unwrap().steal();
     ModuleId::DERIVED.register_debug_idents(&derived_ident_ids);
     state
         .constrained_ident_ids
