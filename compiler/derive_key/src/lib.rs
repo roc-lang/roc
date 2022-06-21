@@ -86,7 +86,7 @@ impl DerivedSymbols {
         }
 
         let symbol = self.map.entry(key).or_insert_with_key(|key| {
-            let ident_id = if cfg!(debug_assertions) {
+            let ident_id = if cfg!(debug_assertions) || cfg!(feature = "debug-derived-symbols") {
                 let debug_name = key.debug_name();
                 debug_assert!(
                     self.derived_ident_ids.get_id(&debug_name).is_none(),
