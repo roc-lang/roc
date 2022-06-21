@@ -4,6 +4,7 @@ const math = std.math;
 const RocList = @import("list.zig").RocList;
 const RocStr = @import("str.zig").RocStr;
 const WithOverflow = @import("utils.zig").WithOverflow;
+const roc_panic = @import("utils.zig").panic;
 
 pub fn NumParseResult(comptime T: type) type {
     // on the roc side we sort by alignment; putting the errorcode last
@@ -223,12 +224,12 @@ pub fn exportAddWithOverflow(comptime T: type, comptime name: []const u8) void {
 pub fn exportAddSaturatedInt(comptime T: type, comptime Wider: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(self: T, other: T) callconv(.C) T {
-            const self_w = @intCast(Wider, self);
-            const other_w = @intCast(Wider, other);
+            const self_w: Wider = self;
+            const other_w: Wider = other;
             const answer = self_w + other_w;
 
-            const max = @intCast(Wider, std.math.maxInt(T));
-            const min = @intCast(Wider, std.math.minInt(T));
+            const max = std.math.maxInt(T);
+            const min = std.math.minInt(T);
 
             if (answer > max) {
                 return max;
@@ -236,6 +237,21 @@ pub fn exportAddSaturatedInt(comptime T: type, comptime Wider: type, comptime na
                 return min;
             } else {
                 return @intCast(T, answer);
+            }
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn exportAddOrPanic(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(self: T, other: T) callconv(.C) T {
+            const result = addWithOverflow(T, self, other);
+            if (result.has_overflowed) {
+                roc_panic("integer addition overflowed!", 1);
+                unreachable;
+            } else {
+                return result.value;
             }
         }
     }.func;

@@ -7,6 +7,7 @@ const math = std.math;
 const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 const RocStr = str.RocStr;
 const WithOverflow = utils.WithOverflow;
+const roc_panic = utils.panic;
 
 pub const RocDec = extern struct {
     num: i128,
@@ -1092,4 +1093,15 @@ pub fn mulC(arg1: RocDec, arg2: RocDec) callconv(.C) WithOverflow(RocDec) {
 
 pub fn divC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
     return @call(.{ .modifier = always_inline }, RocDec.div, .{ arg1, arg2 }).num;
+}
+
+pub fn addOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
+    const result = arg1.addWithOverflow(arg2);
+    if (result.has_overflowed) {
+        const todo_why_does_this_argument_exist = 1;
+        roc_panic("Dec overflow", todo_why_does_this_argument_exist);
+        unreachable;
+    } else {
+        return result.value;
+    }
 }

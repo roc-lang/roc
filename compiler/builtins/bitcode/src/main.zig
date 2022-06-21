@@ -21,6 +21,7 @@ comptime {
     exportDecFn(dec.subC, "sub_with_overflow");
     exportDecFn(dec.mulC, "mul_with_overflow");
     exportDecFn(dec.divC, "div");
+    exportDecFn(dec.addOrPanicC, "add_or_panic");
 }
 
 // List Module
@@ -104,6 +105,7 @@ comptime {
         num.exportRoundF64(T, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f64.");
 
         num.exportAddWithOverflow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_with_overflow.");
+        num.exportAddOrPanic(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_or_panic.");
         const Wider = WIDEINTS[i];
         num.exportAddSaturatedInt(T, Wider, ROC_BUILTINS ++ "." ++ NUM ++ ".add_saturated.");
     }
