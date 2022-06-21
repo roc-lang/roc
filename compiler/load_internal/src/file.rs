@@ -2686,7 +2686,7 @@ fn finish_specialization(
 
 #[allow(clippy::too_many_arguments)]
 fn finish(
-    state: State,
+    mut state: State,
     solved: Solved<Subs>,
     exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
@@ -2699,6 +2699,13 @@ fn finish(
         .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
         .into_inner()
         .into_module_ids();
+
+    // Steal the derived symbols and put them in the global ident ids
+    let derived_ident_ids = state.derived_symbols.write().unwrap().steal();
+    ModuleId::DERIVED.register_debug_idents(&derived_ident_ids);
+    state
+        .constrained_ident_ids
+        .insert(ModuleId::DERIVED, derived_ident_ids);
 
     let interns = Interns {
         module_ids,

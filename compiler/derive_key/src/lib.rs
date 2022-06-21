@@ -26,9 +26,18 @@ use roc_types::subs::{Subs, Variable};
 #[derive(Hash, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum DeriveKey {
-    Encoding(FlatEncodableKey),
+    ToEncoder(FlatEncodableKey),
     #[allow(unused)]
     Decoding,
+}
+
+impl DeriveKey {
+    pub(self) fn debug_name(&self) -> String {
+        match self {
+            DeriveKey::ToEncoder(key) => format!("toEncoder_{}", key.debug_name()),
+            DeriveKey::Decoding => todo!(),
+        }
+    }
 }
 
 #[derive(Hash, PartialEq, Eq, Debug)]
@@ -46,7 +55,7 @@ impl Derived {
     pub fn encoding(subs: &Subs, var: Variable) -> Self {
         match encoding::FlatEncodable::from_var(subs, var) {
             FlatEncodable::Immediate(imm) => Derived::Immediate(imm),
-            FlatEncodable::Key(repr) => Derived::Key(DeriveKey::Encoding(repr)),
+            FlatEncodable::Key(repr) => Derived::Key(DeriveKey::ToEncoder(repr)),
         }
     }
 }
@@ -56,16 +65,42 @@ impl Derived {
 pub struct DerivedSymbols {
     map: MutMap<DeriveKey, Symbol>,
     derived_ident_ids: IdentIds,
+    #[cfg(debug_assertions)]
+    stolen: bool,
 }
 
 impl DerivedSymbols {
     pub fn get_or_insert(&mut self, key: DeriveKey) -> Symbol {
-        let symbol = self.map.entry(key).or_insert_with(|| {
-            let ident_id = self.derived_ident_ids.gen_unique();
+        debug_assert!(!self.stolen, "attempting to add to stolen symbols!");
+
+        let symbol = self.map.entry(key).or_insert_with_key(|key| {
+            let ident_id = if cfg!(debug_assertions) {
+                let debug_name = key.debug_name();
+                debug_assert!(
+                    self.derived_ident_ids.get_id(&debug_name).is_none(),
+                    "duplicate debug name for different derive key"
+                );
+                self.derived_ident_ids.get_or_insert(&debug_name)
+            } else {
+                self.derived_ident_ids.gen_unique()
+            };
 
             Symbol::new(ModuleId::DERIVED, ident_id)
         });
         *symbol
+    }
+
+    /// Steal all created derived ident Ids.
+    /// After this is called, [`Self::get_or_insert`] may no longer be called.
+    pub fn steal(&mut self) -> IdentIds {
+        let mut ident_ids = Default::default();
+        std::mem::swap(&mut self.derived_ident_ids, &mut ident_ids);
+
+        if cfg!(debug_assertions) {
+            self.stolen = true;
+        }
+
+        ident_ids
     }
 }
 

@@ -21,6 +21,40 @@ pub enum FlatEncodableKey {
     TagUnion(Vec<(TagName, u16)>),
 }
 
+impl FlatEncodableKey {
+    pub(crate) fn debug_name(&self) -> String {
+        match self {
+            FlatEncodableKey::List() => "list".to_string(),
+            FlatEncodableKey::Set() => "set".to_string(),
+            FlatEncodableKey::Dict() => "dict".to_string(),
+            FlatEncodableKey::Record(fields) => {
+                let mut str = String::from('{');
+                fields.iter().enumerate().for_each(|(i, f)| {
+                    if i > 0 {
+                        str.push(',');
+                    }
+                    str.push_str(f.as_str());
+                });
+                str.push('}');
+                str
+            }
+            FlatEncodableKey::TagUnion(tags) => {
+                let mut str = String::from('[');
+                tags.iter().enumerate().for_each(|(i, (tag, arity))| {
+                    if i > 0 {
+                        str.push(',');
+                    }
+                    str.push_str(tag.0.as_str());
+                    str.push(' ');
+                    str.push_str(&arity.to_string());
+                });
+                str.push(']');
+                str
+            }
+        }
+    }
+}
+
 macro_rules! unexpected {
     ($subs:expr, $var:expr) => {
         internal_error!(

@@ -227,7 +227,7 @@ where
 
 fn get_key(subs: &Subs, var: Variable) -> FlatEncodableKey {
     match Derived::encoding(subs, var) {
-        Derived::Key(DeriveKey::Encoding(repr)) => repr,
+        Derived::Key(DeriveKey::ToEncoder(repr)) => repr,
         _ => unreachable!(),
     }
 }
