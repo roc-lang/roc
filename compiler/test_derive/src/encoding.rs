@@ -25,7 +25,7 @@ use roc_constrain::{
     module::{ExposedByModule, ExposedForModule, ExposedModuleTypes},
 };
 use roc_debug_flags::dbg_do;
-use roc_derive_key::{encoding::FlatEncodableKey, Derived};
+use roc_derive_key::{encoding::FlatEncodableKey, DeriveKey, Derived};
 use roc_load_internal::file::{add_imports, default_aliases, LoadedModule, Threading};
 use roc_module::{
     ident::{ModuleName, TagName},
@@ -227,8 +227,8 @@ where
 
 fn get_key(subs: &Subs, var: Variable) -> FlatEncodableKey {
     match Derived::encoding(subs, var) {
-        Derived::Immediate(_) => unreachable!(),
-        Derived::Key(key) => key.repr,
+        Derived::Key(DeriveKey::Encoding(repr)) => repr,
+        _ => unreachable!(),
     }
 }
 

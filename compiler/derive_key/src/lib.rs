@@ -10,54 +10,65 @@
 //! - `Decoding` is like encoding, but has some differences. For one, it *does* need to distinguish
 //!   between required and optional record fields.
 //!
-//! For these reasons the content keying is based on a [`Strategy`] as well.
+//! For these reasons the content keying is based on a strategy as well, which are the variants of
+//! [`DeriveKey`].
 
 pub mod encoding;
 
 use encoding::{FlatEncodable, FlatEncodableKey};
 
-use roc_module::symbol::Symbol;
+use roc_collections::MutMap;
+use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_types::subs::{Subs, Variable};
 
 #[derive(Hash, PartialEq, Eq, Debug)]
 #[repr(u8)]
-enum Strategy {
-    Encoding,
+pub enum DeriveKey {
+    Encoding(FlatEncodableKey),
     #[allow(unused)]
     Decoding,
 }
 
 #[derive(Hash, PartialEq, Eq, Debug)]
-pub enum Derived<R>
-where
-    R: std::hash::Hash + PartialEq + Eq + std::fmt::Debug,
-{
+pub enum Derived {
     /// If a derived implementation name is well-known ahead-of-time, we can inline the symbol
     /// directly rather than associating a key for an implementation to be made later on.
     Immediate(Symbol),
     /// Key of the derived implementation to use. This allows association of derived implementation
     /// names to a key, when the key is known ahead-of-time but the implementation (and it's name)
     /// is yet-to-be-made.
-    Key(DeriveKey<R>),
+    Key(DeriveKey),
 }
 
-#[derive(Hash, PartialEq, Eq, Debug)]
-pub struct DeriveKey<R>
-where
-    R: std::hash::Hash + PartialEq + Eq + std::fmt::Debug,
-{
-    strategy: Strategy,
-    pub repr: R,
-}
-
-impl Derived<FlatEncodableKey> {
+impl Derived {
     pub fn encoding(subs: &Subs, var: Variable) -> Self {
         match encoding::FlatEncodable::from_var(subs, var) {
             FlatEncodable::Immediate(imm) => Derived::Immediate(imm),
-            FlatEncodable::Key(repr) => Derived::Key(DeriveKey {
-                strategy: Strategy::Encoding,
-                repr,
-            }),
+            FlatEncodable::Key(repr) => Derived::Key(DeriveKey::Encoding(repr)),
         }
+    }
+}
+
+/// Map of [`DeriveKey`]s to their derived symbols.
+pub struct DerivedMethods {
+    map: MutMap<DeriveKey, Symbol>,
+    derived_ident_ids: IdentIds,
+}
+
+impl DerivedMethods {
+    pub fn new(derived_ident_ids: IdentIds) -> Self {
+        Self {
+            map: MutMap::default(),
+            derived_ident_ids,
+        }
+    }
+
+    pub fn get_or_insert(&mut self, key: DeriveKey) -> Symbol {
+        let symbol = self.map.entry(key).or_insert_with(|| {
+            let ident_id = self.derived_ident_ids.gen_unique();
+
+            Symbol::new(todo!(), ident_id)
+        });
+        *symbol
     }
 }
