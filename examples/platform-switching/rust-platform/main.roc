@@ -1,4 +1,4 @@
-platform "hello-world-in-swift"
+platform "echo-in-rust"
     requires {} { main : Str }
     exposes []
     packages {}

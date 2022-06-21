@@ -1,4 +1,4 @@
-platform "hello-world-in-rust"
+platform "echo-in-c"
     requires {} { main : Str }
     exposes []
     packages {}

@@ -1,4 +1,4 @@
-platform "hello-world-in-zig"
+platform "echo-in-web"
     requires {} { main : Str }
     exposes []
     packages {}

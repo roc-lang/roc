@@ -3,12 +3,12 @@
 To run this website, first compile either of these identical apps:
 
 ```bash
-# Option A: Compile helloWeb.roc
-cargo run -- build --target=wasm32 examples/hello-world/web-platform/helloWeb.roc
+# Option A: Compile examples/platform-switching/web-assembly-platform/rocLovesWeb.roc
+cargo run -- build --target=wasm32 examples/platform-switching/web-assembly-platform/rocLovesWeb.roc
 
-# Option B: Compile helloWorld.roc with `pf: "web-platform"` and move the result
-cargo run -- build --target=wasm32 examples/hello-world/main.roc
-(cd examples/hello-world && mv helloWorld.wasm web-platform/helloWeb.wasm)
+# Option B: Compile examples/platform-switching/main.roc with `pf: "web-assembly-platform/main.roc"` and move the result
+cargo run -- build --target=wasm32 examples/platform-switching/main.roc
+(cd examples/platform-switching && mv rocLovesPlatforms.wasm web-assembly-platform/rocLovesWeb.wasm)
 ```
 
 Then `cd` into the website directory
@@ -16,7 +16,7 @@ and run any web server that can handle WebAssembly.
 For example, with `http-server`:
 
 ```bash
-cd examples/hello-world/web-platform
+cd examples/platform-switching/web-assembly-platform
 npm install -g http-server
 http-server
 ```

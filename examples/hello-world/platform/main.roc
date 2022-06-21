@@ -1,4 +1,4 @@
-platform "hello-world-in-web-assembly"
+platform "hello-world"
     requires {} { main : Str }
     exposes []
     packages {}

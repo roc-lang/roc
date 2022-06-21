@@ -1,6 +1,6 @@
-app "helloSwift"
+app "rocLovesRust"
     packages { pf: "main.roc" }
     imports []
     provides [main] to pf
 
-main = "Hello, World!\n"
+main = "Roc <3 Rust!\n"

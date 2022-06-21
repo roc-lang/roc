@@ -1,4 +1,4 @@
-platform "hello-world-in-c"
+platform "echo-in-zig"
     requires {} { main : Str }
     exposes []
     packages {}
