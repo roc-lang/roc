@@ -918,7 +918,7 @@ impl<'a> SymbolSpecializations<'a> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ProcsBase<'a> {
     pub partial_procs: BumpMap<Symbol, PartialProc<'a>>,
     pub module_thunks: &'a [Symbol],
@@ -1325,7 +1325,19 @@ impl<'a, 'i> Env<'a, 'i> {
     /// Unifies two variables and performs lambda set compaction.
     /// Use this rather than [roc_unify::unify] directly!
     fn unify(&mut self, left: Variable, right: Variable) -> Result<(), UnificationFailed> {
-        roc_late_solve::unify(
+        if self.home == ModuleId::DERIVED {
+            // When specializing derives, we steal the Derived module's ident ids from
+            // `derived_symbols` for use in the usual mono pass. But during unification we
+            // temporarily return them, so that derived ability symbols are resolved properly in
+            // lambda sets.
+            let mut derived_ident_ids = IdentIds::default();
+            std::mem::swap(&mut derived_ident_ids, self.ident_ids);
+
+            let mut derived_symbols = self.derived_symbols.lock().unwrap();
+            derived_symbols.return_ident_ids(derived_ident_ids);
+        }
+
+        let result = roc_late_solve::unify(
             self.home,
             self.arena,
             self.subs,
@@ -1333,7 +1345,20 @@ impl<'a, 'i> Env<'a, 'i> {
             self.derived_symbols,
             left,
             right,
-        )
+        );
+
+        if self.home == ModuleId::DERIVED {
+            debug_assert!(
+                self.ident_ids.is_empty(),
+                "no ident ids should have been added while they were returned to derived_symbols"
+            );
+
+            let mut derived_symbols = self.derived_symbols.lock().unwrap();
+            let mut real_derived_ident_ids = derived_symbols.steal();
+            std::mem::swap(&mut real_derived_ident_ids, self.ident_ids);
+        }
+
+        result
     }
 }
 

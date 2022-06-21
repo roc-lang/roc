@@ -131,6 +131,7 @@ struct ModuleCache<'a> {
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
     late_specializations: MutMap<ModuleId, LateSpecializationsModule<'a>>,
     external_specializations_requested: MutMap<ModuleId, Vec<ExternalSpecializations<'a>>>,
+    derives_module: Option<DerivesModule<'a>>,
 
     /// Various information
     imports: MutMap<ModuleId, MutSet<ModuleId>>,
@@ -179,6 +180,7 @@ impl Default for ModuleCache<'_> {
             found_specializations: Default::default(),
             late_specializations: Default::default(),
             external_specializations_requested: Default::default(),
+            derives_module: Default::default(),
             imports: Default::default(),
             top_level_thunks: Default::default(),
             documentation: Default::default(),
@@ -436,7 +438,37 @@ fn start_phase<'a>(
                     .unwrap_or_default();
 
                 let (ident_ids, subs, procs_base, layout_cache, module_timing) =
-                    if state.make_specializations_pass.current_pass() == 1 {
+                    if module_id == ModuleId::DERIVED {
+                        // The module for derives is treated specially - we keep it isolated, as it
+                        // is only needed for making specializations.
+                        let DerivesModule {
+                            mut layout_cache,
+                            mut procs_base,
+                            mut subs,
+                            mut module_timing,
+                        } = state
+                            .module_cache
+                            .derives_module
+                            .take()
+                            .unwrap_or_else(|| DerivesModule::new(state.target_info));
+
+                        load_derived_partial_procs(
+                            module_id,
+                            arena,
+                            &mut subs,
+                            &state.derived_symbols,
+                            &mut module_timing,
+                            &mut layout_cache,
+                            state.target_info,
+                            &state.exposed_to_host,
+                            &mut procs_base,
+                            &mut state.world_abilities,
+                        );
+
+                        let ident_ids = state.derived_symbols.lock().unwrap().steal();
+
+                        (ident_ids, subs, procs_base, layout_cache, module_timing)
+                    } else if state.make_specializations_pass.current_pass() == 1 {
                         let found_specializations = state
                             .module_cache
                             .found_specializations
@@ -614,6 +646,25 @@ struct LateSpecializationsModule<'a> {
     module_timing: ModuleTiming,
     layout_cache: LayoutCache<'a>,
     procs_base: ProcsBase<'a>,
+}
+
+#[derive(Debug)]
+struct DerivesModule<'a> {
+    layout_cache: LayoutCache<'a>,
+    procs_base: ProcsBase<'a>,
+    subs: Subs,
+    module_timing: ModuleTiming,
+}
+
+impl DerivesModule<'_> {
+    fn new(target_info: TargetInfo) -> Self {
+        Self {
+            layout_cache: LayoutCache::new(target_info),
+            procs_base: ProcsBase::default(),
+            subs: Subs::default(),
+            module_timing: ModuleTiming::new(SystemTime::now()),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -2387,16 +2438,36 @@ fn update<'a>(
             let _ = layout_cache;
 
             state.procedures.extend(procedures);
-            state.module_cache.late_specializations.insert(
-                module_id,
-                LateSpecializationsModule {
-                    ident_ids,
-                    module_timing,
-                    subs,
+            if module_id == ModuleId::DERIVED {
+                // The derives module is treated specially - put the data back and return the ident
+                // IDs to `derived_symbols` so other modules can use it in their monomorphization
+                // if needed.
+                state
+                    .derived_symbols
+                    .lock()
+                    .unwrap()
+                    .return_ident_ids(ident_ids);
+
+                debug_assert!(state.module_cache.derives_module.is_none());
+
+                state.module_cache.derives_module = Some(DerivesModule {
                     layout_cache,
                     procs_base,
-                },
-            );
+                    subs,
+                    module_timing,
+                });
+            } else {
+                state.module_cache.late_specializations.insert(
+                    module_id,
+                    LateSpecializationsModule {
+                        ident_ids,
+                        module_timing,
+                        subs,
+                        layout_cache,
+                        procs_base,
+                    },
+                );
+            }
 
             let work = state
                 .dependencies
@@ -4509,7 +4580,7 @@ fn make_specializations<'a>(
         update_mode_ids: &mut update_mode_ids,
         // call_specialization_counter=0 is reserved
         call_specialization_counter: 1,
-        abilities: AbilitiesView::World(world_abilities),
+        abilities: AbilitiesView::World(&world_abilities),
         derived_symbols: &derived_symbols,
     };
 

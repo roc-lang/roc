@@ -102,6 +102,18 @@ impl DerivedSymbols {
         *symbol
     }
 
+    pub fn iter_all(&self) -> impl Iterator<Item = (&DeriveKey, &Symbol)> {
+        self.map.iter()
+    }
+
+    /// Generate a unique symbol. This should only be used when generating code inside the Derived
+    /// module; other modules should use [`Self::get_or_insert`] to generate a symbol for a derived
+    /// ability member usage.
+    pub fn gen_unique(&mut self) -> Symbol {
+        let ident_id = self.derived_ident_ids.gen_unique();
+        Symbol::new(ModuleId::DERIVED, ident_id)
+    }
+
     /// Steal all created derived ident Ids.
     /// After this is called, [`Self::get_or_insert`] may no longer be called.
     pub fn steal(&mut self) -> IdentIds {
@@ -110,10 +122,21 @@ impl DerivedSymbols {
 
         #[cfg(debug_assertions)]
         {
+            debug_assert!(!self.stolen);
             self.stolen = true;
         }
 
         ident_ids
+    }
+
+    pub fn return_ident_ids(&mut self, ident_ids: IdentIds) {
+        #[cfg(debug_assertions)]
+        {
+            debug_assert!(self.stolen);
+            self.stolen = false;
+        }
+
+        self.derived_ident_ids = ident_ids;
     }
 }
 

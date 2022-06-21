@@ -377,7 +377,8 @@ impl<'a> Dependencies<'a> {
     pub fn reload_make_specialization_pass(&mut self) -> MutSet<(ModuleId, Phase)> {
         let mut output = MutSet::default();
 
-        let mut make_specializations_dependents = Default::default();
+        let mut make_specializations_dependents = MakeSpecializationsDependents::default();
+        let default_make_specializations_dependents_len = make_specializations_dependents.0.len();
         std::mem::swap(
             &mut self.make_specializations_dependents,
             &mut make_specializations_dependents,
@@ -403,7 +404,7 @@ impl<'a> Dependencies<'a> {
                 self.add_dependency(dependent, module, Phase::MakeSpecializations);
             }
 
-            self.add_to_status_for_all_phases(module, Phase::MakeSpecializations);
+            self.add_to_status_for_phase(module, Phase::MakeSpecializations);
             if !has_pred {
                 output.insert((module, Phase::MakeSpecializations));
             }
@@ -413,9 +414,11 @@ impl<'a> Dependencies<'a> {
             &mut self.make_specializations_dependents,
             &mut make_specializations_dependents,
         );
-        debug_assert!(
-            make_specializations_dependents.0.is_empty(),
-            "more modules were added to the graph"
+        debug_assert_eq!(
+            make_specializations_dependents.0.len(),
+            default_make_specializations_dependents_len,
+            "more modules were added to the graph: {:?}",
+            make_specializations_dependents
         );
 
         output
