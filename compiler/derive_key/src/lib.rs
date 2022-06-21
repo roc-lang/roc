@@ -53,12 +53,12 @@ impl Derived {
 
 /// Map of [`DeriveKey`]s to their derived symbols.
 #[derive(Debug, Default)]
-pub struct DerivedMethods {
+pub struct DerivedSymbols {
     map: MutMap<DeriveKey, Symbol>,
     derived_ident_ids: IdentIds,
 }
 
-impl DerivedMethods {
+impl DerivedSymbols {
     pub fn get_or_insert(&mut self, key: DeriveKey) -> Symbol {
         let symbol = self.map.entry(key).or_insert_with(|| {
             let ident_id = self.derived_ident_ids.gen_unique();
@@ -70,4 +70,4 @@ impl DerivedMethods {
 }
 
 /// Thread-sharable [`DerivedMethods`].
-pub type GlobalDerivedMethods = Arc<RwLock<DerivedMethods>>;
+pub type GlobalDerivedSymbols = Arc<RwLock<DerivedSymbols>>;

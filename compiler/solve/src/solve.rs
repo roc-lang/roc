@@ -13,7 +13,7 @@ use roc_collections::VecSet;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
-use roc_derive_key::{Derived, GlobalDerivedMethods};
+use roc_derive_key::{Derived, GlobalDerivedSymbols};
 use roc_error_macros::internal_error;
 use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
@@ -551,7 +551,7 @@ pub fn run(
     constraint: &Constraint,
     pending_derives: PendingDerives,
     abilities_store: &mut AbilitiesStore,
-    derived_methods: GlobalDerivedMethods,
+    derived_symbols: GlobalDerivedSymbols,
 ) -> (Solved<Subs>, Env) {
     let env = run_in_place(
         constraints,
@@ -561,7 +561,7 @@ pub fn run(
         constraint,
         pending_derives,
         abilities_store,
-        derived_methods,
+        derived_symbols,
     );
 
     (Solved(subs), env)
@@ -576,7 +576,7 @@ fn run_in_place(
     constraint: &Constraint,
     pending_derives: PendingDerives,
     abilities_store: &mut AbilitiesStore,
-    derived_methods: GlobalDerivedMethods,
+    derived_symbols: GlobalDerivedSymbols,
 ) -> Env {
     let mut pools = Pools::default();
 
@@ -621,7 +621,7 @@ fn run_in_place(
         &mut pools,
         deferred_uls_to_resolve,
         &SolvePhase { abilities_store },
-        &derived_methods,
+        &derived_symbols,
     );
 
     state.env
@@ -1753,7 +1753,7 @@ pub fn compact_lambda_sets_of_vars<P: Phase>(
     pools: &mut Pools,
     uls_of_var: UlsOfVar,
     phase: &P,
-    derived_methods: &GlobalDerivedMethods,
+    derived_symbols: &GlobalDerivedSymbols,
 ) {
     let mut seen = VecSet::default();
     for (_, lambda_sets) in uls_of_var.drain() {
@@ -1763,7 +1763,7 @@ pub fn compact_lambda_sets_of_vars<P: Phase>(
                 continue;
             }
 
-            compact_lambda_set(subs, arena, pools, root_lset, phase, derived_methods);
+            compact_lambda_set(subs, arena, pools, root_lset, phase, derived_symbols);
 
             seen.insert(root_lset);
         }
@@ -1776,7 +1776,7 @@ fn compact_lambda_set<P: Phase>(
     pools: &mut Pools,
     this_lambda_set: Variable,
     phase: &P,
-    derived_methods: &GlobalDerivedMethods,
+    derived_symbols: &GlobalDerivedSymbols,
 ) {
     let LambdaSet {
         solved,
@@ -1807,8 +1807,8 @@ fn compact_lambda_set<P: Phase>(
                 let specialization_symbol = match Derived::encoding(subs, var) {
                     Derived::Immediate(symbol) => symbol,
                     Derived::Key(derive_key) => {
-                        let mut derived_methods = derived_methods.write().unwrap();
-                        derived_methods.get_or_insert(derive_key)
+                        let mut derived_symbols = derived_symbols.write().unwrap();
+                        derived_symbols.get_or_insert(derive_key)
                     }
                 };
 
@@ -1893,7 +1893,7 @@ fn compact_lambda_set<P: Phase>(
                 pools,
                 specialized_lambda_set,
                 phase,
-                derived_methods,
+                derived_symbols,
             );
         }
 
