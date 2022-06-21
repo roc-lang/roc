@@ -1,4 +1,4 @@
-app "hello"
+app "helloWorld"
     packages { pf: "platform/main.roc" }
     imports []
     provides [main] to pf
