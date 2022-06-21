@@ -67,7 +67,7 @@ impl DerivedMethods {
         let symbol = self.map.entry(key).or_insert_with(|| {
             let ident_id = self.derived_ident_ids.gen_unique();
 
-            Symbol::new(todo!(), ident_id)
+            Symbol::new(ModuleId::DERIVED, ident_id)
         });
         *symbol
     }
