@@ -9,6 +9,7 @@ use roc_can::expr::{AnnotatedMark, ClosureData, Expr, Field, Recursive, WhenBran
 use roc_can::pattern::Pattern;
 use roc_collections::SendMap;
 use roc_derive_key::encoding::FlatEncodableKey;
+use roc_derive_key::GlobalDerivedMethods;
 use roc_error_macros::internal_error;
 use roc_late_solve::{instantiate_rigids, AbilitiesView};
 use roc_module::called_via::CalledVia;
@@ -43,6 +44,7 @@ pub struct Env<'a> {
     pub subs: &'a mut Subs,
     pub ident_ids: &'a mut IdentIds,
     pub exposed_encode_types: &'a mut ExposedTypesStorageSubs,
+    pub derived_methods: &'a GlobalDerivedMethods,
 }
 
 impl Env<'_> {
@@ -78,6 +80,7 @@ impl Env<'_> {
             self.arena,
             self.subs,
             &AbilitiesView::Module(&AbilitiesStore::default()),
+            self.derived_methods,
             left,
             right,
         )

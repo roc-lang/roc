@@ -15,6 +15,8 @@
 
 pub mod encoding;
 
+use std::sync::{Arc, RwLock};
+
 use encoding::{FlatEncodable, FlatEncodableKey};
 
 use roc_collections::MutMap;
@@ -50,19 +52,13 @@ impl Derived {
 }
 
 /// Map of [`DeriveKey`]s to their derived symbols.
+#[derive(Debug, Default)]
 pub struct DerivedMethods {
     map: MutMap<DeriveKey, Symbol>,
     derived_ident_ids: IdentIds,
 }
 
 impl DerivedMethods {
-    pub fn new(derived_ident_ids: IdentIds) -> Self {
-        Self {
-            map: MutMap::default(),
-            derived_ident_ids,
-        }
-    }
-
     pub fn get_or_insert(&mut self, key: DeriveKey) -> Symbol {
         let symbol = self.map.entry(key).or_insert_with(|| {
             let ident_id = self.derived_ident_ids.gen_unique();
@@ -72,3 +68,6 @@ impl DerivedMethods {
         *symbol
     }
 }
+
+/// Thread-sharable [`DerivedMethods`].
+pub type GlobalDerivedMethods = Arc<RwLock<DerivedMethods>>;

@@ -22,6 +22,7 @@ use roc_debug_flags::{
     ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
     ROC_PRINT_LOAD_LOG,
 };
+use roc_derive_key::GlobalDerivedMethods;
 use roc_error_macros::internal_error;
 use roc_late_solve::{AbilitiesView, WorldAbilities};
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
@@ -372,6 +373,8 @@ fn start_phase<'a>(
                     ..
                 } = constrained;
 
+                let derived_methods = GlobalDerivedMethods::clone(&state.derived_methods);
+
                 BuildTask::solve_module(
                     module,
                     ident_ids,
@@ -385,6 +388,7 @@ fn start_phase<'a>(
                     dep_idents,
                     declarations,
                     state.cached_subs.clone(),
+                    derived_methods,
                 )
             }
             Phase::FindSpecializations => {
@@ -412,6 +416,8 @@ fn start_phase<'a>(
                     }
                 }
 
+                let derived_methods = GlobalDerivedMethods::clone(&state.derived_methods);
+
                 BuildTask::BuildPendingSpecializations {
                     layout_cache,
                     module_id,
@@ -422,6 +428,7 @@ fn start_phase<'a>(
                     ident_ids,
                     exposed_to_host: state.exposed_to_host.clone(),
                     abilities_store,
+                    derived_methods,
                 }
             }
             Phase::MakeSpecializations => {
@@ -479,6 +486,8 @@ fn start_phase<'a>(
                         (ident_ids, subs, procs_base, layout_cache, module_timing)
                     };
 
+                let derived_methods = GlobalDerivedMethods::clone(&state.derived_methods);
+
                 BuildTask::MakeSpecializations {
                     module_id,
                     ident_ids,
@@ -488,6 +497,7 @@ fn start_phase<'a>(
                     specializations_we_must_make,
                     module_timing,
                     world_abilities: state.world_abilities.clone_ref(),
+                    derived_methods,
                 }
             }
         }
@@ -795,6 +805,8 @@ struct State<'a> {
     /// From now on, these will be used by multiple threads; time to make an Arc<Mutex<_>>!
     pub arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
     pub arc_shorthands: Arc<Mutex<MutMap<&'a str, PackageName<'a>>>>,
+    #[allow(unused)]
+    pub derived_methods: GlobalDerivedMethods,
 
     pub ident_ids_by_module: SharedIdentIdsByModule,
 
@@ -854,6 +866,7 @@ impl<'a> State<'a> {
             exposed_types,
             arc_modules,
             arc_shorthands,
+            derived_methods: Default::default(),
             constrained_ident_ids: IdentIds::exposed_builtins(0),
             ident_ids_by_module,
             declarations_by_id: MutMap::default(),
@@ -973,6 +986,7 @@ enum BuildTask<'a> {
         declarations: Vec<Declaration>,
         dep_idents: IdentIdsByModule,
         cached_subs: CachedSubs,
+        derived_methods: GlobalDerivedMethods,
     },
     BuildPendingSpecializations {
         module_timing: ModuleTiming,
@@ -984,6 +998,7 @@ enum BuildTask<'a> {
         decls: Vec<Declaration>,
         exposed_to_host: ExposedToHost,
         abilities_store: AbilitiesStore,
+        derived_methods: GlobalDerivedMethods,
     },
     MakeSpecializations {
         module_id: ModuleId,
@@ -994,6 +1009,7 @@ enum BuildTask<'a> {
         specializations_we_must_make: Vec<ExternalSpecializations>,
         module_timing: ModuleTiming,
         world_abilities: WorldAbilities,
+        derived_methods: GlobalDerivedMethods,
     },
 }
 
@@ -3719,6 +3735,7 @@ impl<'a> BuildTask<'a> {
         dep_idents: IdentIdsByModule,
         declarations: Vec<Declaration>,
         cached_subs: CachedSubs,
+        derived_methods: GlobalDerivedMethods,
     ) -> Self {
         let exposed_by_module = exposed_types.retain_modules(imported_modules.keys());
 
@@ -3746,6 +3763,7 @@ impl<'a> BuildTask<'a> {
             dep_idents,
             module_timing,
             cached_subs,
+            derived_methods,
         }
     }
 }
@@ -3876,6 +3894,7 @@ fn run_solve_solve(
     pending_derives: PendingDerives,
     mut var_store: VarStore,
     module: Module,
+    derived_methods: GlobalDerivedMethods,
 ) -> (
     Solved<Subs>,
     ResolvedSpecializations,
@@ -3923,6 +3942,7 @@ fn run_solve_solve(
             solve_aliases,
             abilities_store,
             pending_derives,
+            derived_methods,
         );
 
         let module_id = module.module_id;
@@ -3979,6 +3999,7 @@ fn run_solve<'a>(
     decls: Vec<Declaration>,
     dep_idents: IdentIdsByModule,
     cached_subs: CachedSubs,
+    derived_methods: GlobalDerivedMethods,
 ) -> Msg<'a> {
     let solve_start = SystemTime::now();
 
@@ -3998,6 +4019,7 @@ fn run_solve<'a>(
                     pending_derives,
                     var_store,
                     module,
+                    derived_methods,
                 ),
                 Some((subs, exposed_vars_by_symbol)) => {
                     (
@@ -4020,6 +4042,7 @@ fn run_solve<'a>(
                 pending_derives,
                 var_store,
                 module,
+                derived_methods,
             )
         }
     };
@@ -4375,6 +4398,7 @@ fn make_specializations<'a>(
     mut module_timing: ModuleTiming,
     target_info: TargetInfo,
     world_abilities: WorldAbilities,
+    derived_methods: GlobalDerivedMethods,
 ) -> Msg<'a> {
     let make_specializations_start = SystemTime::now();
     let mut update_mode_ids = UpdateModeIds::new();
@@ -4389,6 +4413,7 @@ fn make_specializations<'a>(
         // call_specialization_counter=0 is reserved
         call_specialization_counter: 1,
         abilities: AbilitiesView::World(world_abilities),
+        derived_methods: &derived_methods,
     };
 
     let mut procs = Procs::new_in(arena);
@@ -4449,9 +4474,9 @@ fn build_pending_specializations<'a>(
     mut module_timing: ModuleTiming,
     mut layout_cache: LayoutCache<'a>,
     target_info: TargetInfo,
-    // TODO remove
-    exposed_to_host: ExposedToHost,
+    exposed_to_host: ExposedToHost, // TODO remove
     abilities_store: AbilitiesStore,
+    derived_methods: GlobalDerivedMethods,
 ) -> Msg<'a> {
     let find_specializations_start = SystemTime::now();
 
@@ -4480,6 +4505,7 @@ fn build_pending_specializations<'a>(
         // to know the types and abilities in our modules. Only for building *all* specializations
         // do we need a global view.
         abilities: AbilitiesView::Module(&abilities_store),
+        derived_methods: &derived_methods,
     };
 
     // Add modules' decls to Procs
@@ -4747,6 +4773,7 @@ fn run_task<'a>(
             declarations,
             dep_idents,
             cached_subs,
+            derived_methods,
         } => Ok(run_solve(
             module,
             ident_ids,
@@ -4760,6 +4787,7 @@ fn run_task<'a>(
             declarations,
             dep_idents,
             cached_subs,
+            derived_methods,
         )),
         BuildPendingSpecializations {
             module_id,
@@ -4771,6 +4799,7 @@ fn run_task<'a>(
             imported_module_thunks,
             exposed_to_host,
             abilities_store,
+            derived_methods,
         } => Ok(build_pending_specializations(
             arena,
             solved_subs,
@@ -4783,6 +4812,7 @@ fn run_task<'a>(
             target_info,
             exposed_to_host,
             abilities_store,
+            derived_methods,
         )),
         MakeSpecializations {
             module_id,
@@ -4793,6 +4823,7 @@ fn run_task<'a>(
             specializations_we_must_make,
             module_timing,
             world_abilities,
+            derived_methods,
         } => Ok(make_specializations(
             arena,
             module_id,
@@ -4804,6 +4835,7 @@ fn run_task<'a>(
             module_timing,
             target_info,
             world_abilities,
+            derived_methods,
         )),
     }?;
 

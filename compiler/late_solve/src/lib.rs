@@ -6,6 +6,7 @@ use std::sync::{Arc, RwLock};
 use bumpalo::Bump;
 use roc_can::abilities::AbilitiesStore;
 use roc_collections::MutMap;
+use roc_derive_key::GlobalDerivedMethods;
 use roc_module::symbol::ModuleId;
 use roc_solve::solve::{compact_lambda_sets_of_vars, Phase, Pools};
 use roc_types::subs::Content;
@@ -136,6 +137,7 @@ pub fn unify(
     arena: &Bump,
     subs: &mut Subs,
     abilities: &AbilitiesView,
+    derived_methods: &GlobalDerivedMethods,
     left: Variable,
     right: Variable,
 ) -> Result<(), UnificationFailed> {
@@ -157,6 +159,7 @@ pub fn unify(
                 &mut pools,
                 lambda_sets_to_specialize,
                 &late_phase,
+                derived_methods,
             );
             // Pools are only used to keep track of variable ranks for generalization purposes.
             // Since we break generalization during monomorphization, `pools` is irrelevant
