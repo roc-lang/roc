@@ -543,6 +543,7 @@ struct State {
     mark: Mark,
 }
 
+#[allow(clippy::too_many_arguments)] // TODO: put params in a context/env var
 pub fn run(
     constraints: &Constraints,
     problems: &mut Vec<TypeError>,
@@ -568,6 +569,7 @@ pub fn run(
 }
 
 /// Modify an existing subs in-place instead
+#[allow(clippy::too_many_arguments)] // TODO: put params in a context/env var
 fn run_in_place(
     constraints: &Constraints,
     problems: &mut Vec<TypeError>,

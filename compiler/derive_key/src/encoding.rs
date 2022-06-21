@@ -90,11 +90,8 @@ impl FlatEncodable {
                         matches!(ext, Content::Structure(FlatType::EmptyRecord))
                     })?;
 
-                    let mut field_names: Vec<_> = subs
-                        .get_subs_slice(fields.field_names())
-                        .iter()
-                        .cloned()
-                        .collect();
+                    let mut field_names: Vec<_> =
+                        subs.get_subs_slice(fields.field_names()).to_vec();
                     field_names.sort();
 
                     Ok(Key(FlatEncodableKey::Record(field_names)))

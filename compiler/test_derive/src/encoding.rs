@@ -198,7 +198,7 @@ where
         .insert(test_module, IdentIds::default());
 
     let signature_var = synth_input(&mut test_subs);
-    let key = get_key(&test_subs, signature_var).into();
+    let key = get_key(&test_subs, signature_var);
 
     let mut env = Env {
         home: test_module,

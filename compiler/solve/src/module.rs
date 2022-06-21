@@ -33,6 +33,7 @@ pub struct SolvedModule {
     pub exposed_types: ExposedTypesStorageSubs,
 }
 
+#[allow(clippy::too_many_arguments)] // TODO: put params in a context/env var
 pub fn run_solve(
     constraints: &Constraints,
     constraint: ConstraintSoa,

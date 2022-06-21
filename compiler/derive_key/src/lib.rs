@@ -80,7 +80,10 @@ pub struct DerivedSymbols {
 
 impl DerivedSymbols {
     pub fn get_or_insert(&mut self, key: DeriveKey) -> Symbol {
-        debug_assert!(!self.stolen, "attempting to add to stolen symbols!");
+        #[cfg(debug_assertions)]
+        {
+            debug_assert!(!self.stolen, "attempting to add to stolen symbols!");
+        }
 
         let symbol = self.map.entry(key).or_insert_with_key(|key| {
             let ident_id = if cfg!(debug_assertions) {
@@ -105,7 +108,8 @@ impl DerivedSymbols {
         let mut ident_ids = Default::default();
         std::mem::swap(&mut self.derived_ident_ids, &mut ident_ids);
 
-        if cfg!(debug_assertions) {
+        #[cfg(debug_assertions)]
+        {
             self.stolen = true;
         }
 
