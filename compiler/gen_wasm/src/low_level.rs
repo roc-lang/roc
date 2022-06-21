@@ -173,30 +173,26 @@ impl<'a> LowLevelCall<'a> {
         }
     }
 
-    /// Wrap an integer whose Wasm representation is i32
+    fn wrap_i32(&self, backend: &mut WasmBackend<'a>) {
+        match self.ret_layout {
+            Layout::Builtin(Builtin::Int(width)) => self.wrap_small_int(backend, width),
+            _ => internal_error!("Expected integer <= 32 bits, found {:?}", self.ret_layout),
+        }
+    }
+
+    /// Wrap an integer that should have less than 32 bits, but is represented in Wasm as i32.
     /// This may seem like deliberately introducing an error!
     /// But we want all targets to behave the same, and hash algos rely on wrapping.
     /// Discussion: https://github.com/rtfeldman/roc/pull/2117#discussion_r760723063
-    fn wrap_i32(&self, backend: &mut WasmBackend<'a>) {
-        let invalid =
-            || internal_error!("Expected integer <= 32 bits, found {:?}", self.ret_layout);
-
-        let (shift, is_signed) = match self.ret_layout {
-            Layout::Builtin(Builtin::Int(int_width)) => match int_width {
-                IntWidth::U8 => (24, false),
-                IntWidth::U16 => (16, false),
-                IntWidth::I8 => (24, true),
-                IntWidth::I16 => (16, true),
-                IntWidth::I32 | IntWidth::U32 => return,
-                _ => invalid(),
-            },
-            _ => invalid(),
-        };
+    fn wrap_small_int(&self, backend: &mut WasmBackend<'a>, int_width: IntWidth) {
+        let bits = 8 * int_width.stack_size() as i32;
+        let shift = 32 - bits;
+        debug_assert!(shift > 0);
 
         backend.code_builder.i32_const(shift);
         backend.code_builder.i32_shl();
         backend.code_builder.i32_const(shift);
-        if is_signed {
+        if int_width.is_signed() {
             backend.code_builder.i32_shr_s();
         } else {
             backend.code_builder.i32_shr_u();
@@ -323,42 +319,61 @@ impl<'a> LowLevelCall<'a> {
                 Layout::Builtin(Builtin::Int(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_ADD_OR_PANIC_INT[width])
                 }
-                Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
-                    self.load_args(backend);
-                    backend.code_builder.f32_add()
-                }
-                Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
-                    self.load_args(backend);
-                    backend.code_builder.f64_add()
-                }
-                Layout::Builtin(Builtin::Float(FloatWidth::F128)) => todo!("Num.add for f128"),
+                Layout::Builtin(Builtin::Float(width)) => match width {
+                    FloatWidth::F32 => {
+                        self.load_args(backend);
+                        backend.code_builder.f32_add()
+                    }
+                    FloatWidth::F64 => {
+                        self.load_args(backend);
+                        backend.code_builder.f64_add()
+                    }
+                    FloatWidth::F128 => todo!("Num.add for f128"),
+                },
                 Layout::Builtin(Builtin::Decimal) => {
                     self.load_args_and_call_zig(backend, bitcode::DEC_ADD_OR_PANIC)
                 }
                 _ => panic_ret_type(),
             },
 
-            NumAddWrap => {
-                self.load_args(backend);
-                match CodeGenNumType::from(self.ret_layout) {
-                    I32 => {
-                        backend.code_builder.i32_add();
-                        self.wrap_i32(backend);
+            NumAddWrap => match self.ret_layout {
+                Layout::Builtin(Builtin::Int(width)) => match width {
+                    IntWidth::I128 | IntWidth::U128 => {
+                        self.load_args_and_call_zig(backend, &bitcode::NUM_ADD_OR_PANIC_INT[width])
+                        // TODO: don't panic
                     }
-                    I64 => backend.code_builder.i64_add(),
-                    F32 => backend.code_builder.f32_add(),
-                    F64 => backend.code_builder.f64_add(),
-
-                    I128 => self.load_args_and_call_zig(
-                        backend,
-                        &bitcode::NUM_ADD_OR_PANIC_INT[IntWidth::I128], // TODO: don't panic
-                    ),
-
-                    Decimal => self.load_args_and_call_zig(backend, bitcode::DEC_ADD_OR_PANIC), // TODO: don't panic
-
-                    F128 => todo!("f128 NumAddWrap"),
+                    IntWidth::I64 | IntWidth::U64 => {
+                        self.load_args(backend);
+                        backend.code_builder.i64_add()
+                    }
+                    IntWidth::I32 | IntWidth::U32 => {
+                        self.load_args(backend);
+                        backend.code_builder.i32_add()
+                    }
+                    _ => {
+                        self.load_args(backend);
+                        backend.code_builder.i32_add();
+                        self.wrap_small_int(backend, width);
+                    }
+                },
+                Layout::Builtin(Builtin::Float(width)) => match width {
+                    FloatWidth::F32 => {
+                        self.load_args(backend);
+                        backend.code_builder.f32_add()
+                    }
+                    FloatWidth::F64 => {
+                        self.load_args(backend);
+                        backend.code_builder.f64_add()
+                    }
+                    FloatWidth::F128 => todo!("Num.add for f128"),
+                },
+                Layout::Builtin(Builtin::Decimal) => {
+                    self.load_args_and_call_zig(backend, bitcode::DEC_ADD_OR_PANIC)
+                    // TODO: don't panic
                 }
-            }
+                _ => panic_ret_type(),
+            },
+
             NumToStr => todo!("{:?}", self.lowlevel),
             NumAddChecked => {
                 let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
