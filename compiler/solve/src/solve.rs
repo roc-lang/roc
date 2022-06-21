@@ -13,7 +13,7 @@ use roc_collections::VecSet;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
-use roc_derive_key::{Derived, GlobalDerivedSymbols};
+use roc_derive_key::{DeriveError, Derived, GlobalDerivedSymbols};
 use roc_error_macros::internal_error;
 use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
@@ -1804,29 +1804,44 @@ fn compact_lambda_set<P: Phase>(
             Structure(_) | Alias(_, _, _, AliasKind::Structural) => {
                 // This is a structural type, find the name of the derived ability function it
                 // should use.
-                let specialization_symbol = match Derived::encoding(subs, var) {
-                    Derived::Immediate(symbol) => symbol,
-                    Derived::Key(derive_key) => {
-                        let mut derived_symbols = derived_symbols.write().unwrap();
-                        derived_symbols.get_or_insert(derive_key)
+                match Derived::encoding(subs, var) {
+                    Ok(derived) => {
+                        let specialization_symbol = match derived {
+                            Derived::Immediate(symbol) => symbol,
+                            Derived::Key(derive_key) => {
+                                let mut derived_symbols = derived_symbols.write().unwrap();
+                                derived_symbols.get_or_insert(derive_key)
+                            }
+                        };
+
+                        let specialization_symbol_slice = UnionLabels::insert_into_subs(
+                            subs,
+                            vec![(specialization_symbol, vec![])],
+                        );
+                        let lambda_set_for_derived = subs.fresh(Descriptor {
+                            content: LambdaSet(subs::LambdaSet {
+                                solved: specialization_symbol_slice,
+                                recursion_var: OptVariable::NONE,
+                                unspecialized: SubsSlice::default(),
+                            }),
+                            rank: target_rank,
+                            mark: Mark::NONE,
+                            copy: OptVariable::NONE,
+                        });
+
+                        specialized_to_unify_with.push(lambda_set_for_derived);
+                        continue;
+                    }
+                    Err(DeriveError::UnboundVar) => {
+                        // not specialized yet
+                        new_unspecialized.push(uls);
+                        continue;
+                    }
+                    Err(DeriveError::Underivable) => {
+                        // we should have reported an error for this; drop the lambda set.
+                        continue;
                     }
                 };
-
-                let specialization_symbol_slice =
-                    UnionLabels::insert_into_subs(subs, vec![(specialization_symbol, vec![])]);
-                let lambda_set_for_derived = subs.fresh(Descriptor {
-                    content: LambdaSet(subs::LambdaSet {
-                        solved: specialization_symbol_slice,
-                        recursion_var: OptVariable::NONE,
-                        unspecialized: SubsSlice::default(),
-                    }),
-                    rank: target_rank,
-                    mark: Mark::NONE,
-                    copy: OptVariable::NONE,
-                });
-
-                specialized_to_unify_with.push(lambda_set_for_derived);
-                continue;
             }
             Alias(opaque, _, _, AliasKind::Opaque) => opaque,
             Error => {

@@ -23,6 +23,15 @@ use roc_collections::MutMap;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_types::subs::{Subs, Variable};
 
+#[derive(Debug, PartialEq)]
+pub enum DeriveError {
+    /// Unbound variable present in the type-to-derive. It may be possible to derive for this type
+    /// once the unbound variable is resolved.
+    UnboundVar,
+    /// The type is underivable for the given ability member.
+    Underivable,
+}
+
 #[derive(Hash, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum DeriveKey {
@@ -52,10 +61,10 @@ pub enum Derived {
 }
 
 impl Derived {
-    pub fn encoding(subs: &Subs, var: Variable) -> Self {
-        match encoding::FlatEncodable::from_var(subs, var) {
-            FlatEncodable::Immediate(imm) => Derived::Immediate(imm),
-            FlatEncodable::Key(repr) => Derived::Key(DeriveKey::ToEncoder(repr)),
+    pub fn encoding(subs: &Subs, var: Variable) -> Result<Self, DeriveError> {
+        match encoding::FlatEncodable::from_var(subs, var)? {
+            FlatEncodable::Immediate(imm) => Ok(Derived::Immediate(imm)),
+            FlatEncodable::Key(repr) => Ok(Derived::Key(DeriveKey::ToEncoder(repr))),
         }
     }
 }

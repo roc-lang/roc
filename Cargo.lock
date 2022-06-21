@@ -4093,6 +4093,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_constrain",
+ "roc_derive_key",
  "roc_exhaustive",
  "roc_load",
  "roc_module",
