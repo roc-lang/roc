@@ -45,6 +45,28 @@ impl WorldAbilities {
         debug_assert!(old_store.is_none(), "{:?} abilities not new", module);
     }
 
+    #[inline(always)]
+    pub fn with_module_exposed_type<T>(
+        &mut self,
+        module: ModuleId,
+        mut f: impl FnMut(&mut ExposedTypesStorageSubs) -> T,
+    ) -> T {
+        let mut world = self.world.write().unwrap();
+        let (_, exposed_types) = world.get_mut(&module).expect("module not in the world");
+
+        f(exposed_types)
+    }
+
+    #[inline(always)]
+    pub fn with_module_abilities_store<T, F>(&self, module: ModuleId, mut f: F) -> T
+    where
+        F: FnMut(&AbilitiesStore) -> T,
+    {
+        let world = self.world.read().unwrap();
+        let (module_store, _module_types) = world.get(&module).unwrap();
+        f(module_store)
+    }
+
     pub fn clone_ref(&self) -> Self {
         Self {
             world: Arc::clone(&self.world),
@@ -53,7 +75,7 @@ impl WorldAbilities {
 }
 
 pub enum AbilitiesView<'a> {
-    World(WorldAbilities),
+    World(&'a WorldAbilities),
     Module(&'a AbilitiesStore),
 }
 
@@ -64,11 +86,7 @@ impl AbilitiesView<'_> {
         F: FnMut(&AbilitiesStore) -> T,
     {
         match self {
-            AbilitiesView::World(wa) => {
-                let world = wa.world.read().unwrap();
-                let (module_store, _module_types) = world.get(&module).unwrap();
-                f(module_store)
-            }
+            AbilitiesView::World(wa) => wa.with_module_abilities_store(module, f),
             AbilitiesView::Module(store) => f(store),
         }
     }
