@@ -111,13 +111,13 @@ pub fn generate_module_docs(
 }
 
 fn detached_docs_from_comments_and_new_lines<'a>(
-    comments_or_new_lines: &'a [roc_parse::ast::CommentOrNewline<'a>],
+    comments_or_new_lines: impl Iterator<Item = &'a roc_parse::ast::CommentOrNewline<'a>>,
 ) -> Vec<String> {
     let mut detached_docs: Vec<String> = Vec::new();
 
     let mut docs = String::new();
 
-    for comment_or_new_line in comments_or_new_lines.iter() {
+    for comment_or_new_line in comments_or_new_lines {
         match comment_or_new_line {
             CommentOrNewline::DocComment(doc_str) => {
                 docs.push_str(doc_str);
@@ -144,14 +144,22 @@ fn generate_entry_docs<'a>(
     use roc_parse::ast::Pattern;
 
     let mut acc = Vec::with_capacity(defs.tags.len());
-    let mut before_comments_or_new_lines = None;
+    let mut before_comments_or_new_lines: Option<&[CommentOrNewline]> = None;
+    let mut scratchpad = Vec::new();
 
     for (index, either_index) in defs.tags.iter().enumerate() {
         let spaces_before = &defs.spaces[defs.space_before[index].indices()];
 
-        for detached_doc in detached_docs_from_comments_and_new_lines(spaces_before) {
-            acc.push(DetachedDoc(detached_doc));
-        }
+        scratchpad.clear();
+        scratchpad.extend(
+            before_comments_or_new_lines
+                .take()
+                .iter()
+                .flat_map(|e| e.iter()),
+        );
+        scratchpad.extend(spaces_before);
+
+        let docs = comments_or_new_lines_to_docs(&scratchpad);
 
         match either_index.split() {
             Err(value_index) => match &defs.value_defs[value_index.index()] {
@@ -164,8 +172,7 @@ fn generate_entry_docs<'a>(
                                 name,
                                 type_annotation: type_to_docs(false, loc_ann.value),
                                 type_vars: Vec::new(),
-                                docs: before_comments_or_new_lines
-                                    .and_then(comments_or_new_lines_to_docs),
+                                docs,
                             };
                             acc.push(DocEntry::DocDef(doc_def));
                         }
@@ -184,8 +191,7 @@ fn generate_entry_docs<'a>(
                                 name: identifier.to_string(),
                                 type_annotation: type_to_docs(false, ann_type.value),
                                 type_vars: Vec::new(),
-                                docs: before_comments_or_new_lines
-                                    .and_then(comments_or_new_lines_to_docs),
+                                docs,
                             };
                             acc.push(DocEntry::DocDef(doc_def));
                         }
@@ -213,7 +219,7 @@ fn generate_entry_docs<'a>(
                         name: name.value.to_string(),
                         type_annotation: type_to_docs(false, ann.value),
                         type_vars,
-                        docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
+                        docs,
                     };
                     acc.push(DocEntry::DocDef(doc_def));
                 }
@@ -234,7 +240,7 @@ fn generate_entry_docs<'a>(
                         name: name.value.to_string(),
                         type_annotation: TypeAnnotation::NoTypeAnn,
                         type_vars,
-                        docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
+                        docs,
                     };
                     acc.push(DocEntry::DocDef(doc_def));
                 }
@@ -272,14 +278,21 @@ fn generate_entry_docs<'a>(
                         name: name.value.to_string(),
                         type_annotation: TypeAnnotation::Ability { members },
                         type_vars,
-                        docs: before_comments_or_new_lines.and_then(comments_or_new_lines_to_docs),
+                        docs,
                     };
                     acc.push(DocEntry::DocDef(doc_def));
                 }
             },
         }
 
-        before_comments_or_new_lines = Some(&defs.spaces[defs.space_after[index].indices()]);
+        let spaces_after = &defs.spaces[defs.space_after[index].indices()];
+        before_comments_or_new_lines = Some(spaces_after);
+    }
+
+    let it = before_comments_or_new_lines.iter().flat_map(|e| e.iter());
+
+    for detached_doc in detached_docs_from_comments_and_new_lines(it) {
+        acc.push(DetachedDoc(detached_doc));
     }
 
     acc
