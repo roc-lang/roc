@@ -853,6 +853,8 @@ impl<'a> State<'a> {
     ) -> Self {
         let arc_shorthands = Arc::new(Mutex::new(MutMap::default()));
 
+        let dependencies = Dependencies::new(goal_phase);
+
         Self {
             root_id,
             root_subs: None,
@@ -862,7 +864,7 @@ impl<'a> State<'a> {
             output_path: None,
             platform_path: PlatformPath::NotSpecified,
             module_cache: ModuleCache::default(),
-            dependencies: Dependencies::default(),
+            dependencies,
             procedures: MutMap::default(),
             toplevel_expects: Vec::new(),
             exposed_to_host: ExposedToHost::default(),
