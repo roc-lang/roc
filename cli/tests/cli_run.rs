@@ -309,7 +309,7 @@ mod cli_run {
                                 return;
                             }
                         }
-                        "rocLovesWeb" => {
+                        "rocLovesWebAssembly" => {
                             // this is a web assembly example, but we don't test with JS at the moment
                             eprintln!("WARNING: skipping testing example {} because the test is broken right now!", example.filename);
                             return;
@@ -422,12 +422,12 @@ mod cli_run {
             expected_ending:"Roc <3 Swift!\n",
             use_valgrind: true,
         },
-        platformSwitchingWeb:"platform-switching/web-platform" => Example {
+        platformSwitchingWebAssembly:"platform-switching/web-assembly-platform" => Example {
             filename: "main.roc",
-            executable_filename: "rocLovesWeb",
+            executable_filename: "rocLovesWebAssembly",
             stdin: &[],
             input_file: None,
-            expected_ending:"Roc <3 Web!\n",
+            expected_ending:"Roc <3 Web Assembly!\n",
             use_valgrind: true,
         },
         platformSwitchingZig:"platform-switching/zig-platform" => Example {
@@ -817,7 +817,7 @@ mod cli_run {
                         "c-platform",
                         "rust-platform",
                         "swift-platform",
-                        "web-platform",
+                        "web-assembly-platform",
                         "zig-platform",
                     ] {
                         all_examples.remove(format!("{}/{}", example_dir_name, sub_dir).as_str()).unwrap_or_else(|| {

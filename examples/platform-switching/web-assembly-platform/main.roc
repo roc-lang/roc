@@ -1,4 +1,4 @@
-platform "echo-in-web"
+platform "echo-in-web-assembly"
     requires {} { main : Str }
     exposes []
     packages {}
