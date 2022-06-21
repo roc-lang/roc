@@ -93,7 +93,7 @@ impl Default for MakeSpecializationsDependents {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct Dependencies<'a> {
     waiting_for: MutMap<Job<'a>, MutSet<Job<'a>>>,
     notifies: MutMap<Job<'a>, MutSet<Job<'a>>>,
@@ -103,6 +103,23 @@ pub struct Dependencies<'a> {
 }
 
 impl<'a> Dependencies<'a> {
+    pub fn new(goal_phase: Phase) -> Self {
+        let mut deps = Self {
+            waiting_for: Default::default(),
+            notifies: Default::default(),
+            status: Default::default(),
+            make_specializations_dependents: Default::default(),
+        };
+
+        if goal_phase >= Phase::MakeSpecializations {
+            // Module for deriving is always implicitly loaded into the work graph, but it only
+            // comes into play for make specializations.
+            deps.add_to_status_for_phase(ModuleId::DERIVED, Phase::MakeSpecializations);
+        }
+
+        deps
+    }
+
     /// Add all the dependencies for a module, return (module, phase) pairs that can make progress
     pub fn add_module(
         &mut self,
@@ -148,9 +165,11 @@ impl<'a> Dependencies<'a> {
             }
         }
 
-        // Add make specialization dependents
-        self.make_specializations_dependents
-            .add_succ(module_id, dependencies.iter().map(|dep| *dep.as_inner()));
+        if goal_phase >= MakeSpecializations {
+            // Add make specialization dependents
+            self.make_specializations_dependents
+                .add_succ(module_id, dependencies.iter().map(|dep| *dep.as_inner()));
+        }
 
         // add dependencies for self
         // phase i + 1 of a file always depends on phase i being completed
@@ -162,20 +181,26 @@ impl<'a> Dependencies<'a> {
             }
         }
 
-        self.add_to_status(module_id, goal_phase);
+        self.add_to_status_for_all_phases(module_id, goal_phase);
 
         output
     }
 
-    fn add_to_status(&mut self, module_id: ModuleId, goal_phase: Phase) {
+    /// Adds a status for the given module for exactly one phase.
+    fn add_to_status_for_phase(&mut self, module_id: ModuleId, phase: Phase) {
+        if let Entry::Vacant(entry) = self.status.entry(Job::Step(module_id, phase)) {
+            entry.insert(Status::NotStarted);
+        }
+    }
+
+    /// Adds a status for the given module for all phases up to and including the goal phase.
+    fn add_to_status_for_all_phases(&mut self, module_id: ModuleId, goal_phase: Phase) {
         for phase in PHASES.iter() {
             if *phase > goal_phase {
                 break;
             }
 
-            if let Entry::Vacant(entry) = self.status.entry(Job::Step(module_id, *phase)) {
-                entry.insert(Status::NotStarted);
-            }
+            self.add_to_status_for_phase(module_id, *phase);
         }
     }
 
@@ -378,7 +403,7 @@ impl<'a> Dependencies<'a> {
                 self.add_dependency(dependent, module, Phase::MakeSpecializations);
             }
 
-            self.add_to_status(module, Phase::MakeSpecializations);
+            self.add_to_status_for_all_phases(module, Phase::MakeSpecializations);
             if !has_pred {
                 output.insert((module, Phase::MakeSpecializations));
             }
