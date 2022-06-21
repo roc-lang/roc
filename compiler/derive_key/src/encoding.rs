@@ -6,19 +6,19 @@ use roc_module::{
 use roc_types::subs::{Content, FlatType, GetSubsSlice, Subs, SubsFmtContent, Variable};
 
 #[derive(Hash)]
-pub enum FlatEncodable<'a> {
+pub enum FlatEncodable {
     Immediate(Symbol),
-    Key(FlatEncodableKey<'a>),
+    Key(FlatEncodableKey),
 }
 
 #[derive(Hash, PartialEq, Eq, Debug)]
-pub enum FlatEncodableKey<'a> {
+pub enum FlatEncodableKey {
     List(/* takes one variable */),
     Set(/* takes one variable */),
     Dict(/* takes two variables */),
     // Unfortunate that we must allocate here, c'est la vie
-    Record(Vec<&'a Lowercase>),
-    TagUnion(Vec<(&'a TagName, u16)>),
+    Record(Vec<Lowercase>),
+    TagUnion(Vec<(TagName, u16)>),
 }
 
 macro_rules! unexpected {
@@ -30,7 +30,7 @@ macro_rules! unexpected {
     };
 }
 
-impl FlatEncodable<'_> {
+impl FlatEncodable {
     pub(crate) fn from_var(subs: &Subs, var: Variable) -> FlatEncodable {
         use FlatEncodable::*;
         match *subs.get_content_without_compacting(var) {
@@ -48,8 +48,11 @@ impl FlatEncodable<'_> {
                         Content::Structure(FlatType::EmptyRecord)
                     ));
 
-                    let mut field_names: Vec<_> =
-                        subs.get_subs_slice(fields.field_names()).iter().collect();
+                    let mut field_names: Vec<_> = subs
+                        .get_subs_slice(fields.field_names())
+                        .iter()
+                        .cloned()
+                        .collect();
                     field_names.sort();
                     Key(FlatEncodableKey::Record(field_names))
                 }
@@ -73,15 +76,15 @@ impl FlatEncodable<'_> {
                             let payload_slice = subs[payload_slice_index];
                             let payload_size = payload_slice.length;
                             let name = &subs[name_index];
-                            (name, payload_size)
+                            (name.clone(), payload_size)
                         })
                         .collect();
-                    tag_names_and_payload_sizes.sort_by_key(|t| t.0);
+                    tag_names_and_payload_sizes.sort_by(|(t1, _), (t2, _)| t1.cmp(t2));
                     Key(FlatEncodableKey::TagUnion(tag_names_and_payload_sizes))
                 }
-                FlatType::FunctionOrTagUnion(name_index, _, _) => {
-                    Key(FlatEncodableKey::TagUnion(vec![(&subs[name_index], 0)]))
-                }
+                FlatType::FunctionOrTagUnion(name_index, _, _) => Key(FlatEncodableKey::TagUnion(
+                    vec![(subs[name_index].clone(), 0)],
+                )),
                 FlatType::EmptyRecord => Key(FlatEncodableKey::Record(vec![])),
                 FlatType::EmptyTagUnion => Key(FlatEncodableKey::TagUnion(vec![])),
                 //

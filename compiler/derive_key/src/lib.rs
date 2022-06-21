@@ -50,8 +50,8 @@ where
     pub repr: R,
 }
 
-impl<'a> Derived<FlatEncodableKey<'a>> {
-    pub fn encoding(subs: &'a Subs, var: Variable) -> Self {
+impl Derived<FlatEncodableKey> {
+    pub fn encoding(subs: &Subs, var: Variable) -> Self {
         match encoding::FlatEncodable::from_var(subs, var) {
             FlatEncodable::Immediate(imm) => Derived::Immediate(imm),
             FlatEncodable::Key(repr) => Derived::Key(DeriveKey {
