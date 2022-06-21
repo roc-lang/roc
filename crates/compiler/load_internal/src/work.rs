@@ -39,13 +39,67 @@ enum Job<'a> {
 }
 
 #[derive(Default, Debug)]
+struct MakeSpecializationInfo {
+    /// Modules to make specializations for after they are made for this module
+    succ: MutSet<ModuleId>,
+    /// Whether this module depends on specializations being made for another module
+    has_pred: bool,
+}
+
+#[derive(Debug)]
+struct MakeSpecializationsDependents(MutMap<ModuleId, MakeSpecializationInfo>);
+
+impl MakeSpecializationsDependents {
+    /// Gets the info entry for a module, or creates a default one.
+    fn entry(&mut self, module_id: ModuleId) -> &mut MakeSpecializationInfo {
+        self.0.entry(module_id).or_default()
+    }
+
+    fn mark_has_pred(&mut self, module_id: ModuleId) {
+        self.entry(module_id).has_pred = true;
+    }
+
+    fn add_succ(&mut self, module_id: ModuleId, succ: impl IntoIterator<Item = ModuleId>) {
+        // Add make specialization dependents
+        let entry = self.entry(module_id);
+        debug_assert!(
+            entry.succ.is_empty(),
+            "already added successors for this module"
+        );
+
+        entry.succ.extend(succ.into_iter());
+
+        // The module for derives implicitly depends on every other module
+        entry.succ.insert(ModuleId::DERIVED);
+    }
+}
+
+impl Default for MakeSpecializationsDependents {
+    fn default() -> Self {
+        let mut map: MutMap<ModuleId, MakeSpecializationInfo> = Default::default();
+
+        // The module for derives is always at the base as the last module to specialize
+        map.insert(
+            ModuleId::DERIVED,
+            MakeSpecializationInfo {
+                succ: Default::default(),
+                // NB: invariant - the derived module depends on every other module, and
+                // work can never be initiated for just the derived module!
+                has_pred: true,
+            },
+        );
+
+        Self(map)
+    }
+}
+
+#[derive(Default, Debug)]
 pub struct Dependencies<'a> {
     waiting_for: MutMap<Job<'a>, MutSet<Job<'a>>>,
     notifies: MutMap<Job<'a>, MutSet<Job<'a>>>,
     status: MutMap<Job<'a>, Status>,
 
-    /// module -> modules to make specializations after, whether a module comes before us
-    make_specializations_dependents: MutMap<ModuleId, (MutSet<ModuleId>, bool)>,
+    make_specializations_dependents: MakeSpecializationsDependents,
 }
 
 impl<'a> Dependencies<'a> {
@@ -86,24 +140,17 @@ impl<'a> Dependencies<'a> {
 
             if goal_phase >= MakeSpecializations {
                 self.add_dependency(dep, module_id, Phase::MakeSpecializations);
+                // The module for derives implicitly depends on every other module
+                self.add_dependency(ModuleId::DERIVED, module_id, Phase::MakeSpecializations);
 
-                let dep_entry = self
-                    .make_specializations_dependents
-                    .entry(dep)
-                    .or_insert((MutSet::default(), false));
-                dep_entry.1 = true;
+                // `dep` depends on `module_id` making specializations first
+                self.make_specializations_dependents.mark_has_pred(dep);
             }
         }
 
         // Add make specialization dependents
-        let entry = self
-            .make_specializations_dependents
-            .entry(module_id)
-            .or_insert((MutSet::default(), false));
-        debug_assert!(entry.0.is_empty(), "already seen this dep");
-        entry
-            .0
-            .extend(dependencies.iter().map(|dep| *dep.as_inner()));
+        self.make_specializations_dependents
+            .add_succ(module_id, dependencies.iter().map(|dep| *dep.as_inner()));
 
         // add dependencies for self
         // phase i + 1 of a file always depends on phase i being completed
@@ -311,7 +358,7 @@ impl<'a> Dependencies<'a> {
             &mut make_specializations_dependents,
         );
 
-        for (&module, _) in make_specializations_dependents.iter() {
+        for (&module, _) in make_specializations_dependents.0.iter() {
             let job = Job::Step(module, Phase::MakeSpecializations);
             let status = self.status.get_mut(&job).unwrap();
             debug_assert!(
@@ -324,7 +371,9 @@ impl<'a> Dependencies<'a> {
         // `add_dependency` borrows self as mut so we move `make_specializations_dependents` out
         // for our local use. `add_dependency` should never grow the make specializations
         // dependency graph.
-        for (&module, (succ, has_pred)) in make_specializations_dependents.iter() {
+        for (&module, MakeSpecializationInfo { succ, has_pred }) in
+            make_specializations_dependents.0.iter()
+        {
             for &dependent in succ {
                 self.add_dependency(dependent, module, Phase::MakeSpecializations);
             }
@@ -340,7 +389,7 @@ impl<'a> Dependencies<'a> {
             &mut make_specializations_dependents,
         );
         debug_assert!(
-            make_specializations_dependents.is_empty(),
+            make_specializations_dependents.0.is_empty(),
             "more modules were added to the graph"
         );
 
