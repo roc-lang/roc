@@ -207,7 +207,7 @@ fn addWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
             const answer = self + other;
             const overflowed = !std.math.isFinite(answer);
             return .{ .value = answer, .has_overflowed = overflowed };
-        }
+        },
     }
 }
 
@@ -215,6 +215,28 @@ pub fn exportAddWithOverflow(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(self: T, other: T) callconv(.C) WithOverflow(T) {
             return @call(.{ .modifier = always_inline }, addWithOverflow, .{ T, self, other });
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn exportAddSaturatedInt(comptime T: type, comptime Wider: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(self: T, other: T) callconv(.C) T {
+            const self_w = @intCast(Wider, self);
+            const other_w = @intCast(Wider, other);
+            const answer = self_w + other_w;
+
+            const max = @intCast(Wider, std.math.maxInt(T));
+            const min = @intCast(Wider, std.math.minInt(T));
+
+            if (answer > max) {
+                return max;
+            } else if (answer < min) {
+                return min;
+            } else {
+                return @intCast(T, answer);
+            }
         }
     }.func;
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });

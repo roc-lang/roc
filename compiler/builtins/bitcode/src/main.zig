@@ -88,6 +88,7 @@ comptime {
 const num = @import("num.zig");
 
 const INTEGERS = [_]type{ i8, i16, i32, i64, i128, u8, u16, u32, u64, u128 };
+const WIDEINTS = [_]type{ i16, i32, i64, i128, i256, u16, u32, u64, u128, u256 };
 const FLOATS = [_]type{ f32, f64 };
 const NUMBERS = INTEGERS ++ FLOATS;
 
@@ -95,9 +96,16 @@ comptime {
     exportNumFn(num.bytesToU16C, "bytes_to_u16");
     exportNumFn(num.bytesToU32C, "bytes_to_u32");
 
-    inline for (INTEGERS) |T| {
+    inline for (INTEGERS) |T, i| {
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow_int.");
         num.exportDivCeil(T, ROC_BUILTINS ++ "." ++ NUM ++ ".div_ceil.");
+
+        num.exportRoundF32(T, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f32.");
+        num.exportRoundF64(T, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f64.");
+
+        num.exportAddWithOverflow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_with_overflow.");
+        const Wider = WIDEINTS[i];
+        num.exportAddSaturatedInt(T, Wider, ROC_BUILTINS ++ "." ++ NUM ++ ".add_saturated.");
     }
 
     inline for (INTEGERS) |FROM| {
@@ -106,11 +114,6 @@ comptime {
             num.exportToIntCheckingMax(FROM, TO, ROC_BUILTINS ++ "." ++ NUM ++ ".int_to_" ++ @typeName(TO) ++ "_checking_max.");
             num.exportToIntCheckingMaxAndMin(FROM, TO, ROC_BUILTINS ++ "." ++ NUM ++ ".int_to_" ++ @typeName(TO) ++ "_checking_max_and_min.");
         }
-
-        num.exportRoundF32(FROM, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f32.");
-        num.exportRoundF64(FROM, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f64.");
-
-        num.exportAddWithOverflow(FROM, ROC_BUILTINS ++ "." ++ NUM ++ ".add_with_overflow.");
     }
 
     inline for (FLOATS) |T| {
