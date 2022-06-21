@@ -12,10 +12,8 @@ interface AssocList
         get,
         walk,
         remove,
-        normalize,
-        union,
-        intersection,
-        difference
+        normalizeWith,
+        insertAll,
         ]
     imports [List.{ List }]
 
@@ -162,18 +160,22 @@ remove = \@AssocList list, key ->
 ## even if they contain the same key-value associations.
 ##
 ## To make sure that two AssocLists containing the same keys compare equal,
-## call normalize on both of them before comparison.
-##
-## Internally, normalization happens by sorting the associations
-## in an implementation-defined order (which might change between releases).
-## As such, this procedure takes linearithmic (`O(n*log(n))`) time.
-normalize : AssocList k v -> AssocList k v
-normalize = \@AssocList list ->
+## call normalizeWith (with the same sorter function)
+## on both of them before comparison.
+normalizeWith : AssocList k v, (k, k -> [LT, EQ, GT])  -> AssocList k v
+normalizeWith = \@AssocList list, sorter ->
     list
-      |> List.sort
+      |> List.sortWith (\Pair k1 _v1, Pair k2 _v2 -> sorter k1 k2)
       |> @AssocList
 
-# TODO:
-#  union : Dict k v, Dict k v -> Dict k v
-#  intersection : Dict k v, Dict k v -> Dict k v
-#  difference : Dict k v, Dict k v -> Dict k v
+## Returns an association list where all associations of the second parameter
+## have been inserted into the first parameter.
+## This means that on conflict, the association inside the second parameter is kept.
+##
+## Note that this uses plain insertion internally, and as such is rather inefficient:
+## It runs in quadratic time.
+## (`O(n * m)` where `n` and `m` are the number of elements in the first and second parameters, respectively.
+insertAll : AssocList k v, AssocList k v -> AssocList k v
+insertAll = \xs, ys ->
+          walk ys xs \result, key, value ->
+              insert result key value
