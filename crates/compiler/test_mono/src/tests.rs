@@ -1467,7 +1467,6 @@ fn encode_custom_type() {
 }
 
 #[mono_test]
-#[ignore]
 fn encode_derived_record() {
     indoc!(
         r#"
