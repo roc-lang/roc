@@ -26,7 +26,18 @@ pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
         match tag {
             Value => {
                 let loc_expr = &decls.expressions[index];
+
+                let loc_symbol = decls.symbols[index];
                 let expr_var = decls.variables[index];
+
+                let pattern = match decls.specializes.get(&index).copied() {
+                    Some(specializes) => Pattern::AbilityMemberSpecialization {
+                        ident: loc_symbol.value,
+                        specializes,
+                    },
+                    None => Pattern::Identifier(loc_symbol.value),
+                };
+                visitor.visit_pattern(&pattern, loc_symbol.region, Some(expr_var));
 
                 visitor.visit_expr(&loc_expr.value, loc_expr.region, expr_var);
                 if let Some(annot) = &decls.annotations[index] {
@@ -42,6 +53,18 @@ pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
             | Recursive(function_index)
             | TailRecursive(function_index) => {
                 let loc_body = &decls.expressions[index];
+
+                let loc_symbol = decls.symbols[index];
+                let expr_var = decls.variables[index];
+
+                let pattern = match decls.specializes.get(&index).copied() {
+                    Some(specializes) => Pattern::AbilityMemberSpecialization {
+                        ident: loc_symbol.value,
+                        specializes,
+                    },
+                    None => Pattern::Identifier(loc_symbol.value),
+                };
+                visitor.visit_pattern(&pattern, loc_symbol.region, Some(expr_var));
 
                 let function_def = &decls.function_bodies[function_index.index() as usize];
 
@@ -86,6 +109,7 @@ fn walk_decl<V: Visitor>(visitor: &mut V, decl: &Declaration) {
         Declaration::DeclareRec(defs, _cycle_mark) => {
             visit_list!(visitor, visit_def, defs)
         }
+
         Declaration::Expects(expects) => {
             let it = expects.regions.iter().zip(expects.conditions.iter());
             for (region, condition) in it {
