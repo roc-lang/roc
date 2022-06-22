@@ -88,6 +88,29 @@ pub fn roc_memset(_dst: *mut c_void, _c: i32, _n: usize) -> *mut c_void {
     unimplemented!("It is not valid to call roc memset from within the compiler. Please use the \"platform\" feature if this is a platform.")
 }
 
+pub fn roc_alloc_refcounted<T>() -> *mut T {
+    let size = core::mem::size_of::<T>();
+    let align = core::mem::align_of::<T>();
+
+    roc_alloc_refcounted_help(size, align) as *mut T
+}
+
+fn roc_alloc_refcounted_help(mut size: usize, mut align: usize) -> *mut u8 {
+    let prefix = if align > 8 { 16 } else { 8 };
+    size += prefix;
+    align = align.max(core::mem::size_of::<crate::Storage>());
+
+    unsafe {
+        let allocation_ptr = roc_alloc(size, align as _) as *mut u8;
+        let data_ptr = allocation_ptr.add(prefix);
+        let storage_ptr = (data_ptr as *mut crate::Storage).sub(1);
+
+        *storage_ptr = Storage::new_reference_counted();
+
+        data_ptr
+    }
+}
+
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RocOrder {

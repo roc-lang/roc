@@ -4,6 +4,7 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_error_macros::internal_error;
 
+use super::linking::{LinkingSection, SymInfo, WasmObjectSymbol};
 use super::opcodes::OpCode;
 use super::parse::{Parse, ParseError, SkipBytes};
 use super::serialize::{SerialBuffer, Serialize, MAX_SIZE_ENCODED_U32};
@@ -1476,6 +1477,31 @@ impl<'a> NameSection<'a> {
         NameSection {
             function_names: bumpalo::vec![in arena],
         }
+    }
+
+    pub fn from_imports_and_linking_data(
+        arena: &'a Bump,
+        import: &ImportSection<'a>,
+        linking: &LinkingSection<'a>,
+    ) -> Self {
+        let import_fns = import.imports.iter().filter(|imp| imp.is_function());
+        let import_names = Vec::from_iter_in(import_fns.map(|imp| imp.name), arena);
+
+        let symbols = linking.symbol_table.iter();
+        let names = symbols.filter_map(|sym_info| match sym_info {
+            SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { index, name, .. }) => {
+                Some((*index, *name))
+            }
+            SymInfo::Function(WasmObjectSymbol::ImplicitlyNamed { index, .. }) => {
+                Some((*index, import_names[*index as usize]))
+            }
+            _ => None,
+        });
+
+        let mut function_names = Vec::from_iter_in(names, arena);
+        function_names.sort_by_key(|(idx, _name)| *idx);
+
+        NameSection { function_names }
     }
 }
 

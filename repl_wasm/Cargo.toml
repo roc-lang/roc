@@ -8,6 +8,7 @@ crate-type = ["cdylib"]
 
 [build-dependencies]
 roc_builtins = {path = "../compiler/builtins"}
+wasi_libc_sys = { path = "../wasi-libc-sys" }
 
 [dependencies]
 bumpalo = {version = "3.8.0", features = ["collections"]}

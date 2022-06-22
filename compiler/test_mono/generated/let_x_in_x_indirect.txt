@@ -1,6 +1,8 @@
 procedure Test.0 ():
+    let Test.1 : I64 = 5i64;
     let Test.2 : I64 = 1337i64;
     let Test.3 : I64 = 17i64;
+    let Test.5 : I64 = 1i64;
     let Test.7 : {I64, I64} = Struct {Test.2, Test.3};
     let Test.6 : I64 = StructAtIndex 0 Test.7;
     ret Test.6;

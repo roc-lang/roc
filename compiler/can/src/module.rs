@@ -493,6 +493,7 @@ pub fn canonicalize_module_defs<'a>(
                     .iter()
                     .all(|(symbol, _)| !exposed_but_not_defined.contains(symbol)));
             }
+            Expects(_) => { /* ignore */ }
         }
     }
 
@@ -574,7 +575,7 @@ pub fn canonicalize_module_defs<'a>(
             DeclareRec(defs, _) => {
                 fix_values_captured_in_closure_defs(defs, &mut VecSet::default())
             }
-            InvalidCycle(_) | Builtin(_) => {}
+            InvalidCycle(_) | Builtin(_) | Expects(_) => {}
         }
     }
 

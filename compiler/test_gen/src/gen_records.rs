@@ -88,7 +88,7 @@ fn f64_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn fn_record() {
     assert_evals_to!(
         indoc!(
@@ -286,7 +286,7 @@ fn i64_record2_literal() {
 }
 
 // #[test]
-// #[cfg(any(feature = "gen-llvm"))]
+// #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 // fn i64_record3_literal() {
 //     assert_evals_to!(
 //         indoc!(
@@ -313,7 +313,7 @@ fn f64_record2_literal() {
 }
 
 // #[test]
-// #[cfg(any(feature = "gen-llvm"))]
+// #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 // fn f64_record3_literal() {
 //     assert_evals_to!(
 //         indoc!(
@@ -327,7 +327,7 @@ fn f64_record2_literal() {
 // }
 
 // #[test]
-// #[cfg(any(feature = "gen-llvm"))]
+// #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 // fn bool_record4_literal() {
 //     assert_evals_to!(
 //         indoc!(
@@ -357,7 +357,7 @@ fn i64_record1_literal() {
 }
 
 // #[test]
-// #[cfg(any(feature = "gen-llvm"))]
+// #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 // fn i64_record9_literal() {
 //     assert_evals_to!(
 //         indoc!(
@@ -371,7 +371,7 @@ fn i64_record1_literal() {
 // }
 
 // #[test]
-// #[cfg(any(feature = "gen-llvm"))]
+// #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 // fn f64_record3_literal() {
 //     assert_evals_to!(
 //         indoc!(
@@ -418,7 +418,7 @@ fn return_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn optional_field_when_use_default() {
     assert_evals_to!(
         indoc!(
@@ -446,7 +446,7 @@ fn optional_field_when_use_default() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn optional_field_when_use_default_nested() {
     assert_evals_to!(
         indoc!(
@@ -470,7 +470,7 @@ fn optional_field_when_use_default_nested() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn optional_field_when_no_use_default() {
     assert_evals_to!(
         indoc!(
@@ -491,7 +491,7 @@ fn optional_field_when_no_use_default() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn optional_field_when_no_use_default_nested() {
     assert_evals_to!(
         indoc!(
@@ -530,7 +530,7 @@ fn optional_field_let_use_default() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn optional_field_let_no_use_default() {
     assert_evals_to!(
         indoc!(
@@ -551,7 +551,7 @@ fn optional_field_let_no_use_default() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn optional_field_let_no_use_default_nested() {
     assert_evals_to!(
         indoc!(
@@ -586,7 +586,7 @@ fn optional_field_function_use_default() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn optional_field_function_no_use_default() {
     assert_evals_to!(
         indoc!(
@@ -605,7 +605,7 @@ fn optional_field_function_no_use_default() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn optional_field_function_no_use_default_nested() {
     assert_evals_to!(
         indoc!(
@@ -824,13 +824,13 @@ fn nested_record_load() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn accessor_twice() {
     assert_evals_to!(".foo { foo: 4 }  + .foo { bar: 2.46, foo: 3 } ", 7, i64);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn accessor_multi_element_record() {
     assert_evals_to!(
         indoc!(
@@ -844,7 +844,7 @@ fn accessor_multi_element_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn accessor_single_element_record() {
     assert_evals_to!(
         indoc!(
@@ -858,7 +858,7 @@ fn accessor_single_element_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn update_record() {
     assert_evals_to!(
         indoc!(
@@ -915,7 +915,7 @@ fn booleans_in_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn alignment_in_record() {
     assert_evals_to!(
         indoc!("{ c: 32, b: if True then Red else if True then Green else Blue, a: 1 == 1 }"),

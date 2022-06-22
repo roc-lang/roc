@@ -164,7 +164,9 @@ where
                 };
 
                 // flaky test error that only occurs sometimes inside MacOS ci run
-                if error_str.contains("unable to build stage1 zig object: FileNotFound") {
+                if error_str.contains("unable to build stage1 zig object: FileNotFound")
+                    || error_str.contains("unable to save cached ZIR code")
+                {
                     run_command(path, command_str, args)
                 } else {
                     panic!("{} failed: {}", command_str, error_str);

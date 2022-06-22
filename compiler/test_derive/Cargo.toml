@@ -1,0 +1,31 @@
+[package]
+name = "test_derive"
+version = "0.1.0"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+edition = "2021"
+
+[[test]]
+name = "test_derive"
+path = "src/tests.rs"
+
+[dev-dependencies]
+roc_collections = { path = "../collections" }
+roc_module = { path = "../module" }
+roc_builtins = { path = "../builtins" }
+roc_load_internal = { path = "../load_internal" }
+roc_can = { path = "../can" }
+roc_derive_key = { path = "../derive_key" }
+roc_mono = { path = "../mono" }
+roc_target = { path = "../roc_target" }
+roc_types = { path = "../types" }
+roc_reporting = { path = "../../reporting" }
+roc_constrain = { path = "../constrain" }
+roc_region = { path = "../region" }
+roc_solve = { path = "../solve" }
+roc_debug_flags = { path = "../debug_flags" }
+bumpalo = { version = "3.8.0", features = ["collections"] }
+lazy_static = "1.4.0"
+indoc = "1.0.3"
+ven_pretty = { path = "../../vendor/pretty" }
+pretty_assertions = "1.0.0"

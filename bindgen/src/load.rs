@@ -69,6 +69,7 @@ pub fn load_types(
             unreachable!("Builtin decl in userspace module?")
         }
         Declaration::InvalidCycle(..) => Vec::new(),
+        Declaration::Expects(..) => Vec::new(),
     });
 
     let vars_iter = defs_iter.filter_map(

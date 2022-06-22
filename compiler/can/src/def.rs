@@ -79,8 +79,26 @@ pub struct Annotation {
 #[derive(Debug)]
 pub(crate) struct CanDefs {
     defs: Vec<Option<Def>>,
+    expects: Expects,
     def_ordering: DefOrdering,
     aliases: VecMap<Symbol, Alias>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Expects {
+    pub conditions: Vec<Expr>,
+    pub regions: Vec<Region>,
+    pub preceding_comment: Vec<Region>,
+}
+
+impl Expects {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            conditions: Vec::with_capacity(capacity),
+            regions: Vec::with_capacity(capacity),
+            preceding_comment: Vec::with_capacity(capacity),
+        }
+    }
 }
 
 /// A Def that has had patterns and type annnotations canonicalized,
@@ -201,6 +219,7 @@ pub enum Declaration {
     Declare(Def),
     DeclareRec(Vec<Def>, IllegalCycleMark),
     Builtin(Def),
+    Expects(Expects),
     /// If we know a cycle is illegal during canonicalization.
     /// Otherwise we will try to detect this during solving; see [`IllegalCycleMark`].
     InvalidCycle(Vec<CycleEntry>),
@@ -214,6 +233,7 @@ impl Declaration {
             DeclareRec(defs, _) => defs.len(),
             InvalidCycle { .. } => 0,
             Builtin(_) => 0,
+            Expects(_) => 0,
         }
     }
 
@@ -228,6 +248,10 @@ impl Declaration {
             Declaration::InvalidCycle(cycles) => Region::span_across(
                 &cycles.first().unwrap().expr_region,
                 &cycles.last().unwrap().expr_region,
+            ),
+            Declaration::Expects(expects) => Region::span_across(
+                expects.regions.first().unwrap(),
+                expects.regions.last().unwrap(),
             ),
         }
     }
@@ -541,24 +565,31 @@ fn canonicalize_value_defs<'a>(
     // the ast::Expr values in pending_exprs for further canonicalization
     // once we've finished assembling the entire scope.
     let mut pending_value_defs = Vec::with_capacity(value_defs.len());
+    let mut pending_expects = Vec::with_capacity(value_defs.len());
+
     for loc_def in value_defs {
         let mut new_output = Output::default();
-        match to_pending_value_def(
+        let pending = to_pending_value_def(
             env,
             var_store,
             loc_def.value,
             scope,
             &mut new_output,
             pattern_type,
-        ) {
-            None => { /* skip */ }
-            Some(pending_def) => {
+        );
+
+        match pending {
+            PendingValue::Def(pending_def) => {
                 // Record the ast::Expr for later. We'll do another pass through these
                 // once we have the entire scope assembled. If we were to canonicalize
                 // the exprs right now, they wouldn't have symbols in scope from defs
                 // that get would have gotten added later in the defs list!
                 pending_value_defs.push(pending_def);
                 output.union(new_output);
+            }
+            PendingValue::SignatureDefMismatch => { /* skip */ }
+            PendingValue::Expect(pending_expect) => {
+                pending_expects.push(pending_expect);
             }
         }
     }
@@ -607,8 +638,27 @@ fn canonicalize_value_defs<'a>(
         def_ordering.insert_symbol_references(def_id as u32, &temp_output.references)
     }
 
+    let mut expects = Expects::with_capacity(pending_expects.len());
+
+    for pending in pending_expects {
+        let (loc_can_condition, can_output) = canonicalize_expr(
+            env,
+            var_store,
+            scope,
+            pending.condition.region,
+            &pending.condition.value,
+        );
+
+        expects.conditions.push(loc_can_condition.value);
+        expects.regions.push(loc_can_condition.region);
+        expects.preceding_comment.push(pending.preceding_comment);
+
+        output.union(can_output);
+    }
+
     let can_defs = CanDefs {
         defs,
+        expects,
         def_ordering,
         aliases,
     };
@@ -1009,6 +1059,7 @@ pub(crate) fn sort_can_defs(
 ) -> (Vec<Declaration>, Output) {
     let CanDefs {
         mut defs,
+        expects,
         def_ordering,
         aliases,
     } = defs;
@@ -1117,6 +1168,10 @@ pub(crate) fn sort_can_defs(
 
             declarations.push(declaration);
         }
+    }
+
+    if !expects.conditions.is_empty() {
+        declarations.push(Declaration::Expects(expects));
     }
 
     (declarations, output)
@@ -1574,6 +1629,10 @@ fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Loc<Expr> {
             // Builtins should only be added to top-level decls, not to let-exprs!
             unreachable!()
         }
+        Declaration::Expects(expects) => {
+            // Expects should only be added to top-level decls, not to let-exprs!
+            unreachable!("{:?}", &expects)
+        }
     }
 }
 
@@ -1739,6 +1798,17 @@ fn to_pending_type_def<'a>(
     }
 }
 
+enum PendingValue<'a> {
+    Def(PendingValueDef<'a>),
+    Expect(PendingExpect<'a>),
+    SignatureDefMismatch,
+}
+
+struct PendingExpect<'a> {
+    condition: &'a Loc<ast::Expr<'a>>,
+    preceding_comment: Region,
+}
+
 fn to_pending_value_def<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
@@ -1746,7 +1816,7 @@ fn to_pending_value_def<'a>(
     scope: &mut Scope,
     output: &mut Output,
     pattern_type: PatternType,
-) -> Option<PendingValueDef<'a>> {
+) -> PendingValue<'a> {
     use ast::ValueDef::*;
 
     match def {
@@ -1762,7 +1832,7 @@ fn to_pending_value_def<'a>(
                 loc_pattern.region,
             );
 
-            Some(PendingValueDef::AnnotationOnly(
+            PendingValue::Def(PendingValueDef::AnnotationOnly(
                 loc_pattern,
                 loc_can_pattern,
                 loc_ann,
@@ -1780,7 +1850,7 @@ fn to_pending_value_def<'a>(
                 loc_pattern.region,
             );
 
-            Some(PendingValueDef::Body(
+            PendingValue::Def(PendingValueDef::Body(
                 loc_pattern,
                 loc_can_pattern,
                 loc_expr,
@@ -1812,7 +1882,7 @@ fn to_pending_value_def<'a>(
                     body_pattern.region,
                 );
 
-                Some(PendingValueDef::TypedBody(
+                PendingValue::Def(PendingValueDef::TypedBody(
                     body_pattern,
                     loc_can_pattern,
                     ann_type,
@@ -1828,11 +1898,14 @@ fn to_pending_value_def<'a>(
                 // TODO: Should we instead build some PendingValueDef::InvalidAnnotatedBody ? This would
                 // remove the `Option` on this function (and be probably more reliable for further
                 // problem/error reporting)
-                None
+                PendingValue::SignatureDefMismatch
             }
         }
 
-        Expect(_condition) => todo!(),
+        Expect(condition) => PendingValue::Expect(PendingExpect {
+            condition,
+            preceding_comment: Region::zero(),
+        }),
     }
 }
 
