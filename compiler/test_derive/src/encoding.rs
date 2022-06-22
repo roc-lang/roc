@@ -17,13 +17,10 @@ use roc_can::{
     constraint::Constraints,
     expected::Expected,
     expr::Expr,
-    module::RigidVariables,
+    module::{ExposedByModule, ExposedForModule, ExposedModuleTypes, RigidVariables},
 };
 use roc_collections::VecSet;
-use roc_constrain::{
-    expr::constrain_expr,
-    module::{ExposedByModule, ExposedForModule, ExposedModuleTypes},
-};
+use roc_constrain::expr::constrain_expr;
 use roc_debug_flags::dbg_do;
 use roc_derive_key::{encoding::FlatEncodableKey, Derived};
 use roc_load_internal::file::{add_imports, default_aliases, LoadedModule, Threading};

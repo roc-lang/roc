@@ -10,12 +10,11 @@ use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedSpeciali
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::def::Declaration;
 use roc_can::expr::PendingDerives;
-use roc_can::module::{canonicalize_module_defs, Module};
-use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
-use roc_constrain::module::{
-    constrain_builtin_imports, constrain_module, ExposedByModule, ExposedForModule,
-    ExposedModuleTypes,
+use roc_can::module::{
+    canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
 };
+use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
+use roc_constrain::module::{constrain_builtin_imports, constrain_module};
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::{

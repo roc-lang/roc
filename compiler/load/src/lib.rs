@@ -1,8 +1,8 @@
 pub use roc_load_internal::file::Threading;
 
 use bumpalo::Bump;
+use roc_can::module::ExposedByModule;
 use roc_collections::all::MutMap;
-use roc_constrain::module::ExposedByModule;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_reporting::report::RenderTarget;
 use roc_target::TargetInfo;

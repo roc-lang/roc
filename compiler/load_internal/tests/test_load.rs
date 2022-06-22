@@ -18,7 +18,7 @@ mod test_load {
     use bumpalo::Bump;
     use roc_can::def::Declaration::*;
     use roc_can::def::Def;
-    use roc_constrain::module::ExposedByModule;
+    use roc_can::module::ExposedByModule;
     use roc_load_internal::file::Threading;
     use roc_load_internal::file::{LoadResult, LoadStart, LoadedModule, LoadingProblem, Phase};
     use roc_module::ident::ModuleName;
