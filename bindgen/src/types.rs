@@ -13,7 +13,7 @@ use roc_mono::layout::{
 };
 use roc_target::TargetInfo;
 use roc_types::{
-    subs::{Content, FlatType, GetSubsSlice, Subs, UnionTags, Variable},
+    subs::{Content, FlatType, Subs, UnionTags, Variable},
     types::RecordField,
 };
 use std::fmt::Display;
@@ -533,35 +533,25 @@ fn add_type_help<'a>(
 
             add_tag_union(env, opt_name, tag_vars, var, types, layout)
         }
-        Content::Structure(FlatType::Apply(symbol, var_subs_slice)) => match layout {
+        Content::Structure(FlatType::Apply(symbol, _)) => match layout {
             Layout::Builtin(builtin) => {
                 add_builtin_type(env, builtin, var, opt_name, types, layout)
             }
-            _ => match *symbol {
-                Symbol::LIST_LIST => {
-                    // `List` should always be applied to exactly 1 type
-                    debug_assert_eq!(var_subs_slice.len(), 1);
-
-                    let elem_var = subs.get_subs_slice(*var_subs_slice)[0];
-                    let list_layout = Layout::Builtin(Builtin::List(&layout));
-
-                    add_list(env, elem_var, list_layout, layout, opt_name, types)
-                }
-                _ if symbol.is_builtin() => {
+            _ => {
+                if symbol.is_builtin() {
                     todo!(
                         "Handle Apply for builtin symbol {:?} and layout {:?}",
                         symbol,
                         layout
                     )
-                }
-                _ => {
+                } else {
                     todo!(
                         "Handle non-builtin Apply for symbol {:?} and layout {:?}",
                         symbol,
                         layout
                     )
                 }
-            },
+            }
         },
         Content::Structure(FlatType::Func(_, _, _)) => {
             todo!()
@@ -615,7 +605,7 @@ fn add_builtin_type<'a>(
     var: Variable,
     opt_name: Option<Symbol>,
     types: &mut Types,
-    layout: Layout<'a>,
+    layout: Layout<'_>,
 ) -> TypeId {
     match builtin {
         Builtin::Int(width) => match width {
@@ -657,24 +647,15 @@ fn add_builtin_type<'a>(
 
             set_id
         }
-        Builtin::List(elem_layout) => add_list(env, var, layout, *elem_layout, opt_name, types),
+        Builtin::List(elem_layout) => {
+            let elem_id = add_type_help(env, *elem_layout, var, opt_name, types);
+            let list_id = types.add(RocType::RocList(elem_id), layout);
+
+            types.depends(list_id, elem_id);
+
+            list_id
+        }
     }
-}
-
-fn add_list<'a>(
-    env: &mut Env<'a>,
-    var: Variable,
-    layout: Layout<'_>,
-    elem_layout: Layout<'a>,
-    opt_name: Option<Symbol>,
-    types: &mut Types,
-) -> TypeId {
-    let elem_id = add_type_help(env, elem_layout, var, opt_name, types);
-    let list_id = types.add(RocType::RocList(elem_id), layout);
-
-    types.depends(list_id, elem_id);
-
-    list_id
 }
 
 fn add_struct<I, L, F>(
