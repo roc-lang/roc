@@ -232,6 +232,7 @@ fn solve<'a>(
                     vars,
                     must_implement_ability: _,
                     lambda_sets_to_specialize: _, // TODO ignored
+                    extra_metadata: _,
                 } => {
                     // TODO(abilities) record deferred ability checks
                     introduce(subs, rank, pools, &vars);
@@ -330,6 +331,7 @@ fn solve<'a>(
                             vars,
                             must_implement_ability: _,
                             lambda_sets_to_specialize: _, // TODO ignored
+                            extra_metadata: _,
                         } => {
                             // TODO(abilities) record deferred ability checks
                             introduce(subs, rank, pools, &vars);
@@ -406,6 +408,7 @@ fn solve<'a>(
                     vars,
                     must_implement_ability: _,
                     lambda_sets_to_specialize: _, // TODO ignored
+                    extra_metadata: _,
                 } => {
                     // TODO(abilities) record deferred ability checks
                     introduce(subs, rank, pools, &vars);
@@ -719,6 +722,7 @@ fn solve<'a>(
                     vars,
                     must_implement_ability: _,
                     lambda_sets_to_specialize: _, // TODO ignored
+                    extra_metadata: _,
                 } => {
                     // TODO(abilities) record deferred ability checks
                     introduce(subs, rank, pools, &vars);

@@ -890,6 +890,7 @@ fn solve(
                         vars,
                         must_implement_ability,
                         lambda_sets_to_specialize,
+                        extra_metadata: _,
                     } => {
                         introduce(subs, rank, pools, &vars);
                         if !must_implement_ability.is_empty() {
@@ -944,6 +945,7 @@ fn solve(
                         // ERROR NOT REPORTED
                         must_implement_ability: _,
                         lambda_sets_to_specialize,
+                        extra_metadata: _,
                     } => {
                         introduce(subs, rank, pools, &vars);
 
@@ -1002,6 +1004,7 @@ fn solve(
                                 vars,
                                 must_implement_ability,
                                 lambda_sets_to_specialize,
+                                extra_metadata: _,
                             } => {
                                 introduce(subs, rank, pools, &vars);
                                 if !must_implement_ability.is_empty() {
@@ -1081,6 +1084,7 @@ fn solve(
                         vars,
                         must_implement_ability,
                         lambda_sets_to_specialize,
+                        extra_metadata: _,
                     } => {
                         introduce(subs, rank, pools, &vars);
                         if !must_implement_ability.is_empty() {
@@ -1245,6 +1249,7 @@ fn solve(
                         vars,
                         must_implement_ability,
                         lambda_sets_to_specialize,
+                        extra_metadata: _,
                     } => {
                         introduce(subs, rank, pools, &vars);
                         if !must_implement_ability.is_empty() {
@@ -1351,6 +1356,7 @@ fn solve(
                         vars,
                         must_implement_ability,
                         lambda_sets_to_specialize,
+                        extra_metadata: _,
                     } => {
                         subs.commit_snapshot(snapshot);
 
@@ -1609,6 +1615,7 @@ fn check_ability_specialization(
                 vars,
                 must_implement_ability,
                 lambda_sets_to_specialize,
+                extra_metadata: _,
             } => {
                 let specialization_type =
                     type_implementing_specialization(&must_implement_ability, parent_ability);
@@ -1953,7 +1960,7 @@ fn compact_lambda_set<P: Phase>(
     subs.set_content(this_lambda_set, partial_compacted_lambda_set);
 
     for other_specialized in specialized_to_unify_with.into_iter() {
-        let (vars, must_implement_ability, lambda_sets_to_specialize) =
+        let (vars, must_implement_ability, lambda_sets_to_specialize, _meta) =
             unify(subs, this_lambda_set, other_specialized, Mode::EQ)
                 .expect_success("lambda sets don't unify");
 

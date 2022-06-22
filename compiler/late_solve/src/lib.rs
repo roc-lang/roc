@@ -145,6 +145,7 @@ pub fn unify(
             vars: _,
             must_implement_ability: _,
             lambda_sets_to_specialize,
+            extra_metadata: _,
         } => {
             let mut pools = Pools::default();
 
