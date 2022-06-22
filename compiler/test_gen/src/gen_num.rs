@@ -1767,7 +1767,7 @@ fn float_add_overflow() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = r#"Roc failed with message: "integer subtraction overflowed!"#)]
 fn int_sub_overflow() {
     assert_evals_to!(
@@ -1796,8 +1796,7 @@ fn int_sub_wrap() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
-#[should_panic(expected = r#"Roc failed with message: "float subtraction overflowed!"#)]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_sub_overflow() {
     assert_evals_to!(
         indoc!(
@@ -1805,13 +1804,13 @@ fn float_sub_overflow() {
                     -1.7976931348623157e308 - 1.7976931348623157e308
                 "#
         ),
-        0.0,
+        -f64::INFINITY,
         f64
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_sub_checked() {
     assert_evals_to!(
         indoc!(
@@ -1839,7 +1838,7 @@ fn int_sub_checked() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_sub_checked() {
     assert_evals_to!(
         indoc!(

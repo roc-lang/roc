@@ -231,7 +231,7 @@ pub const RocDec = extern struct {
         const answer = RocDec.addWithOverflow(self, other);
 
         if (answer.has_overflowed) {
-            roc_panic("Dec overflow", 1);
+            roc_panic("Decimal addition overflowed!", 1);
             unreachable;
         } else {
             return answer.value;
@@ -263,7 +263,21 @@ pub const RocDec = extern struct {
         const answer = RocDec.subWithOverflow(self, other);
 
         if (answer.has_overflowed) {
-            @panic("TODO runtime exception for overflow!");
+            roc_panic("Decimal subtraction overflowed!", 1);
+            unreachable;
+        } else {
+            return answer.value;
+        }
+    }
+
+    pub fn subSaturated(self: RocDec, other: RocDec) RocDec {
+        const answer = RocDec.subWithOverflow(self, other);
+        if (answer.has_overflowed) {
+            if (answer.value.num < 0) {
+                return RocDec.max;
+            } else {
+                return RocDec.min;
+            }
         } else {
             return answer.value;
         }
@@ -1116,4 +1130,12 @@ pub fn addOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
 
 pub fn addSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
     return @call(.{ .modifier = always_inline }, RocDec.addSaturated, .{ arg1, arg2 });
+}
+
+pub fn subOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
+    return @call(.{ .modifier = always_inline }, RocDec.sub, .{ arg1, arg2 });
+}
+
+pub fn subSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
+    return @call(.{ .modifier = always_inline }, RocDec.subSaturated, .{ arg1, arg2 });
 }

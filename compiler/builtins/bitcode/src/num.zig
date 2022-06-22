@@ -254,3 +254,75 @@ pub fn exportAddOrPanic(comptime T: type, comptime name: []const u8) void {
     }.func;
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }
+
+fn subWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
+    switch (@typeInfo(T)) {
+        .Int => {
+            var answer: T = undefined;
+            const overflowed = @subWithOverflow(T, self, other, &answer);
+            return .{ .value = answer, .has_overflowed = overflowed };
+        },
+        else => {
+            const answer = self - other;
+            const overflowed = !std.math.isFinite(answer);
+            return .{ .value = answer, .has_overflowed = overflowed };
+        },
+    }
+}
+
+pub fn exportSubWithOverflow(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(self: T, other: T) callconv(.C) WithOverflow(T) {
+            return @call(.{ .modifier = always_inline }, subWithOverflow, .{ T, self, other });
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn exportSubSaturatedInt(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(self: T, other: T) callconv(.C) T {
+            const result = subWithOverflow(T, self, other);
+            if (result.has_overflowed) {
+                if (result.value < 0) {
+                    return std.math.maxInt(T);
+                } else {
+                    return std.math.minInt(T);
+                }
+            } else {
+                return result.value;
+            }
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn exportSubOrPanic(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(self: T, other: T) callconv(.C) T {
+            const result = subWithOverflow(T, self, other);
+            if (result.has_overflowed) {
+                roc_panic("integer subtraction overflowed!", 1);
+                unreachable;
+            } else {
+                return result.value;
+            }
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+fn mulWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
+    switch (@typeInfo(T)) {
+        .Int => {
+            var answer: T = undefined;
+            const overflowed = @mulWithOverflow(T, self, other, &answer);
+            return .{ .value = answer, .has_overflowed = overflowed };
+        },
+        else => {
+            const answer = self + other;
+            const overflowed = !std.math.isFinite(answer);
+            return .{ .value = answer, .has_overflowed = overflowed };
+        },
+    }
+}

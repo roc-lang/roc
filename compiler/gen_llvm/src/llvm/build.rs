@@ -6960,29 +6960,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
             struct_value.into()
         }
         NumAddWrap => unreachable!("wrapping addition is not defined on floats"),
-        NumSub => {
-            let builder = env.builder;
-            let context = env.context;
-
-            let result = bd.build_float_sub(lhs, rhs, "sub_float");
-
-            let is_finite =
-                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE[float_width])
-                    .into_int_value();
-
-            let then_block = context.append_basic_block(parent, "then_block");
-            let throw_block = context.append_basic_block(parent, "throw_block");
-
-            builder.build_conditional_branch(is_finite, then_block, throw_block);
-
-            builder.position_at_end(throw_block);
-
-            throw_exception(env, "float subtraction overflowed!");
-
-            builder.position_at_end(then_block);
-
-            result.into()
-        }
+        NumSub => bd.build_float_sub(lhs, rhs, "sub_float").into(),
         NumSubChecked => {
             let context = env.context;
 

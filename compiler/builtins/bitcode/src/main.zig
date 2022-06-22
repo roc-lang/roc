@@ -17,12 +17,17 @@ comptime {
     exportDecFn(dec.eqC, "eq");
     exportDecFn(dec.neqC, "neq");
     exportDecFn(dec.negateC, "negate");
-    exportDecFn(dec.addC, "add_with_overflow");
-    exportDecFn(dec.subC, "sub_with_overflow");
-    exportDecFn(dec.mulC, "mul_with_overflow");
     exportDecFn(dec.divC, "div");
+
+    exportDecFn(dec.addC, "add_with_overflow");
     exportDecFn(dec.addOrPanicC, "add_or_panic");
     exportDecFn(dec.addSaturatedC, "add_saturated");
+
+    exportDecFn(dec.subC, "sub_with_overflow");
+    exportDecFn(dec.subOrPanicC, "sub_or_panic");
+    exportDecFn(dec.subSaturatedC, "sub_saturated");
+
+    exportDecFn(dec.mulC, "mul_with_overflow");
 }
 
 // List Module
@@ -107,6 +112,10 @@ comptime {
         num.exportAddWithOverflow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_with_overflow.");
         num.exportAddOrPanic(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_or_panic.");
         num.exportAddSaturatedInt(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_saturated.");
+
+        num.exportSubWithOverflow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".sub_with_overflow.");
+        num.exportSubOrPanic(T, ROC_BUILTINS ++ "." ++ NUM ++ ".sub_or_panic.");
+        num.exportSubSaturatedInt(T, ROC_BUILTINS ++ "." ++ NUM ++ ".sub_saturated.");
     }
 
     inline for (INTEGERS) |FROM| {
@@ -129,6 +138,7 @@ comptime {
         num.exportLog(T, ROC_BUILTINS ++ "." ++ NUM ++ ".log.");
 
         num.exportAddWithOverflow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_with_overflow.");
+        num.exportSubWithOverflow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".sub_with_overflow.");
 
         num.exportIsFinite(T, ROC_BUILTINS ++ "." ++ NUM ++ ".is_finite.");
     }
