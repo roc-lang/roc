@@ -6,7 +6,7 @@ use std::sync::{Arc, RwLock};
 use bumpalo::Bump;
 use roc_can::abilities::AbilitiesStore;
 use roc_collections::MutMap;
-use roc_derive_key::GlobalDerivedSymbols;
+use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
 use roc_module::symbol::ModuleId;
 use roc_solve::solve::{compact_lambda_sets_of_vars, Phase, Pools};
@@ -168,7 +168,7 @@ pub fn unify(
     arena: &Bump,
     subs: &mut Subs,
     abilities: &AbilitiesView,
-    derived_symbols: &GlobalDerivedSymbols,
+    derived_module: &SharedDerivedModule,
     left: Variable,
     right: Variable,
 ) -> Result<(), UnificationFailed> {
@@ -190,7 +190,7 @@ pub fn unify(
                 &mut pools,
                 lambda_sets_to_specialize,
                 &late_phase,
-                derived_symbols,
+                derived_module,
             );
             // At this point we can't do anything with must-implement constraints, since we're no
             // longer solving. We must assume that they were totally caught during solving.

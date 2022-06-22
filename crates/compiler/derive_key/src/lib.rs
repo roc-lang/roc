@@ -15,12 +15,9 @@
 
 pub mod encoding;
 
-use std::sync::{Arc, Mutex};
-
 use encoding::{FlatEncodable, FlatEncodableKey};
 
-use roc_collections::MutMap;
-use roc_module::symbol::{IdentIds, ModuleId, Symbol};
+use roc_module::symbol::Symbol;
 use roc_types::subs::{Subs, Variable};
 
 #[derive(Debug, PartialEq)]
@@ -68,83 +65,3 @@ impl Derived {
         }
     }
 }
-
-/// Map of [`DeriveKey`]s to their derived symbols.
-#[derive(Debug, Default)]
-pub struct DerivedSymbols {
-    map: MutMap<DeriveKey, Symbol>,
-    derived_ident_ids: IdentIds,
-    #[cfg(debug_assertions)]
-    stolen: bool,
-}
-
-impl DerivedSymbols {
-    pub fn get_or_insert(&mut self, key: DeriveKey) -> Symbol {
-        #[cfg(debug_assertions)]
-        {
-            debug_assert!(!self.stolen, "attempting to add to stolen symbols!");
-        }
-
-        let symbol = self.map.entry(key).or_insert_with_key(|key| {
-            let ident_id = if cfg!(debug_assertions) || cfg!(feature = "debug-derived-symbols") {
-                let debug_name = key.debug_name();
-                debug_assert!(
-                    self.derived_ident_ids.get_id(&debug_name).is_none(),
-                    "duplicate debug name for different derive key"
-                );
-                let ident_id = self.derived_ident_ids.get_or_insert(&debug_name);
-
-                // This is expensive, but yields much better symbols when debugging.
-                // TODO: hide behind debug_flags?
-                ModuleId::DERIVED.register_debug_idents(&self.derived_ident_ids);
-
-                ident_id
-            } else {
-                self.derived_ident_ids.gen_unique()
-            };
-
-            Symbol::new(ModuleId::DERIVED, ident_id)
-        });
-        *symbol
-    }
-
-    pub fn iter_all(&self) -> impl Iterator<Item = (&DeriveKey, &Symbol)> {
-        self.map.iter()
-    }
-
-    /// Generate a unique symbol. This should only be used when generating code inside the Derived
-    /// module; other modules should use [`Self::get_or_insert`] to generate a symbol for a derived
-    /// ability member usage.
-    pub fn gen_unique(&mut self) -> Symbol {
-        let ident_id = self.derived_ident_ids.gen_unique();
-        Symbol::new(ModuleId::DERIVED, ident_id)
-    }
-
-    /// Steal all created derived ident Ids.
-    /// After this is called, [`Self::get_or_insert`] may no longer be called.
-    pub fn steal(&mut self) -> IdentIds {
-        let mut ident_ids = Default::default();
-        std::mem::swap(&mut self.derived_ident_ids, &mut ident_ids);
-
-        #[cfg(debug_assertions)]
-        {
-            debug_assert!(!self.stolen);
-            self.stolen = true;
-        }
-
-        ident_ids
-    }
-
-    pub fn return_ident_ids(&mut self, ident_ids: IdentIds) {
-        #[cfg(debug_assertions)]
-        {
-            debug_assert!(self.stolen);
-            self.stolen = false;
-        }
-
-        self.derived_ident_ids = ident_ids;
-    }
-}
-
-/// Thread-sharable [`DerivedMethods`].
-pub type GlobalDerivedSymbols = Arc<Mutex<DerivedSymbols>>;
