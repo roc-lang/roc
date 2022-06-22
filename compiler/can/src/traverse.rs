@@ -26,8 +26,9 @@ pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
         match tag {
             Value => {
                 let loc_expr = &decls.expressions[index];
+                let expr_var = decls.variables[index];
 
-                visitor.visit_expr(&loc_expr.value, loc_expr.region, Variable::BOOL);
+                visitor.visit_expr(&loc_expr.value, loc_expr.region, expr_var);
                 if let Some(annot) = &decls.annotations[index] {
                     visitor.visit_annotation(annot);
                 }
@@ -56,16 +57,17 @@ pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
                 let loc_pattern = &destructure.loc_pattern;
 
                 let loc_expr = &decls.expressions[index];
+                let expr_var = decls.variables[index];
 
                 let opt_var = match loc_pattern.value {
                     Pattern::Identifier(..) | Pattern::AbilityMemberSpecialization { .. } => {
-                        Some(decls.variables[index])
+                        Some(expr_var)
                     }
                     _ => loc_pattern.value.opt_var(),
                 };
 
                 visitor.visit_pattern(&loc_pattern.value, loc_pattern.region, opt_var);
-                visitor.visit_expr(&loc_expr.value, loc_expr.region, Variable::BOOL);
+                visitor.visit_expr(&loc_expr.value, loc_expr.region, expr_var);
 
                 if let Some(annot) = &decls.annotations[index] {
                     visitor.visit_annotation(annot);
