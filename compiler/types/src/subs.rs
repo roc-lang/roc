@@ -3955,12 +3955,12 @@ impl StorageSubs {
         storage_copy_var_to(source, &mut self.subs, variable)
     }
 
-    pub fn import_variable_from(&mut self, source: &mut Subs, variable: Variable) -> CopiedImport {
+    pub fn import_variable_from(&mut self, source: &Subs, variable: Variable) -> CopiedImport {
         copy_import_to(source, &mut self.subs, variable, Rank::import())
     }
 
-    pub fn export_variable_to(&mut self, target: &mut Subs, variable: Variable) -> CopiedImport {
-        copy_import_to(&mut self.subs, target, variable, Rank::import())
+    pub fn export_variable_to(&self, target: &mut Subs, variable: Variable) -> CopiedImport {
+        copy_import_to(&self.subs, target, variable, Rank::import())
     }
 
     pub fn merge_into(self, target: &mut Subs) -> impl Fn(Variable) -> Variable {
@@ -4600,7 +4600,8 @@ pub struct CopiedImport {
 
 struct CopyImportEnv<'a> {
     visited: bumpalo::collections::Vec<'a, Variable>,
-    source: &'a mut Subs,
+    copy_table: &'a mut VecMap<Variable, Variable>,
+    source: &'a Subs,
     target: &'a mut Subs,
     flex: Vec<Variable>,
     rigid: Vec<Variable>,
@@ -4610,19 +4611,17 @@ struct CopyImportEnv<'a> {
     registered: Vec<Variable>,
 }
 
-pub fn copy_import_to(
-    source: &mut Subs, // mut to set the copy. TODO: use a separate copy table to avoid mut
-    target: &mut Subs,
-    var: Variable,
-    rank: Rank,
-) -> CopiedImport {
+pub fn copy_import_to(source: &Subs, target: &mut Subs, var: Variable, rank: Rank) -> CopiedImport {
     let mut arena = take_scratchpad();
 
     let copied_import = {
         let visited = bumpalo::collections::Vec::with_capacity_in(256, &arena);
 
+        let mut copy_table = VecMap::default();
+
         let mut env = CopyImportEnv {
             visited,
+            copy_table: &mut copy_table,
             source,
             target,
             flex: Vec::new(),
@@ -4636,8 +4635,9 @@ pub fn copy_import_to(
         let copy = copy_import_to_help(&mut env, rank, var);
 
         let CopyImportEnv {
-            visited,
-            source,
+            visited: _,
+            source: _,
+            copy_table: _,
             flex,
             rigid,
             flex_able,
@@ -4646,19 +4646,6 @@ pub fn copy_import_to(
             registered,
             target: _,
         } = env;
-
-        // we have tracked all visited variables, and can now traverse them
-        // in one go (without looking at the UnificationTable) and clear the copy field
-
-        for var in visited {
-            source.modify(var, |descriptor| {
-                if descriptor.copy.is_some() {
-                    descriptor.rank = Rank::NONE;
-                    descriptor.mark = Mark::NONE;
-                    descriptor.copy = OptVariable::NONE;
-                }
-            });
-        }
 
         CopiedImport {
             variable: copy,
@@ -4735,9 +4722,10 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
     use Content::*;
     use FlatType::*;
 
+    let var = env.source.get_root_key_without_compacting(var);
     let desc = env.source.get_without_compacting(var);
 
-    if let Some(copy) = desc.copy.into_variable() {
+    if let Some(&copy) = env.copy_table.get(&var) {
         debug_assert!(env.target.contains(copy));
         return copy;
     } else if desc.rank != Rank::NONE {
@@ -4760,7 +4748,6 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
         copy: OptVariable::NONE,
     };
 
-    // let copy = env.target.fresh_unnamed_flex_var();
     let copy = env.target.fresh(make_descriptor(unnamed_flex_var()));
 
     // is this content registered (in the current pool) by type_to_variable?
@@ -4772,10 +4759,7 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
     // avoid making multiple copies of the variable we are instantiating.
     //
     // Need to do this before recursively copying to avoid looping.
-    env.source.modify(var, |descriptor| {
-        descriptor.mark = Mark::NONE;
-        descriptor.copy = copy.into();
-    });
+    env.copy_table.insert(var, copy);
 
     // Now we recursively copy the content of the variable.
     // We have already marked the variable as copied, so we
