@@ -29,7 +29,10 @@ use roc_types::types::{
     gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, ErrorType, OptAbleType,
     OptAbleVar, PatternCategory, Reason, TypeExtension, Uls,
 };
-use roc_unify::unify::{unify, Mode, Obligated, Unified::*};
+use roc_unify::unify::{
+    unify, unify_introduced_ability_specialization, Mode, Obligated, SpecializationLsetCollector,
+    Unified::*,
+};
 
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
 // https://github.com/elm/compiler
@@ -1608,14 +1611,19 @@ fn check_ability_specialization(
         let root_signature_var =
             deep_copy_var_in(subs, Rank::toplevel(), pools, root_signature_var, arena);
         let snapshot = subs.snapshot();
-        let unified = unify(subs, symbol_loc_var.value, root_signature_var, Mode::EQ);
+        let unified = unify_introduced_ability_specialization(
+            subs,
+            root_signature_var,
+            symbol_loc_var.value,
+            Mode::EQ,
+        );
 
         match unified {
             Success {
                 vars,
                 must_implement_ability,
-                lambda_sets_to_specialize,
-                extra_metadata: _,
+                lambda_sets_to_specialize: other_lambda_sets_to_specialize,
+                extra_metadata: SpecializationLsetCollector(specialization_lambda_sets),
             } => {
                 let specialization_type =
                     type_implementing_specialization(&must_implement_ability, parent_ability);
@@ -1627,13 +1635,14 @@ fn check_ability_specialization(
                         subs.commit_snapshot(snapshot);
                         introduce(subs, rank, pools, &vars);
 
-                        let (other_lambda_sets_to_specialize, specialization_lambda_sets) =
-                            find_specialization_lambda_sets(
-                                subs,
-                                opaque,
-                                ability_member,
-                                lambda_sets_to_specialize,
-                            );
+                        let specialization_lambda_sets = specialization_lambda_sets
+                            .into_iter()
+                            .map(|((symbol, region), var)| {
+                                debug_assert_eq!(symbol, ability_member);
+                                (region, var)
+                            })
+                            .collect();
+
                         deferred_uls_to_resolve.union(other_lambda_sets_to_specialize);
 
                         let specialization_region = symbol_loc_var.region;
@@ -1731,96 +1740,6 @@ fn check_ability_specialization(
             }
         }
     }
-}
-
-/// Finds the lambda sets in an ability member specialization.
-///
-/// Suppose we have
-///
-///   Default has default : {} -[[] + a:default:1]-> a | a has Default
-///   
-///   A := {}
-///   default = \{} -[[closA]]-> @A {}
-///
-/// Now after solving the `default` specialization we have unified it with the ability signature,
-/// yielding
-///   
-///   {} -[[closA] + A:default:1]-> A
-///
-/// But really, what we want is to only keep around the original lambda sets, and associate
-/// `A:default:1` to resolve to the lambda set `[[closA]]`. There might be other unspecialized lambda
-/// sets in the lambda sets for this implementation, which we need to account for as well; that is,
-/// it may really be `[[closA] + v123:otherAbilityMember:4 + ...]`.
-#[inline(always)]
-fn find_specialization_lambda_sets(
-    subs: &mut Subs,
-    opaque: Symbol,
-    ability_member: Symbol,
-    uls: UlsOfVar,
-) -> (UlsOfVar, VecMap<u8, Variable>) {
-    // unspecialized lambda sets that don't belong to our specialization, and should be resolved
-    // later.
-    let mut leftover_uls = UlsOfVar::default();
-    let mut specialization_lambda_sets: VecMap<u8, Variable> = VecMap::with_capacity(uls.len());
-
-    for (spec_var, lambda_sets) in uls.drain() {
-        if !matches!(subs.get_content_without_compacting(spec_var), Content::Alias(name, _, _, AliasKind::Opaque) if *name == opaque)
-        {
-            // These lambda sets aren't resolved to the current specialization, they need to be
-            // solved at a later time.
-            leftover_uls.extend(spec_var, lambda_sets);
-            continue;
-        }
-
-        for lambda_set in lambda_sets {
-            let &LambdaSet {
-                solved,
-                recursion_var,
-                unspecialized,
-            } = match subs.get_content_without_compacting(lambda_set) {
-                Content::LambdaSet(lambda_set) => lambda_set,
-                _ => internal_error!("Not a lambda set"),
-            };
-
-            // Figure out the unspecailized lambda set that corresponds to our specialization
-            // (`A:default:1` in the example), and those that need to stay part of the lambda set.
-            let mut split_index_and_region = None;
-            let uls_slice = subs.get_subs_slice(unspecialized).to_owned();
-            for (i, &Uls(var, _sym, region)) in uls_slice.iter().enumerate() {
-                if var == spec_var {
-                    debug_assert!(split_index_and_region.is_none());
-                    debug_assert!(_sym == ability_member, "unspecialized lambda set var is the same as the specialization, but points to a different ability member");
-                    split_index_and_region = Some((i, region));
-                }
-            }
-
-            let (split_index, specialized_lset_region) =
-                split_index_and_region.expect("no unspecialization lambda set found");
-            let (uls_before, uls_after) =
-                (&uls_slice[0..split_index], &uls_slice[split_index + 1..]);
-
-            let new_unspecialized = SubsSlice::extend_new(
-                &mut subs.unspecialized_lambda_sets,
-                uls_before.iter().chain(uls_after.iter()).copied(),
-            );
-
-            let new_lambda_set_content = Content::LambdaSet(LambdaSet {
-                solved,
-                recursion_var,
-                unspecialized: new_unspecialized,
-            });
-            subs.set_content(lambda_set, new_lambda_set_content);
-
-            let old_specialized =
-                specialization_lambda_sets.insert(specialized_lset_region, lambda_set);
-            debug_assert!(
-                old_specialized.is_none(),
-                "Specialization of lambda set already exists"
-            );
-        }
-    }
-
-    (leftover_uls, specialization_lambda_sets)
 }
 
 pub fn compact_lambda_sets_of_vars<P: Phase>(
@@ -1926,7 +1845,13 @@ fn compact_lambda_set<P: Phase>(
                         let specialized_lambda_set = *specialization
                             .specialization_lambda_sets
                             .get(&region)
-                            .expect("lambda set region not resolved");
+                            .unwrap_or_else(|| {
+                                internal_error!(
+                                    "lambda set region ({:?}, {}) not resolved",
+                                    member,
+                                    region
+                                )
+                            });
                         Spec::Some(specialized_lambda_set)
                     }
                 }

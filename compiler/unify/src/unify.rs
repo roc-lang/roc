@@ -1,4 +1,5 @@
 use bitflags::bitflags;
+use roc_collections::VecMap;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::{ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS};
@@ -162,6 +163,25 @@ impl MetaCollector for NoCollector {
     fn union(&mut self, _other: Self) {}
 }
 
+#[derive(Default, Debug)]
+pub struct SpecializationLsetCollector(pub VecMap<(Symbol, u8), Variable>);
+
+impl MetaCollector for SpecializationLsetCollector {
+    const UNIFYING_SPECIALIZATION: bool = true;
+
+    fn record_specialization_lambda_set(&mut self, member: Symbol, region: u8, var: Variable) {
+        dbg!((member, region, var));
+        self.0.insert((member, region), var);
+    }
+
+    fn union(&mut self, other: Self) {
+        for (k, v) in other.0.into_iter() {
+            let _old = self.0.insert(k, v);
+            debug_assert!(_old.is_none(), "overwriting known lambda set");
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum Unified<M: MetaCollector = NoCollector> {
     Success {
@@ -271,6 +291,16 @@ impl<M: MetaCollector> Outcome<M> {
 #[inline(always)]
 pub fn unify(subs: &mut Subs, var1: Variable, var2: Variable, mode: Mode) -> Unified {
     unify_help(subs, var1, var2, mode)
+}
+
+#[inline(always)]
+pub fn unify_introduced_ability_specialization(
+    subs: &mut Subs,
+    ability_member_signature: Variable,
+    specialization_var: Variable,
+    mode: Mode,
+) -> Unified<SpecializationLsetCollector> {
+    unify_help(subs, ability_member_signature, specialization_var, mode)
 }
 
 #[inline(always)]
@@ -858,9 +888,27 @@ fn unify_lambda_set<M: MetaCollector>(
     other: &Content,
 ) -> Outcome<M> {
     match other {
-        FlexVar(_) => merge(subs, ctx, Content::LambdaSet(lambda_set)),
+        FlexVar(_) => {
+            if M::UNIFYING_SPECIALIZATION {
+                // TODO: It appears that this can happen in well-typed, reasonable programs, but it's
+                // open question as to why! See also https://github.com/rtfeldman/roc/issues/3163.
+                let zero_lambda_set = LambdaSet {
+                    solved: UnionLabels::default(),
+                    recursion_var: OptVariable::NONE,
+                    unspecialized: SubsSlice::default(),
+                };
+
+                extract_specialization_lambda_set(subs, ctx, lambda_set, zero_lambda_set)
+            } else {
+                merge(subs, ctx, Content::LambdaSet(lambda_set))
+            }
+        }
         Content::LambdaSet(other_lambda_set) => {
-            unify_lambda_set_help(subs, pool, ctx, lambda_set, *other_lambda_set)
+            if M::UNIFYING_SPECIALIZATION {
+                extract_specialization_lambda_set(subs, ctx, lambda_set, *other_lambda_set)
+            } else {
+                unify_lambda_set_help(subs, pool, ctx, lambda_set, *other_lambda_set)
+            }
         }
         RecursionVar { structure, .. } => {
             // suppose that the recursion var is a lambda set
@@ -873,6 +921,50 @@ fn unify_lambda_set<M: MetaCollector>(
         Alias(..) => mismatch!("Lambda set can never be directly under an alias!"),
         Error => merge(subs, ctx, Error),
     }
+}
+
+fn extract_specialization_lambda_set<M: MetaCollector>(
+    subs: &mut Subs,
+    ctx: &Context,
+    ability_member_proto_lset: LambdaSet,
+    specialization_lset: LambdaSet,
+) -> Outcome<M> {
+    // We should have the unspecialized ability member lambda set on the left and the
+    // specialization lambda set on the right. E.g.
+    //
+    //   [[] + a:toEncoder:1] ~ [[myTypeLset]]
+    //
+    // Taking that example, we keep around [[myTypeLset]] in the unification and associate
+    // (toEncoder, 1) => [[myTypeLset]] in the metadata collector.
+
+    let LambdaSet {
+        solved: member_solved,
+        recursion_var: member_rec_var,
+        unspecialized: member_uls_slice,
+    } = ability_member_proto_lset;
+
+    debug_assert!(
+        member_solved.is_empty(),
+        "member signature should not have solved lambda sets"
+    );
+    debug_assert!(member_rec_var.is_none());
+
+    let member_uls = subs.get_subs_slice(member_uls_slice);
+    debug_assert_eq!(
+        member_uls.len(),
+        1,
+        "member signature lambda sets should contain only one unspecialized lambda set"
+    );
+
+    let Uls(_, member, region) = member_uls[0];
+
+    let mut outcome: Outcome<M> = merge(subs, ctx, Content::LambdaSet(specialization_lset));
+
+    outcome
+        .extra_metadata
+        .record_specialization_lambda_set(member, region, ctx.second);
+
+    outcome
 }
 
 fn unify_lambda_set_help<M: MetaCollector>(
@@ -2304,6 +2396,8 @@ fn unify_recursion<M: MetaCollector>(
         ),
 
         LambdaSet(..) => {
+            debug_assert!(!M::UNIFYING_SPECIALIZATION);
+
             // suppose that the recursion var is a lambda set
             unify_pool(subs, pool, structure, ctx.second, ctx.mode)
         }
