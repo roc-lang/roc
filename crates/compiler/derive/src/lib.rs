@@ -19,6 +19,10 @@ mod encoding;
 
 pub(crate) const DERIVED_SYNTH: ModuleId = ModuleId::DERIVED_SYNTH;
 
+mod encoding;
+
+pub(crate) const DERIVED_MODULE: ModuleId = ModuleId::DERIVED;
+
 pub fn synth_var(subs: &mut Subs, content: Content) -> Variable {
     let descriptor = Descriptor {
         content,
