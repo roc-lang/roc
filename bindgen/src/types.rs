@@ -13,7 +13,7 @@ use roc_mono::layout::{
 };
 use roc_target::TargetInfo;
 use roc_types::{
-    subs::{Content, FlatType, Subs, UnionTags, Variable},
+    subs::{Content, FlatType, GetSubsSlice, Subs, UnionTags, Variable},
     types::RecordField,
 };
 use std::fmt::Display;
@@ -607,8 +607,13 @@ fn add_builtin_type<'a>(
     types: &mut Types,
     layout: Layout<'_>,
 ) -> TypeId {
-    match builtin {
-        Builtin::Int(width) => match width {
+    use Content::*;
+    use FlatType::*;
+
+    let builtin_type = env.subs.get_content_without_compacting(var);
+
+    match (builtin, builtin_type) {
+        (Builtin::Int(width), _) => match width {
             U8 => types.add(RocType::Num(RocNum::U8), layout),
             U16 => types.add(RocType::Num(RocNum::U16), layout),
             U32 => types.add(RocType::Num(RocNum::U32), layout),
@@ -620,18 +625,20 @@ fn add_builtin_type<'a>(
             I64 => types.add(RocType::Num(RocNum::I64), layout),
             I128 => types.add(RocType::Num(RocNum::I128), layout),
         },
-        Builtin::Float(width) => match width {
+        (Builtin::Float(width), _) => match width {
             F32 => types.add(RocType::Num(RocNum::F32), layout),
             F64 => types.add(RocType::Num(RocNum::F64), layout),
             F128 => types.add(RocType::Num(RocNum::F128), layout),
         },
-        Builtin::Decimal => types.add(RocType::Num(RocNum::Dec), layout),
-        Builtin::Bool => types.add(RocType::Bool, layout),
-        Builtin::Str => types.add(RocType::RocStr, layout),
-        Builtin::Dict(key_layout, val_layout) => {
-            // TODO FIXME this `var` is wrong - should have a different `var` for key and for val
-            let key_id = add_type_help(env, *key_layout, var, opt_name, types);
-            let val_id = add_type_help(env, *val_layout, var, opt_name, types);
+        (Builtin::Decimal, _) => types.add(RocType::Num(RocNum::Dec), layout),
+        (Builtin::Bool, _) => types.add(RocType::Bool, layout),
+        (Builtin::Str, _) => types.add(RocType::RocStr, layout),
+        (Builtin::Dict(key_layout, val_layout), Structure(Apply(Symbol::DICT_DICT, args))) => {
+            let args = env.subs.get_subs_slice(*args);
+            debug_assert_eq!(args.len(), 2);
+
+            let key_id = add_type_help(env, *key_layout, args[0], opt_name, types);
+            let val_id = add_type_help(env, *val_layout, args[1], opt_name, types);
             let dict_id = types.add(RocType::RocDict(key_id, val_id), layout);
 
             types.depends(dict_id, key_id);
@@ -639,22 +646,29 @@ fn add_builtin_type<'a>(
 
             dict_id
         }
-        Builtin::Set(elem_layout) => {
-            let elem_id = add_type_help(env, *elem_layout, var, opt_name, types);
+        (Builtin::Set(elem_layout), Structure(Apply(Symbol::SET_SET, args))) => {
+            let args = env.subs.get_subs_slice(*args);
+            debug_assert_eq!(args.len(), 1);
+
+            let elem_id = add_type_help(env, *elem_layout, args[0], opt_name, types);
             let set_id = types.add(RocType::RocSet(elem_id), layout);
 
             types.depends(set_id, elem_id);
 
             set_id
         }
-        Builtin::List(elem_layout) => {
-            let elem_id = add_type_help(env, *elem_layout, var, opt_name, types);
+        (Builtin::List(elem_layout), Structure(Apply(Symbol::LIST_LIST, args))) => {
+            let args = env.subs.get_subs_slice(*args);
+            debug_assert_eq!(args.len(), 1);
+
+            let elem_id = add_type_help(env, *elem_layout, args[0], opt_name, types);
             let list_id = types.add(RocType::RocList(elem_id), layout);
 
             types.depends(list_id, elem_id);
 
             list_id
         }
+        (layout, typ) => todo!("Handle builtin layout {:?} and type {:?}", layout, typ),
     }
 }
 
