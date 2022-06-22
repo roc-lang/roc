@@ -160,7 +160,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
     console_error_panic_hook::set_once();
 
     let arena = &Bump::new();
-    let pre_linked_binary: &'static [u8] = include_bytes!("../data/pre_linked_binary.o");
+    let pre_linked_binary: &'static [u8] = include_bytes!("pre_linked_binary.o");
 
     // Compile the app
     let target_info = TargetInfo::default_wasm32();

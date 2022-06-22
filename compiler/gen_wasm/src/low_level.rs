@@ -578,10 +578,39 @@ impl<'a> LowLevelCall<'a> {
                     _ => todo!("{:?} for {:?}", self.lowlevel, self.ret_layout),
                 }
             }
-            NumSin => todo!("{:?}", self.lowlevel),
-            NumCos => todo!("{:?}", self.lowlevel),
-            NumSqrtUnchecked => todo!("{:?}", self.lowlevel),
-            NumLogUnchecked => todo!("{:?}", self.lowlevel),
+            NumSin => match self.ret_layout {
+                Layout::Builtin(Builtin::Float(width)) => {
+                    self.load_args_and_call_zig(backend, &bitcode::NUM_SIN[width]);
+                }
+                _ => panic_ret_type(),
+            },
+            NumCos => match self.ret_layout {
+                Layout::Builtin(Builtin::Float(width)) => {
+                    self.load_args_and_call_zig(backend, &bitcode::NUM_COS[width]);
+                }
+                _ => panic_ret_type(),
+            },
+            NumSqrtUnchecked => {
+                self.load_args(backend);
+                match self.ret_layout {
+                    Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                        backend.code_builder.f32_sqrt()
+                    }
+                    Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                        backend.code_builder.f64_sqrt()
+                    }
+                    Layout::Builtin(Builtin::Float(FloatWidth::F128)) => {
+                        todo!("sqrt for f128")
+                    }
+                    _ => panic_ret_type(),
+                }
+            }
+            NumLogUnchecked => match self.ret_layout {
+                Layout::Builtin(Builtin::Float(width)) => {
+                    self.load_args_and_call_zig(backend, &bitcode::NUM_LOG[width]);
+                }
+                _ => panic_ret_type(),
+            },
             NumToFrac => {
                 self.load_args(backend);
                 let ret_type = CodeGenNumType::from(self.ret_layout);
@@ -600,7 +629,12 @@ impl<'a> LowLevelCall<'a> {
                     _ => todo!("{:?}: {:?} -> {:?}", self.lowlevel, arg_type, ret_type),
                 }
             }
-            NumPow => todo!("{:?}", self.lowlevel),
+            NumPow => match self.ret_layout {
+                Layout::Builtin(Builtin::Float(width)) => {
+                    self.load_args_and_call_zig(backend, &bitcode::NUM_POW[width]);
+                }
+                _ => panic_ret_type(),
+            },
             NumRound => {
                 self.load_args(backend);
                 let arg_type = CodeGenNumType::for_symbol(backend, self.arguments[0]);
@@ -687,8 +721,8 @@ impl<'a> LowLevelCall<'a> {
                 }
                 _ => panic_ret_type(),
             },
-            NumBytesToU16 => todo!("{:?}", self.lowlevel),
-            NumBytesToU32 => todo!("{:?}", self.lowlevel),
+            NumBytesToU16 => self.load_args_and_call_zig(backend, bitcode::NUM_BYTES_TO_U16),
+            NumBytesToU32 => self.load_args_and_call_zig(backend, bitcode::NUM_BYTES_TO_U32),
             NumBitwiseAnd => {
                 self.load_args(backend);
                 match CodeGenNumType::from(self.ret_layout) {
@@ -785,7 +819,36 @@ impl<'a> LowLevelCall<'a> {
                 todo!("implement toF32 and toF64");
             }
             NumToIntChecked => {
-                todo!()
+                let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
+
+                let (arg_width, ret_width) = match (arg_layout, self.ret_layout) {
+                    (
+                        Layout::Builtin(Builtin::Int(arg_width)),
+                        Layout::Struct {
+                            field_layouts: &[Layout::Builtin(Builtin::Int(ret_width)), ..],
+                            ..
+                        },
+                    ) => (arg_width, ret_width),
+                    _ => {
+                        internal_error!(
+                            "NumToIntChecked is not defined for signature {:?} -> {:?}",
+                            arg_layout,
+                            self.ret_layout
+                        );
+                    }
+                };
+
+                if arg_width.is_signed() {
+                    self.load_args_and_call_zig(
+                        backend,
+                        &bitcode::NUM_INT_TO_INT_CHECKING_MAX_AND_MIN[ret_width][arg_width],
+                    )
+                } else {
+                    self.load_args_and_call_zig(
+                        backend,
+                        &bitcode::NUM_INT_TO_INT_CHECKING_MAX[ret_width][arg_width],
+                    )
+                }
             }
             NumToFloatChecked => {
                 todo!("implement toF32Checked and toF64Checked");
@@ -938,16 +1001,7 @@ impl<'a> LowLevelCall<'a> {
         locations: [StackMemoryLocation; 2],
     ) {
         match format {
-            StackMemoryFormat::Decimal => {
-                // Both args are finite
-                num_is_finite(backend, self.arguments[0]);
-                num_is_finite(backend, self.arguments[1]);
-                backend.code_builder.i32_and();
-
-                // AND they have the same bytes
-                Self::eq_num128_bytes(backend, locations);
-                backend.code_builder.i32_and();
-            }
+            StackMemoryFormat::Decimal => Self::eq_num128_bytes(backend, locations),
 
             StackMemoryFormat::Int128 => Self::eq_num128_bytes(backend, locations),
 

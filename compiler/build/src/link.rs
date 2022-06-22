@@ -559,13 +559,9 @@ pub fn rebuild_host(
             validate_output("c_host.o", "ld", output);
 
             // Clean up c_host.o
-            let output = Command::new("rm")
-                .env_clear()
-                .args(&["-f", c_host_dest.to_str().unwrap()])
-                .output()
-                .unwrap();
-
-            validate_output("rust_host.o", "rm", output);
+            if c_host_dest.exists() {
+                std::fs::remove_file(c_host_dest).unwrap();
+            }
         }
     } else if rust_host_src.exists() {
         // Compile and link host.rs, if it exists
@@ -629,17 +625,12 @@ pub fn rebuild_host(
         }
 
         // Clean up rust_host.o and c_host.o
-        let output = Command::new("rm")
-            .env_clear()
-            .args(&[
-                "-f",
-                rust_host_dest.to_str().unwrap(),
-                c_host_dest.to_str().unwrap(),
-            ])
-            .output()
-            .unwrap();
-
-        validate_output("rust_host.o", "rm", output);
+        if c_host_dest.exists() {
+            std::fs::remove_file(c_host_dest).unwrap();
+        }
+        if rust_host_dest.exists() {
+            std::fs::remove_file(rust_host_dest).unwrap();
+        }
     } else if c_host_src.exists() {
         // Compile host.c, if it exists
         let output = build_c_host_native(

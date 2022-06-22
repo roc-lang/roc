@@ -90,6 +90,33 @@ pub fn exportAtan(comptime T: type, comptime name: []const u8) void {
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }
 
+pub fn exportSin(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(input: T) callconv(.C) T {
+            return @sin(input);
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn exportCos(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(input: T) callconv(.C) T {
+            return @cos(input);
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn exportLog(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(input: T) callconv(.C) T {
+            return @log(input);
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
 pub fn exportRoundF32(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(input: f32) callconv(.C) T {

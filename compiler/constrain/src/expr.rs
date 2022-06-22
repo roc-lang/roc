@@ -3005,15 +3005,7 @@ fn constrain_recursive_defs(
     body_con: Constraint,
     cycle_mark: IllegalCycleMark,
 ) -> Constraint {
-    rec_defs_help(
-        constraints,
-        env,
-        defs,
-        body_con,
-        Info::with_capacity(defs.len()),
-        Info::with_capacity(defs.len()),
-        cycle_mark,
-    )
+    rec_defs_help(constraints, env, defs, body_con, cycle_mark)
 }
 
 pub fn rec_defs_help(
@@ -3021,10 +3013,15 @@ pub fn rec_defs_help(
     env: &mut Env,
     defs: &[Def],
     body_con: Constraint,
-    mut rigid_info: Info,
-    mut flex_info: Info,
     cycle_mark: IllegalCycleMark,
 ) -> Constraint {
+    // We partition recursive defs into three buckets:
+    //   rigid: those with fully-elaborated type annotations (no inference vars), e.g. a -> b
+    //   hybrid: those with type annotations containing an inference variable, e.g. _ -> b
+    //   flex: those without a type annotation
+    let mut rigid_info = Info::with_capacity(defs.len());
+    let mut hybrid_and_flex_info = Info::with_capacity(defs.len());
+
     for def in defs {
         let expr_var = def.expr_var;
         let expr_type = Type::Variable(expr_var);
@@ -3047,9 +3044,11 @@ pub fn rec_defs_help(
 
                 let def_con = expr_con;
 
-                flex_info.vars = def_pattern_state.vars;
-                flex_info.constraints.push(def_con);
-                flex_info.def_types.extend(def_pattern_state.headers);
+                hybrid_and_flex_info.vars.extend(def_pattern_state.vars);
+                hybrid_and_flex_info.constraints.push(def_con);
+                hybrid_and_flex_info
+                    .def_types
+                    .extend(def_pattern_state.headers);
             }
 
             Some(annotation) => {
@@ -3068,7 +3067,9 @@ pub fn rec_defs_help(
                     &mut def_pattern_state.headers,
                 );
 
-                flex_info.vars.extend(new_infer_variables);
+                let is_hybrid = !new_infer_variables.is_empty();
+
+                hybrid_and_flex_info.vars.extend(new_infer_variables);
 
                 let annotation_expected = FromAnnotation(
                     def.loc_pattern.clone(),
@@ -3193,16 +3194,24 @@ pub fn rec_defs_help(
                         let and_constraint = constraints.and_constraint(cons);
                         let def_con = constraints.exists(vars, and_constraint);
 
-                        rigid_info.vars.extend(&new_rigid_variables);
+                        if is_hybrid {
+                            hybrid_and_flex_info.vars.extend(&new_rigid_variables);
+                            hybrid_and_flex_info.constraints.push(def_con);
+                            hybrid_and_flex_info
+                                .def_types
+                                .extend(def_pattern_state.headers);
+                        } else {
+                            rigid_info.vars.extend(&new_rigid_variables);
 
-                        rigid_info.constraints.push(constraints.let_constraint(
-                            new_rigid_variables,
-                            def_pattern_state.vars,
-                            [], // no headers introduced (at this level)
-                            def_con,
-                            Constraint::True,
-                        ));
-                        rigid_info.def_types.extend(def_pattern_state.headers);
+                            rigid_info.constraints.push(constraints.let_constraint(
+                                new_rigid_variables,
+                                def_pattern_state.vars,
+                                [], // no headers introduced (at this level)
+                                def_con,
+                                Constraint::True,
+                            ));
+                            rigid_info.def_types.extend(def_pattern_state.headers);
+                        }
                     }
                     _ => {
                         let expected = annotation_expected;
@@ -3224,16 +3233,24 @@ pub fn rec_defs_help(
                         ];
                         let def_con = constraints.and_constraint(cons);
 
-                        rigid_info.vars.extend(&new_rigid_variables);
+                        if is_hybrid {
+                            hybrid_and_flex_info.vars.extend(&new_rigid_variables);
+                            hybrid_and_flex_info.constraints.push(def_con);
+                            hybrid_and_flex_info
+                                .def_types
+                                .extend(def_pattern_state.headers);
+                        } else {
+                            rigid_info.vars.extend(&new_rigid_variables);
 
-                        rigid_info.constraints.push(constraints.let_constraint(
-                            new_rigid_variables,
-                            def_pattern_state.vars,
-                            [], // no headers introduced (at this level)
-                            def_con,
-                            Constraint::True,
-                        ));
-                        rigid_info.def_types.extend(def_pattern_state.headers);
+                            rigid_info.constraints.push(constraints.let_constraint(
+                                new_rigid_variables,
+                                def_pattern_state.vars,
+                                [], // no headers introduced (at this level)
+                                def_con,
+                                Constraint::True,
+                            ));
+                            rigid_info.def_types.extend(def_pattern_state.headers);
+                        }
                     }
                 }
             }
@@ -3241,28 +3258,37 @@ pub fn rec_defs_help(
     }
 
     // Strategy for recursive defs:
-    // 1. Let-generalize the type annotations we know; these are the source of truth we'll solve
-    //    everything else with. If there are circular type errors here, they will be caught during
-    //    the let-generalization.
-    // 2. Introduce all symbols of the untyped defs, but don't generalize them yet. Now, solve
-    //    the untyped defs' bodies. This way, when checking something like
+    //
+    // 1. Let-generalize all rigid annotations. These are the source of truth we'll solve
+    //    everything else with. If there are circular type errors here, they will be caught
+    //    during the let-generalization.
+    //
+    // 2. Introduce all symbols of the flex + hybrid defs, but don't generalize them yet.
+    //    Now, solve those defs' bodies. This way, when checking something like
     //      f = \x -> f [x]
     //    we introduce `f: b -> c`, then constrain the call `f [x]`,
     //    forcing `b -> c ~ List b -> c` and correctly picking up a recursion error.
     //    Had we generalized `b -> c`, the call `f [x]` would have been generalized, and this
     //    error would not be found.
-    // 3. Now properly let-generalize the untyped body defs, since we now know their types and
+    //
+    //    - This works just as well for mutually recursive defs.
+    //    - For hybrid defs, we also ensure solved types agree with what the
+    //      elaborated parts of their type annotations demand.
+    //
+    // 3. Now properly let-generalize the flex + hybrid defs, since we now know their types and
     //    that they don't have circular type errors.
+    //
     // 4. Solve the bodies of the typed body defs, and check that they agree the types of the type
     //    annotation.
+    //
     // 5. Solve the rest of the program that happens after this recursive def block.
 
     // 2. Solve untyped defs without generalization of their symbols.
-    let untyped_body_constraints = constraints.and_constraint(flex_info.constraints);
+    let untyped_body_constraints = constraints.and_constraint(hybrid_and_flex_info.constraints);
     let untyped_def_symbols_constr = constraints.let_constraint(
         [],
         [],
-        flex_info.def_types.clone(),
+        hybrid_and_flex_info.def_types.clone(),
         Constraint::True,
         untyped_body_constraints,
     );
@@ -3286,8 +3312,8 @@ pub fn rec_defs_help(
     // 3. Properly generalize untyped defs after solving them.
     let inner = constraints.let_constraint(
         [],
-        flex_info.vars,
-        flex_info.def_types,
+        hybrid_and_flex_info.vars,
+        hybrid_and_flex_info.def_types,
         untyped_def_symbols_constr,
         // 4 + 5. Solve the typed body defs, and the rest of the program.
         typed_body_and_final_constr,

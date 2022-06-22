@@ -6830,4 +6830,35 @@ mod solve_expr {
             &[r#"[\{} -> {}, \{} -> {}] : List ({}* -[[1(1), 2(2)]]-> {})"#],
         )
     }
+
+    #[test]
+    fn self_recursion_with_inference_var() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                f : _ -> _
+                f = \_ -> if False then "" else f ""
+
+                f
+                "#
+            ),
+            "Str -> Str",
+        )
+    }
+
+    #[test]
+    fn mutual_recursion_with_inference_var() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                f : _ -> Str
+                f = \s -> g s
+                g = \s -> if True then s else f s
+
+                g
+                "#
+            ),
+            "Str -> Str",
+        )
+    }
 }

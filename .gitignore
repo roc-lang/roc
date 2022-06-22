@@ -5,6 +5,7 @@ zig-cache
 .envrc
 *.rs.bk
 *.o
+*.obj
 *.tmp
 *.wasm
 
