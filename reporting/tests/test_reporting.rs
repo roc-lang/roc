@@ -9457,7 +9457,7 @@ All branches in an `if` must have the same type!
             r#"
             ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-            Something is off with the body of this definition:
+            Something is off with the body of the `hash` definition:
 
             8│  hash : Id -> U32
             9│  hash = \@Id n -> n
@@ -9476,7 +9476,7 @@ All branches in an `if` must have the same type!
             Something is off with this specialization of `hash`:
 
             9│  hash = \@Id n -> n
-                ^^^^
+                       ^^^^^^^^^^^
 
             This value is a declared specialization of type:
 
@@ -10061,9 +10061,9 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-            cycle_through_non_function_top_level,
-            indoc!(
-                r#"
+        cycle_through_non_function_top_level,
+        indoc!(
+            r#"
                 app "test" provides [t2] to "./platform"
 
                 force : ({} -> I64) -> I64
@@ -10073,9 +10073,9 @@ All branches in an `if` must have the same type!
 
                 t2 = t1 {}
                 "#
-            ),
-            indoc!(
-                r#"
+        ),
+        indoc!(
+            r#"
                 ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
 
                 The `t1` definition is causing a very tricky infinite loop:
@@ -10092,22 +10092,14 @@ All branches in an `if` must have the same type!
                     │     t2
                     └─────┘
                 "#
-            )
-        );
+        )
+    );
 
-    fn derive_non_builtin_ability() {
-        new_report_problem_as(
-            "derive_non_builtin_ability",
-            indoc!(
-                r#"
-                app "test" provides [A] to "./platform"
-=======
     test_report!(
         derive_non_builtin_ability,
         indoc!(
             r#"
             app "test" provides [A] to "./platform"
->>>>>>> origin/trunk
 
             Ab has ab : a -> a | a has Ab
 

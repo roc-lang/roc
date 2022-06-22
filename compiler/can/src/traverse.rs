@@ -7,7 +7,7 @@ use roc_types::subs::Variable;
 use crate::{
     abilities::AbilitiesStore,
     def::{Annotation, Declaration, Def},
-    expr::{self, AccessorData, ClosureData, Declarations, Expr, Field},
+    expr::{self, AccessorData, AnnotatedMark, ClosureData, Declarations, Expr, Field},
     pattern::{DestructType, Pattern, RecordDestruct},
 };
 
@@ -24,17 +24,54 @@ pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
 
     for (index, tag) in decls.declarations.iter().enumerate() {
         match tag {
-            Value => todo!(),
+            Value => {
+                let loc_expr = &decls.expressions[index];
+
+                visitor.visit_expr(&loc_expr.value, loc_expr.region, Variable::BOOL);
+                if let Some(annot) = &decls.annotations[index] {
+                    visitor.visit_annotation(annot);
+                }
+            }
             Expectation => {
                 let loc_condition = &decls.expressions[index];
 
                 visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::BOOL);
             }
-            Function(_) => todo!(),
-            Recursive(_) => todo!(),
-            TailRecursive(_) => todo!(),
-            Destructure(_) => todo!(),
-            MutualRecursion { length, cycle_mark } => todo!(),
+            Function(function_index)
+            | Recursive(function_index)
+            | TailRecursive(function_index) => {
+                let loc_body = &decls.expressions[index];
+
+                let function_def = &decls.function_bodies[function_index.index() as usize];
+
+                walk_closure_help(
+                    visitor,
+                    &function_def.value.arguments,
+                    loc_body,
+                    function_def.value.return_type,
+                )
+            }
+            Destructure(destructure_index) => {
+                let destructure = &decls.destructs[destructure_index.index() as usize];
+                let loc_pattern = &destructure.loc_pattern;
+
+                let loc_expr = &decls.expressions[index];
+
+                let opt_var = match loc_pattern.value {
+                    Pattern::Identifier(..) | Pattern::AbilityMemberSpecialization { .. } => {
+                        Some(decls.variables[index])
+                    }
+                    _ => loc_pattern.value.opt_var(),
+                };
+
+                visitor.visit_pattern(&loc_pattern.value, loc_pattern.region, opt_var);
+                visitor.visit_expr(&loc_expr.value, loc_expr.region, Variable::BOOL);
+
+                if let Some(annot) = &decls.annotations[index] {
+                    visitor.visit_annotation(annot);
+                }
+            }
+            MutualRecursion { .. } => { /* ignore */ }
         }
     }
 }
@@ -212,11 +249,20 @@ pub fn walk_closure<V: Visitor>(visitor: &mut V, clos: &ClosureData) {
         ..
     } = clos;
 
+    walk_closure_help(visitor, arguments, loc_body, *return_type)
+}
+
+fn walk_closure_help<V: Visitor>(
+    visitor: &mut V,
+    arguments: &[(Variable, AnnotatedMark, Loc<Pattern>)],
+    loc_body: &Loc<Expr>,
+    return_type: Variable,
+) {
     arguments.iter().for_each(|(var, _exhaustive_mark, arg)| {
         visitor.visit_pattern(&arg.value, arg.region, Some(*var))
     });
 
-    visitor.visit_expr(&loc_body.value, loc_body.region, *return_type);
+    visitor.visit_expr(&loc_body.value, loc_body.region, return_type);
 }
 
 #[inline(always)]
@@ -434,7 +480,7 @@ pub fn find_type_at(region: Region, decls: &Declarations) -> Option<Variable> {
 /// is unknown, (Foo, foo) is returned. Otherwise [None] is returned.
 pub fn find_ability_member_and_owning_type_at(
     region: Region,
-    decls: &[Declaration],
+    decls: &Declarations,
     abilities_store: &AbilitiesStore,
 ) -> Option<(Symbol, Symbol)> {
     let mut visitor = Finder {
