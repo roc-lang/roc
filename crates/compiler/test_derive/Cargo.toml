@@ -23,7 +23,6 @@ roc_reporting = { path = "../../reporting" }
 roc_constrain = { path = "../constrain" }
 roc_region = { path = "../region" }
 roc_solve = { path = "../solve" }
-roc_late_solve = { path = "../late_solve" }
 roc_debug_flags = { path = "../debug_flags" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
 lazy_static = "1.4.0"
