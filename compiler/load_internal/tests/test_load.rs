@@ -229,27 +229,6 @@ mod test_load {
         loaded_module
     }
 
-    fn expect_def(
-        interns: &Interns,
-        subs: &mut Subs,
-        home: ModuleId,
-        def: &Def,
-        expected_types: &mut HashMap<&str, &str>,
-    ) {
-        for (symbol, expr_var) in &def.pattern_vars {
-            let actual_str =
-                name_and_print_var(*expr_var, subs, home, interns, DebugPrint::NOTHING);
-            let fully_qualified = symbol.fully_qualified(interns, home).to_string();
-            let expected_type = expected_types
-                .remove(fully_qualified.as_str())
-                .unwrap_or_else(|| {
-                    panic!("Defs included an unexpected symbol: {:?}", fully_qualified)
-                });
-
-            assert_eq!((&symbol, expected_type), (&symbol, actual_str.as_str()));
-        }
-    }
-
     fn expect_types(mut loaded_module: LoadedModule, mut expected_types: HashMap<&str, &str>) {
         let home = loaded_module.module_id;
         let mut subs = loaded_module.solved.into_inner();
