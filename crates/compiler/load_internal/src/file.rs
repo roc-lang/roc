@@ -484,12 +484,13 @@ fn start_phase<'a>(
                             abilities_store,
                         } = found_specializations;
 
-                        // Safety: by this point every module should have been solved, so there is no need
-                        // for our exposed types anymore, but the world does need them.
-                        let our_exposed_types = unsafe { state.exposed_types.remove(&module_id) }
+                        let our_exposed_types = state
+                            .exposed_types
+                            .get(&module_id)
                             .unwrap_or_else(|| {
                                 internal_error!("Exposed types for {:?} missing", module_id)
-                            });
+                            })
+                            .clone();
 
                         // Add our abilities to the world.
                         state.world_abilities.insert(
