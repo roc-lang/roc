@@ -142,7 +142,7 @@ pub struct IAbilitiesStore<Phase: ResolvePhase> {
 
     /// Resolved specializations for a symbol. These might be ephemeral (known due to type solving),
     /// or resolved on-the-fly during mono.
-    resolved_specializations: MutMap<NonZeroU32, Symbol>,
+    resolved_specializations: MutMap<SpecializationId, Symbol>,
 }
 
 impl<Phase: ResolvePhase> Default for IAbilitiesStore<Phase> {
@@ -374,7 +374,6 @@ impl IAbilitiesStore<Resolved> {
     }
 
     pub fn insert_resolved(&mut self, id: SpecializationId, specialization: Symbol) {
-        let id = id.0.expect("attempting to resolve a no-specialization id");
         let old_specialization = self.resolved_specializations.insert(id, specialization);
 
         debug_assert!(
@@ -385,7 +384,7 @@ impl IAbilitiesStore<Resolved> {
     }
 
     pub fn get_resolved(&self, id: SpecializationId) -> Option<Symbol> {
-        id.0.and_then(|id| self.resolved_specializations.get(&id).copied())
+        self.resolved_specializations.get(&id).copied()
     }
 }
 
