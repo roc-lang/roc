@@ -7,6 +7,7 @@ use bumpalo::Bump;
 use roc_can::abilities::AbilitiesStore;
 use roc_collections::MutMap;
 use roc_derive_key::GlobalDerivedSymbols;
+use roc_error_macros::internal_error;
 use roc_module::symbol::ModuleId;
 use roc_solve::solve::{compact_lambda_sets_of_vars, Phase, Pools};
 use roc_types::subs::{Content, FlatType, LambdaSet};
@@ -63,7 +64,9 @@ impl WorldAbilities {
         F: FnMut(&AbilitiesStore) -> T,
     {
         let world = self.world.read().unwrap();
-        let (module_store, _module_types) = world.get(&module).unwrap();
+        let (module_store, _module_types) = world
+            .get(&module)
+            .unwrap_or_else(|| internal_error!("Module {:?} not found in world abilities", module));
         f(module_store)
     }
 
