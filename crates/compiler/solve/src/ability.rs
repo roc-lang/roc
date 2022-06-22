@@ -55,7 +55,7 @@ pub enum Unfulfilled {
     },
 }
 
-/// Indexes a deriving of an ability for an opaque type.
+/// Indexes a requested deriving of an ability for an opaque type.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct RequestedDeriveKey {
     pub opaque: Symbol,
