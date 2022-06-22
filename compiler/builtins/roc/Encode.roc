@@ -21,6 +21,8 @@ interface Encode
             bool,
             string,
             list,
+            record,
+            tag,
             custom,
             appendWith,
             append,
@@ -51,6 +53,8 @@ EncoderFormatting has
     bool : Bool -> Encoder fmt | fmt has EncoderFormatting
     string : Str -> Encoder fmt | fmt has EncoderFormatting
     list : List elem, (elem -> Encoder fmt) -> Encoder fmt | fmt has EncoderFormatting
+    record : List { key : Str, value : Encoder fmt } -> Encoder fmt | fmt has EncoderFormatting
+    tag : Str, List (Encoder fmt) -> Encoder fmt | fmt has EncoderFormatting
 
 custom : (List U8, fmt -> List U8) -> Encoder fmt | fmt has EncoderFormatting
 custom = \encoder -> @Encoder encoder

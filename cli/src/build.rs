@@ -176,11 +176,15 @@ pub fn build_file<'a>(
             "Find Specializations",
             module_timing.find_specializations,
         );
-        report_timing(
-            buf,
-            "Make Specializations",
-            module_timing.make_specializations,
-        );
+        let multiple_make_specializations_passes = module_timing.make_specializations.len() > 1;
+        for (i, pass_time) in module_timing.make_specializations.iter().enumerate() {
+            let suffix = if multiple_make_specializations_passes {
+                format!(" (Pass {})", i)
+            } else {
+                String::new()
+            };
+            report_timing(buf, &format!("Make Specializations{}", suffix), *pass_time);
+        }
         report_timing(buf, "Other", module_timing.other());
         buf.push('\n');
         report_timing(buf, "Total", module_timing.total());
@@ -460,16 +464,6 @@ pub fn check_file(
         report_timing(buf, "Canonicalize", module_timing.canonicalize);
         report_timing(buf, "Constrain", module_timing.constrain);
         report_timing(buf, "Solve", module_timing.solve);
-        report_timing(
-            buf,
-            "Find Specializations",
-            module_timing.find_specializations,
-        );
-        report_timing(
-            buf,
-            "Make Specializations",
-            module_timing.make_specializations,
-        );
         report_timing(buf, "Other", module_timing.other());
         buf.push('\n');
         report_timing(buf, "Total", module_timing.total());

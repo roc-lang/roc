@@ -1321,10 +1321,12 @@ define_builtins! {
         17 ENCODE_BOOL: "bool"
         18 ENCODE_STRING: "string"
         19 ENCODE_LIST: "list"
-        20 ENCODE_CUSTOM: "custom"
-        21 ENCODE_APPEND_WITH: "appendWith"
-        22 ENCODE_APPEND: "append"
-        23 ENCODE_TO_BYTES: "toBytes"
+        20 ENCODE_RECORD: "record"
+        21 ENCODE_TAG: "tag"
+        22 ENCODE_CUSTOM: "custom"
+        23 ENCODE_APPEND_WITH: "appendWith"
+        24 ENCODE_APPEND: "append"
+        25 ENCODE_TO_BYTES: "toBytes"
     }
     10 JSON: "Json" => {
         0 JSON_JSON: "Json"

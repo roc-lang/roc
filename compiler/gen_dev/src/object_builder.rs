@@ -330,7 +330,9 @@ fn build_proc_symbol<'a, B: Backend<'a>>(
     let base_name = backend.symbol_to_string(sym, layout_id);
 
     let fn_name = if backend.env().exposed_to_host.contains(&sym) {
-        format!("roc_{}_exposed", base_name)
+        layout_ids
+            .get_toplevel(sym, &layout)
+            .to_exposed_symbol_string(sym, backend.interns())
     } else {
         base_name
     };

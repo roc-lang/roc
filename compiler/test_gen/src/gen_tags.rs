@@ -129,7 +129,7 @@ fn applied_tag_just_enum() {
 }
 
 // #[test]
-// #[cfg(any(feature = "gen-llvm"))]
+// #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 // fn raw_result() {
 //     assert_evals_to!(
 //         indoc!(
@@ -201,7 +201,7 @@ fn basic_enum() {
 }
 
 //    #[test]
-// #[cfg(any(feature = "gen-llvm"))]
+// #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 //    fn linked_list_empty() {
 //        assert_evals_to!(
 //            indoc!(
@@ -220,7 +220,7 @@ fn basic_enum() {
 //    }
 //
 //    #[test]
-// #[cfg(any(feature = "gen-llvm"))]
+// #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 //    fn linked_list_singleton() {
 //        assert_evals_to!(
 //            indoc!(
@@ -239,7 +239,7 @@ fn basic_enum() {
 //    }
 //
 //    #[test]
-// #[cfg(any(feature = "gen-llvm"))]
+// #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 //    fn linked_list_is_empty() {
 //        assert_evals_to!(
 //            indoc!(
@@ -1099,7 +1099,7 @@ fn phantom_polymorphic_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn result_never() {
     assert_evals_to!(
         indoc!(
@@ -1165,7 +1165,7 @@ fn newtype_wrapper() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn applied_tag_function() {
     assert_evals_to!(
         indoc!(
@@ -1199,7 +1199,7 @@ fn applied_tag_function_result() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[ignore = "This test has incorrect refcounts: https://github.com/rtfeldman/roc/issues/2968"]
 fn applied_tag_function_linked_list() {
     assert_evals_to!(
@@ -1279,7 +1279,7 @@ fn recursive_tag_union_into_flat_tag_union() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn monomorphized_tag() {
     assert_evals_to!(
         indoc!(
@@ -1296,7 +1296,7 @@ fn monomorphized_tag() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn monomorphized_applied_tag() {
     assert_evals_to!(
         indoc!(
@@ -1318,7 +1318,7 @@ fn monomorphized_applied_tag() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn monomorphized_tag_with_polymorphic_arg() {
     assert_evals_to!(
         indoc!(
@@ -1350,7 +1350,7 @@ fn monomorphized_tag_with_polymorphic_arg() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn monomorphized_tag_with_polymorphic_arg_and_monomorphic_arg() {
     assert_evals_to!(
         indoc!(
@@ -1384,7 +1384,7 @@ fn monomorphized_tag_with_polymorphic_arg_and_monomorphic_arg() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn issue_2365_monomorphize_tag_with_non_empty_ext_var() {
     assert_evals_to!(
         indoc!(
@@ -1514,7 +1514,7 @@ fn issue_2458() {
 
 #[test]
 #[ignore = "See https://github.com/rtfeldman/roc/issues/2466"]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn issue_2458_deep_recursion_var() {
     assert_evals_to!(
         indoc!(

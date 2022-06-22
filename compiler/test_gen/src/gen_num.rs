@@ -196,7 +196,7 @@ fn i8_hex_int_alias() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn u128_signed_int_alias() {
     assert_evals_to!(
         indoc!(
@@ -277,7 +277,7 @@ fn u8_signed_int_alias() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn u128_hex_int_alias() {
     assert_evals_to!(
         indoc!(
@@ -451,7 +451,7 @@ fn f64_float_alias() {
     );
 }
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn f32_float_alias() {
     assert_evals_to!(
         indoc!(
@@ -468,7 +468,7 @@ fn f32_float_alias() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn f64_sqrt() {
     assert_evals_to!(
         indoc!(
@@ -484,7 +484,7 @@ fn f64_sqrt() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn f64_log() {
     assert_evals_to!(
         indoc!(
@@ -498,7 +498,7 @@ fn f64_log() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn f64_log_checked_one() {
     assert_evals_to!(
         indoc!(
@@ -514,7 +514,7 @@ fn f64_log_checked_one() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn f64_sqrt_zero() {
     assert_evals_to!(
         indoc!(
@@ -530,7 +530,7 @@ fn f64_sqrt_zero() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn f64_sqrt_checked_negative() {
     assert_evals_to!(
         indoc!(
@@ -546,7 +546,7 @@ fn f64_sqrt_checked_negative() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn f64_log_checked_zero() {
     assert_evals_to!(
         indoc!(
@@ -562,7 +562,7 @@ fn f64_log_checked_zero() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn f64_log_negative() {
     assert_evals_to!(
         indoc!(
@@ -722,7 +722,7 @@ fn gen_wrap_add_nums() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_div_f64() {
     assert_evals_to!(
         indoc!(
@@ -1032,7 +1032,7 @@ fn gen_mul_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_div_i64() {
     assert_evals_to!(
         indoc!(
@@ -1078,7 +1078,7 @@ fn gen_div_checked_by_zero_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_rem_i64() {
     assert_evals_to!(
         indoc!(
@@ -1170,21 +1170,21 @@ fn gen_is_even() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn sin() {
     assert_evals_to!("Num.sin 0", 0.0, f64);
     assert_evals_to!("Num.sin 1.41421356237", 0.9877659459922529, f64);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn cos() {
     assert_evals_to!("Num.cos 0", 1.0, f64);
     assert_evals_to!("Num.cos 3.14159265359", -1.0, f64);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn tan() {
     assert_evals_to!("Num.tan 0", 0.0, f64);
     assert_evals_to!("Num.tan 1", 1.557407724654902, f64);
@@ -1634,7 +1634,7 @@ fn float_compare() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn pow() {
     assert_evals_to!("Num.pow 2.0 2.0", 4.0, f64);
 }
@@ -2487,7 +2487,7 @@ num_conversion_tests! {
 macro_rules! to_int_checked_tests {
     ($($fn:expr, $typ:ty, ($($test_name:ident, $input:expr, $output:expr)*))*) => {$($(
         #[test]
-        #[cfg(any(feature = "gen-llvm"))]
+        #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
         fn $test_name() {
             let sentinel = 23;
             // Some n = Ok n, None = OutOfBounds
@@ -2647,7 +2647,7 @@ fn is_multiple_of() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn bytes_to_u16_clearly_out_of_bounds() {
     assert_evals_to!(
         indoc!(
@@ -2664,7 +2664,7 @@ fn bytes_to_u16_clearly_out_of_bounds() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn bytes_to_u16_subtly_out_of_bounds() {
     assert_evals_to!(
         indoc!(
@@ -2681,7 +2681,7 @@ fn bytes_to_u16_subtly_out_of_bounds() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn bytes_to_u32_clearly_out_of_bounds() {
     assert_evals_to!(
         indoc!(
@@ -2698,7 +2698,7 @@ fn bytes_to_u32_clearly_out_of_bounds() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn bytes_to_u32_subtly_out_of_bounds() {
     assert_evals_to!(
         indoc!(
@@ -2715,7 +2715,7 @@ fn bytes_to_u32_subtly_out_of_bounds() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn bytes_to_u16_max_u8s() {
     assert_evals_to!(
         indoc!(
@@ -2731,7 +2731,7 @@ fn bytes_to_u16_max_u8s() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn bytes_to_u16_min_u8s() {
     assert_evals_to!(
         indoc!(
@@ -2747,7 +2747,7 @@ fn bytes_to_u16_min_u8s() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn bytes_to_u16_random_u8s() {
     assert_evals_to!(
         indoc!(
@@ -2763,7 +2763,7 @@ fn bytes_to_u16_random_u8s() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn bytes_to_u32_min_u8s() {
     assert_evals_to!(
         indoc!(
@@ -2779,7 +2779,7 @@ fn bytes_to_u32_min_u8s() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn bytes_to_u32_max_u8s() {
     assert_evals_to!(
         indoc!(
@@ -2795,7 +2795,7 @@ fn bytes_to_u32_max_u8s() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn bytes_to_u32_random_u8s() {
     assert_evals_to!(
         indoc!(
@@ -3193,7 +3193,7 @@ fn monomorphized_ints_names_dont_conflict() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn monomorphized_ints_aliased() {
     assert_evals_to!(
         indoc!(
@@ -3290,7 +3290,7 @@ fn upcast_of_int_checked_is_zext() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn modulo_of_unsigned() {
     assert_evals_to!(
         indoc!(
@@ -3304,7 +3304,7 @@ fn modulo_of_unsigned() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn div_of_unsigned() {
     assert_evals_to!(
         indoc!(

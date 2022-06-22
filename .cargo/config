@@ -9,6 +9,10 @@ test-gen-wasm = "test -p roc_gen_wasm -p test_gen --no-default-features --featur
 # lto=fat       Spend extra effort on link-time optimization across crates
 rustflags = ["-Copt-level=s", "-Clto=fat"]
 
+[target.'cfg(not(target = "wasm32-unknown-unknown"))']
+# Sets the avx, avx2, sse2 and sse4.2 target-features correctly based on your CPU.
+rustflags = ["-Ctarget-cpu=native"]
+
 [env]
 # Gives us the path of the workspace root for use in cargo tests without having
 # to compute it per-package.
@@ -19,6 +23,7 @@ ROC_WORKSPACE_DIR = { value = "", relative = true }
 # Set = "1" to turn a debug flag on.
 ROC_PRETTY_PRINT_ALIAS_CONTENTS     = "0"
 ROC_PRINT_UNIFICATIONS              = "0"
+ROC_PRINT_UNIFICATIONS_DERIVED      = "0"
 ROC_PRINT_MISMATCHES                = "0"
 ROC_VERIFY_RIGID_LET_GENERALIZED    = "0"
 ROC_PRINT_IR_AFTER_SPECIALIZATION   = "0"

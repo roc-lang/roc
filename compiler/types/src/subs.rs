@@ -1078,14 +1078,6 @@ impl ExhaustiveMark {
         Self(Variable::EMPTY_TAG_UNION)
     }
 
-    pub fn variable_for_introduction(&self) -> Variable {
-        debug_assert!(
-            self.0 != Variable::EMPTY_TAG_UNION,
-            "Attempting to introduce known mark"
-        );
-        self.0
-    }
-
     pub fn set_non_exhaustive(&self, subs: &mut Subs) {
         subs.set_content(self.0, Content::Error);
     }
@@ -1108,14 +1100,6 @@ impl RedundantMark {
     // Otherwise you will get unpleasant unification errors.
     pub fn known_non_redundant() -> Self {
         Self(Variable::EMPTY_TAG_UNION)
-    }
-
-    pub fn variable_for_introduction(&self) -> Variable {
-        debug_assert!(
-            self.0 != Variable::EMPTY_TAG_UNION,
-            "Attempting to introduce known mark"
-        );
-        self.0
     }
 
     pub fn set_redundant(&self, subs: &mut Subs) {
@@ -1282,6 +1266,10 @@ define_const_var! {
     :pub F64,
 
     :pub DEC,
+
+    // The following are abound in derived abilities, so we cache them.
+    :pub STR,
+    :pub LIST_U8,
 }
 
 impl Variable {
@@ -1322,6 +1310,8 @@ impl Variable {
             Symbol::NUM_F32 => Some(Variable::F32),
 
             Symbol::NUM_DEC => Some(Variable::DEC),
+
+            Symbol::STR_STR => Some(Variable::STR),
 
             _ => None,
         }
@@ -1699,6 +1689,20 @@ impl Subs {
             )
         });
 
+        subs.set_content(Variable::STR, {
+            Content::Structure(FlatType::Apply(
+                Symbol::STR_STR,
+                VariableSubsSlice::default(),
+            ))
+        });
+
+        let u8_slice =
+            VariableSubsSlice::insert_into_subs(&mut subs, std::iter::once(Variable::U8));
+        subs.set_content(
+            Variable::LIST_U8,
+            Content::Structure(FlatType::Apply(Symbol::LIST_LIST, u8_slice)),
+        );
+
         subs
     }
 
@@ -1743,8 +1747,8 @@ impl Subs {
 
     /// Unions two keys without the possibility of failure.
     pub fn union(&mut self, left: Variable, right: Variable, desc: Descriptor) {
-        let l_root = self.utable.inlined_get_root_key(left);
-        let r_root = self.utable.inlined_get_root_key(right);
+        let l_root = self.utable.root_key(left);
+        let r_root = self.utable.root_key(right);
 
         // NOTE this swapping is intentional! most of our unifying commands are based on the elm
         // source, but unify_roots is from `ena`, not the elm source. Turns out that they have
@@ -1799,7 +1803,7 @@ impl Subs {
 
     #[inline(always)]
     pub fn get_root_key(&mut self, key: Variable) -> Variable {
-        self.utable.inlined_get_root_key(key)
+        self.utable.root_key(key)
     }
 
     #[inline(always)]
@@ -1809,7 +1813,7 @@ impl Subs {
 
     #[inline(always)]
     pub fn set(&mut self, key: Variable, r_value: Descriptor) {
-        let l_key = self.utable.inlined_get_root_key(key);
+        let l_key = self.utable.root_key(key);
 
         // self.utable.update_value(l_key, |node| node.value = r_value);
         self.utable.set_descriptor(l_key, r_value)
@@ -4607,7 +4611,7 @@ struct CopyImportEnv<'a> {
 }
 
 pub fn copy_import_to(
-    source: &mut Subs, // mut to set the copy
+    source: &mut Subs, // mut to set the copy. TODO: use a separate copy table to avoid mut
     target: &mut Subs,
     var: Variable,
     rank: Rank,

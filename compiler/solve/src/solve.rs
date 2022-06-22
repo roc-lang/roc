@@ -792,7 +792,9 @@ fn solve(
                         let result = offenders.len();
 
                         if result > 0 {
-                            dbg!(&subs, &offenders, &let_con.def_types);
+                            eprintln!("subs = {:?}", &subs);
+                            eprintln!("offenders = {:?}", &offenders);
+                            eprintln!("let_con.def_types = {:?}", &let_con.def_types);
                         }
 
                         result
@@ -1873,7 +1875,7 @@ fn compact_lambda_set<P: Phase>(
                 //   Default has default : {} -> a | a has Default
                 //
                 //   {a, b} = default {}
-                //   #        ^^^^^^^ {} -[{a: t1, b: t2}:default:1]
+                //   #        ^^^^^^^ {} -[{a: t1, b: t2}:default:1]-> {a: t1, b: t2}
                 new_unspecialized.push(uls);
                 continue;
             }

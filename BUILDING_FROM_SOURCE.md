@@ -4,11 +4,11 @@ Installation should be a smooth process, let us now if anything does not work pe
 
 ## Using Nix
 
+We highly recommend Using [nix](https://nixos.org/download.html) to quickly install all dependencies necessary to build roc.
+
 ### On Linux x86_64/aarch64 or MacOS aarch64/arm64/x86_64
 
 #### Install
-
-We highly recommend Using [nix](https://nixos.org/download.html) to quickly install all dependencies necessary to build roc.
 
 If you are running ArchLinux or a derivative like Manjaro, you'll need to run `sudo sysctl -w kernel.unprivileged_userns_clone=1` before installing nix.
 
@@ -174,14 +174,14 @@ export CPPFLAGS="-I/usr/local/opt/llvm/include"
 Installing LLVM's prebuilt binaries doesn't seem to be enough for the `llvm-sys` crate that Roc depends on, so I had to follow the steps below:
 
 1. I downloaded and installed [Build Tools for Visual Studio 2019](https://visualstudio.microsoft.com/thank-you-downloading-visual-studio/?sku=BuildTools&rel=16) (a full Visual Studio install should work too; the Build Tools are just the CLI tools, which is all I wanted)
-1. Download the custom LLVM 7z archive [here](https://github.com/PLC-lang/llvm-package-windows/releases/tag/v13.0.1).
+1. Download the custom LLVM 7z archive [here](https://github.com/PLC-lang/llvm-package-windows/releases/tag/v13.0.0).
 1. [Download 7-zip](https://www.7-zip.org/) to be able to extract this archive.
 1. Extract the 7z file to where you want to permanently keep the folder.
 1. In powershell, set the `LLVM_SYS_130_PREFIX` environment variable (check [here](https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables?view=powershell-7.2#saving-changes-to-environment-variables) to make this a permanent environment variable):
 ```
 [Environment]::SetEnvironmentVariable(
    "Path",
-   [Environment]::GetEnvironmentVariable("Path", "User") + ";C:\Users\anton\Downloads\LLVM-13.0.1-win64\bin",
+   [Environment]::GetEnvironmentVariable("Path", "User") + ";C:\Users\anton\Downloads\LLVM-13.0.0-win64\bin",
    "User"
 )
 ```

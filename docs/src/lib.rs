@@ -749,8 +749,8 @@ fn doc_url<'a>(
             Err(_) => {
                 // TODO return Err here
                 panic!(
-                "Tried to generate an automatic link in docs for symbol `{}`, but that symbol was not in scope in this module. Scope was: {:?}",
-                ident, scope
+                "Tried to generate an automatic link in docs for symbol `{}`, but that symbol was not in scope in this module.",
+                ident
             );
             }
         }

@@ -364,7 +364,7 @@ pub fn examples_dir(dir_name: &str) -> PathBuf {
 
     // Descend into examples/{dir_name}
     path.push("examples");
-    path.push(dir_name);
+    path.extend(dir_name.split("/")); // Make slashes cross-platform
 
     path
 }
@@ -386,7 +386,7 @@ pub fn fixtures_dir(dir_name: &str) -> PathBuf {
     path.push("cli");
     path.push("tests");
     path.push("fixtures");
-    path.push(dir_name);
+    path.extend(dir_name.split("/")); // Make slashes cross-platform
 
     path
 }
