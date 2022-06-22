@@ -2606,18 +2606,7 @@ fn constrain_recursive_declarations(
     body_con: Constraint,
     cycle_mark: IllegalCycleMark,
 ) -> Constraint {
-    let length = range.end - range.start;
-
-    rec_defs_help_simple(
-        constraints,
-        env,
-        declarations,
-        range,
-        body_con,
-        Info::with_capacity(length),
-        Info::with_capacity(length),
-        cycle_mark,
-    )
+    rec_defs_help_simple(constraints, env, declarations, range, body_con, cycle_mark)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2814,11 +2803,17 @@ pub fn rec_defs_help_simple(
     declarations: &Declarations,
     range: Range<usize>,
     body_con: Constraint,
-    mut rigid_info: Info,
-    mut flex_info: Info,
     cycle_mark: IllegalCycleMark,
 ) -> Constraint {
     let length = range.end - range.start;
+
+    // We partition recursive defs into three buckets:
+    //   rigid: those with fully-elaborated type annotations (no inference vars), e.g. a -> b
+    //   hybrid: those with type annotations containing an inference variable, e.g. _ -> b
+    //   flex: those without a type annotation
+    let mut rigid_info = Info::with_capacity(length);
+    let mut hybrid_and_flex_info = Info::with_capacity(length);
+
     let mut loc_symbols = Vec::with_capacity(length);
     let mut expr_regions = Vec::with_capacity(length);
 
@@ -2851,9 +2846,9 @@ pub fn rec_defs_help_simple(
 
                         let def_con = expr_con;
 
-                        flex_info.vars = vec![expr_var];
-                        flex_info.constraints.push(def_con);
-                        flex_info.def_types.insert(
+                        hybrid_and_flex_info.vars.push(expr_var);
+                        hybrid_and_flex_info.constraints.push(def_con);
+                        hybrid_and_flex_info.def_types.insert(
                             loc_symbol.value,
                             Loc::at(loc_symbol.region, Type::Variable(expr_var)),
                         );
@@ -2876,7 +2871,9 @@ pub fn rec_defs_help_simple(
                         let loc_pattern =
                             Loc::at(loc_symbol.region, Pattern::Identifier(loc_symbol.value));
 
-                        flex_info.vars.extend(new_infer_variables);
+                        let is_hybrid = !new_infer_variables.is_empty();
+
+                        hybrid_and_flex_info.vars.extend(new_infer_variables);
 
                         let annotation_expected = FromAnnotation(
                             loc_pattern.clone(),
@@ -2911,18 +2908,25 @@ pub fn rec_defs_help_simple(
                         ];
                         let def_con = constraints.and_constraint(cons);
 
-                        rigid_info.vars.extend(&new_rigid_variables);
+                        let loc_type = Loc::at(loc_symbol.region, signature);
+                        if is_hybrid {
+                            hybrid_and_flex_info.vars.extend(&new_rigid_variables);
+                            hybrid_and_flex_info.constraints.push(def_con);
+                            hybrid_and_flex_info
+                                .def_types
+                                .insert(loc_symbol.value, loc_type);
+                        } else {
+                            rigid_info.vars.extend(&new_rigid_variables);
 
-                        rigid_info.constraints.push(constraints.let_constraint(
-                            new_rigid_variables,
-                            [expr_var],
-                            [], // no headers introduced (at this level)
-                            def_con,
-                            Constraint::True,
-                        ));
-                        rigid_info
-                            .def_types
-                            .insert(loc_symbol.value, Loc::at(loc_symbol.region, signature));
+                            rigid_info.constraints.push(constraints.let_constraint(
+                                new_rigid_variables,
+                                [expr_var],
+                                [], // no headers introduced (at this level)
+                                def_con,
+                                Constraint::True,
+                            ));
+                            rigid_info.def_types.insert(loc_symbol.value, loc_type);
+                        }
                     }
                 }
             }
@@ -2936,7 +2940,7 @@ pub fn rec_defs_help_simple(
                     index,
                     f_index,
                     &mut rigid_info,
-                    &mut flex_info,
+                    &mut hybrid_and_flex_info,
                 );
             }
             _ => unreachable!(),
@@ -2961,11 +2965,11 @@ pub fn rec_defs_help_simple(
     // 5. Solve the rest of the program that happens after this recursive def block.
 
     // 2. Solve untyped defs without generalization of their symbols.
-    let untyped_body_constraints = constraints.and_constraint(flex_info.constraints);
+    let untyped_body_constraints = constraints.and_constraint(hybrid_and_flex_info.constraints);
     let untyped_def_symbols_constr = constraints.let_constraint(
         [],
         [],
-        flex_info.def_types.clone(),
+        hybrid_and_flex_info.def_types.clone(),
         Constraint::True,
         untyped_body_constraints,
     );
@@ -2981,8 +2985,8 @@ pub fn rec_defs_help_simple(
     // 3. Properly generalize untyped defs after solving them.
     let inner = constraints.let_constraint(
         [],
-        flex_info.vars,
-        flex_info.def_types,
+        hybrid_and_flex_info.vars,
+        hybrid_and_flex_info.def_types,
         untyped_def_symbols_constr,
         // 4 + 5. Solve the typed body defs, and the rest of the program.
         typed_body_and_final_constr,
@@ -3008,7 +3012,7 @@ fn constrain_recursive_defs(
     rec_defs_help(constraints, env, defs, body_con, cycle_mark)
 }
 
-pub fn rec_defs_help(
+fn rec_defs_help(
     constraints: &mut Constraints,
     env: &mut Env,
     defs: &[Def],
