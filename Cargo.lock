@@ -4103,6 +4103,7 @@ dependencies = [
  "roc_reporting",
  "roc_target",
  "roc_types",
+ "wasi_libc_sys",
  "wasm-bindgen",
  "wasm-bindgen-futures",
 ]
@@ -4915,6 +4916,7 @@ dependencies = [
  "roc_unify",
  "target-lexicon",
  "tempfile",
+ "wasi_libc_sys",
  "wasmer",
  "wasmer-wasi",
 ]

@@ -5,7 +5,9 @@ zig-cache
 .envrc
 *.rs.bk
 *.o
+*.obj
 *.tmp
+*.wasm
 
 # llvm human-readable output
 *.ll

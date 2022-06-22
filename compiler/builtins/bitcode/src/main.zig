@@ -116,6 +116,12 @@ comptime {
         num.exportAcos(T, ROC_BUILTINS ++ "." ++ NUM ++ ".acos.");
         num.exportAtan(T, ROC_BUILTINS ++ "." ++ NUM ++ ".atan.");
 
+        num.exportSin(T, ROC_BUILTINS ++ "." ++ NUM ++ ".sin.");
+        num.exportCos(T, ROC_BUILTINS ++ "." ++ NUM ++ ".cos.");
+
+        num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow.");
+        num.exportLog(T, ROC_BUILTINS ++ "." ++ NUM ++ ".log.");
+
         num.exportIsFinite(T, ROC_BUILTINS ++ "." ++ NUM ++ ".is_finite.");
     }
 }

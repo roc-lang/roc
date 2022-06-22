@@ -2,11 +2,11 @@ on:
   schedule:
     - cron:  '0 9 * * *'
 
-name: Nightly Release Build
+name: Nightly Release Linux x86_64
 
 jobs:
   build:
-    name: Test and Build
+    name: Rust tests, build and package nightly release
     runs-on: [self-hosted, i5-4690K]
     timeout-minutes: 90
     env:
@@ -18,14 +18,14 @@ jobs:
       - name: install dependencies, build, run tests, build release
         run: ./ci/safe-earthly.sh +build-nightly-release
       - name: Create pre-release with test_archive.tar.gz
-        uses: WebFreak001/deploy-nightly@v1.1.0
+        uses: Anton-4/deploy-nightly@1609d8dfe211b078674801113ab7a2ec2938b2a9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # automatically provided by github actions
         with:
           upload_url: https://uploads.github.com/repos/rtfeldman/roc/releases/51880579/assets{?name,label}
           release_id: 51880579
           asset_path: ./roc_linux_x86_64.tar.gz
-          asset_name: roc_nightly-linux_x86_64-$$.tar.gz # $$ to inserts date (YYYYMMDD) and 6 letter commit hash
+          asset_name: roc_nightly-linux_x86_64-$$.tar.gz # $$ inserts 6 char commit hash and date (YYYY-MM-DD)
           asset_content_type: application/gzip
           max_releases: 3
 

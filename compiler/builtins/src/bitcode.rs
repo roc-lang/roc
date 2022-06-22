@@ -271,13 +271,17 @@ macro_rules! int_intrinsic {
     }};
 }
 
+pub const NUM_SIN: IntrinsicName = float_intrinsic!("roc_builtins.num.sin");
+pub const NUM_COS: IntrinsicName = float_intrinsic!("roc_builtins.num.cos");
 pub const NUM_ASIN: IntrinsicName = float_intrinsic!("roc_builtins.num.asin");
 pub const NUM_ACOS: IntrinsicName = float_intrinsic!("roc_builtins.num.acos");
 pub const NUM_ATAN: IntrinsicName = float_intrinsic!("roc_builtins.num.atan");
 pub const NUM_IS_FINITE: IntrinsicName = float_intrinsic!("roc_builtins.num.is_finite");
+pub const NUM_LOG: IntrinsicName = float_intrinsic!("roc_builtins.num.log");
+pub const NUM_POW: IntrinsicName = float_intrinsic!("roc_builtins.num.pow");
+
 pub const NUM_POW_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.pow_int");
 pub const NUM_DIV_CEIL: IntrinsicName = int_intrinsic!("roc_builtins.num.div_ceil");
-
 pub const NUM_ROUND_F32: IntrinsicName = int_intrinsic!("roc_builtins.num.round_f32");
 pub const NUM_ROUND_F64: IntrinsicName = int_intrinsic!("roc_builtins.num.round_f64");
 
