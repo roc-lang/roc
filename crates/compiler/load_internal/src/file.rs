@@ -462,6 +462,7 @@ fn start_phase<'a>(
                             state.target_info,
                             &state.exposed_to_host,
                             &mut procs_base,
+                            &state.exposed_types,
                             &mut state.world_abilities,
                         );
 

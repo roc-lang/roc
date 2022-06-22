@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use bumpalo::Bump;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
-use roc_late_solve::WorldAbilities;
 use ven_pretty::DocAllocator;
 
 use crate::pretty_print::{pretty_print_def, Ctx};
