@@ -3770,6 +3770,7 @@ dependencies = [
  "roc_collections",
  "roc_constrain",
  "roc_debug_flags",
+ "roc_derive",
  "roc_derive_key",
  "roc_error_macros",
  "roc_late_solve",
