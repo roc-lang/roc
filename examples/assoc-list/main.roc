@@ -1,26 +1,39 @@
 app "main"
     packages { pf: "cli-platform" }
-    imports [pf.Stdin, pf.Stdout, pf.Task.{ await, loop, succeed }, AssocList]
+    imports [pf.Stdin, pf.Stdout, pf.Task.{ Task, await, loop, succeed }, AssocList.{ AssocList }]
     provides [main] to pf
 
+## An example program
+## that takes [AssocList] for a spin.
+
 main =
-    _ <- await (Stdout.line "Input pairs of lines which will be used to build an association.\nQuit by inputting an empty line.")
-    _assocs <- readAssociations AssocList.empty
+    _ <- await (Stdout.line "This example program takes the AssocList interface for a spin.")
+    _ <- await (Stdout.line "Input pairs of lines.\n Each pair will become an association in the first AssocList.\nFinish by inputting an empty line.")
+    assocs1 <- readAssociations AssocList.empty
+    _ <- await (Stdout.line "Fist association list:")
+    _ <- printAssociations assocs1
+
+    _ <- await (Stdout.line "Input pairs of lines.\n Each pair will become an association in the second AssocList.\nFinish by inputting an empty line.")
+    assocs2 <- readAssociations AssocList.empty
+    _ <- await (Stdout.line "Second association list:")
+    _ <- printAssociations assocs2
+
+    # TODO: Test out insertAll and normalizeWith here.
+
     succeed {}
 
 
 readAssociations = \assocs, after ->
     key <- await Stdin.line
     if key == "" then
-        _ <- printAssociations assocs
         after assocs
     else
         value <- await Stdin.line
-        res = AssocList.insert assocs key value
-        readAssociations res after
+        assocs
+          |> AssocList.insert key value
+          |> readAssociations after
 
 printAssociations = \assocs, after ->
-    _ <- await (Stdout.line "Associations right now:")
     assocs
         |> AssocList.walk (succeed {}) \_, key, value ->
             _ <- await (Stdout.line "\(key) => \(value)")
