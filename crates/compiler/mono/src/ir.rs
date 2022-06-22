@@ -2723,7 +2723,7 @@ pub fn specialize_all<'a>(
         PendingSpecializations::Making => {}
         PendingSpecializations::Finding(suspended) => {
             if env.home == ModuleId::DERIVED {
-                dbg!(&suspended);
+                // dbg!(&suspended);
             }
             specialize_suspended(env, &mut procs, layout_cache, suspended)
         }
