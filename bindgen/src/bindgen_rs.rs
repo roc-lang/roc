@@ -31,11 +31,21 @@ const RECURSIVE_TAG_UNION_CLONE: &str = r#"fn clone(&self) -> Self {
 
 const RECURSIVE_TAG_UNION_STORAGE: &str = r#"#[inline(always)]
     fn storage(&self) -> Option<&core::cell::Cell<roc_std::Storage>> {
-        if self.pointer.is_null() {
+        let mask = match std::mem::size_of::<usize>() {
+            4 => 0b11,
+            8 => 0b111,
+            _ => unreachable!(),
+        };
+
+        // NOTE: pointer provenance is probably lost here
+        let unmasked_address = (self.pointer as usize) & !mask;
+        let untagged = unmasked_address as *const core::cell::Cell<roc_std::Storage>;
+
+        if untagged.is_null() {
             None
         } else {
             unsafe {
-                Some(&*self.pointer.cast::<core::cell::Cell<roc_std::Storage>>().sub(1))
+                Some(&*untagged.sub(1))
             }
         }
     }"#;
@@ -608,9 +618,9 @@ pub struct {name} {{
                             "arg".to_string()
                         };
                     }
-                    RocType::Struct { fields, .. } => {
+                    RocType::Struct { fields, name } => {
                         let answer =
-                            tag_union_struct_help(fields.iter(), *payload_id, types, false);
+                            tag_union_struct_help(name, fields.iter(), *payload_id, types, false);
 
                         owned_ret = answer.owned_ret;
                         borrowed_ret = answer.borrowed_ret;
@@ -619,8 +629,9 @@ pub struct {name} {{
                         payload_args = answer.payload_args;
                         args_to_payload = answer.args_to_payload;
                     }
-                    RocType::TagUnionPayload { fields, .. } => {
-                        let answer = tag_union_struct_help(fields.iter(), *payload_id, types, true);
+                    RocType::TagUnionPayload { fields, name } => {
+                        let answer =
+                            tag_union_struct_help(name, fields.iter(), *payload_id, types, true);
 
                         owned_ret = answer.owned_ret;
                         borrowed_ret = answer.borrowed_ret;
@@ -640,7 +651,7 @@ pub struct {name} {{
         let align = core::mem::align_of::<{union_name}>() as u32;
 
         unsafe {{
-            let ptr = crate::roc_alloc(size, align) as *mut {union_name};
+            let ptr = roc_std::roc_alloc_refcounted::<{union_name}>();
 
             *ptr = {union_name} {{
                 {tag_name}: {args_to_payload}
@@ -671,7 +682,7 @@ pub struct {name} {{
                         opt_impl.clone(),
                         target_info,
                         format!(
-                            r#"/// Construct a tag named {tag_name}, with the appropriate payload
+                            r#"/// Construct a tag named `{tag_name}`, with the appropriate payload
     pub fn {tag_name}({payload_args}) -> Self {{{body}
     }}"#
                         ),
@@ -683,9 +694,9 @@ pub struct {name} {{
                     opt_impl.clone(),
                     target_info,
                     format!(
-                        r#"/// Unsafely assume the given {name} has a .discriminant() of {tag_name} and convert it to {tag_name}'s payload.
-    /// (Always examine .discriminant() first to make sure this is the correct variant!)
-    /// Panics in debug builds if the .discriminant() doesn't return {tag_name}.
+                        r#"/// Unsafely assume the given `{name}` has a `.discriminant()` of `{tag_name}` and convert it to `{tag_name}`'s payload.
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `{tag_name}`.
     pub unsafe fn into_{tag_name}({self_for_into}) -> {owned_ret_type} {{
         debug_assert_eq!(self.discriminant(), {discriminant_name}::{tag_name});
 
@@ -701,9 +712,9 @@ pub struct {name} {{
                     opt_impl.clone(),
                     target_info,
                     format!(
-                        r#"/// Unsafely assume the given {name} has a .discriminant() of {tag_name} and return its payload.
-    /// (Always examine .discriminant() first to make sure this is the correct variant!)
-    /// Panics in debug builds if the .discriminant() doesn't return {tag_name}.
+                        r#"/// Unsafely assume the given `{name}` has a `.discriminant()` of `{tag_name}` and return its payload.
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `{tag_name}`.
     pub unsafe fn as_{tag_name}(&self) -> {borrowed_ret_type} {{
         debug_assert_eq!(self.discriminant(), {discriminant_name}::{tag_name});
 
@@ -1391,8 +1402,9 @@ pub struct {name} {{
                 owned_ret = "payload".to_string();
                 borrowed_ret = format!("&{owned_ret}");
             }
-            RocType::Struct { fields, .. } => {
-                let answer = tag_union_struct_help(fields.iter(), non_null_payload, types, false);
+            RocType::Struct { fields, name } => {
+                let answer =
+                    tag_union_struct_help(name, fields.iter(), non_null_payload, types, false);
 
                 payload_args = answer.payload_args;
                 args_to_payload = answer.args_to_payload;
@@ -1401,8 +1413,9 @@ pub struct {name} {{
                 owned_ret_type = answer.owned_ret_type;
                 borrowed_ret_type = answer.borrowed_ret_type;
             }
-            RocType::TagUnionPayload { fields, .. } => {
-                let answer = tag_union_struct_help(fields.iter(), non_null_payload, types, true);
+            RocType::TagUnionPayload { fields, name } => {
+                let answer =
+                    tag_union_struct_help(name, fields.iter(), non_null_payload, types, true);
 
                 payload_args = answer.payload_args;
                 args_to_payload = answer.args_to_payload;
@@ -1434,7 +1447,7 @@ pub struct {name} {{
             opt_impl.clone(),
             target_info,
             format!(
-                r#"/// Construct a tag named {non_null_tag}, with the appropriate payload
+                r#"/// Construct a tag named `{non_null_tag}`, with the appropriate payload
     pub fn {non_null_tag}({payload_args}) -> Self {{
         let payload_align = core::mem::align_of::<{payload_type_name}>();
         let self_align = core::mem::align_of::<Self>();
@@ -1473,9 +1486,9 @@ pub struct {name} {{
                 opt_impl.clone(),
                 target_info,
                 format!(
-                    r#"/// Unsafely assume the given {name} has a .discriminant() of {non_null_tag} and convert it to {non_null_tag}'s payload.
-    /// (Always examine .discriminant() first to make sure this is the correct variant!)
-    /// Panics in debug builds if the .discriminant() doesn't return {non_null_tag}.
+                    r#"/// Unsafely assume the given `{name}` has a `.discriminant()` of `{non_null_tag}` and convert it to `{non_null_tag}`'s payload.
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return {non_null_tag}.
     pub unsafe fn into_{non_null_tag}(self) -> {owned_ret_type} {{
         debug_assert_eq!(self.discriminant(), {discriminant_name}::{non_null_tag});
 
@@ -1494,9 +1507,9 @@ pub struct {name} {{
             opt_impl.clone(),
             target_info,
             format!(
-                r#"/// Unsafely assume the given {name} has a .discriminant() of {non_null_tag} and return its payload.
-    /// (Always examine .discriminant() first to make sure this is the correct variant!)
-    /// Panics in debug builds if the .discriminant() doesn't return {non_null_tag}.
+                r#"/// Unsafely assume the given `{name}` has a `.discriminant()` of `{non_null_tag}` and return its payload.
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `{non_null_tag}`.
     pub unsafe fn as_{non_null_tag}(&self) -> {borrowed_ret_type} {{
         debug_assert_eq!(self.discriminant(), {discriminant_name}::{non_null_tag});
 
@@ -1707,6 +1720,7 @@ struct StructIngredients {
 }
 
 fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + PartialOrd + 'a>(
+    name: &str,
     fields: I,
     payload_id: TypeId,
     types: &Types,
@@ -1716,7 +1730,13 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
 
     sorted_fields.sort_by(|(label1, _), (label2, _)| label1.partial_cmp(label2).unwrap());
 
-    let mut ret_types = Vec::new();
+    let mut ret_types = if is_tag_union_payload {
+        // This will be a tuple we create when iterating over the fields.
+        Vec::new()
+    } else {
+        vec![name.to_string()]
+    };
+
     let mut ret_values = Vec::new();
 
     for (label, type_id) in sorted_fields.iter() {
@@ -1729,7 +1749,11 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
         };
 
         ret_values.push(format!("payload.{label}"));
-        ret_types.push(type_name(*type_id, types));
+
+        if is_tag_union_payload {
+            // Build up the tuple we'll return.
+            ret_types.push(type_name(*type_id, types));
+        }
     }
 
     let payload_type_name = type_name(payload_id, types);
@@ -1739,7 +1763,8 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
         .map(|(index, typ)| format!("arg{index}: {typ}"))
         .collect::<Vec<String>>()
         .join(", ");
-    let args_to_payload = format!(
+    let args_to_payload = if is_tag_union_payload {
+        format!(
         "core::mem::ManuallyDrop::new({payload_type_name} {{\n{}\n{INDENT}{INDENT}{INDENT}{INDENT}}})",
         sorted_fields
             .iter()
@@ -1751,19 +1776,18 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
                     indents.push_str(INDENT);
                 }
 
-                let label = if is_tag_union_payload {
-                    // Tag union payload fields need "f" prefix
-                    // because they're numbers
-                    format!("f{}", label)
-                } else {
-                    format!("{}", label)
-                };
+                // Tag union payload fields need "f" prefix
+                // because they're numbers
+                let label = format!("f{}", label);
 
                 format!("{indents}{label}: arg{index},")
             })
             .collect::<Vec<String>>()
             .join("\n")
-    );
+    )
+    } else {
+        "core::mem::ManuallyDrop::new(arg0)".to_string()
+    };
     let owned_ret;
     let borrowed_ret;
     let owned_ret_type;
@@ -1773,9 +1797,16 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
         owned_ret_type = ret_types.join("");
         borrowed_ret_type = format!("&{owned_ret_type}");
 
-        let ret_val = ret_values.first().unwrap();
-        owned_ret = format!("\n{INDENT}{INDENT}{ret_val}");
-        borrowed_ret = format!("\n{INDENT}{INDENT}&{ret_val}");
+        if is_tag_union_payload {
+            let ret_val = ret_values.first().unwrap();
+
+            owned_ret = format!("\n{INDENT}{INDENT}{ret_val}");
+            borrowed_ret = format!("\n{INDENT}{INDENT}&{ret_val}");
+        } else {
+            owned_ret = format!("\n{INDENT}{INDENT}payload");
+            // We already define `let payload = &...` so no need for an extra `&` here.
+            borrowed_ret = owned_ret.clone();
+        };
     } else {
         owned_ret_type = format!("({})", ret_types.join(", "));
         borrowed_ret_type = format!(

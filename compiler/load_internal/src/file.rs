@@ -46,7 +46,7 @@ use roc_solve::module::SolvedModule;
 use roc_solve::solve;
 use roc_target::TargetInfo;
 use roc_types::solved_types::Solved;
-use roc_types::subs::{Subs, VarStore, Variable};
+use roc_types::subs::{ExposedTypesStorageSubs, Subs, VarStore, Variable};
 use roc_types::types::{Alias, AliasKind};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
@@ -508,6 +508,7 @@ pub struct LoadedModule {
     pub dep_idents: IdentIdsByModule,
     pub exposed_aliases: MutMap<Symbol, Alias>,
     pub exposed_values: Vec<Symbol>,
+    pub exposed_types_storage: ExposedTypesStorageSubs,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
     pub documentation: MutMap<ModuleId, ModuleDocumentation>,
@@ -685,6 +686,7 @@ enum Msg<'a> {
         solved_subs: Solved<Subs>,
         exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
         exposed_aliases_by_symbol: MutMap<Symbol, (bool, Alias)>,
+        exposed_types_storage: ExposedTypesStorageSubs,
         dep_idents: IdentIdsByModule,
         documentation: MutMap<ModuleId, ModuleDocumentation>,
         abilities_store: AbilitiesStore,
@@ -875,7 +877,8 @@ pub struct ModuleTiming {
     pub constrain: Duration,
     pub solve: Duration,
     pub find_specializations: Duration,
-    pub make_specializations: Duration,
+    // indexed by make specializations pass
+    pub make_specializations: Vec<Duration>,
     // TODO pub monomorphize: Duration,
     /// Total duration will always be more than the sum of the other fields, due
     /// to things like state lookups in between phases, waiting on other threads, etc.
@@ -893,7 +896,7 @@ impl ModuleTiming {
             constrain: Duration::default(),
             solve: Duration::default(),
             find_specializations: Duration::default(),
-            make_specializations: Duration::default(),
+            make_specializations: Vec::with_capacity(2),
             start_time,
             end_time: start_time, // just for now; we'll overwrite this at the end
         }
@@ -919,8 +922,9 @@ impl ModuleTiming {
         } = self;
 
         let calculate = |t: Result<Duration, _>| -> Option<Duration> {
-            t.ok()?
-                .checked_sub(*make_specializations)?
+            make_specializations
+                .iter()
+                .fold(t.ok(), |t, pass_time| t?.checked_sub(*pass_time))?
                 .checked_sub(*find_specializations)?
                 .checked_sub(*solve)?
                 .checked_sub(*constrain)?
@@ -1402,6 +1406,7 @@ fn state_thread_step<'a>(
                     solved_subs,
                     exposed_vars_by_symbol,
                     exposed_aliases_by_symbol,
+                    exposed_types_storage,
                     dep_idents,
                     documentation,
                     abilities_store,
@@ -1419,6 +1424,7 @@ fn state_thread_step<'a>(
                         solved_subs,
                         exposed_aliases_by_symbol,
                         exposed_vars_by_symbol,
+                        exposed_types_storage,
                         dep_idents,
                         documentation,
                         abilities_store,
@@ -2207,6 +2213,7 @@ fn update<'a>(
                         solved_subs,
                         exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
                         exposed_aliases_by_symbol: solved_module.aliases,
+                        exposed_types_storage: solved_module.exposed_types,
                         dep_idents,
                         documentation,
                         abilities_store,
@@ -2661,11 +2668,13 @@ fn finish_specialization(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish(
     state: State,
     solved: Solved<Subs>,
     exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+    exposed_types_storage: ExposedTypesStorageSubs,
     dep_idents: IdentIdsByModule,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
     abilities_store: AbilitiesStore,
@@ -2700,6 +2709,7 @@ fn finish(
         exposed_aliases: exposed_aliases_by_symbol,
         exposed_values,
         exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
+        exposed_types_storage,
         sources,
         timings: state.timings,
         documentation,
@@ -3740,7 +3750,7 @@ impl<'a> BuildTask<'a> {
     }
 }
 
-fn add_imports(
+pub fn add_imports(
     my_module: ModuleId,
     subs: &mut Subs,
     mut pending_abilities: PendingAbilitiesStore,
@@ -4409,9 +4419,11 @@ fn make_specializations<'a>(
     mono_env.home.register_debug_idents(mono_env.ident_ids);
 
     let make_specializations_end = SystemTime::now();
-    module_timing.make_specializations = make_specializations_end
-        .duration_since(make_specializations_start)
-        .unwrap();
+    module_timing.make_specializations.push(
+        make_specializations_end
+            .duration_since(make_specializations_start)
+            .unwrap(),
+    );
 
     Msg::MadeSpecializations {
         module_id: home,
@@ -4497,6 +4509,7 @@ fn build_pending_specializations<'a>(
                     )
                 }
             }
+            Expects(_) => todo!("toplevel expect codgen"),
             InvalidCycle(_) | DeclareRec(..) => {
                 // do nothing?
                 // this may mean the loc_symbols are not defined during codegen; is that a problem?
@@ -5015,7 +5028,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
 /// Generic number types (Num, Int, Float, etc.) are treated as `DelayedAlias`es resolved during
 /// type solving.
 /// All that remains are Signed8, Signed16, etc.
-fn default_aliases() -> roc_solve::solve::Aliases {
+pub fn default_aliases() -> roc_solve::solve::Aliases {
     use roc_types::types::Type;
 
     let mut solve_aliases = roc_solve::solve::Aliases::default();
