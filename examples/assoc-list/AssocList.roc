@@ -1,7 +1,7 @@
 interface AssocList
     exposes [
-         empty,
-         single,
+        empty,
+        single,
         insertNew,
         insertNewLazy,
         insert,
