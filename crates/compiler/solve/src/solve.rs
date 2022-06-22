@@ -13,7 +13,8 @@ use roc_collections::all::MutMap;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::{ROC_TRACE_COMPACTION, ROC_VERIFY_RIGID_LET_GENERALIZED};
-use roc_derive_key::{DeriveError, Derived, GlobalDerivedSymbols};
+use roc_derive::SharedDerivedModule;
+use roc_derive_key::{DeriveError, Derived};
 use roc_error_macros::internal_error;
 use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
@@ -550,7 +551,7 @@ pub fn run(
     constraint: &Constraint,
     pending_derives: PendingDerives,
     abilities_store: &mut AbilitiesStore,
-    derived_symbols: GlobalDerivedSymbols,
+    derived_module: SharedDerivedModule,
 ) -> (Solved<Subs>, Env) {
     let env = run_in_place(
         constraints,
@@ -560,7 +561,7 @@ pub fn run(
         constraint,
         pending_derives,
         abilities_store,
-        derived_symbols,
+        derived_module,
     );
 
     (Solved(subs), env)
@@ -576,7 +577,7 @@ fn run_in_place(
     constraint: &Constraint,
     pending_derives: PendingDerives,
     abilities_store: &mut AbilitiesStore,
-    derived_symbols: GlobalDerivedSymbols,
+    derived_module: SharedDerivedModule,
 ) -> Env {
     let mut pools = Pools::default();
 
@@ -618,7 +619,7 @@ fn run_in_place(
         &mut pools,
         deferred_uls_to_resolve,
         &SolvePhase { abilities_store },
-        &derived_symbols,
+        &derived_module,
     );
 
     deferred_obligations.add(new_must_implement, AbilityImplError::IncompleteAbility);

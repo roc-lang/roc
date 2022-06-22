@@ -11,7 +11,7 @@ use roc_derive_key::encoding::FlatEncodableKey;
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::Lowercase;
-use roc_module::symbol::{ModuleId, Symbol};
+use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{
     instantiate_rigids, Content, ExhaustiveMark, FlatType, GetSubsSlice, LambdaSet, OptVariable,

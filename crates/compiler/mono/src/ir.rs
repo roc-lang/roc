@@ -17,7 +17,7 @@ use roc_debug_flags::{
     ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
     ROC_PRINT_RUNTIME_ERROR_GEN,
 };
-use roc_derive_key::GlobalDerivedSymbols;
+use roc_derive::{SharedDerivedModule, StolenFromDerived};
 use roc_error_macros::{internal_error, todo_abilities};
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
@@ -1294,7 +1294,7 @@ pub struct Env<'a, 'i> {
     pub update_mode_ids: &'i mut UpdateModeIds,
     pub call_specialization_counter: u32,
     pub abilities: AbilitiesView<'i>,
-    pub derived_symbols: &'i GlobalDerivedSymbols,
+    pub derived_module: &'i SharedDerivedModule,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
@@ -1327,14 +1327,27 @@ impl<'a, 'i> Env<'a, 'i> {
     fn unify(&mut self, left: Variable, right: Variable) -> Result<(), UnificationFailed> {
         if self.home == ModuleId::DERIVED {
             // When specializing derives, we steal the Derived module's ident ids from
-            // `derived_symbols` for use in the usual mono pass. But during unification we
+            // `derived_module` for use in the usual mono pass. But during unification we
             // temporarily return them, so that derived ability symbols are resolved properly in
             // lambda sets.
+            //
+            // IMPORTANT: when this happens, this should be the only thread running, otherwise we
+            // may hit a race between the time we return the stolen subs/ident ids and the time we
+            // retrieve them again. Currently we enforce this in the load build graph; the derived
+            // module always monomorphizes after all other modules, and hence proceeds only by
+            // itself.
+            // TODO: can we be smarter so more stuff can happen in parallel?
             let mut derived_ident_ids = IdentIds::default();
             std::mem::swap(&mut derived_ident_ids, self.ident_ids);
+            let mut derived_subs = Subs::default();
+            std::mem::swap(&mut derived_subs, self.subs);
 
-            let mut derived_symbols = self.derived_symbols.lock().unwrap();
-            derived_symbols.return_ident_ids(derived_ident_ids);
+            let mut derived_module = self.derived_module.lock().unwrap();
+
+            derived_module.return_stolen(StolenFromDerived {
+                subs: derived_subs,
+                ident_ids: derived_ident_ids,
+            });
         }
 
         let result = roc_late_solve::unify(
@@ -1342,7 +1355,7 @@ impl<'a, 'i> Env<'a, 'i> {
             self.arena,
             self.subs,
             &self.abilities,
-            self.derived_symbols,
+            self.derived_module,
             left,
             right,
         );
@@ -1350,12 +1363,16 @@ impl<'a, 'i> Env<'a, 'i> {
         if self.home == ModuleId::DERIVED {
             debug_assert!(
                 self.ident_ids.is_empty(),
-                "no ident ids should have been added while they were returned to derived_symbols"
+                "no ident ids should have been added while they were returned to derived_module"
             );
 
-            let mut derived_symbols = self.derived_symbols.lock().unwrap();
-            let mut real_derived_ident_ids = derived_symbols.steal();
+            let mut derived_module = self.derived_module.lock().unwrap();
+            let StolenFromDerived {
+                ident_ids: mut real_derived_ident_ids,
+                subs: mut real_derived_subs,
+            } = derived_module.steal();
             std::mem::swap(&mut real_derived_ident_ids, self.ident_ids);
+            std::mem::swap(&mut real_derived_subs, self.subs);
         }
 
         result

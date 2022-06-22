@@ -20,7 +20,7 @@ use roc_debug_flags::{
     ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
     ROC_PRINT_LOAD_LOG,
 };
-use roc_derive_key::GlobalDerivedSymbols;
+use roc_derive::{SharedDerivedModule, StolenFromDerived};
 use roc_error_macros::internal_error;
 use roc_late_solve::{AbilitiesView, WorldAbilities};
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
@@ -131,7 +131,7 @@ struct ModuleCache<'a> {
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
     late_specializations: MutMap<ModuleId, LateSpecializationsModule<'a>>,
     external_specializations_requested: MutMap<ModuleId, Vec<ExternalSpecializations<'a>>>,
-    derives_module: Option<DerivesModule<'a>>,
+    derives_module_metadata: Option<DerivesModuleMetadata<'a>>,
 
     /// Various information
     imports: MutMap<ModuleId, MutSet<ModuleId>>,
@@ -180,7 +180,7 @@ impl Default for ModuleCache<'_> {
             found_specializations: Default::default(),
             late_specializations: Default::default(),
             external_specializations_requested: Default::default(),
-            derives_module: Default::default(),
+            derives_module_metadata: Default::default(),
             imports: Default::default(),
             top_level_thunks: Default::default(),
             documentation: Default::default(),
@@ -372,7 +372,7 @@ fn start_phase<'a>(
                     ..
                 } = constrained;
 
-                let derived_symbols = GlobalDerivedSymbols::clone(&state.derived_symbols);
+                let derived_module = SharedDerivedModule::clone(&state.derived_module);
 
                 BuildTask::solve_module(
                     module,
@@ -387,7 +387,7 @@ fn start_phase<'a>(
                     dep_idents,
                     declarations,
                     state.cached_subs.clone(),
-                    derived_symbols,
+                    derived_module,
                 )
             }
             Phase::FindSpecializations => {
@@ -415,7 +415,7 @@ fn start_phase<'a>(
                     }
                 }
 
-                let derived_symbols = GlobalDerivedSymbols::clone(&state.derived_symbols);
+                let derived_module = SharedDerivedModule::clone(&state.derived_module);
 
                 BuildTask::BuildPendingSpecializations {
                     layout_cache,
@@ -427,7 +427,7 @@ fn start_phase<'a>(
                     ident_ids,
                     exposed_to_host: state.exposed_to_host.clone(),
                     abilities_store,
-                    derived_symbols,
+                    derived_module,
                 }
             }
             Phase::MakeSpecializations => {
@@ -441,32 +441,30 @@ fn start_phase<'a>(
                     if module_id == ModuleId::DERIVED {
                         // The module for derives is treated specially - we keep it isolated, as it
                         // is only needed for making specializations.
-                        let DerivesModule {
+                        let DerivesModuleMetadata {
                             mut layout_cache,
                             mut procs_base,
-                            mut subs,
                             mut module_timing,
                         } = state
                             .module_cache
-                            .derives_module
+                            .derives_module_metadata
                             .take()
-                            .unwrap_or_else(|| DerivesModule::new(state.target_info));
+                            .unwrap_or_else(|| DerivesModuleMetadata::new(state.target_info));
 
                         load_derived_partial_procs(
                             module_id,
                             arena,
-                            &mut subs,
-                            &state.derived_symbols,
+                            &state.derived_module,
                             &mut module_timing,
                             &mut layout_cache,
                             state.target_info,
                             &state.exposed_to_host,
                             &mut procs_base,
-                            &state.exposed_types,
                             &mut state.world_abilities,
                         );
 
-                        let ident_ids = state.derived_symbols.lock().unwrap().steal();
+                        let StolenFromDerived { ident_ids, subs } =
+                            state.derived_module.lock().unwrap().steal();
 
                         (ident_ids, subs, procs_base, layout_cache, module_timing)
                     } else if state.make_specializations_pass.current_pass() == 1 {
@@ -517,7 +515,7 @@ fn start_phase<'a>(
                         (ident_ids, subs, procs_base, layout_cache, module_timing)
                     };
 
-                let derived_symbols = GlobalDerivedSymbols::clone(&state.derived_symbols);
+                let derived_module = SharedDerivedModule::clone(&state.derived_module);
 
                 BuildTask::MakeSpecializations {
                     module_id,
@@ -528,7 +526,7 @@ fn start_phase<'a>(
                     specializations_we_must_make,
                     module_timing,
                     world_abilities: state.world_abilities.clone_ref(),
-                    derived_symbols,
+                    derived_module,
                 }
             }
         }
@@ -651,19 +649,17 @@ struct LateSpecializationsModule<'a> {
 }
 
 #[derive(Debug)]
-struct DerivesModule<'a> {
+struct DerivesModuleMetadata<'a> {
     layout_cache: LayoutCache<'a>,
     procs_base: ProcsBase<'a>,
-    subs: Subs,
     module_timing: ModuleTiming,
 }
 
-impl DerivesModule<'_> {
+impl DerivesModuleMetadata<'_> {
     fn new(target_info: TargetInfo) -> Self {
         Self {
             layout_cache: LayoutCache::new(target_info),
             procs_base: ProcsBase::default(),
-            subs: Subs::default(),
             module_timing: ModuleTiming::new(SystemTime::now()),
         }
     }
@@ -861,7 +857,7 @@ struct State<'a> {
     pub arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
     pub arc_shorthands: Arc<Mutex<MutMap<&'a str, PackageName<'a>>>>,
     #[allow(unused)]
-    pub derived_symbols: GlobalDerivedSymbols,
+    pub derived_module: SharedDerivedModule,
 
     pub ident_ids_by_module: SharedIdentIdsByModule,
 
@@ -924,7 +920,7 @@ impl<'a> State<'a> {
             exposed_types,
             arc_modules,
             arc_shorthands,
-            derived_symbols: Default::default(),
+            derived_module: Default::default(),
             constrained_ident_ids: IdentIds::exposed_builtins(0),
             ident_ids_by_module,
             declarations_by_id: MutMap::default(),
@@ -1043,7 +1039,7 @@ enum BuildTask<'a> {
         declarations: Declarations,
         dep_idents: IdentIdsByModule,
         cached_subs: CachedSubs,
-        derived_symbols: GlobalDerivedSymbols,
+        derived_module: SharedDerivedModule,
     },
     BuildPendingSpecializations {
         module_timing: ModuleTiming,
@@ -1055,7 +1051,7 @@ enum BuildTask<'a> {
         decls: Declarations,
         exposed_to_host: ExposedToHost,
         abilities_store: AbilitiesStore,
-        derived_symbols: GlobalDerivedSymbols,
+        derived_module: SharedDerivedModule,
     },
     MakeSpecializations {
         module_id: ModuleId,
@@ -1066,7 +1062,7 @@ enum BuildTask<'a> {
         specializations_we_must_make: Vec<ExternalSpecializations<'a>>,
         module_timing: ModuleTiming,
         world_abilities: WorldAbilities,
-        derived_symbols: GlobalDerivedSymbols,
+        derived_module: SharedDerivedModule,
     },
 }
 
@@ -2442,20 +2438,19 @@ fn update<'a>(
             state.procedures.extend(procedures);
             if module_id == ModuleId::DERIVED {
                 // The derives module is treated specially - put the data back and return the ident
-                // IDs to `derived_symbols` so other modules can use it in their monomorphization
+                // IDs to `derived_module` so other modules can use it in their monomorphization
                 // if needed.
                 state
-                    .derived_symbols
+                    .derived_module
                     .lock()
                     .unwrap()
-                    .return_ident_ids(ident_ids);
+                    .return_stolen(StolenFromDerived { ident_ids, subs });
 
-                debug_assert!(state.module_cache.derives_module.is_none());
+                debug_assert!(state.module_cache.derives_module_metadata.is_none());
 
-                state.module_cache.derives_module = Some(DerivesModule {
+                state.module_cache.derives_module_metadata = Some(DerivesModuleMetadata {
                     layout_cache,
                     procs_base,
-                    subs,
                     module_timing,
                 });
             } else {
@@ -2822,8 +2817,12 @@ fn finish(
         .into_inner()
         .into_module_ids();
 
-    // Steal the derived symbols and put them in the global ident ids
-    let derived_ident_ids = state.derived_symbols.lock().unwrap().steal();
+    // Steal the derived symbols and put them in the global ident ids. Since we're done, we won't
+    // need them again.
+    let StolenFromDerived {
+        ident_ids: derived_ident_ids,
+        subs: _,
+    } = state.derived_module.lock().unwrap().steal();
     ModuleId::DERIVED.register_debug_idents(&derived_ident_ids);
     state
         .constrained_ident_ids
@@ -3865,7 +3864,7 @@ impl<'a> BuildTask<'a> {
         dep_idents: IdentIdsByModule,
         declarations: Declarations,
         cached_subs: CachedSubs,
-        derived_symbols: GlobalDerivedSymbols,
+        derived_module: SharedDerivedModule,
     ) -> Self {
         let exposed_by_module = exposed_types.retain_modules(imported_modules.keys());
 
@@ -3885,7 +3884,7 @@ impl<'a> BuildTask<'a> {
             dep_idents,
             module_timing,
             cached_subs,
-            derived_symbols,
+            derived_module,
         }
     }
 }
@@ -4067,7 +4066,7 @@ fn run_solve_solve(
     pending_derives: PendingDerives,
     var_store: VarStore,
     module: Module,
-    derived_symbols: GlobalDerivedSymbols,
+    derived_module: SharedDerivedModule,
 ) -> (
     Solved<Subs>,
     ResolvedSpecializations,
@@ -4115,7 +4114,7 @@ fn run_solve_solve(
             solve_aliases,
             abilities_store,
             pending_derives,
-            derived_symbols,
+            derived_module,
         );
 
         let module_id = module.module_id;
@@ -4171,7 +4170,7 @@ fn run_solve<'a>(
     decls: Declarations,
     dep_idents: IdentIdsByModule,
     cached_subs: CachedSubs,
-    derived_symbols: GlobalDerivedSymbols,
+    derived_module: SharedDerivedModule,
 ) -> Msg<'a> {
     let solve_start = SystemTime::now();
 
@@ -4190,7 +4189,7 @@ fn run_solve<'a>(
                     pending_derives,
                     var_store,
                     module,
-                    derived_symbols,
+                    derived_module,
                 ),
                 Some((subs, exposed_vars_by_symbol)) => {
                     (
@@ -4212,7 +4211,7 @@ fn run_solve<'a>(
                 pending_derives,
                 var_store,
                 module,
-                derived_symbols,
+                derived_module,
             )
         }
     };
@@ -4568,7 +4567,7 @@ fn make_specializations<'a>(
     mut module_timing: ModuleTiming,
     target_info: TargetInfo,
     world_abilities: WorldAbilities,
-    derived_symbols: GlobalDerivedSymbols,
+    derived_module: SharedDerivedModule,
 ) -> Msg<'a> {
     let make_specializations_start = SystemTime::now();
     let mut update_mode_ids = UpdateModeIds::new();
@@ -4583,7 +4582,7 @@ fn make_specializations<'a>(
         // call_specialization_counter=0 is reserved
         call_specialization_counter: 1,
         abilities: AbilitiesView::World(&world_abilities),
-        derived_symbols: &derived_symbols,
+        derived_module: &derived_module,
     };
 
     let mut procs = Procs::new_in(arena);
@@ -4646,7 +4645,7 @@ fn build_pending_specializations<'a>(
     target_info: TargetInfo,
     exposed_to_host: ExposedToHost,
     abilities_store: AbilitiesStore,
-    derived_symbols: GlobalDerivedSymbols,
+    derived_module: SharedDerivedModule,
 ) -> Msg<'a> {
     let find_specializations_start = SystemTime::now();
 
@@ -4676,7 +4675,7 @@ fn build_pending_specializations<'a>(
         // to know the types and abilities in our modules. Only for building *all* specializations
         // do we need a global view.
         abilities: AbilitiesView::Module(&abilities_store),
-        derived_symbols: &derived_symbols,
+        derived_module: &derived_module,
     };
 
     // Add modules' decls to Procs
@@ -5033,7 +5032,7 @@ fn run_task<'a>(
             declarations,
             dep_idents,
             cached_subs,
-            derived_symbols,
+            derived_module,
         } => Ok(run_solve(
             module,
             ident_ids,
@@ -5046,7 +5045,7 @@ fn run_task<'a>(
             declarations,
             dep_idents,
             cached_subs,
-            derived_symbols,
+            derived_module,
         )),
         BuildPendingSpecializations {
             module_id,
@@ -5058,7 +5057,7 @@ fn run_task<'a>(
             imported_module_thunks,
             exposed_to_host,
             abilities_store,
-            derived_symbols,
+            derived_module,
         } => Ok(build_pending_specializations(
             arena,
             solved_subs,
@@ -5071,7 +5070,7 @@ fn run_task<'a>(
             target_info,
             exposed_to_host,
             abilities_store,
-            derived_symbols,
+            derived_module,
         )),
         MakeSpecializations {
             module_id,
@@ -5082,7 +5081,7 @@ fn run_task<'a>(
             specializations_we_must_make,
             module_timing,
             world_abilities,
-            derived_symbols,
+            derived_module,
         } => Ok(make_specializations(
             arena,
             module_id,
@@ -5094,7 +5093,7 @@ fn run_task<'a>(
             module_timing,
             target_info,
             world_abilities,
-            derived_symbols,
+            derived_module,
         )),
     }?;
 

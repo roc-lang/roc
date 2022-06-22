@@ -61,7 +61,7 @@ pub fn run_solve(
     mut aliases: Aliases,
     mut abilities_store: AbilitiesStore,
     pending_derives: PendingDerives,
-    derived_symbols: GlobalDerivedSymbols,
+    derived_module: SharedDerivedModule,
 ) -> (
     Solved<Subs>,
     solve::Env,
@@ -93,7 +93,7 @@ pub fn run_solve(
         &constraint,
         pending_derives,
         &mut abilities_store,
-        derived_symbols,
+        derived_module,
     );
 
     (solved_subs, solved_env, problems, abilities_store)
