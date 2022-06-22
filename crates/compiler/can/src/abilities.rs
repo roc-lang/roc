@@ -142,7 +142,22 @@ pub struct IAbilitiesStore<Phase: ResolvePhase> {
 
     /// Resolved specializations for a symbol. These might be ephemeral (known due to type solving),
     /// or resolved on-the-fly during mono.
-    resolved_specializations: MutMap<SpecializationId, Symbol>,
+    resolved_specializations: MutMap<NonZeroU32, Symbol>,
+}
+
+impl<Phase: ResolvePhase> Default for IAbilitiesStore<Phase> {
+    fn default() -> Self {
+        Self {
+            members_of_ability: Default::default(),
+            ability_members: Default::default(),
+            specialization_to_root: Default::default(),
+            declared_specializations: Default::default(),
+            next_specialization_id:
+                // Safety: 1 != 0
+                unsafe { NonZeroU32::new_unchecked(1) },
+            resolved_specializations: Default::default(),
+        }
+    }
 }
 
 impl<Phase: ResolvePhase> Default for IAbilitiesStore<Phase> {
@@ -359,9 +374,7 @@ impl IAbilitiesStore<Resolved> {
     }
 
     pub fn insert_resolved(&mut self, id: SpecializationId, specialization: Symbol) {
-        // May not be a thing in mono
-        // debug_assert!(self.is_specialization_name(specialization));
-
+        let id = id.0.expect("attempting to resolve a no-specialization id");
         let old_specialization = self.resolved_specializations.insert(id, specialization);
 
         debug_assert!(
@@ -371,17 +384,8 @@ impl IAbilitiesStore<Resolved> {
         );
     }
 
-    pub fn remove_resolved(&mut self, id: SpecializationId) {
-        let old_specialization = self.resolved_specializations.remove(&id);
-
-        debug_assert!(
-            old_specialization.is_some(),
-            "Trying to remove a resolved specialization that was never there!",
-        );
-    }
-
     pub fn get_resolved(&self, id: SpecializationId) -> Option<Symbol> {
-        self.resolved_specializations.get(&id).copied()
+        id.0.and_then(|id| self.resolved_specializations.get(&id).copied())
     }
 }
 
