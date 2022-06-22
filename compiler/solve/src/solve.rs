@@ -9,7 +9,7 @@ use roc_can::constraint::{Constraints, Cycle, LetConstraint, OpportunisticResolv
 use roc_can::expected::{Expected, PExpected};
 use roc_can::expr::PendingDerives;
 use roc_collections::all::MutMap;
-use roc_collections::{VecMap, VecSet};
+use roc_collections::VecSet;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
