@@ -92,7 +92,13 @@ impl DerivedSymbols {
                     self.derived_ident_ids.get_id(&debug_name).is_none(),
                     "duplicate debug name for different derive key"
                 );
-                self.derived_ident_ids.get_or_insert(&debug_name)
+                let ident_id = self.derived_ident_ids.get_or_insert(&debug_name);
+
+                // This is expensive, but yields much better symbols when debugging.
+                // TODO: hide behind debug_flags?
+                ModuleId::DERIVED.register_debug_idents(&self.derived_ident_ids);
+
+                ident_id
             } else {
                 self.derived_ident_ids.gen_unique()
             };

@@ -2648,8 +2648,19 @@ fn specialize_suspended<'a>(
                     v
                 }
                 None => {
-                    // TODO this assumes the specialization is done by another module
-                    // make sure this does not become a problem down the road!
+                    if env.home == ModuleId::DERIVED && name.module_id() == ModuleId::DERIVED {
+                        // TODO: This can happen when we find another symbol to derive, but haven't
+                        // yet derived it. We don't need this branch if we make deriving closer to
+                        // mono and have derived impls assembled into procs here, rather than in
+                        // load.
+                        // But for now, just mark as an external specialization and we'll
+                        // specialize it in a subsequent pass of mono.
+                        add_needed_external(procs, env, var, name);
+                    } else {
+                        // TODO this assumes the specialization is done by another module
+                        // make sure this does not become a problem down the road!
+                        debug_assert!(name.module_id() != name.module_id());
+                    }
                     continue;
                 }
             }
@@ -2711,6 +2722,9 @@ pub fn specialize_all<'a>(
     match pending_specializations {
         PendingSpecializations::Making => {}
         PendingSpecializations::Finding(suspended) => {
+            if env.home == ModuleId::DERIVED {
+                dbg!(&suspended);
+            }
             specialize_suspended(env, &mut procs, layout_cache, suspended)
         }
     }
