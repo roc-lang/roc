@@ -72,7 +72,7 @@ pub enum EdError {
     },
 
     #[snafu(display(
-        "EmptyCodeString: I need to have a code string (code_str) that contains either an app, interface or Package-Config header. The code string was empty.",
+        "EmptyCodeString: I need to have a code string (code_str) that contains either an app, interface, package, or platform header. The code string was empty.",
     ))]
     EmptyCodeString {
         backtrace: Backtrace,

@@ -17,9 +17,9 @@ For convenience and consistency, there is only one way to format roc.
 
 pub const HELLO_WORLD: &str = r#"
 app "test-app"
-    packages { pf: "c-platform" }
+    packages { pf: "c-platform/main.roc" }
     imports []
-    provides [ main ] to pf
+    provides [main] to pf
 
 main = "Hello, world!"
 
@@ -29,7 +29,8 @@ pub fn nr_hello_world_lines() -> usize {
     HELLO_WORLD.matches('\n').count() - 1
 }
 
-pub const PLATFORM_NAME: &str = "c-platform";
+pub const PLATFORM_DIR_NAME: &str = "c-platform";
+pub const PLATFORM_FILE_NAME: &str = "main.roc";
 
 pub const PLATFORM_STR: &str = r#"
 platform "test-platform"
@@ -37,7 +38,7 @@ platform "test-platform"
     exposes []
     packages {}
     imports []
-    provides [ mainForHost ]
+    provides [mainForHost]
 
 mainForHost : Str
 mainForHost = main

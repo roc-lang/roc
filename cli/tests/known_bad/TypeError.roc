@@ -1,5 +1,5 @@
 app "type-error"
-    packages { pf: "platform" }
+    packages { pf: "platform/main.roc" }
     imports [pf.Stdout.{ line }, pf.Task.{ await }]
     provides [main] to pf
 

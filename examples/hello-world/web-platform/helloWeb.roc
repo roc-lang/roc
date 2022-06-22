@@ -1,5 +1,5 @@
 app "helloWeb"
-    packages { pf: "." }
+    packages { pf: "main.roc" }
     imports []
     provides [main] to pf
 

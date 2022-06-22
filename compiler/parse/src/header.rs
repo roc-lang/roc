@@ -22,7 +22,7 @@ pub enum HeaderFor<'a> {
     Builtin {
         generates_with: &'a [Symbol],
     },
-    PkgConfig {
+    Platform {
         /// usually `pf`
         config_shorthand: &'a str,
         /// the type scheme of the main function (required by the platform)
@@ -53,7 +53,29 @@ pub enum VersionComparison {
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
-pub struct PackageName<'a>(pub &'a str);
+pub struct PackageName<'a>(&'a str);
+
+impl<'a> PackageName<'a> {
+    pub fn to_str(self) -> &'a str {
+        self.0
+    }
+
+    pub fn as_str(&self) -> &'a str {
+        self.0
+    }
+}
+
+impl<'a> From<PackageName<'a>> for &'a str {
+    fn from(name: PackageName<'a>) -> &'a str {
+        name.0
+    }
+}
+
+impl<'a> From<&'a str> for PackageName<'a> {
+    fn from(string: &'a str) -> Self {
+        Self(string)
+    }
+}
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub struct ModuleName<'a>(&'a str);
@@ -80,7 +102,7 @@ pub enum ModuleNameEnum<'a> {
     App(StrLiteral<'a>),
     Interface(ModuleName<'a>),
     Hosted(ModuleName<'a>),
-    PkgConfig,
+    Platform,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]

@@ -1,5 +1,5 @@
 app "quicksort"
-    packages { pf: "quicksort-platform" }
+    packages { pf: "quicksort-platform/main.roc" }
     imports []
     provides [quicksort] to pf
 
