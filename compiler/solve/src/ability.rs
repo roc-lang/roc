@@ -4,12 +4,12 @@ use roc_collections::VecMap;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{Content, FlatType, GetSubsSlice, Rank, Subs, Variable};
+use roc_types::subs::{instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, Subs, Variable};
 use roc_types::types::{AliasKind, Category, ErrorType, PatternCategory};
 use roc_unify::unify::MustImplementConstraints;
 use roc_unify::unify::{MustImplementAbility, Obligated};
 
-use crate::solve::{instantiate_rigids, type_to_var};
+use crate::solve::type_to_var;
 use crate::solve::{Aliases, Pools, TypeError};
 
 #[derive(Debug, Clone)]
