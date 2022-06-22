@@ -1866,7 +1866,7 @@ fn float_sub_checked() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = r#"Roc failed with message: "integer multiplication overflowed!"#)]
 fn int_positive_mul_overflow() {
     assert_evals_to!(
@@ -1881,7 +1881,7 @@ fn int_positive_mul_overflow() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = r#"Roc failed with message: "integer multiplication overflowed!"#)]
 fn int_negative_mul_overflow() {
     assert_evals_to!(
@@ -1896,8 +1896,7 @@ fn int_negative_mul_overflow() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
-#[should_panic(expected = r#"Roc failed with message: "float multiplication overflowed!"#)]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_positive_mul_overflow() {
     assert_evals_to!(
         indoc!(
@@ -1905,14 +1904,13 @@ fn float_positive_mul_overflow() {
                     1.7976931348623157e308 * 2
                 "#
         ),
-        0.0,
+        f64::INFINITY,
         f64
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
-#[should_panic(expected = r#"Roc failed with message: "float multiplication overflowed!"#)]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_negative_mul_overflow() {
     assert_evals_to!(
         indoc!(
@@ -1920,7 +1918,7 @@ fn float_negative_mul_overflow() {
                     -1.7976931348623157e308 * 2
                 "#
         ),
-        0.0,
+        -f64::INFINITY,
         f64
     );
 }
@@ -1940,7 +1938,7 @@ fn int_mul_wrap() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_mul_checked() {
     assert_evals_to!(
         indoc!(
@@ -1968,7 +1966,7 @@ fn int_mul_checked() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_mul_checked() {
     assert_evals_to!(
         indoc!(

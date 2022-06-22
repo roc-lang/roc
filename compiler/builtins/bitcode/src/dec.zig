@@ -296,7 +296,7 @@ pub const RocDec = extern struct {
             } else if (other_i128 == RocDec.one_point_zero.num) {
                 return .{ .value = self, .has_overflowed = false };
             } else {
-                return .{ .value = undefined, .has_overflowed = true };
+                return .{ .value = RocDec.min, .has_overflowed = true };
             }
         });
 
@@ -306,7 +306,7 @@ pub const RocDec = extern struct {
             } else if (self_i128 == RocDec.one_point_zero.num) {
                 return .{ .value = other, .has_overflowed = false };
             } else {
-                return .{ .value = undefined, .has_overflowed = true };
+                return .{ .value = RocDec.min, .has_overflowed = true };
             }
         });
 
@@ -323,10 +323,16 @@ pub const RocDec = extern struct {
         const answer = RocDec.mulWithOverflow(self, other);
 
         if (answer.has_overflowed) {
-            @panic("TODO runtime exception for overflow!");
+            roc_panic("Decimal multiplication overflowed!", 1);
+            unreachable;
         } else {
             return answer.value;
         }
+    }
+
+    pub fn mulSaturated(self: RocDec, other: RocDec) RocDec {
+        const answer = RocDec.mulWithOverflow(self, other);
+        return answer.value;
     }
 
     pub fn div(self: RocDec, other: RocDec) RocDec {
@@ -1138,4 +1144,12 @@ pub fn subOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
 
 pub fn subSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
     return @call(.{ .modifier = always_inline }, RocDec.subSaturated, .{ arg1, arg2 });
+}
+
+pub fn mulOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
+    return @call(.{ .modifier = always_inline }, RocDec.mul, .{ arg1, arg2 });
+}
+
+pub fn mulSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
+    return @call(.{ .modifier = always_inline }, RocDec.mulSaturated, .{ arg1, arg2 });
 }

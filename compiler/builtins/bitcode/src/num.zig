@@ -312,17 +312,62 @@ pub fn exportSubOrPanic(comptime T: type, comptime name: []const u8) void {
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }
 
-fn mulWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
+fn mulWithOverflow(comptime T: type, comptime W: type, self: T, other: T) WithOverflow(T) {
     switch (@typeInfo(T)) {
         .Int => {
-            var answer: T = undefined;
-            const overflowed = @mulWithOverflow(T, self, other, &answer);
-            return .{ .value = answer, .has_overflowed = overflowed };
+            const self_wide: W = self;
+            const other_wide: W = other;
+            const answer: W = self_wide * other_wide;
+
+            const max: W = std.math.maxInt(T);
+            const min: W = std.math.minInt(T);
+
+            if (answer > max) {
+                return .{ .value = max, .has_overflowed = true };
+            } else if (answer < min) {
+                return .{ .value = min, .has_overflowed = true };
+            } else {
+                return .{ .value = @intCast(T, answer), .has_overflowed = false };
+            }
         },
         else => {
-            const answer = self + other;
+            const answer = self * other;
             const overflowed = !std.math.isFinite(answer);
             return .{ .value = answer, .has_overflowed = overflowed };
         },
     }
+}
+
+pub fn exportMulWithOverflow(comptime T: type, comptime W: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(self: T, other: T) callconv(.C) WithOverflow(T) {
+            return @call(.{ .modifier = always_inline }, mulWithOverflow, .{ T, W, self, other });
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn exportMulSaturatedInt(comptime T: type, comptime W: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(self: T, other: T) callconv(.C) T {
+            const result = @call(.{ .modifier = always_inline }, mulWithOverflow, .{ T, W, self, other });
+            return result.value;
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn exportMulOrPanic(comptime T: type, comptime W: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(self: T, other: T) callconv(.C) T {
+            const result = @call(.{ .modifier = always_inline }, mulWithOverflow, .{ T, W, self, other });
+            if (result.has_overflowed) {
+                roc_panic("integer multiplication overflowed!", 1);
+                unreachable;
+            } else {
+                return result.value;
+            }
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }

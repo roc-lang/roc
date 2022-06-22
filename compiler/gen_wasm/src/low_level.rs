@@ -173,13 +173,6 @@ impl<'a> LowLevelCall<'a> {
         }
     }
 
-    fn wrap_i32(&self, backend: &mut WasmBackend<'a>) {
-        match self.ret_layout {
-            Layout::Builtin(Builtin::Int(width)) => self.wrap_small_int(backend, width),
-            _ => internal_error!("Expected integer <= 32 bits, found {:?}", self.ret_layout),
-        }
-    }
-
     /// Wrap an integer that should have less than 32 bits, but is represented in Wasm as i32.
     /// This may seem like deliberately introducing an error!
     /// But we want all targets to behave the same, and hash algos rely on wrapping.
@@ -499,32 +492,78 @@ impl<'a> LowLevelCall<'a> {
                 _ => panic_ret_type(),
             },
 
-            NumMul => {
-                self.load_args(backend);
-                match CodeGenNumType::from(self.ret_layout) {
-                    I32 => backend.code_builder.i32_mul(),
-                    I64 => backend.code_builder.i64_mul(),
-                    F32 => backend.code_builder.f32_mul(),
-                    F64 => backend.code_builder.f64_mul(),
-                    Decimal => self.load_args_and_call_zig(backend, bitcode::DEC_MUL_WITH_OVERFLOW),
-                    x => todo!("{:?} for {:?}", self.lowlevel, x),
+            NumMul => match self.ret_layout {
+                Layout::Builtin(Builtin::Int(width)) => {
+                    self.load_args_and_call_zig(backend, &bitcode::NUM_MUL_OR_PANIC_INT[width])
                 }
-            }
-            NumMulWrap => {
-                self.load_args(backend);
-                match CodeGenNumType::from(self.ret_layout) {
-                    I32 => {
-                        backend.code_builder.i32_mul();
-                        self.wrap_i32(backend);
+                Layout::Builtin(Builtin::Float(width)) => match width {
+                    FloatWidth::F32 => {
+                        self.load_args(backend);
+                        backend.code_builder.f32_mul()
                     }
-                    I64 => backend.code_builder.i64_mul(),
-                    F32 => backend.code_builder.f32_mul(),
-                    F64 => backend.code_builder.f64_mul(),
-                    Decimal => self.load_args_and_call_zig(backend, bitcode::DEC_MUL_WITH_OVERFLOW),
-                    x => todo!("{:?} for {:?}", self.lowlevel, x),
+                    FloatWidth::F64 => {
+                        self.load_args(backend);
+                        backend.code_builder.f64_mul()
+                    }
+                    FloatWidth::F128 => todo!("Num.mul for f128"),
+                },
+                Layout::Builtin(Builtin::Decimal) => {
+                    self.load_args_and_call_zig(backend, bitcode::DEC_MUL_OR_PANIC)
+                }
+                _ => panic_ret_type(),
+            },
+            NumMulWrap => match self.ret_layout {
+                Layout::Builtin(Builtin::Int(width)) => match width {
+                    IntWidth::I128 | IntWidth::U128 => {
+                        // TODO: don't panic
+                        self.load_args_and_call_zig(backend, &bitcode::NUM_MUL_OR_PANIC_INT[width])
+                    }
+                    IntWidth::I64 | IntWidth::U64 => {
+                        self.load_args(backend);
+                        backend.code_builder.i64_mul()
+                    }
+                    IntWidth::I32 | IntWidth::U32 => {
+                        self.load_args(backend);
+                        backend.code_builder.i32_mul()
+                    }
+                    _ => {
+                        self.load_args(backend);
+                        backend.code_builder.i32_mul();
+                        self.wrap_small_int(backend, width);
+                    }
+                },
+                Layout::Builtin(Builtin::Float(width)) => match width {
+                    FloatWidth::F32 => {
+                        self.load_args(backend);
+                        backend.code_builder.f32_mul()
+                    }
+                    FloatWidth::F64 => {
+                        self.load_args(backend);
+                        backend.code_builder.f64_mul()
+                    }
+                    FloatWidth::F128 => todo!("Num.mul for f128"),
+                },
+                Layout::Builtin(Builtin::Decimal) => {
+                    // TODO: don't panic
+                    self.load_args_and_call_zig(backend, bitcode::DEC_MUL_OR_PANIC)
+                }
+                _ => panic_ret_type(),
+            },
+            NumMulChecked => {
+                let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
+                match arg_layout {
+                    Layout::Builtin(Builtin::Int(width)) => {
+                        self.load_args_and_call_zig(backend, &bitcode::NUM_MUL_CHECKED_INT[width])
+                    }
+                    Layout::Builtin(Builtin::Float(width)) => {
+                        self.load_args_and_call_zig(backend, &bitcode::NUM_MUL_CHECKED_FLOAT[width])
+                    }
+                    Layout::Builtin(Builtin::Decimal) => {
+                        self.load_args_and_call_zig(backend, bitcode::DEC_MUL_WITH_OVERFLOW)
+                    }
+                    x => internal_error!("NumMulChecked is not defined for {:?}", x),
                 }
             }
-            NumMulChecked => todo!("{:?}", self.lowlevel),
             NumGt => {
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
