@@ -1423,9 +1423,9 @@ mod test_reporting {
             r#"
             ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-            I'm inferring a weird self-referential type for `g`:
+            I'm inferring a weird self-referential type for `f`:
 
-            6│      g = \x -> f [x]
+            5│      f = \x -> g x
                     ^
 
             Here is my best effort at writing down the type. You will see ∞ for
@@ -1436,9 +1436,9 @@ mod test_reporting {
 
             ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-            I'm inferring a weird self-referential type for `f`:
+            I'm inferring a weird self-referential type for `g`:
 
-            5│      f = \x -> g x
+            6│      g = \x -> f [x]
                     ^
 
             Here is my best effort at writing down the type. You will see ∞ for
