@@ -3105,11 +3105,39 @@ fn add_saturated() {
         ),
         255,
         u8
-    )
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : I8
+            x = 100
+            y : I8
+            y = 100
+            Num.addSaturated x y
+            "#
+        ),
+        127,
+        i8
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : I8
+            x = -100
+            y : I8
+            y = -100
+            Num.addSaturated x y
+            "#
+        ),
+        -128,
+        i8
+    );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn sub_saturated() {
     assert_evals_to!(
         indoc!(
@@ -3123,7 +3151,33 @@ fn sub_saturated() {
         ),
         0,
         u8
-    )
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : I8
+            x = -100
+            y : I8
+            y = 100
+            Num.subSaturated x y
+            "#
+        ),
+        -128,
+        i8
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : I8
+            x = 100
+            y : I8
+            y = -100
+            Num.subSaturated x y
+            "#
+        ),
+        127,
+        i8
+    );
 }
 
 #[test]

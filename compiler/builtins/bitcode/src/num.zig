@@ -268,10 +268,10 @@ pub fn exportAddSaturatedInt(comptime T: type, comptime name: []const u8) void {
             const result = addWithOverflow(T, self, other);
             if (result.has_overflowed) {
                 // We can unambiguously tell which way it wrapped, because we have N+1 bits including the overflow bit
-                if (result.value < 0) {
-                    return std.math.maxInt(T);
-                } else {
+                if (result.value >= 0 and @typeInfo(T).Int.signedness == .signed) {
                     return std.math.minInt(T);
+                } else {
+                    return std.math.maxInt(T);
                 }
             } else {
                 return result.value;
@@ -325,10 +325,12 @@ pub fn exportSubSaturatedInt(comptime T: type, comptime name: []const u8) void {
         fn func(self: T, other: T) callconv(.C) T {
             const result = subWithOverflow(T, self, other);
             if (result.has_overflowed) {
-                if (result.value < 0) {
-                    return std.math.maxInt(T);
-                } else {
+                if (@typeInfo(T).Int.signedness == .unsigned) {
+                    return 0;
+                } else if (self < 0) {
                     return std.math.minInt(T);
+                } else {
+                    return std.math.maxInt(T);
                 }
             } else {
                 return result.value;
