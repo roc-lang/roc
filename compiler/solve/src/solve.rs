@@ -1713,7 +1713,7 @@ fn check_ability_specialization(
                 }
             }
 
-            Failure(vars, actual_type, expected_type, unimplemented_abilities) => {
+            Failure(vars, expected_type, actual_type, unimplemented_abilities) => {
                 subs.commit_snapshot(snapshot);
                 introduce(subs, rank, pools, &vars);
 
