@@ -27,7 +27,7 @@ pub fn generate_bindings(decl_src: &str) -> String {
 
     let pairs = {
         let dir = tempdir().expect("Unable to create tempdir");
-        let filename = PathBuf::from("Package-Config.roc");
+        let filename = PathBuf::from("platform.roc");
         let file_path = dir.path().join(filename);
         let full_file_path = file_path.clone();
         let mut file = File::create(file_path).unwrap();

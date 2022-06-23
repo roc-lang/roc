@@ -16,7 +16,7 @@ const SUPPORTED_EXTENSIONS: &str = ".c, .rs, .zig, and .json";
 #[derive(Debug, Parser)]
 #[clap(about)]
 struct Opts {
-    /// The path to the platform's Package-Config.roc file
+    /// The path to the `platform` module .roc file
     platform_module: PathBuf,
 
     /// The output file, e.g. `test.rs`

@@ -1,5 +1,5 @@
 app "quicksortapp"
-    packages { pf: "platform" }
+    packages { pf: "platform/main.roc" }
     imports [pf.Task, Quicksort]
     provides [main] to pf
 

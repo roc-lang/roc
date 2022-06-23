@@ -1,5 +1,5 @@
 app "test-base64"
-    packages { pf: "platform" }
+    packages { pf: "platform/main.roc" }
     imports [pf.Task, Base64]
     provides [main] to pf
 

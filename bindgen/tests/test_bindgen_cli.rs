@@ -129,6 +129,9 @@ mod bindgen_cli_run {
         advanced_recursive_union:"advanced-recursive-union" => indoc!(r#"
             rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { tool: Tool::SystemTool(R4 { name: "test", num: 42 }) }), inputFiles: ["foo"] }) }
         "#),
+        list_recursive_union:"list-recursive-union" => indoc!(r#"
+            rbt was: Rbt { default: Job::Job(R1 { command: Command::Command(R2 { args: [], tool: Tool::SystemTool(R3 { name: "test" }) }), inputFiles: ["foo"], job: [] }) }
+        "#),
     }
 
     fn check_for_tests(all_fixtures: &mut roc_collections::VecSet<String>) {
@@ -167,7 +170,7 @@ mod bindgen_cli_run {
         platform_dir: &'a Path,
         args: I,
     ) -> Out {
-        let package_config = platform_dir.join("Package-Config.roc");
+        let platform_module_path = platform_dir.join("platform.roc");
         let bindings_file = platform_dir.join("src").join("bindings.rs");
         let fixture_templates_dir = platform_dir
             .parent()
@@ -192,7 +195,7 @@ mod bindgen_cli_run {
         let bindgen_out = run_bindgen(
             // converting these all to String avoids lifetime issues
             args.into_iter().map(|arg| arg.to_string()).chain([
-                package_config.to_str().unwrap().to_string(),
+                platform_module_path.to_str().unwrap().to_string(),
                 bindings_file.to_str().unwrap().to_string(),
             ]),
         );
