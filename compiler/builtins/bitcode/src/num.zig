@@ -54,8 +54,6 @@ pub fn mul_u128(a: u128, b: u128) U256 {
     return .{ .hi = hi, .lo = lo };
 }
 
-
-
 pub fn exportParseInt(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(buf: RocStr) callconv(.C) NumParseResult(T) {
