@@ -2231,6 +2231,28 @@ fn to_doc_help<'b>(
                 .collect(),
         ),
 
+        Alias(Symbol::NUM_NUM, mut args, _, _) => {
+            debug_assert!(args.len() == 1);
+            let type_arg = args.remove(0);
+
+            let (symbol, args) = match type_arg {
+                Alias(Symbol::NUM_FLOATINGPOINT, inner_args, _, _) => {
+                    (Symbol::NUM_FRAC, inner_args)
+                }
+                Alias(Symbol::NUM_INTEGER, inner_args, _, _) => (Symbol::NUM_INT, inner_args),
+                _ => (Symbol::NUM_NUM, vec![type_arg]),
+            };
+
+            report_text::apply(
+                alloc,
+                parens,
+                alloc.symbol_foreign_qualified(symbol),
+                args.into_iter()
+                    .map(|arg| to_doc_help(ctx, alloc, Parens::InTypeParam, arg))
+                    .collect(),
+            )
+        }
+
         Alias(symbol, args, _, _) => report_text::apply(
             alloc,
             parens,

@@ -1127,6 +1127,40 @@ mod test_reporting {
     }
 
     #[test]
+    fn unwrap_num_elem_in_list() {
+        report_problem_as(
+            indoc!(
+                r#"
+                [1, 2.2, 0x3]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+                This list contains elements with different types:
+
+                1│  [1, 2.2, 0x3]
+                             ^^^
+
+                Its 3rd element is an integer of type:
+
+                    Int a
+
+                However, the preceding elements in the list all have the type:
+
+                    Frac a
+
+                Every element in a list must have the same type!
+
+                Tip: You can convert between Int and Frac using functions like
+                `Num.toFrac` and `Num.round`.
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn record_update_value() {
         report_problem_as(
             indoc!(
@@ -2673,7 +2707,7 @@ mod test_reporting {
 
                 But `add` needs the 2nd argument to be:
 
-                    Num (Integer a)
+                    Int a
                 "#
             ),
         )
@@ -2702,7 +2736,7 @@ mod test_reporting {
 
                 But `add` needs the 2nd argument to be:
 
-                    Num (Integer a)
+                    Int a
 
                 Tip: You can convert between Int and Frac using functions like
                 `Num.toFrac` and `Num.round`.
@@ -3794,7 +3828,7 @@ mod test_reporting {
 
                 This `ACons` tag application has the type:
 
-                    [ACons (Num (Integer Signed64)) [BCons (Num (Integer Signed64)) [ACons Str [BCons I64 [ACons I64 (BList I64 I64),
+                    [ACons (Int Signed64) [BCons (Int Signed64) [ACons Str [BCons I64 [ACons I64 (BList I64 I64),
                     ANil] as ∞, BNil], ANil], BNil], ANil]
 
                 But the type annotation on `x` says it should be:
