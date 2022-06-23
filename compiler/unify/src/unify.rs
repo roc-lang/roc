@@ -170,7 +170,6 @@ impl MetaCollector for SpecializationLsetCollector {
     const UNIFYING_SPECIALIZATION: bool = true;
 
     fn record_specialization_lambda_set(&mut self, member: Symbol, region: u8, var: Variable) {
-        dbg!((member, region, var));
         self.0.insert((member, region), var);
     }
 
