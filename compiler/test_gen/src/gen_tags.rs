@@ -1703,3 +1703,24 @@ fn issue_2900_unreachable_pattern() {
         true // ignore type errors
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn issue_3261_non_nullable_unwrapped_recursive_union_at_index() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Named : [Named Str (List Named)]
+
+            foo : Named
+            foo = Named "outer" [Named "inner" []]
+
+            Named name outerList = foo
+
+            {name, outerList}.name
+            "#
+        ),
+        RocStr::from("outer"),
+        RocStr
+    )
+}
