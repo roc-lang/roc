@@ -549,6 +549,24 @@ impl<'a> LowLevelCall<'a> {
                 }
                 _ => panic_ret_type(),
             },
+            NumMulSaturated => match self.ret_layout {
+                Layout::Builtin(Builtin::Int(width)) => {
+                    self.load_args_and_call_zig(backend, &bitcode::NUM_MUL_SATURATED_INT[width])
+                }
+                Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                    self.load_args(backend);
+                    backend.code_builder.f32_mul()
+                }
+                Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                    self.load_args(backend);
+                    backend.code_builder.f64_mul()
+                }
+                Layout::Builtin(Builtin::Decimal) => {
+                    self.load_args_and_call_zig(backend, bitcode::DEC_MUL_SATURATED)
+                }
+                _ => panic_ret_type(),
+            },
+
             NumMulChecked => {
                 let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
                 match arg_layout {

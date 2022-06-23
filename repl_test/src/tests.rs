@@ -348,6 +348,11 @@ fn num_mul_wrap() {
     expect_success("Num.mulWrap Num.maxI64 2", "-2 : I64");
 }
 
+#[test]
+fn num_mul_saturated() {
+    expect_success("Num.mulSaturated Num.maxI64 2", "9223372036854775807 : I64");
+}
+
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn num_add_checked() {

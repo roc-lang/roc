@@ -3181,6 +3181,76 @@ fn sub_saturated() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn mul_saturated() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : U8
+            x = 20
+            y : U8
+            y = 20
+            Num.mulSaturated x y
+            "#
+        ),
+        255,
+        u8
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : I8
+            x = -20
+            y : I8
+            y = -20
+            Num.mulSaturated x y
+            "#
+        ),
+        127,
+        i8
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : I8
+            x = 20
+            y : I8
+            y = -20
+            Num.mulSaturated x y
+            "#
+        ),
+        -128,
+        i8
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : I8
+            x = -20
+            y : I8
+            y = 20
+            Num.mulSaturated x y
+            "#
+        ),
+        -128,
+        i8
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : I8
+            x = 20
+            y : I8
+            y = 20
+            Num.mulSaturated x y
+            "#
+        ),
+        127,
+        i8
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn monomorphized_ints() {
     assert_evals_to!(

@@ -5952,7 +5952,7 @@ fn run_low_level<'a, 'ctx, 'env>(
         NumAdd | NumSub | NumMul | NumLt | NumLte | NumGt | NumGte | NumRemUnchecked
         | NumIsMultipleOf | NumAddWrap | NumAddChecked | NumAddSaturated | NumDivUnchecked
         | NumDivCeilUnchecked | NumPow | NumPowInt | NumSubWrap | NumSubChecked
-        | NumSubSaturated | NumMulWrap | NumMulChecked => {
+        | NumSubSaturated | NumMulWrap | NumMulSaturated | NumMulChecked => {
             debug_assert_eq!(args.len(), 2);
 
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(scope, &args[0]);
@@ -6719,6 +6719,11 @@ fn build_int_binop<'a, 'ctx, 'env>(
             throw_on_overflow(env, parent, result, "integer multiplication overflowed!")
         }
         NumMulWrap => bd.build_int_mul(lhs, rhs, "mul_int").into(),
+        NumMulSaturated => call_bitcode_fn(
+            env,
+            &[lhs.into(), rhs.into()],
+            &bitcode::NUM_MUL_SATURATED_INT[int_width],
+        ),
         NumMulChecked => env.call_intrinsic(
             &LLVM_MUL_WITH_OVERFLOW[int_width],
             &[lhs.into(), rhs.into()],
@@ -6988,6 +6993,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
         }
         NumSubWrap => unreachable!("wrapping subtraction is not defined on floats"),
         NumMul => bd.build_float_mul(lhs, rhs, "mul_float").into(),
+        NumMulSaturated => bd.build_float_mul(lhs, rhs, "mul_float").into(),
         NumMulChecked => {
             let context = env.context;
 
