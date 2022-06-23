@@ -1,4 +1,5 @@
 use bitflags::bitflags;
+use roc_collections::VecMap;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::{ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS};
@@ -138,28 +139,80 @@ pub struct Context {
     mode: Mode,
 }
 
+pub trait MetaCollector: Default + std::fmt::Debug {
+    /// Whether we are performing `member ~ specialization` where `member` is an ability member
+    /// signature and `specialization` is an ability specialization for a given type. When this is
+    /// the case, given a lambda set unification like
+    /// `[[] + a:member:1] ~ [specialization-lambda-set]`, only the specialization lambda set will
+    /// be kept around, and the record `(member, 1) => specialization-lambda-set` will be
+    /// associated via [`Self::record_specialization_lambda_set`].
+    const UNIFYING_SPECIALIZATION: bool;
+
+    fn record_specialization_lambda_set(&mut self, member: Symbol, region: u8, var: Variable);
+
+    fn union(&mut self, other: Self);
+}
+
+#[derive(Default, Debug)]
+pub struct NoCollector;
+impl MetaCollector for NoCollector {
+    const UNIFYING_SPECIALIZATION: bool = false;
+
+    fn record_specialization_lambda_set(&mut self, _member: Symbol, _region: u8, _var: Variable) {}
+
+    fn union(&mut self, _other: Self) {}
+}
+
+#[derive(Default, Debug)]
+pub struct SpecializationLsetCollector(pub VecMap<(Symbol, u8), Variable>);
+
+impl MetaCollector for SpecializationLsetCollector {
+    const UNIFYING_SPECIALIZATION: bool = true;
+
+    fn record_specialization_lambda_set(&mut self, member: Symbol, region: u8, var: Variable) {
+        self.0.insert((member, region), var);
+    }
+
+    fn union(&mut self, other: Self) {
+        for (k, v) in other.0.into_iter() {
+            let _old = self.0.insert(k, v);
+            debug_assert!(_old.is_none(), "overwriting known lambda set");
+        }
+    }
+}
+
 #[derive(Debug)]
-pub enum Unified {
+pub enum Unified<M: MetaCollector = NoCollector> {
     Success {
         vars: Pool,
         must_implement_ability: MustImplementConstraints,
         lambda_sets_to_specialize: UlsOfVar,
+
+        /// The vast majority of the time the extra metadata is empty, so we make unification
+        /// polymorphic over metadata collection to avoid unnecessary memory usage.
+        extra_metadata: M,
     },
     Failure(Pool, ErrorType, ErrorType, DoesNotImplementAbility),
     BadType(Pool, roc_types::types::Problem),
 }
 
-impl Unified {
+impl<M: MetaCollector> Unified<M> {
     pub fn expect_success(
         self,
         err_msg: &'static str,
-    ) -> (Pool, MustImplementConstraints, UlsOfVar) {
+    ) -> (Pool, MustImplementConstraints, UlsOfVar, M) {
         match self {
             Unified::Success {
                 vars,
                 must_implement_ability,
                 lambda_sets_to_specialize,
-            } => (vars, must_implement_ability, lambda_sets_to_specialize),
+                extra_metadata,
+            } => (
+                vars,
+                must_implement_ability,
+                lambda_sets_to_specialize,
+                extra_metadata,
+            ),
             _ => internal_error!("{}", err_msg),
         }
     }
@@ -212,7 +265,7 @@ impl MustImplementConstraints {
 }
 
 #[derive(Debug, Default)]
-pub struct Outcome {
+pub struct Outcome<M: MetaCollector> {
     mismatches: Vec<Mismatch>,
     /// We defer these checks until the end of a solving phase.
     /// NOTE: this vector is almost always empty!
@@ -220,25 +273,48 @@ pub struct Outcome {
     /// We defer resolution of these lambda sets to the caller of [unify].
     /// See also [merge_flex_able_with_concrete].
     lambda_sets_to_specialize: UlsOfVar,
+    extra_metadata: M,
 }
 
-impl Outcome {
+impl<M: MetaCollector> Outcome<M> {
     fn union(&mut self, other: Self) {
         self.mismatches.extend(other.mismatches);
         self.must_implement_ability
             .extend(other.must_implement_ability);
         self.lambda_sets_to_specialize
             .union(other.lambda_sets_to_specialize);
+        self.extra_metadata.union(other.extra_metadata);
     }
 }
 
 #[inline(always)]
 pub fn unify(subs: &mut Subs, var1: Variable, var2: Variable, mode: Mode) -> Unified {
+    unify_help(subs, var1, var2, mode)
+}
+
+#[inline(always)]
+pub fn unify_introduced_ability_specialization(
+    subs: &mut Subs,
+    ability_member_signature: Variable,
+    specialization_var: Variable,
+    mode: Mode,
+) -> Unified<SpecializationLsetCollector> {
+    unify_help(subs, ability_member_signature, specialization_var, mode)
+}
+
+#[inline(always)]
+fn unify_help<M: MetaCollector>(
+    subs: &mut Subs,
+    var1: Variable,
+    var2: Variable,
+    mode: Mode,
+) -> Unified<M> {
     let mut vars = Vec::new();
     let Outcome {
         mismatches,
         must_implement_ability,
         lambda_sets_to_specialize,
+        extra_metadata,
     } = unify_pool(subs, &mut vars, var1, var2, mode);
 
     if mismatches.is_empty() {
@@ -246,6 +322,7 @@ pub fn unify(subs: &mut Subs, var1: Variable, var2: Variable, mode: Mode) -> Uni
             vars,
             must_implement_ability,
             lambda_sets_to_specialize,
+            extra_metadata,
         }
     } else {
         let error_context = if mismatches.contains(&Mismatch::TypeNotInRange) {
@@ -282,13 +359,13 @@ pub fn unify(subs: &mut Subs, var1: Variable, var2: Variable, mode: Mode) -> Uni
 }
 
 #[inline(always)]
-pub fn unify_pool(
+pub fn unify_pool<M: MetaCollector>(
     subs: &mut Subs,
     pool: &mut Pool,
     var1: Variable,
     var2: Variable,
     mode: Mode,
-) -> Outcome {
+) -> Outcome<M> {
     if subs.equivalent(var1, var2) {
         Outcome::default()
     } else {
@@ -308,7 +385,11 @@ pub fn unify_pool(
 /// a tree to stderr.
 /// NOTE: Only run this on individual tests! Run on multiple threads, this would clobber each others' output.
 #[cfg(debug_assertions)]
-fn debug_print_unified_types(subs: &mut Subs, ctx: &Context, opt_outcome: Option<&Outcome>) {
+fn debug_print_unified_types<M: MetaCollector>(
+    subs: &mut Subs,
+    ctx: &Context,
+    opt_outcome: Option<&Outcome<M>>,
+) {
     use roc_types::subs::SubsFmtContent;
 
     static mut UNIFICATION_DEPTH: usize = 0;
@@ -358,9 +439,9 @@ fn debug_print_unified_types(subs: &mut Subs, ctx: &Context, opt_outcome: Option
     })
 }
 
-fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
+fn unify_context<M: MetaCollector>(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome<M> {
     #[cfg(debug_assertions)]
-    debug_print_unified_types(subs, &ctx, None);
+    debug_print_unified_types::<M>(subs, &ctx, None);
 
     // This #[allow] is needed in release builds, where `result` is no longer used.
     #[allow(clippy::let_and_return)]
@@ -408,13 +489,13 @@ fn unify_context(subs: &mut Subs, pool: &mut Pool, ctx: Context) -> Outcome {
 }
 
 #[inline(always)]
-fn unify_ranged_number(
+fn unify_ranged_number<M: MetaCollector>(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
     real_var: Variable,
     range_vars: NumericRange,
-) -> Outcome {
+) -> Outcome<M> {
     let other_content = &ctx.second_desc.content;
 
     let outcome = match other_content {
@@ -448,7 +529,11 @@ fn unify_ranged_number(
     check_valid_range(subs, ctx.second, range_vars)
 }
 
-fn check_valid_range(subs: &mut Subs, var: Variable, range: NumericRange) -> Outcome {
+fn check_valid_range<M: MetaCollector>(
+    subs: &mut Subs,
+    var: Variable,
+    range: NumericRange,
+) -> Outcome<M> {
     let content = subs.get_content_without_compacting(var);
 
     match content {
@@ -463,6 +548,7 @@ fn check_valid_range(subs: &mut Subs, var: Variable, range: NumericRange) -> Out
                         mismatches: vec![Mismatch::TypeNotInRange],
                         must_implement_ability: Default::default(),
                         lambda_sets_to_specialize: Default::default(),
+                        extra_metadata: Default::default(),
                     };
 
                     return outcome;
@@ -485,7 +571,7 @@ fn check_valid_range(subs: &mut Subs, var: Variable, range: NumericRange) -> Out
 
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
-fn unify_two_aliases(
+fn unify_two_aliases<M: MetaCollector>(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
@@ -496,7 +582,7 @@ fn unify_two_aliases(
     other_args: AliasVariables,
     other_real_var: Variable,
     other_content: &Content,
-) -> Outcome {
+) -> Outcome<M> {
     if args.len() == other_args.len() {
         let mut outcome = Outcome::default();
         let it = args
@@ -534,14 +620,14 @@ fn unify_two_aliases(
 
 // Unifies a structural alias
 #[inline(always)]
-fn unify_alias(
+fn unify_alias<M: MetaCollector>(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
     symbol: Symbol,
     args: AliasVariables,
     real_var: Variable,
-) -> Outcome {
+) -> Outcome<M> {
     let other_content = &ctx.second_desc.content;
 
     let kind = AliasKind::Structural;
@@ -588,14 +674,14 @@ fn unify_alias(
 }
 
 #[inline(always)]
-fn unify_opaque(
+fn unify_opaque<M: MetaCollector>(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
     symbol: Symbol,
     args: AliasVariables,
     real_var: Variable,
-) -> Outcome {
+) -> Outcome<M> {
     let other_content = &ctx.second_desc.content;
 
     let kind = AliasKind::Opaque;
@@ -655,13 +741,13 @@ fn unify_opaque(
 }
 
 #[inline(always)]
-fn unify_structure(
+fn unify_structure<M: MetaCollector>(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
     flat_type: &FlatType,
     other: &Content,
-) -> Outcome {
+) -> Outcome<M> {
     match other {
         FlexVar(_) => {
             // If the other is flex, Structure wins!
@@ -793,17 +879,35 @@ fn unify_structure(
 }
 
 #[inline(always)]
-fn unify_lambda_set(
+fn unify_lambda_set<M: MetaCollector>(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
     lambda_set: LambdaSet,
     other: &Content,
-) -> Outcome {
+) -> Outcome<M> {
     match other {
-        FlexVar(_) => merge(subs, ctx, Content::LambdaSet(lambda_set)),
+        FlexVar(_) => {
+            if M::UNIFYING_SPECIALIZATION {
+                // TODO: It appears that this can happen in well-typed, reasonable programs, but it's
+                // open question as to why! See also https://github.com/rtfeldman/roc/issues/3163.
+                let zero_lambda_set = LambdaSet {
+                    solved: UnionLabels::default(),
+                    recursion_var: OptVariable::NONE,
+                    unspecialized: SubsSlice::default(),
+                };
+
+                extract_specialization_lambda_set(subs, ctx, lambda_set, zero_lambda_set)
+            } else {
+                merge(subs, ctx, Content::LambdaSet(lambda_set))
+            }
+        }
         Content::LambdaSet(other_lambda_set) => {
-            unify_lambda_set_help(subs, pool, ctx, lambda_set, *other_lambda_set)
+            if M::UNIFYING_SPECIALIZATION {
+                extract_specialization_lambda_set(subs, ctx, lambda_set, *other_lambda_set)
+            } else {
+                unify_lambda_set_help(subs, pool, ctx, lambda_set, *other_lambda_set)
+            }
         }
         RecursionVar { structure, .. } => {
             // suppose that the recursion var is a lambda set
@@ -818,13 +922,57 @@ fn unify_lambda_set(
     }
 }
 
-fn unify_lambda_set_help(
+fn extract_specialization_lambda_set<M: MetaCollector>(
+    subs: &mut Subs,
+    ctx: &Context,
+    ability_member_proto_lset: LambdaSet,
+    specialization_lset: LambdaSet,
+) -> Outcome<M> {
+    // We should have the unspecialized ability member lambda set on the left and the
+    // specialization lambda set on the right. E.g.
+    //
+    //   [[] + a:toEncoder:1] ~ [[myTypeLset]]
+    //
+    // Taking that example, we keep around [[myTypeLset]] in the unification and associate
+    // (toEncoder, 1) => [[myTypeLset]] in the metadata collector.
+
+    let LambdaSet {
+        solved: member_solved,
+        recursion_var: member_rec_var,
+        unspecialized: member_uls_slice,
+    } = ability_member_proto_lset;
+
+    debug_assert!(
+        member_solved.is_empty(),
+        "member signature should not have solved lambda sets"
+    );
+    debug_assert!(member_rec_var.is_none());
+
+    let member_uls = subs.get_subs_slice(member_uls_slice);
+    debug_assert_eq!(
+        member_uls.len(),
+        1,
+        "member signature lambda sets should contain only one unspecialized lambda set"
+    );
+
+    let Uls(_, member, region) = member_uls[0];
+
+    let mut outcome: Outcome<M> = merge(subs, ctx, Content::LambdaSet(specialization_lset));
+
+    outcome
+        .extra_metadata
+        .record_specialization_lambda_set(member, region, ctx.second);
+
+    outcome
+}
+
+fn unify_lambda_set_help<M: MetaCollector>(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
     lset1: self::LambdaSet,
     lset2: self::LambdaSet,
-) -> Outcome {
+) -> Outcome<M> {
     // LambdaSets unify like TagUnions, but can grow unbounded regardless of the extension
     // variable.
 
@@ -876,7 +1024,7 @@ fn unify_lambda_set_help(
             maybe_mark_union_recursive(subs, var1);
             maybe_mark_union_recursive(subs, var2);
 
-            let outcome = unify_pool(subs, pool, var1, var2, ctx.mode);
+            let outcome = unify_pool::<M>(subs, pool, var1, var2, ctx.mode);
 
             if outcome.mismatches.is_empty() {
                 matching_vars.push(var1);
@@ -980,12 +1128,12 @@ fn unify_lambda_set_help(
 // resolve these cases here.
 //
 // See tests labeled "issue_2810" for more examples.
-fn fix_tag_union_recursion_variable(
+fn fix_tag_union_recursion_variable<M: MetaCollector>(
     subs: &mut Subs,
     ctx: &Context,
     tag_union_promoted_to_recursive: Variable,
     recursion_var: &Content,
-) -> Outcome {
+) -> Outcome<M> {
     debug_assert!(matches!(
         subs.get_content_without_compacting(tag_union_promoted_to_recursive),
         Structure(FlatType::RecursiveTagUnion(..))
@@ -1002,7 +1150,7 @@ fn fix_tag_union_recursion_variable(
     }
 }
 
-fn unify_record(
+fn unify_record<M: MetaCollector>(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
@@ -1010,7 +1158,7 @@ fn unify_record(
     ext1: Variable,
     fields2: RecordFields,
     ext2: Variable,
-) -> Outcome {
+) -> Outcome<M> {
     let (separate, ext1, ext2) = separate_record_fields(subs, fields1, ext1, fields2, ext2);
 
     let shared_fields = separate.in_both;
@@ -1118,14 +1266,14 @@ enum OtherFields {
 
 type SharedFields = Vec<(Lowercase, (RecordField<Variable>, RecordField<Variable>))>;
 
-fn unify_shared_fields(
+fn unify_shared_fields<M: MetaCollector>(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
     shared_fields: SharedFields,
     other_fields: OtherFields,
     ext: Variable,
-) -> Outcome {
+) -> Outcome<M> {
     let mut matching_fields = Vec::with_capacity(shared_fields.len());
     let num_shared_fields = shared_fields.len();
 
@@ -1375,7 +1523,7 @@ enum Rec {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn unify_tag_unions(
+fn unify_tag_unions<M: MetaCollector>(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
@@ -1384,7 +1532,7 @@ fn unify_tag_unions(
     tags2: UnionTags,
     initial_ext2: Variable,
     recursion_var: Rec,
-) -> Outcome {
+) -> Outcome<M> {
     let (separate, mut ext1, ext2) =
         separate_union_tags(subs, tags1, initial_ext1, tags2, initial_ext2);
 
@@ -1593,7 +1741,7 @@ fn maybe_mark_union_recursive(subs: &mut Subs, union_var: Variable) {
     }
 }
 
-fn unify_shared_tags_new(
+fn unify_shared_tags_new<M: MetaCollector>(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
@@ -1601,7 +1749,7 @@ fn unify_shared_tags_new(
     other_tags: OtherTags2,
     ext: Variable,
     recursion_var: Rec,
-) -> Outcome {
+) -> Outcome<M> {
     let mut matching_tags = Vec::default();
     let num_shared_tags = shared_tags.len();
 
@@ -1646,7 +1794,7 @@ fn unify_shared_tags_new(
             maybe_mark_union_recursive(subs, actual);
             maybe_mark_union_recursive(subs, expected);
 
-            let mut outcome = Outcome::default();
+            let mut outcome = Outcome::<M>::default();
 
             outcome.union(unify_pool(subs, pool, actual, expected, ctx.mode));
 
@@ -1719,13 +1867,13 @@ fn unify_shared_tags_new(
     }
 }
 
-fn unify_shared_tags_merge_new(
+fn unify_shared_tags_merge_new<M: MetaCollector>(
     subs: &mut Subs,
     ctx: &Context,
     new_tags: UnionTags,
     new_ext_var: Variable,
     recursion_var: Rec,
-) -> Outcome {
+) -> Outcome<M> {
     let flat_type = match recursion_var {
         Rec::None => FlatType::TagUnion(new_tags, new_ext_var),
         Rec::Left(rec) | Rec::Right(rec) | Rec::Both(rec, _) => {
@@ -1738,13 +1886,13 @@ fn unify_shared_tags_merge_new(
 }
 
 #[inline(always)]
-fn unify_flat_type(
+fn unify_flat_type<M: MetaCollector>(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
     left: &FlatType,
     right: &FlatType,
-) -> Outcome {
+) -> Outcome<M> {
     use roc_types::subs::FlatType::*;
 
     match (left, right) {
@@ -1924,12 +2072,12 @@ fn unify_flat_type(
     }
 }
 
-fn unify_zip_slices(
+fn unify_zip_slices<M: MetaCollector>(
     subs: &mut Subs,
     pool: &mut Pool,
     left: SubsSlice<Variable>,
     right: SubsSlice<Variable>,
-) -> Outcome {
+) -> Outcome<M> {
     let mut outcome = Outcome::default();
 
     let it = left.into_iter().zip(right.into_iter());
@@ -1945,12 +2093,12 @@ fn unify_zip_slices(
 }
 
 #[inline(always)]
-fn unify_rigid(
+fn unify_rigid<M: MetaCollector>(
     subs: &mut Subs,
     ctx: &Context,
     name: &SubsIndex<Lowercase>,
     other: &Content,
-) -> Outcome {
+) -> Outcome<M> {
     match other {
         FlexVar(_) => {
             // If the other is flex, rigid wins!
@@ -1985,13 +2133,13 @@ fn unify_rigid(
 }
 
 #[inline(always)]
-fn unify_rigid_able(
+fn unify_rigid_able<M: MetaCollector>(
     subs: &mut Subs,
     ctx: &Context,
     name: &SubsIndex<Lowercase>,
     ability: Symbol,
     other: &Content,
-) -> Outcome {
+) -> Outcome<M> {
     match other {
         FlexVar(_) => {
             // If the other is flex, rigid wins!
@@ -2034,12 +2182,12 @@ fn unify_rigid_able(
 }
 
 #[inline(always)]
-fn unify_flex(
+fn unify_flex<M: MetaCollector>(
     subs: &mut Subs,
     ctx: &Context,
     opt_name: &Option<SubsIndex<Lowercase>>,
     other: &Content,
-) -> Outcome {
+) -> Outcome<M> {
     match other {
         FlexVar(other_opt_name) => {
             // Prefer using right's name.
@@ -2070,13 +2218,13 @@ fn unify_flex(
 }
 
 #[inline(always)]
-fn unify_flex_able(
+fn unify_flex_able<M: MetaCollector>(
     subs: &mut Subs,
     ctx: &Context,
     opt_name: &Option<SubsIndex<Lowercase>>,
     ability: Symbol,
     other: &Content,
-) -> Outcome {
+) -> Outcome<M> {
     match other {
         FlexVar(opt_other_name) => {
             // Prefer using right's name.
@@ -2147,14 +2295,14 @@ fn unify_flex_able(
     }
 }
 
-fn merge_flex_able_with_concrete(
+fn merge_flex_able_with_concrete<M: MetaCollector>(
     subs: &mut Subs,
     ctx: &Context,
     flex_able_var: Variable,
     ability: Symbol,
     concrete_content: Content,
     concrete_obligation: Obligated,
-) -> Outcome {
+) -> Outcome<M> {
     let mut outcome = merge(subs, ctx, concrete_content);
     let must_implement_ability = MustImplementAbility {
         typ: concrete_obligation,
@@ -2178,14 +2326,14 @@ fn merge_flex_able_with_concrete(
 }
 
 #[inline(always)]
-fn unify_recursion(
+fn unify_recursion<M: MetaCollector>(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
     opt_name: &Option<SubsIndex<Lowercase>>,
     structure: Variable,
     other: &Content,
-) -> Outcome {
+) -> Outcome<M> {
     match other {
         RecursionVar {
             opt_name: other_opt_name,
@@ -2247,6 +2395,8 @@ fn unify_recursion(
         ),
 
         LambdaSet(..) => {
+            debug_assert!(!M::UNIFYING_SPECIALIZATION);
+
             // suppose that the recursion var is a lambda set
             unify_pool(subs, pool, structure, ctx.second, ctx.mode)
         }
@@ -2255,7 +2405,7 @@ fn unify_recursion(
     }
 }
 
-pub fn merge(subs: &mut Subs, ctx: &Context, content: Content) -> Outcome {
+pub fn merge<M: MetaCollector>(subs: &mut Subs, ctx: &Context, content: Content) -> Outcome<M> {
     let rank = ctx.first_desc.rank.min(ctx.second_desc.rank);
     let desc = Descriptor {
         content,
@@ -2298,7 +2448,7 @@ fn is_recursion_var(subs: &Subs, var: Variable) -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn unify_function_or_tag_union_and_func(
+fn unify_function_or_tag_union_and_func<M: MetaCollector>(
     subs: &mut Subs,
     pool: &mut Pool,
     ctx: &Context,
@@ -2309,7 +2459,7 @@ fn unify_function_or_tag_union_and_func(
     function_return: Variable,
     function_lambda_set: Variable,
     left: bool,
-) -> Outcome {
+) -> Outcome<M> {
     let tag_name = subs[*tag_name_index].clone();
 
     let union_tags = UnionTags::insert_slices_into_subs(subs, [(tag_name, function_arguments)]);

@@ -652,7 +652,7 @@ pub fn resolve_ability_specialization(
     let signature_var = member_def.signature_var();
 
     instantiate_rigids(subs, signature_var);
-    let (_vars, must_implement_ability, _lambda_sets_to_specialize) =
+    let (_vars, must_implement_ability, _lambda_sets_to_specialize, _meta) =
         unify(subs, specialization_var, signature_var, Mode::EQ).expect_success(
             "If resolving a specialization, the specialization must be known to typecheck.",
         );
