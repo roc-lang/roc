@@ -15,6 +15,47 @@ pub fn NumParseResult(comptime T: type) type {
     };
 }
 
+pub const U256 = struct {
+    hi: u128,
+    lo: u128,
+};
+
+pub fn mul_u128(a: u128, b: u128) U256 {
+    var hi: u128 = undefined;
+    var lo: u128 = undefined;
+
+    const bits_in_dword_2: u32 = 64;
+    const lower_mask: u128 = math.maxInt(u128) >> bits_in_dword_2;
+
+    lo = (a & lower_mask) * (b & lower_mask);
+
+    var t = lo >> bits_in_dword_2;
+
+    lo &= lower_mask;
+
+    t += (a >> bits_in_dword_2) * (b & lower_mask);
+
+    lo += (t & lower_mask) << bits_in_dword_2;
+
+    hi = t >> bits_in_dword_2;
+
+    t = lo >> bits_in_dword_2;
+
+    lo &= lower_mask;
+
+    t += (b >> bits_in_dword_2) * (a & lower_mask);
+
+    lo += (t & lower_mask) << bits_in_dword_2;
+
+    hi += t >> bits_in_dword_2;
+
+    hi += (a >> bits_in_dword_2) * (b >> bits_in_dword_2);
+
+    return .{ .hi = hi, .lo = lo };
+}
+
+
+
 pub fn exportParseInt(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(buf: RocStr) callconv(.C) NumParseResult(T) {
@@ -315,19 +356,67 @@ pub fn exportSubOrPanic(comptime T: type, comptime name: []const u8) void {
 fn mulWithOverflow(comptime T: type, comptime W: type, self: T, other: T) WithOverflow(T) {
     switch (@typeInfo(T)) {
         .Int => {
-            const self_wide: W = self;
-            const other_wide: W = other;
-            const answer: W = self_wide * other_wide;
+            if (T == i128) {
+                const is_answer_negative = (self < 0) != (other < 0);
+                const max = std.math.maxInt(i128);
+                const min = std.math.minInt(i128);
 
-            const max: W = std.math.maxInt(T);
-            const min: W = std.math.minInt(T);
+                const self_u128 = @intCast(u128, math.absInt(self) catch {
+                    if (other == 0) {
+                        return .{ .value = 0, .has_overflowed = false };
+                    } else if (other == 1) {
+                        return .{ .value = self, .has_overflowed = false };
+                    } else if (is_answer_negative) {
+                        return .{ .value = min, .has_overflowed = true };
+                    } else {
+                        return .{ .value = max, .has_overflowed = true };
+                    }
+                });
 
-            if (answer > max) {
-                return .{ .value = max, .has_overflowed = true };
-            } else if (answer < min) {
-                return .{ .value = min, .has_overflowed = true };
+                const other_u128 = @intCast(u128, math.absInt(other) catch {
+                    if (self == 0) {
+                        return .{ .value = 0, .has_overflowed = false };
+                    } else if (self == 1) {
+                        return .{ .value = other, .has_overflowed = false };
+                    } else if (is_answer_negative) {
+                        return .{ .value = min, .has_overflowed = true };
+                    } else {
+                        return .{ .value = max, .has_overflowed = true };
+                    }
+                });
+
+                const answer256: U256 = mul_u128(self_u128, other_u128);
+
+                if (is_answer_negative) {
+                    if (answer256.hi != 0 or answer256.lo > (1 << 127)) {
+                        return .{ .value = min, .has_overflowed = true };
+                    } else if (answer256.lo == (1 << 127)) {
+                        return .{ .value = min, .has_overflowed = false };
+                    } else {
+                        return .{ .value = -@intCast(i128, answer256.lo), .has_overflowed = false };
+                    }
+                } else {
+                    if (answer256.hi != 0 or answer256.lo > @intCast(u128, max)) {
+                        return .{ .value = max, .has_overflowed = true };
+                    } else {
+                        return .{ .value = @intCast(i128, answer256.lo), .has_overflowed = false };
+                    }
+                }
             } else {
-                return .{ .value = @intCast(T, answer), .has_overflowed = false };
+                const self_wide: W = self;
+                const other_wide: W = other;
+                const answer: W = self_wide * other_wide;
+
+                const max: W = std.math.maxInt(T);
+                const min: W = std.math.minInt(T);
+
+                if (answer > max) {
+                    return .{ .value = max, .has_overflowed = true };
+                } else if (answer < min) {
+                    return .{ .value = min, .has_overflowed = true };
+                } else {
+                    return .{ .value = @intCast(T, answer), .has_overflowed = false };
+                }
             }
         },
         else => {

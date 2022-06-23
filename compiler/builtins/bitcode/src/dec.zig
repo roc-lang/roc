@@ -8,6 +8,8 @@ const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 const RocStr = str.RocStr;
 const WithOverflow = utils.WithOverflow;
 const roc_panic = utils.panic;
+const U256 = num_.U256;
+const mul_u128 = num_.mul_u128;
 
 pub const RocDec = extern struct {
     num: i128,
@@ -295,8 +297,10 @@ pub const RocDec = extern struct {
                 return .{ .value = RocDec{ .num = 0 }, .has_overflowed = false };
             } else if (other_i128 == RocDec.one_point_zero.num) {
                 return .{ .value = self, .has_overflowed = false };
-            } else {
+            } else if (is_answer_negative) {
                 return .{ .value = RocDec.min, .has_overflowed = true };
+            } else {
+                return .{ .value = RocDec.max, .has_overflowed = true };
             }
         });
 
@@ -305,8 +309,10 @@ pub const RocDec = extern struct {
                 return .{ .value = RocDec{ .num = 0 }, .has_overflowed = false };
             } else if (self_i128 == RocDec.one_point_zero.num) {
                 return .{ .value = other, .has_overflowed = false };
-            } else {
+            } else if (is_answer_negative) {
                 return .{ .value = RocDec.min, .has_overflowed = true };
+            } else {
+                return .{ .value = RocDec.max, .has_overflowed = true };
             }
         });
 
@@ -428,11 +434,6 @@ inline fn count_trailing_zeros_base10(input: i128) u6 {
     return count;
 }
 
-const U256 = struct {
-    hi: u128,
-    lo: u128,
-};
-
 fn mul_and_decimalize(a: u128, b: u128) i128 {
     const answer_u256 = mul_u128(a, b);
 
@@ -548,40 +549,6 @@ fn mul_and_decimalize(a: u128, b: u128) i128 {
     // need to left shift 321 times
     // 315 - 256 is 59. So left shift d, c 59 times.
     return @intCast(i128, c >> 59 | (d << (128 - 59)));
-}
-
-fn mul_u128(a: u128, b: u128) U256 {
-    var hi: u128 = undefined;
-    var lo: u128 = undefined;
-
-    const bits_in_dword_2: u32 = 64;
-    const lower_mask: u128 = math.maxInt(u128) >> bits_in_dword_2;
-
-    lo = (a & lower_mask) * (b & lower_mask);
-
-    var t = lo >> bits_in_dword_2;
-
-    lo &= lower_mask;
-
-    t += (a >> bits_in_dword_2) * (b & lower_mask);
-
-    lo += (t & lower_mask) << bits_in_dword_2;
-
-    hi = t >> bits_in_dword_2;
-
-    t = lo >> bits_in_dword_2;
-
-    lo &= lower_mask;
-
-    t += (b >> bits_in_dword_2) * (a & lower_mask);
-
-    lo += (t & lower_mask) << bits_in_dword_2;
-
-    hi += t >> bits_in_dword_2;
-
-    hi += (a >> bits_in_dword_2) * (b >> bits_in_dword_2);
-
-    return .{ .hi = hi, .lo = lo };
 }
 
 // Multiply two 128-bit ints and divide the result by 10^DECIMAL_PLACES
