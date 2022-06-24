@@ -34,6 +34,8 @@ pub struct DerivedModule {
     map: MutMap<DeriveKey, (Symbol, Def)>,
     subs: Subs,
     derived_ident_ids: IdentIds,
+
+    /// Has someone stolen subs/ident ids from us?
     #[cfg(debug_assertions)]
     stolen: bool,
 }
