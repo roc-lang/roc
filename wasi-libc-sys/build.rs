@@ -26,8 +26,6 @@ fn main() {
             zig_cache_dir.to_str().unwrap(),
             "src/dummy.c",
             &format!("-femit-bin={}/dummy.wasm", out_dir),
-            "--verbose-link",
-            "--verbose-cc"
         ])
         .output()
         .unwrap());
