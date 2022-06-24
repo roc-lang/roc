@@ -133,6 +133,11 @@ impl DerivedModule {
     pub fn iter_all(
         &self,
     ) -> impl Iterator<Item = (&DeriveKey, &(Symbol, Def, SpecializationLambdaSets))> {
+        #[cfg(debug_assertions)]
+        {
+            debug_assert!(!self.stolen);
+        }
+
         self.map.iter()
     }
 
@@ -140,6 +145,11 @@ impl DerivedModule {
     /// module; other modules should use [`Self::get_or_insert`] to generate a symbol for a derived
     /// ability member usage.
     pub fn gen_unique(&mut self) -> Symbol {
+        #[cfg(debug_assertions)]
+        {
+            debug_assert!(!self.stolen);
+        }
+
         let ident_id = self.derived_ident_ids.gen_unique();
         Symbol::new(DERIVED_SYNTH, ident_id)
     }
@@ -210,6 +220,30 @@ impl DerivedModule {
 
     pub fn decompose(self) -> (Subs, IdentIds) {
         (self.subs, self.derived_ident_ids)
+    }
+
+    pub fn copy_lambda_set_var_to_subs(&self, var: Variable, target: &mut Subs) -> Variable {
+        #[cfg(debug_assertions)]
+        {
+            debug_assert!(!self.stolen);
+        }
+
+        let copied_import = copy_import_to(
+            &self.subs,
+            target,
+            // bookkeep unspecialized lambda sets of var - I think we want this here
+            true,
+            var,
+            // TODO: I think this is okay because the only use of `copy_lambda_set_var_to_subs`
+            // (at least right now) is for lambda set compaction, which will automatically unify
+            // and lower ranks, and never generalize.
+            //
+            // However this is a bad coupling and maybe not a good assumption, we should revisit
+            // this when possible.
+            Rank::toplevel(),
+        );
+
+        copied_import.variable
     }
 }
 
