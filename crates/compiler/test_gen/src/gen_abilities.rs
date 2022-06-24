@@ -427,6 +427,7 @@ fn encode_derived_string() {
 }
 
 #[test]
+#[ignore]
 #[cfg(any(feature = "gen-llvm"))]
 fn encode_derived_record() {
     assert_evals_to!(
