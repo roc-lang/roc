@@ -6,6 +6,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  ZIG_VERSION: 0.9.1
+
 jobs:
   test-and-build:
     name: Rust tests, build and package nightly release
@@ -15,9 +18,11 @@ jobs:
       - uses: actions/checkout@v2
 
       - name: Install zig
-        uses: goto-bus-stop/setup-zig@v1
-        with:
-          version: 0.9.1
+        run: |
+          curl -L -o zig.tar.xz https://ziglang.org/download/${ZIG_VERSION}/zig-macos-x86_64-${ZIG_VERSION}.tar.xz && tar -xf zig.tar.xz
+          echo "${GITHUB_WORKSPACE}/zig-macos-x86_64-${ZIG_VERSION}" >> $GITHUB_PATH
+      - name: zig version
+        run: zig version
       - name: Install LLVM and Clang
         uses: KyleMayes/install-llvm-action@v1
         with:
@@ -31,8 +36,6 @@ jobs:
           echo "CPPFLAGS=-I$LLVM_PATH/include" >> $GITHUB_ENV
           echo "CC=$LLVM_PATH/bin/clang" >> $GITHUB_ENV
           echo "CXX=$LLVM_PATH/bin/clang++" >> $GITHUB_ENV
-      - name: print CPATH
-        run: echo $CPATH
       - name: execute rust tests
         uses: actions-rs/cargo@v1
         with:
