@@ -403,3 +403,47 @@ fn to_encoder_encode_custom_has_capture() {
         RocStr
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn encode_derived_string() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ toEncoder }, Json]
+                provides [main] to "./platform"
+
+            main =
+                result = Str.fromUtf8 (Encode.toBytes "foo" Json.format)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from("\"foo\""),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn encode_derived_record() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ toEncoder }, Json]
+                provides [main] to "./platform"
+
+            main =
+                result = Str.fromUtf8 (Encode.toBytes {a: "foo"} Json.format)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from("foo"),
+        RocStr
+    )
+}

@@ -205,7 +205,7 @@ impl DerivedModule {
             &self.subs,
             target,
             // bookkeep unspecialized lambda sets of var - I think we want this here
-            true,
+            false,
             var,
             // TODO: I think this is okay because the only use of `copy_lambda_set_var_to_subs`
             // (at least right now) is for lambda set compaction, which will automatically unify
@@ -213,8 +213,8 @@ impl DerivedModule {
             //
             // However this is a bad coupling and maybe not a good assumption, we should revisit
             // this when possible.
-            // Rank::toplevel(),
-            target_rank,
+            Rank::import(),
+            // target_rank,
         );
 
         copied_import.variable

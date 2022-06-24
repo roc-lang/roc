@@ -2706,7 +2706,15 @@ fn finish_specialization(
         .into_inner()
         .into_module_ids();
 
-    let all_ident_ids = state.constrained_ident_ids;
+    let mut all_ident_ids = state.constrained_ident_ids;
+    // Steal the derived symbols and put them in the global ident ids. Since we're done, we won't
+    // need them again.
+    let StolenFromDerived {
+        ident_ids: derived_ident_ids,
+        subs: _,
+    } = state.derived_module.lock().unwrap().steal();
+    ModuleId::DERIVED.register_debug_idents(&derived_ident_ids);
+    all_ident_ids.insert(ModuleId::DERIVED, derived_ident_ids);
 
     let interns = Interns {
         module_ids,
@@ -4113,7 +4121,10 @@ fn run_solve_solve(
     }
 
     let (solved_subs, solved_specializations, exposed_vars_by_symbol, problems, abilities_store) = {
+        let module_id = module.module_id;
+
         let (solved_subs, solved_env, problems, abilities_store) = roc_solve::module::run_solve(
+            module_id,
             &constraints,
             actual_constraint,
             rigid_variables,
@@ -4125,7 +4136,6 @@ fn run_solve_solve(
             derived_module,
         );
 
-        let module_id = module.module_id;
         // Figure out what specializations belong to this module
         let solved_specializations: ResolvedSpecializations = abilities_store
             .iter_specializations()

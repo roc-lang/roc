@@ -2923,6 +2923,7 @@ fn specialize_external<'a>(
     host_exposed_variables: &[(Symbol, Variable)],
     partial_proc_id: PartialProcId,
 ) -> Result<Proc<'a>, LayoutProblem> {
+    dbg!(("spec ", proc_name));
     let partial_proc = procs.partial_procs.get_id(partial_proc_id);
     let captured_symbols = partial_proc.captured_symbols;
 
@@ -2930,7 +2931,16 @@ fn specialize_external<'a>(
     let snapshot = env.subs.snapshot();
     let cache_snapshot = layout_cache.snapshot();
 
+    let ann = roc_types::subs::SubsFmtContent(
+        env.subs
+            .get_content_without_compacting(partial_proc.annotation),
+        env.subs,
+    );
+    let spec =
+        roc_types::subs::SubsFmtContent(env.subs.get_content_without_compacting(fn_var), env.subs);
+    dbg!(ann, spec);
     let _unified = env.unify(partial_proc.annotation, fn_var);
+    dbg!("done");
 
     // This will not hold for programs with type errors
     // let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));
@@ -4747,6 +4757,12 @@ pub fn with_hole<'a>(
 
             match loc_expr.value {
                 roc_can::expr::Expr::Var(proc_name) if is_known(proc_name) => {
+                    dbg!(proc_name);
+                    dbg!(roc_types::subs::SubsFmtContent(
+                        env.subs.get_content_without_compacting(fn_var),
+                        &env.subs
+                    ));
+
                     // a call by a known name
                     call_by_name(
                         env,

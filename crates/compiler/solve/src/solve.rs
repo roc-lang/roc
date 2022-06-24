@@ -14,8 +14,8 @@ use roc_collections::all::MutMap;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::{ROC_TRACE_COMPACTION, ROC_VERIFY_RIGID_LET_GENERALIZED};
-use roc_derive::SharedDerivedModule;
-use roc_derive_key::{DeriveError, Derived};
+use roc_derive::{DerivedModule, SharedDerivedModule};
+use roc_derive_key::{DeriveError, DeriveKey};
 use roc_error_macros::internal_error;
 use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
@@ -545,6 +545,7 @@ struct State {
 
 #[allow(clippy::too_many_arguments)] // TODO: put params in a context/env var
 pub fn run(
+    home: ModuleId,
     constraints: &Constraints,
     problems: &mut Vec<TypeError>,
     mut subs: Subs,
@@ -556,6 +557,7 @@ pub fn run(
     derived_module: SharedDerivedModule,
 ) -> (Solved<Subs>, Env) {
     let env = run_in_place(
+        home,
         constraints,
         problems,
         &mut subs,
@@ -573,6 +575,7 @@ pub fn run(
 /// Modify an existing subs in-place instead
 #[allow(clippy::too_many_arguments)] // TODO: put params in a context/env var
 fn run_in_place(
+    home: ModuleId,
     constraints: &Constraints,
     problems: &mut Vec<TypeError>,
     subs: &mut Subs,
@@ -617,14 +620,15 @@ fn run_in_place(
     // Now that the module has been solved, we can run through and check all
     // types claimed to implement abilities. This will also tell us what derives
     // are legal, which we need to register.
+    let mut subs_proxy = SubsProxy::new(home, subs, &derived_module);
+
     let new_must_implement = compact_lambda_sets_of_vars(
-        subs,
+        &mut subs_proxy,
         &arena,
         &mut pools,
         deferred_uls_to_resolve,
         &SolvePhase { abilities_store },
         exposed_by_module,
-        &derived_module,
     );
 
     deferred_obligations.add(new_must_implement, AbilityImplError::IncompleteAbility);
@@ -1759,6 +1763,72 @@ fn check_ability_specialization(
     }
 }
 
+/// A proxy for managing [`Subs`] and the derived module, in the presence of possibly having to
+/// solve within the derived module's subs.
+pub struct SubsProxy<'a> {
+    home: ModuleId,
+    subs: &'a mut Subs,
+    derived_module: &'a SharedDerivedModule,
+}
+
+impl<'a> SubsProxy<'a> {
+    /// Creates a new subs proxy with the derived module.
+    /// The contract is:
+    ///   - `subs` is for the `home` module
+    ///   - if `home` is the derived module, then the derived module is not in a stolen state
+    pub fn new(
+        home: ModuleId,
+        subs: &'a mut Subs,
+        derived_module: &'a SharedDerivedModule,
+    ) -> Self {
+        Self {
+            home,
+            subs,
+            derived_module,
+        }
+    }
+
+    fn with_subs<T, F>(&mut self, f: F) -> T
+    where
+        F: FnOnce(&mut Subs) -> T,
+    {
+        if self.home != ModuleId::DERIVED {
+            f(self.subs)
+        } else {
+            let mut derived_module = self.derived_module.lock().unwrap();
+            let mut stolen = derived_module.steal();
+            let result = f(&mut stolen.subs);
+            derived_module.return_stolen(stolen);
+            result
+        }
+    }
+
+    fn with_derived<T, F>(&mut self, f: F) -> T
+    where
+        F: FnOnce(&mut DerivedModule) -> T,
+    {
+        let mut derived_module = self.derived_module.lock().unwrap();
+        f(&mut derived_module)
+    }
+
+    fn copy_lambda_set_var_from_derived_to_subs(
+        &mut self,
+        lambda_set_var_in_derived: Variable,
+        target_rank: Rank,
+    ) -> Variable {
+        if self.home == ModuleId::DERIVED {
+            lambda_set_var_in_derived
+        } else {
+            let derived_module = self.derived_module.lock().unwrap();
+            derived_module.copy_lambda_set_var_to_subs(
+                lambda_set_var_in_derived,
+                self.subs,
+                target_rank,
+            )
+        }
+    }
+}
+
 #[cfg(debug_assertions)]
 fn trace_compaction_step_1(subs: &Subs, c_a: Variable, uls_a: &[Variable]) {
     let c_a = roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(c_a), subs);
@@ -1881,7 +1951,7 @@ fn unique_unspecialized_lambda(subs: &Subs, c_a: Variable, uls: &[Uls]) -> Optio
 
 #[must_use]
 pub fn compact_lambda_sets_of_vars<P: Phase>(
-    subs: &mut Subs,
+    subs: &mut SubsProxy,
     arena: &Bump,
     pools: &mut Pools,
     uls_of_var: UlsOfVar,
@@ -2307,13 +2377,14 @@ fn make_specialization_decision(subs: &Subs, var: Variable) -> SpecializeDecisio
 }
 
 fn get_specialization_lambda_set<P: Phase>(
-    subs: &mut Subs,
+    subs: &mut SubsProxy,
     phase: &P,
     ability_member: Symbol,
     lset_region: u8,
     specialization_key: SpecializationTypeKey,
     exposed_by_module: &ExposedByModule,
     derived_module: &SharedDerivedModule,
+    target_rank: Rank,
 ) -> Result<Variable, ()> {
     match specialization_key {
         SpecializationTypeKey::Opaque(opaque) => {
@@ -2344,27 +2415,25 @@ fn get_specialization_lambda_set<P: Phase>(
                     }
                 })?;
 
-            let local_lset = phase.copy_lambda_set_var_to_home_subs(
-                external_specialized_lset,
-                opaque_home,
-                subs,
-            );
+            let local_lset = subs.with_subs(|subs| {
+                phase.copy_lambda_set_var_to_home_subs(external_specialized_lset, opaque_home, subs)
+            });
 
             Ok(local_lset)
         }
 
         SpecializationTypeKey::Derived(derive_key) => {
-            let mut derived_module = derived_module.lock().unwrap();
+            let specialized_lambda_set = subs.with_derived(|derived_module| {
+                let (_, _, specialization_lambda_sets) =
+                    derived_module.get_or_insert(exposed_by_module, derive_key);
 
-            let (_, _, specialization_lambda_sets) =
-                derived_module.get_or_insert(exposed_by_module, derive_key);
-
-            let &specialized_lambda_set = specialization_lambda_sets
-                .get(&lset_region)
-                .expect("lambda set region not resolved");
+                *specialization_lambda_sets
+                    .get(&lset_region)
+                    .expect("lambda set region not resolved")
+            });
 
             let local_lset =
-                derived_module.copy_lambda_set_var_to_subs(specialized_lambda_set, subs);
+                subs.copy_lambda_set_var_from_derived_to_subs(specialized_lambda_set, target_rank);
 
             Ok(local_lset)
         }
