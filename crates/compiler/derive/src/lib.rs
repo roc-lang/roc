@@ -190,7 +190,12 @@ impl DerivedModule {
         self.derived_ident_ids = ident_ids;
     }
 
-    pub fn copy_lambda_set_var_to_subs(&self, var: Variable, target: &mut Subs) -> Variable {
+    pub fn copy_lambda_set_var_to_subs(
+        &self,
+        var: Variable,
+        target: &mut Subs,
+        target_rank: Rank,
+    ) -> Variable {
         #[cfg(debug_assertions)]
         {
             debug_assert!(!self.stolen);
@@ -208,7 +213,8 @@ impl DerivedModule {
             //
             // However this is a bad coupling and maybe not a good assumption, we should revisit
             // this when possible.
-            Rank::toplevel(),
+            // Rank::toplevel(),
+            target_rank,
         );
 
         copied_import.variable
