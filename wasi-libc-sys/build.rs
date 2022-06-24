@@ -29,6 +29,10 @@ fn main() {
         .output()
         .unwrap();
 
+    println!("{:?}", Command::new("ls")
+            .arg(zig_cache_dir.to_str().unwrap())
+            .output());
+
     let libc_path = find(&zig_cache_dir, &OsString::from("libc.a"))
         .unwrap()
         .unwrap();
