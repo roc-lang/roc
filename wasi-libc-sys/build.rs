@@ -13,7 +13,7 @@ fn main() {
     let zig_cache_dir = PathBuf::from(&out_dir).join("zig-cache");
     let out_file = PathBuf::from(&out_dir).join("wasi-libc.a");
 
-    println!("clang {:?}", Command::new(&zig_executable())
+    println!("clang --version: {:?}", Command::new("clang")
         .args([
             "--version",
         ])
