@@ -10,7 +10,7 @@ use roc_collections::MutMap;
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
 use roc_module::symbol::ModuleId;
-use roc_solve::solve::{compact_lambda_sets_of_vars, Phase, Pools};
+use roc_solve::solve::{compact_lambda_sets_of_vars, Phase, Pools, SubsProxy};
 use roc_types::subs::{Content, FlatType, LambdaSet};
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, Variable};
 use roc_unify::unify::{unify as unify_unify, Mode, Unified};
@@ -174,7 +174,22 @@ pub fn unify(
     left: Variable,
     right: Variable,
 ) -> Result<(), UnificationFailed> {
-    let unified = unify_unify(subs, left, right, Mode::EQ);
+    let unified = if home == ModuleId::DERIVED {
+        // TODO: can we be smarter so more stuff can happen in parallel without us having to lock
+        // and steal from the derived module here?
+        let mut derived_module = derived_module.lock().unwrap();
+
+        let mut stolen = derived_module.steal();
+
+        let unified = unify_unify(&mut stolen.subs, left, right, Mode::EQ);
+
+        derived_module.return_stolen(stolen);
+
+        unified
+    } else {
+        unify_unify(subs, left, right, Mode::EQ)
+    };
+
     match unified {
         Unified::Success {
             vars: _,
@@ -186,14 +201,14 @@ pub fn unify(
 
             let late_phase = LatePhase { home, abilities };
 
+            let mut subs_proxy = SubsProxy::new(home, subs, derived_module);
             let must_implement_constraints = compact_lambda_sets_of_vars(
-                subs,
+                &mut subs_proxy,
                 arena,
                 &mut pools,
                 lambda_sets_to_specialize,
                 &late_phase,
                 exposed_by_module,
-                derived_module,
             );
             // At this point we can't do anything with must-implement constraints, since we're no
             // longer solving. We must assume that they were totally caught during solving.
@@ -209,4 +224,27 @@ pub fn unify(
         }
         Unified::Failure(..) | Unified::BadType(..) => Err(UnificationFailed),
     }
+}
+
+pub fn hack(
+    lset: Variable,
+    home: ModuleId,
+    arena: &Bump,
+    subs: &mut Subs,
+    abilities: &AbilitiesView,
+    derived_module: &SharedDerivedModule,
+    exposed_by_module: &ExposedByModule,
+) {
+    let mut subs_proxy = SubsProxy::new(home, subs, derived_module);
+    let late_phase = LatePhase { home, abilities };
+    let mut uls_of_var = roc_types::subs::UlsOfVar::default();
+    uls_of_var.add(lset, lset);
+    compact_lambda_sets_of_vars(
+        &mut subs_proxy,
+        arena,
+        &mut Pools::default(),
+        uls_of_var,
+        &late_phase,
+        exposed_by_module,
+    );
 }

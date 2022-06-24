@@ -1235,7 +1235,23 @@ impl<'a> Layout<'a> {
         use roc_types::subs::Content::*;
         match content {
             FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar(var)),
-            FlexAbleVar(_, _) | RigidAbleVar(_, _) => todo_abilities!("Not reachable yet"),
+            FlexAbleVar(_, _) | RigidAbleVar(_, _) => {
+                unsafe {
+                    dbg!(
+                        roc_types::subs::SubsFmtContent(
+                            env.subs
+                                .get_content_without_compacting(Variable::from_index(1217)),
+                            &env.subs
+                        ),
+                        roc_types::subs::SubsFmtContent(
+                            env.subs
+                                .get_content_without_compacting(Variable::from_index(1224)),
+                            &env.subs
+                        ),
+                    );
+                }
+                todo_abilities!("Not reachable yet")
+            }
             RecursionVar { structure, .. } => {
                 let structure_content = env.subs.get_content_without_compacting(structure);
                 Self::new_help(env, structure, *structure_content)
@@ -2099,6 +2115,13 @@ fn layout_from_flat_type<'a>(
             }
         }
         Func(_, closure_var, _) => {
+            dbg!(
+                closure_var,
+                roc_types::subs::SubsFmtContent(
+                    env.subs.get_content_without_compacting(closure_var),
+                    &subs
+                )
+            );
             let lambda_set =
                 LambdaSet::from_var(env.arena, env.subs, closure_var, env.target_info)?;
 
@@ -2116,6 +2139,13 @@ fn layout_from_flat_type<'a>(
             for (label, field) in it {
                 match field {
                     RecordField::Required(field_var) | RecordField::Demanded(field_var) => {
+                        dbg!(
+                            label,
+                            roc_types::subs::SubsFmtContent(
+                                subs.get_content_without_compacting(field_var),
+                                subs
+                            )
+                        );
                         sortables.push((label, Layout::from_var(env, field_var)?));
                     }
                     RecordField::Optional(_) => {
