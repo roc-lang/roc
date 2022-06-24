@@ -1,0 +1,25 @@
+on: [pull_request]
+
+name: Nix macOS x86_64 cargo test
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_BACKTRACE: 1
+
+jobs:
+  nix-macos-x86-64:
+    name: nix-macos-x86-64
+    runs-on: [macos-12]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          clean: "true"
+          
+      - uses: cachix/install-nix-action@v15
+
+      - name: execute tests without --release
+        run: nix develop -c cargo test --locked  # no --release yet until #3166 is fixed
