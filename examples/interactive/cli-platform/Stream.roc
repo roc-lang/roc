@@ -1,15 +1,15 @@
-interface OpenFile
-    exposes [OpenFile, OpenErr, MetadataErr, ReadErr, WriteErr, fromStr, toStr]
+interface Stream
+    exposes [Stream, OpenErr, MetadataErr, ReadErr, WriteErr, fromStr, toStr]
     imports [File.{ Metadata }]
 
-## An [OpenFile] represents a [file descriptor](https://en.wikipedia.org/wiki/File_descriptor)
+## An [Stream] represents a [file descriptor](https://en.wikipedia.org/wiki/File_descriptor)
 ## on UNIX systems or a [file handle](https://docs.microsoft.com/en-us/windows/win32/fileio/file-handles)
 ## on Windows.
 ##
 ## When you open a file, for example using [openRead], that file will remain open as long as
-## the [OpenFile] is still referenced anywhere in the program. Once the program no longer has
-## a reference to the [OpenFile], the corresponding file will be closed automatically.
-OpenFile permissions := {
+## the [Stream] is still referenced anywhere in the program. Once the program no longer has
+## a reference to the [Stream], the corresponding file will be closed automatically.
+Stream permissions := {
     # A Windows HANDLE is an isize, and a UNIX file descriptor is i32.
     # A Nat will always be enough to fit either, on a 32-bit or 64-bit target.
     # On a 16-bit target, Nat will be too small, meaning that you can only have
@@ -19,7 +19,7 @@ OpenFile permissions := {
     # which will be bigger than necessary on 32-bit and 16-bit targets, but will work
     # everywhere.
     #
-    # An OpenFile should only ever be created in the host,
+    # An Stream should only ever be created in the host,
     # because only the host can create an entry into the "needs closing on dealloc" hashmap!
     handleOrFd : Nat,
 
@@ -38,48 +38,60 @@ OpenFile permissions := {
 
 ## ## Opening Files
 
+## This has a `Metadata` effect because, like [File.exists], it tells whether a file exists on disk.
+openFileRead : Path -> Task (Stream [Read [Disk]*]) (OpenFileErr *) [Metadata]*
 # TODO what's the win32 call version of `open` in UNIX?
-openRead : Path -> Task (OpenFile [Read [Disk]*]) (OpenErr *) [Read [Disk]*]*
-openWrite : Path -> Task (OpenFile [Write [Disk]*]) (OpenErr *) [Read [Disk]*]*
-openReadWrite : Path -> Task (OpenFile [Read [Disk]*, Write [Disk]*]) (OpenErr *) [Read [Disk]*]*
+openFileWrite : Path -> Task (Stream [Write [Disk]*]) (OpenFileErr *) [Metadata]*
+openFileReadWrite : Path -> Task (Stream [Read [Disk]*, Write [Disk]*]) (OpenFileErr *) [Metadata]*
 
+# https://forums.codeguru.com/showthread.php?280671-using-ReadFile()-and-WriteFile()-with-a-socket
+openSocketRead : SocketInfo -> Task (Stream [Read [Socket]*]) (OpenSocketErr *) *
+openSocketWrite : SocketInfo -> Task (Stream [Write [Socket]*]) (OpenSocketErr *) *
+openSocketReadWrite : SocketInfo -> Task (Stream [Read [Socket]*, Write [Socket]*]) (OpenSocketErr *) *
+
+# TODO does it actually do this? Can you possibly tell if a tempfile already exists this way?
+## This has a `Metadata` effect because, like [File.exists], it tells whether a temporary file
+## with the given name exists on disk.
+openTempRead : Str -> Task (Stream [Read [Disk]*]) (OpenFileErr *) [Metadata]*
 # TODO what are the win32 and Linux calls for tempfiles?
-openTempRead : Str -> Task (OpenFile [Read [Disk]*]) (OpenErr *) [Read [Disk]*]*
-openTempWrite : Str -> Task (OpenFile [Write [Disk]*]) (OpenErr *) [Read [Disk]*]*
-openTempReadWrite : Str -> Task (OpenFile [Read [Disk]*, Write [Disk]*]) (OpenErr *) [Read [Disk]*]*
+## This has a `Write [Disk]` effect because it can create a new temporary file on disk.
+openTempWrite : Str -> Task (Stream [Write [Disk]*]) (OpenFileErr *) [Write [Disk]]*
+openTempReadWrite : Str -> Task (Stream [Read [Disk]*, Write [Disk]*]) (OpenFileErr *) [Metadata]*
 
-openReadRestricted : Path, token -> Task (OpenFile [Read [Disk, Restricted token]*]) (OpenErr *) [Read [Disk]*]*
-openWriteRestricted : Task (OpenFile [Write [Disk, Restricted token]*]) (OpenErr *) [Read [Disk]*]*
-openReadWriteRestricted : Task (OpenFile [Read [Disk, Restricted token]*, Write [Disk, Restricted token]*]) (OpenErr *) [Read [Disk]*]*
+openReadRestricted : Path, token -> Task (Stream [Read [Disk, Restricted token]*]) (OpenFileErr *) [Read [Disk]*]*
+openWriteRestricted : Task (Stream [Write [Disk, Restricted token]*]) (OpenFileErr *) [Read [Disk]*]*
+openReadWriteRestricted : Task (Stream [Read [Disk, Restricted token]*, Write [Disk, Restricted token]*]) (OpenFileErr *) [Read [Disk]*]*
+
+duplicate
 
 ## ## File I/O
 
 # Attempt to read the given number of bytes. There may not have been enough bytes, in which
 # case the List U8 will have a length lower than Nat.
-read : OpenFile [Read a]*, Nat -> Task (List U8) (ReadErr *) [Read a]*
+read : Stream [Read a]*, Nat -> Task (List U8) (ReadErr *) [Read a]*
 
 # pread on Linux - TODO: is there an equivalent on Windows?
-readAt : OpenFile [Read a]*, { bytes : Nat, offset : Nat } -> Task (List U8) (ReadErr *) [Read a]*
+readAt : Stream [Read a]*, { bytes : Nat, offset : Nat } -> Task (List U8) (ReadErr *) [Read a]*
 
 # Technically this means you can read the metadata of stdin/stdout/stderr - which I
 # suppose is well-defined and harmless, but then again it might be a mistake. You
 # can always special-case those if you have a code path that tries to read metadata,
 # by explicitly doing an == check to see if what you have happens to be
-metadata : OpenFile [Read a]* -> Task Metadata (ReadErr *) [Metadata a]*
+metadata : Stream [Read a]* -> Task Metadata (ReadErr *) [Metadata a]*
 
 # write
-write : OpenFile [Write a]*, List U8 -> Task (WriteErr *) [Write a]*
-writeUtf8 : OpenFile [Write a]*, Str -> Task (WriteErr *) [Write a]*
-writeUtf16 : OpenFile [Write a]*, Str -> Task (WriteErr *) [Write a]*
+write : Stream [Write a]*, List U8 -> Task (WriteErr *) [Write a]*
+writeUtf8 : Stream [Write a]*, Str -> Task (WriteErr *) [Write a]*
+writeUtf16 : Stream [Write a]*, Str -> Task (WriteErr *) [Write a]*
 
 # pwrite on UNIX - TODO is there an equivalent in Windows?
-writeAt : OpenFile [Write a]*, List U8, Nat -> Task (WriteErr *) [Write a]*
-writeUtf8At : OpenFile [Write a]*, Str, Nat -> Task (WriteErr *) [Write a]*
-writeUtf16At : OpenFile [Write a]*, Str, Nat -> Task (WriteErr *) [Write a]*
+writeAt : Stream [Write a]*, List U8, Nat -> Task (WriteErr *) [Write a]*
+writeUtf8At : Stream [Write a]*, Str, Nat -> Task (WriteErr *) [Write a]*
+writeUtf16At : Stream [Write a]*, Str, Nat -> Task (WriteErr *) [Write a]*
 
 # Resize to the given number of bytes - ftruncate on UNIX, ??? on Windows
 # TODO: On Linux, ftruncate pads with \0 bytes if you make it bigger. Does it on Windows?
-resize : OpenFile [Write a]*, Nat -> Task (WriteErr *) [Write a]*
+resize : Stream [Write a]*, Nat -> Task (WriteErr *) [Write a]*
 
 # sync() on UNIX - TODO: is there a Windows equivalent?
 flushAll : Task (WriteErr *) [Write a]*
@@ -93,76 +105,76 @@ flushAll : Task (WriteErr *) [Write a]*
 #     computing so that the output will appear.
 # So this means when doing writes to stdout/stderr, may need to flush them explicitly.
 # ALSO means, when doing Stdout.line, should always flush right after I suppose.
-flush : OpenFile [Write a]*, Nat -> Task (WriteErr *) [Write a]*
+flush : Stream [Write a]*, Nat -> Task (WriteErr *) [Write a]*
 
 # fdatasync on UNIX - TODO: is there a Windows equivalent?
 #
 # From the docs: "The aim of fdatasync() is to reduce disk activity for
 # applications that do not require all metadata to be synchronized
 # with the disk."
-flushNonMetadata : OpenFile [Write a]*, Nat -> Task (WriteErr *) [Write a]*
+flushNonMetadata : Stream [Write a]*, Nat -> Task (WriteErr *) [Write a]*
 
 ## ## Standard I/O
 
-## An [OpenFile] to read from [standard output](https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout))
+## An [Stream] to read from [standard output](https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout))
 ## (`stdout`). *Reading* from `stdout` is very uncommon;
 ## it is much more common to write to it, for example using [stdoutWrite].
 ##
 ## The `stdout` file is always open, so there's no need to [open] it.
-stdoutRead : OpenFile [Read [Stdout]*]
+stdoutRead : Stream [Read [Stdout]*]
 
-## An [OpenFile] to write to [standard output](https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout))
+## An [Stream] to write to [standard output](https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout))
 ## (`stdout`).
 ##
 ## The `stdout` file is always open, so there's no need to [open] it.
-stdoutWrite : OpenFile [Write [Stdout]*]
+stdoutWrite : Stream [Write [Stdout]*]
 
-## An [OpenFile] to read from or write to [standard output](https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout))
+## An [Stream] to read from or write to [standard output](https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout))
 ## (`stdout`). *Reading* from `stdout` is very uncommon;
 ## it is much more common to write to it.
 ##
 ## The `stdout` file is always open, so there's no need to [open] it.
-stdoutReadWrite : OpenFile [Read [Stdout]*, Write [Stdout]*]
+stdoutReadWrite : Stream [Read [Stdout]*, Write [Stdout]*]
 
-## An [OpenFile] to read from [standard error](https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr))
+## An [Stream] to read from [standard error](https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr))
 ## (`stderr`). *Reading* from `stderr` is very uncommon;
 ## it is much more common to write to it, for example using [stderrWrite].
 ##
 ## The `stderr` file is always open, so there's no need to [open] it.
-stderrRead : OpenFile [Read [Stderr]*]
+stderrRead : Stream [Read [Stderr]*]
 
-## An [OpenFile] to write to [standard error](https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr))
+## An [Stream] to write to [standard error](https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr))
 ## (`stderr`).
 ##
 ## The `stderr` file is always open, so there's no need to [open] it.
-stderrWrite : OpenFile [Write [Stderr]*]
+stderrWrite : Stream [Write [Stderr]*]
 
-## An [OpenFile] to read from or write to [standard error](https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr))
+## An [Stream] to read from or write to [standard error](https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr))
 ## (`stderr`). *Reading* from `stderr` is very uncommon;
 ## it is much more common to write to it.
 ##
 ## The `stderr` file is always open, so there's no need to [open] it.
-stderrReadWrite : OpenFile [Read [Stderr]*, Write [Stderr]*]
+stderrReadWrite : Stream [Read [Stderr]*, Write [Stderr]*]
 
-## An [OpenFile] to read from [standard input](https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin))
+## An [Stream] to read from [standard input](https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin))
 ## (`stdin`).
 ##
 ## The `stdin` file is always open, so there's no need to [open] it.
-stdinRead : OpenFile [Read [Stdin]*]
+stdinRead : Stream [Read [Stdin]*]
 
-## An [OpenFile] to write to [standard input](https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin))
+## An [Stream] to write to [standard input](https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin))
 ## (`stdin`). *Writing* to `stdin` is very uncommon;
 ## it is much more common to read from it, for example using [stdinRead].
 ##
 ## The `stdin` file is always open, so there's no need to [open] it.
-stdinWrite : OpenFile [Write [Stdin]*]
+stdinWrite : Stream [Write [Stdin]*]
 
-## An [OpenFile] to read from or write to [standard input](https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin))
+## An [Stream] to read from or write to [standard input](https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin))
 ## (`stdin`). *Writing* to `stdin` is very uncommon;
 ## it is much more common to read from it.
 ##
 ## The `stdin` file is always open, so there's no need to [open] it.
-stdinReadWrite : OpenFile [Read [Stdin]*, Write [Stdin]*]
+stdinReadWrite : Stream [Read [Stdin]*, Write [Stdin]*]
 
 ## ## Errors
 
@@ -181,7 +193,7 @@ Source : [
     Path Path,
 ]
 
-# TODO OpenFile needs its own distinct set of errors from File; the latter
+# TODO Stream needs its own distinct set of errors from File; the latter
 # only works with Paths, so its errors should report Path only. In contrast,
 # these should work with Source because you might not have a Path if you're
 # doing a stdio thing.
