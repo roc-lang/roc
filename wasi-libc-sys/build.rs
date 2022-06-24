@@ -1,3 +1,4 @@
+use core::panic;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -13,7 +14,7 @@ fn main() {
     let out_file = PathBuf::from(&out_dir).join("wasi-libc.a");
 
     // Compile a dummy C program with Zig, with our own private cache directory
-    Command::new(&zig_executable())
+    println!("zig build-exe output: {:?}", Command::new(&zig_executable())
         .args([
             "build-exe",
             "-target",
@@ -25,16 +26,20 @@ fn main() {
             zig_cache_dir.to_str().unwrap(),
             "src/dummy.c",
             &format!("-femit-bin={}/dummy.wasm", out_dir),
+            "--verbose-link",
+            "--verbose-cc"
         ])
         .output()
-        .unwrap();
+        .unwrap());
 
-    println!("{:?}", Command::new("tree")
-            .arg(zig_cache_dir.join("o").to_str().unwrap())
-            .output());
+    //panic!("DONE");
 
     let libc_path = find(&zig_cache_dir, &OsString::from("libc.a"))
         .unwrap()
+        .or(
+            find(&zig_cache_dir, &OsString::from("libc.a"))
+            .unwrap()
+        )
         .unwrap();
 
     let compiler_rt_path = find(&zig_cache_dir, &OsString::from("compiler_rt.o"))
