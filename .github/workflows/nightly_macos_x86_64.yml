@@ -36,6 +36,8 @@ jobs:
           echo "CPPFLAGS=-I$LLVM_PATH/include" >> $GITHUB_ENV
           echo "CC=$LLVM_PATH/bin/clang" >> $GITHUB_ENV
           echo "CXX=$LLVM_PATH/bin/clang++" >> $GITHUB_ENV
+      - name: install tree for debugging
+        run: brew install tree
       - name: execute rust tests
         uses: actions-rs/cargo@v1
         with:
