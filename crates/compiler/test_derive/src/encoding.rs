@@ -260,6 +260,7 @@ where
 
     let (_derived_symbol, derived_def, specialization_lsets) =
         derived_module.get_or_insert(&exposed_by_module, key);
+    let derived_symbol = *derived_symbol;
     let specialization_lsets = specialization_lsets.clone();
     let derived_def = derived_def.clone();
 
