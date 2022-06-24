@@ -3251,7 +3251,7 @@ fn mul_saturated() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn monomorphized_ints() {
     assert_evals_to!(
         indoc!(
@@ -3265,12 +3265,12 @@ fn monomorphized_ints() {
             "#
         ),
         18,
-        u64
+        usize
     )
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn monomorphized_floats() {
     assert_evals_to!(
         indoc!(
@@ -3284,12 +3284,12 @@ fn monomorphized_floats() {
             "#
         ),
         18,
-        u64
+        usize
     )
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn monomorphized_ints_names_dont_conflict() {
     assert_evals_to!(
         indoc!(
@@ -3308,7 +3308,7 @@ fn monomorphized_ints_names_dont_conflict() {
             "#
         ),
         18,
-        u64
+        usize
     )
 }
 
@@ -3393,7 +3393,7 @@ fn upcast_of_int_is_zext() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 // https://github.com/rtfeldman/roc/issues/2696
 fn upcast_of_int_checked_is_zext() {
     assert_evals_to!(
