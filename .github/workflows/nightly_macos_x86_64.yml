@@ -24,11 +24,15 @@ jobs:
           version: "13.0.1"
       - name: set Clang up properly
         run: |
+          LLVM_PATH=${{ env.LLVM_PATH }}
+          LLVM_VERSION=13.0.1
           echo "CPATH=$LLVM_PATH/lib/clang/$LLVM_VERSION/include/" >> $GITHUB_ENV
           echo "LDFLAGS=-L$LLVM_PATH/lib" >> $GITHUB_ENV
           echo "CPPFLAGS=-I$LLVM_PATH/include" >> $GITHUB_ENV
           echo "CC=$LLVM_PATH/bin/clang" >> $GITHUB_ENV
           echo "CXX=$LLVM_PATH/bin/clang++" >> $GITHUB_ENV
+      - name: print CPATH
+        run: echo $CPATH
       - name: execute rust tests
         uses: actions-rs/cargo@v1
         with:
