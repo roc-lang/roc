@@ -59,7 +59,7 @@ fn build_derived_body(
                 exposed_types: exposed_by_module,
                 derived_ident_ids,
             };
-            encoding::derive_to_encoder(&mut env, to_encoder_key)
+            encoding::derive_to_encoder(&mut env, to_encoder_key, derived_symbol)
         }
         DeriveKey::Decoding => todo!(),
     };
