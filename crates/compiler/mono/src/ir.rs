@@ -9,6 +9,7 @@ use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_can::abilities::SpecializationId;
 use roc_can::expr::{AnnotatedMark, ClosureData, IntValue};
+use roc_can::module::ExposedByModule;
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
 use roc_collections::VecMap;
 use roc_debug_flags::dbg_do;
@@ -1293,7 +1294,9 @@ pub struct Env<'a, 'i> {
     pub target_info: TargetInfo,
     pub update_mode_ids: &'i mut UpdateModeIds,
     pub call_specialization_counter: u32,
+    // TODO: WorldAbilities and exposed_by_module share things, think about how to combine them
     pub abilities: AbilitiesView<'i>,
+    pub exposed_by_module: &'i ExposedByModule,
     pub derived_module: &'i SharedDerivedModule,
 }
 
@@ -1356,6 +1359,7 @@ impl<'a, 'i> Env<'a, 'i> {
             self.subs,
             &self.abilities,
             self.derived_module,
+            &self.exposed_by_module,
             left,
             right,
         );

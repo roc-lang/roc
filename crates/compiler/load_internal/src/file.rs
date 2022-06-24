@@ -427,6 +427,8 @@ fn start_phase<'a>(
                     ident_ids,
                     exposed_to_host: state.exposed_to_host.clone(),
                     abilities_store,
+                    // TODO: awful, how can we get rid of the clone?
+                    exposed_by_module: state.exposed_types.clone(),
                     derived_module,
                 }
             }
@@ -459,6 +461,7 @@ fn start_phase<'a>(
                             &mut layout_cache,
                             state.target_info,
                             &state.exposed_to_host,
+                            &state.exposed_types,
                             &mut procs_base,
                             &mut state.world_abilities,
                         );
@@ -526,6 +529,8 @@ fn start_phase<'a>(
                     specializations_we_must_make,
                     module_timing,
                     world_abilities: state.world_abilities.clone_ref(),
+                    // TODO: awful, how can we get rid of the clone?
+                    exposed_by_module: state.exposed_types.clone(),
                     derived_module,
                 }
             }
@@ -1050,6 +1055,7 @@ enum BuildTask<'a> {
         ident_ids: IdentIds,
         decls: Declarations,
         exposed_to_host: ExposedToHost,
+        exposed_by_module: ExposedByModule,
         abilities_store: AbilitiesStore,
         derived_module: SharedDerivedModule,
     },
@@ -1061,6 +1067,7 @@ enum BuildTask<'a> {
         layout_cache: LayoutCache<'a>,
         specializations_we_must_make: Vec<ExternalSpecializations<'a>>,
         module_timing: ModuleTiming,
+        exposed_by_module: ExposedByModule,
         world_abilities: WorldAbilities,
         derived_module: SharedDerivedModule,
     },
@@ -3932,7 +3939,7 @@ pub fn add_imports(
     my_module: ModuleId,
     subs: &mut Subs,
     mut pending_abilities: PendingAbilitiesStore,
-    mut exposed_for_module: ExposedForModule,
+    exposed_for_module: &ExposedForModule,
     def_types: &mut Vec<(Symbol, Loc<roc_types::types::Type>)>,
     rigid_vars: &mut Vec<Variable>,
 ) -> (Vec<Variable>, AbilitiesStore) {
@@ -3945,7 +3952,7 @@ pub fn add_imports(
     macro_rules! import_var_for_symbol  {
         ($subs:expr, $exposed_by_module:expr, $symbol:ident, $break:stmt) => {
             let module_id = $symbol.module_id();
-            match $exposed_by_module.get_mut(&module_id) {
+            match $exposed_by_module.get(&module_id) {
                 Some(ExposedModuleTypes {
                     exposed_types_storage_subs: exposed_types,
                     resolved_specializations: _,
@@ -3988,7 +3995,7 @@ pub fn add_imports(
         }
     }
 
-    for symbol in exposed_for_module.imported_values {
+    for &symbol in &exposed_for_module.imported_values {
         import_var_for_symbol!(subs, exposed_for_module.exposed_by_module, symbol, continue);
     }
 
@@ -4014,14 +4021,14 @@ pub fn add_imports(
 
     struct Ctx<'a> {
         subs: &'a mut Subs,
-        exposed_by_module: &'a mut ExposedByModule,
+        exposed_by_module: &'a ExposedByModule,
     }
 
     let abilities_store = pending_abilities.resolve_for_module(
         my_module,
         &mut Ctx {
             subs,
-            exposed_by_module: &mut exposed_for_module.exposed_by_module,
+            exposed_by_module: &exposed_for_module.exposed_by_module,
         },
         |ctx, symbol| match cached_symbol_vars.get(&symbol).copied() {
             Some(var) => var,
@@ -4035,7 +4042,7 @@ pub fn add_imports(
                 *cached_symbol_vars.get(&symbol).unwrap()
             }
         },
-        |ctx, module, lset_var| match ctx.exposed_by_module.get_mut(&module) {
+        |ctx, module, lset_var| match ctx.exposed_by_module.get(&module) {
             Some(ExposedModuleTypes {
                 exposed_types_storage_subs: exposed_types,
                 resolved_specializations: _,
@@ -4091,7 +4098,7 @@ fn run_solve_solve(
         module.module_id,
         &mut subs,
         pending_abilities,
-        exposed_for_module,
+        &exposed_for_module,
         &mut def_types,
         &mut rigid_vars,
     );
@@ -4114,6 +4121,7 @@ fn run_solve_solve(
             solve_aliases,
             abilities_store,
             pending_derives,
+            &exposed_for_module.exposed_by_module,
             derived_module,
         );
 
@@ -4567,6 +4575,7 @@ fn make_specializations<'a>(
     mut module_timing: ModuleTiming,
     target_info: TargetInfo,
     world_abilities: WorldAbilities,
+    exposed_by_module: &ExposedByModule,
     derived_module: SharedDerivedModule,
 ) -> Msg<'a> {
     let make_specializations_start = SystemTime::now();
@@ -4582,6 +4591,7 @@ fn make_specializations<'a>(
         // call_specialization_counter=0 is reserved
         call_specialization_counter: 1,
         abilities: AbilitiesView::World(&world_abilities),
+        exposed_by_module,
         derived_module: &derived_module,
     };
 
@@ -4675,6 +4685,7 @@ fn build_pending_specializations<'a>(
         // to know the types and abilities in our modules. Only for building *all* specializations
         // do we need a global view.
         abilities: AbilitiesView::Module(&abilities_store),
+        exposed_by_module,
         derived_module: &derived_module,
     };
 
@@ -5057,6 +5068,7 @@ fn run_task<'a>(
             imported_module_thunks,
             exposed_to_host,
             abilities_store,
+            exposed_by_module,
             derived_module,
         } => Ok(build_pending_specializations(
             arena,
@@ -5069,6 +5081,7 @@ fn run_task<'a>(
             layout_cache,
             target_info,
             exposed_to_host,
+            &exposed_by_module,
             abilities_store,
             derived_module,
         )),
@@ -5081,6 +5094,7 @@ fn run_task<'a>(
             specializations_we_must_make,
             module_timing,
             world_abilities,
+            exposed_by_module,
             derived_module,
         } => Ok(make_specializations(
             arena,
@@ -5093,6 +5107,7 @@ fn run_task<'a>(
             module_timing,
             target_info,
             world_abilities,
+            &exposed_by_module,
             derived_module,
         )),
     }?;

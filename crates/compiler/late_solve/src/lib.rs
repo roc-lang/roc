@@ -5,6 +5,7 @@ use std::sync::{Arc, RwLock};
 
 use bumpalo::Bump;
 use roc_can::abilities::AbilitiesStore;
+use roc_can::module::ExposedByModule;
 use roc_collections::MutMap;
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
@@ -169,6 +170,7 @@ pub fn unify(
     subs: &mut Subs,
     abilities: &AbilitiesView,
     derived_module: &SharedDerivedModule,
+    exposed_by_module: &ExposedByModule,
     left: Variable,
     right: Variable,
 ) -> Result<(), UnificationFailed> {
@@ -190,6 +192,7 @@ pub fn unify(
                 &mut pools,
                 lambda_sets_to_specialize,
                 &late_phase,
+                exposed_by_module,
                 derived_module,
             );
             // At this point we can't do anything with must-implement constraints, since we're no

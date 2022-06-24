@@ -2,7 +2,7 @@ use crate::solve::{self, Aliases};
 use roc_can::abilities::{AbilitiesStore, ResolvedSpecializations};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::expr::PendingDerives;
-use roc_can::module::RigidVariables;
+use roc_can::module::{ExposedByModule, RigidVariables};
 use roc_collections::all::MutMap;
 use roc_collections::VecMap;
 use roc_derive_key::GlobalDerivedSymbols;
@@ -61,6 +61,7 @@ pub fn run_solve(
     mut aliases: Aliases,
     mut abilities_store: AbilitiesStore,
     pending_derives: PendingDerives,
+    exposed_by_module: &ExposedByModule,
     derived_module: SharedDerivedModule,
 ) -> (
     Solved<Subs>,
@@ -93,6 +94,7 @@ pub fn run_solve(
         &constraint,
         pending_derives,
         &mut abilities_store,
+        exposed_by_module,
         derived_module,
     );
 

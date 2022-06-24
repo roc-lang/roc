@@ -9,6 +9,7 @@ use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::{Constraints, Cycle, LetConstraint, OpportunisticResolve};
 use roc_can::expected::{Expected, PExpected};
 use roc_can::expr::PendingDerives;
+use roc_can::module::ExposedByModule;
 use roc_collections::all::MutMap;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
@@ -551,6 +552,7 @@ pub fn run(
     constraint: &Constraint,
     pending_derives: PendingDerives,
     abilities_store: &mut AbilitiesStore,
+    exposed_by_module: &ExposedByModule,
     derived_module: SharedDerivedModule,
 ) -> (Solved<Subs>, Env) {
     let env = run_in_place(
@@ -561,6 +563,7 @@ pub fn run(
         constraint,
         pending_derives,
         abilities_store,
+        exposed_by_module,
         derived_module,
     );
 
@@ -577,6 +580,7 @@ fn run_in_place(
     constraint: &Constraint,
     pending_derives: PendingDerives,
     abilities_store: &mut AbilitiesStore,
+    exposed_by_module: &ExposedByModule,
     derived_module: SharedDerivedModule,
 ) -> Env {
     let mut pools = Pools::default();
@@ -619,6 +623,7 @@ fn run_in_place(
         &mut pools,
         deferred_uls_to_resolve,
         &SolvePhase { abilities_store },
+        exposed_by_module,
         &derived_module,
     );
 
@@ -1881,7 +1886,8 @@ pub fn compact_lambda_sets_of_vars<P: Phase>(
     pools: &mut Pools,
     uls_of_var: UlsOfVar,
     phase: &P,
-    derived_symbols: &GlobalDerivedSymbols,
+    exposed_by_module: &ExposedByModule,
+    derived_module: &SharedDerivedModule,
 ) -> MustImplementConstraints {
     // let mut seen = VecSet::default();
     let mut must_implement = MustImplementConstraints::default();
@@ -2306,6 +2312,8 @@ fn get_specialization_lambda_set<P: Phase>(
     ability_member: Symbol,
     lset_region: u8,
     specialization_key: SpecializationTypeKey,
+    exposed_by_module: &ExposedByModule,
+    derived_module: &SharedDerivedModule,
 ) -> Result<Variable, ()> {
     match specialization_key {
         SpecializationTypeKey::Opaque(opaque) => {
@@ -2345,7 +2353,21 @@ fn get_specialization_lambda_set<P: Phase>(
             Ok(local_lset)
         }
 
-        SpecializationTypeKey::Derived(_) => todo!(),
+        SpecializationTypeKey::Derived(derive_key) => {
+            let mut derived_module = derived_module.lock().unwrap();
+
+            let (_, _, specialization_lambda_sets) =
+                derived_module.get_or_insert(exposed_by_module, derive_key);
+
+            let &specialized_lambda_set = specialization_lambda_sets
+                .get(&lset_region)
+                .expect("lambda set region not resolved");
+
+            let local_lset =
+                derived_module.copy_lambda_set_var_to_subs(specialized_lambda_set, subs);
+
+            Ok(local_lset)
+        }
     }
 }
 
