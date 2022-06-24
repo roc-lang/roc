@@ -5025,3 +5025,176 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
         }
     }
 }
+
+/// Function that converts rigids variables to flex variables
+/// this is used during the monomorphization process and deriving
+pub fn instantiate_rigids(subs: &mut Subs, var: Variable) {
+    let rank = Rank::NONE;
+
+    instantiate_rigids_help(subs, rank, var);
+
+    // NOTE subs.restore(var) is done at the end of instantiate_rigids_help
+}
+
+fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
+    let mut visited = vec![];
+    let mut stack = vec![initial];
+
+    macro_rules! var_slice {
+        ($variable_subs_slice:expr) => {{
+            let slice = $variable_subs_slice;
+            &subs.variables[slice.indices()]
+        }};
+    }
+
+    while let Some(var) = stack.pop() {
+        visited.push(var);
+
+        if subs.get_copy(var).is_some() {
+            continue;
+        }
+
+        subs.modify(var, |desc| {
+            desc.rank = Rank::NONE;
+            desc.mark = Mark::NONE;
+            desc.copy = OptVariable::from(var);
+        });
+
+        use Content::*;
+        use FlatType::*;
+
+        match subs.get_content_without_compacting(var) {
+            RigidVar(name) => {
+                // what it's all about: convert the rigid var into a flex var
+                let name = *name;
+
+                // NOTE: we must write to the mutually borrowed `desc` value here
+                // using `subs.set` does not work (unclear why, really)
+                // but get_ref_mut approach saves a lookup, so the weirdness is worth it
+                subs.modify(var, |d| {
+                    *d = Descriptor {
+                        content: FlexVar(Some(name)),
+                        rank: max_rank,
+                        mark: Mark::NONE,
+                        copy: OptVariable::NONE,
+                    }
+                })
+            }
+            &RigidAbleVar(name, ability) => {
+                // Same as `RigidVar` above
+                subs.modify(var, |d| {
+                    *d = Descriptor {
+                        content: FlexAbleVar(Some(name), ability),
+                        rank: max_rank,
+                        mark: Mark::NONE,
+                        copy: OptVariable::NONE,
+                    }
+                })
+            }
+            FlexVar(_) | FlexAbleVar(_, _) | Error => (),
+
+            RecursionVar { structure, .. } => {
+                stack.push(*structure);
+            }
+
+            Structure(flat_type) => match flat_type {
+                Apply(_, args) => {
+                    stack.extend(var_slice!(*args));
+                }
+
+                Func(arg_vars, closure_var, ret_var) => {
+                    let arg_vars = *arg_vars;
+                    let ret_var = *ret_var;
+                    let closure_var = *closure_var;
+
+                    stack.extend(var_slice!(arg_vars));
+
+                    stack.push(ret_var);
+                    stack.push(closure_var);
+                }
+
+                EmptyRecord => (),
+                EmptyTagUnion => (),
+
+                Record(fields, ext_var) => {
+                    let fields = *fields;
+                    let ext_var = *ext_var;
+                    stack.extend(var_slice!(fields.variables()));
+
+                    stack.push(ext_var);
+                }
+                TagUnion(tags, ext_var) => {
+                    let tags = *tags;
+                    let ext_var = *ext_var;
+
+                    for slice_index in tags.variables() {
+                        let slice = subs.variable_slices[slice_index.index as usize];
+                        stack.extend(var_slice!(slice));
+                    }
+
+                    stack.push(ext_var);
+                }
+                FunctionOrTagUnion(_, _, ext_var) => {
+                    stack.push(*ext_var);
+                }
+
+                RecursiveTagUnion(rec_var, tags, ext_var) => {
+                    let tags = *tags;
+                    let ext_var = *ext_var;
+                    let rec_var = *rec_var;
+
+                    for slice_index in tags.variables() {
+                        let slice = subs.variable_slices[slice_index.index as usize];
+                        stack.extend(var_slice!(slice));
+                    }
+
+                    stack.push(ext_var);
+                    stack.push(rec_var);
+                }
+
+                Erroneous(_) => (),
+            },
+            Alias(_, args, var, _) => {
+                let var = *var;
+                let args = *args;
+
+                stack.extend(var_slice!(args.all_variables()));
+
+                stack.push(var);
+            }
+            LambdaSet(self::LambdaSet {
+                solved,
+                recursion_var,
+                unspecialized,
+            }) => {
+                for slice_index in solved.variables() {
+                    let slice = subs.variable_slices[slice_index.index as usize];
+                    stack.extend(var_slice!(slice));
+                }
+
+                if let Some(rec_var) = recursion_var.into_variable() {
+                    stack.push(rec_var);
+                }
+
+                for Uls(var, _, _) in subs.get_subs_slice(*unspecialized) {
+                    stack.push(*var);
+                }
+            }
+            &RangedNumber(typ, _) => {
+                stack.push(typ);
+            }
+        }
+    }
+
+    // we have tracked all visited variables, and can now traverse them
+    // in one go (without looking at the UnificationTable) and clear the copy field
+    for var in visited {
+        subs.modify(var, |descriptor| {
+            if descriptor.copy.is_some() {
+                descriptor.rank = Rank::NONE;
+                descriptor.mark = Mark::NONE;
+                descriptor.copy = OptVariable::NONE;
+            }
+        });
+    }
+}
