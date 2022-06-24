@@ -102,7 +102,13 @@ Stream permissions := {
 ##     bytes <- Stream.read 32 # Read the next 32 bytes from the stream
 ##
 ## This has a `Metadata` effect because, like [File.exists], it tells whether a file exists on disk.
-openDiskRead : Path -> Task (Stream [Read [Disk]*]) (OpenFileErr *) [Metadata]*
+openDiskRead :
+    Path
+    -> Task
+        (Stream a * [Read [Disk]*])
+        (OpenFileErr *)
+        [Metadata]*
+    | a has Decode
 # TODO what's the win32 call version of `open` in UNIX?
 openDiskWrite : Path -> Task (Stream [Write [Disk]*]) (OpenFileErr *) [Metadata]*
 openDiskReadWrite : Path -> Task (Stream [Read [Disk]*, Write [Disk]*]) (OpenFileErr *) [Metadata]*
@@ -142,13 +148,6 @@ openMemFile : Task (Stream [Read [MemFile]*, Write [MemFile]*]) (OpenFileErr *) 
 
 ## ## File I/O
 
-# Attempt to read the given number of bytes. There may not have been enough bytes, in which
-# case the List U8 will have a length lower than Nat.
-read : Stream [Read a]*, Nat -> Task (List U8) (ReadErr *) [Read a]*
-
-# pread on Linux - TODO: is there an equivalent on Windows?
-readAt : Stream [Read a]*, { bytes : Nat, offset : Nat } -> Task (List U8) (ReadErr *) [Read a]*
-
 # Technically this means you can read the metadata of stdin/stdout/stderr - which I
 # suppose is well-defined and harmless, but then again it might be a mistake. You
 # can always special-case those if you have a code path that tries to read metadata,
@@ -159,13 +158,67 @@ readAt : Stream [Read a]*, { bytes : Nat, offset : Nat } -> Task (List U8) (Read
 # windows though?
 metadata : Stream [Read a]* -> Task Metadata (ReadErr *) [Metadata a]*
 
+## Read and decode the given number of bytes. If there are any leftover bytes that couldn't
+## be decoded, they will be processed on the next read.
+##
+## The returned Task produces a `[Done ok, More ok, Empty]` tag union.
+## - `Empty` notes that the read succeeded, but there was nothing there to read.
+## - `More ok` returns a successfully-decoded value, and notes that there's more left to read.
+## - `Done ok` returns a successfully-decoded value, and notes that there's no more left to read. Subsequent attempts to [read] this string will produce `Empty`.
+read :
+    Stream ok err [Read src]*,
+    Nat
+    -> Task
+        [Done ok, More ok, Empty]
+        (ReadErr err)
+        [Read src]*
+
+## Like [read], except appends the bytes it reads to the given [List] and then returns
+## that list.
+##
+## Calling [readAppend] repeatedly can be faster than calling [read] repeatedly, as long as
+## you keep passing the list you got from the previous call as the argument to the next one -
+## perhaps after calling something like [List.withCapacity] on it to reset its size to 0.
+##
+## Doing this can avoid reallocating a fresh list every time. (To avoid reallocation, make sure
+## to use the list the previous call returned _only_ as an argument to the next call. If you
+## store a copy of it somewhere else in between, a new allocation may end up happening.)
+readAppend : Stream [Read a]*, Nat, List U8 -> Task (List U8) (ReadErr *) [Read a]*
+
+# pread on Linux - TODO: is there an equivalent on Windows?
+readAt : Stream [Read a]*, { bytes : Nat, offset : Nat } -> Task (List U8) (ReadErr *) [Read a]*
+readAppendAt : Stream [Read a]*, { bytes : Nat, offset : Nat }, List U8 -> Task (List U8) (ReadErr *) [Read a]*
+
+# Read chunks of N bytes at a time, until EOF is reached. Can build up state along the way,
+# including a buffer. Cool design thing: even without seamless slices, we can hold onto a reference
+# to the chunk buffer, so it won't get deallocated if you don't use it at the end of the callback.
+# Then if we have a unique reference to it in the host, we can write directly into it for the
+# next iteration - so, no reallocations!
+readChunks :
+    Stream [Read a]b,
+    Nat,
+    state,
+    (state, List U8 -> Task state (ReadErr x) [Read a]b)
+    -> Task state (ReadErr x) [Read a]b
+
+readChunksUntil :
+    Stream [Read a]b,
+    Nat,
+    state,
+    (state, List U8 -> [Done, Continue (Task state (ReadErr x) [Read a]b)])
+    -> Task state (ReadErr x) [Read a]b
+
 # write()
 write : Stream [Write a]*, List U8 -> Task (WriteErr *) [Write a]*
 writeUtf8 : Stream [Write a]*, Str -> Task (WriteErr *) [Write a]*
+# This is only necessary if we don't have seamless slices.
+# First argument: start index; second argument: length
+writeRange : Stream [Write a]*, List U8, Nat, Nat -> Task (WriteErr *) [Write a]*
 
 # pwrite on UNIX - TODO is there an equivalent in Windows?
 writeAt : Stream [Write a]*, List U8, Nat -> Task (WriteErr *) [Write a]*
 writeUtf8At : Stream [Write a]*, Str, Nat -> Task (WriteErr *) [Write a]*
+writeRangeAt : Stream [Write a]*, { bytes : List U8, start : Nat, len : Nat }, Nat -> Task (WriteErr *) [Write a]*
 
 # Resize to the given number of bytes - ftruncate on UNIX, ??? on Windows
 # TODO: On Linux, ftruncate pads with \0 bytes if you make it bigger. Does it on Windows?
