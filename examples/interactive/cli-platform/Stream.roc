@@ -2,7 +2,9 @@ interface Stream
     exposes [Stream, OpenErr, MetadataErr, ReadErr, WriteErr, fromStr, toStr]
     imports [File.{ Metadata }]
 
-## An [Stream] represents a [file descriptor](https://en.wikipedia.org/wiki/File_descriptor)
+# TODO is there any use for dup() (and win32 equivalent) in this API?
+
+## A stream represents a [file descriptor](https://en.wikipedia.org/wiki/File_descriptor)
 ## on UNIX systems or a [file handle](https://docs.microsoft.com/en-us/windows/win32/fileio/file-handles)
 ## on Windows.
 ##
@@ -19,7 +21,7 @@ Stream permissions := {
     # which will be bigger than necessary on 32-bit and 16-bit targets, but will work
     # everywhere.
     #
-    # An Stream should only ever be created in the host,
+    # A stream should only ever be created in the host,
     # because only the host can create an entry into the "needs closing on dealloc" hashmap!
     handleOrFd : Nat,
 
@@ -27,42 +29,60 @@ Stream permissions := {
     # allocation is needed to track whether there are any references left to them.
     # Other files need closing, so we use a zero-sized Box to track the reference count.
     #
-    # In the host's roc_dealloc, whenever it receives a request to deallocate 0 bytes,
-    # it checks to see if the pointer it received is an entry in the global hashmap of
-    # pointers to file descriptors, which gets an entry inserted whenever we do an `open`.
+    # These buffers (and the Box, for NeedsClosingUnbuffered) are all allocated to a separate
+    # arena on the heap. This way, in the host's roc_dealloc, whenever it receives a request
+    # to deallocate a pointer, it checks to see if the pointer it received is within the
+    # address space of that arena. If so, then that pointer should have a corresponding entry
+    # in the global hashmap of pointers to file descriptors, which gets an entry inserted
+    # whenever we do an `open`.
     #
-    # This is a (Box []) to emphasize that this should never be created outside the host,
-    # because only the host can create an entry into the "needs closing on dealloc" hashmap!
-    references : [AlwaysOpen, NeedsClosing (Box [])],
+    # The `Buffered` variant does not distinguish between being a buffer for stdio or not,
+    # but when it's initially allocated, if it's for a stdio stream, its buffer gets
+    # allocated using normal roc_alloc, and no entry is made in the file descriptor hashmap.
+    # That way, it is never automatically closed (as it must not be).
+    #
+    # Separately, unbuffered stdio actually uses the Buffered variant - but with an empty list.
+    # This way there's no heap allocation (unlike if we used Unbuffered, which always has a Box),
+    # and we also don't need an extra variant causing an extra conditional branch (or jump table).
+    #
+    # https://man7.org/linux/man-pages/man3/setbuf.3.html
+    buffer : [
+        # This is a (Box []) to emphasize that this should never be created outside the host,
+        # because only the host can create an entry into the "needs closing on dealloc" hashmap!
+        Unbuffered (Box []),
+        Buffered (List U8),
+    ],
 } # has Eq, Hash, Ord # no Encode or Decode; you should never serialize these!
 
-## ## Opening Files
+## ## Opening a Stream
 
+## Takes the number of bytes to use in the stream's buffer. (0 bytes means it is unbuffered.)
+## Example:
+##
+##     # Stream [Read [Disk]*]
+##     stream <- Stream.openDiskRead 1024 (Path.fromStr "example.txt")
+##     bytes <- Stream.read 32 # Read the next 32 bytes from the stream
+##
 ## This has a `Metadata` effect because, like [File.exists], it tells whether a file exists on disk.
-openFileRead : Path -> Task (Stream [Read [Disk]*]) (OpenFileErr *) [Metadata]*
+openDiskRead : Path, Nat -> Task (Stream [Read [Disk]*]) (OpenFileErr *) [Metadata]*
 # TODO what's the win32 call version of `open` in UNIX?
-openFileWrite : Path -> Task (Stream [Write [Disk]*]) (OpenFileErr *) [Metadata]*
-openFileReadWrite : Path -> Task (Stream [Read [Disk]*, Write [Disk]*]) (OpenFileErr *) [Metadata]*
+openDiskWrite : Path, Nat -> Task (Stream [Write [Disk]*]) (OpenFileErr *) [Metadata]*
+openDiskReadWrite : Path, Nat -> Task (Stream [Read [Disk]*, Write [Disk]*]) (OpenFileErr *) [Metadata]*
 
 # https://forums.codeguru.com/showthread.php?280671-using-ReadFile()-and-WriteFile()-with-a-socket
-openSocketRead : SocketInfo -> Task (Stream [Read [Socket]*]) (OpenSocketErr *) *
-openSocketWrite : SocketInfo -> Task (Stream [Write [Socket]*]) (OpenSocketErr *) *
-openSocketReadWrite : SocketInfo -> Task (Stream [Read [Socket]*, Write [Socket]*]) (OpenSocketErr *) *
+openSocketRead : SocketInfo, Nat -> Task (Stream [Read [Socket]*]) (OpenSocketErr *) *
+openSocketWrite : SocketInfo, Nat -> Task (Stream [Write [Socket]*]) (OpenSocketErr *) *
+openSocketReadWrite : SocketInfo, Nat -> Task (Stream [Read [Socket]*, Write [Socket]*]) (OpenSocketErr *) *
 
-# TODO does it actually do this? Can you possibly tell if a tempfile already exists this way?
+# TODO does it make sense to open (even a named) tempfile for reading only?
 ## This has a `Metadata` effect because, like [File.exists], it tells whether a temporary file
 ## with the given name exists on disk.
-openTempRead : Str -> Task (Stream [Read [Disk]*]) (OpenFileErr *) [Metadata]*
+# TODO does it actually do this? Can you possibly tell if a tempfile already exists this way?
+openTempRead : Str, Nat -> Task (Stream [Read [Disk]*]) (OpenFileErr *) [Metadata]*
 # TODO what are the win32 and Linux calls for tempfiles?
 ## This has a `Write [Disk]` effect because it can create a new temporary file on disk.
-openTempWrite : Str -> Task (Stream [Write [Disk]*]) (OpenFileErr *) [Write [Disk]]*
-openTempReadWrite : Str -> Task (Stream [Read [Disk]*, Write [Disk]*]) (OpenFileErr *) [Metadata]*
-
-openReadRestricted : Path, token -> Task (Stream [Read [Disk, Restricted token]*]) (OpenFileErr *) [Read [Disk]*]*
-openWriteRestricted : Task (Stream [Write [Disk, Restricted token]*]) (OpenFileErr *) [Read [Disk]*]*
-openReadWriteRestricted : Task (Stream [Read [Disk, Restricted token]*, Write [Disk, Restricted token]*]) (OpenFileErr *) [Read [Disk]*]*
-
-duplicate
+openTempWrite : Str, Nat -> Task (Stream [Write [Disk]*]) (OpenFileErr *) [Write [Disk]]*
+openTempReadWrite : Str, Nat -> Task (Stream [Read [Disk]*, Write [Disk]*]) (OpenFileErr *) [Metadata]*
 
 ## ## File I/O
 
@@ -79,7 +99,7 @@ readAt : Stream [Read a]*, { bytes : Nat, offset : Nat } -> Task (List U8) (Read
 # by explicitly doing an == check to see if what you have happens to be
 metadata : Stream [Read a]* -> Task Metadata (ReadErr *) [Metadata a]*
 
-# write
+# write()
 write : Stream [Write a]*, List U8 -> Task (WriteErr *) [Write a]*
 writeUtf8 : Stream [Write a]*, Str -> Task (WriteErr *) [Write a]*
 writeUtf16 : Stream [Write a]*, Str -> Task (WriteErr *) [Write a]*
@@ -105,6 +125,7 @@ flushAll : Task (WriteErr *) [Write a]*
 #     computing so that the output will appear.
 # So this means when doing writes to stdout/stderr, may need to flush them explicitly.
 # ALSO means, when doing Stdout.line, should always flush right after I suppose.
+## Flushes any buffered data to disk, and then flushes the disk cache to hardware.
 flush : Stream [Write a]*, Nat -> Task (WriteErr *) [Write a]*
 
 # fdatasync on UNIX - TODO: is there a Windows equivalent?
@@ -114,66 +135,70 @@ flush : Stream [Write a]*, Nat -> Task (WriteErr *) [Write a]*
 # with the disk."
 flushNonMetadata : Stream [Write a]*, Nat -> Task (WriteErr *) [Write a]*
 
+## Returns the capacity of the stream's buffer, in bytes.
+## Returns 0 if the stream is not buffered.
+capacity : Stream * -> Nat
+
 ## ## Standard I/O
 
-## An [Stream] to read from [standard output](https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout))
+## A stream to read from [standard output](https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout))
 ## (`stdout`). *Reading* from `stdout` is very uncommon;
 ## it is much more common to write to it, for example using [stdoutWrite].
 ##
-## The `stdout` file is always open, so there's no need to [open] it.
+## The `stdout` stream is always open, so there's no need to [open] it.
 stdoutRead : Stream [Read [Stdout]*]
 
-## An [Stream] to write to [standard output](https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout))
+## A stream to write to [standard output](https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout))
 ## (`stdout`).
 ##
-## The `stdout` file is always open, so there's no need to [open] it.
+## The `stdout` stream is always open, so there's no need to [open] it.
 stdoutWrite : Stream [Write [Stdout]*]
 
-## An [Stream] to read from or write to [standard output](https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout))
+## A stream to read from or write to [standard output](https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout))
 ## (`stdout`). *Reading* from `stdout` is very uncommon;
 ## it is much more common to write to it.
 ##
-## The `stdout` file is always open, so there's no need to [open] it.
+## The `stdout` stream is always open, so there's no need to [open] it.
 stdoutReadWrite : Stream [Read [Stdout]*, Write [Stdout]*]
 
-## An [Stream] to read from [standard error](https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr))
+## A stream to read from [standard error](https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr))
 ## (`stderr`). *Reading* from `stderr` is very uncommon;
 ## it is much more common to write to it, for example using [stderrWrite].
 ##
-## The `stderr` file is always open, so there's no need to [open] it.
+## The `stderr` stream is always open, so there's no need to [open] it.
 stderrRead : Stream [Read [Stderr]*]
 
-## An [Stream] to write to [standard error](https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr))
+## A stream to write to [standard error](https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr))
 ## (`stderr`).
 ##
-## The `stderr` file is always open, so there's no need to [open] it.
+## The `stderr` stream is always open, so there's no need to [open] it.
 stderrWrite : Stream [Write [Stderr]*]
 
-## An [Stream] to read from or write to [standard error](https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr))
+## A stream to read from or write to [standard error](https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr))
 ## (`stderr`). *Reading* from `stderr` is very uncommon;
 ## it is much more common to write to it.
 ##
-## The `stderr` file is always open, so there's no need to [open] it.
+## The `stderr` stream is always open, so there's no need to [open] it.
 stderrReadWrite : Stream [Read [Stderr]*, Write [Stderr]*]
 
-## An [Stream] to read from [standard input](https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin))
+## A stream to read from [standard input](https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin))
 ## (`stdin`).
 ##
-## The `stdin` file is always open, so there's no need to [open] it.
+## The `stdin` stream is always open, so there's no need to [open] it.
 stdinRead : Stream [Read [Stdin]*]
 
-## An [Stream] to write to [standard input](https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin))
+## A stream to write to [standard input](https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin))
 ## (`stdin`). *Writing* to `stdin` is very uncommon;
 ## it is much more common to read from it, for example using [stdinRead].
 ##
-## The `stdin` file is always open, so there's no need to [open] it.
+## The `stdin` stream is always open, so there's no need to [open] it.
 stdinWrite : Stream [Write [Stdin]*]
 
-## An [Stream] to read from or write to [standard input](https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin))
+## A stream to read from or write to [standard input](https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin))
 ## (`stdin`). *Writing* to `stdin` is very uncommon;
 ## it is much more common to read from it.
 ##
-## The `stdin` file is always open, so there's no need to [open] it.
+## The `stdin` stream is always open, so there's no need to [open] it.
 stdinReadWrite : Stream [Read [Stdin]*, Write [Stdin]*]
 
 ## ## Errors
