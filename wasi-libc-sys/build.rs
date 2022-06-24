@@ -13,6 +13,13 @@ fn main() {
     let zig_cache_dir = PathBuf::from(&out_dir).join("zig-cache");
     let out_file = PathBuf::from(&out_dir).join("wasi-libc.a");
 
+    println!("clang {:?}", Command::new(&zig_executable())
+        .args([
+            "--version",
+        ])
+        .output()
+        .unwrap());
+
     // Compile a dummy C program with Zig, with our own private cache directory
     println!("zig build-exe output: {:?}", Command::new(&zig_executable())
         .args([

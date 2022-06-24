@@ -31,6 +31,7 @@ jobs:
         run: |
           LLVM_PATH=${{ env.LLVM_PATH }}
           LLVM_VERSION=13.0.1
+          echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> $GITHUB_ENV
           echo "CPATH=$LLVM_PATH/lib/clang/$LLVM_VERSION/include/" >> $GITHUB_ENV
           echo "LDFLAGS=-L$LLVM_PATH/lib" >> $GITHUB_ENV
           echo "CPPFLAGS=-I$LLVM_PATH/include" >> $GITHUB_ENV
