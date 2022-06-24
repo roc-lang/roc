@@ -375,3 +375,31 @@ fn encode_use_stdlib_without_wrapping_custom() {
         RocStr
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn to_encoder_encode_custom_has_capture() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ toEncoder }, Json]
+                provides [main] to "./platform"
+
+            HelloWorld := Str
+            toEncoder = \@HelloWorld s1 ->
+                Encode.custom \bytes, fmt ->
+                    bytes
+                        |> Encode.appendWith (Encode.string s1) fmt
+
+            main =
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld "Hello, World!\n") Json.format)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from("\"Hello, World!\n\""),
+        RocStr
+    )
+}
