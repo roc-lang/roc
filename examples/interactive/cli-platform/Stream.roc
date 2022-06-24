@@ -4,9 +4,41 @@ interface Stream
 
 # TODO is there any use for dup() (and win32 equivalent) in this API?
 
-## A stream represents a [file descriptor](https://en.wikipedia.org/wiki/File_descriptor)
-## on UNIX systems or a [file handle](https://docs.microsoft.com/en-us/windows/win32/fileio/file-handles)
-## on Windows.
+    # https://man7.org/linux/man-pages/man3/setbuf.3.html
+    # https://docs.microsoft.com/en-us/windows/win32/multimedia/performing-memory-file-i-o
+# Unbuffered file I/O in Windows has alignment requirements that normal Roc data structures
+# can't meet. So if we tried to say "give me a List U8 and I'll do an unbuffered write to disk",
+# unless you miraculously got a List U8 with the exact right alignment requirements, it's
+# getting copied to a buffer anyway. So we simplify things by always using buffers.
+# https://docs.microsoft.com/en-us/windows/win32/fileio/file-buffering
+# Actually, let's do the buffering ourselves. This way, we can avoid a double allocation;
+# we need to allocate anyway in order to get a refcount, so we can just do the buffering
+# ourselves using that allocation. It's technically always tracked as a (Box []) but
+# in actuality it'll point to a heap allocation of fixed capacity (whatever buffer size
+# we decide all Streams get), which is stateful on a per-Stream basis.
+#
+# Java uses this buffer size: (4096 * 2 = 8192) bytes. Seems like if we give you control
+# https://stackoverflow.com/questions/13433286/optimal-buffer-size-for-reading-file-in-c
+# https://stackoverflow.com/questions/236861/how-do-you-determine-the-ideal-buffer-size-when-using-fileinputstream
+# https://stackoverflow.com/a/10698422
+#
+# We should support custom buffer sizes, and we should store them on the heap. If you provide
+# a suboptimal buffer size, sorry. Maybe we say the minimum buffer size is 4096, and we round
+# up to the nearest multiple of 4096, because we mmap pages in to use for the buffer. Yeah
+# that seems fine! That should take care of our Windows alignment issues automatically too.
+# Actually I guess we can allocate more or less to the buffer, and if you specify a low
+# buffer size (e.g. 1) then that just means we're skipping the buffer all the time bc
+# the length of the thing you pass is less than the capacity.
+#
+# Anyway, we need to store length on the heap but capacity in the struct. That's becasue
+# we check struct capacity when doing a write; if you're writing more data than the capacity
+# of the buffer, then we skip the buffer (and in fact truncate the buffer) and go straight
+# to disk. If capacity is 0, we don't bother chasing the pointer to truncate it.
+#
+
+## A stream represents a buffered [file descriptor](https://en.wikipedia.org/wiki/File_descriptor)
+## on UNIX systems or a buffered [file handle](https://docs.microsoft.com/en-us/windows/win32/fileio/file-handles)
+## on Windows. The buffer size is 8192 bytes.
 ##
 ## When you open a file, for example using [openRead], that file will remain open as long as
 ## the [Stream] is still referenced anywhere in the program. Once the program no longer has
@@ -25,6 +57,15 @@ Stream permissions := {
     # because only the host can create an entry into the "needs closing on dealloc" hashmap!
     handleOrFd : Nat,
 
+    # TODO update everything below this line to reflect that now we do our own buffering,
+    # and the buffer length is stored on the heap at the beginning of the buffer allocation
+    # (right after the refcount). Buffers for stdio are statically allocated, but buffers for
+    # other files are allocated per-open. Windows has strict alignment requirements for
+    # buffers, so we make sure to account for those when giving roc_alloc its alignment arg
+    # on Windows. We want to do this allocation ourselves because we need an allocation anyway
+    # in order to do the reference counting, and having libc do a separate allocation for
+    # buffering would be redundant.
+    # ------------------------------------------------------------------------------------a
     # Standard I/O streams (stdout, stderr, stdin) are always open, so no heap
     # allocation is needed to track whether there are any references left to them.
     # Other files need closing, so we use a zero-sized Box to track the reference count.
@@ -44,19 +85,16 @@ Stream permissions := {
     # Separately, unbuffered stdio actually uses the Buffered variant - but with an empty list.
     # This way there's no heap allocation (unlike if we used Unbuffered, which always has a Box),
     # and we also don't need an extra variant causing an extra conditional branch (or jump table).
-    #
-    # https://man7.org/linux/man-pages/man3/setbuf.3.html
-    buffer : [
+    memory : [
         # This is a (Box []) to emphasize that this should never be created outside the host,
         # because only the host can create an entry into the "needs closing on dealloc" hashmap!
-        Unbuffered (Box []),
-        Buffered (List U8),
+        NeedsClosing (Box []),
+        AlwaysOpen, # stdin, stdout, or stderr
     ],
 } # has Eq, Hash, Ord # no Encode or Decode; you should never serialize these!
 
 ## ## Opening a Stream
 
-## Takes the number of bytes to use in the stream's buffer. (0 bytes means it is unbuffered.)
 ## Example:
 ##
 ##     # Stream [Read [Disk]*]
@@ -64,25 +102,43 @@ Stream permissions := {
 ##     bytes <- Stream.read 32 # Read the next 32 bytes from the stream
 ##
 ## This has a `Metadata` effect because, like [File.exists], it tells whether a file exists on disk.
-openDiskRead : Path, Nat -> Task (Stream [Read [Disk]*]) (OpenFileErr *) [Metadata]*
+openDiskRead : Path -> Task (Stream [Read [Disk]*]) (OpenFileErr *) [Metadata]*
 # TODO what's the win32 call version of `open` in UNIX?
-openDiskWrite : Path, Nat -> Task (Stream [Write [Disk]*]) (OpenFileErr *) [Metadata]*
-openDiskReadWrite : Path, Nat -> Task (Stream [Read [Disk]*, Write [Disk]*]) (OpenFileErr *) [Metadata]*
+openDiskWrite : Path -> Task (Stream [Write [Disk]*]) (OpenFileErr *) [Metadata]*
+openDiskReadWrite : Path -> Task (Stream [Read [Disk]*, Write [Disk]*]) (OpenFileErr *) [Metadata]*
+
+## Like [openDiskRead], but with a custom buffer size, in bytes.
+##
+## Pass a buffer size of 0 to get an unbuffered stream.
+openDiskReadBuf : Path, Nat -> Task (Stream [Read [Disk]*]) (OpenFileErr *) [Metadata]*
+openDiskWriteBuf : Path, Nat -> Task (Stream [Write [Disk]*]) (OpenFileErr *) [Metadata]*
+openDiskReadWriteBuf : Path, Nat -> Task (Stream [Read [Disk]*, Write [Disk]*]) (OpenFileErr *) [Metadata]*
 
 # https://forums.codeguru.com/showthread.php?280671-using-ReadFile()-and-WriteFile()-with-a-socket
-openSocketRead : SocketInfo, Nat -> Task (Stream [Read [Socket]*]) (OpenSocketErr *) *
-openSocketWrite : SocketInfo, Nat -> Task (Stream [Write [Socket]*]) (OpenSocketErr *) *
-openSocketReadWrite : SocketInfo, Nat -> Task (Stream [Read [Socket]*, Write [Socket]*]) (OpenSocketErr *) *
+openSocketRead : SocketInfo -> Task (Stream [Read [Socket]*]) (OpenSocketErr *) *
+openSocketWrite : SocketInfo -> Task (Stream [Write [Socket]*]) (OpenSocketErr *) *
+openSocketReadWrite : SocketInfo -> Task (Stream [Read [Socket]*, Write [Socket]*]) (OpenSocketErr *) *
 
+# TODO do we want to allow persistent vs in-memory (as much as possible) tempfiles?
+# What's the point in a persistent tempfile anyway? If, for debugging purposes, I want
+# to switch to persistent, maybe that's an argumetn for tempfiles always having Disk?
 # TODO does it make sense to open (even a named) tempfile for reading only?
 ## This has a `Metadata` effect because, like [File.exists], it tells whether a temporary file
 ## with the given name exists on disk.
 # TODO does it actually do this? Can you possibly tell if a tempfile already exists this way?
-openTempRead : Str, Nat -> Task (Stream [Read [Disk]*]) (OpenFileErr *) [Metadata]*
+openTempRead : Str -> Task (Stream [Read [Disk]*]) (OpenFileErr *) [Metadata]*
 # TODO what are the win32 and Linux calls for tempfiles?
 ## This has a `Write [Disk]` effect because it can create a new temporary file on disk.
-openTempWrite : Str, Nat -> Task (Stream [Write [Disk]*]) (OpenFileErr *) [Write [Disk]]*
-openTempReadWrite : Str, Nat -> Task (Stream [Read [Disk]*, Write [Disk]*]) (OpenFileErr *) [Metadata]*
+openTempWrite : Str -> Task (Stream [Write [Disk]*]) (OpenFileErr *) [Write [Disk]]*
+openTempReadWrite : Str -> Task (Stream [Read [Disk]*, Write [Disk]*]) (OpenFileErr *) [Metadata]*
+
+## Open an in-memory file for both reading and writing. (There's no point in opening an
+## in-memory file for reading but not writing.)
+##
+## Note that if the system runs out of available memoory, the operating system may temporarily
+## write this "in-memory" file to disk.
+# https://stackoverflow.com/a/50087392
+openMemFile : Task (Stream [Read [MemFile]*, Write [MemFile]*]) (OpenFileErr *) *
 
 ## ## File I/O
 
@@ -96,27 +152,29 @@ readAt : Stream [Read a]*, { bytes : Nat, offset : Nat } -> Task (List U8) (Read
 # Technically this means you can read the metadata of stdin/stdout/stderr - which I
 # suppose is well-defined and harmless, but then again it might be a mistake. You
 # can always special-case those if you have a code path that tries to read metadata,
-# by explicitly doing an == check to see if what you have happens to be
+# by explicitly doing an == check to see if what you have happens to be. Likewise
+# with in-memory "files," if they aren't also well-defined. But I suppose you might want
+# to know e.g. when the in-memory file was created?
+# Also note: technically you don't need read permission on unix to access metadata. What about
+# windows though?
 metadata : Stream [Read a]* -> Task Metadata (ReadErr *) [Metadata a]*
 
 # write()
 write : Stream [Write a]*, List U8 -> Task (WriteErr *) [Write a]*
 writeUtf8 : Stream [Write a]*, Str -> Task (WriteErr *) [Write a]*
-writeUtf16 : Stream [Write a]*, Str -> Task (WriteErr *) [Write a]*
 
 # pwrite on UNIX - TODO is there an equivalent in Windows?
 writeAt : Stream [Write a]*, List U8, Nat -> Task (WriteErr *) [Write a]*
 writeUtf8At : Stream [Write a]*, Str, Nat -> Task (WriteErr *) [Write a]*
-writeUtf16At : Stream [Write a]*, Str, Nat -> Task (WriteErr *) [Write a]*
 
 # Resize to the given number of bytes - ftruncate on UNIX, ??? on Windows
 # TODO: On Linux, ftruncate pads with \0 bytes if you make it bigger. Does it on Windows?
 resize : Stream [Write a]*, Nat -> Task (WriteErr *) [Write a]*
 
-# sync() on UNIX - TODO: is there a Windows equivalent?
-flushAll : Task (WriteErr *) [Write a]*
-
-# fsync on UNIX, or maybe syncfs? What's the difference? - TODO: is there a Windows equivalent?
+# fsync on UNIX, or maybe syncfs? What's the difference?
+# windows Equivalent: https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers
+#
+# Nice article on disk caches and flushing https://docs.microsoft.com/en-us/windows/win32/fileio/file-caching
 #
 # NOTE: from https://man7.org/linux/man-pages/man3/stdio.3.html
 #     In cases where a large amount of computation is
@@ -128,6 +186,9 @@ flushAll : Task (WriteErr *) [Write a]*
 ## Flushes any buffered data to disk, and then flushes the disk cache to hardware.
 flush : Stream [Write a]*, Nat -> Task (WriteErr *) [Write a]*
 
+# sync() on UNIX - TODO: is there a Windows equivalent?
+flushAll : Task (WriteErr *) [Write a]*
+
 # fdatasync on UNIX - TODO: is there a Windows equivalent?
 #
 # From the docs: "The aim of fdatasync() is to reduce disk activity for
@@ -135,71 +196,28 @@ flush : Stream [Write a]*, Nat -> Task (WriteErr *) [Write a]*
 # with the disk."
 flushNonMetadata : Stream [Write a]*, Nat -> Task (WriteErr *) [Write a]*
 
-## Returns the capacity of the stream's buffer, in bytes.
-## Returns 0 if the stream is not buffered.
-capacity : Stream * -> Nat
-
 ## ## Standard I/O
-
-## A stream to read from [standard output](https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout))
-## (`stdout`). *Reading* from `stdout` is very uncommon;
-## it is much more common to write to it, for example using [stdoutWrite].
-##
-## The `stdout` stream is always open, so there's no need to [open] it.
-stdoutRead : Stream [Read [Stdout]*]
-
-## A stream to write to [standard output](https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout))
-## (`stdout`).
-##
-## The `stdout` stream is always open, so there's no need to [open] it.
-stdoutWrite : Stream [Write [Stdout]*]
 
 ## A stream to read from or write to [standard output](https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout))
 ## (`stdout`). *Reading* from `stdout` is very uncommon;
 ## it is much more common to write to it.
 ##
 ## The `stdout` stream is always open, so there's no need to [open] it.
-stdoutReadWrite : Stream [Read [Stdout]*, Write [Stdout]*]
-
-## A stream to read from [standard error](https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr))
-## (`stderr`). *Reading* from `stderr` is very uncommon;
-## it is much more common to write to it, for example using [stderrWrite].
-##
-## The `stderr` stream is always open, so there's no need to [open] it.
-stderrRead : Stream [Read [Stderr]*]
-
-## A stream to write to [standard error](https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr))
-## (`stderr`).
-##
-## The `stderr` stream is always open, so there's no need to [open] it.
-stderrWrite : Stream [Write [Stderr]*]
+stdout : Stream [Read [Stdout]*, Write [Stdout]*]
 
 ## A stream to read from or write to [standard error](https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr))
 ## (`stderr`). *Reading* from `stderr` is very uncommon;
 ## it is much more common to write to it.
 ##
 ## The `stderr` stream is always open, so there's no need to [open] it.
-stderrReadWrite : Stream [Read [Stderr]*, Write [Stderr]*]
-
-## A stream to read from [standard input](https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin))
-## (`stdin`).
-##
-## The `stdin` stream is always open, so there's no need to [open] it.
-stdinRead : Stream [Read [Stdin]*]
-
-## A stream to write to [standard input](https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin))
-## (`stdin`). *Writing* to `stdin` is very uncommon;
-## it is much more common to read from it, for example using [stdinRead].
-##
-## The `stdin` stream is always open, so there's no need to [open] it.
-stdinWrite : Stream [Write [Stdin]*]
+stderr : Stream [Read [Stderr]*, Write [Stderr]*]
 
 ## A stream to read from or write to [standard input](https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin))
 ## (`stdin`). *Writing* to `stdin` is very uncommon;
 ## it is much more common to read from it.
 ##
 ## The `stdin` stream is always open, so there's no need to [open] it.
-stdinReadWrite : Stream [Read [Stdin]*, Write [Stdin]*]
+stdin : Stream [Read [Stdin]*, Write [Stdin]*]
 
 ## ## Errors
 
