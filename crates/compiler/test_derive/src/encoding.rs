@@ -145,7 +145,7 @@ fn check_derived_typechecks_and_golden(
         test_module,
         &mut test_subs,
         pending_abilities,
-        exposed_for_module,
+        &exposed_for_module,
         &mut def_types,
         &mut rigid_vars,
     );
@@ -165,6 +165,7 @@ fn check_derived_typechecks_and_golden(
         default_aliases(),
         abilities_store,
         Default::default(),
+        &exposed_for_module.exposed_by_module,
         Default::default(),
     );
     let subs = solved_subs.inner_mut();
