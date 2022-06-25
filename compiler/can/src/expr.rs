@@ -99,8 +99,10 @@ pub enum Expr {
     AbilityMember(
         /// Actual member name
         Symbol,
-        /// Specialization to use, and its variable
-        SpecializationId,
+        /// Specialization to use, and its variable.
+        /// The specialization id may be [`None`] if construction of an ability member usage can
+        /// prove the usage is polymorphic.
+        Option<SpecializationId>,
         Variable,
     ),
 
@@ -1351,7 +1353,7 @@ fn canonicalize_var_lookup(
                 if scope.abilities_store.is_ability_member_name(symbol) {
                     AbilityMember(
                         symbol,
-                        scope.abilities_store.fresh_specialization_id(),
+                        Some(scope.abilities_store.fresh_specialization_id()),
                         var_store.fresh(),
                     )
                 } else {
@@ -1374,7 +1376,7 @@ fn canonicalize_var_lookup(
                 if scope.abilities_store.is_ability_member_name(symbol) {
                     AbilityMember(
                         symbol,
-                        scope.abilities_store.fresh_specialization_id(),
+                        Some(scope.abilities_store.fresh_specialization_id()),
                         var_store.fresh(),
                     )
                 } else {
