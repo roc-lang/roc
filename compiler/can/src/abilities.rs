@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use roc_collections::{all::MutMap, VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::symbol::{ModuleId, Symbol};
@@ -103,14 +105,9 @@ impl MemberSpecialization<Resolved> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SpecializationId(u32);
+pub struct SpecializationId(NonZeroU32);
 
-#[allow(clippy::derivable_impls)] // let's be explicit about this
-impl Default for SpecializationId {
-    fn default() -> Self {
-        Self(0)
-    }
-}
+static_assertions::assert_eq_size!(SpecializationId, Option<SpecializationId>);
 
 pub enum SpecializationLambdaSetError {}
 
@@ -119,7 +116,7 @@ pub enum SpecializationLambdaSetError {}
 // TODO(abilities): this should probably go on the Scope, I don't put it there for now because we
 // are only dealing with intra-module abilities for now.
 // TODO(abilities): many of these should be `VecMap`s. Do some benchmarking.
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct IAbilitiesStore<Phase: ResolvePhase> {
     /// Maps an ability to the members defining it.
     members_of_ability: MutMap<Symbol, Vec<Symbol>>,
@@ -141,11 +138,26 @@ pub struct IAbilitiesStore<Phase: ResolvePhase> {
     /// member `member`, to the exact symbol that implements the ability.
     declared_specializations: SpecializationsMap<Phase>,
 
-    next_specialization_id: u32,
+    next_specialization_id: NonZeroU32,
 
     /// Resolved specializations for a symbol. These might be ephemeral (known due to type solving),
     /// or resolved on-the-fly during mono.
     resolved_specializations: MutMap<SpecializationId, Symbol>,
+}
+
+impl<Phase: ResolvePhase> Default for IAbilitiesStore<Phase> {
+    fn default() -> Self {
+        Self {
+             members_of_ability: Default::default(),
+             ability_members: Default::default(),
+             specialization_to_root: Default::default(),
+             declared_specializations: Default::default(),
+             next_specialization_id:
+                 // Safety: 1 != 0
+                 unsafe { NonZeroU32::new_unchecked(1) },
+             resolved_specializations: Default::default(),
+         }
+    }
 }
 
 pub type AbilitiesStore = IAbilitiesStore<Resolved>;
@@ -216,10 +228,12 @@ impl<Phase: ResolvePhase> IAbilitiesStore<Phase> {
     }
 
     pub fn fresh_specialization_id(&mut self) -> SpecializationId {
-        debug_assert!(self.next_specialization_id != std::u32::MAX);
+        debug_assert!(self.next_specialization_id.get() != std::u32::MAX);
 
         let id = SpecializationId(self.next_specialization_id);
-        self.next_specialization_id += 1;
+        // Safety: we already checked this won't overflow, and we started > 0.
+        self.next_specialization_id =
+            unsafe { NonZeroU32::new_unchecked(self.next_specialization_id.get() + 1) };
         id
     }
 
@@ -433,8 +447,8 @@ impl IAbilitiesStore<Pending> {
             );
         }
 
-        debug_assert!(next_specialization_id == 0);
-        debug_assert!(self.next_specialization_id == 0);
+        debug_assert_eq!(next_specialization_id.get(), 1);
+        debug_assert_eq!(self.next_specialization_id.get(), 1);
         debug_assert!(resolved_specializations.is_empty());
         debug_assert!(self.resolved_specializations.is_empty());
     }
