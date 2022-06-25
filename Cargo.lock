@@ -625,6 +625,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "console"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a28b32d32ca44b70c3e4acd7db1babf555fa026e385fb95f18028f88848b3c31"
+dependencies = [
+ "encode_unicode",
+ "libc",
+ "once_cell",
+ "terminal_size",
+ "winapi",
+]
+
+[[package]]
 name = "console_error_panic_hook"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1917,6 +1930,20 @@ name = "inplace_it"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90953f308a79fe6d62a4643e51f848fbfddcd05975a38e69fdf4ab86a7baf7ca"
+
+[[package]]
+name = "insta"
+version = "1.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4126dd76ebfe2561486a1bd6738a33d2029ffb068a99ac446b7f8c77b2e58dbc"
+dependencies = [
+ "console",
+ "once_cell",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "similar",
+]
 
 [[package]]
 name = "instant"
@@ -3671,6 +3698,21 @@ name = "roc_debug_flags"
 version = "0.1.0"
 
 [[package]]
+name = "roc_derive"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "roc_can",
+ "roc_collections",
+ "roc_derive_key",
+ "roc_error_macros",
+ "roc_module",
+ "roc_region",
+ "roc_types",
+ "roc_unify",
+]
+
+[[package]]
 name = "roc_derive_key"
 version = "0.1.0"
 dependencies = [
@@ -4515,6 +4557,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43b2853a4d09f215c24cc5489c992ce46052d359b5109343cbafbf26bc62f8a3"
 
 [[package]]
+name = "similar"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e24979f63a11545f5f2c60141afe249d4f19f84581ea2138065e400941d83d3"
+
+[[package]]
 name = "siphasher"
 version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4816,11 +4864,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "terminal_size"
+version = "0.1.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "633c1a546cee861a1a6d0dc69ebeca693bf4296661ba7852b9d21d159e0506df"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "test_derive"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
  "indoc",
+ "insta",
  "lazy_static",
  "pretty_assertions",
  "roc_builtins",
@@ -4828,10 +4887,10 @@ dependencies = [
  "roc_collections",
  "roc_constrain",
  "roc_debug_flags",
+ "roc_derive",
  "roc_derive_key",
  "roc_load_internal",
  "roc_module",
- "roc_mono",
  "roc_region",
  "roc_reporting",
  "roc_solve",

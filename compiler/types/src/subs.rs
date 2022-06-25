@@ -3973,12 +3973,12 @@ impl StorageSubs {
     ///
     /// This is relevant e.g. in the compiler's derivers.
     pub fn export_variable_to_directly_to_use_site(
-        &mut self,
+        &self,
         target: &mut Subs,
         variable: Variable,
     ) -> CopiedImport {
         // TODO: use a separate copy table to avoid &mut self
-        copy_import_to(&mut self.subs, target, true, variable, Rank::import())
+        copy_import_to(&self.subs, target, true, variable, Rank::import())
     }
 
     pub fn merge_into(self, target: &mut Subs) -> impl Fn(Variable) -> Variable {

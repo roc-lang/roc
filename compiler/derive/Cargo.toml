@@ -1,0 +1,21 @@
+[package]
+name = "roc_derive"
+version = "0.1.0"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+edition = "2021"
+
+[dependencies]
+roc_collections = { path = "../collections" }
+roc_error_macros = { path = "../../error_macros" }
+roc_derive_key = { path = "../derive_key" }
+roc_region = { path = "../region" }
+roc_module = { path = "../module" }
+roc_types = { path = "../types" }
+roc_can = { path = "../can" }
+roc_unify = { path = "../unify" }
+bumpalo = { version = "3.8.0", features = ["collections"] }
+
+[features]
+default = []
+debug-derived-symbols = []
