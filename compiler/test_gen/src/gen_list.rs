@@ -2878,8 +2878,6 @@ fn list_find_empty_layout() {
     );
 }
 
-
-
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn list_find_index() {
