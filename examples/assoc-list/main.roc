@@ -18,15 +18,13 @@ main =
     _ <- await (Stdout.line "assocs2:")
     _ <- printAssociations assocs2
 
-    _ <- await (Stdout.line "InsertAll assocs1 assocs2:")
+    _ <- await (Stdout.line "insertAll assocs1 assocs2:")
     _ <- printAssociations (AssocList.insertAll assocs1 assocs2)
 
-    _ <- await (Stdout.line "Result of removing all associations in assocs2 from assocs1:")
-    trimmedAssocs = AssocList.walk assocs2 assocs1 \state, k, _v ->
-        AssocList.remove state k
-    _ <- printAssociations (trimmedAssocs)
 
-    # TODO: Test out insertAll and normalizeWith here.
+    # TODO: There seems to be a problem with 'remove'
+    _ <- await (Stdout.line "remove assocs1 \"2\":")
+    _ <- printAssociations (AssocList.remove assocs1 "3")
 
     succeed {}
 
