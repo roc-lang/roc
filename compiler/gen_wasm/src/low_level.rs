@@ -671,16 +671,12 @@ impl<'a> LowLevelCall<'a> {
                 let layout = backend.storage.symbol_layouts[&self.arguments[0]];
                 let is_signed = layout_is_signed_int(&layout);
 
-                // This implementation relies on the specific values of Eq, Gt and Lt!
-                // (x != y) as u8 + (x < y) as u8
-                //
-                // #[repr(u8)]
-                // pub enum RocOrder {
-                //     Eq = 0,
-                //     Gt = 1,
-                //     Lt = 2,
-                // }
-
+                // This implements the expression:
+                //            (x != y) as u8 + (x < y) as u8
+                // For x==y:  (false as u8)  + (false as u8) = 0 = RocOrder::Eq
+                // For x>y:   (true as u8)   + (false as u8) = 1 = RocOrder::Gt
+                // For x<y:   (true as u8)   + (true as u8)  = 2 = RocOrder::Lt
+                // u8 is represented in the stack machine as i32, but written to memory as 1 byte
                 match CodeGenNumType::from(layout) {
                     I32 => {
                         self.load_args(backend);
