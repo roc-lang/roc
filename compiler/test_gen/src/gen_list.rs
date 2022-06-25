@@ -2888,7 +2888,7 @@ fn list_find_index() {
             r#"
             when List.findIndex ["a", "bc", "def"] (\s -> Str.countGraphemes s > 1) is
                 Ok v -> v
-                Err _ -> "not found"
+                Err _ -> 999
             "#
         ),
         1,
@@ -2904,11 +2904,11 @@ fn list_find_index_not_found() {
             r#"
             when List.findIndex ["a", "bc", "def"] (\s -> Str.countGraphemes s > 5) is
                 Ok v -> v
-                Err _ -> "not found"
+                Err _ -> 999
             "#
         ),
-        RocStr::from("not found"),
-        RocStr
+        999,
+        i64
     );
 }
 
@@ -2920,11 +2920,11 @@ fn list_find_index_empty_typed_list() {
             r#"
             when List.findIndex [] (\s -> Str.countGraphemes s > 5) is
                 Ok v -> v
-                Err _ -> "not found"
+                Err _ -> 999
             "#
         ),
-        RocStr::from("not found"),
-        RocStr
+        999,
+        i64
     );
 }
 

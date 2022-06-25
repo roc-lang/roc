@@ -1246,6 +1246,7 @@ define_builtins! {
         56 LIST_SORT_DESC_COMPARE: "#sortDescCompare"
         57 LIST_REPLACE: "replace"
         58 LIST_IS_UNIQUE: "#isUnique"
+        59 LIST_FIND_INDEX: "findIndex"
     }
     5 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" // the Result.Result type alias
