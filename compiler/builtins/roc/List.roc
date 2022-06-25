@@ -583,6 +583,19 @@ joinMap = \list, mapper ->
 ## If no satisfying element is found, an `Err NotFound` is returned.
 find : List elem, (elem -> Bool) -> Result elem [NotFound]*
 
+findIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]*
+findIndex = \list, matcher ->
+    foundIndex = List.walkUntil list 0 \index, elem ->
+        if matcher elem then
+            Stop index
+        else
+            Continue (index + 1)
+
+    if foundIndex < List.len list then
+        Ok foundIndex
+    else
+        Err NotFound
+
 ## Returns a subsection of the given list, beginning at the `start` index and
 ## including a total of `len` elements.
 ##
