@@ -1143,6 +1143,11 @@ impl<
                 let val = *x;
                 ASM::mov_reg64_imm64(&mut self.buf, reg, i128::from_ne_bytes(val) as i64);
             }
+            (Literal::Bool(x), Layout::Builtin(Builtin::Bool)) => {
+                let reg = self.storage_manager.claim_general_reg(&mut self.buf, sym);
+                let val = [*x as u8; 16];
+                ASM::mov_reg64_imm64(&mut self.buf, reg, i128::from_ne_bytes(val) as i64);
+            }
             (Literal::Float(x), Layout::Builtin(Builtin::Float(FloatWidth::F64))) => {
                 let reg = self.storage_manager.claim_float_reg(&mut self.buf, sym);
                 let val = *x;

@@ -1221,6 +1221,9 @@ fn constrain_function_def(
 
     match opt_annotation {
         Some(annotation) => {
+            let loc_pattern = Loc::at(loc_symbol.region, Pattern::Identifier(loc_symbol.value));
+            let loc_body_expr = loc_expr;
+
             let arity = annotation.signature.arity();
             let rigids = &env.rigids;
             let mut ftv = rigids.clone();
@@ -1235,20 +1238,101 @@ fn constrain_function_def(
                 &mut ftv,
             );
 
+            let (arg_types, signature_closure_type, ret_type) = match &signature {
+                Type::Function(arg_types, signature_closure_type, ret_type) => {
+                    (arg_types, signature_closure_type, ret_type)
+                }
+                _ => {
+                    // aliases, or just something weird
+
+                    let def_pattern_state = {
+                        let mut def_pattern_state = PatternState::default();
+
+                        def_pattern_state.headers.insert(
+                            loc_symbol.value,
+                            Loc {
+                                region: loc_function_def.region,
+                                // todo can we use Type::Variable(expr_var) here?
+                                value: signature.clone(),
+                            },
+                        );
+
+                        // TODO see if we can get away with not adding this constraint at all
+                        def_pattern_state.vars.push(expr_var);
+                        let annotation_expected = FromAnnotation(
+                            loc_pattern.clone(),
+                            arity,
+                            AnnotationSource::TypedBody {
+                                region: annotation.region,
+                            },
+                            signature.clone(),
+                        );
+
+                        def_pattern_state.constraints.push(constraints.equal_types(
+                            Type::Variable(expr_var),
+                            annotation_expected,
+                            Category::Storage(std::file!(), std::line!()),
+                            Region::span_across(&annotation.region, &loc_body_expr.region),
+                        ));
+
+                        def_pattern_state
+                    };
+
+                    let annotation_expected = FromAnnotation(
+                        loc_pattern,
+                        arity,
+                        AnnotationSource::TypedBody {
+                            region: annotation.region,
+                        },
+                        signature.clone(),
+                    );
+
+                    let ret_constraint = constrain_untyped_closure(
+                        constraints,
+                        env,
+                        loc_function_def.region,
+                        annotation_expected,
+                        expr_var,
+                        function_def.closure_type,
+                        function_def.return_type,
+                        &function_def.arguments,
+                        loc_body_expr,
+                        &function_def.captured_symbols,
+                        loc_symbol.value,
+                    );
+
+                    let ret_constraint =
+                        attach_resolution_constraints(constraints, env, ret_constraint);
+
+                    let cons = [
+                        ret_constraint,
+                        // Store type into AST vars. We use Store so errors aren't reported twice
+                        constraints.store(signature, expr_var, std::file!(), std::line!()),
+                    ];
+                    let expr_con = constraints.and_constraint(cons);
+
+                    return constrain_function_def_make_constraint(
+                        constraints,
+                        new_rigid_variables,
+                        new_infer_variables,
+                        expr_con,
+                        body_con,
+                        def_pattern_state,
+                    );
+                }
+            };
+
             let env = &mut Env {
                 home: env.home,
                 rigids: ftv,
                 resolutions_to_make: vec![],
             };
 
-            let loc_pattern = Loc::at(loc_symbol.region, Pattern::Identifier(loc_symbol.value));
-
             // TODO missing equality of annotation_expected with expr_var?
             // but the signature is stored into the expr_var below?!
 
             let region = loc_function_def.region;
 
-            let loc_body_expr = loc_expr;
             let mut argument_pattern_state = PatternState {
                 headers: VecMap::default(),
                 vars: Vec::with_capacity(function_def.arguments.len()),
@@ -1259,14 +1343,6 @@ fn constrain_function_def(
             let ret_var = function_def.return_type;
             let closure_var = function_def.closure_type;
 
-            let (arg_types, signature_closure_type, ret_type) = match &signature {
-                Type::Function(arg_types, signature_closure_type, ret_type) => {
-                    (arg_types, signature_closure_type, ret_type)
-                }
-                _ => todo!("TODO {:?}", (loc_symbol, &signature)),
-            };
-
-            // Type::Function(arg_types, signature_closure_type, ret_type),
             let ret_type = *ret_type.clone();
 
             vars.push(ret_var);

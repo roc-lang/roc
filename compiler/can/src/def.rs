@@ -1054,6 +1054,7 @@ impl DefOrdering {
 #[inline(always)]
 pub(crate) fn sort_can_defs_new(
     env: &mut Env<'_>,
+    scope: &mut Scope,
     var_store: &mut VarStore,
     defs: CanDefs,
     mut output: Output,
@@ -1249,7 +1250,9 @@ pub(crate) fn sort_can_defs_new(
     }
 
     for (condition, region) in expects.conditions.into_iter().zip(expects.regions) {
-        declarations.push_expect(Loc::at(region, condition));
+        // an `expect` does not have a user-defined name, but we'll need a name to call the expectation
+        let name = scope.gen_unique_symbol();
+        declarations.push_expect(name, Loc::at(region, condition));
     }
 
     (declarations, output)
