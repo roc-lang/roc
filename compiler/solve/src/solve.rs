@@ -1,6 +1,6 @@
 use crate::ability::{
     resolve_ability_specialization, type_implementing_specialization, AbilityImplError,
-    DeferredObligations, DeriveKey, PendingDerivesTable, Resolved, Unfulfilled,
+    DeferredObligations, PendingDerivesTable, RequestedDeriveKey, Resolved, Unfulfilled,
 };
 use bumpalo::Bump;
 use roc_can::abilities::{AbilitiesStore, MemberSpecialization};
@@ -1660,7 +1660,7 @@ fn check_ability_specialization(
                             .add(must_implement_ability, AbilityImplError::IncompleteAbility);
                         // This specialization dominates any derives that might be present.
                         deferred_obligations.dominate(
-                            DeriveKey {
+                            RequestedDeriveKey {
                                 opaque,
                                 ability: parent_ability,
                             },

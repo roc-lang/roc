@@ -57,7 +57,7 @@ pub enum Unfulfilled {
 
 /// Indexes a deriving of an ability for an opaque type.
 #[derive(Debug, PartialEq, Clone, Copy)]
-pub struct DeriveKey {
+pub struct RequestedDeriveKey {
     pub opaque: Symbol,
     pub ability: Symbol,
 }
@@ -72,7 +72,7 @@ struct ImplKey {
 #[derive(Debug)]
 pub struct PendingDerivesTable(
     /// derive key -> (opaque type var to use for checking, derive region)
-    VecMap<DeriveKey, (Variable, Region)>,
+    VecMap<RequestedDeriveKey, (Variable, Region)>,
 );
 
 impl PendingDerivesTable {
@@ -89,7 +89,7 @@ impl PendingDerivesTable {
                     ability.is_builtin_ability(),
                     "Not a builtin - should have been caught during can"
                 );
-                let derive_key = DeriveKey { opaque, ability };
+                let derive_key = RequestedDeriveKey { opaque, ability };
 
                 // Neither rank nor pools should matter here.
                 let opaque_var =
@@ -117,7 +117,7 @@ pub struct DeferredObligations {
     /// Derives that are claimed, but have also been determined to have
     /// specializations. Maps to the first member specialization of the same
     /// ability.
-    dominated_derives: VecMap<DeriveKey, Region>,
+    dominated_derives: VecMap<RequestedDeriveKey, Region>,
 }
 
 impl DeferredObligations {
@@ -133,7 +133,7 @@ impl DeferredObligations {
         self.obligations.push((must_implement, on_error));
     }
 
-    pub fn dominate(&mut self, key: DeriveKey, impl_region: Region) {
+    pub fn dominate(&mut self, key: RequestedDeriveKey, impl_region: Region) {
         // Only builtin abilities can be derived, and hence dominated.
         if self.pending_derives.0.contains_key(&key) && !self.dominated_derives.contains_key(&key) {
             self.dominated_derives.insert(key, impl_region);
@@ -153,7 +153,7 @@ impl DeferredObligations {
         self,
         subs: &mut Subs,
         abilities_store: &AbilitiesStore,
-    ) -> (Vec<TypeError>, Vec<DeriveKey>) {
+    ) -> (Vec<TypeError>, Vec<RequestedDeriveKey>) {
         let mut problems = vec![];
 
         let Self {
@@ -282,11 +282,11 @@ type ObligationResult = Result<(), Unfulfilled>;
 
 struct ObligationCache<'a> {
     abilities_store: &'a AbilitiesStore,
-    dominated_derives: &'a VecMap<DeriveKey, Region>,
+    dominated_derives: &'a VecMap<RequestedDeriveKey, Region>,
     pending_derives: &'a PendingDerivesTable,
 
     impl_cache: VecMap<ImplKey, ObligationResult>,
-    derive_cache: VecMap<DeriveKey, ObligationResult>,
+    derive_cache: VecMap<RequestedDeriveKey, ObligationResult>,
 }
 
 enum ReadCache {
@@ -342,7 +342,7 @@ impl ObligationCache<'_> {
 
     fn check_opaque(&mut self, subs: &mut Subs, opaque: Symbol, ability: Symbol) -> ReadCache {
         let impl_key = ImplKey { opaque, ability };
-        let derive_key = DeriveKey { opaque, ability };
+        let derive_key = RequestedDeriveKey { opaque, ability };
 
         match self.pending_derives.0.get(&derive_key) {
             Some(&(opaque_real_var, derive_region)) => {
@@ -377,7 +377,7 @@ impl ObligationCache<'_> {
             ReadCache::Impl => self.impl_cache.get(&ImplKey { opaque, ability }).unwrap(),
             ReadCache::Derive => self
                 .derive_cache
-                .get(&DeriveKey { opaque, ability })
+                .get(&RequestedDeriveKey { opaque, ability })
                 .unwrap(),
         }
     }
@@ -418,7 +418,7 @@ impl ObligationCache<'_> {
     fn check_derive(
         &mut self,
         subs: &mut Subs,
-        derive_key: DeriveKey,
+        derive_key: RequestedDeriveKey,
         opaque_real_var: Variable,
         derive_region: Region,
     ) {
