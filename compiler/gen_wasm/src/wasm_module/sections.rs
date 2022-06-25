@@ -1088,7 +1088,7 @@ impl<'a> ElementSection<'a> {
     /// The function will be inserted into the table if it's not already there.
     /// This index is what the call_indirect instruction expects.
     /// (This works mostly the same as function pointers, except hackers can't jump to arbitrary code)
-    pub fn get_fn_table_index(&mut self, fn_index: u32) -> i32 {
+    pub fn get_or_insert_fn(&mut self, fn_index: u32) -> i32 {
         // In practice there is always one segment. We allow a bit more generality by using the last one.
         let segment = self.segments.last_mut().unwrap();
         let offset = segment.offset.unwrap_i32();

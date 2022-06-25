@@ -1657,7 +1657,7 @@ pub fn call_higher_order_lowlevel<'a>(
     };
 
     let wrapper_fn_idx = backend.register_helper_proc(wrapper_sym, wrapper_layout, source);
-    let wrapper_fn_ptr = backend.get_fn_table_index(wrapper_fn_idx);
+    let wrapper_fn_ptr = backend.get_fn_ptr(wrapper_fn_idx);
     let inc_fn_ptr = match closure_data_layout {
         Layout::Struct {
             field_layouts: &[], ..
@@ -1665,9 +1665,14 @@ pub fn call_higher_order_lowlevel<'a>(
             // Our code gen would ignore the Unit arg, but the Zig builtin passes a pointer for it!
             // That results in an exception (type signature mismatch in indirect call).
             // The workaround is to use I32 layout, treating the (ignored) pointer as an integer.
-            backend.get_refcount_fn_ptr(Layout::Builtin(Builtin::Int(IntWidth::I32)), HelperOp::Inc)
+            let inc_fn = backend
+                .get_refcount_fn_index(Layout::Builtin(Builtin::Int(IntWidth::I32)), HelperOp::Inc);
+            backend.get_fn_ptr(inc_fn)
         }
-        _ => backend.get_refcount_fn_ptr(closure_data_layout, HelperOp::Inc),
+        _ => {
+            let inc_fn = backend.get_refcount_fn_index(closure_data_layout, HelperOp::Inc);
+            backend.get_fn_ptr(inc_fn)
+        }
     };
 
     match op {
@@ -1794,7 +1799,8 @@ fn list_map_n<'a>(
     // If we have lists of different lengths, we may need to decrement
     let num_wasm_args = if arg_elem_layouts.len() > 1 {
         for el in arg_elem_layouts.iter() {
-            let ptr = backend.get_refcount_fn_ptr(*el, HelperOp::Dec);
+            let idx = backend.get_refcount_fn_index(*el, HelperOp::Dec);
+            let ptr = backend.get_fn_ptr(idx);
             backend.code_builder.i32_const(ptr);
         }
         7 + arg_elem_layouts.len() * 4
