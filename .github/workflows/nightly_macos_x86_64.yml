@@ -23,22 +23,8 @@ jobs:
           echo "${GITHUB_WORKSPACE}/zig-macos-x86_64-${ZIG_VERSION}" >> $GITHUB_PATH
       - name: zig version
         run: zig version
-      - name: Install LLVM and Clang
-        uses: KyleMayes/install-llvm-action@v1
-        with:
-          version: "13.0.1"
-      - name: set Clang up properly
-        run: |
-          LLVM_PATH=${{ env.LLVM_PATH }}
-          LLVM_VERSION=13.0.1
-          echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> $GITHUB_ENV
-          echo "CPATH=$LLVM_PATH/lib/clang/$LLVM_VERSION/include/" >> $GITHUB_ENV
-          echo "LDFLAGS=-L$LLVM_PATH/lib" >> $GITHUB_ENV
-          echo "CPPFLAGS=-I$LLVM_PATH/include" >> $GITHUB_ENV
-          echo "CC=$LLVM_PATH/bin/clang" >> $GITHUB_ENV
-          echo "CXX=$LLVM_PATH/bin/clang++" >> $GITHUB_ENV
-      - name: install tree for debugging
-        run: brew install tree
+      - name: Install LLVM
+        run: brew install llvm@13
       - name: execute rust tests
         uses: actions-rs/cargo@v1
         with:
