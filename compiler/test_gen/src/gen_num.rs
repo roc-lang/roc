@@ -736,7 +736,7 @@ fn gen_div_f64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_div_checked_f64() {
     assert_evals_to!(
         indoc!(
@@ -752,7 +752,7 @@ fn gen_div_checked_f64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_div_checked_by_zero_f64() {
     assert_evals_to!(
         indoc!(
@@ -768,7 +768,7 @@ fn gen_div_checked_by_zero_f64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_div_dec() {
     assert_evals_to!(
         indoc!(
@@ -788,7 +788,7 @@ fn gen_div_dec() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_div_checked_dec() {
     assert_evals_to!(
         indoc!(
@@ -809,7 +809,7 @@ fn gen_div_checked_dec() {
     );
 }
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_div_checked_by_zero_dec() {
     assert_evals_to!(
         indoc!(
@@ -1046,7 +1046,7 @@ fn gen_div_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_div_checked_i64() {
     assert_evals_to!(
         indoc!(
@@ -1062,7 +1062,7 @@ fn gen_div_checked_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_div_checked_by_zero_i64() {
     assert_evals_to!(
         indoc!(
@@ -1092,7 +1092,7 @@ fn gen_rem_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_rem_checked_div_by_zero_i64() {
     assert_evals_to!(
         indoc!(

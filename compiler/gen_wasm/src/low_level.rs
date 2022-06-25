@@ -723,9 +723,22 @@ impl<'a> LowLevelCall<'a> {
             }
             NumDivUnchecked => {
                 self.load_args(backend);
+                let is_signed = symbol_is_signed_int(backend, self.arguments[0]);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
-                    I32 => backend.code_builder.i32_div_s(),
-                    I64 => backend.code_builder.i64_div_s(),
+                    I32 => {
+                        if is_signed {
+                            backend.code_builder.i32_div_s()
+                        } else {
+                            backend.code_builder.i32_div_u()
+                        }
+                    }
+                    I64 => {
+                        if is_signed {
+                            backend.code_builder.i64_div_s()
+                        } else {
+                            backend.code_builder.i64_div_u()
+                        }
+                    }
                     F32 => backend.code_builder.f32_div(),
                     F64 => backend.code_builder.f64_div(),
                     Decimal => self.load_args_and_call_zig(backend, bitcode::DEC_DIV),
