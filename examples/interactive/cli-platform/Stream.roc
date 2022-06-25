@@ -43,7 +43,9 @@ interface Stream
 ## When you open a file, for example using [openRead], that file will remain open as long as
 ## the [Stream] is still referenced anywhere in the program. Once the program no longer has
 ## a reference to the [Stream], the corresponding file will be closed automatically.
-Stream permissions := {
+ReadStream output err permissions := {
+    fromBytes : List U8 -> Result input err,
+
     # A Windows HANDLE is an isize, and a UNIX file descriptor is i32.
     # A Nat will always be enough to fit either, on a 32-bit or 64-bit target.
     # On a 16-bit target, Nat will be too small, meaning that you can only have
@@ -91,7 +93,14 @@ Stream permissions := {
         NeedsClosing (Box []),
         AlwaysOpen, # stdin, stdout, or stderr
     ],
-} # has Eq, Hash, Ord # no Encode or Decode; you should never serialize these!
+} # has no abilities, not even Eq, because it contains a function!
+
+WriteStream input err permissions := {
+    toBytes : input -> Result (List U8) err,
+    handleOrFd : Nat,
+    memory : [NeedsClosing (Box []), AlwaysOpen],
+} # has no abilities, not even Eq, because it contains a function!
+
 
 ## ## Opening a Stream
 
@@ -173,21 +182,15 @@ read :
         (ReadErr err)
         [Read src]*
 
-## Like [read], except appends the bytes it reads to the given [List] and then returns
-## that list.
-##
-## Calling [readAppend] repeatedly can be faster than calling [read] repeatedly, as long as
-## you keep passing the list you got from the previous call as the argument to the next one -
-## perhaps after calling something like [List.withCapacity] on it to reset its size to 0.
-##
-## Doing this can avoid reallocating a fresh list every time. (To avoid reallocation, make sure
-## to use the list the previous call returned _only_ as an argument to the next call. If you
-## store a copy of it somewhere else in between, a new allocation may end up happening.)
-readAppend : Stream [Read a]*, Nat, List U8 -> Task (List U8) (ReadErr *) [Read a]*
-
 # pread on Linux - TODO: is there an equivalent on Windows?
-readAt : Stream [Read a]*, { bytes : Nat, offset : Nat } -> Task (List U8) (ReadErr *) [Read a]*
-readAppendAt : Stream [Read a]*, { bytes : Nat, offset : Nat }, List U8 -> Task (List U8) (ReadErr *) [Read a]*
+readAt :
+    Stream ok err [Read src]*,
+    Nat, # just like `read`, number of bytes comes right after the stream
+    Nat # new argument: offset
+    -> Task
+        [Done ok, More ok, Empty]
+        (ReadErr err)
+        [Read src]*
 
 # Read chunks of N bytes at a time, until EOF is reached. Can build up state along the way,
 # including a buffer. Cool design thing: even without seamless slices, we can hold onto a reference
