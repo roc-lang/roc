@@ -745,7 +745,13 @@ impl<'a> LowLevelCall<'a> {
                     x => todo!("{:?} for {:?}", self.lowlevel, x),
                 }
             }
-            NumDivCeilUnchecked => todo!("{:?}", self.lowlevel),
+            NumDivCeilUnchecked => match self.ret_layout {
+                Layout::Builtin(Builtin::Int(width)) => {
+                    self.load_args_and_call_zig(backend, &bitcode::NUM_DIV_CEIL[width])
+                }
+                _ => panic_ret_type(),
+            },
+
             NumRemUnchecked => {
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
