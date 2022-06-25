@@ -84,26 +84,8 @@ macro_rules! run_jit_function {
                 }
             }
 
-            let get_expect_failures: libloading::Symbol<unsafe extern "C" fn() -> Failures> = $lib
-                .get(bitcode::UTILS_GET_EXPECT_FAILURES.as_bytes())
-                .ok()
-                .ok_or(format!(
-                    "Unable to JIT compile `{}`",
-                    bitcode::UTILS_GET_EXPECT_FAILURES
-                ))
-                .expect("errored");
             let mut main_result = MaybeUninit::uninit();
-
             main(main_result.as_mut_ptr());
-            let failures = get_expect_failures();
-
-            if failures.count > 0 {
-                // TODO tell the user about the failures!
-                let failures =
-                    unsafe { core::slice::from_raw_parts(failures.failures, failures.count) };
-
-                panic!("Failed with {} failures. Failures: ", failures.len());
-            }
 
             match main_result.assume_init().into() {
                 Ok(success) => {

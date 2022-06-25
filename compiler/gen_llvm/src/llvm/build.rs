@@ -42,7 +42,7 @@ use inkwell::types::{
 };
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValue, CallSiteValue, CallableValue, FloatValue, FunctionValue,
+    BasicMetadataValueEnum, BasicValue, CallSiteValue, FloatValue, FunctionValue,
     InstructionOpcode, InstructionValue, IntValue, PhiValue, PointerValue, StructValue,
 };
 use inkwell::OptimizationLevel;
@@ -66,7 +66,7 @@ use roc_mono::ir::{
 use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, TagIdIntType, UnionLayout};
 use roc_std::RocDec;
 use roc_target::{PtrWidth, TargetInfo};
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryInto;
 use std::path::Path;
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
@@ -2768,30 +2768,8 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
                 match env.target_info.ptr_width() {
                     roc_target::PtrWidth::Bytes8 => {
-                        let func = env
-                            .module
-                            .get_function(bitcode::UTILS_EXPECT_FAILED)
-                            .unwrap();
-                        // TODO get the actual line info instead of
-                        // hardcoding as zero!
-                        let callable = CallableValue::try_from(func).unwrap();
-                        let start_line = context.i32_type().const_int(0, false);
-                        let end_line = context.i32_type().const_int(0, false);
-                        let start_col = context.i16_type().const_int(0, false);
-                        let end_col = context.i16_type().const_int(0, false);
-
-                        bd.build_call(
-                            callable,
-                            &[
-                                start_line.into(),
-                                end_line.into(),
-                                start_col.into(),
-                                end_col.into(),
-                            ],
-                            "call_expect_failed",
-                        );
-
-                        bd.build_unconditional_branch(then_block);
+                        // temporary native implementation
+                        throw_exception(env, "An expectation failed!");
                     }
                     roc_target::PtrWidth::Bytes4 => {
                         // temporary WASM implementation
