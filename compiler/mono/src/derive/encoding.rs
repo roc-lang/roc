@@ -66,7 +66,7 @@ impl Env<'_> {
         let imported = self
             .exposed_encode_types
             .storage_subs
-            .export_variable_to(self.subs, *storage_var);
+            .export_variable_to_directly_to_use_site(self.subs, *storage_var);
 
         instantiate_rigids(self.subs, imported.variable);
 
