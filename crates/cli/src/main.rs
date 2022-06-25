@@ -57,7 +57,7 @@ fn main() -> io::Result<()> {
         }
         Some((CMD_TEST, matches)) => {
             if matches.is_present(ROC_FILE) {
-                test(Triple::host())
+                test(matches, Triple::host())
             } else {
                 eprintln!("What .roc file do you want to test? Specify it at the end of the `roc test` command.");
 

@@ -8,6 +8,7 @@ use roc_build::link::{LinkType, LinkingStrategy};
 use roc_error_macros::{internal_error, user_error};
 use roc_load::{LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
+use roc_target::TargetInfo;
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
@@ -268,15 +269,128 @@ pub enum FormatMode {
     CheckOnly,
 }
 
-pub fn test(triple: Triple) -> io::Result<i32> {
-    todo!("Run the tests");
+pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
+    let arena = Bump::new();
+    let filename = matches.value_of_os(ROC_FILE).unwrap();
+    let opt_level = match (
+        matches.is_present(FLAG_OPTIMIZE),
+        matches.is_present(FLAG_OPT_SIZE),
+        matches.is_present(FLAG_DEV),
+    ) {
+        (true, false, false) => OptLevel::Optimize,
+        (false, true, false) => OptLevel::Size,
+        (false, false, true) => OptLevel::Development,
+        (false, false, false) => OptLevel::Normal,
+        _ => user_error!("build can be only one of `--dev`, `--optimize`, or `--opt-size`"),
+    };
+    let emit_debug_info = matches.is_present(FLAG_DEBUG);
+    let emit_timings = matches.is_present(FLAG_TIME);
 
-    // what needs to happen here?
-    // 1. Parse, canonicalize, and type-check.
-    // 2. Before mono, first create some new things to specialize - I guess top-level functions?
+    let threading = match matches
+        .value_of(FLAG_MAX_THREADS)
+        .and_then(|s| s.parse::<usize>().ok())
+    {
+        None => Threading::AllAvailable,
+        Some(0) => user_error!("cannot build with at most 0 threads"),
+        Some(1) => Threading::Single,
+        Some(n) => Threading::AtMost(n),
+    };
 
-    // yeah so like we need to create a bunch of top-level functions that the test runner
-    // can execute in parallel.
+    let wasm_dev_backend = matches!(opt_level, OptLevel::Development)
+        && matches!(triple.architecture, Architecture::Wasm32);
+
+    let linking_strategy = if wasm_dev_backend {
+        LinkingStrategy::Additive
+    } else if !roc_linker::supported(&LinkType::Dylib, &triple)
+        || matches.value_of(FLAG_LINKER) == Some("legacy")
+    {
+        LinkingStrategy::Legacy
+    } else {
+        LinkingStrategy::Surgical
+    };
+
+    let precompiled = if matches.is_present(FLAG_PRECOMPILED) {
+        matches.value_of(FLAG_PRECOMPILED) == Some("true")
+    } else {
+        // When compiling for a different target, default to assuming a precompiled host.
+        // Otherwise compilation would most likely fail because many toolchains assume you're compiling for the host
+        // We make an exception for Wasm, because cross-compiling is the norm in that case.
+        triple != Triple::host() && !matches!(triple.architecture, Architecture::Wasm32)
+    };
+    let path = Path::new(filename);
+
+    // Spawn the root task
+    let path = path.canonicalize().unwrap_or_else(|err| {
+        use io::ErrorKind::*;
+
+        match err.kind() {
+            NotFound => {
+                let path_string = path.to_string_lossy();
+
+                // TODO these should use roc_reporting to display nicer error messages.
+                match matches.value_source(ROC_FILE) {
+                    Some(ValueSource::DefaultValue) => {
+                        eprintln!(
+                            "\nNo `.roc` file was specified, and the current directory does not contain a {} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n",
+                            DEFAULT_ROC_FILENAME
+                        )
+                    }
+                    _ => eprintln!("\nThis file was not found: {}\n\nYou can run `roc help` for more information on how to provide a .roc file.\n", path_string),
+                }
+
+                process::exit(1);
+            }
+            _ => {
+                todo!("TODO Gracefully handle opening {:?} - {:?}", path, err);
+            }
+        }
+    });
+
+    unsafe {
+        let name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
+        let cstring = CString::new(name).unwrap();
+        let shared_fd =
+            libc::shm_open(cstring.as_ptr().cast(), libc::O_RDWR | libc::O_CREAT, 0o666);
+
+        libc::ftruncate(shared_fd, 1024);
+
+        let _shared_ptr = libc::mmap(
+            std::ptr::null_mut(),
+            4096,
+            libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            shared_fd,
+            0,
+        );
+    }
+
+    let src_dir = path.parent().unwrap().canonicalize().unwrap();
+    let target_valgrind = matches.is_present(FLAG_VALGRIND);
+
+    let arena = &arena;
+    let target = &triple;
+    let opt_level = opt_level;
+    let target_info = TargetInfo::from(target);
+
+    // Step 1: compile the app and generate the .o file
+    let subs_by_module = Default::default();
+
+    let mut loaded = roc_load::load_and_monomorphize(
+        arena,
+        path.clone(),
+        src_dir.as_path(),
+        subs_by_module,
+        target_info,
+        // TODO: expose this from CLI?
+        roc_reporting::report::RenderTarget::ColorTerminal,
+        threading,
+    )
+    .unwrap();
+
+    // let expectations = std::mem::take(&mut loaded.expectations);
+    let _interns = loaded.interns;
+
+    Ok(0)
 }
 
 pub fn build(
