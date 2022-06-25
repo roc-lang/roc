@@ -1301,7 +1301,7 @@ fn list_join_one_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_single() {
     assert_evals_to!("List.single 1", RocList::from_slice(&[1]), RocList<i64>);
     assert_evals_to!("List.single 5.6", RocList::from_slice(&[5.6]), RocList<f64>);

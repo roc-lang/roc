@@ -1375,7 +1375,7 @@ impl<'a> WasmBackend<'a> {
      * Arrays
      *******************************************************************/
 
-    fn expr_array(
+    pub fn expr_array(
         &mut self,
         sym: Symbol,
         storage: &StoredValue,

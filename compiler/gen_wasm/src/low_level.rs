@@ -4,7 +4,7 @@ use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_mono::code_gen_help::HelperOp;
-use roc_mono::ir::{HigherOrderLowLevel, PassedFunction, ProcLayout};
+use roc_mono::ir::{HigherOrderLowLevel, ListLiteralElement, PassedFunction, ProcLayout};
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
 use roc_mono::low_level::HigherOrder;
 
@@ -335,7 +335,12 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
             ListReplaceUnsafe => todo!("{:?}", self.lowlevel),
-            ListSingle => todo!("{:?}", self.lowlevel),
+            ListSingle => {
+                let elem = self.arguments[0];
+                let elem_layout = &backend.storage.symbol_layouts[&elem].clone();
+                let elems = backend.env.arena.alloc([ListLiteralElement::Symbol(elem)]);
+                backend.expr_array(self.ret_symbol, &self.ret_storage, elem_layout, elems)
+            }
             ListRepeat => todo!("{:?}", self.lowlevel),
             ListReverse => todo!("{:?}", self.lowlevel),
             ListConcat => todo!("{:?}", self.lowlevel),
