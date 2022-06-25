@@ -7,7 +7,7 @@ use roc_types::subs::Variable;
 use crate::{
     abilities::AbilitiesStore,
     def::{Annotation, Declaration, Def},
-    expr::{self, AccessorData, ClosureData, Expr, Field},
+    expr::{self, AccessorData, AnnotatedMark, ClosureData, Declarations, Expr, Field},
     pattern::{DestructType, Pattern, RecordDestruct},
 };
 
@@ -19,11 +19,89 @@ macro_rules! visit_list {
     };
 }
 
-pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &[Declaration]) {
-    visit_list!(visitor, visit_decl, decls)
+pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
+    use crate::expr::DeclarationTag::*;
+
+    for (index, tag) in decls.declarations.iter().enumerate() {
+        match tag {
+            Value => {
+                let loc_expr = &decls.expressions[index];
+
+                let loc_symbol = decls.symbols[index];
+                let expr_var = decls.variables[index];
+
+                let pattern = match decls.specializes.get(&index).copied() {
+                    Some(specializes) => Pattern::AbilityMemberSpecialization {
+                        ident: loc_symbol.value,
+                        specializes,
+                    },
+                    None => Pattern::Identifier(loc_symbol.value),
+                };
+                visitor.visit_pattern(&pattern, loc_symbol.region, Some(expr_var));
+
+                visitor.visit_expr(&loc_expr.value, loc_expr.region, expr_var);
+                if let Some(annot) = &decls.annotations[index] {
+                    visitor.visit_annotation(annot);
+                }
+            }
+            Expectation => {
+                let loc_condition = &decls.expressions[index];
+
+                visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::BOOL);
+            }
+            Function(function_index)
+            | Recursive(function_index)
+            | TailRecursive(function_index) => {
+                let loc_body = &decls.expressions[index];
+
+                let loc_symbol = decls.symbols[index];
+                let expr_var = decls.variables[index];
+
+                let pattern = match decls.specializes.get(&index).copied() {
+                    Some(specializes) => Pattern::AbilityMemberSpecialization {
+                        ident: loc_symbol.value,
+                        specializes,
+                    },
+                    None => Pattern::Identifier(loc_symbol.value),
+                };
+                visitor.visit_pattern(&pattern, loc_symbol.region, Some(expr_var));
+
+                let function_def = &decls.function_bodies[function_index.index() as usize];
+
+                walk_closure_help(
+                    visitor,
+                    &function_def.value.arguments,
+                    loc_body,
+                    function_def.value.return_type,
+                )
+            }
+            Destructure(destructure_index) => {
+                let destructure = &decls.destructs[destructure_index.index() as usize];
+                let loc_pattern = &destructure.loc_pattern;
+
+                let loc_expr = &decls.expressions[index];
+                let expr_var = decls.variables[index];
+
+                let opt_var = match loc_pattern.value {
+                    Pattern::Identifier(..) | Pattern::AbilityMemberSpecialization { .. } => {
+                        Some(expr_var)
+                    }
+                    _ => loc_pattern.value.opt_var(),
+                };
+
+                visitor.visit_pattern(&loc_pattern.value, loc_pattern.region, opt_var);
+                visitor.visit_expr(&loc_expr.value, loc_expr.region, expr_var);
+
+                if let Some(annot) = &decls.annotations[index] {
+                    visitor.visit_annotation(annot);
+                }
+            }
+            MutualRecursion { .. } => { /* ignore */ }
+        }
+    }
 }
 
-pub fn walk_decl<V: Visitor>(visitor: &mut V, decl: &Declaration) {
+fn walk_decl<V: Visitor>(visitor: &mut V, decl: &Declaration) {
     match decl {
         Declaration::Declare(def) => {
             visitor.visit_def(def);
@@ -31,6 +109,7 @@ pub fn walk_decl<V: Visitor>(visitor: &mut V, decl: &Declaration) {
         Declaration::DeclareRec(defs, _cycle_mark) => {
             visit_list!(visitor, visit_def, defs)
         }
+
         Declaration::Expects(expects) => {
             let it = expects.regions.iter().zip(expects.conditions.iter());
             for (region, condition) in it {
@@ -196,11 +275,20 @@ pub fn walk_closure<V: Visitor>(visitor: &mut V, clos: &ClosureData) {
         ..
     } = clos;
 
+    walk_closure_help(visitor, arguments, loc_body, *return_type)
+}
+
+fn walk_closure_help<V: Visitor>(
+    visitor: &mut V,
+    arguments: &[(Variable, AnnotatedMark, Loc<Pattern>)],
+    loc_body: &Loc<Expr>,
+    return_type: Variable,
+) {
     arguments.iter().for_each(|(var, _exhaustive_mark, arg)| {
         visitor.visit_pattern(&arg.value, arg.region, Some(*var))
     });
 
-    visitor.visit_expr(&loc_body.value, loc_body.region, *return_type);
+    visitor.visit_expr(&loc_body.value, loc_body.region, return_type);
 }
 
 #[inline(always)]
@@ -298,7 +386,7 @@ pub trait Visitor: Sized {
         true
     }
 
-    fn visit_decls(&mut self, decls: &[Declaration]) {
+    fn visit_decls(&mut self, decls: &Declarations) {
         walk_decls(self, decls);
     }
 
@@ -407,7 +495,7 @@ impl Visitor for TypeAtVisitor {
 }
 
 /// Attempts to find the type of an expression at `region`, if it exists.
-pub fn find_type_at(region: Region, decls: &[Declaration]) -> Option<Variable> {
+pub fn find_type_at(region: Region, decls: &Declarations) -> Option<Variable> {
     let mut visitor = TypeAtVisitor { region, typ: None };
     visitor.visit_decls(decls);
     visitor.typ
@@ -418,7 +506,7 @@ pub fn find_type_at(region: Region, decls: &[Declaration]) -> Option<Variable> {
 /// is unknown, (Foo, foo) is returned. Otherwise [None] is returned.
 pub fn find_ability_member_and_owning_type_at(
     region: Region,
-    decls: &[Declaration],
+    decls: &Declarations,
     abilities_store: &AbilitiesStore,
 ) -> Option<(Symbol, Symbol)> {
     let mut visitor = Finder {

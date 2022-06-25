@@ -31,7 +31,7 @@ impl<T> Index<T> {
         }
     }
 
-    pub const fn index(&self) -> usize {
+    pub const fn index(self) -> usize {
         self.index as usize
     }
 
@@ -42,12 +42,16 @@ impl<T> Index<T> {
 
         index
     }
+
+    pub const fn as_slice(self) -> Slice<T> {
+        Slice::new(self.index, 1)
+    }
 }
 
 #[derive(PartialEq, Eq)]
 pub struct Slice<T> {
-    start: u32,
     length: u16,
+    start: u32,
     _marker: std::marker::PhantomData<T>,
 }
 
