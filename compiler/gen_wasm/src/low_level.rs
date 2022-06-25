@@ -851,20 +851,31 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
             NumNeg => {
+                const PANIC_MSG: &str =
+                    "integer negation overflowed because its argument is the minimum value";
+
                 self.load_args(backend);
                 match CodeGenNumType::from(self.ret_layout) {
                     I32 => {
+                        backend.code_builder.i32_const(i32::MIN);
+                        backend.code_builder.i32_eq();
+                        backend.code_builder.if_();
+                        backend.stmt_runtime_error(PANIC_MSG);
+                        backend.code_builder.end();
+
                         backend.code_builder.i32_const(0);
-                        backend
-                            .storage
-                            .load_symbols(&mut backend.code_builder, self.arguments);
+                        self.load_args(backend);
                         backend.code_builder.i32_sub();
                     }
                     I64 => {
+                        backend.code_builder.i64_const(i64::MIN);
+                        backend.code_builder.i64_eq();
+                        backend.code_builder.if_();
+                        backend.stmt_runtime_error(PANIC_MSG);
+                        backend.code_builder.end();
+
                         backend.code_builder.i64_const(0);
-                        backend
-                            .storage
-                            .load_symbols(&mut backend.code_builder, self.arguments);
+                        self.load_args(backend);
                         backend.code_builder.i64_sub();
                     }
                     F32 => backend.code_builder.f32_neg(),

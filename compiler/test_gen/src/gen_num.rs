@@ -1471,7 +1471,7 @@ fn int_negate() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(
     expected = r#"Roc failed with message: "integer negation overflowed because its argument is the minimum value"#
 )]
