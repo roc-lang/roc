@@ -262,18 +262,8 @@ impl<'a> LowLevelCall<'a> {
 
                 self.load_args_and_call_zig(backend, intrinsic);
             }
-            StrFromInt => {
-                // This does not get exposed in user space. We switched to NumToStr instead.
-                // We can probably just leave this as NotImplemented. We may want remove this LowLevel.
-                // see: https://github.com/rtfeldman/roc/pull/2108
-                todo!("{:?}", self.lowlevel);
-            }
-            StrFromFloat => {
-                // linker errors for __ashlti3, __fixunsdfti, __multi3, __udivti3, __umodti3
-                // https://gcc.gnu.org/onlinedocs/gccint/Integer-library-routines.html
-                // https://gcc.gnu.org/onlinedocs/gccint/Soft-float-library-routines.html
-                todo!("{:?}", self.lowlevel);
-            }
+            StrFromInt => self.num_to_str(backend),
+            StrFromFloat => self.num_to_str(backend),
             StrFromUtf8 => self.load_args_and_call_zig(backend, bitcode::STR_FROM_UTF8),
             StrTrimLeft => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_LEFT),
             StrTrimRight => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_RIGHT),
@@ -373,7 +363,7 @@ impl<'a> LowLevelCall<'a> {
                 _ => panic_ret_type(),
             },
 
-            NumToStr => todo!("{:?}", self.lowlevel),
+            NumToStr => self.num_to_str(backend),
             NumAddChecked => {
                 let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
                 match arg_layout {
@@ -1367,6 +1357,30 @@ impl<'a> LowLevelCall<'a> {
 
         // First half matches AND second half matches
         backend.code_builder.i32_and();
+    }
+
+    fn num_to_str(&self, backend: &mut WasmBackend<'a>) {
+        let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
+        match arg_layout {
+            Layout::Builtin(Builtin::Int(width)) => {
+                self.load_args_and_call_zig(backend, &bitcode::STR_FROM_INT[width])
+            }
+            Layout::Builtin(Builtin::Float(width)) => match width {
+                FloatWidth::F32 => {
+                    self.load_args(backend);
+                    backend.code_builder.f64_promote_f32();
+                    self.load_args_and_call_zig(backend, &bitcode::STR_FROM_FLOAT);
+                }
+                FloatWidth::F64 => {
+                    self.load_args_and_call_zig(backend, &bitcode::STR_FROM_FLOAT);
+                }
+                FloatWidth::F128 => todo!("F128 to Str"),
+            },
+            Layout::Builtin(Builtin::Decimal) => {
+                todo!("Decimal to Str")
+            }
+            x => internal_error!("NumToStr is not defined for {:?}", x),
+        }
     }
 }
 

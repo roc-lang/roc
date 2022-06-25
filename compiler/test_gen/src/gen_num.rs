@@ -2871,7 +2871,7 @@ fn when_on_i16() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn num_to_str() {
     use roc_std::RocStr;
 
@@ -2895,7 +2895,7 @@ fn num_to_str() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn num_to_str_u8() {
     use roc_std::RocStr;
 
@@ -2908,7 +2908,7 @@ fn num_to_str_u8() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn num_to_str_u16() {
     use roc_std::RocStr;
 
@@ -2925,7 +2925,7 @@ fn num_to_str_u16() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn num_to_str_u32() {
     use roc_std::RocStr;
 
@@ -2942,7 +2942,7 @@ fn num_to_str_u32() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn num_to_str_u64() {
     use roc_std::RocStr;
 
@@ -2959,7 +2959,7 @@ fn num_to_str_u64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn num_to_str_i8() {
     use roc_std::RocStr;
 
@@ -2977,7 +2977,7 @@ fn num_to_str_i8() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn num_to_str_i16() {
     use roc_std::RocStr;
 
@@ -3003,7 +3003,7 @@ fn num_to_str_i16() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn num_to_str_i32() {
     use roc_std::RocStr;
 
@@ -3029,7 +3029,7 @@ fn num_to_str_i32() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn num_to_str_i64() {
     use roc_std::RocStr;
 
