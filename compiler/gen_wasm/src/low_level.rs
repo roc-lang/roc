@@ -787,47 +787,63 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
             NumAbs => {
-                if !symbol_is_signed_int(backend, self.arguments[0]) {
-                    self.load_args(backend);
-                    return;
-                }
                 const PANIC_MSG: &str =
                     "integer absolute overflowed because its argument is the minimum value";
+
                 self.load_args(backend);
-                match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
+
+                match CodeGenNumType::from(self.ret_layout) {
                     I32 => {
-                        let code_builder = &mut backend.code_builder;
-                        let arg_storage = backend.storage.get(&self.arguments[0]).to_owned();
-                        backend.storage.ensure_value_has_local(
-                            code_builder,
-                            self.arguments[0],
-                            arg_storage,
-                        );
-                        backend.storage.load_symbols(code_builder, self.arguments);
-                        code_builder.i32_const(0);
-                        backend.storage.load_symbols(code_builder, self.arguments);
-                        code_builder.i32_sub();
-                        backend.storage.load_symbols(code_builder, self.arguments);
-                        code_builder.i32_const(0);
-                        code_builder.i32_ge_s();
-                        code_builder.select();
+                        if !layout_is_signed_int(&self.ret_layout) {
+                            return;
+                        }
+                        backend.code_builder.i32_const(i32::MIN);
+                        backend.code_builder.i32_eq();
+                        backend.code_builder.if_();
+                        backend.stmt_runtime_error(PANIC_MSG);
+                        backend.code_builder.end();
+
+                        // x
+                        self.load_args(backend);
+
+                        // -x
+                        backend.code_builder.i32_const(0);
+                        self.load_args(backend);
+                        backend.code_builder.i32_sub();
+
+                        // x >= 0
+                        self.load_args(backend);
+                        backend.code_builder.i32_const(0);
+                        backend.code_builder.i32_ge_s();
+
+                        // (x >= 0) ? x : -x
+                        backend.code_builder.select();
                     }
                     I64 => {
-                        let code_builder = &mut backend.code_builder;
-                        let arg_storage = backend.storage.get(&self.arguments[0]).to_owned();
-                        backend.storage.ensure_value_has_local(
-                            code_builder,
-                            self.arguments[0],
-                            arg_storage,
-                        );
-                        backend.storage.load_symbols(code_builder, self.arguments);
-                        code_builder.i64_const(0);
-                        backend.storage.load_symbols(code_builder, self.arguments);
-                        code_builder.i64_sub();
-                        backend.storage.load_symbols(code_builder, self.arguments);
-                        code_builder.i64_const(0);
-                        code_builder.i64_ge_s();
-                        code_builder.select();
+                        if !layout_is_signed_int(&self.ret_layout) {
+                            return;
+                        }
+                        backend.code_builder.i64_const(i64::MIN);
+                        backend.code_builder.i64_eq();
+                        backend.code_builder.if_();
+                        backend.stmt_runtime_error(PANIC_MSG);
+                        backend.code_builder.end();
+
+                        // x
+                        self.load_args(backend);
+
+                        // -x
+                        backend.code_builder.i64_const(0);
+                        self.load_args(backend);
+                        backend.code_builder.i64_sub();
+
+                        // x >= 0
+                        self.load_args(backend);
+                        backend.code_builder.i64_const(0);
+                        backend.code_builder.i64_ge_s();
+
+                        // (x >= 0) ? x : -x
+                        backend.code_builder.select();
                     }
                     F32 => backend.code_builder.f32_abs(),
                     F64 => backend.code_builder.f64_abs(),
