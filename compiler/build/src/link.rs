@@ -1090,7 +1090,7 @@ fn link_windows(
     todo!("Add windows support to the surgical linker. See issue #2608.")
 }
 
-pub fn module_to_dylib(
+pub fn llvm_module_to_dylib(
     module: &inkwell::module::Module,
     target: &Triple,
     opt_level: OptLevel,

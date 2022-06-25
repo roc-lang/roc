@@ -3596,6 +3596,7 @@ dependencies = [
  "errno",
  "indoc",
  "libc",
+ "libloading 0.7.3",
  "mimalloc",
  "pretty_assertions",
  "roc_build",
