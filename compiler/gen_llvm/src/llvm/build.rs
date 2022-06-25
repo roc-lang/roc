@@ -5952,7 +5952,7 @@ fn run_low_level<'a, 'ctx, 'env>(
         NumAdd | NumSub | NumMul | NumLt | NumLte | NumGt | NumGte | NumRemUnchecked
         | NumIsMultipleOf | NumAddWrap | NumAddChecked | NumAddSaturated | NumDivUnchecked
         | NumDivCeilUnchecked | NumPow | NumPowInt | NumSubWrap | NumSubChecked
-        | NumSubSaturated | NumMulWrap | NumMulChecked => {
+        | NumSubSaturated | NumMulWrap | NumMulSaturated | NumMulChecked => {
             debug_assert_eq!(args.len(), 2);
 
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(scope, &args[0]);
@@ -6719,6 +6719,11 @@ fn build_int_binop<'a, 'ctx, 'env>(
             throw_on_overflow(env, parent, result, "integer multiplication overflowed!")
         }
         NumMulWrap => bd.build_int_mul(lhs, rhs, "mul_int").into(),
+        NumMulSaturated => call_bitcode_fn(
+            env,
+            &[lhs.into(), rhs.into()],
+            &bitcode::NUM_MUL_SATURATED_INT[int_width],
+        ),
         NumMulChecked => env.call_intrinsic(
             &LLVM_MUL_WITH_OVERFLOW[int_width],
             &[lhs.into(), rhs.into()],
@@ -6896,7 +6901,6 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
 
                 Float(float_width) => build_float_binop(
                     env,
-                    parent,
                     *float_width,
                     lhs_arg.into_float_value(),
                     rhs_arg.into_float_value(),
@@ -6919,7 +6923,6 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
 
 fn build_float_binop<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
     float_width: FloatWidth,
     lhs: FloatValue<'ctx>,
     rhs: FloatValue<'ctx>,
@@ -6931,29 +6934,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
     let bd = env.builder;
 
     match op {
-        NumAdd => {
-            let builder = env.builder;
-            let context = env.context;
-
-            let result = bd.build_float_add(lhs, rhs, "add_float");
-
-            let is_finite =
-                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE[float_width])
-                    .into_int_value();
-
-            let then_block = context.append_basic_block(parent, "then_block");
-            let throw_block = context.append_basic_block(parent, "throw_block");
-
-            builder.build_conditional_branch(is_finite, then_block, throw_block);
-
-            builder.position_at_end(throw_block);
-
-            throw_exception(env, "float addition overflowed!");
-
-            builder.position_at_end(then_block);
-
-            result.into()
-        }
+        NumAdd => bd.build_float_add(lhs, rhs, "add_float").into(),
         NumAddChecked => {
             let context = env.context;
 
@@ -6982,29 +6963,7 @@ fn build_float_binop<'a, 'ctx, 'env>(
             struct_value.into()
         }
         NumAddWrap => unreachable!("wrapping addition is not defined on floats"),
-        NumSub => {
-            let builder = env.builder;
-            let context = env.context;
-
-            let result = bd.build_float_sub(lhs, rhs, "sub_float");
-
-            let is_finite =
-                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE[float_width])
-                    .into_int_value();
-
-            let then_block = context.append_basic_block(parent, "then_block");
-            let throw_block = context.append_basic_block(parent, "throw_block");
-
-            builder.build_conditional_branch(is_finite, then_block, throw_block);
-
-            builder.position_at_end(throw_block);
-
-            throw_exception(env, "float subtraction overflowed!");
-
-            builder.position_at_end(then_block);
-
-            result.into()
-        }
+        NumSub => bd.build_float_sub(lhs, rhs, "sub_float").into(),
         NumSubChecked => {
             let context = env.context;
 
@@ -7033,29 +6992,8 @@ fn build_float_binop<'a, 'ctx, 'env>(
             struct_value.into()
         }
         NumSubWrap => unreachable!("wrapping subtraction is not defined on floats"),
-        NumMul => {
-            let builder = env.builder;
-            let context = env.context;
-
-            let result = bd.build_float_mul(lhs, rhs, "mul_float");
-
-            let is_finite =
-                call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE[float_width])
-                    .into_int_value();
-
-            let then_block = context.append_basic_block(parent, "then_block");
-            let throw_block = context.append_basic_block(parent, "throw_block");
-
-            builder.build_conditional_branch(is_finite, then_block, throw_block);
-
-            builder.position_at_end(throw_block);
-
-            throw_exception(env, "float multiplication overflowed!");
-
-            builder.position_at_end(then_block);
-
-            result.into()
-        }
+        NumMul => bd.build_float_mul(lhs, rhs, "mul_float").into(),
+        NumMulSaturated => bd.build_float_mul(lhs, rhs, "mul_float").into(),
         NumMulChecked => {
             let context = env.context;
 

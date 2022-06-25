@@ -199,6 +199,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(result_type(num_type(flex(TVAR1)), overflow())),
     );
 
+    // mulSaturated : Int range, Int range -> Int range
+    add_top_level_function_type!(
+        Symbol::NUM_MUL_SATURATED,
+        vec![int_type(flex(TVAR1)), int_type(flex(TVAR1))],
+        Box::new(int_type(flex(TVAR1))),
+    );
+
     // abs : Num a -> Num a
     add_top_level_function_type!(
         Symbol::NUM_ABS,

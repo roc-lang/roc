@@ -208,7 +208,7 @@ where
     match test_wrapper.call(&[]) {
         Err(e) => {
             if let Some(msg) = get_roc_panic_msg(&instance, memory) {
-                Err(msg)
+                Err(format!("Roc failed with message: \"{}\"", msg))
             } else {
                 Err(e.to_string())
             }

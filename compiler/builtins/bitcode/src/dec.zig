@@ -7,6 +7,9 @@ const math = std.math;
 const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 const RocStr = str.RocStr;
 const WithOverflow = utils.WithOverflow;
+const roc_panic = utils.panic;
+const U256 = num_.U256;
+const mul_u128 = num_.mul_u128;
 
 pub const RocDec = extern struct {
     num: i128,
@@ -230,7 +233,22 @@ pub const RocDec = extern struct {
         const answer = RocDec.addWithOverflow(self, other);
 
         if (answer.has_overflowed) {
-            @panic("TODO runtime exception for overflow!");
+            roc_panic("Decimal addition overflowed!", 1);
+            unreachable;
+        } else {
+            return answer.value;
+        }
+    }
+
+    pub fn addSaturated(self: RocDec, other: RocDec) RocDec {
+        const answer = RocDec.addWithOverflow(self, other);
+        if (answer.has_overflowed) {
+            // We can unambiguously tell which way it wrapped, because we have 129 bits including the overflow bit
+            if (answer.value.num < 0) {
+                return RocDec.max;
+            } else {
+                return RocDec.min;
+            }
         } else {
             return answer.value;
         }
@@ -247,7 +265,21 @@ pub const RocDec = extern struct {
         const answer = RocDec.subWithOverflow(self, other);
 
         if (answer.has_overflowed) {
-            @panic("TODO runtime exception for overflow!");
+            roc_panic("Decimal subtraction overflowed!", 1);
+            unreachable;
+        } else {
+            return answer.value;
+        }
+    }
+
+    pub fn subSaturated(self: RocDec, other: RocDec) RocDec {
+        const answer = RocDec.subWithOverflow(self, other);
+        if (answer.has_overflowed) {
+            if (answer.value.num < 0) {
+                return RocDec.max;
+            } else {
+                return RocDec.min;
+            }
         } else {
             return answer.value;
         }
@@ -265,8 +297,10 @@ pub const RocDec = extern struct {
                 return .{ .value = RocDec{ .num = 0 }, .has_overflowed = false };
             } else if (other_i128 == RocDec.one_point_zero.num) {
                 return .{ .value = self, .has_overflowed = false };
+            } else if (is_answer_negative) {
+                return .{ .value = RocDec.min, .has_overflowed = true };
             } else {
-                return .{ .value = undefined, .has_overflowed = true };
+                return .{ .value = RocDec.max, .has_overflowed = true };
             }
         });
 
@@ -275,8 +309,10 @@ pub const RocDec = extern struct {
                 return .{ .value = RocDec{ .num = 0 }, .has_overflowed = false };
             } else if (self_i128 == RocDec.one_point_zero.num) {
                 return .{ .value = other, .has_overflowed = false };
+            } else if (is_answer_negative) {
+                return .{ .value = RocDec.min, .has_overflowed = true };
             } else {
-                return .{ .value = undefined, .has_overflowed = true };
+                return .{ .value = RocDec.max, .has_overflowed = true };
             }
         });
 
@@ -293,10 +329,16 @@ pub const RocDec = extern struct {
         const answer = RocDec.mulWithOverflow(self, other);
 
         if (answer.has_overflowed) {
-            @panic("TODO runtime exception for overflow!");
+            roc_panic("Decimal multiplication overflowed!", 1);
+            unreachable;
         } else {
             return answer.value;
         }
+    }
+
+    pub fn mulSaturated(self: RocDec, other: RocDec) RocDec {
+        const answer = RocDec.mulWithOverflow(self, other);
+        return answer.value;
     }
 
     pub fn div(self: RocDec, other: RocDec) RocDec {
@@ -391,11 +433,6 @@ inline fn count_trailing_zeros_base10(input: i128) u6 {
 
     return count;
 }
-
-const U256 = struct {
-    hi: u128,
-    lo: u128,
-};
 
 fn mul_and_decimalize(a: u128, b: u128) i128 {
     const answer_u256 = mul_u128(a, b);
@@ -512,40 +549,6 @@ fn mul_and_decimalize(a: u128, b: u128) i128 {
     // need to left shift 321 times
     // 315 - 256 is 59. So left shift d, c 59 times.
     return @intCast(i128, c >> 59 | (d << (128 - 59)));
-}
-
-fn mul_u128(a: u128, b: u128) U256 {
-    var hi: u128 = undefined;
-    var lo: u128 = undefined;
-
-    const bits_in_dword_2: u32 = 64;
-    const lower_mask: u128 = math.maxInt(u128) >> bits_in_dword_2;
-
-    lo = (a & lower_mask) * (b & lower_mask);
-
-    var t = lo >> bits_in_dword_2;
-
-    lo &= lower_mask;
-
-    t += (a >> bits_in_dword_2) * (b & lower_mask);
-
-    lo += (t & lower_mask) << bits_in_dword_2;
-
-    hi = t >> bits_in_dword_2;
-
-    t = lo >> bits_in_dword_2;
-
-    lo &= lower_mask;
-
-    t += (b >> bits_in_dword_2) * (a & lower_mask);
-
-    lo += (t & lower_mask) << bits_in_dword_2;
-
-    hi += t >> bits_in_dword_2;
-
-    hi += (a >> bits_in_dword_2) * (b >> bits_in_dword_2);
-
-    return .{ .hi = hi, .lo = lo };
 }
 
 // Multiply two 128-bit ints and divide the result by 10^DECIMAL_PLACES
@@ -1092,4 +1095,28 @@ pub fn mulC(arg1: RocDec, arg2: RocDec) callconv(.C) WithOverflow(RocDec) {
 
 pub fn divC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
     return @call(.{ .modifier = always_inline }, RocDec.div, .{ arg1, arg2 }).num;
+}
+
+pub fn addOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
+    return @call(.{ .modifier = always_inline }, RocDec.add, .{ arg1, arg2 });
+}
+
+pub fn addSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
+    return @call(.{ .modifier = always_inline }, RocDec.addSaturated, .{ arg1, arg2 });
+}
+
+pub fn subOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
+    return @call(.{ .modifier = always_inline }, RocDec.sub, .{ arg1, arg2 });
+}
+
+pub fn subSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
+    return @call(.{ .modifier = always_inline }, RocDec.subSaturated, .{ arg1, arg2 });
+}
+
+pub fn mulOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
+    return @call(.{ .modifier = always_inline }, RocDec.mul, .{ arg1, arg2 });
+}
+
+pub fn mulSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
+    return @call(.{ .modifier = always_inline }, RocDec.mulSaturated, .{ arg1, arg2 });
 }
