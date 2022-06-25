@@ -2,6 +2,18 @@
 
 Builtins are the functions and modules that are implicitly imported into every module. All of them compile down to llvm, but some are implemented directly as llvm and others in terms of intermediate functions. Either way, making a new builtin means touching many files. Lets make it easy for you and just list out which modules you need to visit to make a builtin. Here is what it takes:
 
+## A builtin written only in Roc
+
+Edit the appropriate `roc/*.roc` file with your new implementation. All normal rules for writing Roc code apply. Be sure to add a declaration, definition, some documentation and add it to the exposes list it in the module head.
+
+Next, look towards the bottom of the  `compiler/builtins/module/src/symbol.rs` file. Inside the `define_builtins!` macro, there is a list for each of the builtin modules and the function or value names it contains. Add a new entry to the appropriate list for your new function.
+
+For each of the builtin modules, there is a file in `compiler/test_gen/src/` like `gen_num.rs`, `gen_str.rs` etc. Add new tests for the module you are changing to the appropriate file here. You can look at the existing test cases for examples and inspiration.
+
+You can run your new tests locally using `cargo test-gen-llvm`. You can add a filter like `cargo test-gen-llvm gen_str` (to only run tests defined in `gen_str.rs`) or `cargo test-gen-llvm gen_str::str_split` (to only run tests defined in `gen_str` whose names start with `str_split`). More details can be found in the README in the `compiler/test_gen` directory.
+
+## A builtin implemented directly as LLVM
+
 ### module/src/symbol.rs
 
 Towards the bottom of `symbol.rs` there is a `define_builtins!` macro being used that takes many modules and function names. The first level (`List`, `Int` ..) is the module name, and the second level is the function or value name (`reverse`, `rem` ..). If you wanted to add a `Int` function called `addTwo` go to `2 Int: "Int" => {` and inside that case add to the bottom `38 INT_ADD_TWO: "addTwo"` (assuming there are 37 existing ones).
