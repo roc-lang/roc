@@ -583,6 +583,9 @@ joinMap = \list, mapper ->
 ## If no satisfying element is found, an `Err NotFound` is returned.
 find : List elem, (elem -> Bool) -> Result elem [NotFound]*
 
+## Returns the index at which the first element in the list
+## satisfying a predicate function can be found.
+## If no satisfying element is found, an `Err NotFound` is returned.
 findIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]*
 findIndex = \list, matcher ->
     foundIndex = List.walkUntil list 0 \index, elem ->
