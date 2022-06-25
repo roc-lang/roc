@@ -82,6 +82,7 @@ interface Num
             subChecked,
             subSaturated,
             mulWrap,
+            mulSaturated,
             mulChecked,
             intCast,
             bytesToU16,
@@ -862,7 +863,14 @@ subSaturated : Num a, Num a -> Num a
 subChecked : Num a, Num a -> Result (Num a) [Overflow]*
 
 mulWrap : Int range, Int range -> Int range
-# mulSaturated : Num a, Num a -> Num a
+
+## Multiply two numbers, clamping on the maximum representable number rather than
+## overflowing.
+##
+## This is the same as [Num.mul] except for the saturating behavior if the
+## addition is to overflow.
+mulSaturated : Num a, Num a -> Num a
+
 ## Multiply two numbers and check for overflow.
 ##
 ## This is the same as [Num.mul] except if the operation overflows, instead of

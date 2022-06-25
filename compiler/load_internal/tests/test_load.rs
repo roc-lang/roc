@@ -646,7 +646,7 @@ fn platform_does_not_exist() {
         indoc!(
             r#"
                 app "example"
-                    packages { pf: "./zzz-does-not-exist" }
+                    packages { pf: "./zzz-does-not-exist/main.roc" }
                     imports []
                     provides [main] to pf
 
@@ -659,7 +659,7 @@ fn platform_does_not_exist() {
         Err(report) => {
             assert!(report.contains("FILE NOT FOUND"), "report=({})", report);
             assert!(
-                report.contains("zzz-does-not-exist/Package-Config.roc"),
+                report.contains("zzz-does-not-exist/main.roc"),
                 "report=({})",
                 report
             );
@@ -672,7 +672,7 @@ fn platform_does_not_exist() {
 fn platform_parse_error() {
     let modules = vec![
         (
-            "platform/Package-Config.roc",
+            "platform/main.roc",
             indoc!(
                 r#"
                         platform "hello-c"
@@ -692,7 +692,7 @@ fn platform_parse_error() {
             indoc!(
                 r#"
                         app "hello-world"
-                            packages { pf: "platform" }
+                            packages { pf: "platform/main.roc" }
                             imports []
                             provides [main] to pf
 
@@ -716,7 +716,7 @@ fn platform_parse_error() {
 fn platform_exposes_main_return_by_pointer_issue() {
     let modules = vec![
         (
-            "platform/Package-Config.roc",
+            "platform/main.roc",
             indoc!(
                 r#"
                     platform "hello-world"
@@ -736,7 +736,7 @@ fn platform_exposes_main_return_by_pointer_issue() {
             indoc!(
                 r#"
                     app "hello-world"
-                        packages { pf: "platform" }
+                        packages { pf: "platform/main.roc" }
                         imports []
                         provides [main] to pf
 
@@ -829,7 +829,7 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
 fn issue_2863_module_type_does_not_exist() {
     let modules = vec![
         (
-            "platform/Package-Config.roc",
+            "platform/main.roc",
             indoc!(
                 r#"
                     platform "testplatform"
@@ -849,7 +849,7 @@ fn issue_2863_module_type_does_not_exist() {
             indoc!(
                 r#"
                     app "test"
-                        packages { pf: "platform" }
+                        packages { pf: "platform/main.roc" }
                         provides [main] to pf
 
                     main : DoesNotExist

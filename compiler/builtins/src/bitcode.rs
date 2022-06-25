@@ -285,6 +285,24 @@ pub const NUM_DIV_CEIL: IntrinsicName = int_intrinsic!("roc_builtins.num.div_cei
 pub const NUM_ROUND_F32: IntrinsicName = int_intrinsic!("roc_builtins.num.round_f32");
 pub const NUM_ROUND_F64: IntrinsicName = int_intrinsic!("roc_builtins.num.round_f64");
 
+pub const NUM_ADD_OR_PANIC_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.add_or_panic");
+pub const NUM_ADD_SATURATED_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.add_saturated");
+pub const NUM_ADD_CHECKED_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.add_with_overflow");
+pub const NUM_ADD_CHECKED_FLOAT: IntrinsicName =
+    float_intrinsic!("roc_builtins.num.add_with_overflow");
+
+pub const NUM_SUB_OR_PANIC_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.sub_or_panic");
+pub const NUM_SUB_SATURATED_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.sub_saturated");
+pub const NUM_SUB_CHECKED_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.sub_with_overflow");
+pub const NUM_SUB_CHECKED_FLOAT: IntrinsicName =
+    float_intrinsic!("roc_builtins.num.sub_with_overflow");
+
+pub const NUM_MUL_OR_PANIC_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.mul_or_panic");
+pub const NUM_MUL_SATURATED_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.mul_saturated");
+pub const NUM_MUL_CHECKED_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.mul_with_overflow");
+pub const NUM_MUL_CHECKED_FLOAT: IntrinsicName =
+    float_intrinsic!("roc_builtins.num.mul_with_overflow");
+
 pub const NUM_BYTES_TO_U16: &str = "roc_builtins.num.bytes_to_u16";
 pub const NUM_BYTES_TO_U32: &str = "roc_builtins.num.bytes_to_u32";
 
@@ -366,10 +384,16 @@ pub const DEC_FROM_F64: &str = "roc_builtins.dec.from_f64";
 pub const DEC_EQ: &str = "roc_builtins.dec.eq";
 pub const DEC_NEQ: &str = "roc_builtins.dec.neq";
 pub const DEC_NEGATE: &str = "roc_builtins.dec.negate";
-pub const DEC_ADD_WITH_OVERFLOW: &str = "roc_builtins.dec.add_with_overflow";
-pub const DEC_SUB_WITH_OVERFLOW: &str = "roc_builtins.dec.sub_with_overflow";
 pub const DEC_MUL_WITH_OVERFLOW: &str = "roc_builtins.dec.mul_with_overflow";
 pub const DEC_DIV: &str = "roc_builtins.dec.div";
+pub const DEC_ADD_WITH_OVERFLOW: &str = "roc_builtins.dec.add_with_overflow";
+pub const DEC_ADD_OR_PANIC: &str = "roc_builtins.dec.add_or_panic";
+pub const DEC_ADD_SATURATED: &str = "roc_builtins.dec.add_saturated";
+pub const DEC_SUB_WITH_OVERFLOW: &str = "roc_builtins.dec.sub_with_overflow";
+pub const DEC_SUB_OR_PANIC: &str = "roc_builtins.dec.sub_or_panic";
+pub const DEC_SUB_SATURATED: &str = "roc_builtins.dec.sub_saturated";
+pub const DEC_MUL_OR_PANIC: &str = "roc_builtins.dec.mul_or_panic";
+pub const DEC_MUL_SATURATED: &str = "roc_builtins.dec.mul_saturated";
 
 pub const UTILS_TEST_PANIC: &str = "roc_builtins.utils.test_panic";
 pub const UTILS_ALLOCATE_WITH_REFCOUNT: &str = "roc_builtins.utils.allocate_with_refcount";

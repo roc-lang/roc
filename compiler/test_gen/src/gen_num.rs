@@ -1664,7 +1664,7 @@ fn atan() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
 fn int_add_overflow() {
     assert_evals_to!(
@@ -1679,7 +1679,7 @@ fn int_add_overflow() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_add_checked() {
     assert_evals_to!(
         indoc!(
@@ -1721,7 +1721,7 @@ fn int_add_wrap() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_add_checked_pass() {
     assert_evals_to!(
         indoc!(
@@ -1737,7 +1737,7 @@ fn float_add_checked_pass() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_add_checked_fail() {
     assert_evals_to!(
         indoc!(
@@ -1753,8 +1753,7 @@ fn float_add_checked_fail() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
-#[should_panic(expected = r#"Roc failed with message: "float addition overflowed!"#)]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_add_overflow() {
     assert_evals_to!(
         indoc!(
@@ -1762,13 +1761,13 @@ fn float_add_overflow() {
                     1.7976931348623157e308 + 1.7976931348623157e308
                     "#
         ),
-        0.0,
+        f64::INFINITY,
         f64
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = r#"Roc failed with message: "integer subtraction overflowed!"#)]
 fn int_sub_overflow() {
     assert_evals_to!(
@@ -1797,8 +1796,7 @@ fn int_sub_wrap() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
-#[should_panic(expected = r#"Roc failed with message: "float subtraction overflowed!"#)]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_sub_overflow() {
     assert_evals_to!(
         indoc!(
@@ -1806,13 +1804,13 @@ fn float_sub_overflow() {
                     -1.7976931348623157e308 - 1.7976931348623157e308
                 "#
         ),
-        0.0,
+        -f64::INFINITY,
         f64
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_sub_checked() {
     assert_evals_to!(
         indoc!(
@@ -1840,7 +1838,7 @@ fn int_sub_checked() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_sub_checked() {
     assert_evals_to!(
         indoc!(
@@ -1868,7 +1866,7 @@ fn float_sub_checked() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = r#"Roc failed with message: "integer multiplication overflowed!"#)]
 fn int_positive_mul_overflow() {
     assert_evals_to!(
@@ -1883,7 +1881,7 @@ fn int_positive_mul_overflow() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = r#"Roc failed with message: "integer multiplication overflowed!"#)]
 fn int_negative_mul_overflow() {
     assert_evals_to!(
@@ -1898,8 +1896,7 @@ fn int_negative_mul_overflow() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
-#[should_panic(expected = r#"Roc failed with message: "float multiplication overflowed!"#)]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_positive_mul_overflow() {
     assert_evals_to!(
         indoc!(
@@ -1907,14 +1904,13 @@ fn float_positive_mul_overflow() {
                     1.7976931348623157e308 * 2
                 "#
         ),
-        0.0,
+        f64::INFINITY,
         f64
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
-#[should_panic(expected = r#"Roc failed with message: "float multiplication overflowed!"#)]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_negative_mul_overflow() {
     assert_evals_to!(
         indoc!(
@@ -1922,7 +1918,7 @@ fn float_negative_mul_overflow() {
                     -1.7976931348623157e308 * 2
                 "#
         ),
-        0.0,
+        -f64::INFINITY,
         f64
     );
 }
@@ -1942,7 +1938,7 @@ fn int_mul_wrap() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_mul_checked() {
     assert_evals_to!(
         indoc!(
@@ -1970,7 +1966,7 @@ fn int_mul_checked() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_mul_checked() {
     assert_evals_to!(
         indoc!(
@@ -3095,7 +3091,7 @@ fn u8_mul_greater_than_i8() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn add_saturated() {
     assert_evals_to!(
         indoc!(
@@ -3109,11 +3105,39 @@ fn add_saturated() {
         ),
         255,
         u8
-    )
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : I8
+            x = 100
+            y : I8
+            y = 100
+            Num.addSaturated x y
+            "#
+        ),
+        127,
+        i8
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : I8
+            x = -100
+            y : I8
+            y = -100
+            Num.addSaturated x y
+            "#
+        ),
+        -128,
+        i8
+    );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn sub_saturated() {
     assert_evals_to!(
         indoc!(
@@ -3127,7 +3151,103 @@ fn sub_saturated() {
         ),
         0,
         u8
-    )
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : I8
+            x = -100
+            y : I8
+            y = 100
+            Num.subSaturated x y
+            "#
+        ),
+        -128,
+        i8
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : I8
+            x = 100
+            y : I8
+            y = -100
+            Num.subSaturated x y
+            "#
+        ),
+        127,
+        i8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn mul_saturated() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : U8
+            x = 20
+            y : U8
+            y = 20
+            Num.mulSaturated x y
+            "#
+        ),
+        255,
+        u8
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : I8
+            x = -20
+            y : I8
+            y = -20
+            Num.mulSaturated x y
+            "#
+        ),
+        127,
+        i8
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : I8
+            x = 20
+            y : I8
+            y = -20
+            Num.mulSaturated x y
+            "#
+        ),
+        -128,
+        i8
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : I8
+            x = -20
+            y : I8
+            y = 20
+            Num.mulSaturated x y
+            "#
+        ),
+        -128,
+        i8
+    );
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : I8
+            x = 20
+            y : I8
+            y = 20
+            Num.mulSaturated x y
+            "#
+        ),
+        127,
+        i8
+    );
 }
 
 #[test]

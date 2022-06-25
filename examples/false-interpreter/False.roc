@@ -1,5 +1,5 @@
 app "false"
-    packages { pf: "platform" }
+    packages { pf: "platform/main.roc" }
     imports [pf.Task.{ Task }, pf.Stdout, pf.Stdin, Context.{ Context }, Variable.{ Variable }]
     provides [main] to pf
 

@@ -17,10 +17,19 @@ comptime {
     exportDecFn(dec.eqC, "eq");
     exportDecFn(dec.neqC, "neq");
     exportDecFn(dec.negateC, "negate");
-    exportDecFn(dec.addC, "add_with_overflow");
-    exportDecFn(dec.subC, "sub_with_overflow");
-    exportDecFn(dec.mulC, "mul_with_overflow");
     exportDecFn(dec.divC, "div");
+
+    exportDecFn(dec.addC, "add_with_overflow");
+    exportDecFn(dec.addOrPanicC, "add_or_panic");
+    exportDecFn(dec.addSaturatedC, "add_saturated");
+
+    exportDecFn(dec.subC, "sub_with_overflow");
+    exportDecFn(dec.subOrPanicC, "sub_or_panic");
+    exportDecFn(dec.subSaturatedC, "sub_saturated");
+
+    exportDecFn(dec.mulC, "mul_with_overflow");
+    exportDecFn(dec.mulOrPanicC, "mul_or_panic");
+    exportDecFn(dec.mulSaturatedC, "mul_saturated");
 }
 
 // List Module
@@ -88,6 +97,7 @@ comptime {
 const num = @import("num.zig");
 
 const INTEGERS = [_]type{ i8, i16, i32, i64, i128, u8, u16, u32, u64, u128 };
+const WIDEINTS = [_]type{ i16, i32, i64, i128, i256, u16, u32, u64, u128, u256 };
 const FLOATS = [_]type{ f32, f64 };
 const NUMBERS = INTEGERS ++ FLOATS;
 
@@ -95,9 +105,24 @@ comptime {
     exportNumFn(num.bytesToU16C, "bytes_to_u16");
     exportNumFn(num.bytesToU32C, "bytes_to_u32");
 
-    inline for (INTEGERS) |T| {
+    inline for (INTEGERS) |T, i| {
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow_int.");
         num.exportDivCeil(T, ROC_BUILTINS ++ "." ++ NUM ++ ".div_ceil.");
+
+        num.exportRoundF32(T, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f32.");
+        num.exportRoundF64(T, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f64.");
+
+        num.exportAddWithOverflow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_with_overflow.");
+        num.exportAddOrPanic(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_or_panic.");
+        num.exportAddSaturatedInt(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_saturated.");
+
+        num.exportSubWithOverflow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".sub_with_overflow.");
+        num.exportSubOrPanic(T, ROC_BUILTINS ++ "." ++ NUM ++ ".sub_or_panic.");
+        num.exportSubSaturatedInt(T, ROC_BUILTINS ++ "." ++ NUM ++ ".sub_saturated.");
+
+        num.exportMulWithOverflow(T, WIDEINTS[i], ROC_BUILTINS ++ "." ++ NUM ++ ".mul_with_overflow.");
+        num.exportMulOrPanic(T, WIDEINTS[i], ROC_BUILTINS ++ "." ++ NUM ++ ".mul_or_panic.");
+        num.exportMulSaturatedInt(T, WIDEINTS[i], ROC_BUILTINS ++ "." ++ NUM ++ ".mul_saturated.");
     }
 
     inline for (INTEGERS) |FROM| {
@@ -106,9 +131,6 @@ comptime {
             num.exportToIntCheckingMax(FROM, TO, ROC_BUILTINS ++ "." ++ NUM ++ ".int_to_" ++ @typeName(TO) ++ "_checking_max.");
             num.exportToIntCheckingMaxAndMin(FROM, TO, ROC_BUILTINS ++ "." ++ NUM ++ ".int_to_" ++ @typeName(TO) ++ "_checking_max_and_min.");
         }
-
-        num.exportRoundF32(FROM, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f32.");
-        num.exportRoundF64(FROM, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f64.");
     }
 
     inline for (FLOATS) |T| {
@@ -121,6 +143,10 @@ comptime {
 
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow.");
         num.exportLog(T, ROC_BUILTINS ++ "." ++ NUM ++ ".log.");
+
+        num.exportAddWithOverflow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_with_overflow.");
+        num.exportSubWithOverflow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".sub_with_overflow.");
+        num.exportMulWithOverflow(T, T, ROC_BUILTINS ++ "." ++ NUM ++ ".mul_with_overflow.");
 
         num.exportIsFinite(T, ROC_BUILTINS ++ "." ++ NUM ++ ".is_finite.");
     }

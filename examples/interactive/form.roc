@@ -1,5 +1,5 @@
 app "form"
-    packages { pf: "cli-platform" }
+    packages { pf: "cli-platform/main.roc" }
     imports [pf.Stdin, pf.Stdout, pf.Task.{ await, Task }]
     provides [main] to pf
 

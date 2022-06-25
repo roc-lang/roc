@@ -35,8 +35,18 @@ mod solve_expr {
     fn parse_queries(src: &str) -> Vec<TypeQuery> {
         let line_info = LineInfo::new(src);
         let mut queries = vec![];
+        let mut consecutive_query_lines = 0;
         for (i, line) in src.lines().enumerate() {
-            for capture in RE_TYPE_QUERY.captures_iter(line) {
+            let mut queries_on_line = RE_TYPE_QUERY.captures_iter(line).into_iter().peekable();
+
+            if queries_on_line.peek().is_none() {
+                consecutive_query_lines = 0;
+                continue;
+            } else {
+                consecutive_query_lines += 1;
+            }
+
+            for capture in queries_on_line {
                 let wher = capture.name("where").unwrap();
                 let subtract_col = capture
                     .name("sub")
@@ -44,7 +54,7 @@ mod solve_expr {
                     .unwrap_or(0);
                 let (start, end) = (wher.start() as u32, wher.end() as u32);
                 let (start, end) = (start - subtract_col, end - subtract_col);
-                let last_line = i as u32 - 1;
+                let last_line = i as u32 - consecutive_query_lines;
                 let start_lc = LineColumn {
                     line: last_line,
                     column: start,
@@ -277,6 +287,7 @@ mod solve_expr {
             let var = find_type_at(region, &decls)
                 .unwrap_or_else(|| panic!("No type for {:?} ({:?})!", &text, region));
 
+            let snapshot = subs.snapshot();
             let actual_str = name_and_print_var(
                 var,
                 subs,
@@ -287,6 +298,7 @@ mod solve_expr {
                     print_only_under_alias,
                 },
             );
+            subs.rollback_to(snapshot);
 
             let elaborated =
                 match find_ability_member_and_owning_type_at(region, &decls, &abilities_store) {
@@ -5480,7 +5492,7 @@ mod solve_expr {
                     Job lst s -> P lst s
                 "#
             ),
-            "[P (List [Job (List a) Str] as a) Str]*",
+            "[P (List ([Job (List a) Str] as a)) Str]*",
         )
     }
 
@@ -6859,6 +6871,34 @@ mod solve_expr {
                 "#
             ),
             "Str -> Str",
+        )
+    }
+
+    #[test]
+    fn issue_3261() {
+        infer_queries!(
+            indoc!(
+                r#"
+                Named : [Named Str (List Named)]
+
+                foo : Named
+                foo = Named "outer" [Named "inner" []]
+                #^^^{-1}
+
+                Named name outerList = foo
+                #^^^^^^^^^^^^^^^^^^^^{-1}
+                #     ^^^^ ^^^^^^^^^
+
+                {name, outerList}
+                "#
+            ),
+            &[
+                "foo : [Named Str (List a)] as a",
+                "Named name outerList : [Named Str (List a)] as a",
+                "name : Str",
+                "outerList : List ([Named Str (List a)] as a)",
+            ],
+            print_only_under_alias = true
         )
     }
 }

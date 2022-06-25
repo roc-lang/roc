@@ -3955,12 +3955,12 @@ impl StorageSubs {
         storage_copy_var_to(source, &mut self.subs, variable)
     }
 
-    pub fn import_variable_from(&mut self, source: &mut Subs, variable: Variable) -> CopiedImport {
+    pub fn import_variable_from(&mut self, source: &Subs, variable: Variable) -> CopiedImport {
         copy_import_to(source, &mut self.subs, variable, Rank::import())
     }
 
-    pub fn export_variable_to(&mut self, target: &mut Subs, variable: Variable) -> CopiedImport {
-        copy_import_to(&mut self.subs, target, variable, Rank::import())
+    pub fn export_variable_to(&self, target: &mut Subs, variable: Variable) -> CopiedImport {
+        copy_import_to(&self.subs, target, variable, Rank::import())
     }
 
     pub fn merge_into(self, target: &mut Subs) -> impl Fn(Variable) -> Variable {
@@ -4600,7 +4600,8 @@ pub struct CopiedImport {
 
 struct CopyImportEnv<'a> {
     visited: bumpalo::collections::Vec<'a, Variable>,
-    source: &'a mut Subs,
+    copy_table: &'a mut VecMap<Variable, Variable>,
+    source: &'a Subs,
     target: &'a mut Subs,
     flex: Vec<Variable>,
     rigid: Vec<Variable>,
@@ -4610,19 +4611,17 @@ struct CopyImportEnv<'a> {
     registered: Vec<Variable>,
 }
 
-pub fn copy_import_to(
-    source: &mut Subs, // mut to set the copy. TODO: use a separate copy table to avoid mut
-    target: &mut Subs,
-    var: Variable,
-    rank: Rank,
-) -> CopiedImport {
+pub fn copy_import_to(source: &Subs, target: &mut Subs, var: Variable, rank: Rank) -> CopiedImport {
     let mut arena = take_scratchpad();
 
     let copied_import = {
         let visited = bumpalo::collections::Vec::with_capacity_in(256, &arena);
 
+        let mut copy_table = VecMap::default();
+
         let mut env = CopyImportEnv {
             visited,
+            copy_table: &mut copy_table,
             source,
             target,
             flex: Vec::new(),
@@ -4636,8 +4635,9 @@ pub fn copy_import_to(
         let copy = copy_import_to_help(&mut env, rank, var);
 
         let CopyImportEnv {
-            visited,
-            source,
+            visited: _,
+            source: _,
+            copy_table: _,
             flex,
             rigid,
             flex_able,
@@ -4646,19 +4646,6 @@ pub fn copy_import_to(
             registered,
             target: _,
         } = env;
-
-        // we have tracked all visited variables, and can now traverse them
-        // in one go (without looking at the UnificationTable) and clear the copy field
-
-        for var in visited {
-            source.modify(var, |descriptor| {
-                if descriptor.copy.is_some() {
-                    descriptor.rank = Rank::NONE;
-                    descriptor.mark = Mark::NONE;
-                    descriptor.copy = OptVariable::NONE;
-                }
-            });
-        }
 
         CopiedImport {
             variable: copy,
@@ -4735,9 +4722,10 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
     use Content::*;
     use FlatType::*;
 
+    let var = env.source.get_root_key_without_compacting(var);
     let desc = env.source.get_without_compacting(var);
 
-    if let Some(copy) = desc.copy.into_variable() {
+    if let Some(&copy) = env.copy_table.get(&var) {
         debug_assert!(env.target.contains(copy));
         return copy;
     } else if desc.rank != Rank::NONE {
@@ -4760,7 +4748,6 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
         copy: OptVariable::NONE,
     };
 
-    // let copy = env.target.fresh_unnamed_flex_var();
     let copy = env.target.fresh(make_descriptor(unnamed_flex_var()));
 
     // is this content registered (in the current pool) by type_to_variable?
@@ -4772,10 +4759,7 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
     // avoid making multiple copies of the variable we are instantiating.
     //
     // Need to do this before recursively copying to avoid looping.
-    env.source.modify(var, |descriptor| {
-        descriptor.mark = Mark::NONE;
-        descriptor.copy = copy.into();
-    });
+    env.copy_table.insert(var, copy);
 
     // Now we recursively copy the content of the variable.
     // We have already marked the variable as copied, so we
@@ -5039,5 +5023,178 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
             env.target.set(copy, make_descriptor(new_content));
             copy
         }
+    }
+}
+
+/// Function that converts rigids variables to flex variables
+/// this is used during the monomorphization process and deriving
+pub fn instantiate_rigids(subs: &mut Subs, var: Variable) {
+    let rank = Rank::NONE;
+
+    instantiate_rigids_help(subs, rank, var);
+
+    // NOTE subs.restore(var) is done at the end of instantiate_rigids_help
+}
+
+fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
+    let mut visited = vec![];
+    let mut stack = vec![initial];
+
+    macro_rules! var_slice {
+        ($variable_subs_slice:expr) => {{
+            let slice = $variable_subs_slice;
+            &subs.variables[slice.indices()]
+        }};
+    }
+
+    while let Some(var) = stack.pop() {
+        visited.push(var);
+
+        if subs.get_copy(var).is_some() {
+            continue;
+        }
+
+        subs.modify(var, |desc| {
+            desc.rank = Rank::NONE;
+            desc.mark = Mark::NONE;
+            desc.copy = OptVariable::from(var);
+        });
+
+        use Content::*;
+        use FlatType::*;
+
+        match subs.get_content_without_compacting(var) {
+            RigidVar(name) => {
+                // what it's all about: convert the rigid var into a flex var
+                let name = *name;
+
+                // NOTE: we must write to the mutually borrowed `desc` value here
+                // using `subs.set` does not work (unclear why, really)
+                // but get_ref_mut approach saves a lookup, so the weirdness is worth it
+                subs.modify(var, |d| {
+                    *d = Descriptor {
+                        content: FlexVar(Some(name)),
+                        rank: max_rank,
+                        mark: Mark::NONE,
+                        copy: OptVariable::NONE,
+                    }
+                })
+            }
+            &RigidAbleVar(name, ability) => {
+                // Same as `RigidVar` above
+                subs.modify(var, |d| {
+                    *d = Descriptor {
+                        content: FlexAbleVar(Some(name), ability),
+                        rank: max_rank,
+                        mark: Mark::NONE,
+                        copy: OptVariable::NONE,
+                    }
+                })
+            }
+            FlexVar(_) | FlexAbleVar(_, _) | Error => (),
+
+            RecursionVar { structure, .. } => {
+                stack.push(*structure);
+            }
+
+            Structure(flat_type) => match flat_type {
+                Apply(_, args) => {
+                    stack.extend(var_slice!(*args));
+                }
+
+                Func(arg_vars, closure_var, ret_var) => {
+                    let arg_vars = *arg_vars;
+                    let ret_var = *ret_var;
+                    let closure_var = *closure_var;
+
+                    stack.extend(var_slice!(arg_vars));
+
+                    stack.push(ret_var);
+                    stack.push(closure_var);
+                }
+
+                EmptyRecord => (),
+                EmptyTagUnion => (),
+
+                Record(fields, ext_var) => {
+                    let fields = *fields;
+                    let ext_var = *ext_var;
+                    stack.extend(var_slice!(fields.variables()));
+
+                    stack.push(ext_var);
+                }
+                TagUnion(tags, ext_var) => {
+                    let tags = *tags;
+                    let ext_var = *ext_var;
+
+                    for slice_index in tags.variables() {
+                        let slice = subs.variable_slices[slice_index.index as usize];
+                        stack.extend(var_slice!(slice));
+                    }
+
+                    stack.push(ext_var);
+                }
+                FunctionOrTagUnion(_, _, ext_var) => {
+                    stack.push(*ext_var);
+                }
+
+                RecursiveTagUnion(rec_var, tags, ext_var) => {
+                    let tags = *tags;
+                    let ext_var = *ext_var;
+                    let rec_var = *rec_var;
+
+                    for slice_index in tags.variables() {
+                        let slice = subs.variable_slices[slice_index.index as usize];
+                        stack.extend(var_slice!(slice));
+                    }
+
+                    stack.push(ext_var);
+                    stack.push(rec_var);
+                }
+
+                Erroneous(_) => (),
+            },
+            Alias(_, args, var, _) => {
+                let var = *var;
+                let args = *args;
+
+                stack.extend(var_slice!(args.all_variables()));
+
+                stack.push(var);
+            }
+            LambdaSet(self::LambdaSet {
+                solved,
+                recursion_var,
+                unspecialized,
+            }) => {
+                for slice_index in solved.variables() {
+                    let slice = subs.variable_slices[slice_index.index as usize];
+                    stack.extend(var_slice!(slice));
+                }
+
+                if let Some(rec_var) = recursion_var.into_variable() {
+                    stack.push(rec_var);
+                }
+
+                for Uls(var, _, _) in subs.get_subs_slice(*unspecialized) {
+                    stack.push(*var);
+                }
+            }
+            &RangedNumber(typ, _) => {
+                stack.push(typ);
+            }
+        }
+    }
+
+    // we have tracked all visited variables, and can now traverse them
+    // in one go (without looking at the UnificationTable) and clear the copy field
+    for var in visited {
+        subs.modify(var, |descriptor| {
+            if descriptor.copy.is_some() {
+                descriptor.rank = Rank::NONE;
+                descriptor.mark = Mark::NONE;
+                descriptor.copy = OptVariable::NONE;
+            }
+        });
     }
 }

@@ -541,7 +541,7 @@ mod test_peg_grammar {
         let tokens = tokenize(
             r#"
   app "test-app"
-      packages { pf: "platform" }
+      packages { pf: "platform/main.roc" }
       imports []
       provides [ main ] to pf
   "#,

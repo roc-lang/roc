@@ -31,11 +31,21 @@ const RECURSIVE_TAG_UNION_CLONE: &str = r#"fn clone(&self) -> Self {
 
 const RECURSIVE_TAG_UNION_STORAGE: &str = r#"#[inline(always)]
     fn storage(&self) -> Option<&core::cell::Cell<roc_std::Storage>> {
-        if self.pointer.is_null() {
+        let mask = match std::mem::size_of::<usize>() {
+            4 => 0b11,
+            8 => 0b111,
+            _ => unreachable!(),
+        };
+
+        // NOTE: pointer provenance is probably lost here
+        let unmasked_address = (self.pointer as usize) & !mask;
+        let untagged = unmasked_address as *const core::cell::Cell<roc_std::Storage>;
+
+        if untagged.is_null() {
             None
         } else {
             unsafe {
-                Some(&*self.pointer.cast::<core::cell::Cell<roc_std::Storage>>().sub(1))
+                Some(&*untagged.sub(1))
             }
         }
     }"#;
@@ -641,7 +651,7 @@ pub struct {name} {{
         let align = core::mem::align_of::<{union_name}>() as u32;
 
         unsafe {{
-            let ptr = crate::roc_alloc(size, align) as *mut {union_name};
+            let ptr = roc_std::roc_alloc_refcounted::<{union_name}>();
 
             *ptr = {union_name} {{
                 {tag_name}: {args_to_payload}

@@ -573,7 +573,8 @@ fn build_recursive_tuple_type(
     let mut field_types = Vec::new();
 
     for field in layouts.iter() {
-        field_types.push(layout_spec_help(builder, field, when_recursive)?);
+        let type_id = layout_spec_help(builder, field, when_recursive)?;
+        field_types.push(type_id);
     }
 
     builder.add_tuple_type(&field_types)
@@ -1617,18 +1618,9 @@ fn expr_spec<'a>(
                 let type_name_bytes = recursive_tag_union_name_bytes(union_layout).as_bytes();
                 let type_name = TypeName(&type_name_bytes);
 
-                // a tuple ( cell, union { ... } )
-                let union_id = builder.add_unwrap_named(block, MOD_APP, type_name, tag_value_id)?;
-
-                // decompose
-                let heap_cell = builder.add_get_tuple_field(block, union_id, TAG_CELL_INDEX)?;
-                let union_data = builder.add_get_tuple_field(block, union_id, TAG_DATA_INDEX)?;
-
-                // we're reading from this value, so touch the heap cell
-                builder.add_touch(block, heap_cell)?;
-
-                // next, unwrap the union at the tag id that we've got
-                let variant_id = builder.add_unwrap_union(block, union_data, *tag_id as u32)?;
+                // the unwrapped recursive tag variant
+                let variant_id =
+                    builder.add_unwrap_named(block, MOD_APP, type_name, tag_value_id)?;
 
                 builder.add_get_tuple_field(block, variant_id, index)
             }

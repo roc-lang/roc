@@ -60,7 +60,7 @@ pub fn header_to_markup(
     );
 
     let pack_base_node_id = header_val_mn(
-        "base: ".to_owned(),
+        "pf: ".to_owned(),
         ast_node_id,
         HighlightStyle::RecordField,
         mark_node_pool,
@@ -164,7 +164,7 @@ pub fn header_to_markup(
     );
 
     let provides_end_node_id = header_mn(
-        " to base".to_owned(),
+        " to pf".to_owned(),
         ast_node_id,
         mark_node_pool,
         mark_id_ast_id_map,
