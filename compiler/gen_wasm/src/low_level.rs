@@ -116,15 +116,15 @@ impl From<&StoredValue> for CodeGenNumType {
     }
 }
 
-fn integer_layout_is_signed<'a>(layout: &Layout<'a>) -> bool {
-    return match layout {
+fn layout_is_signed_int(layout: &Layout) -> bool {
+    match layout {
         Layout::Builtin(Builtin::Int(int_width)) => int_width.is_signed(),
-        x => internal_error!("Expected integer, found {:?}", x),
-    };
+        _ => false,
+    }
 }
 
-fn integer_symbol_is_signed(backend: &WasmBackend<'_>, symbol: Symbol) -> bool {
-    return integer_layout_is_signed(&backend.storage.symbol_layouts[&symbol]);
+fn symbol_is_signed_int(backend: &WasmBackend<'_>, symbol: Symbol) -> bool {
+    layout_is_signed_int(&backend.storage.symbol_layouts[&symbol])
 }
 
 pub struct LowLevelCall<'a> {
@@ -582,14 +582,14 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
                     I32 => {
-                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                        if symbol_is_signed_int(backend, self.arguments[0]) {
                             backend.code_builder.i32_gt_s()
                         } else {
                             backend.code_builder.i32_gt_u()
                         }
                     }
                     I64 => {
-                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                        if symbol_is_signed_int(backend, self.arguments[0]) {
                             backend.code_builder.i64_gt_s()
                         } else {
                             backend.code_builder.i64_gt_u()
@@ -604,14 +604,14 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
                     I32 => {
-                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                        if symbol_is_signed_int(backend, self.arguments[0]) {
                             backend.code_builder.i32_ge_s()
                         } else {
                             backend.code_builder.i32_ge_u()
                         }
                     }
                     I64 => {
-                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                        if symbol_is_signed_int(backend, self.arguments[0]) {
                             backend.code_builder.i64_ge_s()
                         } else {
                             backend.code_builder.i64_ge_u()
@@ -626,14 +626,14 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
                     I32 => {
-                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                        if symbol_is_signed_int(backend, self.arguments[0]) {
                             backend.code_builder.i32_lt_s()
                         } else {
                             backend.code_builder.i32_lt_u()
                         }
                     }
                     I64 => {
-                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                        if symbol_is_signed_int(backend, self.arguments[0]) {
                             backend.code_builder.i64_lt_s()
                         } else {
                             backend.code_builder.i64_lt_u()
@@ -648,14 +648,14 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
                     I32 => {
-                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                        if symbol_is_signed_int(backend, self.arguments[0]) {
                             backend.code_builder.i32_le_s()
                         } else {
                             backend.code_builder.i32_le_u()
                         }
                     }
                     I64 => {
-                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                        if symbol_is_signed_int(backend, self.arguments[0]) {
                             backend.code_builder.i64_le_s()
                         } else {
                             backend.code_builder.i64_le_u()
@@ -702,7 +702,7 @@ impl<'a> LowLevelCall<'a> {
                 let lhs = self.arguments[0];
                 let rhs = self.arguments[1];
                 let layout = backend.storage.symbol_layouts[&lhs];
-                let is_signed = integer_layout_is_signed(&layout);
+                let is_signed = layout_is_signed_int(&layout);
                 let code_builder = &mut backend.code_builder;
                 match CodeGenNumType::from(layout) {
                     I64 => {
@@ -787,6 +787,12 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
             NumAbs => {
+                if !symbol_is_signed_int(backend, self.arguments[0]) {
+                    self.load_args(backend);
+                    return;
+                }
+                const PANIC_MSG: &str =
+                    "integer absolute overflowed because its argument is the minimum value";
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
                     I32 => {
@@ -1369,10 +1375,10 @@ impl<'a> LowLevelCall<'a> {
                 FloatWidth::F32 => {
                     self.load_args(backend);
                     backend.code_builder.f64_promote_f32();
-                    self.load_args_and_call_zig(backend, &bitcode::STR_FROM_FLOAT);
+                    self.load_args_and_call_zig(backend, bitcode::STR_FROM_FLOAT);
                 }
                 FloatWidth::F64 => {
-                    self.load_args_and_call_zig(backend, &bitcode::STR_FROM_FLOAT);
+                    self.load_args_and_call_zig(backend, bitcode::STR_FROM_FLOAT);
                 }
                 FloatWidth::F128 => todo!("F128 to Str"),
             },
