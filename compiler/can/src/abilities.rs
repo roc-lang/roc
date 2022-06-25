@@ -71,6 +71,17 @@ pub type SpecializationsMap<Phase> = VecMap<(Symbol, Symbol), MemberSpecializati
 pub type PendingSpecializations = SpecializationsMap<Pending>;
 pub type ResolvedSpecializations = SpecializationsMap<Resolved>;
 
+/// Solved lambda sets for an ability member specialization. For example, if we have
+///
+///   Default has default : {} -[[] + a:default:1]-> a | a has Default
+///
+///   A := {}
+///   default = \{} -[[closA]]-> @A {}
+///
+/// and this [MemberSpecialization] is for `A`, then there is a mapping of
+/// `1` to the variable representing `[[closA]]`.
+pub type SpecializationLambdaSets = VecMap<u8, Variable>;
+
 /// A particular specialization of an ability member.
 #[derive(Debug, Clone)]
 pub struct MemberSpecialization<Phase: ResolvePhase> {
@@ -78,20 +89,11 @@ pub struct MemberSpecialization<Phase: ResolvePhase> {
 
     pub symbol: Symbol,
 
-    /// Solved lambda sets for an ability member specialization. For example, if we have
-    ///
-    ///   Default has default : {} -[[] + a:default:1]-> a | a has Default
-    ///   
-    ///   A := {}
-    ///   default = \{} -[[closA]]-> @A {}
-    ///
-    /// and this [MemberSpecialization] is for `A`, then there is a mapping of
-    /// `1` to the variable representing `[[closA]]`.
-    pub specialization_lambda_sets: VecMap<u8, Variable>,
+    pub specialization_lambda_sets: SpecializationLambdaSets,
 }
 
 impl MemberSpecialization<Resolved> {
-    pub fn new(symbol: Symbol, specialization_lambda_sets: VecMap<u8, Variable>) -> Self {
+    pub fn new(symbol: Symbol, specialization_lambda_sets: SpecializationLambdaSets) -> Self {
         Self {
             _phase: Default::default(),
             symbol,
