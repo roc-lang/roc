@@ -291,11 +291,20 @@ impl<'a> LowLevelCall<'a> {
                 internal_error!("HigherOrder lowlevels should not be handled here")
             }
 
-            ListGetUnsafe | ListReplaceUnsafe | ListSingle | ListRepeat | ListReverse
-            | ListConcat | ListContains | ListAppend | ListPrepend | ListJoin | ListRange
-            | ListSublist | ListDropAt | ListSwap => {
-                todo!("{:?}", self.lowlevel);
-            }
+            ListGetUnsafe => todo!("{:?}", self.lowlevel),
+            ListReplaceUnsafe => todo!("{:?}", self.lowlevel),
+            ListSingle => todo!("{:?}", self.lowlevel),
+            ListRepeat => todo!("{:?}", self.lowlevel),
+            ListReverse => todo!("{:?}", self.lowlevel),
+            ListConcat => todo!("{:?}", self.lowlevel),
+            ListContains => todo!("{:?}", self.lowlevel),
+            ListAppend => todo!("{:?}", self.lowlevel),
+            ListPrepend => todo!("{:?}", self.lowlevel),
+            ListJoin => todo!("{:?}", self.lowlevel),
+            ListRange => todo!("{:?}", self.lowlevel),
+            ListSublist => todo!("{:?}", self.lowlevel),
+            ListDropAt => todo!("{:?}", self.lowlevel),
+            ListSwap => todo!("{:?}", self.lowlevel),
 
             DictSize | DictEmpty | DictInsert | DictRemove | DictContains | DictGetUnsafe
             | DictKeys | DictValues | DictUnion | DictIntersection | DictDifference
