@@ -2,8 +2,8 @@ use roc_build::link::LinkType;
 use roc_cli::build::check_file;
 use roc_cli::{
     build_app, format, test, BuildConfig, FormatMode, Target, CMD_BUILD, CMD_CHECK, CMD_DOCS,
-    CMD_EDIT, CMD_FORMAT, CMD_REPL, CMD_RUN, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_LIB,
-    FLAG_NO_LINK, FLAG_TARGET, FLAG_TIME, ROC_FILE,
+    CMD_EDIT, CMD_FORMAT, CMD_REPL, CMD_RUN, CMD_TEST, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK,
+    FLAG_LIB, FLAG_NO_LINK, FLAG_TARGET, FLAG_TIME, ROC_FILE,
 };
 use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
