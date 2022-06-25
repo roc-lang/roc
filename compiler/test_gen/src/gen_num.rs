@@ -2626,8 +2626,8 @@ to_int_checked_tests! {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
-fn is_multiple_of() {
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn is_multiple_of_signed() {
     // true
     assert_evals_to!("Num.isMultipleOf 5 1", true, bool);
     assert_evals_to!("Num.isMultipleOf 5 -1", true, bool);
@@ -2640,6 +2640,24 @@ fn is_multiple_of() {
 
     // overflow
     assert_evals_to!("Num.isMultipleOf -9223372036854775808 -1", true, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn is_multiple_of_unsigned() {
+    // true
+    assert_evals_to!("Num.isMultipleOf 5u8 1", true, bool);
+    assert_evals_to!("Num.isMultipleOf 0u8 0", true, bool);
+    assert_evals_to!("Num.isMultipleOf 0u8 1", true, bool);
+    assert_evals_to!("Num.isMultipleOf 0u8 0xFF", true, bool);
+
+    // false
+    assert_evals_to!("Num.isMultipleOf 5u8 2", false, bool);
+    assert_evals_to!("Num.isMultipleOf 5u8 0", false, bool);
+
+    // unsigned result is different from signed
+    assert_evals_to!("Num.isMultipleOf 5u8 0xFF", false, bool);
+    assert_evals_to!("Num.isMultipleOf 0xFCu8 0xFE", false, bool);
 }
 
 #[test]

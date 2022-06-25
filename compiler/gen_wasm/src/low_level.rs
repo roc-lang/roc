@@ -116,11 +116,15 @@ impl From<&StoredValue> for CodeGenNumType {
     }
 }
 
-fn integer_symbol_is_signed(backend: &WasmBackend<'_>, symbol: Symbol) -> bool {
-    return match backend.storage.symbol_layouts[&symbol] {
+fn integer_layout_is_signed<'a>(layout: &Layout<'a>) -> bool {
+    return match layout {
         Layout::Builtin(Builtin::Int(int_width)) => int_width.is_signed(),
         x => internal_error!("Expected integer, found {:?}", x),
     };
+}
+
+fn integer_symbol_is_signed(backend: &WasmBackend<'_>, symbol: Symbol) -> bool {
+    return integer_layout_is_signed(&backend.storage.symbol_layouts[&symbol]);
 }
 
 pub struct LowLevelCall<'a> {
@@ -693,7 +697,105 @@ impl<'a> LowLevelCall<'a> {
                     _ => todo!("{:?} for {:?}", self.lowlevel, self.ret_layout),
                 }
             }
-            NumIsMultipleOf => todo!("{:?}", self.lowlevel),
+            NumIsMultipleOf => {
+                // this builds the following construct
+                //    if (rhs != 0 && rhs != -1) {
+                //        let rem = lhs % rhs;
+                //        rem == 0
+                //    } else {
+                //        // lhs is a multiple of rhs iff
+                //        // - rhs == -1
+                //        // - both rhs and lhs are 0
+                //        // the -1 case is important for overflow reasons `isize::MIN % -1` crashes in rust
+                //        (lhs == 0) || (rhs == -1)
+                //    }
+                let lhs = self.arguments[0];
+                let rhs = self.arguments[1];
+                let layout = backend.storage.symbol_layouts[&lhs];
+                let is_signed = integer_layout_is_signed(&layout);
+                let code_builder = &mut backend.code_builder;
+                match CodeGenNumType::from(layout) {
+                    I64 => {
+                        let tmp = backend.storage.create_anonymous_local(ValueType::I32);
+                        backend.storage.load_symbols(code_builder, &[rhs]);
+                        code_builder.i64_const(0);
+                        code_builder.i64_ne(); // rhs != 0
+
+                        if is_signed {
+                            backend.storage.load_symbols(code_builder, &[rhs]);
+                            code_builder.i64_const(-1);
+                            code_builder.i64_ne(); // rhs != -1
+                            code_builder.i32_and(); // rhs != 0 && rhs != -1
+                        }
+                        code_builder.if_();
+                        {
+                            backend.storage.load_symbols(code_builder, &[lhs, rhs]);
+                            if is_signed {
+                                code_builder.i64_rem_s();
+                            } else {
+                                code_builder.i64_rem_u();
+                            }
+                            code_builder.i64_eqz();
+                            code_builder.set_local(tmp);
+                        }
+                        code_builder.else_();
+                        {
+                            backend.storage.load_symbols(code_builder, &[lhs]);
+                            code_builder.i64_eqz(); // lhs == 0
+                            if is_signed {
+                                backend.storage.load_symbols(code_builder, &[rhs]);
+                                code_builder.i64_const(-1);
+                                code_builder.i64_eq(); // rhs == -1
+                                code_builder.i32_or(); // (lhs == 0) || (rhs == -1)
+                            }
+                            code_builder.set_local(tmp);
+                        }
+                        code_builder.end();
+                        code_builder.get_local(tmp);
+                    }
+
+                    I32 => {
+                        let tmp = backend.storage.create_anonymous_local(ValueType::I32);
+                        backend.storage.load_symbols(code_builder, &[rhs]);
+                        code_builder.i32_const(0);
+                        code_builder.i32_ne(); // rhs != 0
+
+                        if is_signed {
+                            backend.storage.load_symbols(code_builder, &[rhs]);
+                            code_builder.i32_const(-1);
+                            code_builder.i32_ne(); // rhs != -1
+                            code_builder.i32_and(); // rhs != 0 && rhs != -1
+                        }
+                        code_builder.if_();
+                        {
+                            backend.storage.load_symbols(code_builder, &[lhs, rhs]);
+                            if is_signed {
+                                code_builder.i32_rem_s();
+                            } else {
+                                code_builder.i32_rem_u();
+                            }
+                            code_builder.i32_eqz();
+                            code_builder.set_local(tmp);
+                        }
+                        code_builder.else_();
+                        {
+                            backend.storage.load_symbols(code_builder, &[lhs]);
+                            code_builder.i32_eqz(); // lhs == 0
+                            if is_signed {
+                                backend.storage.load_symbols(code_builder, &[rhs]);
+                                code_builder.i32_const(-1);
+                                code_builder.i32_eq(); // rhs == -1
+                                code_builder.i32_or(); // (lhs == 0) || (rhs == -1)
+                            }
+                            code_builder.set_local(tmp);
+                        }
+                        code_builder.end();
+                        code_builder.get_local(tmp);
+                    }
+
+                    _ => panic_ret_type(),
+                }
+            }
             NumAbs => {
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
@@ -983,9 +1085,7 @@ impl<'a> LowLevelCall<'a> {
                 };
 
                 match (ret_type, arg_type) {
-                    (I32, I32) => {
-                        self.wrap_small_int(backend, ret_width)
-                    }
+                    (I32, I32) => self.wrap_small_int(backend, ret_width),
                     (I32, I64) => {
                         backend.code_builder.i32_wrap_i64();
                         self.wrap_small_int(backend, ret_width);
