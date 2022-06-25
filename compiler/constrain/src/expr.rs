@@ -1769,13 +1769,15 @@ pub fn constrain_decls(
                 let expected =
                     Expected::ForReason(Reason::ExpectCondition, bool_type, loc_expr.region);
 
-                constraint = constrain_expr(
+                let expect_constraint = constrain_expr(
                     constraints,
                     &mut env,
                     loc_expr.region,
                     &loc_expr.value,
                     expected,
                 );
+
+                constraint = constraints.let_constraint([], [], [], expect_constraint, constraint)
             }
             Function(function_def_index) => {
                 constraint = constrain_function_def(
