@@ -1443,6 +1443,7 @@ fn list_sort_asc() {
 }
 
 #[mono_test]
+#[ignore]
 fn encode_custom_type() {
     indoc!(
         r#"
