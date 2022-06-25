@@ -1595,7 +1595,7 @@ fn loaded_int_list_len() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn fn_int_list_len() {
     assert_evals_to!(
         indoc!(
@@ -1723,7 +1723,7 @@ fn last_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn get_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -1739,7 +1739,7 @@ fn get_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[ignore]
 fn get_wildcard_empty_list() {
     assert_evals_to!(
@@ -1756,7 +1756,7 @@ fn get_wildcard_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn get_int_list_ok() {
     assert_evals_to!(
         indoc!(
@@ -1772,7 +1772,7 @@ fn get_int_list_ok() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn get_int_list_oob() {
     assert_evals_to!(
         indoc!(
@@ -1970,7 +1970,7 @@ fn set_shared_list_oob() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn get_unique_int_list() {
     assert_evals_to!(
         indoc!(
@@ -1988,7 +1988,7 @@ fn get_unique_int_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_wrap_len() {
     assert_evals_to!(
         indoc!(

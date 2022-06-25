@@ -291,7 +291,49 @@ impl<'a> LowLevelCall<'a> {
                 internal_error!("HigherOrder lowlevels should not be handled here")
             }
 
-            ListGetUnsafe => todo!("{:?}", self.lowlevel),
+            ListGetUnsafe => {
+                let list: Symbol = self.arguments[0];
+                let index: Symbol = self.arguments[1];
+
+                // Calculate byte offset in list
+                backend
+                    .storage
+                    .load_symbols(&mut backend.code_builder, &[index]);
+                let elem_size = self.ret_layout.stack_size(TARGET_INFO);
+                backend.code_builder.i32_const(elem_size as i32);
+                backend.code_builder.i32_mul(); // index*size
+
+                // Calculate base heap pointer
+                if let StoredValue::StackMemory { location, .. } = backend.storage.get(&list) {
+                    let (fp, offset) =
+                        location.local_and_offset(backend.storage.stack_frame_pointer);
+                    backend.code_builder.get_local(fp);
+                    backend.code_builder.i32_load(Align::Bytes4, offset);
+                }
+
+                // Target element heap pointer
+                backend.code_builder.i32_add(); // base + index*size
+                let elem_heap_ptr = backend.storage.create_anonymous_local(ValueType::I32);
+                backend.code_builder.set_local(elem_heap_ptr);
+
+                // Copy to stack
+                backend.storage.copy_value_from_memory(
+                    &mut backend.code_builder,
+                    self.ret_symbol,
+                    elem_heap_ptr,
+                    0,
+                );
+
+                // Increment refcount
+                if self.ret_layout.is_refcounted() {
+                    let inc_fn = backend.get_refcount_fn_index(self.ret_layout, HelperOp::Inc);
+                    backend
+                        .storage
+                        .load_symbols(&mut backend.code_builder, &[self.ret_symbol]);
+                    backend.code_builder.i32_const(1);
+                    backend.code_builder.call(inc_fn, 2, false);
+                }
+            }
             ListReplaceUnsafe => todo!("{:?}", self.lowlevel),
             ListSingle => todo!("{:?}", self.lowlevel),
             ListRepeat => todo!("{:?}", self.lowlevel),
