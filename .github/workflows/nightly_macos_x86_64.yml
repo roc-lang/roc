@@ -8,6 +8,7 @@ concurrency:
 
 env:
   ZIG_VERSION: 0.9.1
+  LLVM_SYS_130_PREFIX: /usr/local/opt/llvm
 
 jobs:
   test-and-build:
