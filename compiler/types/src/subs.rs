@@ -4635,7 +4635,7 @@ struct CopyImportEnv<'a> {
     registered: Vec<Variable>,
 }
 
-fn copy_import_to(
+pub fn copy_import_to(
     source: &Subs,
     target: &mut Subs,
     bookkeep_unspecialized_lambda_sets: bool,
