@@ -646,16 +646,17 @@ impl<'a> LowLevelCall<'a> {
             }
             NumLte => {
                 self.load_args(backend);
-                match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
+                let layout = backend.storage.symbol_layouts[&self.arguments[0]];
+                match CodeGenNumType::from(layout) {
                     I32 => {
-                        if symbol_is_signed_int(backend, self.arguments[0]) {
+                        if layout_is_signed_int(&layout) {
                             backend.code_builder.i32_le_s()
                         } else {
                             backend.code_builder.i32_le_u()
                         }
                     }
                     I64 => {
-                        if symbol_is_signed_int(backend, self.arguments[0]) {
+                        if layout_is_signed_int(&layout) {
                             backend.code_builder.i64_le_s()
                         } else {
                             backend.code_builder.i64_le_u()
@@ -666,7 +667,60 @@ impl<'a> LowLevelCall<'a> {
                     x => todo!("{:?} for {:?}", self.lowlevel, x),
                 }
             }
-            NumCompare => todo!("{:?}", self.lowlevel),
+            NumCompare => {
+                let layout = backend.storage.symbol_layouts[&self.arguments[0]];
+                let is_signed = layout_is_signed_int(&layout);
+
+                // This implementation relies on the specific values of Eq, Gt and Lt!
+                // (x != y) as u8 + (x < y) as u8
+                //
+                // #[repr(u8)]
+                // pub enum RocOrder {
+                //     Eq = 0,
+                //     Gt = 1,
+                //     Lt = 2,
+                // }
+
+                match CodeGenNumType::from(layout) {
+                    I32 => {
+                        self.load_args(backend);
+                        backend.code_builder.i32_ne();
+                        self.load_args(backend);
+                        if is_signed {
+                            backend.code_builder.i32_lt_s()
+                        } else {
+                            backend.code_builder.i32_lt_u()
+                        }
+                        backend.code_builder.i32_add();
+                    }
+                    I64 => {
+                        self.load_args(backend);
+                        backend.code_builder.i64_ne();
+                        self.load_args(backend);
+                        if is_signed {
+                            backend.code_builder.i64_lt_s()
+                        } else {
+                            backend.code_builder.i64_lt_u()
+                        }
+                        backend.code_builder.i32_add();
+                    }
+                    F32 => {
+                        self.load_args(backend);
+                        backend.code_builder.f32_ne();
+                        self.load_args(backend);
+                        backend.code_builder.f32_lt();
+                        backend.code_builder.i32_add();
+                    }
+                    F64 => {
+                        self.load_args(backend);
+                        backend.code_builder.f64_ne();
+                        self.load_args(backend);
+                        backend.code_builder.f64_lt();
+                        backend.code_builder.i32_add();
+                    }
+                    x => todo!("{:?} for {:?}", self.lowlevel, x),
+                }
+            }
             NumDivUnchecked => {
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {

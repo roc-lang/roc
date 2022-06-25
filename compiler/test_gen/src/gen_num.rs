@@ -1618,7 +1618,7 @@ fn float_to_float() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_compare() {
     assert_evals_to!("Num.compare 0 1", RocOrder::Lt, RocOrder);
     assert_evals_to!("Num.compare 1 1", RocOrder::Eq, RocOrder);
@@ -1626,7 +1626,7 @@ fn int_compare() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_compare() {
     assert_evals_to!("Num.compare 0.01 3.14", RocOrder::Lt, RocOrder);
     assert_evals_to!("Num.compare 3.14 3.14", RocOrder::Eq, RocOrder);
