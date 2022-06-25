@@ -43,6 +43,7 @@ interface List
             takeFirst,
             takeLast,
             find,
+            findIndex,
             sublist,
             intersperse,
             split,
