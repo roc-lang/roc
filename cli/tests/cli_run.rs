@@ -529,6 +529,41 @@ mod cli_run {
                 use_valgrind: false,
             }
         },
+        assoc_list: "assoc-list" => {
+            Example {
+                filename: "main.roc",
+                executable_filename: "main",
+                stdin: &["1\n", "a\n", "2\n", "b\n", "3\n", "c\n", "\n", "4\n", "d\n", "5\n", "e\n", "1\n", "f\n"],
+                input_file: None,
+                expected_ending: "\
+                    This example program takes the AssocList interface for a spin.\n\
+                    Input pairs of lines.\n\
+                    Each pair will become an association in the first AssocList.\n\
+                    Finish by inputting an empty line.\n\
+                    assocs1:\n\
+                    1 => a\n\
+                    2 => b\n\
+                    3 => c\n\
+                    Input pairs of lines.\n\
+                    Each pair will become an association in the second AssocList.\n\
+                    Finish by inputting an empty line.\n\
+                    assocs2:\n\
+                    4 => d\n\
+                    5 => e\n\
+                    1 => f\n\
+                    insertAll assocs1 assocs2:\n\
+                    1 => f\n\
+                    2 => b\n\
+                    3 => c\n\
+                    4 => d\n\
+                    5 => e\n\
+                    remove assocs1 \"2\":\n\
+                    => a\n\
+                    2 => b\n\
+                    ",
+                use_valgrind: false,
+            }
+        },
     }
 
     macro_rules! benchmarks {

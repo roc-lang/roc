@@ -8,12 +8,12 @@ app "main"
 
 main =
     _ <- await (Stdout.line "This example program takes the AssocList interface for a spin.")
-    _ <- await (Stdout.line "Input pairs of lines.\n Each pair will become an association in the first AssocList.\nFinish by inputting an empty line.")
+    _ <- await (Stdout.line "Input pairs of lines.\nEach pair will become an association in the first AssocList.\nFinish by inputting an empty line.")
     assocs1 <- readAssociations AssocList.empty
     _ <- await (Stdout.line "assocs1:")
     _ <- printAssociations assocs1
 
-    _ <- await (Stdout.line "Input pairs of lines.\n Each pair will become an association in the second AssocList.\nFinish by inputting an empty line.")
+    _ <- await (Stdout.line "Input pairs of lines.\nEach pair will become an association in the second AssocList.\nFinish by inputting an empty line.")
     assocs2 <- readAssociations AssocList.empty
     _ <- await (Stdout.line "assocs2:")
     _ <- printAssociations assocs2
