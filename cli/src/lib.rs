@@ -268,6 +268,7 @@ pub enum BuildConfig {
     BuildOnly,
     BuildAndRun,
     BuildAndRunIfNoErrors,
+    BuildAndRunTests,
 }
 
 pub enum FormatMode {
@@ -565,6 +566,53 @@ pub fn build(
 
                         Ok(problems.exit_code())
                     }
+                }
+                BuildAndRunTests => {
+                    if problems.errors > 0 || problems.warnings > 0 {
+                        println!(
+                            "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.\n\nRunning program anyway…\n\n\x1B[36m{}\x1B[39m",
+                            if problems.errors == 0 {
+                                32 // green
+                            } else {
+                                33 // yellow
+                            },
+                            problems.errors,
+                            if problems.errors == 1 {
+                                "error"
+                            } else {
+                                "errors"
+                            },
+                            if problems.warnings == 0 {
+                                32 // green
+                            } else {
+                                33 // yellow
+                            },
+                            problems.warnings,
+                            if problems.warnings == 1 {
+                                "warning"
+                            } else {
+                                "warnings"
+                            },
+                            total_time.as_millis(),
+                            "─".repeat(80)
+                        );
+                    }
+
+                    let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
+
+                    let mut bytes = std::fs::read(&binary_path).unwrap();
+
+                    let x = roc_run(
+                        arena,
+                        triple,
+                        opt_level,
+                        args,
+                        &mut bytes,
+                        expectations,
+                        interns,
+                    );
+                    std::mem::forget(bytes);
+                    x
                 }
             }
         }
