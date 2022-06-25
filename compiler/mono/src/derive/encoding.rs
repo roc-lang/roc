@@ -122,6 +122,7 @@ fn verify_signature(env: &mut Env<'_>, signature: Variable) {
 
 pub fn derive_to_encoder(env: &mut Env<'_>, key: FlatEncodableKey) -> Expr {
     match key {
+        FlatEncodableKey::String => todo!(),
         FlatEncodableKey::List() => todo!(),
         FlatEncodableKey::Set() => todo!(),
         FlatEncodableKey::Dict() => todo!(),

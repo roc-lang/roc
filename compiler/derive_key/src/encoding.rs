@@ -12,8 +12,9 @@ pub enum FlatEncodable {
     Key(FlatEncodableKey),
 }
 
-#[derive(Hash, PartialEq, Eq, Debug)]
+#[derive(Hash, PartialEq, Eq, Debug, Clone)]
 pub enum FlatEncodableKey {
+    String,
     List(/* takes one variable */),
     Set(/* takes one variable */),
     Dict(/* takes two variables */),
@@ -25,6 +26,7 @@ pub enum FlatEncodableKey {
 impl FlatEncodableKey {
     pub(crate) fn debug_name(&self) -> String {
         match self {
+            FlatEncodableKey::String => "string".to_string(),
             FlatEncodableKey::List() => "list".to_string(),
             FlatEncodableKey::Set() => "set".to_string(),
             FlatEncodableKey::Dict() => "dict".to_string(),
@@ -82,7 +84,7 @@ impl FlatEncodable {
                     Symbol::LIST_LIST => Ok(Key(FlatEncodableKey::List())),
                     Symbol::SET_SET => Ok(Key(FlatEncodableKey::Set())),
                     Symbol::DICT_DICT => Ok(Key(FlatEncodableKey::Dict())),
-                    Symbol::STR_STR => Ok(Immediate(Symbol::ENCODE_STRING)),
+                    Symbol::STR_STR => Ok(Key(FlatEncodableKey::String)),
                     _ => Err(Underivable),
                 },
                 FlatType::Record(fields, ext) => {

@@ -32,7 +32,7 @@ pub enum DeriveError {
     Underivable,
 }
 
-#[derive(Hash, PartialEq, Eq, Debug)]
+#[derive(Hash, PartialEq, Eq, Debug, Clone)]
 #[repr(u8)]
 pub enum DeriveKey {
     ToEncoder(FlatEncodableKey),
@@ -41,7 +41,7 @@ pub enum DeriveKey {
 }
 
 impl DeriveKey {
-    pub(self) fn debug_name(&self) -> String {
+    pub fn debug_name(&self) -> String {
         match self {
             DeriveKey::ToEncoder(key) => format!("toEncoder_{}", key.debug_name()),
             DeriveKey::Decoding => todo!(),
@@ -65,52 +65,6 @@ impl Derived {
         match encoding::FlatEncodable::from_var(subs, var)? {
             FlatEncodable::Immediate(imm) => Ok(Derived::Immediate(imm)),
             FlatEncodable::Key(repr) => Ok(Derived::Key(DeriveKey::ToEncoder(repr))),
-        }
-    }
-}
-
-/// Map of [`DeriveKey`]s to their derived symbols.
-#[derive(Debug, Default)]
-pub struct DerivedSymbols {
-    map: MutMap<DeriveKey, Symbol>,
-    derived_ident_ids: IdentIds,
-    #[cfg(debug_assertions)]
-    stolen: bool,
-}
-
-impl DerivedSymbols {
-    pub fn get_or_insert(&mut self, key: DeriveKey) -> Symbol {
-        #[cfg(debug_assertions)]
-        {
-            debug_assert!(!self.stolen, "attempting to add to stolen symbols!");
-        }
-
-        let symbol = self.map.entry(key).or_insert_with_key(|key| {
-            let ident_id = if cfg!(debug_assertions) || cfg!(feature = "debug-derived-symbols") {
-                let debug_name = key.debug_name();
-                debug_assert!(
-                    self.derived_ident_ids.get_id(&debug_name).is_none(),
-                    "duplicate debug name for different derive key"
-                );
-                self.derived_ident_ids.get_or_insert(&debug_name)
-            } else {
-                self.derived_ident_ids.gen_unique()
-            };
-
-            Symbol::new(ModuleId::DERIVED, ident_id)
-        });
-        *symbol
-    }
-
-    /// Steal all created derived ident Ids.
-    /// After this is called, [`Self::get_or_insert`] may no longer be called.
-    pub fn steal(&mut self) -> IdentIds {
-        let mut ident_ids = Default::default();
-        std::mem::swap(&mut self.derived_ident_ids, &mut ident_ids);
-
-        #[cfg(debug_assertions)]
-        {
-            self.stolen = true;
         }
 
         ident_ids
