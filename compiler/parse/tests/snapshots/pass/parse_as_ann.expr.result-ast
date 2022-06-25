@@ -1,6 +1,20 @@
 Defs(
-    [
-        @0-33 Value(
+    Defs {
+        tags: [
+            Index(2147483648),
+        ],
+        regions: [
+            @0-33,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
             Annotation(
                 @0-3 Identifier(
                     "foo",
@@ -32,8 +46,8 @@ Defs(
                     },
                 ),
             ),
-        ),
-    ],
+        ],
+    },
     @35-37 SpaceBefore(
         Num(
             "42",

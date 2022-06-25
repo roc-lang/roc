@@ -4,12 +4,12 @@ use roc_collections::VecMap;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{Content, FlatType, GetSubsSlice, Rank, Subs, Variable};
+use roc_types::subs::{instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, Subs, Variable};
 use roc_types::types::{AliasKind, Category, ErrorType, PatternCategory};
 use roc_unify::unify::MustImplementConstraints;
 use roc_unify::unify::{MustImplementAbility, Obligated};
 
-use crate::solve::{instantiate_rigids, type_to_var};
+use crate::solve::type_to_var;
 use crate::solve::{Aliases, Pools, TypeError};
 
 #[derive(Debug, Clone)]
@@ -562,6 +562,27 @@ impl ObligationCache<'_> {
                         return Err(var);
                     }
                 }
+                Alias(
+                    Symbol::NUM_U8
+                    | Symbol::NUM_U16
+                    | Symbol::NUM_U32
+                    | Symbol::NUM_U64
+                    | Symbol::NUM_U128
+                    | Symbol::NUM_I8
+                    | Symbol::NUM_I16
+                    | Symbol::NUM_I32
+                    | Symbol::NUM_I64
+                    | Symbol::NUM_I128
+                    | Symbol::NUM_NAT
+                    | Symbol::NUM_F32
+                    | Symbol::NUM_F64
+                    | Symbol::NUM_DEC,
+                    _,
+                    _,
+                    _,
+                ) => {
+                    // yes
+                }
                 Alias(_, arguments, real_type_var, _) => {
                     push_var_slice!(arguments.all_variables());
                     stack.push(*real_type_var);
@@ -631,7 +652,7 @@ pub fn resolve_ability_specialization(
     let signature_var = member_def.signature_var();
 
     instantiate_rigids(subs, signature_var);
-    let (_vars, must_implement_ability, _lambda_sets_to_specialize) =
+    let (_vars, must_implement_ability, _lambda_sets_to_specialize, _meta) =
         unify(subs, specialization_var, signature_var, Mode::EQ).expect_success(
             "If resolving a specialization, the specialization must be known to typecheck.",
         );

@@ -12,6 +12,8 @@ use indoc::indoc;
 
 #[cfg(all(test, feature = "gen-llvm"))]
 use roc_std::RocList;
+#[cfg(all(test, feature = "gen-llvm"))]
+use roc_std::RocStr;
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
@@ -322,4 +324,32 @@ fn decode() {
         15,
         u8
     );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn encode_use_stdlib() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ toEncoder }, Json]
+                provides [main] to "./platform"
+
+            HelloWorld := {}
+            toEncoder = \@HelloWorld {} ->
+                Encode.custom \bytes, fmt ->
+                    bytes
+                        |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
+
+            main =
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.format)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from("\"Hello, World!\n\""),
+        RocStr
+    )
 }

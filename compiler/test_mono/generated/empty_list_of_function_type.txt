@@ -1,20 +1,21 @@
 procedure List.2 (#Attr.2, #Attr.3):
-    let List.144 : U64 = lowlevel ListLen #Attr.2;
-    let List.141 : Int1 = lowlevel NumLt #Attr.3 List.144;
-    if List.141 then
-        let List.143 : {} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-        let List.142 : [C {}, C {}] = Ok List.143;
-        ret List.142;
+    let List.145 : U64 = lowlevel ListLen #Attr.2;
+    let List.142 : Int1 = lowlevel NumLt #Attr.3 List.145;
+    if List.142 then
+        let List.144 : {} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+        let List.143 : [C {}, C {}] = Ok List.144;
+        ret List.143;
     else
-        let List.140 : {} = Struct {};
-        let List.139 : [C {}, C {}] = Err List.140;
-        ret List.139;
+        let List.141 : {} = Struct {};
+        let List.140 : [C {}, C {}] = Err List.141;
+        ret List.140;
 
 procedure Test.2 (Test.6):
     let Test.18 : Str = "bar";
     ret Test.18;
 
 procedure Test.0 ():
+    let Test.1 : List {} = Array [];
     joinpoint Test.16 Test.3:
         let Test.14 : U64 = 0i64;
         let Test.7 : [C {}, C {}] = CallByName List.2 Test.3 Test.14;
@@ -34,9 +35,9 @@ procedure Test.0 ():
     in
     let Test.19 : Int1 = false;
     if Test.19 then
-        let Test.1 : List {} = Array [];
         jump Test.16 Test.1;
     else
+        dec Test.1;
         let Test.17 : {} = Struct {};
         let Test.15 : List {} = Array [Test.17];
         jump Test.16 Test.15;

@@ -3675,6 +3675,18 @@ name = "roc_debug_flags"
 version = "0.1.0"
 
 [[package]]
+name = "roc_derive_key"
+version = "0.1.0"
+dependencies = [
+ "roc_can",
+ "roc_collections",
+ "roc_error_macros",
+ "roc_module",
+ "roc_region",
+ "roc_types",
+]
+
+[[package]]
 name = "roc_docs"
 version = "0.1.0"
 dependencies = [
@@ -3831,6 +3843,7 @@ dependencies = [
 name = "roc_gen_wasm"
 version = "0.1.0"
 dependencies = [
+ "bitvec 1.0.0",
  "bumpalo",
  "roc_builtins",
  "roc_collections",
@@ -3859,6 +3872,8 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "roc_can",
+ "roc_collections",
+ "roc_module",
  "roc_solve",
  "roc_types",
  "roc_unify",
@@ -3913,6 +3928,7 @@ dependencies = [
  "roc_constrain",
  "roc_debug_flags",
  "roc_error_macros",
+ "roc_late_solve",
  "roc_module",
  "roc_mono",
  "roc_parse",
@@ -3951,6 +3967,7 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_debug_flags",
+ "roc_derive_key",
  "roc_error_macros",
  "roc_exhaustive",
  "roc_late_solve",
@@ -4086,6 +4103,7 @@ dependencies = [
  "roc_reporting",
  "roc_target",
  "roc_types",
+ "wasi_libc_sys",
  "wasm-bindgen",
  "wasm-bindgen-futures",
 ]
@@ -4842,6 +4860,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_derive"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "indoc",
+ "lazy_static",
+ "pretty_assertions",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_constrain",
+ "roc_debug_flags",
+ "roc_derive_key",
+ "roc_load_internal",
+ "roc_module",
+ "roc_mono",
+ "roc_region",
+ "roc_reporting",
+ "roc_solve",
+ "roc_target",
+ "roc_types",
+ "ven_pretty",
+]
+
+[[package]]
 name = "test_gen"
 version = "0.1.0"
 dependencies = [
@@ -4873,6 +4916,7 @@ dependencies = [
  "roc_unify",
  "target-lexicon",
  "tempfile",
+ "wasi_libc_sys",
  "wasmer",
  "wasmer-wasi",
 ]

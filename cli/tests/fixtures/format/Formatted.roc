@@ -1,5 +1,5 @@
 app "formatted"
-    packages { pf: "platform" } imports []
+    packages { pf: "platform/main.roc" } imports []
     provides [main] to pf
 
 main : Str

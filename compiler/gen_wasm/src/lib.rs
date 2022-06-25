@@ -8,6 +8,7 @@ pub mod wasm_module;
 pub mod wasm32_result;
 pub mod wasm32_sized;
 
+use bitvec::prelude::BitVec;
 use bumpalo::collections::Vec;
 use bumpalo::{self, Bump};
 
@@ -67,7 +68,7 @@ pub fn build_app_binary<'a>(
     let (mut wasm_module, called_preload_fns, _) =
         build_app_module(env, interns, host_module, procedures);
 
-    wasm_module.remove_dead_preloads(env.arena, called_preload_fns);
+    wasm_module.eliminate_dead_code(env.arena, called_preload_fns);
 
     let mut buffer = std::vec::Vec::with_capacity(wasm_module.size());
     wasm_module.serialize(&mut buffer);
@@ -83,8 +84,8 @@ pub fn build_app_module<'a>(
     interns: &'a mut Interns,
     host_module: WasmModule<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> (WasmModule<'a>, Vec<'a, u32>, u32) {
-    let layout_ids = LayoutIds::default();
+) -> (WasmModule<'a>, BitVec<usize>, u32) {
+    let mut layout_ids = LayoutIds::default();
     let mut procs = Vec::with_capacity_in(procedures.len(), env.arena);
     let mut proc_lookup = Vec::with_capacity_in(procedures.len() * 2, env.arena);
     let mut host_to_app_map = Vec::with_capacity_in(env.exposed_to_host.len(), env.arena);
@@ -109,10 +110,13 @@ pub fn build_app_module<'a>(
         if env.exposed_to_host.contains(&sym) {
             maybe_main_fn_index = Some(fn_index);
 
-            // Assumption: there is only one specialization of a host-exposed function
-            let ident_string = sym.as_str(interns);
-            let c_function_name = bumpalo::format!(in env.arena, "roc__{}_1_exposed", ident_string);
-            host_to_app_map.push((c_function_name.into_bump_str(), fn_index));
+            let exposed_name = layout_ids
+                .get_toplevel(sym, &proc_layout)
+                .to_exposed_symbol_string(sym, interns);
+
+            let exposed_name_bump: &'a str = env.arena.alloc_str(&exposed_name);
+
+            host_to_app_map.push((exposed_name_bump, fn_index));
         }
 
         proc_lookup.push(ProcLookupData {
@@ -135,7 +139,7 @@ pub fn build_app_module<'a>(
         CodeGenHelp::new(env.arena, TargetInfo::default_wasm32(), env.module_id),
     );
 
-    if DEBUG_LOG_SETTINGS.user_procs_ir {
+    if DEBUG_SETTINGS.user_procs_ir {
         println!("## procs");
         for proc in procs.iter() {
             println!("{}", proc.to_pretty(200));
@@ -153,7 +157,7 @@ pub fn build_app_module<'a>(
 
     backend.register_symbol_debug_names();
 
-    if DEBUG_LOG_SETTINGS.helper_procs_ir {
+    if DEBUG_SETTINGS.helper_procs_ir {
         println!("## helper_procs");
         for proc in helper_procs.iter() {
             println!("{}", proc.to_pretty(200));
@@ -247,7 +251,7 @@ macro_rules! round_up_to_alignment {
     };
 }
 
-pub struct WasmDebugLogSettings {
+pub struct WasmDebugSettings {
     proc_start_end: bool,
     user_procs_ir: bool,
     helper_procs_ir: bool,
@@ -255,9 +259,10 @@ pub struct WasmDebugLogSettings {
     instructions: bool,
     storage_map: bool,
     pub keep_test_binary: bool,
+    pub skip_dead_code_elim: bool,
 }
 
-pub const DEBUG_LOG_SETTINGS: WasmDebugLogSettings = WasmDebugLogSettings {
+pub const DEBUG_SETTINGS: WasmDebugSettings = WasmDebugSettings {
     proc_start_end: false && cfg!(debug_assertions),
     user_procs_ir: false && cfg!(debug_assertions),
     helper_procs_ir: false && cfg!(debug_assertions),
@@ -265,4 +270,5 @@ pub const DEBUG_LOG_SETTINGS: WasmDebugLogSettings = WasmDebugLogSettings {
     instructions: false && cfg!(debug_assertions),
     storage_map: false && cfg!(debug_assertions),
     keep_test_binary: false && cfg!(debug_assertions),
+    skip_dead_code_elim: false && cfg!(debug_assertions),
 };

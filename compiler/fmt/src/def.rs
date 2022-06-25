@@ -348,10 +348,6 @@ fn fmt_expect<'a, 'buf>(
     condition.format(buf, return_indent);
 }
 
-pub fn fmt_def<'a, 'buf>(buf: &mut Buf<'buf>, def: &Def<'a>, indent: u16) {
-    def.format(buf, indent);
-}
-
 pub fn fmt_value_def<'a, 'buf>(
     buf: &mut Buf<'buf>,
     def: &roc_parse::ast::ValueDef<'a>,
@@ -364,7 +360,7 @@ pub fn fmt_type_def<'a, 'buf>(buf: &mut Buf<'buf>, def: &roc_parse::ast::TypeDef
     def.format(buf, indent);
 }
 
-pub fn fmt_toplevel_defs<'a, 'buf>(buf: &mut Buf<'buf>, defs: &Defs<'a>, indent: u16) {
+pub fn fmt_defs<'a, 'buf>(buf: &mut Buf<'buf>, defs: &Defs<'a>, indent: u16) {
     defs.format(buf, indent);
 }
 

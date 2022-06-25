@@ -11,6 +11,7 @@ path = "src/tests.rs"
 
 [build-dependencies]
 roc_builtins = { path = "../builtins" }
+wasi_libc_sys = { path = "../../wasi-libc-sys" }
 
 [dev-dependencies]
 roc_gen_llvm = { path = "../gen_llvm" }

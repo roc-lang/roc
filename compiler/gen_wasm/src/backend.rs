@@ -1,3 +1,4 @@
+use bitvec::vec::BitVec;
 use bumpalo::collections::{String, Vec};
 
 use code_builder::Align;
@@ -16,17 +17,17 @@ use roc_std::RocDec;
 
 use crate::layout::{CallConv, ReturnMethod, WasmLayout};
 use crate::low_level::{call_higher_order_lowlevel, LowLevelCall};
-use crate::storage::{Storage, StoredValue, StoredValueKind};
-use crate::wasm_module::linking::{self, DataSymbol, WasmObjectSymbol};
+use crate::storage::{Storage, StoredValue, StoredVarKind};
+use crate::wasm_module::linking::{DataSymbol, WasmObjectSymbol};
 use crate::wasm_module::sections::{
     ConstExpr, DataMode, DataSegment, Export, Global, GlobalType, Import, ImportDesc, Limits,
-    MemorySection,
+    MemorySection, NameSection,
 };
 use crate::wasm_module::{
     code_builder, CodeBuilder, ExportType, LocalId, Signature, SymInfo, ValueType, WasmModule,
 };
 use crate::{
-    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, DEBUG_LOG_SETTINGS, MEMORY_NAME,
+    copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, DEBUG_SETTINGS, MEMORY_NAME,
     PTR_SIZE, PTR_TYPE, TARGET_INFO,
 };
 
@@ -53,10 +54,11 @@ pub struct WasmBackend<'a> {
     module: WasmModule<'a>,
     layout_ids: LayoutIds<'a>,
     pub fn_index_offset: u32,
-    called_preload_fns: Vec<'a, u32>,
+    called_preload_fns: BitVec<usize>,
     pub proc_lookup: Vec<'a, ProcLookupData<'a>>,
     host_lookup: Vec<'a, (&'a str, u32)>,
     helper_proc_gen: CodeGenHelp<'a>,
+    can_relocate_heap: bool,
 
     // Function-level data
     pub code_builder: CodeBuilder<'a>,
@@ -81,7 +83,7 @@ impl<'a> WasmBackend<'a> {
     ) -> Self {
         // TODO: get this from a CLI parameter with some default
         const STACK_SIZE: u32 = 1024 * 1024;
-        Self::set_memory_layout(env, &mut module, STACK_SIZE);
+        let can_relocate_heap = Self::set_memory_layout(env, &mut module, STACK_SIZE);
 
         Self::export_globals(&mut module);
 
@@ -93,12 +95,21 @@ impl<'a> WasmBackend<'a> {
             )
         });
 
-        module.link_host_to_app_calls(host_to_app_map);
+        let host_lookup = module.get_host_function_lookup(env.arena);
 
+        if module.names.function_names.is_empty() {
+            module.names = NameSection::from_imports_and_linking_data(
+                env.arena,
+                &module.import,
+                &module.linking,
+            )
+        }
+
+        module.link_host_to_app_calls(env.arena, host_to_app_map);
         module.code.code_builders.reserve(proc_lookup.len());
 
-        let symbol_prefix = "roc_"; // The app only links to roc_builtins.*, roc_alloc, etc.
-        let host_lookup = module.linking.name_index_map(env.arena, symbol_prefix);
+        let host_function_count = module.import.imports.len()
+            + (module.code.dead_import_dummy_count + module.code.preloaded_count) as usize;
 
         WasmBackend {
             env,
@@ -109,10 +120,11 @@ impl<'a> WasmBackend<'a> {
 
             layout_ids,
             fn_index_offset,
-            called_preload_fns: Vec::with_capacity_in(2, env.arena),
+            called_preload_fns: BitVec::repeat(false, host_function_count),
             proc_lookup,
             host_lookup,
             helper_proc_gen,
+            can_relocate_heap,
 
             // Function-level data
             block_depth: 0,
@@ -127,7 +139,7 @@ impl<'a> WasmBackend<'a> {
     /// Since they're all in one block, they can't grow independently. Only the highest one can grow.
     /// Also, there's no "invalid region" below the stack, so stack overflow will overwrite constants!
     /// TODO: Detect stack overflow in function prologue... at least in Roc code...
-    fn set_memory_layout(env: &'a Env<'a>, module: &mut WasmModule<'a>, stack_size: u32) {
+    fn set_memory_layout(env: &'a Env<'a>, module: &mut WasmModule<'a>, stack_size: u32) -> bool {
         let mut stack_heap_boundary = module.data.end_addr + stack_size;
         stack_heap_boundary = round_up_to_alignment!(stack_heap_boundary, MemorySection::PAGE_SIZE);
 
@@ -181,7 +193,9 @@ impl<'a> WasmBackend<'a> {
         });
 
         // Set the constant that malloc uses to know where the heap begins
-        module.relocate_internal_symbol("__heap_base", stack_heap_boundary);
+        module
+            .relocate_internal_symbol("__heap_base", stack_heap_boundary)
+            .is_ok()
     }
 
     /// If the host has some `extern` global variables, we need to create them in the final binary
@@ -195,7 +209,6 @@ impl<'a> WasmBackend<'a> {
 
                     module.reloc_code.apply_relocs_u32(
                         &mut module.code.preloaded_bytes,
-                        module.code.preloaded_reloc_offset,
                         sym_index as u32,
                         global_value_addr,
                     );
@@ -239,6 +252,8 @@ impl<'a> WasmBackend<'a> {
             .to_symbol_string(symbol, self.interns);
         let name = String::from_str_in(&name, self.env.arena).into_bump_str();
 
+        // dbg!(name);
+
         self.proc_lookup.push(ProcLookupData {
             name: symbol,
             layout,
@@ -255,7 +270,7 @@ impl<'a> WasmBackend<'a> {
         wasm_fn_index
     }
 
-    pub fn finalize(mut self) -> (WasmModule<'a>, Vec<'a, u32>) {
+    pub fn finalize(mut self) -> (WasmModule<'a>, BitVec<usize>) {
         self.maybe_call_host_main();
         let fn_table_size = 1 + self.module.element.max_table_index();
         self.module.table.function_table.limits = Limits::MinMax(fn_table_size, fn_table_size);
@@ -265,22 +280,32 @@ impl<'a> WasmBackend<'a> {
     /// If the host has a `main` function then we need to insert a `_start` to call it.
     /// This is something linkers do, and this backend is also a linker!
     fn maybe_call_host_main(&mut self) {
-        let main_symbol_index = if let Some(i) = self.module.linking.find_internal_symbol("main") {
-            i as usize
-        } else {
-            return;
+        let main_symbol_index = match self.module.linking.find_internal_symbol("main") {
+            Ok(x) => x,
+            Err(_) => return,
         };
 
         let main_fn_index: u32 = match &self.module.linking.symbol_table[main_symbol_index] {
-            SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { flags, index, .. })
-                if flags & linking::WASM_SYM_BINDING_LOCAL == 0 =>
-            {
-                *index
-            }
+            SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { index, .. }) => *index,
             _ => {
                 return;
             }
         };
+
+        const START: &str = "_start";
+
+        if let Ok(sym_index) = self.module.linking.find_internal_symbol(START) {
+            let fn_index = match self.module.linking.symbol_table[sym_index] {
+                SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { index, .. }) => index,
+                _ => panic!("linker symbol `{}` is not a function", START),
+            };
+            self.module.export.append(Export {
+                name: START,
+                ty: ExportType::Func,
+                index: fn_index,
+            });
+            return;
+        }
 
         self.module.add_function_signature(Signature {
             param_types: bumpalo::vec![in self.env.arena],
@@ -288,7 +313,7 @@ impl<'a> WasmBackend<'a> {
         });
 
         self.module.export.append(Export {
-            name: "_start",
+            name: START,
             ty: ExportType::Func,
             index: self.fn_index_offset + self.module.code.code_builders.len() as u32,
         });
@@ -300,7 +325,7 @@ impl<'a> WasmBackend<'a> {
         self.code_builder.build_fn_header_and_footer(&[], 0, None);
         self.reset();
 
-        self.called_preload_fns.push(main_fn_index);
+        self.called_preload_fns.set(main_fn_index as usize, true);
     }
 
     /// Register the debug names of Symbols in a global lookup table
@@ -351,7 +376,7 @@ impl<'a> WasmBackend<'a> {
     ***********************************************************/
 
     pub fn build_proc(&mut self, proc: &Proc<'a>) {
-        if DEBUG_LOG_SETTINGS.proc_start_end {
+        if DEBUG_SETTINGS.proc_start_end {
             println!("\ngenerating procedure {:?}\n", proc.name);
         }
 
@@ -364,7 +389,7 @@ impl<'a> WasmBackend<'a> {
         self.finalize_proc();
         self.reset();
 
-        if DEBUG_LOG_SETTINGS.proc_start_end {
+        if DEBUG_SETTINGS.proc_start_end {
             println!("\nfinished generating {:?}\n", proc.name);
         }
     }
@@ -389,10 +414,8 @@ impl<'a> WasmBackend<'a> {
         // We never use the `return` instruction. Instead, we break from this block.
         self.start_block();
 
-        for (layout, symbol) in proc.args {
-            self.storage
-                .allocate(*layout, *symbol, StoredValueKind::Parameter);
-        }
+        self.storage
+            .allocate_args(proc.args, &mut self.code_builder, self.env.arena);
 
         if let Some(ty) = ret_type {
             let ret_var = self.storage.create_anonymous_local(ty);
@@ -420,7 +443,7 @@ impl<'a> WasmBackend<'a> {
             self.storage.stack_frame_pointer,
         );
 
-        if DEBUG_LOG_SETTINGS.storage_map {
+        if DEBUG_SETTINGS.storage_map {
             println!("\nStorage:");
             for (sym, storage) in self.storage.symbol_storage_map.iter() {
                 println!("{:?} => {:?}", sym, storage);
@@ -630,13 +653,13 @@ impl<'a> WasmBackend<'a> {
     fn stmt_let(&mut self, stmt: &Stmt<'a>) {
         let mut current_stmt = stmt;
         while let Stmt::Let(sym, expr, layout, following) = current_stmt {
-            if DEBUG_LOG_SETTINGS.let_stmt_ir {
+            if DEBUG_SETTINGS.let_stmt_ir {
                 println!("let {:?} = {}", sym, expr.to_pretty(200)); // ignore `following`! Too confusing otherwise.
             }
 
             let kind = match following {
-                Stmt::Ret(ret_sym) if *sym == *ret_sym => StoredValueKind::ReturnValue,
-                _ => StoredValueKind::Variable,
+                Stmt::Ret(ret_sym) if *sym == *ret_sym => StoredVarKind::ReturnValue,
+                _ => StoredVarKind::Variable,
             };
 
             self.stmt_let_store_expr(*sym, layout, expr, kind);
@@ -652,9 +675,9 @@ impl<'a> WasmBackend<'a> {
         sym: Symbol,
         layout: &Layout<'a>,
         expr: &Expr<'a>,
-        kind: StoredValueKind,
+        kind: StoredVarKind,
     ) {
-        let sym_storage = self.storage.allocate(*layout, sym, kind);
+        let sym_storage = self.storage.allocate_var(*layout, sym, kind);
 
         self.expr(sym, expr, layout, &sym_storage);
 
@@ -792,10 +815,10 @@ impl<'a> WasmBackend<'a> {
         // make locals for join pointer parameters
         let mut jp_param_storages = Vec::with_capacity_in(parameters.len(), self.env.arena);
         for parameter in parameters.iter() {
-            let mut param_storage = self.storage.allocate(
+            let mut param_storage = self.storage.allocate_var(
                 parameter.layout,
                 parameter.symbol,
-                StoredValueKind::Variable,
+                StoredVarKind::Variable,
             );
             param_storage = self.storage.ensure_value_has_local(
                 &mut self.code_builder,
@@ -879,7 +902,7 @@ impl<'a> WasmBackend<'a> {
         let tag_id = 0;
         self.code_builder.i32_const(elements_addr as i32);
         self.code_builder.i32_const(tag_id);
-        self.call_zig_builtin_after_loading_args("roc_panic", 2, false);
+        self.call_host_fn_after_loading_args("roc_panic", 2, false);
 
         self.code_builder.unreachable_();
     }
@@ -994,7 +1017,7 @@ impl<'a> WasmBackend<'a> {
                         let (upper_bits, lower_bits) = RocDec::from_ne_bytes(*bytes).as_bits();
                         write128(lower_bits as i64, upper_bits);
                     }
-                    Literal::Int(x) => {
+                    Literal::Int(x) | Literal::U128(x) => {
                         let lower_bits = (i128::from_ne_bytes(*x) & 0xffff_ffff_ffff_ffff) as i64;
                         let upper_bits = (i128::from_ne_bytes(*x) >> 64) as i64;
                         write128(lower_bits, upper_bits);
@@ -1047,7 +1070,8 @@ impl<'a> WasmBackend<'a> {
                             self.code_builder.i32_store(Align::Bytes4, offset + 8);
                         };
                     }
-                    _ => invalid_error(),
+                    // Bools and bytes should not be stored in the stack frame
+                    Literal::Bool(_) | Literal::Byte(_) => invalid_error(),
                 }
             }
 
@@ -1120,7 +1144,24 @@ impl<'a> WasmBackend<'a> {
                 call_higher_order_lowlevel(self, ret_sym, ret_layout, *higher_order_lowlevel)
             }
 
-            CallType::Foreign { .. } => todo!("CallType::Foreign"),
+            CallType::Foreign {
+                foreign_symbol,
+                ret_layout,
+            } => {
+                let name = foreign_symbol.as_str();
+                let wasm_layout = WasmLayout::new(ret_layout);
+                let (num_wasm_args, has_return_val, ret_zig_packed_struct) =
+                    self.storage.load_symbols_for_call(
+                        self.env.arena,
+                        &mut self.code_builder,
+                        arguments,
+                        ret_sym,
+                        &wasm_layout,
+                        CallConv::C,
+                    );
+                debug_assert!(!ret_zig_packed_struct); // only true in another place where we use the same helper fn
+                self.call_host_fn_after_loading_args(name, num_wasm_args, has_return_val)
+            }
         }
     }
 
@@ -1190,12 +1231,10 @@ impl<'a> WasmBackend<'a> {
         low_level_call.generate(self);
     }
 
-    /// Generate a call instruction to a Zig builtin function.
-    /// And if we haven't seen it before, add an Import and linker data for it.
-    /// Zig calls use LLVM's "fast" calling convention rather than our usual C ABI.
-    pub fn call_zig_builtin_after_loading_args(
+    /// Generate a call instruction to a host function or Zig builtin.
+    pub fn call_host_fn_after_loading_args(
         &mut self,
-        name: &'a str,
+        name: &str,
         num_wasm_args: usize,
         has_return_val: bool,
     ) {
@@ -1203,16 +1242,18 @@ impl<'a> WasmBackend<'a> {
             .host_lookup
             .iter()
             .find(|(fn_name, _)| *fn_name == name)
-            .unwrap_or_else(|| {
-                panic!(
-                    "I can't find the builtin function `{}` in the preprocessed host file.",
-                    name
-                )
-            });
+            .unwrap_or_else(|| panic!("The Roc app tries to call `{}` but I can't find it!", name));
 
-        self.called_preload_fns.push(*fn_index);
-        self.code_builder
-            .call(*fn_index, num_wasm_args, has_return_val);
+        self.called_preload_fns.set(*fn_index as usize, true);
+
+        let host_import_count = self.fn_index_offset - self.module.code.preloaded_count;
+        if *fn_index < host_import_count {
+            self.code_builder
+                .call_import(*fn_index, num_wasm_args, has_return_val);
+        } else {
+            self.code_builder
+                .call(*fn_index, num_wasm_args, has_return_val);
+        }
     }
 
     /// Call a helper procedure that implements `==` for a data structure (not numbers or Str)
@@ -1378,7 +1419,7 @@ impl<'a> WasmBackend<'a> {
                             elem_sym,
                             elem_layout,
                             &expr,
-                            StoredValueKind::Variable,
+                            StoredVarKind::Variable,
                         );
 
                         elem_sym
@@ -1675,6 +1716,10 @@ impl<'a> WasmBackend<'a> {
         alignment_bytes: u32,
         initial_refcount: u32,
     ) {
+        if !self.can_relocate_heap {
+            // This will probably only happen for test hosts.
+            panic!("The app tries to allocate heap memory but the host doesn't support that. It needs to export __heap_base");
+        }
         // Add extra bytes for the refcount
         let extra_bytes = alignment_bytes.max(PTR_SIZE);
 
@@ -1692,7 +1737,7 @@ impl<'a> WasmBackend<'a> {
         self.code_builder.i32_const(alignment_bytes as i32);
 
         // Call the foreign function. (Zig and C calling conventions are the same for this signature)
-        self.call_zig_builtin_after_loading_args("roc_alloc", 2, true);
+        self.call_host_fn_after_loading_args("roc_alloc", 2, true);
 
         // Save the allocation address to a temporary local variable
         let local_id = self.storage.create_anonymous_local(ValueType::I32);

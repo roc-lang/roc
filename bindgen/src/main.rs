@@ -16,7 +16,7 @@ const SUPPORTED_EXTENSIONS: &str = ".c, .rs, .zig, and .json";
 #[derive(Debug, Parser)]
 #[clap(about)]
 struct Opts {
-    /// The path to the platform's Package-Config.roc file
+    /// The path to the `platform` module .roc file
     platform_module: PathBuf,
 
     /// The output file, e.g. `test.rs`
@@ -58,8 +58,17 @@ pub fn main() {
 
     match load_types(input_path.clone(), &cwd, Threading::AllAvailable) {
         Ok(types_and_targets) => {
-            let mut buf;
+            let mut file = File::create(output_path.clone()).unwrap_or_else(|err| {
+                eprintln!(
+                    "Unable to create output file {} - {:?}",
+                    output_path.display(),
+                    err
+                );
 
+                process::exit(1);
+            });
+
+            let mut buf;
             match output_type {
                 OutputType::Rust => {
                     buf = std::str::from_utf8(bindgen_rs::HEADER).unwrap().to_string();
@@ -71,16 +80,6 @@ pub fn main() {
                 OutputType::Zig => todo!("TODO: Generate bindings for Zig"),
                 OutputType::Json => todo!("TODO: Generate bindings for JSON"),
             };
-
-            let mut file = File::create(output_path.clone()).unwrap_or_else(|err| {
-                eprintln!(
-                    "Unable to create output file {} - {:?}",
-                    output_path.display(),
-                    err
-                );
-
-                process::exit(1);
-            });
 
             file.write_all(buf.as_bytes()).unwrap_or_else(|err| {
                 eprintln!(

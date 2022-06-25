@@ -23,6 +23,7 @@ use roc_debug_flags::{
     ROC_PRINT_LOAD_LOG,
 };
 use roc_error_macros::internal_error;
+use roc_late_solve::{AbilitiesView, WorldAbilities};
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
     IdentIds, IdentIdsByModule, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds,
@@ -30,7 +31,7 @@ use roc_module::symbol::{
 };
 use roc_mono::ir::{
     CapturedSymbols, EntryPoint, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs,
-    UpdateModeIds,
+    ProcsBase, UpdateModeIds,
 };
 use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
 use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
@@ -45,10 +46,11 @@ use roc_solve::module::SolvedModule;
 use roc_solve::solve;
 use roc_target::TargetInfo;
 use roc_types::solved_types::Solved;
-use roc_types::subs::{Subs, VarStore, Variable};
+use roc_types::subs::{ExposedTypesStorageSubs, Subs, VarStore, Variable};
 use roc_types::types::{Alias, AliasKind};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
+use std::env::current_dir;
 use std::io;
 use std::iter;
 use std::ops::ControlFlow;
@@ -70,9 +72,6 @@ const DEFAULT_APP_OUTPUT_PATH: &str = "app";
 
 /// Filename extension for normal Roc modules
 const ROC_FILE_EXTENSION: &str = "roc";
-
-/// Roc-Config file name
-const PKG_CONFIG_FILE_NAME: &str = "Package-Config";
 
 /// The . in between module names like Foo.Bar.Baz
 const MODULE_SEPARATOR: char = '.';
@@ -132,6 +131,7 @@ struct ModuleCache<'a> {
     constrained: MutMap<ModuleId, ConstrainedModule>,
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
+    late_specializations: MutMap<ModuleId, LateSpecializationsModule<'a>>,
     external_specializations_requested: MutMap<ModuleId, Vec<ExternalSpecializations>>,
 
     /// Various information
@@ -180,6 +180,7 @@ impl Default for ModuleCache<'_> {
             constrained: Default::default(),
             typechecked: Default::default(),
             found_specializations: Default::default(),
+            late_specializations: Default::default(),
             external_specializations_requested: Default::default(),
             imports: Default::default(),
             top_level_thunks: Default::default(),
@@ -426,27 +427,59 @@ fn start_phase<'a>(
                 }
             }
             Phase::MakeSpecializations => {
-                let found_specializations = state
-                    .module_cache
-                    .found_specializations
-                    .remove(&module_id)
-                    .unwrap();
-
                 let specializations_we_must_make = state
                     .module_cache
                     .external_specializations_requested
                     .remove(&module_id)
                     .unwrap_or_default();
 
-                let FoundSpecializationsModule {
-                    module_id,
-                    ident_ids,
-                    subs,
-                    procs_base,
-                    layout_cache,
-                    module_timing,
-                    abilities_store,
-                } = found_specializations;
+                let (ident_ids, subs, procs_base, layout_cache, module_timing) =
+                    if state.make_specializations_pass.current_pass() == 1 {
+                        let found_specializations = state
+                            .module_cache
+                            .found_specializations
+                            .remove(&module_id)
+                            .unwrap();
+
+                        let FoundSpecializationsModule {
+                            ident_ids,
+                            subs,
+                            procs_base,
+                            layout_cache,
+                            module_timing,
+                            abilities_store,
+                        } = found_specializations;
+
+                        // Safety: by this point every module should have been solved, so there is no need
+                        // for our exposed types anymore, but the world does need them.
+                        let our_exposed_types = unsafe { state.exposed_types.remove(&module_id) }
+                            .unwrap_or_else(|| {
+                                internal_error!("Exposed types for {:?} missing", module_id)
+                            });
+
+                        // Add our abilities to the world.
+                        state.world_abilities.insert(
+                            module_id,
+                            abilities_store,
+                            our_exposed_types.exposed_types_storage_subs,
+                        );
+
+                        (ident_ids, subs, procs_base, layout_cache, module_timing)
+                    } else {
+                        let LateSpecializationsModule {
+                            ident_ids,
+                            subs,
+                            module_timing,
+                            layout_cache,
+                            procs_base,
+                        } = state
+                            .module_cache
+                            .late_specializations
+                            .remove(&module_id)
+                            .unwrap();
+
+                        (ident_ids, subs, procs_base, layout_cache, module_timing)
+                    };
 
                 BuildTask::MakeSpecializations {
                     module_id,
@@ -456,7 +489,7 @@ fn start_phase<'a>(
                     layout_cache,
                     specializations_we_must_make,
                     module_timing,
-                    abilities_store,
+                    world_abilities: state.world_abilities.clone_ref(),
                 }
             }
         }
@@ -477,6 +510,7 @@ pub struct LoadedModule {
     pub dep_idents: IdentIdsByModule,
     pub exposed_aliases: MutMap<Symbol, Alias>,
     pub exposed_values: Vec<Symbol>,
+    pub exposed_types_storage: ExposedTypesStorageSubs,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
     pub documentation: MutMap<ModuleId, ModuleDocumentation>,
@@ -559,7 +593,6 @@ pub struct TypeCheckedModule<'a> {
 
 #[derive(Debug)]
 struct FoundSpecializationsModule<'a> {
-    module_id: ModuleId,
     ident_ids: IdentIds,
     layout_cache: LayoutCache<'a>,
     procs_base: ProcsBase<'a>,
@@ -569,12 +602,21 @@ struct FoundSpecializationsModule<'a> {
 }
 
 #[derive(Debug)]
+struct LateSpecializationsModule<'a> {
+    ident_ids: IdentIds,
+    subs: Subs,
+    module_timing: ModuleTiming,
+    layout_cache: LayoutCache<'a>,
+    procs_base: ProcsBase<'a>,
+}
+
+#[derive(Debug)]
 pub struct MonomorphizedModule<'a> {
     pub module_id: ModuleId,
     pub interns: Interns,
     pub subs: Subs,
-    pub output_path: Box<str>,
-    pub platform_path: Box<str>,
+    pub output_path: Box<Path>,
+    pub platform_path: Box<Path>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
@@ -656,6 +698,7 @@ enum Msg<'a> {
         solved_subs: Solved<Subs>,
         exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
         exposed_aliases_by_symbol: MutMap<Symbol, (bool, Alias)>,
+        exposed_types_storage: ExposedTypesStorageSubs,
         dep_idents: IdentIdsByModule,
         documentation: MutMap<ModuleId, ModuleDocumentation>,
         abilities_store: AbilitiesStore,
@@ -674,6 +717,7 @@ enum Msg<'a> {
         ident_ids: IdentIds,
         layout_cache: LayoutCache<'a>,
         external_specializations_requested: BumpMap<ModuleId, ExternalSpecializations>,
+        procs_base: ProcsBase<'a>,
         procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
         update_mode_ids: UpdateModeIds,
         module_timing: ModuleTiming,
@@ -707,13 +751,37 @@ enum PlatformPath<'a> {
     Valid(To<'a>),
     RootIsInterface,
     RootIsHosted,
-    RootIsPkgConfig,
+    RootIsPlatformModule,
 }
 
 #[derive(Debug)]
 struct PlatformData {
     module_id: ModuleId,
     provides: Symbol,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum MakeSpecializationsPass {
+    Pass(u8),
+}
+
+impl MakeSpecializationsPass {
+    fn inc(&mut self) {
+        match self {
+            &mut Self::Pass(n) => {
+                *self = Self::Pass(
+                    n.checked_add(1)
+                        .expect("way too many specialization passes!"),
+                )
+            }
+        }
+    }
+
+    fn current_pass(&self) -> u8 {
+        match self {
+            MakeSpecializationsPass::Pass(n) => *n,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -756,6 +824,11 @@ struct State<'a> {
     pub layout_caches: std::vec::Vec<LayoutCache<'a>>,
 
     pub render: RenderTarget,
+
+    /// All abilities across all modules.
+    pub world_abilities: WorldAbilities,
+
+    make_specializations_pass: MakeSpecializationsPass,
 
     // cached subs (used for builtin modules, could include packages in the future too)
     cached_subs: CachedSubs,
@@ -801,6 +874,8 @@ impl<'a> State<'a> {
             layout_caches: std::vec::Vec::with_capacity(number_of_workers),
             cached_subs: Arc::new(Mutex::new(cached_subs)),
             render,
+            make_specializations_pass: MakeSpecializationsPass::Pass(1),
+            world_abilities: Default::default(),
         }
     }
 }
@@ -814,7 +889,8 @@ pub struct ModuleTiming {
     pub constrain: Duration,
     pub solve: Duration,
     pub find_specializations: Duration,
-    pub make_specializations: Duration,
+    // indexed by make specializations pass
+    pub make_specializations: Vec<Duration>,
     // TODO pub monomorphize: Duration,
     /// Total duration will always be more than the sum of the other fields, due
     /// to things like state lookups in between phases, waiting on other threads, etc.
@@ -832,7 +908,7 @@ impl ModuleTiming {
             constrain: Duration::default(),
             solve: Duration::default(),
             find_specializations: Duration::default(),
-            make_specializations: Duration::default(),
+            make_specializations: Vec::with_capacity(2),
             start_time,
             end_time: start_time, // just for now; we'll overwrite this at the end
         }
@@ -858,8 +934,9 @@ impl ModuleTiming {
         } = self;
 
         let calculate = |t: Result<Duration, _>| -> Option<Duration> {
-            t.ok()?
-                .checked_sub(*make_specializations)?
+            make_specializations
+                .iter()
+                .fold(t.ok(), |t, pass_time| t?.checked_sub(*pass_time))?
                 .checked_sub(*find_specializations)?
                 .checked_sub(*solve)?
                 .checked_sub(*constrain)?
@@ -928,7 +1005,7 @@ enum BuildTask<'a> {
         layout_cache: LayoutCache<'a>,
         specializations_we_must_make: Vec<ExternalSpecializations>,
         module_timing: ModuleTiming,
-        abilities_store: AbilitiesStore,
+        world_abilities: WorldAbilities,
     },
 }
 
@@ -1170,6 +1247,13 @@ pub enum Threading {
 ///     of any requests that were added in the course of completing other requests). Now
 ///     we have a map of specializations, and everything was assembled in parallel with
 ///     no unique specialization ever getting assembled twice (meaning no wasted effort).
+///
+///     a. Note that this might mean that we have to specialize certain modules multiple times.
+///        When might this happen? Well, abilities can introduce implicit edges in the dependency
+///        graph, and even cycles. For example, suppose module Ab provides "ability1" and a function
+///        "f" that uses "ability1", and module App implements "ability1" and calls "f" with the
+///        implementing type. Then the specialization of "Ab#f" depends on the specialization of
+///        "ability1" back in the App module.
 /// 12. Now that we have our final map of specializations, we can proceed to code gen!
 ///     As long as the specializations are stored in a per-ModuleId map, we can also
 ///     parallelize this code gen. (e.g. in dev builds, building separate LLVM modules
@@ -1334,6 +1418,7 @@ fn state_thread_step<'a>(
                     solved_subs,
                     exposed_vars_by_symbol,
                     exposed_aliases_by_symbol,
+                    exposed_types_storage,
                     dep_idents,
                     documentation,
                     abilities_store,
@@ -1351,6 +1436,7 @@ fn state_thread_step<'a>(
                         solved_subs,
                         exposed_aliases_by_symbol,
                         exposed_vars_by_symbol,
+                        exposed_types_storage,
                         dep_idents,
                         documentation,
                         abilities_store,
@@ -1819,7 +1905,7 @@ fn update<'a>(
                     shorthands.insert(shorthand, *package_name);
                 }
 
-                if let PkgConfig {
+                if let Platform {
                     config_shorthand, ..
                 } = header.header_for
                 {
@@ -1832,7 +1918,7 @@ fn update<'a>(
                     debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                     state.platform_path = PlatformPath::Valid(to_platform);
                 }
-                PkgConfig { main_for_host, .. } => {
+                Platform { main_for_host, .. } => {
                     debug_assert!(matches!(state.platform_data, None));
 
                     state.platform_data = Some(PlatformData {
@@ -1842,7 +1928,7 @@ fn update<'a>(
 
                     if header.is_root_module {
                         debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
-                        state.platform_path = PlatformPath::RootIsPkgConfig;
+                        state.platform_path = PlatformPath::RootIsPlatformModule;
                     }
                 }
                 Builtin { .. } | Interface => {
@@ -2017,7 +2103,7 @@ fn update<'a>(
                         todo!("TODO gracefully handle a malformed string literal after `app` keyword.");
                     }
                 },
-                ModuleNameEnum::PkgConfig
+                ModuleNameEnum::Platform
                 | ModuleNameEnum::Interface(_)
                 | ModuleNameEnum::Hosted(_) => {}
             }
@@ -2111,7 +2197,7 @@ fn update<'a>(
 
             let work = state.dependencies.notify(module_id, Phase::SolveTypes);
 
-            // if there is a platform, the Package-Config module provides host-exposed,
+            // if there is a platform, the `platform` module provides host-exposed,
             // otherwise the App module exposes host-exposed
             let is_host_exposed = match state.platform_data {
                 None => module_id == state.root_id,
@@ -2156,6 +2242,7 @@ fn update<'a>(
                         solved_subs,
                         exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
                         exposed_aliases_by_symbol: solved_module.aliases,
+                        exposed_types_storage: solved_module.exposed_types,
                         dep_idents,
                         documentation,
                         abilities_store,
@@ -2229,7 +2316,6 @@ fn update<'a>(
                 .extend(procs_base.module_thunks.iter().copied());
 
             let found_specializations_module = FoundSpecializationsModule {
-                module_id,
                 ident_ids,
                 layout_cache,
                 procs_base,
@@ -2253,9 +2339,10 @@ fn update<'a>(
         }
         MadeSpecializations {
             module_id,
-            mut ident_ids,
+            ident_ids,
             mut update_mode_ids,
             subs,
+            procs_base,
             procedures,
             external_specializations_requested,
             module_timing,
@@ -2270,103 +2357,217 @@ fn update<'a>(
             let _ = layout_cache;
 
             state.procedures.extend(procedures);
-            state.timings.insert(module_id, module_timing);
+            state.module_cache.late_specializations.insert(
+                module_id,
+                LateSpecializationsModule {
+                    ident_ids,
+                    module_timing,
+                    subs,
+                    layout_cache,
+                    procs_base,
+                },
+            );
 
             let work = state
                 .dependencies
                 .notify(module_id, Phase::MakeSpecializations);
 
-            if work.is_empty() && state.dependencies.solved_all() {
-                if !external_specializations_requested.is_empty()
-                    || !state
+            for (module_id, requested) in external_specializations_requested {
+                let existing = match state
+                    .module_cache
+                    .external_specializations_requested
+                    .entry(module_id)
+                {
+                    Vacant(entry) => entry.insert(vec![]),
+                    Occupied(entry) => entry.into_mut(),
+                };
+
+                existing.push(requested);
+            }
+
+            enum NextStep {
+                Done,
+                RelaunchPhase,
+                MakingInPhase,
+            }
+
+            let all_work_done = work.is_empty() && state.dependencies.solved_all();
+            let next_step = if all_work_done {
+                if state
+                    .module_cache
+                    .external_specializations_requested
+                    .is_empty()
+                {
+                    NextStep::Done
+                } else {
+                    NextStep::RelaunchPhase
+                }
+            } else {
+                NextStep::MakingInPhase
+            };
+
+            match next_step {
+                NextStep::Done => {
+                    // We are all done with specializations across all modules.
+                    // Insert post-specialization operations and report our completion.
+
+                    if !state
                         .module_cache
                         .external_specializations_requested
                         .is_empty()
-                {
-                    internal_error!(
-                        "No more work left, but external specializations left over: {:?}, {:?}",
-                        external_specializations_requested,
-                        state.module_cache.external_specializations_requested
-                    )
+                    {
+                        internal_error!(
+                            "No more work left, but external specializations left over: {:?}",
+                            state.module_cache.external_specializations_requested
+                        );
+                    }
+
+                    // Flush late-specialization module information to the top-level of the state
+                    // where it will be visible to others, since we don't need late specialization
+                    // anymore.
+                    for (
+                        module_id,
+                        LateSpecializationsModule {
+                            ident_ids,
+                            subs,
+                            module_timing,
+                            layout_cache: _,
+                            procs_base: _,
+                        },
+                    ) in state.module_cache.late_specializations.drain()
+                    {
+                        state.constrained_ident_ids.insert(module_id, ident_ids);
+                        if module_id == state.root_id {
+                            state.root_subs = Some(subs);
+                        }
+                        state.timings.insert(module_id, module_timing);
+                    }
+
+                    log!("specializations complete from {:?}", module_id);
+
+                    debug_print_ir!(state, ROC_PRINT_IR_AFTER_SPECIALIZATION);
+
+                    let ident_ids = state.constrained_ident_ids.get_mut(&module_id).unwrap();
+
+                    Proc::insert_reset_reuse_operations(
+                        arena,
+                        module_id,
+                        ident_ids,
+                        &mut update_mode_ids,
+                        &mut state.procedures,
+                    );
+
+                    debug_print_ir!(state, ROC_PRINT_IR_AFTER_RESET_REUSE);
+
+                    Proc::insert_refcount_operations(
+                        arena,
+                        module_id,
+                        ident_ids,
+                        &mut update_mode_ids,
+                        &mut state.procedures,
+                    );
+
+                    debug_print_ir!(state, ROC_PRINT_IR_AFTER_REFCOUNT);
+
+                    // This is not safe with the new non-recursive RC updates that we do for tag unions
+                    //
+                    // Proc::optimize_refcount_operations(
+                    //     arena,
+                    //     module_id,
+                    //     &mut ident_ids,
+                    //     &mut state.procedures,
+                    // );
+
+                    // use the subs of the root module;
+                    // this is used in the repl to find the type of `main`
+                    let subs = state.root_subs.clone().unwrap();
+
+                    msg_tx
+                        .send(Msg::FinishedAllSpecialization {
+                            subs,
+                            // TODO thread through mono problems
+                            exposed_to_host: state.exposed_to_host.clone(),
+                        })
+                        .map_err(|_| LoadingProblem::MsgChannelDied)?;
+
+                    Ok(state)
                 }
 
-                log!("specializations complete from {:?}", module_id);
+                NextStep::RelaunchPhase => {
+                    // We passed through the dependency graph of modules to be specialized, but
+                    // there are still specializations left over. Restart the make specializations
+                    // phase in reverse topological order.
+                    //
+                    // This happens due to abilities. In detail, consider
+                    //
+                    //   # Default module
+                    //   interface Default exposes [default, getDefault]
+                    //
+                    //   Default has default : {} -> a | a has Default
+                    //
+                    //   getDefault = \{} -> default {}
+                    //
+                    //   # App module
+                    //   app "test" provides [main] imports [Default.{default, getDefault}]
+                    //
+                    //   Foo := {}
+                    //
+                    //   default = \{} -> @Foo {}
+                    //
+                    //   main =
+                    //     f : Foo
+                    //     f = getDefault {}
+                    //     f
+                    //
+                    // The syntactic make specializations graph (based on imports) will be
+                    // App -> Default, and in a pass will build the specializations `App#main` and
+                    // `Default#getDefault for Foo`. But now notice that `Default#getDefault` will
+                    // have gained an implicit dependency on the specialized `default` for `Foo`,
+                    // `App#Foo#default`. So for abilities, the syntactic import graph is not
+                    // enough to express the entire dependency graph.
+                    //
+                    // The simplest way to resolve these leftover, possibly circular
+                    // specializations is to relaunch the make-specializations phase in the import
+                    // order until there are no more specializations left to be made. This is a bit
+                    // unfortunate in that we may look again into modules that don't need any
+                    // specializations made, but there are also some nice properties:
+                    //
+                    // - no more specializations will be made than needed
+                    // - the number of phase relaunches scales linearly with the largest number of
+                    //   "bouncing back and forth" between ability calls, which is likely to be
+                    //   small in practice
+                    // - the phases will always terminate. suppose they didn't; then there must be
+                    //   an infinite chain of calls all of which have different layouts. In Roc
+                    //   this can only be true if the calls are all mutually recursive, and
+                    //   furthermore are polymorphically recursive. But polymorphic recursion is
+                    //   illegal in Roc, will have been enforced during type inference.
 
-                debug_print_ir!(state, ROC_PRINT_IR_AFTER_SPECIALIZATION);
-
-                Proc::insert_reset_reuse_operations(
-                    arena,
-                    module_id,
-                    &mut ident_ids,
-                    &mut update_mode_ids,
-                    &mut state.procedures,
-                );
-
-                debug_print_ir!(state, ROC_PRINT_IR_AFTER_RESET_REUSE);
-
-                Proc::insert_refcount_operations(
-                    arena,
-                    module_id,
-                    &mut ident_ids,
-                    &mut update_mode_ids,
-                    &mut state.procedures,
-                );
-
-                debug_print_ir!(state, ROC_PRINT_IR_AFTER_REFCOUNT);
-
-                // This is not safe with the new non-recursive RC updates that we do for tag unions
-                //
-                //                Proc::optimize_refcount_operations(
-                //                    arena,
-                //                    module_id,
-                //                    &mut ident_ids,
-                //                    &mut state.procedures,
-                //                );
-
-                state.constrained_ident_ids.insert(module_id, ident_ids);
-
-                // use the subs of the root module;
-                // this is used in the repl to find the type of `main`
-                let subs = if module_id == state.root_id {
-                    subs
-                } else {
-                    state.root_subs.clone().unwrap()
-                };
-
-                msg_tx
-                    .send(Msg::FinishedAllSpecialization {
-                        subs,
-                        // TODO thread through mono problems
-                        exposed_to_host: state.exposed_to_host.clone(),
-                    })
-                    .map_err(|_| LoadingProblem::MsgChannelDied)?;
-
-                Ok(state)
-            } else {
-                // record the subs of the root module;
-                // this is used in the repl to find the type of `main`
-                if module_id == state.root_id {
-                    state.root_subs = Some(subs);
-                }
-
-                state.constrained_ident_ids.insert(module_id, ident_ids);
-
-                for (module_id, requested) in external_specializations_requested {
-                    let existing = match state
+                    if state
                         .module_cache
                         .external_specializations_requested
-                        .entry(module_id)
+                        .is_empty()
                     {
-                        Vacant(entry) => entry.insert(vec![]),
-                        Occupied(entry) => entry.into_mut(),
-                    };
+                        internal_error!(
+                            "No specializations left over, but we were told to loop making specializations"
+                        );
+                    }
 
-                    existing.push(requested);
+                    log!("re-launching specializations pass");
+
+                    state.make_specializations_pass.inc();
+
+                    let work = state.dependencies.reload_make_specialization_pass();
+
+                    start_tasks(arena, &mut state, work, injector, worker_listeners)?;
+
+                    Ok(state)
                 }
 
-                start_tasks(arena, &mut state, work, injector, worker_listeners)?;
+                NextStep::MakingInPhase => {
+                    start_tasks(arena, &mut state, work, injector, worker_listeners)?;
 
-                Ok(state)
+                    Ok(state)
+                }
             }
         }
         Msg::FinishedAllTypeChecking { .. } => {
@@ -2443,10 +2644,10 @@ fn finish_specialization(
             }
         };
 
-        package_name.0
+        package_name.into()
     };
 
-    let platform_path = path_to_platform.into();
+    let platform_path = Path::new(path_to_platform).into();
 
     let entry_point = {
         let symbol = match platform_data {
@@ -2476,10 +2677,15 @@ fn finish_specialization(
         }
     };
 
+    let output_path = match output_path {
+        Some(path_str) => Path::new(path_str).into(),
+        None => current_dir().unwrap().join(DEFAULT_APP_OUTPUT_PATH).into(),
+    };
+
     Ok(MonomorphizedModule {
         can_problems,
         type_problems,
-        output_path: output_path.unwrap_or(DEFAULT_APP_OUTPUT_PATH).into(),
+        output_path,
         platform_path,
         exposed_to_host,
         module_id: state.root_id,
@@ -2493,11 +2699,13 @@ fn finish_specialization(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish(
     state: State,
     solved: Solved<Subs>,
     exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+    exposed_types_storage: ExposedTypesStorageSubs,
     dep_idents: IdentIdsByModule,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
     abilities_store: AbilitiesStore,
@@ -2532,6 +2740,7 @@ fn finish(
         exposed_aliases: exposed_aliases_by_symbol,
         exposed_values,
         exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
+        exposed_types_storage,
         sources,
         timings: state.timings,
         documentation,
@@ -2539,19 +2748,16 @@ fn finish(
     }
 }
 
-/// Load a PkgConfig.roc file
-fn load_pkg_config<'a>(
+/// Load a `platform` module
+fn load_platform_module<'a>(
     arena: &'a Bump,
-    src_dir: &Path,
+    filename: &Path,
     shorthand: &'a str,
     app_module_id: ModuleId,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
 ) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let module_start_time = SystemTime::now();
-
-    let filename = PathBuf::from(src_dir);
-
     let file_io_start = SystemTime::now();
     let file = fs::read(&filename);
     let file_io_duration = file_io_start.elapsed().unwrap();
@@ -2590,12 +2796,12 @@ fn load_pkg_config<'a>(
                     )))
                 }
                 Ok((ast::Module::Platform { header }, parser_state)) => {
-                    // make a Package-Config module that ultimately exposes `main` to the host
-                    let pkg_config_module_msg = fabricate_pkg_config_module(
+                    // make a `platform` module that ultimately exposes `main` to the host
+                    let platform_module_msg = fabricate_platform_module(
                         arena,
                         shorthand,
                         Some(app_module_id),
-                        filename,
+                        filename.to_path_buf(),
                         parser_state,
                         module_ids.clone(),
                         ident_ids_by_module,
@@ -2604,17 +2810,17 @@ fn load_pkg_config<'a>(
                     )
                     .1;
 
-                    Ok(pkg_config_module_msg)
+                    Ok(platform_module_msg)
                 }
                 Err(fail) => Err(LoadingProblem::ParsingFailed(
                     fail.map_problem(SyntaxError::Header)
-                        .into_file_error(filename),
+                        .into_file_error(filename.to_path_buf()),
                 )),
             }
         }
 
         Err(err) => Err(LoadingProblem::FileProblem {
-            filename,
+            filename: filename.to_path_buf(),
             error: err.kind(),
         }),
     }
@@ -2752,13 +2958,13 @@ fn module_name_to_path<'a>(
     module_name: PQModuleName<'a>,
     arc_shorthands: Arc<Mutex<MutMap<&'a str, PackageName<'a>>>>,
 ) -> (PathBuf, Option<&'a str>) {
-    let mut filename = PathBuf::new();
-
-    filename.push(src_dir);
-
+    let mut filename;
     let opt_shorthand;
+
     match module_name {
         PQModuleName::Unqualified(name) => {
+            filename = src_dir.to_path_buf();
+
             opt_shorthand = None;
             // Convert dots in module name to directories
             for part in name.split(MODULE_SEPARATOR) {
@@ -2770,8 +2976,15 @@ fn module_name_to_path<'a>(
             let shorthands = arc_shorthands.lock();
 
             match shorthands.get(shorthand) {
-                Some(PackageName(path)) => {
-                    filename.push(path);
+                Some(path) => {
+                    let parent = Path::new(path.as_str()).parent().unwrap_or_else(|| {
+                        panic!(
+                            "platform module {:?} did not have a parent directory.",
+                            path
+                        )
+                    });
+
+                    filename = src_dir.join(parent)
                 }
                 None => unreachable!("there is no shorthand named {:?}", shorthand),
             }
@@ -2889,8 +3102,8 @@ fn parse_header<'a>(
             ))
         }
         Ok((ast::Module::App { header }, parse_state)) => {
-            let mut pkg_config_dir = filename.clone();
-            pkg_config_dir.pop();
+            let mut app_file_dir = filename.clone();
+            app_file_dir.pop();
 
             let packages = unspace(arena, header.packages.items);
 
@@ -2954,18 +3167,13 @@ fn parse_header<'a>(
                         ..
                     }) = opt_base_package
                     {
-                        let package = package_name.0;
+                        // check whether we can find a `platform` module file
+                        let platform_module_path = app_file_dir.join(package_name.to_str());
 
-                        // check whether we can find a Package-Config.roc file
-                        let mut pkg_config_roc = pkg_config_dir;
-                        pkg_config_roc.push(package);
-                        pkg_config_roc.push(PKG_CONFIG_FILE_NAME);
-                        pkg_config_roc.set_extension(ROC_FILE_EXTENSION);
-
-                        if pkg_config_roc.as_path().exists() {
-                            let load_pkg_config_msg = load_pkg_config(
+                        if platform_module_path.as_path().exists() {
+                            let load_platform_module_msg = load_platform_module(
                                 arena,
-                                &pkg_config_roc,
+                                &platform_module_path,
                                 shorthand,
                                 module_id,
                                 module_ids,
@@ -2974,11 +3182,11 @@ fn parse_header<'a>(
 
                             Ok((
                                 module_id,
-                                Msg::Many(vec![app_module_header_msg, load_pkg_config_msg]),
+                                Msg::Many(vec![app_module_header_msg, load_platform_module_msg]),
                             ))
                         } else {
                             Err(LoadingProblem::FileProblem {
-                                filename: pkg_config_roc,
+                                filename: platform_module_path,
                                 error: io::ErrorKind::NotFound,
                             })
                         }
@@ -2990,7 +3198,7 @@ fn parse_header<'a>(
             }
         }
         Ok((ast::Module::Platform { header }, parse_state)) => {
-            Ok(fabricate_pkg_config_module(
+            Ok(fabricate_platform_module(
                 arena,
                 "", // Use a shorthand of "" - it will be fine for `roc check` and bindgen
                 None,
@@ -3105,7 +3313,7 @@ fn send_header<'a>(
     } = info;
 
     let declared_name: ModuleName = match &loc_name.value {
-        PkgConfig => unreachable!(),
+        Platform => unreachable!(),
         App(_) => ModuleName::APP.into(),
         Interface(module_name) | Hosted(module_name) => {
             // TODO check to see if module_name is consistent with filename.
@@ -3328,7 +3536,7 @@ fn send_header_two<'a>(
         HashMap::with_capacity_and_hasher(num_exposes, default_hasher());
 
     // Add standard imports, if there is an app module.
-    // (There might not be, e.g. when running `roc check Package-Config.roc` or
+    // (There might not be, e.g. when running `roc check myplatform.roc` or
     // when generating bindings.)
     if let Some(app_module_id) = opt_app_module_id {
         imported_modules.insert(app_module_id, Region::zero());
@@ -3402,7 +3610,7 @@ fn send_header_two<'a>(
 
         {
             // If we don't have an app module id (e.g. because we're doing
-            // `roc check Package-Config.roc` or because we're doing bindgen),
+            // `roc check myplatform.roc` or because we're doing bindgen),
             // insert the `requires` symbols into the platform module's IdentIds.
             //
             // Otherwise, get them from the app module's IdentIds, because it
@@ -3476,7 +3684,7 @@ fn send_header_two<'a>(
     // We always need to send these, even if deps is empty,
     // because the coordinator thread needs to receive this message
     // to decrement its "pending" count.
-    let module_name = ModuleNameEnum::PkgConfig;
+    let module_name = ModuleNameEnum::Platform;
 
     let main_for_host = {
         let ident_id = ident_ids.get_or_insert(provides[0].value.as_str());
@@ -3484,7 +3692,7 @@ fn send_header_two<'a>(
         Symbol::new(home, ident_id)
     };
 
-    let extra = HeaderFor::PkgConfig {
+    let extra = HeaderFor::Platform {
         config_shorthand: shorthand,
         platform_main_type: requires[0].value,
         main_for_host,
@@ -3573,7 +3781,7 @@ impl<'a> BuildTask<'a> {
     }
 }
 
-fn add_imports(
+pub fn add_imports(
     my_module: ModuleId,
     subs: &mut Subs,
     mut pending_abilities: PendingAbilitiesStore,
@@ -3893,7 +4101,7 @@ fn unspace<'a, T: Copy>(arena: &'a Bump, items: &[Loc<Spaced<'a, T>>]) -> &'a [L
 }
 
 #[allow(clippy::too_many_arguments)]
-fn fabricate_pkg_config_module<'a>(
+fn fabricate_platform_module<'a>(
     arena: &'a Bump,
     shorthand: &'a str,
     opt_app_module_id: Option<ModuleId>,
@@ -4000,7 +4208,7 @@ fn canonicalize_and_constrain<'a>(
     // Generate documentation information
     // TODO: store timing information?
     let module_docs = match module_name {
-        ModuleNameEnum::PkgConfig => None,
+        ModuleNameEnum::Platform => None,
         ModuleNameEnum::App(_) => None,
         ModuleNameEnum::Interface(name) | ModuleNameEnum::Hosted(name) => {
             let docs = crate::docs::generate_module_docs(
@@ -4201,7 +4409,7 @@ fn make_specializations<'a>(
     specializations_we_must_make: Vec<ExternalSpecializations>,
     mut module_timing: ModuleTiming,
     target_info: TargetInfo,
-    abilities_store: AbilitiesStore,
+    world_abilities: WorldAbilities,
 ) -> Msg<'a> {
     let make_specializations_start = SystemTime::now();
     let mut update_mode_ids = UpdateModeIds::new();
@@ -4215,7 +4423,7 @@ fn make_specializations<'a>(
         update_mode_ids: &mut update_mode_ids,
         // call_specialization_counter=0 is reserved
         call_specialization_counter: 1,
-        abilities_store: &abilities_store,
+        abilities: AbilitiesView::World(world_abilities),
     };
 
     let mut procs = Procs::new_in(arena);
@@ -4240,36 +4448,29 @@ fn make_specializations<'a>(
     );
 
     let external_specializations_requested = procs.externals_we_need.clone();
-    let procedures = procs.get_specialized_procs_without_rc(&mut mono_env);
+    let (procedures, restored_procs_base) = procs.get_specialized_procs_without_rc(&mut mono_env);
 
     // Turn `Bytes.Decode.IdentId(238)` into `Bytes.Decode.238`, we rely on this in mono tests
     mono_env.home.register_debug_idents(mono_env.ident_ids);
 
     let make_specializations_end = SystemTime::now();
-    module_timing.make_specializations = make_specializations_end
-        .duration_since(make_specializations_start)
-        .unwrap();
+    module_timing.make_specializations.push(
+        make_specializations_end
+            .duration_since(make_specializations_start)
+            .unwrap(),
+    );
 
     Msg::MadeSpecializations {
         module_id: home,
         ident_ids,
         layout_cache,
+        procs_base: restored_procs_base,
         procedures,
         update_mode_ids,
         subs,
         external_specializations_requested,
         module_timing,
     }
-}
-
-#[derive(Clone, Debug)]
-struct ProcsBase<'a> {
-    partial_procs: BumpMap<Symbol, PartialProc<'a>>,
-    module_thunks: &'a [Symbol],
-    /// A host-exposed function must be specialized; it's a seed for subsequent specializations
-    host_specializations: roc_mono::ir::HostSpecializations,
-    runtime_errors: BumpMap<Symbol, &'a str>,
-    imported_module_thunks: &'a [Symbol],
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4310,7 +4511,10 @@ fn build_pending_specializations<'a>(
         update_mode_ids: &mut update_mode_ids,
         // call_specialization_counter=0 is reserved
         call_specialization_counter: 1,
-        abilities_store: &abilities_store,
+        // NB: for getting pending specializations the module view is enough because we only need
+        // to know the types and abilities in our modules. Only for building *all* specializations
+        // do we need a global view.
+        abilities: AbilitiesView::Module(&abilities_store),
     };
 
     // Add modules' decls to Procs
@@ -4340,6 +4544,7 @@ fn build_pending_specializations<'a>(
                     )
                 }
             }
+            Expects(_) => todo!("toplevel expect codgen"),
             InvalidCycle(_) | DeclareRec(..) => {
                 // do nothing?
                 // this may mean the loc_symbols are not defined during codegen; is that a problem?
@@ -4622,7 +4827,7 @@ fn run_task<'a>(
             layout_cache,
             specializations_we_must_make,
             module_timing,
-            abilities_store,
+            world_abilities,
         } => Ok(make_specializations(
             arena,
             module_id,
@@ -4633,7 +4838,7 @@ fn run_task<'a>(
             specializations_we_must_make,
             module_timing,
             target_info,
-            abilities_store,
+            world_abilities,
         )),
     }?;
 
@@ -4826,7 +5031,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
                     severity: Severity::RuntimeError,
                 }
             }
-            RootIsPkgConfig => {
+            RootIsPlatformModule => {
                 let doc = alloc.stack([
                                 alloc.reflow(r"The input file is a package config file, but only app modules can be ran."),
                                 alloc.concat([
@@ -4858,7 +5063,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
 /// Generic number types (Num, Int, Float, etc.) are treated as `DelayedAlias`es resolved during
 /// type solving.
 /// All that remains are Signed8, Signed16, etc.
-fn default_aliases() -> roc_solve::solve::Aliases {
+pub fn default_aliases() -> roc_solve::solve::Aliases {
     use roc_types::types::Type;
 
     let mut solve_aliases = roc_solve::solve::Aliases::default();

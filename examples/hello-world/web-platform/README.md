@@ -7,7 +7,7 @@ To run this website, first compile either of these identical apps:
 cargo run -- build --target=wasm32 examples/hello-world/web-platform/helloWeb.roc
 
 # Option B: Compile helloWorld.roc with `pf: "web-platform"` and move the result
-cargo run -- build --target=wasm32 examples/hello-world/helloWorld.roc
+cargo run -- build --target=wasm32 examples/hello-world/main.roc
 (cd examples/hello-world && mv helloWorld.wasm web-platform/helloWeb.wasm)
 ```
 

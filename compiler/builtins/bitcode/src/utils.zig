@@ -17,7 +17,7 @@ extern fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, align
 extern fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void;
 
 // Signals to the host that the program has panicked
-extern fn roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void;
+extern fn roc_panic(c_ptr: *const anyopaque, tag_id: u32) callconv(.C) void;
 
 // should work just like libc memcpy (we can't assume libc is present)
 extern fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
@@ -79,7 +79,7 @@ pub fn dealloc(c_ptr: [*]u8, alignment: u32) void {
 }
 
 // must export this explicitly because right now it is not used from zig code
-pub fn panic(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
+pub fn panic(c_ptr: *const anyopaque, alignment: u32) callconv(.C) void {
     return @call(.{ .modifier = always_inline }, roc_panic, .{ c_ptr, alignment });
 }
 

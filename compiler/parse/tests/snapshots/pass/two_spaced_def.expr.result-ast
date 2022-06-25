@@ -1,7 +1,27 @@
 SpaceBefore(
     Defs(
-        [
-            @18-23 Value(
+        Defs {
+            tags: [
+                Index(2147483648),
+                Index(2147483649),
+            ],
+            regions: [
+                @18-23,
+                @24-29,
+            ],
+            space_before: [
+                Slice(start = 0, length = 0),
+                Slice(start = 0, length = 1),
+            ],
+            space_after: [
+                Slice(start = 0, length = 0),
+                Slice(start = 1, length = 0),
+            ],
+            spaces: [
+                Newline,
+            ],
+            type_defs: [],
+            value_defs: [
                 Body(
                     @18-19 Identifier(
                         "x",
@@ -10,23 +30,16 @@ SpaceBefore(
                         "5",
                     ),
                 ),
-            ),
-            @24-29 SpaceBefore(
-                Value(
-                    Body(
-                        @24-25 Identifier(
-                            "y",
-                        ),
-                        @28-29 Num(
-                            "6",
-                        ),
+                Body(
+                    @24-25 Identifier(
+                        "y",
+                    ),
+                    @28-29 Num(
+                        "6",
                     ),
                 ),
-                [
-                    Newline,
-                ],
-            ),
-        ],
+            ],
+        },
         @31-33 SpaceBefore(
             Num(
                 "42",

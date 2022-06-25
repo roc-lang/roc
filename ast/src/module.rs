@@ -26,7 +26,7 @@ pub fn load_module(src_file: &Path, threading: Threading) -> LoadedModule {
         Ok(x) => x,
         Err(roc_load::LoadingProblem::FormattedReport(report)) => {
             panic!(
-                "Failed to load module from src_file {:?}. Report: {}",
+                "Failed to load module from src_file: {:?}. Report: {}",
                 src_file, report
             );
         }

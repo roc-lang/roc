@@ -1,5 +1,5 @@
 app "issue2279"
-    packages { pf: "platform" }
+    packages { pf: "platform/main.roc" }
     imports [Issue2279Help, pf.Task]
     provides [main] to pf
 
