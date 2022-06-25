@@ -1135,13 +1135,43 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
             NumShiftRightZfBy => {
-                backend.storage.load_symbols(
-                    &mut backend.code_builder,
-                    &[self.arguments[1], self.arguments[0]],
-                );
                 match CodeGenNumType::from(self.ret_layout) {
-                    I32 => backend.code_builder.i32_shr_u(),
-                    I64 => backend.code_builder.i64_shr_u(),
+                    I32 => {
+                        // This is normally an unsigned operation, but Roc defines it on all integer types.
+                        // So the argument is implicitly converted to unsigned before the shift operator.
+                        // We need to make that conversion explicit for i8 and i16, which use Wasm's i32 type.
+                        let bit_width = 8 * self.ret_layout.stack_size(TARGET_INFO);
+                        if bit_width < 32 && symbol_is_signed_int(backend, self.arguments[0]) {
+                            let mask = (1 << bit_width) - 1;
+
+                            backend
+                                .storage
+                                .load_symbols(&mut backend.code_builder, &[self.arguments[1]]);
+
+                            backend.code_builder.i32_const(mask);
+                            backend.code_builder.i32_and();
+
+                            backend
+                                .storage
+                                .load_symbols(&mut backend.code_builder, &[self.arguments[0]]);
+                        } else {
+                            // swap the arguments
+                            backend.storage.load_symbols(
+                                &mut backend.code_builder,
+                                &[self.arguments[1], self.arguments[0]],
+                            );
+                        }
+
+                        backend.code_builder.i32_shr_u();
+                    }
+                    I64 => {
+                        // swap the arguments
+                        backend.storage.load_symbols(
+                            &mut backend.code_builder,
+                            &[self.arguments[1], self.arguments[0]],
+                        );
+                        backend.code_builder.i64_shr_u();
+                    }
                     I128 => todo!("{:?} for I128", self.lowlevel),
                     _ => panic_ret_type(),
                 }
