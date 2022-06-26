@@ -15,7 +15,8 @@ use crate::pretty_print::{pretty_print_def, Ctx};
 use roc_can::{
     abilities::{AbilitiesStore, ResolvedSpecializations, SpecializationLambdaSets},
     constraint::Constraints,
-    def::{Declaration, Def},
+    def::Def,
+    expr::Declarations,
     module::{ExposedByModule, ExposedForModule, ExposedModuleTypes, RigidVariables},
 };
 use roc_collections::VecSet;
@@ -121,11 +122,9 @@ fn check_derived_typechecks_and_golden(
     // constrain the derived
     let mut constraints = Constraints::new();
     let def_var = derived_def.expr_var;
-    let constr = constrain_decls(
-        &mut constraints,
-        test_module,
-        &[Declaration::Declare(derived_def)],
-    );
+    let mut decls = Declarations::new();
+    decls.push_def(derived_def);
+    let constr = constrain_decls(&mut constraints, test_module, &decls);
 
     // the derived depends on stuff from Encode, so
     //   - we need to add those dependencies as imported on the constraint

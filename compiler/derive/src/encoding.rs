@@ -8,7 +8,6 @@ use roc_can::module::ExposedByModule;
 use roc_can::pattern::Pattern;
 use roc_collections::SendMap;
 use roc_derive_key::encoding::FlatEncodableKey;
-use roc_derive_key::GlobalDerivedSymbols;
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::Lowercase;
@@ -39,9 +38,8 @@ macro_rules! bad_input {
 pub(crate) struct Env<'a> {
     /// NB: This **must** be subs for the derive module!
     pub subs: &'a mut Subs,
-    pub ident_ids: &'a mut IdentIds,
-    pub exposed_encode_types: &'a mut ExposedTypesStorageSubs,
-    pub derived_symbols: &'a GlobalDerivedSymbols,
+    pub exposed_types: &'a ExposedByModule,
+    pub derived_ident_ids: &'a mut IdentIds,
 }
 
 impl Env<'_> {
