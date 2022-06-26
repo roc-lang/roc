@@ -113,9 +113,7 @@ impl DerivedModule {
                     self.derived_ident_ids.get_id(&debug_name).is_none(),
                     "duplicate debug name for different derive key"
                 );
-                let ident_id = self.derived_ident_ids.get_or_insert(&debug_name);
-
-                ident_id
+                self.derived_ident_ids.get_or_insert(&debug_name)
             } else {
                 self.derived_ident_ids.gen_unique()
             };
