@@ -591,7 +591,41 @@ impl<'a> LowLevelCall<'a> {
             ListRange => todo!("{:?}", self.lowlevel),
             ListSublist => todo!("{:?}", self.lowlevel),
             ListDropAt => todo!("{:?}", self.lowlevel),
-            ListSwap => todo!("{:?}", self.lowlevel),
+            ListSwap => {
+                // List.swap : List elem, Nat, Nat -> List elem
+                let list: Symbol = self.arguments[0];
+                let index_1: Symbol = self.arguments[1];
+                let index_2: Symbol = self.arguments[2];
+
+                let elem_layout = unwrap_list_elem_layout(self.ret_layout);
+                let (elem_width, elem_align) = elem_layout.stack_size_and_alignment(TARGET_INFO);
+
+                // Zig arguments              Wasm types
+                //  (return pointer)           i32
+                //  list: RocList,             i64, i32
+                //  alignment: u32,            i32
+                //  element_width: usize,      i32
+                //  index_1: usize,            i32
+                //  index_2: usize,            i32
+                //  update_mode: UpdateMode,   i32
+
+                // Load the return pointer and the list
+                backend.storage.load_symbols_for_call(
+                    backend.env.arena,
+                    &mut backend.code_builder,
+                    &[list],
+                    self.ret_symbol,
+                    &WasmLayout::new(&self.ret_layout),
+                    CallConv::Zig,
+                );
+
+                backend.code_builder.i32_const(elem_align as i32);
+                backend.code_builder.i32_const(elem_width as i32);
+                backend.storage.load_symbols(&mut backend.code_builder, &[index_1, index_2]);
+                backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
+
+                backend.call_host_fn_after_loading_args(bitcode::LIST_SWAP, 8, false);
+            }
 
             DictSize | DictEmpty | DictInsert | DictRemove | DictContains | DictGetUnsafe
             | DictKeys | DictValues | DictUnion | DictIntersection | DictDifference

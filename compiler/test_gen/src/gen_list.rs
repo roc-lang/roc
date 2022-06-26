@@ -550,7 +550,7 @@ fn list_drop_first() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_swap() {
     assert_evals_to!(
         "List.swap [] 0 1",
