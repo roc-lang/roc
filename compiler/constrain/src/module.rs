@@ -2,8 +2,8 @@ use crate::expr::{constrain_def_make_constraint, constrain_def_pattern, Env};
 use roc_builtins::std::StdLib;
 use roc_can::abilities::{PendingAbilitiesStore, PendingMemberType};
 use roc_can::constraint::{Constraint, Constraints};
-use roc_can::def::Declaration;
 use roc_can::expected::Expected;
+use roc_can::expr::Declarations;
 use roc_can::pattern::Pattern;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
@@ -15,7 +15,7 @@ pub fn constrain_module(
     constraints: &mut Constraints,
     symbols_from_requires: Vec<(Loc<Symbol>, Loc<Type>)>,
     abilities_store: &PendingAbilitiesStore,
-    declarations: &[Declaration],
+    declarations: &Declarations,
     home: ModuleId,
 ) -> Constraint {
     let constraint = crate::expr::constrain_decls(constraints, home, declarations);

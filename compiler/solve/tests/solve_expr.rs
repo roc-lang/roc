@@ -6901,4 +6901,26 @@ mod solve_expr {
             print_only_under_alias = true
         )
     }
+
+    #[test]
+    fn function_alias_in_signature() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Parser a : List U8 -> List [Pair a (List U8)]
+
+                any: Parser U8
+                any = \inp ->
+                   when List.first inp is
+                     Ok u -> [Pair u (List.drop inp 1)]
+                     _ -> []
+
+                main = any 
+                "#
+            ),
+            "Parser U8",
+        );
+    }
 }

@@ -1,9 +1,5 @@
 use crate::types::{Env, Types};
 use bumpalo::Bump;
-use roc_can::{
-    def::{Declaration, Def},
-    pattern::Pattern,
-};
 use roc_load::{LoadedModule, Threading};
 use roc_reporting::report::RenderTarget;
 use roc_target::{Architecture, TargetInfo};
@@ -54,50 +50,33 @@ pub fn load_types(
         );
     }
 
-    let defs_iter = decls.iter().flat_map(|decl| match decl {
-        Declaration::Declare(def) => {
-            vec![def.clone()]
-        }
-        Declaration::DeclareRec(defs, cycle_mark) => {
-            if cycle_mark.is_illegal(subs) {
-                Vec::new()
-            } else {
-                defs.clone()
-            }
-        }
-        Declaration::Builtin(..) => {
-            unreachable!("Builtin decl in userspace module?")
-        }
-        Declaration::InvalidCycle(..) => Vec::new(),
-        Declaration::Expects(..) => Vec::new(),
-    });
+    let variables = (0..decls.len()).filter_map(|index| {
+        use roc_can::expr::DeclarationTag::*;
 
-    let vars_iter = defs_iter.filter_map(
-        |Def {
-             loc_pattern,
-             pattern_vars,
-             ..
-         }| {
-            if let Pattern::Identifier(sym) = loc_pattern.value {
-                let var = pattern_vars
-                    .get(&sym)
-                    .expect("Indetifier known but it has no var?");
-
-                Some(*var)
-            } else {
-                // figure out if we need to export non-identifier defs - when
-                // would that happen?
+        match decls.declarations[index] {
+            Value | Function(_) | Recursive(_) | TailRecursive(_) => Some(decls.variables[index]),
+            Destructure(_) => {
+                // figure out if we need to export non-identifier defs - when would that
+                // happen?
                 None
             }
-        },
-    );
+            MutualRecursion { .. } => {
+                // handled by future iterations
+                None
+            }
+            Expectation => {
+                // not publicly visible
+                None
+            }
+        }
+    });
 
     let types_and_targets = Architecture::iter()
         .map(|arch| {
             let target_info = arch.into();
             let mut env = Env::new(arena, subs, &interns, target_info);
 
-            (env.vars_to_types(vars_iter.clone()), target_info)
+            (env.vars_to_types(variables.clone()), target_info)
         })
         .collect();
 
