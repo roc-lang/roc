@@ -39,6 +39,8 @@ impl CodeGenNumType {
     }
 }
 
+const UPDATE_MODE_IMMUTABLE: i32 = 0;
+
 impl From<Layout<'_>> for CodeGenNumType {
     fn from(layout: Layout) -> CodeGenNumType {
         use CodeGenNumType::*;
@@ -438,8 +440,40 @@ impl<'a> LowLevelCall<'a> {
                 backend.expr_array(self.ret_symbol, &self.ret_storage, elem_layout, elems)
             }
             ListRepeat => todo!("{:?}", self.lowlevel),
-            ListReverse => todo!("{:?}", self.lowlevel),
+            ListReverse => {
+                // List.reverse : List elem -> List elem
+                // Zig arguments              Wasm types
+                //  (return pointer)           i32
+                //  list: RocList              i64, i32
+                //  alignment: u32             i32
+                //  element_width: usize       i32
+                //  update_mode: UpdateMode    i32
+
+                // Load the arguments that have symbols
+                backend.storage.load_symbols_for_call(
+                    backend.env.arena,
+                    &mut backend.code_builder,
+                    self.arguments,
+                    self.ret_symbol,
+                    &WasmLayout::new(&self.ret_layout),
+                    CallConv::Zig,
+                );
+
+                // Load monomorphization constants
+                if let Layout::Builtin(Builtin::List(elem_layout)) = self.ret_layout {
+                    let (elem_width, elem_align) =
+                        elem_layout.stack_size_and_alignment(TARGET_INFO);
+                    backend.code_builder.i32_const(elem_align as i32);
+                    backend.code_builder.i32_const(elem_width as i32);
+                } else {
+                    internal_error!("Invalid return layout for ListConcat {:?}", self.ret_layout);
+                }
+                backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
+
+                backend.call_host_fn_after_loading_args(bitcode::LIST_REVERSE, 6, false);
+            }
             ListConcat => {
+                // List.concat : List elem, List elem -> List elem
                 // Zig arguments          Wasm types
                 //  (return pointer)       i32
                 //  list_a: RocList        i64, i32
