@@ -1499,6 +1499,20 @@ fn tail_call_elimination() {
 }
 
 #[mono_test]
+fn tail_call_with_same_layout_different_lambda_sets() {
+    indoc!(
+        r#"
+        chain = \in, buildLazy ->
+            \{} ->
+                thunk = buildLazy in
+                thunk {}
+
+        chain 1u8 \_ -> chain 1u8 \_ -> (\{} -> "")
+        "#
+    )
+}
+
+#[mono_test]
 fn tail_call_with_different_layout() {
     indoc!(
         r#"
