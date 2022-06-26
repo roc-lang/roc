@@ -1432,7 +1432,6 @@ fn list_concat_second_list_is_empty() {
         RocList::from_slice(&[12, 13]),
         RocList<i64>
     );
-
 }
 
 #[test]
@@ -1451,6 +1450,12 @@ fn list_concat_two_non_empty_lists() {
     assert_evals_to!(
         "List.concat [1, 2] [3, 4]",
         RocList::from_slice(&[1, 2, 3, 4]),
+        RocList<i64>
+    );
+
+    assert_evals_to!(
+        "List.concat [34, 43] [64, 55, 66]",
+        RocList::from_slice(&[34, 43, 64, 55, 66]),
         RocList<i64>
     );
 }
