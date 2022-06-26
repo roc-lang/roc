@@ -57,7 +57,6 @@ fn assemble_derived_golden(
     test_module: ModuleId,
     interns: &Interns,
     source_var: Variable,
-    derived_symbol: Symbol,
     derived_source: &str,
     typ: Variable,
     specialization_lsets: SpecializationLambdaSets,
@@ -80,11 +79,7 @@ fn assemble_derived_golden(
 
     let mut pretty_buf = String::new();
 
-    pretty_buf.push_str(&format!(
-        "# {} derived for {}\n",
-        derived_symbol,
-        print_var(source_var, false)
-    ));
+    pretty_buf.push_str(&format!("# derived for {}\n", print_var(source_var, false)));
 
     let pretty_type = print_var(typ, false);
     pretty_buf.push_str(&format!("# {}\n", &pretty_type));
@@ -114,7 +109,6 @@ fn check_derived_typechecks_and_golden(
     exposed_encode_types: ExposedTypesStorageSubs,
     encode_abilities_store: AbilitiesStore,
     source_var: Variable,
-    derived_symbol: Symbol,
     derived_program: &str,
     specialization_lsets: SpecializationLambdaSets,
     check_golden: impl Fn(&str),
@@ -214,7 +208,6 @@ fn check_derived_typechecks_and_golden(
         test_module,
         interns,
         source_var,
-        derived_symbol,
         derived_program,
         def_var,
         specialization_lsets,
@@ -265,9 +258,8 @@ where
         },
     );
 
-    let (derived_symbol, derived_def, specialization_lsets) =
+    let (_derived_symbol, derived_def, specialization_lsets) =
         derived_module.get_or_insert(&exposed_by_module, key);
-    let derived_symbol = *derived_symbol;
     let specialization_lsets = specialization_lsets.clone();
     let derived_def = derived_def.clone();
 
@@ -287,7 +279,6 @@ where
         exposed_encode_types,
         abilities_store,
         source_var,
-        derived_symbol,
         &derived_program,
         specialization_lsets,
         check_golden,
@@ -528,7 +519,7 @@ fn immediates() {
 fn string() {
     derive_test(v!(STR), |golden| {
         assert_snapshot!(golden, @r###"
-        # #Derived.0 derived for Str
+        # derived for Str
         # Str -[[toEncoder_string(0)]]-> Encoder fmt | fmt has EncoderFormatting
         # Str -[[toEncoder_string(0)]]-> (List U8, fmt -[[custom(2) Str]]-> List U8) | fmt has EncoderFormatting
         # Specialization lambda sets:
@@ -547,7 +538,7 @@ fn string() {
 fn empty_record() {
     derive_test(v!(EMPTY_RECORD), |golden| {
         assert_snapshot!(golden, @r###"
-        # #Derived.0 derived for {}
+        # derived for {}
         # {} -[[toEncoder_{}(0)]]-> Encoder fmt | fmt has EncoderFormatting
         # {} -[[toEncoder_{}(0)]]-> (List U8, fmt -[[custom(2) {}]]-> List U8) | fmt has EncoderFormatting
         # Specialization lambda sets:
@@ -566,7 +557,7 @@ fn empty_record() {
 fn zero_field_record() {
     derive_test(v!({}), |golden| {
         assert_snapshot!(golden, @r###"
-        # #Derived.0 derived for {}
+        # derived for {}
         # {} -[[toEncoder_{}(0)]]-> Encoder fmt | fmt has EncoderFormatting
         # {} -[[toEncoder_{}(0)]]-> (List U8, fmt -[[custom(2) {}]]-> List U8) | fmt has EncoderFormatting
         # Specialization lambda sets:
@@ -585,7 +576,7 @@ fn zero_field_record() {
 fn one_field_record() {
     derive_test(v!({ a: v!(U8), }), |golden| {
         assert_snapshot!(golden, @r###"
-        # #Derived.0 derived for { a : U8 }
+        # derived for { a : U8 }
         # { a : val } -[[toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting, val has Encoding
         # { a : val } -[[toEncoder_{a}(0)]]-> (List U8, fmt -[[custom(2) { a : val }]]-> List U8) | fmt has EncoderFormatting, val has Encoding
         # Specialization lambda sets:
@@ -606,7 +597,7 @@ fn one_field_record() {
 fn two_field_record() {
     derive_test(v!({ a: v!(U8), b: v!(STR), }), |golden| {
         assert_snapshot!(golden, @r###"
-        # #Derived.0 derived for { a : U8, b : Str }
+        # derived for { a : U8, b : Str }
         # { a : val, b : a } -[[toEncoder_{a,b}(0)]]-> Encoder fmt | a has Encoding, fmt has EncoderFormatting, val has Encoding
         # { a : val, b : a } -[[toEncoder_{a,b}(0)]]-> (List U8, fmt -[[custom(2) { a : val, b : a }]]-> List U8) | a has Encoding, fmt has EncoderFormatting, val has Encoding
         # Specialization lambda sets:
@@ -641,7 +632,7 @@ fn empty_tag_union() {
 fn tag_one_label_zero_args() {
     derive_test(v!([A]), |golden| {
         assert_snapshot!(golden, @r###"
-        # #Derived.0 derived for [A]
+        # derived for [A]
         # [A] -[[toEncoder_[A 0](0)]]-> Encoder fmt | fmt has EncoderFormatting
         # [A] -[[toEncoder_[A 0](0)]]-> (List U8, fmt -[[custom(2) [A]]]-> List U8) | fmt has EncoderFormatting
         # Specialization lambda sets:
@@ -661,7 +652,7 @@ fn tag_one_label_zero_args() {
 fn tag_one_label_two_args() {
     derive_test(v!([A v!(U8) v!(STR)]), |golden| {
         assert_snapshot!(golden, @r###"
-        # #Derived.0 derived for [A U8 Str]
+        # derived for [A U8 Str]
         # [A val a] -[[toEncoder_[A 2](0)]]-> Encoder fmt | a has Encoding, fmt has EncoderFormatting, val has Encoding
         # [A val a] -[[toEncoder_[A 2](0)]]-> (List U8, fmt -[[custom(4) [A val a]]]-> List U8) | a has Encoding, fmt has EncoderFormatting, val has Encoding
         # Specialization lambda sets:
@@ -685,7 +676,7 @@ fn tag_one_label_two_args() {
 fn tag_two_labels() {
     derive_test(v!([A v!(U8) v!(STR) v!(U16), B v!(STR)]), |golden| {
         assert_snapshot!(golden, @r###"
-        # #Derived.0 derived for [A U8 Str U16, B Str]
+        # derived for [A U8 Str U16, B Str]
         # [A val a b, B c] -[[toEncoder_[A 3,B 1](0)]]-> Encoder fmt | a has Encoding, b has Encoding, c has Encoding, fmt has EncoderFormatting, val has Encoding
         # [A val a b, B c] -[[toEncoder_[A 3,B 1](0)]]-> (List U8, fmt -[[custom(6) [A val a b, B c]]]-> List U8) | a has Encoding, b has Encoding, c has Encoding, fmt has EncoderFormatting, val has Encoding
         # Specialization lambda sets:
@@ -712,7 +703,7 @@ fn tag_two_labels() {
 fn recursive_tag_union() {
     derive_test(v!([Nil, Cons v!(U8) v!(*lst) ] as lst), |golden| {
         assert_snapshot!(golden, @r###"
-        # #Derived.0 derived for [Cons U8 $rec, Nil] as $rec
+        # derived for [Cons U8 $rec, Nil] as $rec
         # [Cons val a, Nil] -[[toEncoder_[Cons 2,Nil 0](0)]]-> Encoder fmt | a has Encoding, fmt has EncoderFormatting, val has Encoding
         # [Cons val a, Nil] -[[toEncoder_[Cons 2,Nil 0](0)]]-> (List U8, fmt -[[custom(4) [Cons val a, Nil]]]-> List U8) | a has Encoding, fmt has EncoderFormatting, val has Encoding
         # Specialization lambda sets:

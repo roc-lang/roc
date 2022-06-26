@@ -44,7 +44,11 @@ pub(crate) struct Env<'a> {
 
 impl Env<'_> {
     fn new_symbol(&mut self, name_hint: &str) -> Symbol {
-        if cfg!(any(debug_assertions, feature = "extra_debug_idents")) {
+        if cfg!(any(
+            debug_assertions,
+            test,
+            feature = "debug-derived-symbols"
+        )) {
             let mut i = 0;
             let debug_name = loop {
                 i += 1;
