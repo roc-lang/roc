@@ -123,7 +123,11 @@ impl<'a> Storage<'a> {
         id
     }
 
-    pub fn allocate_anonymous_stack_memory(&mut self, size: u32, alignment_bytes: u32) -> (LocalId, u32) {
+    pub fn allocate_anonymous_stack_memory(
+        &mut self,
+        size: u32,
+        alignment_bytes: u32,
+    ) -> (LocalId, u32) {
         let offset = self.allocate_stack_memory(size, alignment_bytes);
         let fp = self.stack_frame_pointer.unwrap();
         (fp, offset)
@@ -136,8 +140,7 @@ impl<'a> Storage<'a> {
             self.local_types.push(PTR_TYPE);
         }
 
-        let offset =
-            round_up_to_alignment!(self.stack_frame_size, alignment_bytes as i32);
+        let offset = round_up_to_alignment!(self.stack_frame_size, alignment_bytes as i32);
 
         self.stack_frame_size = offset + (size as i32);
 

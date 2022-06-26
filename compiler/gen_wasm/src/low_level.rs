@@ -395,7 +395,7 @@ impl<'a> LowLevelCall<'a> {
 
                 // Load all the arguments for Zig
                 //    (List return pointer)  i32
-                //    list: RocList,         i64
+                //    list: RocList,         i64, i32
                 //    alignment: u32,        i32
                 //    index: usize,          i32
                 //    element: Opaque,       i32
@@ -429,7 +429,7 @@ impl<'a> LowLevelCall<'a> {
                 }
 
                 // There is an in-place version of this but we don't use it for dev backends. No morphic_lib analysis.
-                backend.call_host_fn_after_loading_args(bitcode::LIST_REPLACE, 7, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_REPLACE, 8, false);
             }
             ListSingle => {
                 let elem = self.arguments[0];
