@@ -375,7 +375,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     )
     .unwrap();
 
-    let (lib, expects, _subs) =
+    let (lib, expects) =
         expect_mono_module_to_dylib(arena, target.clone(), loaded, opt_level).unwrap();
 
     use roc_gen_llvm::run_jit_function;
