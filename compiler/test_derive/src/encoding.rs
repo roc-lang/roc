@@ -22,7 +22,7 @@ use roc_can::{
 use roc_collections::VecSet;
 use roc_constrain::expr::constrain_expr;
 use roc_debug_flags::dbg_do;
-use roc_derive_key::{encoding::FlatEncodableKey, Derived};
+use roc_derive_key::{encoding::FlatEncodableKey, DeriveKey, Derived};
 use roc_load_internal::file::{add_imports, default_aliases, LoadedModule, Threading};
 use roc_module::{
     ident::{ModuleName, TagName},
@@ -122,6 +122,7 @@ fn check_derived_typechecks(
         default_aliases(),
         abilities_store,
         Default::default(),
+        Default::default(),
     );
     let subs = solved_subs.inner_mut();
 
@@ -194,7 +195,7 @@ where
         .insert(test_module, IdentIds::default());
 
     let signature_var = synth_input(&mut test_subs);
-    let key = get_key(&test_subs, signature_var).into();
+    let key = get_key(&test_subs, signature_var);
 
     let mut env = Env {
         home: test_module,
@@ -202,6 +203,7 @@ where
         subs: &mut test_subs,
         ident_ids: interns.all_ident_ids.get_mut(&test_module).unwrap(),
         exposed_encode_types: &mut exposed_encode_types,
+        derived_symbols: &Default::default(),
     };
 
     let derived = encoding::derive_to_encoder(&mut env, key);
@@ -224,8 +226,8 @@ where
 
 fn get_key(subs: &Subs, var: Variable) -> FlatEncodableKey {
     match Derived::encoding(subs, var) {
-        Derived::Immediate(_) => unreachable!(),
-        Derived::Key(key) => key.repr,
+        Ok(Derived::Key(DeriveKey::ToEncoder(repr))) => repr,
+        _ => unreachable!(),
     }
 }
 
@@ -257,7 +259,7 @@ where
 
     let key = Derived::encoding(&subs, var);
 
-    assert_eq!(key, Derived::Immediate(immediate));
+    assert_eq!(key, Ok(Derived::Immediate(immediate)));
 }
 
 // Writing out the types into content is terrible, so let's use a DSL at least for testing

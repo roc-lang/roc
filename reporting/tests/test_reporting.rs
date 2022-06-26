@@ -234,6 +234,7 @@ mod test_reporting {
             PendingDerives::default(),
             &mut solve_aliases,
             &mut abilities_store,
+            Default::default(),
             var,
         );
 

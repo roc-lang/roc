@@ -13,6 +13,7 @@ roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 roc_types = { path = "../types" }
 roc_can = { path = "../can" }
+roc_derive_key = { path = "../derive_key" }
 roc_problem = { path = "../problem" }
 roc_unify = { path = "../unify" }
 roc_debug_flags = { path = "../debug_flags" }
@@ -27,6 +28,7 @@ roc_parse = { path = "../parse" }
 roc_solve = { path = "../solve" }
 roc_target = { path = "../roc_target" }
 roc_reporting = { path = "../../reporting" }
+roc_derive_key = { path = "../derive_key", features = ["debug-derived-symbols"] }
 pretty_assertions = "1.0.0"
 indoc = "1.0.3"
 tempfile = "3.2.0"

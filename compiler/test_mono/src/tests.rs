@@ -1441,3 +1441,87 @@ fn list_sort_asc() {
         "#
     )
 }
+
+#[mono_test]
+#[ignore]
+fn encode_custom_type() {
+    indoc!(
+        r#"
+        app "test"
+            imports [Encode.{ toEncoder }, Json]
+            provides [main] to "./platform"
+
+        HelloWorld := {}
+        toEncoder = \@HelloWorld {} ->
+            Encode.custom \bytes, fmt ->
+                bytes
+                    |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
+
+        main =
+            result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.format)
+            when result is
+                Ok s -> s
+                _ -> "<bad>"
+        "#
+    )
+}
+
+#[mono_test]
+#[ignore]
+fn encode_derived_record() {
+    indoc!(
+        r#"
+        app "test"
+            imports [Encode.{ toEncoder }, Json]
+            provides [main] to "./platform"
+
+        main =
+            result = Str.fromUtf8 (Encode.toBytes {a: "fieldA", b: "fieldB"} Json.format)
+            when result is
+                Ok s -> s
+                _ -> "<bad>"
+        "#
+    )
+}
+
+#[mono_test]
+fn tail_call_elimination() {
+    indoc!(
+        r#"
+        sum = \n, accum ->
+            when n is
+                0 -> accum
+                _ -> sum (n - 1) (n + accum)
+
+        sum 1_000_000 0
+        "#
+    )
+}
+
+#[mono_test]
+fn tail_call_with_same_layout_different_lambda_sets() {
+    indoc!(
+        r#"
+        chain = \in, buildLazy ->
+            \{} ->
+                thunk = buildLazy in
+                thunk {}
+
+        chain 1u8 \_ -> chain 1u8 \_ -> (\{} -> "")
+        "#
+    )
+}
+
+#[mono_test]
+fn tail_call_with_different_layout() {
+    indoc!(
+        r#"
+        chain = \in, buildLazy ->
+            \{} ->
+                thunk = buildLazy in
+                thunk {}
+
+        chain 1u8 \_ -> chain 1u16 \_ -> (\{} -> "")
+        "#
+    )
+}
