@@ -116,11 +116,15 @@ impl From<&StoredValue> for CodeGenNumType {
     }
 }
 
-fn integer_symbol_is_signed(backend: &WasmBackend<'_>, symbol: Symbol) -> bool {
-    return match backend.storage.symbol_layouts[&symbol] {
+fn layout_is_signed_int(layout: &Layout) -> bool {
+    match layout {
         Layout::Builtin(Builtin::Int(int_width)) => int_width.is_signed(),
-        x => internal_error!("Expected integer, found {:?}", x),
-    };
+        _ => false,
+    }
+}
+
+fn symbol_is_signed_int(backend: &WasmBackend<'_>, symbol: Symbol) -> bool {
+    layout_is_signed_int(&backend.storage.symbol_layouts[&symbol])
 }
 
 pub struct LowLevelCall<'a> {
@@ -180,7 +184,9 @@ impl<'a> LowLevelCall<'a> {
     fn wrap_small_int(&self, backend: &mut WasmBackend<'a>, int_width: IntWidth) {
         let bits = 8 * int_width.stack_size() as i32;
         let shift = 32 - bits;
-        debug_assert!(shift > 0);
+        if shift <= 0 {
+            return;
+        }
 
         backend.code_builder.i32_const(shift);
         backend.code_builder.i32_shl();
@@ -256,18 +262,8 @@ impl<'a> LowLevelCall<'a> {
 
                 self.load_args_and_call_zig(backend, intrinsic);
             }
-            StrFromInt => {
-                // This does not get exposed in user space. We switched to NumToStr instead.
-                // We can probably just leave this as NotImplemented. We may want remove this LowLevel.
-                // see: https://github.com/rtfeldman/roc/pull/2108
-                todo!("{:?}", self.lowlevel);
-            }
-            StrFromFloat => {
-                // linker errors for __ashlti3, __fixunsdfti, __multi3, __udivti3, __umodti3
-                // https://gcc.gnu.org/onlinedocs/gccint/Integer-library-routines.html
-                // https://gcc.gnu.org/onlinedocs/gccint/Soft-float-library-routines.html
-                todo!("{:?}", self.lowlevel);
-            }
+            StrFromInt => self.num_to_str(backend),
+            StrFromFloat => self.num_to_str(backend),
             StrFromUtf8 => self.load_args_and_call_zig(backend, bitcode::STR_FROM_UTF8),
             StrTrimLeft => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_LEFT),
             StrTrimRight => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_RIGHT),
@@ -367,7 +363,7 @@ impl<'a> LowLevelCall<'a> {
                 _ => panic_ret_type(),
             },
 
-            NumToStr => todo!("{:?}", self.lowlevel),
+            NumToStr => self.num_to_str(backend),
             NumAddChecked => {
                 let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
                 match arg_layout {
@@ -586,14 +582,14 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
                     I32 => {
-                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                        if symbol_is_signed_int(backend, self.arguments[0]) {
                             backend.code_builder.i32_gt_s()
                         } else {
                             backend.code_builder.i32_gt_u()
                         }
                     }
                     I64 => {
-                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                        if symbol_is_signed_int(backend, self.arguments[0]) {
                             backend.code_builder.i64_gt_s()
                         } else {
                             backend.code_builder.i64_gt_u()
@@ -608,14 +604,14 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
                     I32 => {
-                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                        if symbol_is_signed_int(backend, self.arguments[0]) {
                             backend.code_builder.i32_ge_s()
                         } else {
                             backend.code_builder.i32_ge_u()
                         }
                     }
                     I64 => {
-                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                        if symbol_is_signed_int(backend, self.arguments[0]) {
                             backend.code_builder.i64_ge_s()
                         } else {
                             backend.code_builder.i64_ge_u()
@@ -630,14 +626,14 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
                     I32 => {
-                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                        if symbol_is_signed_int(backend, self.arguments[0]) {
                             backend.code_builder.i32_lt_s()
                         } else {
                             backend.code_builder.i32_lt_u()
                         }
                     }
                     I64 => {
-                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                        if symbol_is_signed_int(backend, self.arguments[0]) {
                             backend.code_builder.i64_lt_s()
                         } else {
                             backend.code_builder.i64_lt_u()
@@ -650,16 +646,17 @@ impl<'a> LowLevelCall<'a> {
             }
             NumLte => {
                 self.load_args(backend);
-                match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
+                let layout = backend.storage.symbol_layouts[&self.arguments[0]];
+                match CodeGenNumType::from(layout) {
                     I32 => {
-                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                        if layout_is_signed_int(&layout) {
                             backend.code_builder.i32_le_s()
                         } else {
                             backend.code_builder.i32_le_u()
                         }
                     }
                     I64 => {
-                        if integer_symbol_is_signed(backend, self.arguments[0]) {
+                        if layout_is_signed_int(&layout) {
                             backend.code_builder.i64_le_s()
                         } else {
                             backend.code_builder.i64_le_u()
@@ -670,19 +667,87 @@ impl<'a> LowLevelCall<'a> {
                     x => todo!("{:?} for {:?}", self.lowlevel, x),
                 }
             }
-            NumCompare => todo!("{:?}", self.lowlevel),
+            NumCompare => {
+                let layout = backend.storage.symbol_layouts[&self.arguments[0]];
+                let is_signed = layout_is_signed_int(&layout);
+
+                // This implements the expression:
+                //            (x != y) as u8 + (x < y) as u8
+                // For x==y:  (false as u8)  + (false as u8) = 0 = RocOrder::Eq
+                // For x>y:   (true as u8)   + (false as u8) = 1 = RocOrder::Gt
+                // For x<y:   (true as u8)   + (true as u8)  = 2 = RocOrder::Lt
+                // u8 is represented in the stack machine as i32, but written to memory as 1 byte
+                match CodeGenNumType::from(layout) {
+                    I32 => {
+                        self.load_args(backend);
+                        backend.code_builder.i32_ne();
+                        self.load_args(backend);
+                        if is_signed {
+                            backend.code_builder.i32_lt_s()
+                        } else {
+                            backend.code_builder.i32_lt_u()
+                        }
+                        backend.code_builder.i32_add();
+                    }
+                    I64 => {
+                        self.load_args(backend);
+                        backend.code_builder.i64_ne();
+                        self.load_args(backend);
+                        if is_signed {
+                            backend.code_builder.i64_lt_s()
+                        } else {
+                            backend.code_builder.i64_lt_u()
+                        }
+                        backend.code_builder.i32_add();
+                    }
+                    F32 => {
+                        self.load_args(backend);
+                        backend.code_builder.f32_ne();
+                        self.load_args(backend);
+                        backend.code_builder.f32_lt();
+                        backend.code_builder.i32_add();
+                    }
+                    F64 => {
+                        self.load_args(backend);
+                        backend.code_builder.f64_ne();
+                        self.load_args(backend);
+                        backend.code_builder.f64_lt();
+                        backend.code_builder.i32_add();
+                    }
+                    x => todo!("{:?} for {:?}", self.lowlevel, x),
+                }
+            }
             NumDivUnchecked => {
                 self.load_args(backend);
+                let is_signed = symbol_is_signed_int(backend, self.arguments[0]);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
-                    I32 => backend.code_builder.i32_div_s(),
-                    I64 => backend.code_builder.i64_div_s(),
+                    I32 => {
+                        if is_signed {
+                            backend.code_builder.i32_div_s()
+                        } else {
+                            backend.code_builder.i32_div_u()
+                        }
+                    }
+                    I64 => {
+                        if is_signed {
+                            backend.code_builder.i64_div_s()
+                        } else {
+                            backend.code_builder.i64_div_u()
+                        }
+                    }
                     F32 => backend.code_builder.f32_div(),
                     F64 => backend.code_builder.f64_div(),
                     Decimal => self.load_args_and_call_zig(backend, bitcode::DEC_DIV),
                     x => todo!("{:?} for {:?}", self.lowlevel, x),
                 }
             }
-            NumDivCeilUnchecked => todo!("{:?}", self.lowlevel),
+            NumDivCeilUnchecked => match self.ret_layout {
+                Layout::Builtin(Builtin::Int(width)) => {
+                    self.load_args_and_call_zig(backend, &bitcode::NUM_DIV_CEIL[width])
+                }
+                _ => panic_ret_type(),
+            },
+
             NumRemUnchecked => {
                 self.load_args(backend);
                 match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
@@ -691,43 +756,163 @@ impl<'a> LowLevelCall<'a> {
                     _ => todo!("{:?} for {:?}", self.lowlevel, self.ret_layout),
                 }
             }
-            NumIsMultipleOf => todo!("{:?}", self.lowlevel),
-            NumAbs => {
-                self.load_args(backend);
-                match CodeGenNumType::for_symbol(backend, self.arguments[0]) {
+            NumIsMultipleOf => {
+                // this builds the following construct
+                //    if (rhs != 0 && rhs != -1) {
+                //        let rem = lhs % rhs;
+                //        rem == 0
+                //    } else {
+                //        // lhs is a multiple of rhs iff
+                //        // - rhs == -1
+                //        // - both rhs and lhs are 0
+                //        // the -1 case is important for overflow reasons `isize::MIN % -1` crashes in rust
+                //        (lhs == 0) || (rhs == -1)
+                //    }
+                let lhs = self.arguments[0];
+                let rhs = self.arguments[1];
+                let layout = backend.storage.symbol_layouts[&lhs];
+                let is_signed = layout_is_signed_int(&layout);
+                let code_builder = &mut backend.code_builder;
+                match CodeGenNumType::from(layout) {
+                    I64 => {
+                        let tmp = backend.storage.create_anonymous_local(ValueType::I32);
+                        backend.storage.load_symbols(code_builder, &[rhs]);
+                        code_builder.i64_const(0);
+                        code_builder.i64_ne(); // rhs != 0
+
+                        if is_signed {
+                            backend.storage.load_symbols(code_builder, &[rhs]);
+                            code_builder.i64_const(-1);
+                            code_builder.i64_ne(); // rhs != -1
+                            code_builder.i32_and(); // rhs != 0 && rhs != -1
+                        }
+                        code_builder.if_();
+                        {
+                            backend.storage.load_symbols(code_builder, &[lhs, rhs]);
+                            if is_signed {
+                                code_builder.i64_rem_s();
+                            } else {
+                                code_builder.i64_rem_u();
+                            }
+                            code_builder.i64_eqz();
+                            code_builder.set_local(tmp);
+                        }
+                        code_builder.else_();
+                        {
+                            backend.storage.load_symbols(code_builder, &[lhs]);
+                            code_builder.i64_eqz(); // lhs == 0
+                            if is_signed {
+                                backend.storage.load_symbols(code_builder, &[rhs]);
+                                code_builder.i64_const(-1);
+                                code_builder.i64_eq(); // rhs == -1
+                                code_builder.i32_or(); // (lhs == 0) || (rhs == -1)
+                            }
+                            code_builder.set_local(tmp);
+                        }
+                        code_builder.end();
+                        code_builder.get_local(tmp);
+                    }
+
                     I32 => {
-                        let code_builder = &mut backend.code_builder;
-                        let arg_storage = backend.storage.get(&self.arguments[0]).to_owned();
-                        backend.storage.ensure_value_has_local(
-                            code_builder,
-                            self.arguments[0],
-                            arg_storage,
-                        );
-                        backend.storage.load_symbols(code_builder, self.arguments);
+                        let tmp = backend.storage.create_anonymous_local(ValueType::I32);
+                        backend.storage.load_symbols(code_builder, &[rhs]);
                         code_builder.i32_const(0);
-                        backend.storage.load_symbols(code_builder, self.arguments);
-                        code_builder.i32_sub();
-                        backend.storage.load_symbols(code_builder, self.arguments);
-                        code_builder.i32_const(0);
-                        code_builder.i32_ge_s();
-                        code_builder.select();
+                        code_builder.i32_ne(); // rhs != 0
+
+                        if is_signed {
+                            backend.storage.load_symbols(code_builder, &[rhs]);
+                            code_builder.i32_const(-1);
+                            code_builder.i32_ne(); // rhs != -1
+                            code_builder.i32_and(); // rhs != 0 && rhs != -1
+                        }
+                        code_builder.if_();
+                        {
+                            backend.storage.load_symbols(code_builder, &[lhs, rhs]);
+                            if is_signed {
+                                code_builder.i32_rem_s();
+                            } else {
+                                code_builder.i32_rem_u();
+                            }
+                            code_builder.i32_eqz();
+                            code_builder.set_local(tmp);
+                        }
+                        code_builder.else_();
+                        {
+                            backend.storage.load_symbols(code_builder, &[lhs]);
+                            code_builder.i32_eqz(); // lhs == 0
+                            if is_signed {
+                                backend.storage.load_symbols(code_builder, &[rhs]);
+                                code_builder.i32_const(-1);
+                                code_builder.i32_eq(); // rhs == -1
+                                code_builder.i32_or(); // (lhs == 0) || (rhs == -1)
+                            }
+                            code_builder.set_local(tmp);
+                        }
+                        code_builder.end();
+                        code_builder.get_local(tmp);
+                    }
+
+                    _ => panic_ret_type(),
+                }
+            }
+            NumAbs => {
+                const PANIC_MSG: &str =
+                    "integer absolute overflowed because its argument is the minimum value";
+
+                self.load_args(backend);
+
+                match CodeGenNumType::from(self.ret_layout) {
+                    I32 => {
+                        if !layout_is_signed_int(&self.ret_layout) {
+                            return;
+                        }
+                        backend.code_builder.i32_const(i32::MIN);
+                        backend.code_builder.i32_eq();
+                        backend.code_builder.if_();
+                        backend.stmt_runtime_error(PANIC_MSG);
+                        backend.code_builder.end();
+
+                        // x
+                        self.load_args(backend);
+
+                        // -x
+                        backend.code_builder.i32_const(0);
+                        self.load_args(backend);
+                        backend.code_builder.i32_sub();
+
+                        // x >= 0
+                        self.load_args(backend);
+                        backend.code_builder.i32_const(0);
+                        backend.code_builder.i32_ge_s();
+
+                        // (x >= 0) ? x : -x
+                        backend.code_builder.select();
                     }
                     I64 => {
-                        let code_builder = &mut backend.code_builder;
-                        let arg_storage = backend.storage.get(&self.arguments[0]).to_owned();
-                        backend.storage.ensure_value_has_local(
-                            code_builder,
-                            self.arguments[0],
-                            arg_storage,
-                        );
-                        backend.storage.load_symbols(code_builder, self.arguments);
-                        code_builder.i64_const(0);
-                        backend.storage.load_symbols(code_builder, self.arguments);
-                        code_builder.i64_sub();
-                        backend.storage.load_symbols(code_builder, self.arguments);
-                        code_builder.i64_const(0);
-                        code_builder.i64_ge_s();
-                        code_builder.select();
+                        if !layout_is_signed_int(&self.ret_layout) {
+                            return;
+                        }
+                        backend.code_builder.i64_const(i64::MIN);
+                        backend.code_builder.i64_eq();
+                        backend.code_builder.if_();
+                        backend.stmt_runtime_error(PANIC_MSG);
+                        backend.code_builder.end();
+
+                        // x
+                        self.load_args(backend);
+
+                        // -x
+                        backend.code_builder.i64_const(0);
+                        self.load_args(backend);
+                        backend.code_builder.i64_sub();
+
+                        // x >= 0
+                        self.load_args(backend);
+                        backend.code_builder.i64_const(0);
+                        backend.code_builder.i64_ge_s();
+
+                        // (x >= 0) ? x : -x
+                        backend.code_builder.select();
                     }
                     F32 => backend.code_builder.f32_abs(),
                     F64 => backend.code_builder.f64_abs(),
@@ -735,20 +920,31 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
             NumNeg => {
+                const PANIC_MSG: &str =
+                    "integer negation overflowed because its argument is the minimum value";
+
                 self.load_args(backend);
                 match CodeGenNumType::from(self.ret_layout) {
                     I32 => {
+                        backend.code_builder.i32_const(i32::MIN);
+                        backend.code_builder.i32_eq();
+                        backend.code_builder.if_();
+                        backend.stmt_runtime_error(PANIC_MSG);
+                        backend.code_builder.end();
+
                         backend.code_builder.i32_const(0);
-                        backend
-                            .storage
-                            .load_symbols(&mut backend.code_builder, self.arguments);
+                        self.load_args(backend);
                         backend.code_builder.i32_sub();
                     }
                     I64 => {
+                        backend.code_builder.i64_const(i64::MIN);
+                        backend.code_builder.i64_eq();
+                        backend.code_builder.if_();
+                        backend.stmt_runtime_error(PANIC_MSG);
+                        backend.code_builder.end();
+
                         backend.code_builder.i64_const(0);
-                        backend
-                            .storage
-                            .load_symbols(&mut backend.code_builder, self.arguments);
+                        self.load_args(backend);
                         backend.code_builder.i64_sub();
                     }
                     F32 => backend.code_builder.f32_neg(),
@@ -954,47 +1150,126 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
             NumShiftRightZfBy => {
-                backend.storage.load_symbols(
-                    &mut backend.code_builder,
-                    &[self.arguments[1], self.arguments[0]],
-                );
                 match CodeGenNumType::from(self.ret_layout) {
-                    I32 => backend.code_builder.i32_shr_u(),
-                    I64 => backend.code_builder.i64_shr_u(),
+                    I32 => {
+                        // This is normally an unsigned operation, but Roc defines it on all integer types.
+                        // So the argument is implicitly converted to unsigned before the shift operator.
+                        // We need to make that conversion explicit for i8 and i16, which use Wasm's i32 type.
+                        let bit_width = 8 * self.ret_layout.stack_size(TARGET_INFO);
+                        if bit_width < 32 && symbol_is_signed_int(backend, self.arguments[0]) {
+                            let mask = (1 << bit_width) - 1;
+
+                            backend
+                                .storage
+                                .load_symbols(&mut backend.code_builder, &[self.arguments[1]]);
+
+                            backend.code_builder.i32_const(mask);
+                            backend.code_builder.i32_and();
+
+                            backend
+                                .storage
+                                .load_symbols(&mut backend.code_builder, &[self.arguments[0]]);
+                        } else {
+                            // swap the arguments
+                            backend.storage.load_symbols(
+                                &mut backend.code_builder,
+                                &[self.arguments[1], self.arguments[0]],
+                            );
+                        }
+
+                        backend.code_builder.i32_shr_u();
+                    }
+                    I64 => {
+                        // swap the arguments
+                        backend.storage.load_symbols(
+                            &mut backend.code_builder,
+                            &[self.arguments[1], self.arguments[0]],
+                        );
+                        backend.code_builder.i64_shr_u();
+                    }
                     I128 => todo!("{:?} for I128", self.lowlevel),
                     _ => panic_ret_type(),
                 }
             }
             NumIntCast => {
                 self.load_args(backend);
+                let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
+                let arg_type = CodeGenNumType::from(arg_layout);
+                let arg_width = match arg_layout {
+                    Layout::Builtin(Builtin::Int(w)) => w,
+                    x => internal_error!("Num.intCast is not defined for {:?}", x),
+                };
+
                 let ret_type = CodeGenNumType::from(self.ret_layout);
-                let arg_type = CodeGenNumType::for_symbol(backend, self.arguments[0]);
+                let ret_width = match self.ret_layout {
+                    Layout::Builtin(Builtin::Int(w)) => w,
+                    x => internal_error!("Num.intCast is not defined for {:?}", x),
+                };
+
                 match (ret_type, arg_type) {
-                    (I32, I32) => {}
-                    (I32, I64) => backend.code_builder.i32_wrap_i64(),
-                    (I32, F32) => backend.code_builder.i32_trunc_s_f32(),
-                    (I32, F64) => backend.code_builder.i32_trunc_s_f64(),
-
-                    (I64, I32) => backend.code_builder.i64_extend_s_i32(),
+                    (I32, I32) => self.wrap_small_int(backend, ret_width),
+                    (I32, I64) => {
+                        backend.code_builder.i32_wrap_i64();
+                        self.wrap_small_int(backend, ret_width);
+                    }
+                    (I64, I32) => {
+                        if arg_width.is_signed() {
+                            backend.code_builder.i64_extend_s_i32()
+                        } else {
+                            backend.code_builder.i64_extend_u_i32()
+                        }
+                    }
                     (I64, I64) => {}
-                    (I64, F32) => backend.code_builder.i64_trunc_s_f32(),
-                    (I64, F64) => backend.code_builder.i64_trunc_s_f64(),
-
-                    (F32, I32) => backend.code_builder.f32_convert_s_i32(),
-                    (F32, I64) => backend.code_builder.f32_convert_s_i64(),
-                    (F32, F32) => {}
-                    (F32, F64) => backend.code_builder.f32_demote_f64(),
-
-                    (F64, I32) => backend.code_builder.f64_convert_s_i32(),
-                    (F64, I64) => backend.code_builder.f64_convert_s_i64(),
-                    (F64, F32) => backend.code_builder.f64_promote_f32(),
-                    (F64, F64) => {}
 
                     _ => todo!("{:?}: {:?} -> {:?}", self.lowlevel, arg_type, ret_type),
                 }
             }
             NumToFloatCast => {
-                todo!("implement toF32 and toF64");
+                self.load_args(backend);
+                let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
+                let arg_signed = match arg_layout {
+                    Layout::Builtin(Builtin::Int(w)) => w.is_signed(),
+                    Layout::Builtin(Builtin::Float(_)) => true, // unused
+                    Layout::Builtin(Builtin::Decimal) => true,
+                    x => internal_error!("Num.intCast is not defined for {:?}", x),
+                };
+                let ret_type = CodeGenNumType::from(self.ret_layout);
+                let arg_type = CodeGenNumType::from(arg_layout);
+
+                match (ret_type, arg_type) {
+                    (F32, F32) => {}
+                    (F32, F64) => backend.code_builder.f32_demote_f64(),
+                    (F32, I32) => {
+                        if arg_signed {
+                            backend.code_builder.f32_convert_s_i32()
+                        } else {
+                            backend.code_builder.f32_convert_u_i32()
+                        }
+                    }
+                    (F32, I64) => {
+                        if arg_signed {
+                            backend.code_builder.f32_convert_s_i64()
+                        } else {
+                            backend.code_builder.f32_convert_u_i64()
+                        }
+                    }
+                    (F64, F64) => {}
+                    (F64, I32) => {
+                        if arg_signed {
+                            backend.code_builder.f64_convert_s_i32()
+                        } else {
+                            backend.code_builder.f64_convert_u_i32()
+                        }
+                    }
+                    (F64, I64) => {
+                        if arg_signed {
+                            backend.code_builder.f64_convert_s_i64()
+                        } else {
+                            backend.code_builder.f64_convert_u_i64()
+                        }
+                    }
+                    _ => todo!("{:?}: {:?} -> {:?}", self.lowlevel, arg_type, ret_type),
+                }
             }
             NumToIntChecked => {
                 let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
@@ -1214,6 +1489,30 @@ impl<'a> LowLevelCall<'a> {
 
         // First half matches AND second half matches
         backend.code_builder.i32_and();
+    }
+
+    fn num_to_str(&self, backend: &mut WasmBackend<'a>) {
+        let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
+        match arg_layout {
+            Layout::Builtin(Builtin::Int(width)) => {
+                self.load_args_and_call_zig(backend, &bitcode::STR_FROM_INT[width])
+            }
+            Layout::Builtin(Builtin::Float(width)) => match width {
+                FloatWidth::F32 => {
+                    self.load_args(backend);
+                    backend.code_builder.f64_promote_f32();
+                    self.load_args_and_call_zig(backend, bitcode::STR_FROM_FLOAT);
+                }
+                FloatWidth::F64 => {
+                    self.load_args_and_call_zig(backend, bitcode::STR_FROM_FLOAT);
+                }
+                FloatWidth::F128 => todo!("F128 to Str"),
+            },
+            Layout::Builtin(Builtin::Decimal) => {
+                todo!("Decimal to Str")
+            }
+            x => internal_error!("NumToStr is not defined for {:?}", x),
+        }
     }
 }
 
