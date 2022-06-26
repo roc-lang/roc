@@ -1,5 +1,5 @@
 interface WriteStream
-    exposes [Stream, OpenErr, MetadataErr, ReadErr, WriteErr, fromStr, toStr]
+    exposes [Stream, OpenErr, MetadataErr, StreamReadErr, StreamWriteErr, fromStr, toStr]
     imports [File.{ Metadata }]
 
 ## A stream represents a buffered [file descriptor](https://en.wikipedia.org/wiki/File_descriptor)
@@ -19,7 +19,7 @@ WriteStream output permissions := [
         type : [Stdin, Stdout, Stderr],
     },
     NeedsClosing {
-        toBytes : input -> List U8
+        toBytes : input -> List U8,
 
         # A Windows HANDLE is an isize, and a UNIX file descriptor is i32.
         # A Nat will always be enough to fit either, on a 32-bit or 64-bit target.
@@ -62,7 +62,7 @@ WriteStream output permissions := [
         # Separately, unbuffered stdio actually uses the Buffered variant - but with an empty list.
         # This way there's no heap allocation (unlike if we used Unbuffered, which always has a Box),
         # and we also don't need an extra variant causing an extra conditional branch (or jump table).
-        buffer : (Box [])
+        buffer : Box [],
         # This is a (Box []) to emphasize that this should never be created outside the host,
         # because only the host can create an entry into the "needs closing on dealloc" hashmap!
     }
@@ -74,26 +74,57 @@ WriteStream output permissions := [
 ##
 ##     # Stream [Read [Disk]*]
 ##     stream <- WriteStream.openPath (Path.fromStr "example.txt") Json.toUtf8
-##     {} <- WriteStream.write 32 # Read the next 32 bytes from the stream
+##     {} <- WriteStream.append 32 # Read the next 32 bytes from the stream
 ##
 ## This has a `Metadata` effect because, like [File.exists], it tells whether a file exists on disk.
 openPath :
     Path,
+    encoding
+    -> Task
+        (WriteStream input [Write [Disk]*]*)
+        (OpenFileErr *)
+        [Metadata]*
+    | input has Encode
+    | encoding has Encoding
+openPath = \path, encoding ->
+    # Effect.openWrite calls open() on UNIX, CreateFile() on Windows
+    Effect.openWrite path
+        |> Effect.after \result -> openFromResult result encoding
+
+## Open the given path for appending only.
+openPathAppend :
+    Path,
     fmt
     -> Task
-        (WriteStream input [Write [Disk]]*)
+        (WriteStream input [Append [Disk]]*)
         (OpenFileErr *)
         [Metadata]*
     | input has Encode
     | fmt has EncodeFormat
-openPath = \path, fmt ->
-    # Effect.openWrite uses open() on UNIX, CreateFile() on Windows
-    result <- Effect.openWrite path |> Effect.after
+openPathAppend = \path, encoding ->
+    # Effect.openAppend calls open() on UNIX, CreateFile() on Windows
+    Effect.openAppend path
+        |> Effect.after \result -> openFromResult result encoding
 
+openSocket :
+    SocketInfo,
+    encoding
+    -> Task
+        (WriteStream input [Append [Socket]]*)
+        (OpenSocketErr *)
+        *
+    | input has Encode
+    | encoding has Encoding
+openSocket = \path, encoding ->
+    # Effect.openSocketAppend calls open() on UNIX, socket() on Windows
+    Effect.openSocketAppend path
+        |> Effect.after \result -> openFromResult result encoding
+
+openFromResult = \result, encoding ->
     when result is
         Ok { fd, buffer } ->
             NeedsClosing {
-                toBytes: \input -> Encode.encode input fmt,
+                toBytes: \input -> Encode.encode input encoding,
                 handleOrFd: fd,
                 buffer,
             }
@@ -102,31 +133,29 @@ openPath = \path, fmt ->
 
         Err err -> Task.fail err
 
-## Open the given path for appending only.
-openPathAppend :
-    Path,
-    fmt
-    -> Task
-        (WriteStream input * [Append [Disk]]*)
-        (OpenFileErr *)
-        [Metadata]*
-    | input has Encode
-    | fmt has EncodeFormat
-# TODO what's the win32 call version of `open` in UNIX?
-
-openSocket :
-    SocketInfo,
-    fmt
-    -> Task
-        (WriteStream input * [Write [Socket]]*)
-        (OpenSocketErr *)
-        *
-    | input has Encode
-    | fmt has EncodeFormat
-
 # TODO open tempfiles - named? Unnamed? Should it be just temp dirs?
 
+# TODO ReadDirStream? WriteDirStream? Should those just be a part of ReadStream and WriteStream somehow?
+# Nah probably not.
+
 ## ## Transforming Data
+
+####################### TODOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO
+# I forgot about wanting to support e.g. Stream.each or something, which
+# doesn't just transform the data at each step, but also runs an effect.
+# To do that we need to give it an error type. Important, though: do we
+# actually want to support that? Or is this just a bunch of data transformations,
+# and then at the end we let you run a task with the output? e.g. "pipe" it?
+#
+# Example motivating use case: progress bar in a CLI. I want to incrementally
+# download and decompress a file, and then in between each step, print a status
+# message. Isn't that just ReadStream.walk though? Like I walk over it, and then
+# at each step I print the status update and then append to a WriteStream I
+# kept in the walk's state. That seems...straightforward and a good example?
+#
+# Okay cool, so then WriteStream.map is just for data transformations.
+#
+# ALSO: what about named pipes vs anonymous pipes vs UNIX sockets etc?
 
 map :
     WriteStream a err fx,
@@ -145,16 +174,12 @@ map = \@WriteStream stream, fromBtoA ->
             @WriteStream (NeedsClosing { rec & toBytes })
 
 # write()
-## Append the given input to the stream.
-append :
-    WriteStream input err fx,
-    input
-    -> Task (WriteErr *) fx
+## Append the input to the stream.
+append : WriteStream input fx, input -> Task (StreamWriteErr *) fx
 
-appendUtf8 : Stream [Write a]*, Str -> Task (WriteErr *) [Write a]*
 # This is only necessary if we don't have seamless slices.
 # First argument: start index; second argument: length
-appendRange : Stream [Write a]*, List U8, Nat, Nat -> Task (WriteErr *) [Write a]*
+appendSlice : WriteStream (List U8) fx, List U8, Nat, Nat -> Task (StreamWriteErr *) fx
 
 ## Write the given bytes into an open file on disk, starting from the given byte offset.
 ## (The offset is from the beginning of the file, not the position of the stream.)
@@ -166,11 +191,22 @@ writeBytes :
     WriteStream (List U8) [Write [Disk]a]b,
     Nat,
     List U8
-    -> Task {} (WriteErr *) [Write [Disk]a]b
+    -> Task {} (StreamWriteErr *) [Write [Disk]a]b
+
+## Like [writeBytes], but writing from a particular slice of the given bytes.
+writeByteSlice :
+    WriteStream (List U8) [Write [Disk]a]b,
+    Nat,
+    List U8,
+    Nat,
+    Nat
+    -> Task {} (StreamWriteErr *) [Write [Disk]a]b
 
 # Resize to the given number of bytes - ftruncate on UNIX, ??? on Windows
 # TODO: On Linux, ftruncate pads with \0 bytes if you make it bigger. Does it on Windows?
-resize : Stream [Write a]*, Nat -> Task (WriteErr *) [Write a]*
+# TODO: This presumably works on files on disk; does it work on anything else?
+#       e.g. presumably on stdio it blows up or something. What about sockets?
+resize : Stream [Write a]*, Nat -> Task (StreamWriteErr *) [Write a]*
 
 # fsync on UNIX, or maybe syncfs? What's the difference?
 # windows Equivalent: https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers
@@ -184,11 +220,17 @@ resize : Stream [Write a]*, Nat -> Task (WriteErr *) [Write a]*
 #     computing so that the output will appear.
 # So this means when doing writes to stdout/stderr, may need to flush them explicitly.
 # ALSO means, when doing Stdout.line, should always flush right after I suppose.
-## Flushes any buffered data to disk, and then flushes the disk cache to hardware.
-flush : Stream [Write a]*, Nat -> Task (WriteErr *) [Write a]*
+# TODO can this fail? fsync errors:
+#    [EBADF]		fildes is not a valid descriptor. [not applicable]
+#    [EINTR]		Its execution is interrupted by a signal. [just retry if that happens?]
+#    [EINVAL]		fildes refers to a file type (e.g., a socket) that does not support this operation. [not applicable]
+#    [EIO]		An I/O error occurred while reading from or writing to the file system.
+## Flushes any buffered data to disk, and then flushes the OS disk cache to hardware.
+## Only supports [WriteStream]s which write to disk.
+flush : WriteStream * [Write [Disk]a]b -> Task {} [StreamWriteErr IoErr]* [Write [Disk]a]b
 
 # sync() on UNIX - TODO: is there a Windows equivalent?
-flushAll : Task (WriteErr *) [Write a]*
+flushAll : Task (StreamWriteErr *) [Write a]*
 
 ## ## Standard I/O
 

@@ -73,7 +73,7 @@ ReadStream output permissions := {
 ## This has a `Metadata` effect because, like [File.exists], it tells whether a file exists on disk.
 openPath :
     Path,
-    fmt
+    fmt # Can be Encode.bytes, which is a no-op EncodeFormat
     -> Task
         (ReadStream output [Read [Disk]*]*)
         (OpenFileErr *)
@@ -232,3 +232,8 @@ WriteErr a : [
     IncompleteWrite Source Nat
 ]a
 MetadataErr : []
+
+
+## Call [ReadStream.read] on the given [ReadStream], and pass its output to [WriteStream.append]
+## on the given [WriteStream]. Repeat until the [ReadStream] runs out of data.
+pipeInto : ReadStream data fx, WriteStream data fx -> Task (StreamReadErr (StreamWriteErr *)) fx
