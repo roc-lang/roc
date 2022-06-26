@@ -311,7 +311,7 @@ mod cli_run {
                         }
                         "rocLovesWebAssembly" => {
                             // this is a web assembly example, but we don't test with JS at the moment
-                            eprintln!("WARNING: skipping testing example {} because the test is broken right now!", example.filename);
+                            eprintln!("WARNING: skipping testing example {} because it only works in a browser!", example.filename);
                             return;
                         }
                         _ => {}
