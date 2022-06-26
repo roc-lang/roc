@@ -34,9 +34,11 @@ pub fn make_tail_recursive<'a>(
     needle: Symbol,
     stmt: Stmt<'a>,
     args: &'a [(Layout<'a>, Symbol, Symbol)],
+    ret_layout: Layout,
 ) -> Option<Stmt<'a>> {
     let allocated = arena.alloc(stmt);
-    match insert_jumps(arena, allocated, id, needle) {
+    let get_arg_layouts = || args.iter().map(|l| &l.0);
+    match insert_jumps(arena, allocated, id, needle, get_arg_layouts, ret_layout) {
         None => None,
         Some(new) => {
             // jumps were inserted, we must now add a join point
@@ -68,25 +70,58 @@ pub fn make_tail_recursive<'a>(
     }
 }
 
-fn insert_jumps<'a>(
+fn fn_eq<'a>(
+    needle: Symbol,
+    needle_args: impl ExactSizeIterator<Item = &'a Layout<'a>>,
+    needle_ret: Layout,
+    f: Symbol,
+    f_args: &[Layout],
+    f_ret: Layout,
+) -> bool {
+    needle == f
+        && needle_args.len() == f_args.len()
+        && needle_args.zip(f_args.iter()).all(|(l, r)| l == r)
+        && needle_ret == f_ret
+}
+
+fn insert_jumps<'a, I, F>(
     arena: &'a Bump,
     stmt: &'a Stmt<'a>,
     goal_id: JoinPointId,
     needle: Symbol,
-) -> Option<&'a Stmt<'a>> {
+    get_needle_args: F,
+    needle_ret: Layout,
+) -> Option<&'a Stmt<'a>>
+where
+    I: ExactSizeIterator<Item = &'a Layout<'a>>,
+    F: Fn() -> I + Copy,
+{
     use Stmt::*;
 
     match stmt {
         Let(
             symbol,
             Expr::Call(crate::ir::Call {
-                call_type: CallType::ByName { name: fsym, .. },
+                call_type:
+                    CallType::ByName {
+                        name: fsym,
+                        ret_layout,
+                        arg_layouts,
+                        ..
+                    },
                 arguments,
-                ..
             }),
             _,
             Stmt::Ret(rsym),
-        ) if needle == *fsym && symbol == rsym => {
+        ) if fn_eq(
+            needle,
+            get_needle_args(),
+            needle_ret,
+            *fsym,
+            arg_layouts,
+            **ret_layout,
+        ) && symbol == rsym =>
+        {
             // replace the call and return with a jump
 
             let jump = Stmt::Jump(goal_id, arguments);
@@ -95,7 +130,7 @@ fn insert_jumps<'a>(
         }
 
         Let(symbol, expr, layout, cont) => {
-            let opt_cont = insert_jumps(arena, cont, goal_id, needle);
+            let opt_cont = insert_jumps(arena, cont, goal_id, needle, get_needle_args, needle_ret);
 
             if opt_cont.is_some() {
                 let cont = opt_cont.unwrap_or(cont);
@@ -112,8 +147,22 @@ fn insert_jumps<'a>(
             remainder,
             body: continuation,
         } => {
-            let opt_remainder = insert_jumps(arena, remainder, goal_id, needle);
-            let opt_continuation = insert_jumps(arena, continuation, goal_id, needle);
+            let opt_remainder = insert_jumps(
+                arena,
+                remainder,
+                goal_id,
+                needle,
+                get_needle_args,
+                needle_ret,
+            );
+            let opt_continuation = insert_jumps(
+                arena,
+                continuation,
+                goal_id,
+                needle,
+                get_needle_args,
+                needle_ret,
+            );
 
             if opt_remainder.is_some() || opt_continuation.is_some() {
                 let remainder = opt_remainder.unwrap_or(remainder);
@@ -136,13 +185,21 @@ fn insert_jumps<'a>(
             default_branch,
             ret_layout,
         } => {
-            let opt_default = insert_jumps(arena, default_branch.1, goal_id, needle);
+            let opt_default = insert_jumps(
+                arena,
+                default_branch.1,
+                goal_id,
+                needle,
+                get_needle_args,
+                needle_ret,
+            );
 
             let mut did_change = false;
 
             let opt_branches = Vec::from_iter_in(
                 branches.iter().map(|(label, info, branch)| {
-                    match insert_jumps(arena, branch, goal_id, needle) {
+                    match insert_jumps(arena, branch, goal_id, needle, get_needle_args, needle_ret)
+                    {
                         None => None,
                         Some(branch) => {
                             did_change = true;
@@ -186,10 +243,12 @@ fn insert_jumps<'a>(
                 None
             }
         }
-        Refcounting(modify, cont) => match insert_jumps(arena, cont, goal_id, needle) {
-            Some(cont) => Some(arena.alloc(Refcounting(*modify, cont))),
-            None => None,
-        },
+        Refcounting(modify, cont) => {
+            match insert_jumps(arena, cont, goal_id, needle, get_needle_args, needle_ret) {
+                Some(cont) => Some(arena.alloc(Refcounting(*modify, cont))),
+                None => None,
+            }
+        }
 
         Expect {
             condition,
@@ -197,7 +256,14 @@ fn insert_jumps<'a>(
             lookups,
             layouts,
             remainder,
-        } => match insert_jumps(arena, remainder, goal_id, needle) {
+        } => match insert_jumps(
+            arena,
+            remainder,
+            goal_id,
+            needle,
+            get_needle_args,
+            needle_ret,
+        ) {
             Some(cont) => Some(arena.alloc(Expect {
                 condition: *condition,
                 region: *region,
