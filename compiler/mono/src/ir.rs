@@ -104,6 +104,20 @@ pub enum OptLevel {
     Optimize,
 }
 
+impl OptLevel {
+    pub fn from_flags(optimize: bool, size: bool, dev: bool) -> Self {
+        match (optimize, size, dev) {
+            (true, false, false) => OptLevel::Optimize,
+            (false, true, false) => OptLevel::Size,
+            (false, false, true) => OptLevel::Development,
+            (false, false, false) => OptLevel::Normal,
+            _ => roc_error_macros::user_error!(
+                "build can be only one of `--dev`, `--optimize`, or `--opt-size`"
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct EntryPoint<'a> {
     pub symbol: Symbol,
