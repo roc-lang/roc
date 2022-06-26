@@ -1,7 +1,7 @@
 use crate::abilities::SpecializationId;
 use crate::annotation::{freshen_opaque_def, IntroducedVariables};
 use crate::builtins::builtin_defs_map;
-use crate::def::{can_defs_with_return, Def};
+use crate::def::{can_defs_with_return, Annotation, Def};
 use crate::env::Env;
 use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, float_expr_from_result,
@@ -10,7 +10,9 @@ use crate::num::{
 use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
+use roc_collections::soa::Index;
 use roc_collections::{SendMap, VecMap, VecSet};
+use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -99,8 +101,10 @@ pub enum Expr {
     AbilityMember(
         /// Actual member name
         Symbol,
-        /// Specialization to use, and its variable
-        SpecializationId,
+        /// Specialization to use, and its variable.
+        /// The specialization id may be [`None`] if construction of an ability member usage can
+        /// prove the usage is polymorphic.
+        Option<SpecializationId>,
         Variable,
     ),
 
@@ -1351,7 +1355,7 @@ fn canonicalize_var_lookup(
                 if scope.abilities_store.is_ability_member_name(symbol) {
                     AbilityMember(
                         symbol,
-                        scope.abilities_store.fresh_specialization_id(),
+                        Some(scope.abilities_store.fresh_specialization_id()),
                         var_store.fresh(),
                     )
                 } else {
@@ -1374,7 +1378,7 @@ fn canonicalize_var_lookup(
                 if scope.abilities_store.is_ability_member_name(symbol) {
                     AbilityMember(
                         symbol,
-                        scope.abilities_store.fresh_specialization_id(),
+                        Some(scope.abilities_store.fresh_specialization_id()),
                         var_store.fresh(),
                     )
                 } else {
@@ -1936,6 +1940,353 @@ pub fn unescape_char(escaped: &EscapedChar) -> char {
         Tab => '\t',
         Newline => '\n',
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct Declarations {
+    pub declarations: Vec<DeclarationTag>,
+
+    /// same lengths as declarations; has a dummy value if not applicable
+    pub variables: Vec<Variable>,
+    pub symbols: Vec<Loc<Symbol>>,
+    pub annotations: Vec<Option<crate::def::Annotation>>,
+
+    // used for ability member specializatons.
+    pub specializes: VecMap<usize, Symbol>,
+
+    pub function_bodies: Vec<Loc<FunctionDef>>,
+    pub expressions: Vec<Loc<Expr>>,
+    pub destructs: Vec<DestructureDef>,
+}
+
+impl Default for Declarations {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Declarations {
+    pub fn new() -> Self {
+        Self::with_capacity(0)
+    }
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            declarations: Vec::with_capacity(capacity),
+            variables: Vec::with_capacity(capacity),
+            symbols: Vec::with_capacity(capacity),
+            annotations: Vec::with_capacity(capacity),
+            function_bodies: Vec::with_capacity(capacity),
+            expressions: Vec::with_capacity(capacity),
+            specializes: VecMap::default(), // number of specializations is probably low
+            destructs: Vec::new(),          // number of destructs is probably low
+        }
+    }
+
+    /// To store a recursive group in the vectors without nesting, we first push a "header"
+    /// here, then push the definitions that are part of that recursive group
+    pub fn push_recursive_group(&mut self, length: u16, cycle_mark: IllegalCycleMark) -> usize {
+        let index = self.declarations.len();
+
+        let tag = DeclarationTag::MutualRecursion { length, cycle_mark };
+        self.declarations.push(tag);
+
+        // dummy values
+        self.variables.push(Variable::NULL);
+        self.symbols.push(Loc::at_zero(Symbol::ATTR_ATTR));
+        self.annotations.push(None);
+        self.expressions.push(Loc::at_zero(Expr::EmptyRecord));
+
+        index
+    }
+
+    pub fn push_recursive_def(
+        &mut self,
+        symbol: Loc<Symbol>,
+        loc_closure_data: Loc<ClosureData>,
+        expr_var: Variable,
+        annotation: Option<Annotation>,
+        specializes: Option<Symbol>,
+    ) -> usize {
+        let index = self.declarations.len();
+
+        let function_def = FunctionDef {
+            closure_type: loc_closure_data.value.closure_type,
+            return_type: loc_closure_data.value.return_type,
+            captured_symbols: loc_closure_data.value.captured_symbols,
+            arguments: loc_closure_data.value.arguments,
+        };
+
+        let loc_function_def = Loc::at(loc_closure_data.region, function_def);
+
+        let function_def_index = Index::push_new(&mut self.function_bodies, loc_function_def);
+
+        let tag = match loc_closure_data.value.recursive {
+            Recursive::NotRecursive | Recursive::Recursive => {
+                DeclarationTag::Recursive(function_def_index)
+            }
+            Recursive::TailRecursive => DeclarationTag::TailRecursive(function_def_index),
+        };
+
+        self.declarations.push(tag);
+        self.variables.push(expr_var);
+        self.symbols.push(symbol);
+        self.annotations.push(annotation);
+
+        self.expressions.push(*loc_closure_data.value.loc_body);
+
+        if let Some(specializes) = specializes {
+            self.specializes.insert(index, specializes);
+        }
+
+        index
+    }
+
+    pub fn push_function_def(
+        &mut self,
+        symbol: Loc<Symbol>,
+        loc_closure_data: Loc<ClosureData>,
+        expr_var: Variable,
+        annotation: Option<Annotation>,
+        specializes: Option<Symbol>,
+    ) -> usize {
+        let index = self.declarations.len();
+
+        let function_def = FunctionDef {
+            closure_type: loc_closure_data.value.closure_type,
+            return_type: loc_closure_data.value.return_type,
+            captured_symbols: loc_closure_data.value.captured_symbols,
+            arguments: loc_closure_data.value.arguments,
+        };
+
+        let loc_function_def = Loc::at(loc_closure_data.region, function_def);
+
+        let function_def_index = Index::push_new(&mut self.function_bodies, loc_function_def);
+
+        self.declarations
+            .push(DeclarationTag::Function(function_def_index));
+        self.variables.push(expr_var);
+        self.symbols.push(symbol);
+        self.annotations.push(annotation);
+
+        self.expressions.push(*loc_closure_data.value.loc_body);
+
+        if let Some(specializes) = specializes {
+            self.specializes.insert(index, specializes);
+        }
+
+        index
+    }
+
+    pub fn push_expect(&mut self, name: Symbol, loc_expr: Loc<Expr>) -> usize {
+        let index = self.declarations.len();
+
+        self.declarations.push(DeclarationTag::Expectation);
+        self.variables.push(Variable::BOOL);
+        self.symbols.push(Loc::at_zero(name));
+        self.annotations.push(None);
+
+        self.expressions.push(loc_expr);
+
+        index
+    }
+
+    pub fn push_value_def(
+        &mut self,
+        symbol: Loc<Symbol>,
+        loc_expr: Loc<Expr>,
+        expr_var: Variable,
+        annotation: Option<Annotation>,
+        specializes: Option<Symbol>,
+    ) -> usize {
+        let index = self.declarations.len();
+
+        self.declarations.push(DeclarationTag::Value);
+        self.variables.push(expr_var);
+        self.symbols.push(symbol);
+        self.annotations.push(annotation);
+
+        self.expressions.push(loc_expr);
+
+        if let Some(specializes) = specializes {
+            self.specializes.insert(index, specializes);
+        }
+
+        index
+    }
+
+    /// Any def with a weird pattern
+    pub fn push_destructure_def(
+        &mut self,
+        loc_pattern: Loc<Pattern>,
+        loc_expr: Loc<Expr>,
+        expr_var: Variable,
+        annotation: Option<Annotation>,
+        pattern_vars: VecMap<Symbol, Variable>,
+    ) -> usize {
+        let index = self.declarations.len();
+
+        let destruct_def = DestructureDef {
+            loc_pattern,
+            pattern_vars,
+        };
+
+        let destructure_def_index = Index::push_new(&mut self.destructs, destruct_def);
+
+        self.declarations
+            .push(DeclarationTag::Destructure(destructure_def_index));
+        self.variables.push(expr_var);
+        self.symbols.push(Loc::at_zero(Symbol::ATTR_ATTR));
+        self.annotations.push(annotation);
+
+        self.expressions.push(loc_expr);
+
+        index
+    }
+
+    pub fn push_def(&mut self, def: Def) {
+        match def.loc_pattern.value {
+            Pattern::Identifier(symbol) => match def.loc_expr.value {
+                Expr::Closure(closure_data) => match closure_data.recursive {
+                    Recursive::NotRecursive => {
+                        self.push_function_def(
+                            Loc::at(def.loc_pattern.region, symbol),
+                            Loc::at(def.loc_expr.region, closure_data),
+                            def.expr_var,
+                            def.annotation,
+                            None,
+                        );
+                    }
+
+                    Recursive::Recursive | Recursive::TailRecursive => {
+                        self.push_recursive_def(
+                            Loc::at(def.loc_pattern.region, symbol),
+                            Loc::at(def.loc_expr.region, closure_data),
+                            def.expr_var,
+                            def.annotation,
+                            None,
+                        );
+                    }
+                },
+                _ => {
+                    self.push_value_def(
+                        Loc::at(def.loc_pattern.region, symbol),
+                        def.loc_expr,
+                        def.expr_var,
+                        def.annotation,
+                        None,
+                    );
+                }
+            },
+            _ => todo!(),
+        }
+    }
+
+    pub fn update_builtin_def(&mut self, index: usize, def: Def) {
+        match def.loc_pattern.value {
+            Pattern::Identifier(s) => assert_eq!(s, self.symbols[index].value),
+            p => internal_error!("a builtin definition has a non-identifier pattern: {:?}", p),
+        }
+
+        match def.loc_expr.value {
+            Expr::Closure(closure_data) => {
+                let function_def = FunctionDef {
+                    closure_type: closure_data.closure_type,
+                    return_type: closure_data.return_type,
+                    captured_symbols: closure_data.captured_symbols,
+                    arguments: closure_data.arguments,
+                };
+
+                let loc_function_def = Loc::at(def.loc_expr.region, function_def);
+
+                let function_def_index =
+                    Index::push_new(&mut self.function_bodies, loc_function_def);
+
+                self.declarations[index] = DeclarationTag::Function(function_def_index);
+                self.expressions[index] = *closure_data.loc_body;
+                self.variables[index] = def.expr_var;
+            }
+            _ => {
+                self.declarations[index] = DeclarationTag::Value;
+                self.expressions[index] = def.loc_expr;
+                self.variables[index] = def.expr_var;
+            }
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.declarations.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn iter_top_down(&self) -> impl Iterator<Item = (usize, DeclarationTag)> + '_ {
+        self.declarations.iter().scan(0, |state, e| {
+            let length_so_far = *state;
+
+            *state += e.len();
+
+            Some((length_so_far, *e))
+        })
+    }
+
+    pub fn iter_bottom_up(&self) -> impl Iterator<Item = (usize, DeclarationTag)> + '_ {
+        self.declarations
+            .iter()
+            .rev()
+            .scan(self.declarations.len() - 1, |state, e| {
+                let length_so_far = *state;
+
+                *state = length_so_far.saturating_sub(e.len());
+
+                Some((length_so_far, *e))
+            })
+    }
+}
+
+roc_error_macros::assert_sizeof_default!(DeclarationTag, 8);
+
+#[derive(Clone, Copy, Debug)]
+pub enum DeclarationTag {
+    Value,
+    Expectation,
+    Function(Index<Loc<FunctionDef>>),
+    Recursive(Index<Loc<FunctionDef>>),
+    TailRecursive(Index<Loc<FunctionDef>>),
+    Destructure(Index<DestructureDef>),
+    MutualRecursion {
+        length: u16,
+        cycle_mark: IllegalCycleMark,
+    },
+}
+
+impl DeclarationTag {
+    fn len(self) -> usize {
+        match self {
+            DeclarationTag::Function(_) => 1,
+            DeclarationTag::Recursive(_) => 1,
+            DeclarationTag::TailRecursive(_) => 1,
+            DeclarationTag::Value => 1,
+            DeclarationTag::Expectation => 1,
+            DeclarationTag::Destructure(_) => 1,
+            DeclarationTag::MutualRecursion { length, .. } => length as usize + 1,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct FunctionDef {
+    pub closure_type: Variable,
+    pub return_type: Variable,
+    pub captured_symbols: Vec<(Symbol, Variable)>,
+    pub arguments: Vec<(Variable, AnnotatedMark, Loc<Pattern>)>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DestructureDef {
+    pub loc_pattern: Loc<Pattern>,
+    pub pattern_vars: VecMap<Symbol, Variable>,
 }
 
 fn get_lookup_symbols(expr: &Expr, var_store: &mut VarStore) -> Vec<(Symbol, Variable)> {

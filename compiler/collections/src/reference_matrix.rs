@@ -287,4 +287,23 @@ impl Sccs {
             .chunks_exact(length)
             .take(self.components)
     }
+
+    /// Reorder the input slice based on the SCCs. This produces a topological sort
+    pub fn reorder<T>(&self, slice: &mut [T]) {
+        debug_assert_eq!(self.matrix.length, slice.len());
+
+        let mut indices: Vec<_> = self.groups().flat_map(|s| s.iter_ones()).collect();
+
+        for i in 0..slice.len() {
+            let mut index = indices[i];
+            while index < i {
+                index = indices[index];
+            }
+
+            if i != index {
+                indices[i] = index;
+                slice.swap(i, index);
+            }
+        }
+    }
 }

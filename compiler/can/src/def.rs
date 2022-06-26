@@ -9,6 +9,7 @@ use crate::annotation::OwnedNamedOrAble;
 use crate::env::Env;
 use crate::expr::AnnotatedMark;
 use crate::expr::ClosureData;
+use crate::expr::Declarations;
 use crate::expr::Expr::{self, *};
 use crate::expr::{canonicalize_expr, Output, Recursive};
 use crate::pattern::{canonicalize_def_header_pattern, BindingsFromPattern, Pattern};
@@ -18,6 +19,7 @@ use crate::scope::Scope;
 use roc_collections::ReferenceMatrix;
 use roc_collections::VecMap;
 use roc_collections::{ImSet, MutMap, SendMap};
+use roc_error_macros::internal_error;
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::IdentId;
@@ -1048,6 +1050,199 @@ impl DefOrdering {
 
         None
     }
+}
+
+#[inline(always)]
+pub(crate) fn sort_can_defs_new(
+    env: &mut Env<'_>,
+    scope: &mut Scope,
+    var_store: &mut VarStore,
+    defs: CanDefs,
+    mut output: Output,
+) -> (Declarations, Output) {
+    let CanDefs {
+        defs,
+        expects,
+        def_ordering,
+        aliases,
+    } = defs;
+
+    // TODO: inefficient, but I want to make this what CanDefs contains in the future
+    let mut defs: Vec<_> = defs.into_iter().map(|x| x.unwrap()).collect();
+
+    let mut declarations = Declarations::with_capacity(defs.len());
+
+    for (symbol, alias) in aliases.into_iter() {
+        output.aliases.insert(symbol, alias);
+    }
+
+    // We first perform SCC based on any reference, both variable usage and calls
+    // considering both value definitions and function bodies. This will spot any
+    // recursive relations between any 2 definitions.
+    let sccs = def_ordering.references.strongly_connected_components_all();
+
+    sccs.reorder(&mut defs);
+
+    for group in sccs.groups().rev() {
+        match group.count_ones() {
+            1 => {
+                // a group with a single Def, nice and simple
+                let def = defs.pop().unwrap();
+                let index = group.first_one().unwrap();
+
+                if def_ordering.direct_references.get_row_col(index, index) {
+                    // a definition like `x = x + 1`, which is invalid in roc
+                    let symbol = def_ordering.get_symbol(index).unwrap();
+
+                    let entries = vec![make_cycle_entry(symbol, &def)];
+
+                    let problem = Problem::RuntimeError(RuntimeError::CircularDef(entries.clone()));
+                    env.problem(problem);
+
+                    // Declaration::InvalidCycle(entries)
+                    todo!("InvalidCycle: {:?}", entries)
+                } else if def_ordering.references.get_row_col(index, index) {
+                    // this function calls itself, and must be typechecked as a recursive def
+                    match def.loc_pattern.value {
+                        Pattern::Identifier(symbol) => match def.loc_expr.value {
+                            Closure(closure_data) => {
+                                declarations.push_recursive_def(
+                                    Loc::at(def.loc_pattern.region, symbol),
+                                    Loc::at(def.loc_expr.region, closure_data),
+                                    def.expr_var,
+                                    def.annotation,
+                                    None,
+                                );
+                            }
+                            _ => todo!(),
+                        },
+                        Pattern::AbilityMemberSpecialization {
+                            ident: symbol,
+                            specializes,
+                        } => match def.loc_expr.value {
+                            Closure(closure_data) => {
+                                declarations.push_recursive_def(
+                                    Loc::at(def.loc_pattern.region, symbol),
+                                    Loc::at(def.loc_expr.region, closure_data),
+                                    def.expr_var,
+                                    def.annotation,
+                                    Some(specializes),
+                                );
+                            }
+                            _ => todo!(),
+                        },
+                        _ => todo!("{:?}", &def.loc_pattern.value),
+                    }
+                } else {
+                    match def.loc_pattern.value {
+                        Pattern::Identifier(symbol) => match def.loc_expr.value {
+                            Closure(closure_data) => {
+                                declarations.push_function_def(
+                                    Loc::at(def.loc_pattern.region, symbol),
+                                    Loc::at(def.loc_expr.region, closure_data),
+                                    def.expr_var,
+                                    def.annotation,
+                                    None,
+                                );
+                            }
+                            _ => {
+                                declarations.push_value_def(
+                                    Loc::at(def.loc_pattern.region, symbol),
+                                    def.loc_expr,
+                                    def.expr_var,
+                                    def.annotation,
+                                    None,
+                                );
+                            }
+                        },
+                        Pattern::AbilityMemberSpecialization {
+                            ident: symbol,
+                            specializes,
+                        } => match def.loc_expr.value {
+                            Closure(closure_data) => {
+                                declarations.push_function_def(
+                                    Loc::at(def.loc_pattern.region, symbol),
+                                    Loc::at(def.loc_expr.region, closure_data),
+                                    def.expr_var,
+                                    def.annotation,
+                                    Some(specializes),
+                                );
+                            }
+                            _ => {
+                                declarations.push_value_def(
+                                    Loc::at(def.loc_pattern.region, symbol),
+                                    def.loc_expr,
+                                    def.expr_var,
+                                    def.annotation,
+                                    Some(specializes),
+                                );
+                            }
+                        },
+                        _ => {
+                            declarations.push_destructure_def(
+                                def.loc_pattern,
+                                def.loc_expr,
+                                def.expr_var,
+                                def.annotation,
+                                def.pattern_vars.into_iter().collect(),
+                            );
+                        }
+                    }
+                }
+            }
+            group_length => {
+                let group_defs = defs.split_off(defs.len() - group_length);
+
+                // push the "header" for this group of recursive definitions
+                let cycle_mark = IllegalCycleMark::new(var_store);
+                declarations.push_recursive_group(group_length as u16, cycle_mark);
+
+                // then push the definitions of this group
+                for def in group_defs {
+                    let (symbol, specializes) = match def.loc_pattern.value {
+                        Pattern::Identifier(symbol) => (symbol, None),
+
+                        Pattern::AbilityMemberSpecialization { ident, specializes } => {
+                            (ident, Some(specializes))
+                        }
+
+                        _ => {
+                            internal_error!("destructures cannot participate in a recursive group; it's always a type error")
+                        }
+                    };
+
+                    match def.loc_expr.value {
+                        Closure(closure_data) => {
+                            declarations.push_recursive_def(
+                                Loc::at(def.loc_pattern.region, symbol),
+                                Loc::at(def.loc_expr.region, closure_data),
+                                def.expr_var,
+                                def.annotation,
+                                specializes,
+                            );
+                        }
+                        _ => {
+                            declarations.push_value_def(
+                                Loc::at(def.loc_pattern.region, symbol),
+                                def.loc_expr,
+                                def.expr_var,
+                                def.annotation,
+                                specializes,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for (condition, region) in expects.conditions.into_iter().zip(expects.regions) {
+        // an `expect` does not have a user-defined name, but we'll need a name to call the expectation
+        let name = scope.gen_unique_symbol();
+        declarations.push_expect(name, Loc::at(region, condition));
+    }
+
+    (declarations, output)
 }
 
 #[inline(always)]

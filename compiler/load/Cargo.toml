@@ -9,7 +9,7 @@ edition = "2021"
 roc_load_internal = { path = "../load_internal" }
 bumpalo = { version = "3.8.0", features = ["collections"] }
 roc_target = { path = "../roc_target" }
-roc_constrain= { path = "../constrain" }
+roc_can = { path = "../can" }
 roc_types = { path = "../types" }
 roc_module = { path = "../module" }
 roc_collections = { path = "../collections" }

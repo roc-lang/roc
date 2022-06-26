@@ -3772,14 +3772,13 @@ pub fn with_hole<'a>(
 
             specialize_naked_symbol(env, variable, procs, layout_cache, assigned, hole, symbol)
         }
-        AbilityMember(_member, specialization_id, _) => {
-            let specialization_symbol =
-                env.abilities
-                    .with_module_abilities_store(env.home, |store| {
-                        store
-                            .get_resolved(specialization_id)
-                            .expect("Specialization was never made!")
-                    });
+        AbilityMember(member, specialization_id, specialization_var) => {
+            let specialization_symbol = late_resolve_ability_specialization(
+                env,
+                member,
+                specialization_id,
+                specialization_var,
+            );
 
             specialize_naked_symbol(
                 env,
@@ -5161,12 +5160,13 @@ pub fn with_hole<'a>(
 fn late_resolve_ability_specialization<'a>(
     env: &mut Env<'a, '_>,
     member: Symbol,
-    specialization_id: SpecializationId,
+    specialization_id: Option<SpecializationId>,
     specialization_var: Variable,
 ) -> Symbol {
-    let opt_resolved = env
-        .abilities
-        .with_module_abilities_store(env.home, |store| store.get_resolved(specialization_id));
+    let opt_resolved = specialization_id.and_then(|id| {
+        env.abilities
+            .with_module_abilities_store(env.home, |store| store.get_resolved(id))
+    });
 
     if let Some(spec_symbol) = opt_resolved {
         // Fast path: specialization is monomorphic, was found during solving.

@@ -1,14 +1,14 @@
-use crate::abilities::PendingAbilitiesStore;
+use crate::abilities::{PendingAbilitiesStore, ResolvedSpecializations};
 use crate::annotation::canonicalize_annotation;
-use crate::def::{canonicalize_defs, sort_can_defs, Declaration, Def};
+use crate::def::{canonicalize_defs, Def};
 use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
-use crate::expr::{ClosureData, Expr, Output, PendingDerives};
-use crate::operator::desugar_defs;
-use crate::pattern::Pattern;
+use crate::expr::{ClosureData, Declarations, Expr, Output, PendingDerives};
+use crate::pattern::{BindingsFromPattern, Pattern};
 use crate::scope::Scope;
 use bumpalo::Bump;
 use roc_collections::{MutMap, SendMap, VecSet};
+use roc_error_macros::internal_error;
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{IdentIds, IdentIdsByModule, ModuleId, ModuleIds, Symbol};
@@ -17,8 +17,99 @@ use roc_parse::header::HeaderFor;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{VarStore, Variable};
+use roc_types::subs::{ExposedTypesStorageSubs, VarStore, Variable};
 use roc_types::types::{Alias, AliasKind, AliasVar, Type};
+
+/// The types of all exposed values/functions of a collection of modules
+#[derive(Clone, Debug, Default)]
+pub struct ExposedByModule {
+    exposed: MutMap<ModuleId, ExposedModuleTypes>,
+}
+
+impl ExposedByModule {
+    pub fn insert(&mut self, module_id: ModuleId, exposed: ExposedModuleTypes) {
+        self.exposed.insert(module_id, exposed);
+    }
+
+    pub fn get(&self, module_id: &ModuleId) -> Option<&ExposedModuleTypes> {
+        self.exposed.get(module_id)
+    }
+
+    /// Convenient when you need mutable access to the StorageSubs in the ExposedModuleTypes
+    pub fn get_mut(&mut self, module_id: &ModuleId) -> Option<&mut ExposedModuleTypes> {
+        self.exposed.get_mut(module_id)
+    }
+
+    /// Create a clone of `self` that has just a subset of the modules
+    ///
+    /// Useful when we know what modules a particular module imports, and want just
+    /// the exposed types for those exposed modules.
+    pub fn retain_modules<'a>(&self, it: impl Iterator<Item = &'a ModuleId>) -> Self {
+        let mut output = Self::default();
+
+        for module_id in it {
+            match self.exposed.get(module_id) {
+                None => {
+                    internal_error!("Module {:?} did not register its exposed values", module_id)
+                }
+                Some(exposed_types) => {
+                    output.exposed.insert(*module_id, exposed_types.clone());
+                }
+            }
+        }
+
+        output
+    }
+
+    pub fn iter_all(&self) -> impl Iterator<Item = (&ModuleId, &ExposedModuleTypes)> {
+        self.exposed.iter()
+    }
+
+    /// # Safety
+    ///
+    /// May only be called when the exposed types of a modules are no longer needed, or may be
+    /// transitioned into another context.
+    pub unsafe fn remove(&mut self, module_id: &ModuleId) -> Option<ExposedModuleTypes> {
+        self.exposed.remove(module_id)
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ExposedForModule {
+    pub exposed_by_module: ExposedByModule,
+    pub imported_values: Vec<Symbol>,
+}
+
+impl ExposedForModule {
+    pub fn new<'a>(
+        it: impl Iterator<Item = &'a Symbol>,
+        exposed_by_module: ExposedByModule,
+    ) -> Self {
+        let mut imported_values = Vec::new();
+
+        for symbol in it {
+            let module = exposed_by_module.exposed.get(&symbol.module_id());
+            if let Some(ExposedModuleTypes { .. }) = module {
+                imported_values.push(*symbol);
+            } else {
+                continue;
+            }
+        }
+
+        Self {
+            imported_values,
+            exposed_by_module,
+        }
+    }
+}
+
+/// The types of all exposed values/functions of a module. This includes ability member
+/// specializations.
+#[derive(Clone, Debug)]
+pub struct ExposedModuleTypes {
+    pub exposed_types_storage_subs: ExposedTypesStorageSubs,
+    pub resolved_specializations: ResolvedSpecializations,
+}
 
 #[derive(Debug)]
 pub struct Module {
@@ -44,7 +135,7 @@ pub struct RigidVariables {
 pub struct ModuleOutput {
     pub aliases: MutMap<Symbol, Alias>,
     pub rigid_variables: RigidVariables,
-    pub declarations: Vec<Declaration>,
+    pub declarations: Declarations,
     pub exposed_imports: MutMap<Symbol, Variable>,
     pub lookups: Vec<(Symbol, Variable, Region)>,
     pub problems: Vec<Problem>,
@@ -198,7 +289,7 @@ pub fn canonicalize_module_defs<'a>(
     // visited a BinOp node we'd recursively try to apply this to each of its nested
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
-    desugar_defs(arena, loc_defs);
+    crate::operator::desugar_defs(arena, loc_defs);
 
     let mut lookups = Vec::with_capacity(num_deps);
     let mut rigid_variables = RigidVariables::default();
@@ -347,7 +438,8 @@ pub fn canonicalize_module_defs<'a>(
         ..Default::default()
     };
 
-    let (mut declarations, mut output) = sort_can_defs(&mut env, var_store, defs, new_output);
+    let (mut declarations, mut output) =
+        crate::def::sort_can_defs_new(&mut env, &mut scope, var_store, defs, new_output);
 
     debug_assert!(
         output.pending_derives.is_empty(),
@@ -403,40 +495,38 @@ pub fn canonicalize_module_defs<'a>(
         );
     }
 
-    use crate::def::Declaration::*;
-    for decl in declarations.iter_mut() {
-        match decl {
-            Declare(def) => {
-                for (symbol, _) in def.pattern_vars.iter() {
-                    if exposed_but_not_defined.contains(symbol) {
-                        // Remove this from exposed_symbols,
-                        // so that at the end of the process,
-                        // we can see if there were any
-                        // exposed symbols which did not have
-                        // corresponding defs.
-                        exposed_but_not_defined.remove(symbol);
-                    }
-                }
+    for index in 0..declarations.len() {
+        use crate::expr::DeclarationTag::*;
+
+        let tag = declarations.declarations[index];
+
+        match tag {
+            Value => {
+                let symbol = &declarations.symbols[index].value;
+
+                // Remove this from exposed_symbols,
+                // so that at the end of the process,
+                // we can see if there were any
+                // exposed symbols which did not have
+                // corresponding defs.
+                exposed_but_not_defined.remove(symbol);
 
                 // Temporary hack: we don't know exactly what symbols are hosted symbols,
                 // and which are meant to be normal definitions without a body. So for now
                 // we just assume they are hosted functions (meant to be provided by the platform)
-                if has_no_implementation(&def.loc_expr.value) {
+                if has_no_implementation(&declarations.expressions[index].value) {
                     match generated_info {
                         GeneratedInfo::Builtin => {
-                            let symbol = def.pattern_vars.iter().next().unwrap().0;
                             match crate::builtins::builtin_defs_map(*symbol, var_store) {
                                 None => {
                                     panic!("A builtin module contains a signature without implementation for {:?}", symbol)
                                 }
-                                Some(mut replacement_def) => {
-                                    replacement_def.annotation = def.annotation.take();
-                                    *def = replacement_def;
+                                Some(replacement_def) => {
+                                    declarations.update_builtin_def(index, replacement_def);
                                 }
                             }
                         }
                         GeneratedInfo::Hosted { effect_symbol, .. } => {
-                            let symbol = def.pattern_vars.iter().next().unwrap().0;
                             let ident_id = symbol.ident_id();
                             let ident = scope
                                 .locals
@@ -444,7 +534,9 @@ pub fn canonicalize_module_defs<'a>(
                                 .get_name(ident_id)
                                 .unwrap()
                                 .to_string();
-                            let def_annotation = def.annotation.clone().unwrap();
+
+                            let def_annotation = declarations.annotations[index].clone().unwrap();
+
                             let annotation = crate::annotation::Annotation {
                                 typ: def_annotation.signature,
                                 introduced_variables: def_annotation.introduced_variables,
@@ -461,39 +553,81 @@ pub fn canonicalize_module_defs<'a>(
                                 annotation,
                             );
 
-                            *def = hosted_def;
+                            declarations.update_builtin_def(index, hosted_def);
                         }
                         _ => (),
                     }
                 }
             }
-            DeclareRec(defs, _) => {
-                for def in defs {
-                    for (symbol, _) in def.pattern_vars.iter() {
-                        if exposed_but_not_defined.contains(symbol) {
-                            // Remove this from exposed_symbols,
-                            // so that at the end of the process,
-                            // we can see if there were any
-                            // exposed symbols which did not have
-                            // corresponding defs.
-                            exposed_but_not_defined.remove(symbol);
+            Function(_) | Recursive(_) | TailRecursive(_) => {
+                let symbol = &declarations.symbols[index].value;
+
+                // Remove this from exposed_symbols,
+                // so that at the end of the process,
+                // we can see if there were any
+                // exposed symbols which did not have
+                // corresponding defs.
+                exposed_but_not_defined.remove(symbol);
+
+                // Temporary hack: we don't know exactly what symbols are hosted symbols,
+                // and which are meant to be normal definitions without a body. So for now
+                // we just assume they are hosted functions (meant to be provided by the platform)
+                if has_no_implementation(&declarations.expressions[index].value) {
+                    match generated_info {
+                        GeneratedInfo::Builtin => {
+                            match crate::builtins::builtin_defs_map(*symbol, var_store) {
+                                None => {
+                                    panic!("A builtin module contains a signature without implementation for {:?}", symbol)
+                                }
+                                Some(replacement_def) => {
+                                    declarations.update_builtin_def(index, replacement_def);
+                                }
+                            }
                         }
+                        GeneratedInfo::Hosted { effect_symbol, .. } => {
+                            let ident_id = symbol.ident_id();
+                            let ident = scope
+                                .locals
+                                .ident_ids
+                                .get_name(ident_id)
+                                .unwrap()
+                                .to_string();
+
+                            let def_annotation = declarations.annotations[index].clone().unwrap();
+
+                            let annotation = crate::annotation::Annotation {
+                                typ: def_annotation.signature,
+                                introduced_variables: def_annotation.introduced_variables,
+                                references: Default::default(),
+                                aliases: Default::default(),
+                            };
+
+                            let hosted_def = crate::effect_module::build_host_exposed_def(
+                                &mut scope,
+                                *symbol,
+                                &ident,
+                                effect_symbol,
+                                var_store,
+                                annotation,
+                            );
+
+                            declarations.update_builtin_def(index, hosted_def);
+                        }
+                        _ => (),
                     }
                 }
             }
+            Destructure(d_index) => {
+                let destruct_def = &declarations.destructs[d_index.index()];
 
-            InvalidCycle(entries) => {
-                env.problems.push(Problem::BadRecursion(entries.to_vec()));
+                for (symbol, _) in BindingsFromPattern::new(&destruct_def.loc_pattern) {
+                    exposed_but_not_defined.remove(&symbol);
+                }
             }
-            Builtin(def) => {
-                // Builtins cannot be exposed in module declarations.
-                // This should never happen!
-                debug_assert!(def
-                    .pattern_vars
-                    .iter()
-                    .all(|(symbol, _)| !exposed_but_not_defined.contains(symbol)));
+            MutualRecursion { .. } => {
+                // the declarations of this group will be treaded individually by later iterations
             }
-            Expects(_) => { /* ignore */ }
+            Expectation => { /* ignore */ }
         }
     }
 
@@ -555,7 +689,7 @@ pub fn canonicalize_module_defs<'a>(
             annotation: None,
         };
 
-        declarations.push(Declaration::Declare(def));
+        declarations.push_def(def);
     }
 
     // Incorporate any remaining output.lookups entries into references.
@@ -569,13 +703,53 @@ pub fn canonicalize_module_defs<'a>(
     referenced_values.extend(env.qualified_value_lookups.iter().copied());
     referenced_types.extend(env.qualified_type_lookups.iter().copied());
 
-    for declaration in declarations.iter_mut() {
-        match declaration {
-            Declare(def) => fix_values_captured_in_closure_def(def, &mut VecSet::default()),
-            DeclareRec(defs, _) => {
-                fix_values_captured_in_closure_defs(defs, &mut VecSet::default())
+    for index in 0..declarations.len() {
+        use crate::expr::DeclarationTag::*;
+
+        match declarations.declarations[index] {
+            Value => {
+                // def pattern has no default expressions, so skip
+                let loc_expr = &mut declarations.expressions[index];
+
+                fix_values_captured_in_closure_expr(&mut loc_expr.value, &mut VecSet::default());
             }
-            InvalidCycle(_) | Builtin(_) | Expects(_) => {}
+            Function(f_index) | Recursive(f_index) | TailRecursive(f_index) => {
+                let name = declarations.symbols[index].value;
+                let function_def = &mut declarations.function_bodies[f_index.index()].value;
+                let loc_expr = &mut declarations.expressions[index];
+
+                function_def.captured_symbols.retain(|(s, _)| *s != name);
+
+                let mut no_capture_symbols = VecSet::default();
+                if function_def.captured_symbols.is_empty() {
+                    no_capture_symbols.insert(name);
+                }
+
+                // patterns can contain default expressions, so must go over them too!
+                for (_, _, loc_pat) in function_def.arguments.iter_mut() {
+                    fix_values_captured_in_closure_pattern(
+                        &mut loc_pat.value,
+                        &mut no_capture_symbols,
+                    );
+                }
+
+                fix_values_captured_in_closure_expr(&mut loc_expr.value, &mut no_capture_symbols);
+            }
+            Destructure(d_index) => {
+                let destruct_def = &mut declarations.destructs[d_index.index()];
+                let loc_pat = &mut destruct_def.loc_pattern;
+                let loc_expr = &mut declarations.expressions[index];
+
+                fix_values_captured_in_closure_pattern(&mut loc_pat.value, &mut VecSet::default());
+                fix_values_captured_in_closure_expr(&mut loc_expr.value, &mut VecSet::default());
+            }
+            MutualRecursion { .. } => {
+                // the declarations of this group will be treaded individually by later iterations
+            }
+            Expectation => {
+                let loc_expr = &mut declarations.expressions[index];
+                fix_values_captured_in_closure_expr(&mut loc_expr.value, &mut VecSet::default());
+            }
         }
     }
 

@@ -1,6 +1,6 @@
 use crate::annotation::IntroducedVariables;
-use crate::def::{Declaration, Def};
-use crate::expr::{AnnotatedMark, ClosureData, Expr, Recursive};
+use crate::def::Def;
+use crate::expr::{AnnotatedMark, ClosureData, Declarations, Expr, Recursive};
 use crate::pattern::Pattern;
 use crate::scope::Scope;
 use roc_collections::{SendMap, VecSet};
@@ -8,7 +8,7 @@ use roc_module::called_via::CalledVia;
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
-use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, RedundantMark, VarStore, Variable};
+use roc_types::subs::{ExhaustiveMark, RedundantMark, VarStore, Variable};
 use roc_types::types::{AliasKind, LambdaSet, OptAbleType, OptAbleVar, Type, TypeExtension};
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -38,7 +38,7 @@ pub(crate) fn build_effect_builtins(
     effect_symbol: Symbol,
     var_store: &mut VarStore,
     exposed_symbols: &mut VecSet<Symbol>,
-    declarations: &mut Vec<Declaration>,
+    declarations: &mut Declarations,
     generated_functions: HostedGeneratedFunctions,
 ) {
     macro_rules! helper {
@@ -54,37 +54,31 @@ pub(crate) fn build_effect_builtins(
 
     if generated_functions.after {
         let def = helper!(build_effect_after);
-        declarations.push(Declaration::Declare(def));
+        declarations.push_def(def);
     }
 
     // Effect.map : Effect a, (a -> b) -> Effect b
     if generated_functions.map {
         let def = helper!(build_effect_map);
-        declarations.push(Declaration::Declare(def));
+        declarations.push_def(def);
     }
 
     // Effect.always : a -> Effect a
     if generated_functions.always {
         let def = helper!(build_effect_always);
-        declarations.push(Declaration::Declare(def));
+        declarations.push_def(def);
     }
 
     // Effect.forever : Effect a -> Effect b
     if generated_functions.forever {
         let def = helper!(build_effect_forever);
-        declarations.push(Declaration::DeclareRec(
-            vec![def],
-            IllegalCycleMark::empty(),
-        ));
+        declarations.push_def(def);
     }
 
     // Effect.loop : a, (a -> Effect [Step a, Done b]) -> Effect b
     if generated_functions.loop_ {
         let def = helper!(build_effect_loop);
-        declarations.push(Declaration::DeclareRec(
-            vec![def],
-            IllegalCycleMark::empty(),
-        ));
+        declarations.push_def(def);
     }
 
     // Useful when working on functions in this module. By default symbols that we named do now

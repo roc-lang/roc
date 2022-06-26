@@ -1268,9 +1268,9 @@ mod test_reporting {
                 r#"
                 ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                I'm inferring a weird self-referential type for `g`:
+                I'm inferring a weird self-referential type for `f`:
 
-                2│  g = \x -> f [x]
+                1│  f = \x -> g x
                     ^
 
                 Here is my best effort at writing down the type. You will see ∞ for
@@ -1281,9 +1281,9 @@ mod test_reporting {
 
                 ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                I'm inferring a weird self-referential type for `f`:
+                I'm inferring a weird self-referential type for `g`:
 
-                1│  f = \x -> g x
+                2│  g = \x -> f [x]
                     ^
 
                 Here is my best effort at writing down the type. You will see ∞ for
@@ -1457,9 +1457,9 @@ mod test_reporting {
             r#"
             ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-            I'm inferring a weird self-referential type for `g`:
+            I'm inferring a weird self-referential type for `f`:
 
-            6│      g = \x -> f [x]
+            5│      f = \x -> g x
                     ^
 
             Here is my best effort at writing down the type. You will see ∞ for
@@ -1470,9 +1470,9 @@ mod test_reporting {
 
             ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-            I'm inferring a weird self-referential type for `f`:
+            I'm inferring a weird self-referential type for `g`:
 
-            5│      f = \x -> g x
+            6│      g = \x -> f [x]
                     ^
 
             Here is my best effort at writing down the type. You will see ∞ for
@@ -9642,7 +9642,7 @@ All branches in an `if` must have the same type!
             r#"
             ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-            Something is off with the body of this definition:
+            Something is off with the body of the `hash` definition:
 
             8│  hash : Id -> U32
             9│  hash = \@Id n -> n
@@ -9652,7 +9652,7 @@ All branches in an `if` must have the same type!
 
                 U64
 
-            But the type annotation says it should be:
+            But the type annotation on `hash` says it should be:
 
                 U32
 
@@ -9661,7 +9661,7 @@ All branches in an `if` must have the same type!
             Something is off with this specialization of `hash`:
 
             9│  hash = \@Id n -> n
-                ^^^^
+                       ^^^^^^^^^^^
 
             This value is a declared specialization of type:
 
@@ -10246,6 +10246,41 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
+        cycle_through_non_function_top_level,
+        indoc!(
+            r#"
+                app "test" provides [t2] to "./platform"
+
+                force : ({} -> I64) -> I64
+                force = \eval -> eval {}
+
+                t1 = \_ -> force (\_ -> t2)
+
+                t2 = t1 {}
+                "#
+        ),
+        indoc!(
+            r#"
+                ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
+
+                The `t1` definition is causing a very tricky infinite loop:
+
+                6│  t1 = \_ -> force (\_ -> t2)
+                    ^^
+
+                The `t1` value depends on itself through the following chain of
+                definitions:
+
+                    ┌─────┐
+                    │     t1
+                    │     ↓
+                    │     t2
+                    └─────┘
+                "#
+        )
+    );
+
+    test_report!(
         derive_non_builtin_ability,
         indoc!(
             r#"
@@ -10349,6 +10384,37 @@ All branches in an `if` must have the same type!
             "#
         ),
         indoc!("") // no error
+    );
+
+    test_report!(
+        shadowing_top_level_scope,
+        indoc!(
+            r#"
+            app "test" provides [ main ] to "./platform"
+
+            main = 1
+
+            main = \n -> n + 2
+            "#
+        ),
+        indoc!(
+            r#"
+            ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
+            
+            The `main` name is first defined here:
+            
+            3│  main = 1
+                ^^^^
+            
+            But then it's defined a second time here:
+            
+            5│  main = \n -> n + 2
+                ^^^^
+            
+            Since these variables have the same name, it's easy to use the wrong
+            one on accident. Give one of them a new name.
+            "#
+        )
     );
 
     test_report!(
