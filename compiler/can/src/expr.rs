@@ -12,6 +12,7 @@ use crate::procedure::References;
 use crate::scope::Scope;
 use roc_collections::soa::Index;
 use roc_collections::{SendMap, VecMap, VecSet};
+use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -2179,7 +2180,7 @@ impl Declarations {
     pub fn update_builtin_def(&mut self, index: usize, def: Def) {
         match def.loc_pattern.value {
             Pattern::Identifier(s) => assert_eq!(s, self.symbols[index].value),
-            _ => panic!(),
+            p => internal_error!("a builtin definition has a non-identifier pattern: {:?}", p),
         }
 
         match def.loc_expr.value {
