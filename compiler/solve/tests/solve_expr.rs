@@ -185,7 +185,7 @@ mod solve_expr {
 
         exposed_to_host.retain(|s, _| !abilities_store.is_specialization_name(*s));
 
-        debug_assert!(exposed_to_host.len() == 1);
+        debug_assert!(exposed_to_host.len() == 1, "{:?}", exposed_to_host);
         let (_symbol, variable) = exposed_to_host.into_iter().next().unwrap();
         let actual_str = name_and_print_var(variable, subs, home, &interns, DebugPrint::NOTHING);
 
@@ -6923,6 +6923,36 @@ mod solve_expr {
                 "#
             ),
             "Parser U8",
+        );
+    }
+
+    #[test]
+    fn infer_variables_in_value_def_signature() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [a] to "./platform"
+
+                a : {a: _}
+                a = {a: ""}
+                "#
+            ),
+            "{a: Str}",
+        );
+    }
+
+    #[test]
+    fn infer_variables_in_destructure_def_signature() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [a] to "./platform"
+
+                {a} : {a: _}
+                {a} = {a: ""}
+                "#
+            ),
+            "",
         );
     }
 }
