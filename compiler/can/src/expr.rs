@@ -12,6 +12,7 @@ use crate::procedure::References;
 use crate::scope::Scope;
 use roc_collections::soa::Index;
 use roc_collections::{SendMap, VecMap, VecSet};
+use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -102,8 +103,10 @@ pub enum Expr {
     AbilityMember(
         /// Actual member name
         Symbol,
-        /// Specialization to use, and its variable
-        SpecializationId,
+        /// Specialization to use, and its variable.
+        /// The specialization id may be [`None`] if construction of an ability member usage can
+        /// prove the usage is polymorphic.
+        Option<SpecializationId>,
         Variable,
     ),
 
@@ -1356,7 +1359,7 @@ fn canonicalize_var_lookup(
                 if scope.abilities_store.is_ability_member_name(symbol) {
                     AbilityMember(
                         symbol,
-                        scope.abilities_store.fresh_specialization_id(),
+                        Some(scope.abilities_store.fresh_specialization_id()),
                         var_store.fresh(),
                     )
                 } else {
@@ -1379,7 +1382,7 @@ fn canonicalize_var_lookup(
                 if scope.abilities_store.is_ability_member_name(symbol) {
                     AbilityMember(
                         symbol,
-                        scope.abilities_store.fresh_specialization_id(),
+                        Some(scope.abilities_store.fresh_specialization_id()),
                         var_store.fresh(),
                     )
                 } else {
@@ -1983,6 +1986,8 @@ impl Declarations {
         }
     }
 
+    /// To store a recursive group in the vectors without nesting, we first push a "header"
+    /// here, then push the definitions that are part of that recursive group
     pub fn push_recursive_group(&mut self, length: u16, cycle_mark: IllegalCycleMark) -> usize {
         let index = self.declarations.len();
 
@@ -2183,7 +2188,7 @@ impl Declarations {
     pub fn update_builtin_def(&mut self, index: usize, def: Def) {
         match def.loc_pattern.value {
             Pattern::Identifier(s) => assert_eq!(s, self.symbols[index].value),
-            _ => panic!(),
+            p => internal_error!("a builtin definition has a non-identifier pattern: {:?}", p),
         }
 
         match def.loc_expr.value {
@@ -2202,15 +2207,11 @@ impl Declarations {
 
                 self.declarations[index] = DeclarationTag::Function(function_def_index);
                 self.expressions[index] = *closure_data.loc_body;
-
-                // TODO investigate whether this matters, and if we can be more efficient here
                 self.variables[index] = def.expr_var;
             }
             _ => {
                 self.declarations[index] = DeclarationTag::Value;
                 self.expressions[index] = def.loc_expr;
-
-                // TODO investigate whether this matters, and if we can be more efficient here
                 self.variables[index] = def.expr_var;
             }
         }

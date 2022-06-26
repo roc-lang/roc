@@ -434,15 +434,17 @@ pub fn constrain_expr(
                 region,
             );
 
-            // Make sure we attempt to resolve the specialization.
-            env.resolutions_to_make.push(OpportunisticResolve {
-                specialization_variable: specialization_var,
-                specialization_expectation: constraints.push_expected_type(
-                    Expected::NoExpectation(Type::Variable(specialization_var)),
-                ),
-                member: symbol,
-                specialization_id,
-            });
+            // Make sure we attempt to resolve the specialization, if we need to.
+            if let Some(specialization_id) = specialization_id {
+                env.resolutions_to_make.push(OpportunisticResolve {
+                    specialization_variable: specialization_var,
+                    specialization_expectation: constraints.push_expected_type(
+                        Expected::NoExpectation(Type::Variable(specialization_var)),
+                    ),
+                    member: symbol,
+                    specialization_id,
+                });
+            }
 
             constraints.and_constraint([store_expected, lookup_constr])
         }
@@ -1328,9 +1330,6 @@ fn constrain_function_def(
                 resolutions_to_make: vec![],
             };
 
-            // TODO missing equality of annotation_expected with expr_var?
-            // but the signature is stored into the expr_var below?!
-
             let region = loc_function_def.region;
 
             let mut argument_pattern_state = PatternState {
@@ -1504,9 +1503,6 @@ fn constrain_destructure_def(
     let destructure_def = &declarations.destructs[destructure_def_index.index()];
     let loc_pattern = &destructure_def.loc_pattern;
 
-    // TODO what is this for?
-    // let pattern_vars = &destructure_def.pattern_vars;
-
     let mut def_pattern_state =
         constrain_def_pattern(constraints, env, loc_pattern, Type::Variable(expr_var));
 
@@ -1547,6 +1543,7 @@ fn constrain_destructure_def(
 
             // TODO missing equality of annotation_expected with expr_var?
             // but the signature is stored into the expr_var below?!
+            // see https://github.com/rtfeldman/roc/issues/3332
 
             let ret_constraint = constrain_expr(
                 constraints,
@@ -1728,8 +1725,6 @@ fn constrain_when_branch_help(
         delayed_is_open_constraints: Vec::new(),
     };
 
-    // TODO investigate for error messages, is it better to unify all branches with a variable,
-    // then unify that variable with the expectation?
     for (i, loc_pattern) in when_branch.patterns.iter().enumerate() {
         let pattern_expected = pattern_expected(HumanIndex::zero_based(i), loc_pattern.region);
 
@@ -3026,20 +3021,29 @@ pub fn rec_defs_help_simple(
     }
 
     // Strategy for recursive defs:
-    // 1. Let-generalize the type annotations we know; these are the source of truth we'll solve
-    //    everything else with. If there are circular type errors here, they will be caught during
-    //    the let-generalization.
-    // 2. Introduce all symbols of the untyped defs, but don't generalize them yet. Now, solve
-    //    the untyped defs' bodies. This way, when checking something like
-    //      f = \x -> f [ x ]
-    //    we introduce `f: b -> c`, then constrain the call `f [ x ]`,
+    //
+    // 1. Let-generalize all rigid annotations. These are the source of truth we'll solve
+    //    everything else with. If there are circular type errors here, they will be caught
+    //    during the let-generalization.
+    //
+    // 2. Introduce all symbols of the flex + hybrid defs, but don't generalize them yet.
+    //    Now, solve those defs' bodies. This way, when checking something like
+    //      f = \x -> f [x]
+    //    we introduce `f: b -> c`, then constrain the call `f [x]`,
     //    forcing `b -> c ~ List b -> c` and correctly picking up a recursion error.
-    //    Had we generalized `b -> c`, the call `f [ x ]` would have been generalized, and this
+    //    Had we generalized `b -> c`, the call `f [x]` would have been generalized, and this
     //    error would not be found.
-    // 3. Now properly let-generalize the untyped body defs, since we now know their types and
+    //
+    //    - This works just as well for mutually recursive defs.
+    //    - For hybrid defs, we also ensure solved types agree with what the
+    //      elaborated parts of their type annotations demand.
+    //
+    // 3. Now properly let-generalize the flex + hybrid defs, since we now know their types and
     //    that they don't have circular type errors.
+    //
     // 4. Solve the bodies of the typed body defs, and check that they agree the types of the type
     //    annotation.
+    //
     // 5. Solve the rest of the program that happens after this recursive def block.
 
     // 2. Solve untyped defs without generalization of their symbols.
@@ -3056,6 +3060,7 @@ pub fn rec_defs_help_simple(
     // and generate a good error message there.
     let cycle_constraint = constraints.check_cycle(loc_symbols, expr_regions, cycle_mark);
 
+    // 4 + 5. Solve the typed body defs, and the rest of the program.
     let typed_body_constraints = constraints.and_constraint(rigid_info.constraints);
     let typed_body_and_final_constr =
         constraints.and_constraint([typed_body_constraints, cycle_constraint, body_con]);
@@ -3066,7 +3071,6 @@ pub fn rec_defs_help_simple(
         hybrid_and_flex_info.vars,
         hybrid_and_flex_info.def_types,
         untyped_def_symbols_constr,
-        // 4 + 5. Solve the typed body defs, and the rest of the program.
         typed_body_and_final_constr,
     );
 

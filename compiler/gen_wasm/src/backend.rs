@@ -889,7 +889,7 @@ impl<'a> WasmBackend<'a> {
         self.stmt(rc_stmt);
     }
 
-    fn stmt_runtime_error(&mut self, msg: &'a str) {
+    pub fn stmt_runtime_error(&mut self, msg: &'a str) {
         // Create a zero-terminated version of the message string
         let mut bytes = Vec::with_capacity_in(msg.len() + 1, self.env.arena);
         bytes.extend_from_slice(msg.as_bytes());

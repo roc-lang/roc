@@ -726,11 +726,20 @@ fn write_content<'a>(
             buf.push_str("[[");
 
             let print_symbol = |symbol: &Symbol| {
-                format!(
-                    "{}({})",
-                    symbol.as_str(env.interns),
-                    symbol.ident_id().index(),
-                )
+                if env.home == symbol.module_id() {
+                    format!(
+                        "{}({})",
+                        symbol.as_str(env.interns),
+                        symbol.ident_id().index(),
+                    )
+                } else {
+                    format!(
+                        "{}.{}({})",
+                        symbol.module_string(env.interns),
+                        symbol.as_str(env.interns),
+                        symbol.ident_id().index(),
+                    )
+                }
             };
 
             write_sorted_tags2(

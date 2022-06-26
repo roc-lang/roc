@@ -16,6 +16,7 @@ use roc_debug_flags::dbg_do;
 use roc_debug_flags::{
     ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
 };
+use roc_derive_key::GlobalDerivedSymbols;
 use roc_error_macros::todo_abilities;
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
@@ -1267,6 +1268,7 @@ pub struct Env<'a, 'i> {
     pub update_mode_ids: &'i mut UpdateModeIds,
     pub call_specialization_counter: u32,
     pub abilities: AbilitiesView<'i>,
+    pub derived_symbols: &'i GlobalDerivedSymbols,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
@@ -1302,6 +1304,7 @@ impl<'a, 'i> Env<'a, 'i> {
             self.arena,
             self.subs,
             &self.abilities,
+            self.derived_symbols,
             left,
             right,
         )
@@ -3779,14 +3782,13 @@ pub fn with_hole<'a>(
 
             specialize_naked_symbol(env, variable, procs, layout_cache, assigned, hole, symbol)
         }
-        AbilityMember(_member, specialization_id, _) => {
-            let specialization_symbol =
-                env.abilities
-                    .with_module_abilities_store(env.home, |store| {
-                        store
-                            .get_resolved(specialization_id)
-                            .expect("Specialization was never made!")
-                    });
+        AbilityMember(member, specialization_id, specialization_var) => {
+            let specialization_symbol = late_resolve_ability_specialization(
+                env,
+                member,
+                specialization_id,
+                specialization_var,
+            );
 
             specialize_naked_symbol(
                 env,
@@ -5168,12 +5170,13 @@ pub fn with_hole<'a>(
 fn late_resolve_ability_specialization<'a>(
     env: &mut Env<'a, '_>,
     member: Symbol,
-    specialization_id: SpecializationId,
+    specialization_id: Option<SpecializationId>,
     specialization_var: Variable,
 ) -> Symbol {
-    let opt_resolved = env
-        .abilities
-        .with_module_abilities_store(env.home, |store| store.get_resolved(specialization_id));
+    let opt_resolved = specialization_id.and_then(|id| {
+        env.abilities
+            .with_module_abilities_store(env.home, |store| store.get_resolved(id))
+    });
 
     if let Some(spec_symbol) = opt_resolved {
         // Fast path: specialization is monomorphic, was found during solving.

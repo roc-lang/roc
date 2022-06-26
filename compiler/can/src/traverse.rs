@@ -550,7 +550,9 @@ pub fn find_ability_member_and_owning_type_at(
             if region == self.region {
                 if let &Expr::AbilityMember(member_symbol, specialization_id, _var) = expr {
                     debug_assert!(self.found.is_none());
-                    self.found = match self.abilities_store.get_resolved(specialization_id) {
+                    self.found = match specialization_id
+                        .and_then(|id| self.abilities_store.get_resolved(id))
+                    {
                         Some(spec_symbol) => {
                             let spec_type = find_specialization_type_of_symbol(
                                 spec_symbol,

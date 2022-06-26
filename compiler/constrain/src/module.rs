@@ -1,108 +1,15 @@
 use crate::expr::{constrain_def_make_constraint, constrain_def_pattern, Env};
 use roc_builtins::std::StdLib;
-use roc_can::abilities::{PendingAbilitiesStore, PendingMemberType, ResolvedSpecializations};
+use roc_can::abilities::{PendingAbilitiesStore, PendingMemberType};
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::expected::Expected;
 use roc_can::expr::Declarations;
 use roc_can::pattern::Pattern;
-use roc_collections::all::MutMap;
-use roc_error_macros::internal_error;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::solved_types::{FreeVars, SolvedType};
-use roc_types::subs::{ExposedTypesStorageSubs, VarStore, Variable};
+use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{AnnotationSource, Category, Type};
-
-/// The types of all exposed values/functions of a collection of modules
-#[derive(Clone, Debug, Default)]
-pub struct ExposedByModule {
-    exposed: MutMap<ModuleId, ExposedModuleTypes>,
-}
-
-impl ExposedByModule {
-    pub fn insert(&mut self, module_id: ModuleId, exposed: ExposedModuleTypes) {
-        self.exposed.insert(module_id, exposed);
-    }
-
-    pub fn get(&self, module_id: &ModuleId) -> Option<&ExposedModuleTypes> {
-        self.exposed.get(module_id)
-    }
-
-    /// Convenient when you need mutable access to the StorageSubs in the ExposedModuleTypes
-    pub fn get_mut(&mut self, module_id: &ModuleId) -> Option<&mut ExposedModuleTypes> {
-        self.exposed.get_mut(module_id)
-    }
-
-    /// Create a clone of `self` that has just a subset of the modules
-    ///
-    /// Useful when we know what modules a particular module imports, and want just
-    /// the exposed types for those exposed modules.
-    pub fn retain_modules<'a>(&self, it: impl Iterator<Item = &'a ModuleId>) -> Self {
-        let mut output = Self::default();
-
-        for module_id in it {
-            match self.exposed.get(module_id) {
-                None => {
-                    internal_error!("Module {:?} did not register its exposed values", module_id)
-                }
-                Some(exposed_types) => {
-                    output.exposed.insert(*module_id, exposed_types.clone());
-                }
-            }
-        }
-
-        output
-    }
-
-    pub fn iter_all(&self) -> impl Iterator<Item = (&ModuleId, &ExposedModuleTypes)> {
-        self.exposed.iter()
-    }
-
-    /// # Safety
-    ///
-    /// May only be called when the exposed types of a modules are no longer needed, or may be
-    /// transitioned into another context.
-    pub unsafe fn remove(&mut self, module_id: &ModuleId) -> Option<ExposedModuleTypes> {
-        self.exposed.remove(module_id)
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct ExposedForModule {
-    pub exposed_by_module: ExposedByModule,
-    pub imported_values: Vec<Symbol>,
-}
-
-impl ExposedForModule {
-    pub fn new<'a>(
-        it: impl Iterator<Item = &'a Symbol>,
-        exposed_by_module: ExposedByModule,
-    ) -> Self {
-        let mut imported_values = Vec::new();
-
-        for symbol in it {
-            let module = exposed_by_module.exposed.get(&symbol.module_id());
-            if let Some(ExposedModuleTypes { .. }) = module {
-                imported_values.push(*symbol);
-            } else {
-                continue;
-            }
-        }
-
-        Self {
-            imported_values,
-            exposed_by_module,
-        }
-    }
-}
-
-/// The types of all exposed values/functions of a module. This includes ability member
-/// specializations.
-#[derive(Clone, Debug)]
-pub struct ExposedModuleTypes {
-    pub exposed_types_storage_subs: ExposedTypesStorageSubs,
-    pub resolved_specializations: ResolvedSpecializations,
-}
 
 pub fn constrain_module(
     constraints: &mut Constraints,

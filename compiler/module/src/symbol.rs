@@ -764,7 +764,7 @@ macro_rules! define_builtins {
             $module_id:literal $module_const:ident: $module_name:literal => {
                 $(
                     $ident_id:literal $ident_const:ident: $ident_name:literal $($imported:ident)?
-                )+
+                )*
             }
         )+
         num_modules: $total:literal
@@ -778,13 +778,13 @@ macro_rules! define_builtins {
                     debug_assert!(!exposed_idents_by_module.contains_key(&module_id), r"Error setting up Builtins: when setting up module {} {:?} - the module ID {} is already present in the map. Check the map for duplicate module IDs!", $module_id, $module_name, $module_id);
 
                     let ident_ids = {
-                        const TOTAL : usize = [ $($ident_name),+ ].len();
-                        const NAMES : [ &str; TOTAL] = [ $($ident_name),+ ];
-                        const LENGTHS: [ u16; TOTAL] = [ $($ident_name.len() as u16),+ ];
-                        const OFFSETS: [ u32; TOTAL] = offset_helper([ $($ident_name.len() as u32),+ ]);
-                        const BUFFER: &str = concat!($($ident_name),+);
+                        const TOTAL : usize = (&[ $($ident_name),* ] as &[&str]).len();
+                        const NAMES : [ &str; TOTAL] = [ $($ident_name),* ];
+                        const LENGTHS: [ u16; TOTAL] = [ $($ident_name.len() as u16),* ];
+                        const OFFSETS: [ u32; TOTAL] = offset_helper([ $($ident_name.len() as u32),* ]);
+                        const BUFFER: &str = concat!($($ident_name),*);
 
-                        const LENGTH_CHECK: Option<(u32, usize)> = check_indices([ $($ident_id),+ ]);
+                        const LENGTH_CHECK: Option<(u32, usize)> = check_indices([ $($ident_id),* ]);
                         const DUPLICATE_CHECK: Option<(usize, usize)> = find_duplicates(NAMES);
 
                         if cfg!(debug_assertions) {
@@ -905,7 +905,7 @@ macro_rules! define_builtins {
             $(
                 $(
                     pub const $ident_const: Symbol = Symbol::new(ModuleId::$module_const, IdentId($ident_id));
-                )+
+                )*
             )+
 
             /// The default idents that should be in scope,
@@ -928,7 +928,7 @@ macro_rules! define_builtins {
                                 scope.insert($ident_name.into(), (Symbol::new(ModuleId::$module_const, IdentId($ident_id)), Region::zero()));
                             }
                         )?
-                    )+
+                    )*
                 )+
 
                 scope
@@ -994,7 +994,10 @@ define_builtins! {
         29 DEV_TMP4: "#dev_tmp4"
         30 DEV_TMP5: "#dev_tmp5"
     }
-    1 NUM: "Num" => {
+    // Fake module for storing derived function symbols
+    1 DERIVED: "#Derived" => {
+    }
+    2 NUM: "Num" => {
         0 NUM_NUM: "Num"  // the Num.Num type alias
         1 NUM_I128: "I128"  // the Num.I128 type alias
         2 NUM_U128: "U128"  // the Num.U128 type alias
@@ -1137,7 +1140,7 @@ define_builtins! {
         139 NUM_MAX_F64: "maxF64"
         140 NUM_MIN_F64: "minF64"
     }
-    2 BOOL: "Bool" => {
+    3 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" // the Bool.Bool type alias
         1 BOOL_FALSE: "False" imported // Bool.Bool = [False, True]
                                        // NB: not strictly needed; used for finding tag names in error suggestions
@@ -1150,7 +1153,7 @@ define_builtins! {
         7 BOOL_EQ: "isEq"
         8 BOOL_NEQ: "isNotEq"
     }
-    3 STR: "Str" => {
+    4 STR: "Str" => {
         0 STR_STR: "Str" imported // the Str.Str type alias
         1 STR_IS_EMPTY: "isEmpty"
         2 STR_APPEND: "#append" // unused
@@ -1186,7 +1189,7 @@ define_builtins! {
         32 STR_TO_U8: "toU8"
         33 STR_TO_I8: "toI8"
     }
-    4 LIST: "List" => {
+    5 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
         1 LIST_IS_EMPTY: "isEmpty"
         2 LIST_GET: "get"
@@ -1247,7 +1250,7 @@ define_builtins! {
         57 LIST_REPLACE: "replace"
         58 LIST_IS_UNIQUE: "#isUnique"
     }
-    5 RESULT: "Result" => {
+    6 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" // the Result.Result type alias
         1 RESULT_OK: "Ok" imported // Result.Result a e = [Ok a, Err e]
                                    // NB: not strictly needed; used for finding tag names in error suggestions
@@ -1260,7 +1263,7 @@ define_builtins! {
         7 RESULT_IS_OK: "isOk"
         8 RESULT_IS_ERR: "isErr"
     }
-    6 DICT: "Dict" => {
+    7 DICT: "Dict" => {
         0 DICT_DICT: "Dict" imported // the Dict.Dict type alias
         1 DICT_EMPTY: "empty"
         2 DICT_SINGLE: "single"
@@ -1279,7 +1282,7 @@ define_builtins! {
         13 DICT_INTERSECTION: "intersection"
         14 DICT_DIFFERENCE: "difference"
     }
-    7 SET: "Set" => {
+    8 SET: "Set" => {
         0 SET_SET: "Set" imported // the Set.Set type alias
         1 SET_EMPTY: "empty"
         2 SET_SINGLE: "single"
@@ -1296,12 +1299,12 @@ define_builtins! {
         13 SET_CONTAINS: "contains"
         14 SET_TO_DICT: "toDict"
     }
-    8 BOX: "Box" => {
+    9 BOX: "Box" => {
         0 BOX_BOX_TYPE: "Box" imported // the Box.Box opaque type
         1 BOX_BOX_FUNCTION: "box" // Box.box
         2 BOX_UNBOX: "unbox"
     }
-    9 ENCODE: "Encode" => {
+    10 ENCODE: "Encode" => {
         0 ENCODE_ENCODER: "Encoder"
         1 ENCODE_ENCODING: "Encoding"
         2 ENCODE_TO_ENCODER: "toEncoder"
@@ -1329,9 +1332,9 @@ define_builtins! {
         24 ENCODE_APPEND: "append"
         25 ENCODE_TO_BYTES: "toBytes"
     }
-    10 JSON: "Json" => {
+    11 JSON: "Json" => {
         0 JSON_JSON: "Json"
     }
 
-    num_modules: 11 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    num_modules: 12 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

@@ -615,7 +615,7 @@ fn i64_abs() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(
     expected = r#"Roc failed with message: "integer absolute overflowed because its argument is the minimum value"#
 )]
@@ -736,7 +736,7 @@ fn gen_div_f64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_div_checked_f64() {
     assert_evals_to!(
         indoc!(
@@ -752,7 +752,7 @@ fn gen_div_checked_f64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_div_checked_by_zero_f64() {
     assert_evals_to!(
         indoc!(
@@ -768,7 +768,7 @@ fn gen_div_checked_by_zero_f64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_div_dec() {
     assert_evals_to!(
         indoc!(
@@ -788,7 +788,7 @@ fn gen_div_dec() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_div_checked_dec() {
     assert_evals_to!(
         indoc!(
@@ -809,7 +809,7 @@ fn gen_div_checked_dec() {
     );
 }
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_div_checked_by_zero_dec() {
     assert_evals_to!(
         indoc!(
@@ -1046,7 +1046,7 @@ fn gen_div_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_div_checked_i64() {
     assert_evals_to!(
         indoc!(
@@ -1062,7 +1062,7 @@ fn gen_div_checked_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_div_checked_by_zero_i64() {
     assert_evals_to!(
         indoc!(
@@ -1092,7 +1092,7 @@ fn gen_rem_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_rem_checked_div_by_zero_i64() {
     assert_evals_to!(
         indoc!(
@@ -1471,7 +1471,7 @@ fn int_negate() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(
     expected = r#"Roc failed with message: "integer negation overflowed because its argument is the minimum value"#
 )]
@@ -1618,7 +1618,7 @@ fn float_to_float() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_compare() {
     assert_evals_to!("Num.compare 0 1", RocOrder::Lt, RocOrder);
     assert_evals_to!("Num.compare 1 1", RocOrder::Eq, RocOrder);
@@ -1626,7 +1626,7 @@ fn int_compare() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_compare() {
     assert_evals_to!("Num.compare 0.01 3.14", RocOrder::Lt, RocOrder);
     assert_evals_to!("Num.compare 3.14 3.14", RocOrder::Eq, RocOrder);
@@ -2626,8 +2626,8 @@ to_int_checked_tests! {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
-fn is_multiple_of() {
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn is_multiple_of_signed() {
     // true
     assert_evals_to!("Num.isMultipleOf 5 1", true, bool);
     assert_evals_to!("Num.isMultipleOf 5 -1", true, bool);
@@ -2640,6 +2640,24 @@ fn is_multiple_of() {
 
     // overflow
     assert_evals_to!("Num.isMultipleOf -9223372036854775808 -1", true, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn is_multiple_of_unsigned() {
+    // true
+    assert_evals_to!("Num.isMultipleOf 5u8 1", true, bool);
+    assert_evals_to!("Num.isMultipleOf 0u8 0", true, bool);
+    assert_evals_to!("Num.isMultipleOf 0u8 1", true, bool);
+    assert_evals_to!("Num.isMultipleOf 0u8 0xFF", true, bool);
+
+    // false
+    assert_evals_to!("Num.isMultipleOf 5u8 2", false, bool);
+    assert_evals_to!("Num.isMultipleOf 5u8 0", false, bool);
+
+    // unsigned result is different from signed
+    assert_evals_to!("Num.isMultipleOf 5u8 0xFF", false, bool);
+    assert_evals_to!("Num.isMultipleOf 0xFCu8 0xFE", false, bool);
 }
 
 #[test]
@@ -2853,7 +2871,7 @@ fn when_on_i16() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn num_to_str() {
     use roc_std::RocStr;
 
@@ -2877,7 +2895,7 @@ fn num_to_str() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn num_to_str_u8() {
     use roc_std::RocStr;
 
@@ -2890,7 +2908,7 @@ fn num_to_str_u8() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn num_to_str_u16() {
     use roc_std::RocStr;
 
@@ -2907,7 +2925,7 @@ fn num_to_str_u16() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn num_to_str_u32() {
     use roc_std::RocStr;
 
@@ -2924,7 +2942,7 @@ fn num_to_str_u32() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn num_to_str_u64() {
     use roc_std::RocStr;
 
@@ -2941,7 +2959,7 @@ fn num_to_str_u64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn num_to_str_i8() {
     use roc_std::RocStr;
 
@@ -2959,7 +2977,7 @@ fn num_to_str_i8() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn num_to_str_i16() {
     use roc_std::RocStr;
 
@@ -2985,7 +3003,7 @@ fn num_to_str_i16() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn num_to_str_i32() {
     use roc_std::RocStr;
 
@@ -3011,7 +3029,7 @@ fn num_to_str_i32() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn num_to_str_i64() {
     use roc_std::RocStr;
 
@@ -3251,7 +3269,7 @@ fn mul_saturated() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn monomorphized_ints() {
     assert_evals_to!(
         indoc!(
@@ -3265,12 +3283,12 @@ fn monomorphized_ints() {
             "#
         ),
         18,
-        u64
+        usize
     )
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn monomorphized_floats() {
     assert_evals_to!(
         indoc!(
@@ -3284,12 +3302,12 @@ fn monomorphized_floats() {
             "#
         ),
         18,
-        u64
+        usize
     )
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn monomorphized_ints_names_dont_conflict() {
     assert_evals_to!(
         indoc!(
@@ -3308,7 +3326,7 @@ fn monomorphized_ints_names_dont_conflict() {
             "#
         ),
         18,
-        u64
+        usize
     )
 }
 
@@ -3393,7 +3411,7 @@ fn upcast_of_int_is_zext() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 // https://github.com/rtfeldman/roc/issues/2696
 fn upcast_of_int_checked_is_zext() {
     assert_evals_to!(

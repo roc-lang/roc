@@ -10,54 +10,112 @@
 //! - `Decoding` is like encoding, but has some differences. For one, it *does* need to distinguish
 //!   between required and optional record fields.
 //!
-//! For these reasons the content keying is based on a [`Strategy`] as well.
+//! For these reasons the content keying is based on a strategy as well, which are the variants of
+//! [`DeriveKey`].
 
 pub mod encoding;
 
+use std::sync::{Arc, Mutex};
+
 use encoding::{FlatEncodable, FlatEncodableKey};
 
-use roc_module::symbol::Symbol;
+use roc_collections::MutMap;
+use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_types::subs::{Subs, Variable};
+
+#[derive(Debug, PartialEq)]
+pub enum DeriveError {
+    /// Unbound variable present in the type-to-derive. It may be possible to derive for this type
+    /// once the unbound variable is resolved.
+    UnboundVar,
+    /// The type is underivable for the given ability member.
+    Underivable,
+}
 
 #[derive(Hash, PartialEq, Eq, Debug)]
 #[repr(u8)]
-enum Strategy {
-    Encoding,
+pub enum DeriveKey {
+    ToEncoder(FlatEncodableKey),
     #[allow(unused)]
     Decoding,
 }
 
+impl DeriveKey {
+    pub(self) fn debug_name(&self) -> String {
+        match self {
+            DeriveKey::ToEncoder(key) => format!("toEncoder_{}", key.debug_name()),
+            DeriveKey::Decoding => todo!(),
+        }
+    }
+}
+
 #[derive(Hash, PartialEq, Eq, Debug)]
-pub enum Derived<R>
-where
-    R: std::hash::Hash + PartialEq + Eq + std::fmt::Debug,
-{
+pub enum Derived {
     /// If a derived implementation name is well-known ahead-of-time, we can inline the symbol
     /// directly rather than associating a key for an implementation to be made later on.
     Immediate(Symbol),
     /// Key of the derived implementation to use. This allows association of derived implementation
     /// names to a key, when the key is known ahead-of-time but the implementation (and it's name)
     /// is yet-to-be-made.
-    Key(DeriveKey<R>),
+    Key(DeriveKey),
 }
 
-#[derive(Hash, PartialEq, Eq, Debug)]
-pub struct DeriveKey<R>
-where
-    R: std::hash::Hash + PartialEq + Eq + std::fmt::Debug,
-{
-    strategy: Strategy,
-    pub repr: R,
-}
-
-impl<'a> Derived<FlatEncodableKey<'a>> {
-    pub fn encoding(subs: &'a Subs, var: Variable) -> Self {
-        match encoding::FlatEncodable::from_var(subs, var) {
-            FlatEncodable::Immediate(imm) => Derived::Immediate(imm),
-            FlatEncodable::Key(repr) => Derived::Key(DeriveKey {
-                strategy: Strategy::Encoding,
-                repr,
-            }),
+impl Derived {
+    pub fn encoding(subs: &Subs, var: Variable) -> Result<Self, DeriveError> {
+        match encoding::FlatEncodable::from_var(subs, var)? {
+            FlatEncodable::Immediate(imm) => Ok(Derived::Immediate(imm)),
+            FlatEncodable::Key(repr) => Ok(Derived::Key(DeriveKey::ToEncoder(repr))),
         }
     }
 }
+
+/// Map of [`DeriveKey`]s to their derived symbols.
+#[derive(Debug, Default)]
+pub struct DerivedSymbols {
+    map: MutMap<DeriveKey, Symbol>,
+    derived_ident_ids: IdentIds,
+    #[cfg(debug_assertions)]
+    stolen: bool,
+}
+
+impl DerivedSymbols {
+    pub fn get_or_insert(&mut self, key: DeriveKey) -> Symbol {
+        #[cfg(debug_assertions)]
+        {
+            debug_assert!(!self.stolen, "attempting to add to stolen symbols!");
+        }
+
+        let symbol = self.map.entry(key).or_insert_with_key(|key| {
+            let ident_id = if cfg!(debug_assertions) || cfg!(feature = "debug-derived-symbols") {
+                let debug_name = key.debug_name();
+                debug_assert!(
+                    self.derived_ident_ids.get_id(&debug_name).is_none(),
+                    "duplicate debug name for different derive key"
+                );
+                self.derived_ident_ids.get_or_insert(&debug_name)
+            } else {
+                self.derived_ident_ids.gen_unique()
+            };
+
+            Symbol::new(ModuleId::DERIVED, ident_id)
+        });
+        *symbol
+    }
+
+    /// Steal all created derived ident Ids.
+    /// After this is called, [`Self::get_or_insert`] may no longer be called.
+    pub fn steal(&mut self) -> IdentIds {
+        let mut ident_ids = Default::default();
+        std::mem::swap(&mut self.derived_ident_ids, &mut ident_ids);
+
+        #[cfg(debug_assertions)]
+        {
+            self.stolen = true;
+        }
+
+        ident_ids
+    }
+}
+
+/// Thread-sharable [`DerivedMethods`].
+pub type GlobalDerivedSymbols = Arc<Mutex<DerivedSymbols>>;

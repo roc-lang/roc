@@ -10,18 +10,18 @@ use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedSpeciali
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::expr::Declarations;
 use roc_can::expr::PendingDerives;
-use roc_can::module::{canonicalize_module_defs, Module};
-use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
-use roc_constrain::module::{
-    constrain_builtin_imports, constrain_module, ExposedByModule, ExposedForModule,
-    ExposedModuleTypes,
+use roc_can::module::{
+    canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
 };
+use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
+use roc_constrain::module::{constrain_builtin_imports, constrain_module};
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::{
     ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
     ROC_PRINT_LOAD_LOG,
 };
+use roc_derive_key::GlobalDerivedSymbols;
 use roc_error_macros::internal_error;
 use roc_late_solve::{AbilitiesView, WorldAbilities};
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
@@ -374,6 +374,8 @@ fn start_phase<'a>(
                     ..
                 } = constrained;
 
+                let derived_symbols = GlobalDerivedSymbols::clone(&state.derived_symbols);
+
                 BuildTask::solve_module(
                     module,
                     ident_ids,
@@ -387,6 +389,7 @@ fn start_phase<'a>(
                     dep_idents,
                     declarations,
                     state.cached_subs.clone(),
+                    derived_symbols,
                 )
             }
             Phase::FindSpecializations => {
@@ -414,6 +417,8 @@ fn start_phase<'a>(
                     }
                 }
 
+                let derived_symbols = GlobalDerivedSymbols::clone(&state.derived_symbols);
+
                 BuildTask::BuildPendingSpecializations {
                     layout_cache,
                     module_id,
@@ -424,6 +429,7 @@ fn start_phase<'a>(
                     ident_ids,
                     exposed_to_host: state.exposed_to_host.clone(),
                     abilities_store,
+                    derived_symbols,
                 }
             }
             Phase::MakeSpecializations => {
@@ -481,6 +487,8 @@ fn start_phase<'a>(
                         (ident_ids, subs, procs_base, layout_cache, module_timing)
                     };
 
+                let derived_symbols = GlobalDerivedSymbols::clone(&state.derived_symbols);
+
                 BuildTask::MakeSpecializations {
                     module_id,
                     ident_ids,
@@ -490,6 +498,7 @@ fn start_phase<'a>(
                     specializations_we_must_make,
                     module_timing,
                     world_abilities: state.world_abilities.clone_ref(),
+                    derived_symbols,
                 }
             }
         }
@@ -807,6 +816,8 @@ struct State<'a> {
     /// From now on, these will be used by multiple threads; time to make an Arc<Mutex<_>>!
     pub arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
     pub arc_shorthands: Arc<Mutex<MutMap<&'a str, PackageName<'a>>>>,
+    #[allow(unused)]
+    pub derived_symbols: GlobalDerivedSymbols,
 
     pub ident_ids_by_module: SharedIdentIdsByModule,
 
@@ -866,6 +877,7 @@ impl<'a> State<'a> {
             exposed_types,
             arc_modules,
             arc_shorthands,
+            derived_symbols: Default::default(),
             constrained_ident_ids: IdentIds::exposed_builtins(0),
             ident_ids_by_module,
             declarations_by_id: MutMap::default(),
@@ -985,6 +997,7 @@ enum BuildTask<'a> {
         declarations: Declarations,
         dep_idents: IdentIdsByModule,
         cached_subs: CachedSubs,
+        derived_symbols: GlobalDerivedSymbols,
     },
     BuildPendingSpecializations {
         module_timing: ModuleTiming,
@@ -996,6 +1009,7 @@ enum BuildTask<'a> {
         decls: Declarations,
         exposed_to_host: ExposedToHost,
         abilities_store: AbilitiesStore,
+        derived_symbols: GlobalDerivedSymbols,
     },
     MakeSpecializations {
         module_id: ModuleId,
@@ -1006,6 +1020,7 @@ enum BuildTask<'a> {
         specializations_we_must_make: Vec<ExternalSpecializations>,
         module_timing: ModuleTiming,
         world_abilities: WorldAbilities,
+        derived_symbols: GlobalDerivedSymbols,
     },
 }
 
@@ -2701,7 +2716,7 @@ fn finish_specialization(
 
 #[allow(clippy::too_many_arguments)]
 fn finish(
-    state: State,
+    mut state: State,
     solved: Solved<Subs>,
     exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
@@ -2714,6 +2729,13 @@ fn finish(
         .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
         .into_inner()
         .into_module_ids();
+
+    // Steal the derived symbols and put them in the global ident ids
+    let derived_ident_ids = state.derived_symbols.lock().unwrap().steal();
+    ModuleId::DERIVED.register_debug_idents(&derived_ident_ids);
+    state
+        .constrained_ident_ids
+        .insert(ModuleId::DERIVED, derived_ident_ids);
 
     let interns = Interns {
         module_ids,
@@ -3750,6 +3772,7 @@ impl<'a> BuildTask<'a> {
         dep_idents: IdentIdsByModule,
         declarations: Declarations,
         cached_subs: CachedSubs,
+        derived_symbols: GlobalDerivedSymbols,
     ) -> Self {
         let exposed_by_module = exposed_types.retain_modules(imported_modules.keys());
 
@@ -3777,6 +3800,7 @@ impl<'a> BuildTask<'a> {
             dep_idents,
             module_timing,
             cached_subs,
+            derived_symbols,
         }
     }
 }
@@ -3907,6 +3931,7 @@ fn run_solve_solve(
     pending_derives: PendingDerives,
     mut var_store: VarStore,
     module: Module,
+    derived_symbols: GlobalDerivedSymbols,
 ) -> (
     Solved<Subs>,
     ResolvedSpecializations,
@@ -3954,6 +3979,7 @@ fn run_solve_solve(
             solve_aliases,
             abilities_store,
             pending_derives,
+            derived_symbols,
         );
 
         let module_id = module.module_id;
@@ -4010,6 +4036,7 @@ fn run_solve<'a>(
     decls: Declarations,
     dep_idents: IdentIdsByModule,
     cached_subs: CachedSubs,
+    derived_symbols: GlobalDerivedSymbols,
 ) -> Msg<'a> {
     let solve_start = SystemTime::now();
 
@@ -4031,6 +4058,7 @@ fn run_solve<'a>(
                     pending_derives,
                     var_store,
                     module,
+                    derived_symbols,
                 ),
                 Some((subs, exposed_vars_by_symbol)) => {
                     (
@@ -4053,6 +4081,7 @@ fn run_solve<'a>(
                 pending_derives,
                 var_store,
                 module,
+                derived_symbols,
             )
         }
     };
@@ -4410,6 +4439,7 @@ fn make_specializations<'a>(
     mut module_timing: ModuleTiming,
     target_info: TargetInfo,
     world_abilities: WorldAbilities,
+    derived_symbols: GlobalDerivedSymbols,
 ) -> Msg<'a> {
     let make_specializations_start = SystemTime::now();
     let mut update_mode_ids = UpdateModeIds::new();
@@ -4424,6 +4454,7 @@ fn make_specializations<'a>(
         // call_specialization_counter=0 is reserved
         call_specialization_counter: 1,
         abilities: AbilitiesView::World(world_abilities),
+        derived_symbols: &derived_symbols,
     };
 
     let mut procs = Procs::new_in(arena);
@@ -4484,9 +4515,9 @@ fn build_pending_specializations<'a>(
     mut module_timing: ModuleTiming,
     mut layout_cache: LayoutCache<'a>,
     target_info: TargetInfo,
-    // TODO remove
-    exposed_to_host: ExposedToHost,
+    exposed_to_host: ExposedToHost, // TODO remove
     abilities_store: AbilitiesStore,
+    derived_symbols: GlobalDerivedSymbols,
 ) -> Msg<'a> {
     let find_specializations_start = SystemTime::now();
 
@@ -4515,6 +4546,7 @@ fn build_pending_specializations<'a>(
         // to know the types and abilities in our modules. Only for building *all* specializations
         // do we need a global view.
         abilities: AbilitiesView::Module(&abilities_store),
+        derived_symbols: &derived_symbols,
     };
 
     // Add modules' decls to Procs
@@ -4729,7 +4761,7 @@ fn build_pending_specializations<'a>(
                 // the declarations of this group will be treaded individually by later iterations
             }
             Expectation => {
-                // mark this symbols as a top-level thunk before any other work on the procs
+                // mark this symbol as a top-level thunk before any other work on the procs
                 module_thunks.push(symbol);
 
                 let is_host_exposed = true;
@@ -4866,6 +4898,7 @@ fn run_task<'a>(
             declarations,
             dep_idents,
             cached_subs,
+            derived_symbols,
         } => Ok(run_solve(
             module,
             ident_ids,
@@ -4879,6 +4912,7 @@ fn run_task<'a>(
             declarations,
             dep_idents,
             cached_subs,
+            derived_symbols,
         )),
         BuildPendingSpecializations {
             module_id,
@@ -4890,6 +4924,7 @@ fn run_task<'a>(
             imported_module_thunks,
             exposed_to_host,
             abilities_store,
+            derived_symbols,
         } => Ok(build_pending_specializations(
             arena,
             solved_subs,
@@ -4902,6 +4937,7 @@ fn run_task<'a>(
             target_info,
             exposed_to_host,
             abilities_store,
+            derived_symbols,
         )),
         MakeSpecializations {
             module_id,
@@ -4912,6 +4948,7 @@ fn run_task<'a>(
             specializations_we_must_make,
             module_timing,
             world_abilities,
+            derived_symbols,
         } => Ok(make_specializations(
             arena,
             module_id,
@@ -4923,6 +4960,7 @@ fn run_task<'a>(
             module_timing,
             target_info,
             world_abilities,
+            derived_symbols,
         )),
     }?;
 
