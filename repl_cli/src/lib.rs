@@ -191,7 +191,94 @@ impl ReplAppMemory for CliMemory {
     }
 }
 
-fn mono_module_to_dylib<'a>(
+pub fn expect_mono_module_to_dylib<'a>(
+    arena: &'a Bump,
+    target: Triple,
+    loaded: MonomorphizedModule<'a>,
+    opt_level: OptLevel,
+) -> Result<
+    (
+        libloading::Library,
+        bumpalo::collections::Vec<'a, &'a str>,
+        Subs,
+    ),
+    libloading::Error,
+> {
+    let target_info = TargetInfo::from(&target);
+
+    let MonomorphizedModule {
+        procedures,
+        entry_point,
+        interns,
+        subs,
+        ..
+    } = loaded;
+
+    let context = Context::create();
+    let builder = context.create_builder();
+    let module = arena.alloc(roc_gen_llvm::llvm::build::module_from_builtins(
+        &target, &context, "",
+    ));
+
+    let module = arena.alloc(module);
+    let (module_pass, function_pass) =
+        roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
+
+    let (dibuilder, compile_unit) = roc_gen_llvm::llvm::build::Env::new_debug_info(module);
+
+    // Compile and add all the Procs before adding main
+    let env = roc_gen_llvm::llvm::build::Env {
+        arena,
+        builder: &builder,
+        dibuilder: &dibuilder,
+        compile_unit: &compile_unit,
+        context: &context,
+        interns,
+        module,
+        target_info,
+        is_gen_test: true, // so roc_panic is generated
+        // important! we don't want any procedures to get the C calling convention
+        exposed_to_host: MutSet::default(),
+    };
+
+    // Add roc_alloc, roc_realloc, and roc_dealloc, since the repl has no
+    // platform to provide them.
+    add_default_roc_externs(&env);
+
+    let expects = roc_gen_llvm::llvm::build::build_procedures_expose_expects(
+        &env,
+        opt_level,
+        procedures,
+        entry_point,
+    );
+
+    env.dibuilder.finalize();
+
+    // we don't use the debug info, and it causes weird errors.
+    module.strip_debug_info();
+
+    // Uncomment this to see the module's un-optimized LLVM instruction output:
+    // env.module.print_to_stderr();
+
+    module_pass.run_on(env.module);
+
+    // Uncomment this to see the module's optimized LLVM instruction output:
+    // env.module.print_to_stderr();
+
+    env.module.print_to_file("/tmp/test.ll");
+
+    // Verify the module
+    if let Err(errors) = env.module.verify() {
+        panic!(
+            "Errors defining module:\n{}\n\nUncomment things nearby to see more details.",
+            errors.to_string()
+        );
+    }
+
+    llvm_module_to_dylib(env.module, &target, opt_level).map(|lib| (lib, expects, subs))
+}
+
+pub fn mono_module_to_dylib<'a>(
     arena: &'a Bump,
     target: Triple,
     loaded: MonomorphizedModule,

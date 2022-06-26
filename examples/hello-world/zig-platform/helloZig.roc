@@ -3,12 +3,8 @@ app "helloZig"
     imports []
     provides [main] to pf
 
+expect 2 == 2
 
-main =
-    a = Str.concat "a" "foo"
-    b = Str.concat "a" "bar"
+expect 3 == 2
 
-    (
-        expect a == b
-        "Hello, World!\n"
-    )
+main = "Hello, World!\n"

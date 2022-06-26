@@ -12,6 +12,7 @@ use roc_load::{Expectations, LoadingProblem, Threading};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_region::all::Region;
+use roc_repl_cli::expect_mono_module_to_dylib;
 use roc_reporting::error::r#type::error_type_to_doc;
 use roc_reporting::report::{Palette, Report, RocDocAllocator, RocDocBuilder};
 use roc_target::TargetInfo;
@@ -171,12 +172,22 @@ pub fn build_app<'a>() -> Command<'a> {
         )
         .subcommand(Command::new(CMD_TEST)
             .about("Run all top-level `expect`s in a root module and any modules it imports.")
+            .arg(flag_optimize.clone())
+            .arg(flag_max_threads.clone())
+            .arg(flag_opt_size.clone())
+            .arg(flag_dev.clone())
+            .arg(flag_debug.clone())
+            .arg(flag_time.clone())
+            .arg(flag_linker.clone())
+            .arg(flag_precompiled.clone())
+            .arg(flag_valgrind.clone())
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file for the root module")
                     .allow_invalid_utf8(true)
                     .required(true),
             )
+            .arg(args_for_app.clone())
         )
         .subcommand(Command::new(CMD_REPL)
             .about("Launch the interactive Read Eval Print Loop (REPL)")
@@ -395,6 +406,18 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let expectations = std::mem::take(&mut loaded.expectations);
     let interns = loaded.interns.clone();
+
+    let (lib, expects, subs) =
+        expect_mono_module_to_dylib(arena, target.clone(), loaded, opt_level).unwrap();
+
+    use roc_gen_llvm::run_jit_function;
+
+    for expect in expects {
+        println!("running: {}", expect);
+        let result = run_jit_function!(lib, expect, bool, |v: bool| v);
+
+        dbg!(result);
+    }
 
     Ok(0)
 }
