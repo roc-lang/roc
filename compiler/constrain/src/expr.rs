@@ -1541,10 +1541,9 @@ fn constrain_destructure_def(
                 signature.clone(),
             );
 
-            // TODO missing equality of annotation_expected with expr_var?
-            // but the signature is stored into the expr_var below?!
-            // see https://github.com/rtfeldman/roc/issues/3332
-
+            // This will fill in inference variables in the `signature` as well, so that we can
+            // then take the signature as the source-of-truth without having to worry about
+            // incompleteness.
             let ret_constraint = constrain_expr(
                 constraints,
                 env,
@@ -1637,9 +1636,9 @@ fn constrain_value_def(
                 signature.clone(),
             );
 
-            // TODO missing equality of annotation_expected with expr_var?
-            // but the signature is stored into the expr_var below?!
-
+            // This will fill in inference variables in the `signature` as well, so that we can
+            // then take the signature as the source-of-truth without having to worry about
+            // incompleteness.
             let ret_constraint = constrain_expr(
                 constraints,
                 env,
@@ -1872,7 +1871,7 @@ pub fn constrain_decls(
                 );
             }
             Destructure(destructure_def_index) => {
-                constrain_destructure_def(
+                constraint = constrain_destructure_def(
                     constraints,
                     &mut env,
                     declarations,
