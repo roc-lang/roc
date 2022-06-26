@@ -16,7 +16,7 @@ mod helpers;
 
 use crate::helpers::fixtures_dir;
 use bumpalo::Bump;
-use roc_constrain::module::ExposedByModule;
+use roc_can::module::ExposedByModule;
 use roc_load_internal::file::Threading;
 use roc_load_internal::file::{LoadResult, LoadStart, LoadedModule, LoadingProblem, Phase};
 use roc_module::ident::ModuleName;
