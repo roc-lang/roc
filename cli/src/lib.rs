@@ -973,17 +973,9 @@ fn render_expect_failure<'a>(
         })
         .collect();
 
-    let expressions = roc_repl_expect::get_values(
-        module_id,
-        target_info,
-        arena,
-        subs,
-        interns,
-        start,
-        start_offset,
-        &variables,
-    )
-    .unwrap();
+    let expressions =
+        roc_repl_expect::get_values(target_info, arena, subs, start, start_offset, &variables)
+            .unwrap();
 
     use roc_fmt::annotation::Formattable;
 
