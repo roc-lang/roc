@@ -341,8 +341,8 @@ impl<'a> WasmBackend<'a> {
     #[cfg(not(debug_assertions))]
     pub fn register_symbol_debug_names(&self) {}
 
-    pub fn get_fn_table_index(&mut self, fn_index: u32) -> i32 {
-        self.module.element.get_fn_table_index(fn_index)
+    pub fn get_fn_ptr(&mut self, fn_index: u32) -> i32 {
+        self.module.element.get_or_insert_fn(fn_index)
     }
 
     /// Create an IR Symbol for an anonymous value (such as ListLiteral)
@@ -1375,7 +1375,7 @@ impl<'a> WasmBackend<'a> {
      * Arrays
      *******************************************************************/
 
-    fn expr_array(
+    pub fn expr_array(
         &mut self,
         sym: Symbol,
         storage: &StoredValue,
@@ -1784,7 +1784,7 @@ impl<'a> WasmBackend<'a> {
 
     /// Generate a refcount helper procedure and return a pointer (table index) to it
     /// This allows it to be indirectly called from Zig code
-    pub fn get_refcount_fn_ptr(&mut self, layout: Layout<'a>, op: HelperOp) -> i32 {
+    pub fn get_refcount_fn_index(&mut self, layout: Layout<'a>, op: HelperOp) -> u32 {
         let ident_ids = self
             .interns
             .all_ident_ids
@@ -1806,7 +1806,6 @@ impl<'a> WasmBackend<'a> {
             .position(|lookup| lookup.name == proc_symbol && lookup.layout.arguments[0] == layout)
             .unwrap();
 
-        let wasm_fn_index = self.fn_index_offset + proc_index as u32;
-        self.get_fn_table_index(wasm_fn_index)
+        self.fn_index_offset + proc_index as u32
     }
 }

@@ -4,7 +4,7 @@ use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_mono::code_gen_help::HelperOp;
-use roc_mono::ir::{HigherOrderLowLevel, PassedFunction, ProcLayout};
+use roc_mono::ir::{HigherOrderLowLevel, ListLiteralElement, PassedFunction, ProcLayout};
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
 use roc_mono::low_level::HigherOrder;
 
@@ -291,11 +291,163 @@ impl<'a> LowLevelCall<'a> {
                 internal_error!("HigherOrder lowlevels should not be handled here")
             }
 
-            ListGetUnsafe | ListReplaceUnsafe | ListSingle | ListRepeat | ListReverse
-            | ListConcat | ListContains | ListAppend | ListPrepend | ListJoin | ListRange
-            | ListSublist | ListDropAt | ListSwap => {
-                todo!("{:?}", self.lowlevel);
+            ListGetUnsafe => {
+                let list: Symbol = self.arguments[0];
+                let index: Symbol = self.arguments[1];
+
+                // Calculate byte offset in list
+                backend
+                    .storage
+                    .load_symbols(&mut backend.code_builder, &[index]);
+                let elem_size = self.ret_layout.stack_size(TARGET_INFO);
+                backend.code_builder.i32_const(elem_size as i32);
+                backend.code_builder.i32_mul(); // index*size
+
+                // Calculate base heap pointer
+                if let StoredValue::StackMemory { location, .. } = backend.storage.get(&list) {
+                    let (fp, offset) =
+                        location.local_and_offset(backend.storage.stack_frame_pointer);
+                    backend.code_builder.get_local(fp);
+                    backend.code_builder.i32_load(Align::Bytes4, offset);
+                }
+
+                // Target element heap pointer
+                backend.code_builder.i32_add(); // base + index*size
+                let elem_heap_ptr = backend.storage.create_anonymous_local(ValueType::I32);
+                backend.code_builder.set_local(elem_heap_ptr);
+
+                // Copy to stack
+                backend.storage.copy_value_from_memory(
+                    &mut backend.code_builder,
+                    self.ret_symbol,
+                    elem_heap_ptr,
+                    0,
+                );
+
+                // Increment refcount
+                if self.ret_layout.is_refcounted() {
+                    let inc_fn = backend.get_refcount_fn_index(self.ret_layout, HelperOp::Inc);
+                    backend
+                        .storage
+                        .load_symbols(&mut backend.code_builder, &[self.ret_symbol]);
+                    backend.code_builder.i32_const(1);
+                    backend.code_builder.call(inc_fn, 2, false);
+                }
             }
+            ListReplaceUnsafe => {
+                // List.replace_unsafe : List elem, Nat, elem -> { list: List elem, value: elem }
+
+                let list: Symbol = self.arguments[0];
+                let index: Symbol = self.arguments[1];
+                let new_elem: Symbol = self.arguments[2];
+
+                // Find the return struct in the stack frame
+                let (ret_local, ret_offset) = match &self.ret_storage {
+                    StoredValue::StackMemory { location, .. } => {
+                        location.local_and_offset(backend.storage.stack_frame_pointer)
+                    }
+                    _ => internal_error!("Invalid return value storage for ListReplaceUnsafe"),
+                };
+
+                // Byte offsets of each field in the return struct
+                let (ret_list_offset, ret_elem_offset, elem_layout) = match self.ret_layout {
+                    Layout::Struct {
+                        field_layouts: &[Layout::Builtin(Builtin::List(list_elem)), value_layout],
+                        ..
+                    } if value_layout == *list_elem => {
+                        let list_offset = 0;
+                        let elem_offset =
+                            Layout::Builtin(Builtin::List(list_elem)).stack_size(TARGET_INFO);
+                        (list_offset, elem_offset, value_layout)
+                    }
+                    Layout::Struct {
+                        field_layouts: &[value_layout, Layout::Builtin(Builtin::List(list_elem))],
+                        ..
+                    } if value_layout == *list_elem => {
+                        let list_offset = value_layout.stack_size(TARGET_INFO);
+                        let elem_offset = 0;
+                        (list_offset, elem_offset, value_layout)
+                    }
+                    _ => internal_error!("Invalid return layout for ListReplaceUnsafe"),
+                };
+
+                let (elem_width, elem_alignment) =
+                    elem_layout.stack_size_and_alignment(TARGET_INFO);
+
+                // Ensure the new element is stored in memory so we can pass a pointer to Zig
+                let (new_elem_local, new_elem_offset) = match backend.storage.get(&new_elem) {
+                    StoredValue::StackMemory { location, .. } => {
+                        location.local_and_offset(backend.storage.stack_frame_pointer)
+                    }
+                    _ => {
+                        let (frame_ptr, offset) = backend
+                            .storage
+                            .allocate_anonymous_stack_memory(elem_width, elem_alignment);
+                        backend.storage.copy_value_to_memory(
+                            &mut backend.code_builder,
+                            frame_ptr,
+                            offset,
+                            new_elem,
+                        );
+                        (frame_ptr, offset)
+                    }
+                };
+
+                // Load all the arguments for Zig
+                //    (List return pointer)  i32
+                //    list: RocList,         i64, i32
+                //    alignment: u32,        i32
+                //    index: usize,          i32
+                //    element: Opaque,       i32
+                //    element_width: usize,  i32
+                //    out_element: ?[*]u8,   i32
+
+                let code_builder = &mut backend.code_builder;
+
+                code_builder.get_local(ret_local);
+                if (ret_offset + ret_list_offset) > 0 {
+                    code_builder.i32_const((ret_offset + ret_list_offset) as i32);
+                    code_builder.i32_add();
+                }
+
+                backend.storage.load_symbol_zig(code_builder, list);
+                code_builder.i32_const(elem_alignment as i32);
+                backend.storage.load_symbol_zig(code_builder, index);
+
+                code_builder.get_local(new_elem_local);
+                if new_elem_offset > 0 {
+                    code_builder.i32_const(new_elem_offset as i32);
+                    code_builder.i32_add();
+                }
+
+                code_builder.i32_const(elem_width as i32);
+
+                code_builder.get_local(ret_local);
+                if (ret_offset + ret_elem_offset) > 0 {
+                    code_builder.i32_const((ret_offset + ret_elem_offset) as i32);
+                    code_builder.i32_add();
+                }
+
+                // There is an in-place version of this but we don't use it for dev backends. No morphic_lib analysis.
+                backend.call_host_fn_after_loading_args(bitcode::LIST_REPLACE, 8, false);
+            }
+            ListSingle => {
+                let elem = self.arguments[0];
+                let elem_layout = &backend.storage.symbol_layouts[&elem].clone();
+                let elems = backend.env.arena.alloc([ListLiteralElement::Symbol(elem)]);
+                backend.expr_array(self.ret_symbol, &self.ret_storage, elem_layout, elems)
+            }
+            ListRepeat => todo!("{:?}", self.lowlevel),
+            ListReverse => todo!("{:?}", self.lowlevel),
+            ListConcat => todo!("{:?}", self.lowlevel),
+            ListContains => todo!("{:?}", self.lowlevel),
+            ListAppend => todo!("{:?}", self.lowlevel),
+            ListPrepend => todo!("{:?}", self.lowlevel),
+            ListJoin => todo!("{:?}", self.lowlevel),
+            ListRange => todo!("{:?}", self.lowlevel),
+            ListSublist => todo!("{:?}", self.lowlevel),
+            ListDropAt => todo!("{:?}", self.lowlevel),
+            ListSwap => todo!("{:?}", self.lowlevel),
 
             DictSize | DictEmpty | DictInsert | DictRemove | DictContains | DictGetUnsafe
             | DictKeys | DictValues | DictUnion | DictIntersection | DictDifference
@@ -1648,7 +1800,7 @@ pub fn call_higher_order_lowlevel<'a>(
     };
 
     let wrapper_fn_idx = backend.register_helper_proc(wrapper_sym, wrapper_layout, source);
-    let wrapper_fn_ptr = backend.get_fn_table_index(wrapper_fn_idx);
+    let wrapper_fn_ptr = backend.get_fn_ptr(wrapper_fn_idx);
     let inc_fn_ptr = match closure_data_layout {
         Layout::Struct {
             field_layouts: &[], ..
@@ -1656,9 +1808,14 @@ pub fn call_higher_order_lowlevel<'a>(
             // Our code gen would ignore the Unit arg, but the Zig builtin passes a pointer for it!
             // That results in an exception (type signature mismatch in indirect call).
             // The workaround is to use I32 layout, treating the (ignored) pointer as an integer.
-            backend.get_refcount_fn_ptr(Layout::Builtin(Builtin::Int(IntWidth::I32)), HelperOp::Inc)
+            let inc_fn = backend
+                .get_refcount_fn_index(Layout::Builtin(Builtin::Int(IntWidth::I32)), HelperOp::Inc);
+            backend.get_fn_ptr(inc_fn)
         }
-        _ => backend.get_refcount_fn_ptr(closure_data_layout, HelperOp::Inc),
+        _ => {
+            let inc_fn = backend.get_refcount_fn_index(closure_data_layout, HelperOp::Inc);
+            backend.get_fn_ptr(inc_fn)
+        }
     };
 
     match op {
@@ -1785,7 +1942,8 @@ fn list_map_n<'a>(
     // If we have lists of different lengths, we may need to decrement
     let num_wasm_args = if arg_elem_layouts.len() > 1 {
         for el in arg_elem_layouts.iter() {
-            let ptr = backend.get_refcount_fn_ptr(*el, HelperOp::Dec);
+            let idx = backend.get_refcount_fn_index(*el, HelperOp::Dec);
+            let ptr = backend.get_fn_ptr(idx);
             backend.code_builder.i32_const(ptr);
         }
         7 + arg_elem_layouts.len() * 4
