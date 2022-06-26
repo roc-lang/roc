@@ -1497,3 +1497,17 @@ fn tail_call_elimination() {
         "#
     )
 }
+
+#[mono_test]
+fn tail_call_with_different_layout() {
+    indoc!(
+        r#"
+        chain = \in, buildLazy ->
+            \{} ->
+                thunk = buildLazy in
+                thunk {}
+
+        chain 1u8 \_ -> chain 1u16 \_ -> (\{} -> "")
+        "#
+    )
+}

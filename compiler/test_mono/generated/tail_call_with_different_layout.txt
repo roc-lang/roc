@@ -1,0 +1,45 @@
+procedure Test.1 (Test.2, Test.3):
+    let Test.12 : {U8, {}} = Struct {Test.2, Test.3};
+    ret Test.12;
+
+procedure Test.1 (Test.2, Test.3):
+    let Test.21 : {U16, {}} = Struct {Test.2, Test.3};
+    ret Test.21;
+
+procedure Test.4 (Test.13, #Attr.12):
+    let Test.3 : {} = StructAtIndex 1 #Attr.12;
+    let Test.2 : U16 = StructAtIndex 0 #Attr.12;
+    let Test.5 : {} = CallByName Test.7 Test.2;
+    let Test.25 : {} = Struct {};
+    let Test.24 : Str = CallByName Test.8 Test.25;
+    ret Test.24;
+
+procedure Test.4 (Test.32, Test.33):
+    joinpoint Test.14 Test.13 #Attr.12:
+        let Test.3 : {} = StructAtIndex 1 #Attr.12;
+        let Test.2 : U8 = StructAtIndex 0 #Attr.12;
+        let Test.5 : {U16, {}} = CallByName Test.6 Test.2;
+        let Test.16 : {} = Struct {};
+        jump Test.14 Test.16 Test.5;
+    in
+    jump Test.14 Test.32 Test.33;
+
+procedure Test.6 (Test.17):
+    let Test.19 : U16 = 1i64;
+    let Test.20 : {} = Struct {};
+    let Test.18 : {U16, {}} = CallByName Test.1 Test.19 Test.20;
+    ret Test.18;
+
+procedure Test.7 (Test.26):
+    let Test.27 : {} = Struct {};
+    ret Test.27;
+
+procedure Test.8 (Test.28):
+    let Test.29 : Str = "";
+    ret Test.29;
+
+procedure Test.0 ():
+    let Test.10 : U8 = 1i64;
+    let Test.11 : {} = Struct {};
+    let Test.9 : {U8, {}} = CallByName Test.1 Test.10 Test.11;
+    ret Test.9;
