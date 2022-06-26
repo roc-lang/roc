@@ -725,7 +725,7 @@ pub fn canonicalize_module_defs<'a>(
                     no_capture_symbols.insert(name);
                 }
 
-                // patterns can contain default expressions, so much go over them too!
+                // patterns can contain default expressions, so must go over them too!
                 for (_, _, loc_pat) in function_def.arguments.iter_mut() {
                     fix_values_captured_in_closure_pattern(
                         &mut loc_pat.value,
