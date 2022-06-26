@@ -1980,6 +1980,8 @@ impl Declarations {
         }
     }
 
+    /// To store a recursive group in the vectors without nesting, we first push a "header"
+    /// here, then push the definitions that are part of that recursive group
     pub fn push_recursive_group(&mut self, length: u16, cycle_mark: IllegalCycleMark) -> usize {
         let index = self.declarations.len();
 

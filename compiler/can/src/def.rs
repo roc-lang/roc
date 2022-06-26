@@ -19,6 +19,7 @@ use crate::scope::Scope;
 use roc_collections::ReferenceMatrix;
 use roc_collections::VecMap;
 use roc_collections::{ImSet, MutMap, SendMap};
+use roc_error_macros::internal_error;
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::IdentId;
@@ -1191,56 +1192,42 @@ pub(crate) fn sort_can_defs_new(
             group_length => {
                 let group_defs = defs.split_off(defs.len() - group_length);
 
+                // push the "header" for this group of recursive definitions
                 let cycle_mark = IllegalCycleMark::new(var_store);
                 declarations.push_recursive_group(group_length as u16, cycle_mark);
 
+                // then push the definitions of this group
                 for def in group_defs {
-                    match def.loc_pattern.value {
-                        Pattern::Identifier(symbol) => match def.loc_expr.value {
-                            Closure(closure_data) => {
-                                declarations.push_recursive_def(
-                                    Loc::at(def.loc_pattern.region, symbol),
-                                    Loc::at(def.loc_expr.region, closure_data),
-                                    def.expr_var,
-                                    def.annotation,
-                                    None,
-                                );
-                            }
-                            _ => {
-                                declarations.push_value_def(
-                                    Loc::at(def.loc_pattern.region, symbol),
-                                    def.loc_expr,
-                                    def.expr_var,
-                                    def.annotation,
-                                    None,
-                                );
-                            }
-                        },
-                        Pattern::AbilityMemberSpecialization {
-                            ident: symbol,
-                            specializes,
-                        } => match def.loc_expr.value {
-                            Closure(closure_data) => {
-                                declarations.push_recursive_def(
-                                    Loc::at(def.loc_pattern.region, symbol),
-                                    Loc::at(def.loc_expr.region, closure_data),
-                                    def.expr_var,
-                                    def.annotation,
-                                    Some(specializes),
-                                );
-                            }
-                            _ => {
-                                declarations.push_value_def(
-                                    Loc::at(def.loc_pattern.region, symbol),
-                                    def.loc_expr,
-                                    def.expr_var,
-                                    def.annotation,
-                                    Some(specializes),
-                                );
-                            }
-                        },
+                    let (symbol, specializes) = match def.loc_pattern.value {
+                        Pattern::Identifier(symbol) => (symbol, None),
+
+                        Pattern::AbilityMemberSpecialization { ident, specializes } => {
+                            (ident, Some(specializes))
+                        }
+
                         _ => {
-                            panic!("destructures cannot participate in a recursive group; it's always a type error")
+                            internal_error!("destructures cannot participate in a recursive group; it's always a type error")
+                        }
+                    };
+
+                    match def.loc_expr.value {
+                        Closure(closure_data) => {
+                            declarations.push_recursive_def(
+                                Loc::at(def.loc_pattern.region, symbol),
+                                Loc::at(def.loc_expr.region, closure_data),
+                                def.expr_var,
+                                def.annotation,
+                                specializes,
+                            );
+                        }
+                        _ => {
+                            declarations.push_value_def(
+                                Loc::at(def.loc_pattern.region, symbol),
+                                def.loc_expr,
+                                def.expr_var,
+                                def.annotation,
+                                specializes,
+                            );
                         }
                     }
                 }
