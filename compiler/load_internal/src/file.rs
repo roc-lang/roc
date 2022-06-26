@@ -4694,7 +4694,7 @@ fn build_pending_specializations<'a>(
                 // the declarations of this group will be treaded individually by later iterations
             }
             Expectation => {
-                // mark this symbols as a top-level thunk before any other work on the procs
+                // mark this symbol as a top-level thunk before any other work on the procs
                 module_thunks.push(symbol);
 
                 let is_host_exposed = true;
