@@ -3026,20 +3026,29 @@ pub fn rec_defs_help_simple(
     }
 
     // Strategy for recursive defs:
-    // 1. Let-generalize the type annotations we know; these are the source of truth we'll solve
-    //    everything else with. If there are circular type errors here, they will be caught during
-    //    the let-generalization.
-    // 2. Introduce all symbols of the untyped defs, but don't generalize them yet. Now, solve
-    //    the untyped defs' bodies. This way, when checking something like
-    //      f = \x -> f [ x ]
-    //    we introduce `f: b -> c`, then constrain the call `f [ x ]`,
+    //
+    // 1. Let-generalize all rigid annotations. These are the source of truth we'll solve
+    //    everything else with. If there are circular type errors here, they will be caught
+    //    during the let-generalization.
+    //
+    // 2. Introduce all symbols of the flex + hybrid defs, but don't generalize them yet.
+    //    Now, solve those defs' bodies. This way, when checking something like
+    //      f = \x -> f [x]
+    //    we introduce `f: b -> c`, then constrain the call `f [x]`,
     //    forcing `b -> c ~ List b -> c` and correctly picking up a recursion error.
-    //    Had we generalized `b -> c`, the call `f [ x ]` would have been generalized, and this
+    //    Had we generalized `b -> c`, the call `f [x]` would have been generalized, and this
     //    error would not be found.
-    // 3. Now properly let-generalize the untyped body defs, since we now know their types and
+    //
+    //    - This works just as well for mutually recursive defs.
+    //    - For hybrid defs, we also ensure solved types agree with what the
+    //      elaborated parts of their type annotations demand.
+    //
+    // 3. Now properly let-generalize the flex + hybrid defs, since we now know their types and
     //    that they don't have circular type errors.
+    //
     // 4. Solve the bodies of the typed body defs, and check that they agree the types of the type
     //    annotation.
+    //
     // 5. Solve the rest of the program that happens after this recursive def block.
 
     // 2. Solve untyped defs without generalization of their symbols.
@@ -3056,6 +3065,7 @@ pub fn rec_defs_help_simple(
     // and generate a good error message there.
     let cycle_constraint = constraints.check_cycle(loc_symbols, expr_regions, cycle_mark);
 
+    // 4 + 5. Solve the typed body defs, and the rest of the program.
     let typed_body_constraints = constraints.and_constraint(rigid_info.constraints);
     let typed_body_and_final_constr =
         constraints.and_constraint([typed_body_constraints, cycle_constraint, body_con]);
@@ -3066,7 +3076,6 @@ pub fn rec_defs_help_simple(
         hybrid_and_flex_info.vars,
         hybrid_and_flex_info.def_types,
         untyped_def_symbols_constr,
-        // 4 + 5. Solve the typed body defs, and the rest of the program.
         typed_body_and_final_constr,
     );
 
