@@ -334,7 +334,103 @@ impl<'a> LowLevelCall<'a> {
                     backend.code_builder.call(inc_fn, 2, false);
                 }
             }
-            ListReplaceUnsafe => todo!("{:?}", self.lowlevel),
+            ListReplaceUnsafe => {
+                // List.replace_unsafe : List elem, Nat, elem -> { list: List elem, value: elem }
+
+                let list: Symbol = self.arguments[0];
+                let index: Symbol = self.arguments[1];
+                let new_elem: Symbol = self.arguments[2];
+
+                // Find the return struct in the stack frame
+                let (ret_local, ret_offset) = match &self.ret_storage {
+                    StoredValue::StackMemory { location, .. } => {
+                        location.local_and_offset(backend.storage.stack_frame_pointer)
+                    }
+                    _ => internal_error!("Invalid return value storage for ListReplaceUnsafe"),
+                };
+
+                // Byte offsets of each field in the return struct
+                let (ret_list_offset, ret_elem_offset, elem_layout) = match self.ret_layout {
+                    Layout::Struct {
+                        field_layouts: &[Layout::Builtin(Builtin::List(list_elem)), value_layout],
+                        ..
+                    } if value_layout == *list_elem => {
+                        let list_offset = 0;
+                        let elem_offset =
+                            Layout::Builtin(Builtin::List(list_elem)).stack_size(TARGET_INFO);
+                        (list_offset, elem_offset, value_layout)
+                    }
+                    Layout::Struct {
+                        field_layouts: &[value_layout, Layout::Builtin(Builtin::List(list_elem))],
+                        ..
+                    } if value_layout == *list_elem => {
+                        let list_offset = value_layout.stack_size(TARGET_INFO);
+                        let elem_offset = 0;
+                        (list_offset, elem_offset, value_layout)
+                    }
+                    _ => internal_error!("Invalid return layout for ListReplaceUnsafe"),
+                };
+
+                let (elem_width, elem_alignment) =
+                    elem_layout.stack_size_and_alignment(TARGET_INFO);
+
+                // Ensure the new element is stored in memory so we can pass a pointer to Zig
+                let (new_elem_local, new_elem_offset) = match backend.storage.get(&new_elem) {
+                    StoredValue::StackMemory { location, .. } => {
+                        location.local_and_offset(backend.storage.stack_frame_pointer)
+                    }
+                    _ => {
+                        let (frame_ptr, offset) = backend
+                            .storage
+                            .allocate_anonymous_stack_memory(elem_width, elem_alignment);
+                        backend.storage.copy_value_to_memory(
+                            &mut backend.code_builder,
+                            frame_ptr,
+                            offset,
+                            new_elem,
+                        );
+                        (frame_ptr, offset)
+                    }
+                };
+
+                // Load all the arguments for Zig
+                //    (List return pointer)  i32
+                //    list: RocList,         i64
+                //    alignment: u32,        i32
+                //    index: usize,          i32
+                //    element: Opaque,       i32
+                //    element_width: usize,  i32
+                //    out_element: ?[*]u8,   i32
+
+                let code_builder = &mut backend.code_builder;
+
+                code_builder.get_local(ret_local);
+                if (ret_offset + ret_list_offset) > 0 {
+                    code_builder.i32_const((ret_offset + ret_list_offset) as i32);
+                    code_builder.i32_add();
+                }
+
+                backend.storage.load_symbol_zig(code_builder, list);
+                code_builder.i32_const(elem_alignment as i32);
+                backend.storage.load_symbol_zig(code_builder, index);
+
+                code_builder.get_local(new_elem_local);
+                if new_elem_offset > 0 {
+                    code_builder.i32_const(new_elem_offset as i32);
+                    code_builder.i32_add();
+                }
+
+                code_builder.i32_const(elem_width as i32);
+
+                code_builder.get_local(ret_local);
+                if (ret_offset + ret_elem_offset) > 0 {
+                    code_builder.i32_const((ret_offset + ret_elem_offset) as i32);
+                    code_builder.i32_add();
+                }
+
+                // There is an in-place version of this but we don't use it for dev backends. No morphic_lib analysis.
+                backend.call_host_fn_after_loading_args(bitcode::LIST_REPLACE, 7, false);
+            }
             ListSingle => {
                 let elem = self.arguments[0];
                 let elem_layout = &backend.storage.symbol_layouts[&elem].clone();

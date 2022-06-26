@@ -1625,7 +1625,7 @@ fn empty_list_is_empty() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn first_int_list() {
     assert_evals_to!(
         indoc!(
@@ -1641,7 +1641,7 @@ fn first_int_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[ignore]
 fn first_wildcard_empty_list() {
     assert_evals_to!(
@@ -1658,7 +1658,7 @@ fn first_wildcard_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn first_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -1674,7 +1674,7 @@ fn first_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn last_int_list() {
     assert_evals_to!(
         indoc!(
@@ -1690,7 +1690,7 @@ fn last_int_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[ignore]
 fn last_wildcard_empty_list() {
     assert_evals_to!(
@@ -1707,7 +1707,7 @@ fn last_wildcard_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn last_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -1879,8 +1879,8 @@ fn replace_shared_int_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
-fn get_set_unique_int_list() {
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn get_set_unique_int_list_i64() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1895,7 +1895,23 @@ fn get_set_unique_int_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn get_set_unique_int_list_i8() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when List.get (List.set [12, 9, 7, 3] 1 42i8) 1 is
+                    Ok val -> val
+                    Err _ -> -1i8
+            "#
+        ),
+        42,
+        i8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn set_unique_int_list() {
     assert_evals_to!(
         "List.set [12, 9, 7, 1, 5] 2 33",
@@ -1905,7 +1921,7 @@ fn set_unique_int_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn set_unique_list_oob() {
     assert_evals_to!(
         "List.set [3, 17, 4.1] 1337 9.25",
@@ -1915,7 +1931,7 @@ fn set_unique_list_oob() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn set_shared_int_list() {
     assert_evals_to!(
         indoc!(
@@ -1943,7 +1959,7 @@ fn set_shared_int_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn set_shared_list_oob() {
     assert_evals_to!(
         indoc!(
@@ -2022,7 +2038,7 @@ fn gen_wrap_first() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_duplicate() {
     assert_evals_to!(
         indoc!(
@@ -2045,7 +2061,7 @@ fn gen_duplicate() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_swap() {
     assert_evals_to!(
         indoc!(
@@ -2074,7 +2090,7 @@ fn gen_swap() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_quicksort() {
     with_larger_debug_stack(|| {
         assert_evals_to!(
@@ -2146,7 +2162,7 @@ fn gen_quicksort() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn quicksort() {
     with_larger_debug_stack(|| {
         assert_evals_to!(
@@ -2220,7 +2236,7 @@ fn quicksort() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn quicksort_singleton() {
     with_larger_debug_stack(|| {
         assert_evals_to!(
@@ -2328,7 +2344,7 @@ fn list_literal_increment_decrement() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_pass_to_function() {
     assert_evals_to!(
         indoc!(
@@ -2348,7 +2364,7 @@ fn list_pass_to_function() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_pass_to_set() {
     assert_evals_to!(
         indoc!(
@@ -2368,7 +2384,7 @@ fn list_pass_to_set() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_wrap_in_tag() {
     assert_evals_to!(
         indoc!(
@@ -2582,7 +2598,7 @@ fn list_map_with_index() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
 fn cleanup_because_exception() {
     assert_evals_to!(
@@ -2753,7 +2769,7 @@ fn map_with_index_multi_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn empty_list_of_function_type() {
     // see https://github.com/rtfeldman/roc/issues/1732
     assert_evals_to!(

@@ -264,11 +264,11 @@ pub struct WasmDebugSettings {
 
 pub const DEBUG_SETTINGS: WasmDebugSettings = WasmDebugSettings {
     proc_start_end: false && cfg!(debug_assertions),
-    user_procs_ir: false && cfg!(debug_assertions),
+    user_procs_ir: false && cfg!(debug_assertions), // Note: we also have `ROC_PRINT_IR_AFTER_SPECIALIZATION=1 cargo test-gen-wasm`
     helper_procs_ir: false && cfg!(debug_assertions),
     let_stmt_ir: false && cfg!(debug_assertions),
     instructions: false && cfg!(debug_assertions),
     storage_map: false && cfg!(debug_assertions),
-    keep_test_binary: false && cfg!(debug_assertions),
+    keep_test_binary: true && cfg!(debug_assertions),
     skip_dead_code_elim: false && cfg!(debug_assertions),
 };

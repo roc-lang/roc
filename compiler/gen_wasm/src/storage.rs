@@ -123,6 +123,27 @@ impl<'a> Storage<'a> {
         id
     }
 
+    pub fn allocate_anonymous_stack_memory(&mut self, size: u32, alignment_bytes: u32) -> (LocalId, u32) {
+        let offset = self.allocate_stack_memory(size, alignment_bytes);
+        let fp = self.stack_frame_pointer.unwrap();
+        (fp, offset)
+    }
+
+    fn allocate_stack_memory(&mut self, size: u32, alignment_bytes: u32) -> u32 {
+        if self.stack_frame_pointer.is_none() && size > 0 {
+            let next_local_id = self.get_next_local_id();
+            self.stack_frame_pointer = Some(next_local_id);
+            self.local_types.push(PTR_TYPE);
+        }
+
+        let offset =
+            round_up_to_alignment!(self.stack_frame_size, alignment_bytes as i32);
+
+        self.stack_frame_size = offset + (size as i32);
+
+        offset as u32
+    }
+
     /// Allocate storage for a Roc variable
     ///
     /// Wasm primitives (i32, i64, f32, f64) are allocated "storage" on the VM stack.
@@ -139,7 +160,6 @@ impl<'a> Storage<'a> {
         symbol: Symbol,
         kind: StoredVarKind,
     ) -> StoredValue {
-        let next_local_id = self.get_next_local_id();
         let wasm_layout = WasmLayout::new(&layout);
         self.symbol_layouts.insert(symbol, layout);
 
@@ -157,17 +177,8 @@ impl<'a> Storage<'a> {
             } => {
                 let location = match kind {
                     StoredVarKind::Variable => {
-                        if self.stack_frame_pointer.is_none() && size > 0 {
-                            self.stack_frame_pointer = Some(next_local_id);
-                            self.local_types.push(PTR_TYPE);
-                        }
-
-                        let offset =
-                            round_up_to_alignment!(self.stack_frame_size, alignment_bytes as i32);
-
-                        self.stack_frame_size = offset + (size as i32);
-
-                        StackMemoryLocation::FrameOffset(offset as u32)
+                        let offset = self.allocate_stack_memory(size, alignment_bytes);
+                        StackMemoryLocation::FrameOffset(offset)
                     }
 
                     StoredVarKind::ReturnValue => StackMemoryLocation::PointerArg(LocalId(0)),
