@@ -14,7 +14,7 @@ use roc_mono::ir::OptLevel;
 use roc_region::all::Region;
 use roc_repl_cli::expect_mono_module_to_dylib;
 use roc_reporting::error::r#type::error_type_to_doc;
-use roc_reporting::report::{Palette, Report, RocDocAllocator, RocDocBuilder};
+use roc_reporting::report::{Report, RocDocAllocator};
 use roc_target::TargetInfo;
 use std::env;
 use std::ffi::{CString, OsStr};
@@ -747,8 +747,8 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     opt_level: OptLevel,
     args: I,
     binary_bytes: &mut [u8],
-    expectations: VecMap<ModuleId, Expectations>,
-    interns: Interns,
+    _expectations: VecMap<ModuleId, Expectations>,
+    _interns: Interns,
 ) -> std::io::Result<i32> {
     use bumpalo::collections::CollectIn;
     use std::os::unix::ffi::OsStrExt;
@@ -795,14 +795,18 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
             .chain([std::ptr::null()])
             .collect_in(&arena);
 
-        //        match opt_level {
-        //            OptLevel::Development => roc_run_native_debug(executable, &argv, &envp),
-        //            OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => {
-        //                roc_run_native_fast(executable, &argv, &envp);
-        //            }
-        //        }
+        // `roc dev` should defer to
+        // roc_run_native_debug(executable, &argv, &envp, expectations, interns)
 
-        roc_run_native_debug(executable, &argv, &envp, expectations, interns)
+        match opt_level {
+            OptLevel::Development => {
+                // Development here means the dev backend
+                roc_run_native_fast(executable, &argv, &envp);
+            }
+            OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => {
+                roc_run_native_fast(executable, &argv, &envp);
+            }
+        }
     }
 
     Ok(1)
@@ -841,7 +845,7 @@ unsafe fn roc_run_native_fast(
     }
 }
 
-// with Expect
+#[allow(unused)]
 unsafe fn roc_run_native_debug(
     executable: ExecutableFile,
     argv: &[*const c_char],
@@ -850,18 +854,12 @@ unsafe fn roc_run_native_debug(
     interns: Interns,
 ) {
     use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
-    use std::os::unix::ffi::OsStrExt;
 
     let mut signals = Signals::new(&[SIGCHLD, SIGUSR1]).unwrap();
 
-    let parent_pid = std::process::id();
-
     match libc::fork() {
         0 => {
-            // we are the child
-            println!("we are the child {}", std::process::id());
-
-            if dbg!(executable.execve(argv, envp)) < 0 {
+            if executable.execve(argv, envp) < 0 {
                 // Get the current value of errno
                 let e = errno::errno();
 
@@ -887,9 +885,6 @@ unsafe fn roc_run_native_debug(
             process::exit(1)
         }
         1.. => {
-            // parent
-            println!("we are the parent {}", std::process::id());
-
             let name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
             let cstring = CString::new(name).unwrap();
 
