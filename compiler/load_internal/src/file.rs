@@ -4692,7 +4692,63 @@ fn build_pending_specializations<'a>(
             MutualRecursion { .. } => {
                 // the declarations of this group will be treaded individually by later iterations
             }
-            Expectation => todo!(),
+            Expectation => {
+                // mark this symbol as a top-level thunk before any other work on the procs
+                module_thunks.push(symbol);
+
+                let is_host_exposed = true;
+
+                // If this is an exposed symbol, we need to
+                // register it as such. Otherwise, since it
+                // never gets called by Roc code, it will never
+                // get specialized!
+                if is_host_exposed {
+                    let layout_result =
+                        layout_cache.raw_from_var(mono_env.arena, expr_var, mono_env.subs);
+
+                    // cannot specialize when e.g. main's type contains type variables
+                    if let Err(e) = layout_result {
+                        match e {
+                            LayoutProblem::Erroneous => {
+                                let message = "top level function has erroneous type";
+                                procs_base.runtime_errors.insert(symbol, message);
+                                continue;
+                            }
+                            LayoutProblem::UnresolvedTypeVar(v) => {
+                                let message = format!(
+                                    "top level function has unresolved type variable {:?}",
+                                    v
+                                );
+                                procs_base
+                                    .runtime_errors
+                                    .insert(symbol, mono_env.arena.alloc(message));
+                                continue;
+                            }
+                        }
+                    }
+
+                    procs_base.host_specializations.insert_host_exposed(
+                        mono_env.subs,
+                        symbol,
+                        annotation,
+                        expr_var,
+                    );
+                }
+
+                let proc = PartialProc {
+                    annotation: expr_var,
+                    // This is a 0-arity thunk, so it has no arguments.
+                    pattern_symbols: &[],
+                    // This is a top-level definition, so it cannot capture anything
+                    captured_symbols: CapturedSymbols::None,
+                    body: body.value,
+                    body_var: expr_var,
+                    // This is a 0-arity thunk, so it cannot be recursive
+                    is_self_recursive: false,
+                };
+
+                procs_base.partial_procs.insert(symbol, proc);
+            }
         }
     }
 

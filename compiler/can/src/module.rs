@@ -439,7 +439,7 @@ pub fn canonicalize_module_defs<'a>(
     };
 
     let (mut declarations, mut output) =
-        crate::def::sort_can_defs_new(&mut env, var_store, defs, new_output);
+        crate::def::sort_can_defs_new(&mut env, &mut scope, var_store, defs, new_output);
 
     debug_assert!(
         output.pending_derives.is_empty(),
