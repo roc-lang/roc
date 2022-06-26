@@ -5,6 +5,7 @@ use roc_can::expr::PendingDerives;
 use roc_can::module::RigidVariables;
 use roc_collections::all::MutMap;
 use roc_collections::VecMap;
+use roc_derive_key::GlobalDerivedSymbols;
 use roc_module::symbol::Symbol;
 use roc_types::solved_types::Solved;
 use roc_types::subs::{ExposedTypesStorageSubs, StorageSubs, Subs, Variable};
@@ -32,6 +33,7 @@ pub struct SolvedModule {
     pub exposed_types: ExposedTypesStorageSubs,
 }
 
+#[allow(clippy::too_many_arguments)] // TODO: put params in a context/env var
 pub fn run_solve(
     constraints: &Constraints,
     constraint: ConstraintSoa,
@@ -40,6 +42,7 @@ pub fn run_solve(
     mut aliases: Aliases,
     mut abilities_store: AbilitiesStore,
     pending_derives: PendingDerives,
+    derived_symbols: GlobalDerivedSymbols,
 ) -> (
     Solved<Subs>,
     solve::Env,
@@ -71,6 +74,7 @@ pub fn run_solve(
         &constraint,
         pending_derives,
         &mut abilities_store,
+        derived_symbols,
     );
 
     (solved_subs, solved_env, problems, abilities_store)

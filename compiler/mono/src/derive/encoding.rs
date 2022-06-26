@@ -9,10 +9,11 @@ use roc_can::expr::{AnnotatedMark, ClosureData, Expr, Field, Recursive, WhenBran
 use roc_can::pattern::Pattern;
 use roc_collections::SendMap;
 use roc_derive_key::encoding::FlatEncodableKey;
+use roc_derive_key::GlobalDerivedSymbols;
 use roc_error_macros::internal_error;
 use roc_late_solve::{instantiate_rigids, AbilitiesView};
 use roc_module::called_via::CalledVia;
-use roc_module::ident::{Lowercase, TagName};
+use roc_module::ident::Lowercase;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{
@@ -43,6 +44,7 @@ pub struct Env<'a> {
     pub subs: &'a mut Subs,
     pub ident_ids: &'a mut IdentIds,
     pub exposed_encode_types: &'a mut ExposedTypesStorageSubs,
+    pub derived_symbols: &'a GlobalDerivedSymbols,
 }
 
 impl Env<'_> {
@@ -78,6 +80,7 @@ impl Env<'_> {
             self.arena,
             self.subs,
             &AbilitiesView::Module(&AbilitiesStore::default()),
+            self.derived_symbols,
             left,
             right,
         )
@@ -117,40 +120,12 @@ fn verify_signature(env: &mut Env<'_>, signature: Variable) {
     };
 }
 
-enum OwnedFlatEncodable {
-    List,
-    Set,
-    Dict,
-    Record(Vec<Lowercase>),
-    TagUnion(Vec<(TagName, u16)>),
-}
-
-pub struct OwnedFlatEncodableKey(OwnedFlatEncodable);
-
-impl From<FlatEncodableKey<'_>> for OwnedFlatEncodableKey {
-    fn from(key: FlatEncodableKey) -> Self {
-        use OwnedFlatEncodable::*;
-        let key = match key {
-            FlatEncodableKey::List() => List,
-            FlatEncodableKey::Set() => Set,
-            FlatEncodableKey::Dict() => Dict,
-            FlatEncodableKey::Record(fields) => Record(fields.into_iter().cloned().collect()),
-            FlatEncodableKey::TagUnion(tags) => TagUnion(
-                tags.into_iter()
-                    .map(|(tag, arity)| (tag.clone(), arity))
-                    .collect(),
-            ),
-        };
-        Self(key)
-    }
-}
-
-pub fn derive_to_encoder(env: &mut Env<'_>, key: OwnedFlatEncodableKey) -> Expr {
-    match key.0 {
-        OwnedFlatEncodable::List => todo!(),
-        OwnedFlatEncodable::Set => todo!(),
-        OwnedFlatEncodable::Dict => todo!(),
-        OwnedFlatEncodable::Record(fields) => {
+pub fn derive_to_encoder(env: &mut Env<'_>, key: FlatEncodableKey) -> Expr {
+    match key {
+        FlatEncodableKey::List() => todo!(),
+        FlatEncodableKey::Set() => todo!(),
+        FlatEncodableKey::Dict() => todo!(),
+        FlatEncodableKey::Record(fields) => {
             // Generalized record var so we can reuse this impl between many records:
             // if fields = { a, b }, this is { a: t1, b: t2 } for fresh t1, t2.
             let flex_fields = fields
@@ -170,7 +145,7 @@ pub fn derive_to_encoder(env: &mut Env<'_>, key: OwnedFlatEncodableKey) -> Expr 
 
             to_encoder_record(env, record_var, fields)
         }
-        OwnedFlatEncodable::TagUnion(tags) => {
+        FlatEncodableKey::TagUnion(tags) => {
             // Generalized tag union var so we can reuse this impl between many unions:
             // if tags = [ A arity=2, B arity=1 ], this is [ A t1 t2, B t3 ] for fresh t1, t2, t3
             let flex_tag_labels = tags

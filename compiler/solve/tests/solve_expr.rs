@@ -6497,7 +6497,7 @@ mod solve_expr {
                 "#
             ),
             &[
-                "Encoding#toEncoder(2) : { a : Str } -[[] + { a : Str }:toEncoder(2):1]-> Encoder fmt | fmt has EncoderFormatting",
+                "Encoding#toEncoder(2) : { a : Str } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting",
             ],
         )
     }
@@ -6518,7 +6518,9 @@ mod solve_expr {
                      # ^^^^^^^^^
                 "#
             ),
-            &["Encoding#toEncoder(2) : { a : A } -[[] + { a : A }:toEncoder(2):1]-> Encoder fmt | fmt has EncoderFormatting"],
+            &[
+                "Encoding#toEncoder(2) : { a : A } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting",
+            ],
         )
     }
 

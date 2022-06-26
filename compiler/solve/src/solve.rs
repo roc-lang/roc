@@ -13,6 +13,7 @@ use roc_collections::VecSet;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
+use roc_derive_key::{DeriveError, Derived, GlobalDerivedSymbols};
 use roc_error_macros::internal_error;
 use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
@@ -542,6 +543,7 @@ struct State {
     mark: Mark,
 }
 
+#[allow(clippy::too_many_arguments)] // TODO: put params in a context/env var
 pub fn run(
     constraints: &Constraints,
     problems: &mut Vec<TypeError>,
@@ -550,6 +552,7 @@ pub fn run(
     constraint: &Constraint,
     pending_derives: PendingDerives,
     abilities_store: &mut AbilitiesStore,
+    derived_symbols: GlobalDerivedSymbols,
 ) -> (Solved<Subs>, Env) {
     let env = run_in_place(
         constraints,
@@ -559,12 +562,14 @@ pub fn run(
         constraint,
         pending_derives,
         abilities_store,
+        derived_symbols,
     );
 
     (Solved(subs), env)
 }
 
 /// Modify an existing subs in-place instead
+#[allow(clippy::too_many_arguments)] // TODO: put params in a context/env var
 fn run_in_place(
     constraints: &Constraints,
     problems: &mut Vec<TypeError>,
@@ -573,6 +578,7 @@ fn run_in_place(
     constraint: &Constraint,
     pending_derives: PendingDerives,
     abilities_store: &mut AbilitiesStore,
+    derived_symbols: GlobalDerivedSymbols,
 ) -> Env {
     let mut pools = Pools::default();
 
@@ -617,6 +623,7 @@ fn run_in_place(
         &mut pools,
         deferred_uls_to_resolve,
         &SolvePhase { abilities_store },
+        &derived_symbols,
     );
 
     state.env
@@ -1748,6 +1755,7 @@ pub fn compact_lambda_sets_of_vars<P: Phase>(
     pools: &mut Pools,
     uls_of_var: UlsOfVar,
     phase: &P,
+    derived_symbols: &GlobalDerivedSymbols,
 ) {
     let mut seen = VecSet::default();
     for (_, lambda_sets) in uls_of_var.drain() {
@@ -1757,7 +1765,7 @@ pub fn compact_lambda_sets_of_vars<P: Phase>(
                 continue;
             }
 
-            compact_lambda_set(subs, arena, pools, root_lset, phase);
+            compact_lambda_set(subs, arena, pools, root_lset, phase, derived_symbols);
 
             seen.insert(root_lset);
         }
@@ -1770,6 +1778,7 @@ fn compact_lambda_set<P: Phase>(
     pools: &mut Pools,
     this_lambda_set: Variable,
     phase: &P,
+    derived_symbols: &GlobalDerivedSymbols,
 ) {
     let LambdaSet {
         solved,
@@ -1795,15 +1804,46 @@ fn compact_lambda_set<P: Phase>(
                 continue;
             }
             Structure(_) | Alias(_, _, _, AliasKind::Structural) => {
-                // TODO: figure out a convention for references to structural types in the
-                // unspecialized lambda set. This may very well happen, for example
-                //
-                //   Default has default : {} -> a | a has Default
-                //
-                //   {a, b} = default {}
-                //   #        ^^^^^^^ {} -[{a: t1, b: t2}:default:1]-> {a: t1, b: t2}
-                new_unspecialized.push(uls);
-                continue;
+                // This is a structural type, find the name of the derived ability function it
+                // should use.
+                match Derived::encoding(subs, var) {
+                    Ok(derived) => {
+                        let specialization_symbol = match derived {
+                            Derived::Immediate(symbol) => symbol,
+                            Derived::Key(derive_key) => {
+                                let mut derived_symbols = derived_symbols.lock().unwrap();
+                                derived_symbols.get_or_insert(derive_key)
+                            }
+                        };
+
+                        let specialization_symbol_slice = UnionLabels::insert_into_subs(
+                            subs,
+                            vec![(specialization_symbol, vec![])],
+                        );
+                        let lambda_set_for_derived = subs.fresh(Descriptor {
+                            content: LambdaSet(subs::LambdaSet {
+                                solved: specialization_symbol_slice,
+                                recursion_var: OptVariable::NONE,
+                                unspecialized: SubsSlice::default(),
+                            }),
+                            rank: target_rank,
+                            mark: Mark::NONE,
+                            copy: OptVariable::NONE,
+                        });
+
+                        specialized_to_unify_with.push(lambda_set_for_derived);
+                        continue;
+                    }
+                    Err(DeriveError::UnboundVar) => {
+                        // not specialized yet
+                        new_unspecialized.push(uls);
+                        continue;
+                    }
+                    Err(DeriveError::Underivable) => {
+                        // we should have reported an error for this; drop the lambda set.
+                        continue;
+                    }
+                };
             }
             Alias(opaque, _, _, AliasKind::Opaque) => opaque,
             Error => {
@@ -1864,7 +1904,14 @@ fn compact_lambda_set<P: Phase>(
 
         // Ensure the specialization lambda set is already compacted.
         if subs.get_root_key(specialized_lambda_set) != subs.get_root_key(this_lambda_set) {
-            compact_lambda_set(subs, arena, pools, specialized_lambda_set, phase);
+            compact_lambda_set(
+                subs,
+                arena,
+                pools,
+                specialized_lambda_set,
+                phase,
+                derived_symbols,
+            );
         }
 
         // Ensure the specialization lambda set we'll unify with is not a generalized one, but one
@@ -1889,7 +1936,7 @@ fn compact_lambda_set<P: Phase>(
             unify(subs, this_lambda_set, other_specialized, Mode::EQ)
                 .expect_success("lambda sets don't unify");
 
-        introduce(subs, subs.get_rank(this_lambda_set), pools, &vars);
+        introduce(subs, target_rank, pools, &vars);
 
         debug_assert!(
             must_implement_ability.is_empty(),

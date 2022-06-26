@@ -1441,3 +1441,45 @@ fn list_sort_asc() {
         "#
     )
 }
+
+#[mono_test]
+#[ignore]
+fn encode_custom_type() {
+    indoc!(
+        r#"
+        app "test"
+            imports [Encode.{ toEncoder }, Json]
+            provides [main] to "./platform"
+
+        HelloWorld := {}
+        toEncoder = \@HelloWorld {} ->
+            Encode.custom \bytes, fmt ->
+                bytes
+                    |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
+
+        main =
+            result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.format)
+            when result is
+                Ok s -> s
+                _ -> "<bad>"
+        "#
+    )
+}
+
+#[mono_test]
+#[ignore]
+fn encode_derived_record() {
+    indoc!(
+        r#"
+        app "test"
+            imports [Encode.{ toEncoder }, Json]
+            provides [main] to "./platform"
+
+        main =
+            result = Str.fromUtf8 (Encode.toBytes {a: "fieldA", b: "fieldB"} Json.format)
+            when result is
+                Ok s -> s
+                _ -> "<bad>"
+        "#
+    )
+}
