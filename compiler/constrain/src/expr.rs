@@ -1328,9 +1328,6 @@ fn constrain_function_def(
                 resolutions_to_make: vec![],
             };
 
-            // TODO missing equality of annotation_expected with expr_var?
-            // but the signature is stored into the expr_var below?!
-
             let region = loc_function_def.region;
 
             let mut argument_pattern_state = PatternState {
@@ -1504,9 +1501,6 @@ fn constrain_destructure_def(
     let destructure_def = &declarations.destructs[destructure_def_index.index()];
     let loc_pattern = &destructure_def.loc_pattern;
 
-    // TODO what is this for?
-    // let pattern_vars = &destructure_def.pattern_vars;
-
     let mut def_pattern_state =
         constrain_def_pattern(constraints, env, loc_pattern, Type::Variable(expr_var));
 
@@ -1547,6 +1541,7 @@ fn constrain_destructure_def(
 
             // TODO missing equality of annotation_expected with expr_var?
             // but the signature is stored into the expr_var below?!
+            // see https://github.com/rtfeldman/roc/issues/3332
 
             let ret_constraint = constrain_expr(
                 constraints,
