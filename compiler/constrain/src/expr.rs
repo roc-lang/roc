@@ -1871,7 +1871,7 @@ pub fn constrain_decls(
                 );
             }
             Destructure(destructure_def_index) => {
-                constrain_destructure_def(
+                constraint = constrain_destructure_def(
                     constraints,
                     &mut env,
                     declarations,
