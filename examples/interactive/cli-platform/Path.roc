@@ -2,20 +2,21 @@ interface Path
     exposes [Path, PathComponent, WindowsRoot, toComponents, walkComponents]
     imports [Locale, CharsetErr]
 
-## There are two types of paths:
+## A [Path] can represent one of two types of path:
 ## * _Canonical_ paths have the type `Path [Canonical]`. They are absolute paths (so, no ".." or "." path components) and have all symlinks resolved.
-## * _Raw_ paths have the type `Path [Raw]`. They come from Roc strings. They may be absolute or relative, they may contain symlinks, and the operating system may not consider them syntactically valid paths.
+## * _Unresolved_ paths have the type `Path *`. They come from Roc strings. They may be absolute or relative, and they may contain unresolved symlinks.
 ##
 ## A [Path] can be either of these, depending on its type parameter. For convenience,
-## there are the type aliases `RawPath : Path [Raw]` and `CanPath : Path [Canonical]`.
+## there is a type alias `CanPath : Path [Canonical]`. This way you have `Path *` for unresolved
+## paths, and [CanPath] for canonical ones.
 ##
 ## File operations (such as reading from a file) will typically accept either type of [Path],
 ## but some operations in this module work differently with one or the other. For example,
 ## [rootRaw] sometimes returns `None` because the path might be relative, whereas [rootCan]
 ## always returns a root because it's guaranteed to be an absolute path, which must have a root.
 ##
-## You can get a [RawPath] from a [Str] using [Path.fromStr], and you can convert it to
-## a canonical path using [Path.canonicalize].
+## You can get a [Path] from a [Str] using [Path.fromStr], and you can convert it to
+## a [CanPath] using [Path.canonicalize].
 ##
 ## Note that comparing canonical paths is typically more reliable than comparing raw ones.
 ## For example, `Path.fromStr "foo/bar/../baz" == Path.fromStr "foo/baz"` will return `False`,
@@ -33,6 +34,13 @@ interface Path
 ## been deleted since the canonical path was created. So you might [canonicalize] a [Path],
 ## and then immediately use that [Path] to read a file from disk, and still get back an error
 ## because something relevant changed on the filesystem between the two operations.
+##
+## Also note that different filesystems have different rules for syntactically valid paths.
+## Suppose you're on a machine with two disks, one formatted as ext4 and another as FAT32.
+## It's possible to list the contents of a directory on the ext4 disk, and get a [CanPath] which
+## is valid on that disk, but invalid on the other disk. One way this could happen is if the
+## directory on the ext4 disk has a filename containing a `:` in it. `:` is allowed in ext4
+## paths but is considered invalid in FAT32 paths.
 Path canonical := [
     # We store these separately for two reasons:
     # 1. If I'm calling an OS API, passing a path I got from the OS is definitely safe.
@@ -58,11 +66,9 @@ Path canonical := [
 
 CanPath : Path [Canonical]
 
-RawPath : Path [Raw]
-
 ## ## Creating and transforming
 
-fromStr : Str -> RawPath
+fromStr : Str -> Path *
 fromStr = \str -> @Path (FromRoc str)
 
 ## Note that canonicalization reads from the file system (in order to resolve symbolic
@@ -104,14 +110,6 @@ display = \@Path path ->
     when path is
         FromOs bytes -> Env.locale |> Task.map Locale.display
         FromRoc str -> Task.succeed str
-
-## Converts a path that we know something about (e.g. [CanPath] or [RawPath]) into
-## a path that we know nothing about.
-##
-## This can be useful for operations which require two paths of the same type. For example,
-## we can't pass [Bool.isEq] a [CanPath] and a [RawPath] because those aren't the same type.
-generalize : Path * -> Path *
-generalize = \@Path unwrapped -> @Path unwrapped
 
 isEq : Path a, Path a -> Bool
 isEq = @Path p1, @Path p2 ->
