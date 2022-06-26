@@ -60,10 +60,6 @@ impl Env<'_> {
 
             let ident_id = self.derived_ident_ids.get_or_insert(&debug_name);
 
-            // This is expensive, but yields much better symbols when debugging.
-            // TODO: hide behind debug_flags?
-            DERIVED_MODULE.register_debug_idents(&self.derived_ident_ids);
-
             Symbol::new(DERIVED_MODULE, ident_id)
         } else {
             self.unique_symbol()
