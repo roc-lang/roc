@@ -1723,8 +1723,6 @@ fn constrain_when_branch_help(
         delayed_is_open_constraints: Vec::new(),
     };
 
-    // TODO investigate for error messages, is it better to unify all branches with a variable,
-    // then unify that variable with the expectation?
     for (i, loc_pattern) in when_branch.patterns.iter().enumerate() {
         let pattern_expected = pattern_expected(HumanIndex::zero_based(i), loc_pattern.region);
 
