@@ -218,7 +218,7 @@ fn list_take_last() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_sublist() {
     assert_evals_to!(
         "List.sublist [1, 2, 3] { start: 0 , len: 2 } ",
