@@ -1,17 +1,18 @@
 use bumpalo::collections::Vec;
+use bumpalo::Bump;
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_mono::code_gen_help::HelperOp;
 use roc_mono::ir::{HigherOrderLowLevel, ListLiteralElement, PassedFunction, ProcLayout};
-use roc_mono::layout::{Builtin, Layout, UnionLayout};
+use roc_mono::layout::{Builtin, FieldOrderHash, Layout, UnionLayout};
 use roc_mono::low_level::HigherOrder;
 
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
 use crate::layout::{CallConv, StackMemoryFormat, WasmLayout};
 use crate::storage::{StackMemoryLocation, StoredValue};
-use crate::wasm_module::{Align, ValueType};
+use crate::wasm_module::{Align, LocalId, ValueType};
 use crate::TARGET_INFO;
 
 /// Number types used for Wasm code gen
@@ -377,23 +378,8 @@ impl<'a> LowLevelCall<'a> {
                     elem_layout.stack_size_and_alignment(TARGET_INFO);
 
                 // Ensure the new element is stored in memory so we can pass a pointer to Zig
-                let (new_elem_local, new_elem_offset) = match backend.storage.get(&new_elem) {
-                    StoredValue::StackMemory { location, .. } => {
-                        location.local_and_offset(backend.storage.stack_frame_pointer)
-                    }
-                    _ => {
-                        let (frame_ptr, offset) = backend
-                            .storage
-                            .allocate_anonymous_stack_memory(elem_width, elem_alignment);
-                        backend.storage.copy_value_to_memory(
-                            &mut backend.code_builder,
-                            frame_ptr,
-                            offset,
-                            new_elem,
-                        );
-                        (frame_ptr, offset)
-                    }
-                };
+                let (new_elem_local, new_elem_offset, _) =
+                    ensure_symbol_is_in_memory(backend, new_elem, elem_layout, backend.env.arena);
 
                 // Load all the arguments for Zig
                 //    (List return pointer)  i32
@@ -439,7 +425,44 @@ impl<'a> LowLevelCall<'a> {
                 let elems = backend.env.arena.alloc([ListLiteralElement::Symbol(elem)]);
                 backend.expr_array(self.ret_symbol, &self.ret_storage, elem_layout, elems)
             }
-            ListRepeat => todo!("{:?}", self.lowlevel),
+            ListRepeat => {
+                // List.repeat : elem, Nat -> List elem
+
+                let element: Symbol = self.arguments[0];
+                let count: Symbol = self.arguments[1];
+                let elem_layout = unwrap_list_elem_layout(self.ret_layout);
+                let (elem_width, elem_align) = elem_layout.stack_size_and_alignment(TARGET_INFO);
+
+                let (elem_local, elem_offset, elem_in_memory_layout) =
+                    ensure_symbol_is_in_memory(backend, element, *elem_layout, backend.env.arena);
+
+                let inc_fn = backend.get_refcount_fn_index(elem_in_memory_layout, HelperOp::Inc);
+                let inc_fn_ptr = backend.get_fn_ptr(inc_fn);
+
+                // Zig arguments              Wasm types
+                //  (return pointer)           i32  ret(i32)
+                //  count: usize               i32  5(i32)
+                //  alignment: u32             i32  8(i32)
+                //  element: Opaque            i32  fp(i32)
+                //  element_width: usize       i32  8(i32)
+                //  inc_n_element: IncN        i32  5(i32)
+
+                backend
+                    .storage
+                    .load_symbols(&mut backend.code_builder, &[self.ret_symbol, count]);
+                backend.code_builder.i32_const(elem_align as i32);
+
+                backend.code_builder.get_local(elem_local);
+                if elem_offset > 0 {
+                    backend.code_builder.i32_const(elem_offset as i32);
+                    backend.code_builder.i32_add();
+                }
+
+                backend.code_builder.i32_const(elem_width as i32);
+                backend.code_builder.i32_const(inc_fn_ptr);
+
+                backend.call_host_fn_after_loading_args(bitcode::LIST_REPEAT, 6, false);
+            }
             ListReverse => {
                 // List.reverse : List elem -> List elem
                 // Zig arguments              Wasm types
@@ -460,14 +483,10 @@ impl<'a> LowLevelCall<'a> {
                 );
 
                 // Load monomorphization constants
-                if let Layout::Builtin(Builtin::List(elem_layout)) = self.ret_layout {
-                    let (elem_width, elem_align) =
-                        elem_layout.stack_size_and_alignment(TARGET_INFO);
-                    backend.code_builder.i32_const(elem_align as i32);
-                    backend.code_builder.i32_const(elem_width as i32);
-                } else {
-                    internal_error!("Invalid return layout for ListConcat {:?}", self.ret_layout);
-                }
+                let elem_layout = unwrap_list_elem_layout(self.ret_layout);
+                let (elem_width, elem_align) = elem_layout.stack_size_and_alignment(TARGET_INFO);
+                backend.code_builder.i32_const(elem_align as i32);
+                backend.code_builder.i32_const(elem_width as i32);
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
 
                 backend.call_host_fn_after_loading_args(bitcode::LIST_REVERSE, 6, false);
@@ -492,14 +511,10 @@ impl<'a> LowLevelCall<'a> {
                 );
 
                 // Load monomorphization constants
-                if let Layout::Builtin(Builtin::List(elem_layout)) = self.ret_layout {
-                    let (elem_width, elem_align) =
-                        elem_layout.stack_size_and_alignment(TARGET_INFO);
-                    backend.code_builder.i32_const(elem_align as i32);
-                    backend.code_builder.i32_const(elem_width as i32);
-                } else {
-                    internal_error!("Invalid return layout for ListConcat {:?}", self.ret_layout);
-                }
+                let elem_layout = unwrap_list_elem_layout(self.ret_layout);
+                let (elem_width, elem_align) = elem_layout.stack_size_and_alignment(TARGET_INFO);
+                backend.code_builder.i32_const(elem_align as i32);
+                backend.code_builder.i32_const(elem_width as i32);
 
                 backend.call_host_fn_after_loading_args(bitcode::LIST_CONCAT, 7, false);
             }
@@ -2016,4 +2031,37 @@ fn list_map_n<'a>(
 
     let has_return_val = false;
     backend.call_host_fn_after_loading_args(zig_fn_name, num_wasm_args, has_return_val);
+}
+
+fn ensure_symbol_is_in_memory<'a>(
+    backend: &mut WasmBackend<'a>,
+    symbol: Symbol,
+    layout: Layout<'a>,
+    arena: &'a Bump,
+) -> (LocalId, u32, Layout<'a>) {
+    let (width, alignment) = layout.stack_size_and_alignment(TARGET_INFO);
+
+    // Ensure the new element is stored in memory so we can pass a pointer to Zig
+    match backend.storage.get(&symbol) {
+        StoredValue::StackMemory { location, .. } => {
+            let (local, offset) = location.local_and_offset(backend.storage.stack_frame_pointer);
+            (local, offset, layout)
+        }
+        _ => {
+            let (frame_ptr, offset) = backend
+                .storage
+                .allocate_anonymous_stack_memory(width, alignment);
+            backend.storage.copy_value_to_memory(
+                &mut backend.code_builder,
+                frame_ptr,
+                offset,
+                symbol,
+            );
+            let in_memory_layout = Layout::Struct {
+                field_order_hash: FieldOrderHash::from_ordered_fields(&[]), // don't care
+                field_layouts: arena.alloc([layout]),
+            };
+            (frame_ptr, offset, in_memory_layout)
+        }
+    }
 }

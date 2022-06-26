@@ -55,7 +55,7 @@ fn int_list_literal() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn bool_list_literal() {
     // NOTE: make sure to explicitly declare the elements to be of type bool, or
     // use both True and False; only using one of them causes the list to in practice be
@@ -1308,7 +1308,7 @@ fn list_single() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_repeat() {
     assert_evals_to!(
         "List.repeat 1 5",
@@ -1762,7 +1762,7 @@ fn get_int_list_oob() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn replace_unique_int_list() {
     assert_evals_to!(
         indoc!(
@@ -1777,7 +1777,7 @@ fn replace_unique_int_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn replace_unique_int_list_out_of_bounds() {
     assert_evals_to!(
         indoc!(
@@ -1792,7 +1792,7 @@ fn replace_unique_int_list_out_of_bounds() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn replace_unique_int_list_get_old_value() {
     assert_evals_to!(
         indoc!(
@@ -1807,7 +1807,7 @@ fn replace_unique_int_list_get_old_value() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn replace_unique_get_large_value() {
     assert_evals_to!(
         indoc!(
@@ -1818,13 +1818,13 @@ fn replace_unique_get_large_value() {
                 record.value
             "#
         ),
-        (5, 6, 7, 8),
-        (u64, u64, u64, u64)
+        [5, 6, 7, 8],
+        [u64; 4]
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn replace_shared_int_list() {
     assert_evals_to!(
         indoc!(
