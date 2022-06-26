@@ -2201,15 +2201,11 @@ impl Declarations {
 
                 self.declarations[index] = DeclarationTag::Function(function_def_index);
                 self.expressions[index] = *closure_data.loc_body;
-
-                // TODO investigate whether this matters, and if we can be more efficient here
                 self.variables[index] = def.expr_var;
             }
             _ => {
                 self.declarations[index] = DeclarationTag::Value;
                 self.expressions[index] = def.loc_expr;
-
-                // TODO investigate whether this matters, and if we can be more efficient here
                 self.variables[index] = def.expr_var;
             }
         }
