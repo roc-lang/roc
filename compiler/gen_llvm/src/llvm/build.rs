@@ -42,7 +42,7 @@ use inkwell::types::{
 };
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValue, CallSiteValue, CallableValue, FloatValue, FunctionValue,
+    BasicMetadataValueEnum, BasicValue, CallSiteValue, FloatValue, FunctionValue,
     InstructionOpcode, InstructionValue, IntValue, PhiValue, PointerValue, StructValue,
 };
 use inkwell::OptimizationLevel;
@@ -66,7 +66,7 @@ use roc_mono::ir::{
 use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, TagIdIntType, UnionLayout};
 use roc_std::RocDec;
 use roc_target::{PtrWidth, TargetInfo};
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryInto;
 use std::path::Path;
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
