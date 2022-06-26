@@ -38,36 +38,34 @@ pub fn make_tail_recursive<'a>(
 ) -> Option<Stmt<'a>> {
     let allocated = arena.alloc(stmt);
     let get_arg_layouts = || args.iter().map(|l| &l.0);
-    match insert_jumps(arena, allocated, id, needle, get_arg_layouts, ret_layout) {
-        None => None,
-        Some(new) => {
-            // jumps were inserted, we must now add a join point
 
-            let params = Vec::from_iter_in(
-                args.iter().map(|(layout, symbol, _)| Param {
-                    symbol: *symbol,
-                    layout: *layout,
-                    borrow: true,
-                }),
-                arena,
-            )
-            .into_bump_slice();
+    let new_stmt = insert_jumps(arena, allocated, id, needle, get_arg_layouts, ret_layout)?;
 
-            // TODO could this be &[]?
-            let args = Vec::from_iter_in(args.iter().map(|t| t.2), arena).into_bump_slice();
+    // if we did not early-return, jumps were inserted, we must now add a join point
 
-            let jump = arena.alloc(Stmt::Jump(id, args));
+    let params = Vec::from_iter_in(
+        args.iter().map(|(layout, symbol, _)| Param {
+            symbol: *symbol,
+            layout: *layout,
+            borrow: true,
+        }),
+        arena,
+    )
+    .into_bump_slice();
 
-            let join = Stmt::Join {
-                id,
-                remainder: jump,
-                parameters: params,
-                body: new,
-            };
+    // TODO could this be &[]?
+    let args = Vec::from_iter_in(args.iter().map(|t| t.2), arena).into_bump_slice();
 
-            Some(join)
-        }
-    }
+    let jump = arena.alloc(Stmt::Jump(id, args));
+
+    let join = Stmt::Join {
+        id,
+        remainder: jump,
+        parameters: params,
+        body: new_stmt,
+    };
+
+    Some(join)
 }
 
 fn fn_eq<'a>(
@@ -75,13 +73,10 @@ fn fn_eq<'a>(
     needle_args: impl ExactSizeIterator<Item = &'a Layout<'a>>,
     needle_ret: Layout,
     f: Symbol,
-    f_args: &[Layout],
+    f_args: &[Layout<'a>],
     f_ret: Layout,
 ) -> bool {
-    needle == f
-        && needle_args.len() == f_args.len()
-        && needle_args.zip(f_args.iter()).all(|(l, r)| l == r)
-        && needle_ret == f_ret
+    needle == f && needle_args.eq(f_args.iter()) && needle_ret == f_ret
 }
 
 fn insert_jumps<'a, I, F>(
