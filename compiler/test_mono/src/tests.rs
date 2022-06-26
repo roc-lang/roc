@@ -1483,3 +1483,17 @@ fn encode_derived_record() {
         "#
     )
 }
+
+#[mono_test]
+fn tail_call_elimination() {
+    indoc!(
+        r#"
+        sum = \n, accum ->
+            when n is
+                0 -> accum
+                _ -> sum (n - 1) (n + accum)
+
+        sum 1_000_000 0
+        "#
+    )
+}
