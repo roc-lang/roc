@@ -6925,4 +6925,35 @@ mod solve_expr {
             "Parser U8",
         );
     }
+
+    #[test]
+    fn lambda_set_de_monomorphizes() {
+        infer_queries!(
+            indoc!(
+                r#"
+                Lazy a := {} -> a
+
+                map : Lazy a, (a -> Lazy b) -> Lazy b
+                map = \@Lazy lazy, mapper ->
+                    thunk = \{} ->
+                        when mapper (lazy {}) is
+                            @Lazy b -> b {}
+                    @Lazy thunk
+
+                x : [True, False]
+
+                y =
+                    when x is
+                        True -> map (@Lazy \{} -> A) (\_ -> @Lazy (\_ -> ""))
+                        False -> map (@Lazy \{} -> B) (\_ -> @Lazy (\_ -> ""))
+                y
+                #^{-1}
+                "#
+            ),
+            &[
+                "y : {} -[[thunk(7) ({} -[[9(9), 13(13)]]-> [A, B]*) ([A, B]* -[[11(11), 15(15)]]-> ({} -[[12(12), 16(16)]]-> Str))]]-> Str",
+            ],
+            print_only_under_alias = true,
+        );
+    }
 }
