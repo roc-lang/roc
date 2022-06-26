@@ -405,14 +405,31 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     use roc_gen_llvm::run_jit_function;
 
+    let mut failures = 0;
+    let passed = expects.len();
+
     for expect in expects {
-        println!("running: {}", expect);
+        print!("test {expect}... ");
         let result = run_jit_function!(lib, expect, bool, |v: bool| v);
 
-        dbg!(result);
+        match result {
+            true => println!("ok"),
+            false => {
+                failures += 1;
+                println!("failed")
+            }
+        }
     }
 
-    Ok(0)
+    println!();
+
+    if failures > 0 {
+        println!("test result: failed. {passed} passed; {failures} failed;");
+        Ok(1)
+    } else {
+        println!("test result: ok. {passed} passed; {failures} failed;");
+        Ok(0)
+    }
 }
 
 pub fn build(
