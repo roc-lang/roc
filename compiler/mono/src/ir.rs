@@ -442,6 +442,7 @@ impl<'a> Proc<'a> {
                 self.name,
                 self.body.clone(),
                 args.into_bump_slice(),
+                self.ret_layout,
             );
 
             if let Some(with_tco) = transformed {

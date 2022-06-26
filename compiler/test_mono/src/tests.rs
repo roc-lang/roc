@@ -1483,3 +1483,45 @@ fn encode_derived_record() {
         "#
     )
 }
+
+#[mono_test]
+fn tail_call_elimination() {
+    indoc!(
+        r#"
+        sum = \n, accum ->
+            when n is
+                0 -> accum
+                _ -> sum (n - 1) (n + accum)
+
+        sum 1_000_000 0
+        "#
+    )
+}
+
+#[mono_test]
+fn tail_call_with_same_layout_different_lambda_sets() {
+    indoc!(
+        r#"
+        chain = \in, buildLazy ->
+            \{} ->
+                thunk = buildLazy in
+                thunk {}
+
+        chain 1u8 \_ -> chain 1u8 \_ -> (\{} -> "")
+        "#
+    )
+}
+
+#[mono_test]
+fn tail_call_with_different_layout() {
+    indoc!(
+        r#"
+        chain = \in, buildLazy ->
+            \{} ->
+                thunk = buildLazy in
+                thunk {}
+
+        chain 1u8 \_ -> chain 1u16 \_ -> (\{} -> "")
+        "#
+    )
+}
