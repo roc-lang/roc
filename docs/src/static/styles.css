@@ -68,6 +68,17 @@ a {
 .entry-name {
   white-space: pre-wrap;
   font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: normal;
+  color: var(--purple-5);
+  background-color: var(--purple-1);
+  width: fit-content;
+  padding: 8px 16px;
+  border-radius: 8px;
+}
+
+.entry-name a {
+  font-weight: bold;
 }
 
 .pkg-full-name a {
@@ -268,7 +279,7 @@ footer p {
 }
 
 a, a:visited {
-  color: var(--link-color);
+  color: var(--purple-5);
 }
 
 h3 {
