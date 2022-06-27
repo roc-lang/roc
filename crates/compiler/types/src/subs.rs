@@ -1872,6 +1872,10 @@ impl Subs {
         self.utable.unioned(left, right)
     }
 
+    pub fn equivalent_without_compacting(&self, left: Variable, right: Variable) -> bool {
+        self.utable.unioned_without_compacting(left, right)
+    }
+
     pub fn redundant(&self, var: Variable) -> bool {
         self.utable.is_redirect(var)
     }

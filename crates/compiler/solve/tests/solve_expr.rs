@@ -6953,6 +6953,68 @@ mod solve_expr {
                 "#
             ),
             "Str",
+        )
+    }
+
+    #[test]
+    fn lambda_sets_collide_with_captured_var() {
+        infer_queries!(
+            indoc!(
+                r#"
+                capture : a -> ({} -> Str)
+                capture = \val ->
+                    thunk =
+                        \{} ->
+                            when val is
+                                _ -> ""
+                    thunk
+
+                x : [True, False]
+
+                fun =
+                    when x is
+                        True -> capture ""
+                        False -> capture {}
+                fun
+                #^^^{-1}
+                "#
+            ),
+            &["fun : {} -[[thunk(5) {}, thunk(5) Str]]-> Str"],
+        );
+    }
+
+    #[test]
+    fn lambda_sets_collide_with_captured_function() {
+        infer_queries!(
+            indoc!(
+                r#"
+                Lazy a : {} -> a
+
+                after : Lazy a, (a -> Lazy b) -> Lazy b
+                after = \effect, map ->
+                    thunk = \{} ->
+                        when map (effect {}) is
+                            b -> b {}
+                    thunk
+
+                f = \_ -> \_ -> ""
+                g = \{ s1 } -> \_ -> s1
+
+                x : [True, False]
+
+                fun =
+                    when x is
+                        True -> after (\{} -> "") f
+                        False -> after (\{} -> {s1: "s1"}) g
+                fun
+                #^^^{-1}
+                "#
+            ),
+            &[
+                "fun : {} -[[thunk(9) (({} -[[15(15)]]-> { s1 : Str })) ({ s1 : Str } -[[g(4)]]-> ({} -[[13(13) Str]]-> Str)), \
+                             thunk(9) (({} -[[14(14)]]-> Str)) (Str -[[f(3)]]-> ({} -[[11(11)]]-> Str))]]-> Str",
+            ],
+            print_only_under_alias = true,
         );
     }
 }

@@ -1000,103 +1000,105 @@ fn unify_lambda_set_help<M: MetaCollector>(
         in_both,
     } = separate_union_lambdas(subs, solved1, solved2);
 
-    let num_shared = in_both.len();
+    let mut new_lambdas = vec![];
+    for (lambda_name, (vars1, vars2)) in in_both {
+        let mut captures_unify = vars1.len() == vars2.len();
 
-    let mut joined_lambdas = vec![];
-    for (tag_name, (vars1, vars2)) in in_both {
-        let mut matching_vars = vec![];
+        if captures_unify {
+            for (var1, var2) in (vars1.into_iter()).zip(vars2.into_iter()) {
+                let (var1, var2) = (subs[var1], subs[var2]);
 
-        if vars1.len() != vars2.len() {
-            continue; // this is a type mismatch; not adding the tag will trigger it below.
-        }
+                // Lambda sets are effectively tags under another name, and their usage can also result
+                // in the arguments of a lambda name being recursive. It very well may happen that
+                // during unification, a lambda set previously marked as not recursive becomes
+                // recursive. See the docs of [LambdaSet] for one example, or https://github.com/rtfeldman/roc/pull/2307.
+                //
+                // Like with tag unions, if it has, we'll always pass through this branch. So, take
+                // this opportunity to promote the lambda set to recursive if need be.
+                maybe_mark_union_recursive(subs, var1);
+                maybe_mark_union_recursive(subs, var2);
 
-        let num_vars = vars1.len();
-        for (var1, var2) in (vars1.into_iter()).zip(vars2.into_iter()) {
-            let (var1, var2) = (subs[var1], subs[var2]);
+                let snapshot = subs.snapshot();
+                let outcome = unify_pool::<M>(subs, pool, var1, var2, ctx.mode);
 
-            // Lambda sets are effectively tags under another name, and their usage can also result
-            // in the arguments of a lambda name being recursive. It very well may happen that
-            // during unification, a lambda set previously marked as not recursive becomes
-            // recursive. See the docs of [LambdaSet] for one example, or https://github.com/rtfeldman/roc/pull/2307.
-            //
-            // Like with tag unions, if it has, we'll always pass through this branch. So, take
-            // this opportunity to promote the lambda set to recursive if need be.
-            maybe_mark_union_recursive(subs, var1);
-            maybe_mark_union_recursive(subs, var2);
-
-            let outcome = unify_pool::<M>(subs, pool, var1, var2, ctx.mode);
-
-            if outcome.mismatches.is_empty() {
-                matching_vars.push(var1);
+                if !outcome.mismatches.is_empty() {
+                    captures_unify = false;
+                    subs.rollback_to(snapshot);
+                    // Continue so the other variables can unify if possible, allowing us to re-use
+                    // shared variables.
+                }
             }
         }
 
-        if matching_vars.len() == num_vars {
-            joined_lambdas.push((tag_name, matching_vars));
+        if captures_unify {
+            debug_assert!((subs.get_subs_slice(vars1).iter())
+                .zip(subs.get_subs_slice(vars2).iter())
+                .all(|(v1, v2)| subs.equivalent_without_compacting(*v1, *v2)));
+
+            new_lambdas.push((lambda_name, subs.get_subs_slice(vars1).to_vec()));
+        } else {
+            debug_assert!((subs.get_subs_slice(vars1).iter())
+                .zip(subs.get_subs_slice(vars2).iter())
+                .any(|(v1, v2)| !subs.equivalent_without_compacting(*v1, *v2)));
+
+            new_lambdas.push((lambda_name, subs.get_subs_slice(vars1).to_vec()));
+            new_lambdas.push((lambda_name, subs.get_subs_slice(vars2).to_vec()));
         }
     }
 
-    if joined_lambdas.len() == num_shared {
-        let all_lambdas = joined_lambdas;
-        let all_lambdas = merge_sorted(
-            all_lambdas,
-            only_in_1.into_iter().map(|(name, subs_slice)| {
-                let vec = subs.get_subs_slice(subs_slice).to_vec();
-                (name, vec)
-            }),
-        );
-        let all_lambdas = merge_sorted(
-            all_lambdas,
-            only_in_2.into_iter().map(|(name, subs_slice)| {
-                let vec = subs.get_subs_slice(subs_slice).to_vec();
-                (name, vec)
-            }),
-        );
+    let all_lambdas = new_lambdas;
+    let all_lambdas = merge_sorted(
+        all_lambdas,
+        only_in_1.into_iter().map(|(name, subs_slice)| {
+            let vec = subs.get_subs_slice(subs_slice).to_vec();
+            (name, vec)
+        }),
+    );
+    let all_lambdas = merge_sorted(
+        all_lambdas,
+        only_in_2.into_iter().map(|(name, subs_slice)| {
+            let vec = subs.get_subs_slice(subs_slice).to_vec();
+            (name, vec)
+        }),
+    );
 
-        let recursion_var = match (rec1.into_variable(), rec2.into_variable()) {
-            // Prefer left when it's available.
-            (Some(rec), _) | (_, Some(rec)) => OptVariable::from(rec),
-            (None, None) => OptVariable::NONE,
-        };
+    let recursion_var = match (rec1.into_variable(), rec2.into_variable()) {
+        // Prefer left when it's available.
+        (Some(rec), _) | (_, Some(rec)) => OptVariable::from(rec),
+        (None, None) => OptVariable::NONE,
+    };
 
-        // Combine the unspecialized lambda sets as needed. Note that we don't need to update the
-        // bookkeeping of variable -> lambda set to be resolved, because if we had v1 -> lset1, and
-        // now lset1 ~ lset2, then afterward either lset1 still resolves to itself or re-points to
-        // lset2. In either case the merged unspecialized lambda sets will be there.
-        let merged_unspecialized = match (uls1.is_empty(), uls2.is_empty()) {
-            (true, true) => SubsSlice::default(),
-            (false, true) => uls1,
-            (true, false) => uls2,
-            (false, false) => {
-                let mut all_uls = (subs.get_subs_slice(uls1).iter())
-                    .chain(subs.get_subs_slice(uls2))
-                    .map(|&Uls(var, sym, region)| {
-                        // Take the root key to deduplicate
-                        Uls(subs.get_root_key_without_compacting(var), sym, region)
-                    })
-                    .collect::<Vec<_>>();
-                all_uls.sort();
-                all_uls.dedup();
+    // Combine the unspecialized lambda sets as needed. Note that we don't need to update the
+    // bookkeeping of variable -> lambda set to be resolved, because if we had v1 -> lset1, and
+    // now lset1 ~ lset2, then afterward either lset1 still resolves to itself or re-points to
+    // lset2. In either case the merged unspecialized lambda sets will be there.
+    let merged_unspecialized = match (uls1.is_empty(), uls2.is_empty()) {
+        (true, true) => SubsSlice::default(),
+        (false, true) => uls1,
+        (true, false) => uls2,
+        (false, false) => {
+            let mut all_uls = (subs.get_subs_slice(uls1).iter())
+                .chain(subs.get_subs_slice(uls2))
+                .map(|&Uls(var, sym, region)| {
+                    // Take the root key to deduplicate
+                    Uls(subs.get_root_key_without_compacting(var), sym, region)
+                })
+                .collect::<Vec<_>>();
+            all_uls.sort();
+            all_uls.dedup();
 
-                SubsSlice::extend_new(&mut subs.unspecialized_lambda_sets, all_uls)
-            }
-        };
+            SubsSlice::extend_new(&mut subs.unspecialized_lambda_sets, all_uls)
+        }
+    };
 
-        let new_solved = UnionLabels::insert_into_subs(subs, all_lambdas);
-        let new_lambda_set = Content::LambdaSet(LambdaSet {
-            solved: new_solved,
-            recursion_var,
-            unspecialized: merged_unspecialized,
-        });
+    let new_solved = UnionLabels::insert_into_subs(subs, all_lambdas);
+    let new_lambda_set = Content::LambdaSet(LambdaSet {
+        solved: new_solved,
+        recursion_var,
+        unspecialized: merged_unspecialized,
+    });
 
-        merge(subs, ctx, new_lambda_set)
-    } else {
-        mismatch!(
-            "Problem with lambda sets: there should be {:?} matching lambda, but only found {:?}",
-            num_shared,
-            &joined_lambdas
-        )
-    }
+    merge(subs, ctx, new_lambda_set)
 }
 
 /// Ensures that a non-recursive tag union, when unified with a recursion var to become a recursive
