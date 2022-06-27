@@ -88,14 +88,12 @@ export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
 const Unit = extern struct {};
 
 pub export fn main() callconv(.C) u8 {
-    const allocator = std.heap.page_allocator;
-
     const size = @intCast(usize, roc__mainForHost_size());
-    const raw_output = allocator.allocAdvanced(u8, @alignOf(u64), @intCast(usize, size), .at_least) catch unreachable;
+    const raw_output = roc_alloc(@intCast(usize, size), @alignOf(u64)).?;
     var output = @ptrCast([*]u8, raw_output);
 
     defer {
-        allocator.free(raw_output);
+        roc_dealloc(raw_output, @alignOf(u64));
     }
 
     var ts1: std.os.timespec = undefined;
