@@ -46,43 +46,12 @@ macro_rules! run_jit_function {
         use roc_gen_llvm::run_roc::RocCallResult;
         use std::mem::MaybeUninit;
 
-        #[derive(Debug, Copy, Clone)]
-        #[repr(C)]
-        struct Failure {
-            start_line: u32,
-            end_line: u32,
-            start_col: u16,
-            end_col: u16,
-        }
-
         unsafe {
             let main: libloading::Symbol<unsafe extern "C" fn(*mut RocCallResult<$ty>)> = $lib
                 .get($main_fn_name.as_bytes())
                 .ok()
                 .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
                 .expect("errored");
-
-            #[repr(C)]
-            struct Failures {
-                failures: *const Failure,
-                count: usize,
-            }
-
-            impl Drop for Failures {
-                fn drop(&mut self) {
-                    use std::alloc::{dealloc, Layout};
-                    use std::mem;
-
-                    unsafe {
-                        let layout = Layout::from_size_align_unchecked(
-                            mem::size_of::<Failure>(),
-                            mem::align_of::<Failure>(),
-                        );
-
-                        dealloc(self.failures as *mut u8, layout);
-                    }
-                }
-            }
 
             let mut main_result = MaybeUninit::uninit();
             main(main_result.as_mut_ptr());
