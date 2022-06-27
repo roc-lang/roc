@@ -206,6 +206,14 @@ isEqUtf8 : Str, List U8 -> Bool
 ## to allocate an intermediate list - even for small strings.
 compareUtf8 : Str, List U8 -> [Lt, Eq, Gt]
 
+## Like [fromUtf8], but replaces any invalid bytes with the
+## [Unicode replacement character](https://unicode.org/glossary/#replacement_character)
+## instead of returning an error.
+##
+## This is a lossy conversion, so it's rarely a good idea to use the [Str] returned by
+## this function for any purpose other than displaying it to a user.
+displayUtf8 : List U8 -> Str
+
 startsWith : Str, Str -> Bool
 endsWith : Str, Str -> Bool
 

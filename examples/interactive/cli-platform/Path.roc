@@ -41,6 +41,10 @@ Path := [
     # or reading an environment variable - which, incidentally, are nul-terminated),
     # so we know they are both nul-terminated and do not contain interior nuls.
     # As such, they can be passed directly to OS APIs.
+    #
+    # Note that the nul terminator byte is right after the end of the length (into the
+    # unused capacity), so this can both be compared directly to other `List U8`s that
+    # aren't nul-terminated, while also being able to be passed directly to OS APIs.
     NulTerminated : List U8,
 
     # These come from userspace (e.g. Path.fromBytes), so they need to be checked for interior
@@ -102,6 +106,9 @@ canonicalize : Path -> Task Path (CanonicalizeErr *) [Metadata, Read [Env]]*
 ## typically does not change after it is set during installation of the OS), so
 ## this should convert a [Path] to a valid string as long as the path was created
 ## with the given [Charset]. (Use [Env.charset] to get the current system charset.)
+##
+## For a conversion to [Str] that is lossy but does not return a [Result], see
+## [displayUtf8].
 toStrUsingCharset : Path, Charset -> Result Str (CharsetErr *)
 toStrUsingCharset = \@Path path, charset ->
     when path is
@@ -109,37 +116,33 @@ toStrUsingCharset = \@Path path, charset ->
         NulTerminated bytes | ArbitraryBytes bytes ->
             Locale.toStr charset bytes
 
-## Convert a path to a string suitable for displaying to the user, based on the
-## current system locale.
+## Assumes a path is encoded as [UTF-8](https://en.wikipedia.org/wiki/UTF-8),
+## and converts it to a string using [Str.displayUtf8].
+##
+## This conversion is lossy because the path may contain invalid UTF-8 bytes. If that happens,
+## any invalid bytes will be replaced with the [Unicode replacement character](https://unicode.org/glossary/#replacement_character)
+## instead of returning an error. As such, it's rarely a good idea to use the [Str] returned
+## by this function for any purpose other than displaying it to a user.
+##
+## When you don't know for sure what a path's encoding is, UTF-8 is a popular guess because
+## it's the default on UNIX and also is the encoding used in Roc strings. This platform also
+## automatically runs applications under the [UTF-8 code page](https://docs.microsoft.com/en-us/windows/apps/design/globalizing/use-utf8-code-page)
+## on Windows.
 ##
 ## Converting paths to strings can be an unreliable operation, because operating systems
 ## don't record the paths' encodings. This means it's possible for the path to have been
-## encoded with a different character set than the current system default, which means
-## when [display] converts them to a string, it may look like gibberish.
+## encoded with a different character set than UTF-8 even if UTF-8 is the system default,
+## which means when [displayUtf8] converts them to a string, the string may include gibberish.
 ## [Here is an example.](https://unix.stackexchange.com/questions/667652/can-a-file-path-be-invalid-utf-8/667863#667863)
 ##
 ## If you happen to know the [Charset] that was used to encode the path, you can use
-## [toStrUsingCharset] instead of [dislay]. This function assumes you don't know the charset
-## for sure, and instead want a best-effort decoding for the purpose of at least displaying
-## something to the user—even if it's incorrect—because that's better than showing an error.
-##
-## Some parts of the path may look like gibberish, and other parts may be replaced with the
-## [Unicode replacement character](https://unicode.org/glossary/#replacement_character)
-## (`"�"`) because they are invalid Unicode. This is a very lossy conversion, so the [Str]
-## produced by this task should almost certainly not be used for any other purpose besides
-## being displayed to the user.
-##
-## Fortunately, most operating systems keep the same [character encoding](https://en.wikipedia.org/wiki/Character_encoding)
-## they had when they were installed, and use it to encode all the file paths on the system.
-## This means it will usually work out that the path displays exactly what you'd expect.
-## Of course, how gracefully our programs handle edge cases like these sometimes makes all
-## the difference between a frustrating experience and a pleasant one.
-display : Path -> Task Str * [Read [Env]]*
-display = \@Path path ->
+## [toStrUsingCharset] instead of [displayUtf8].
+displayUtf8 : Path -> Str
+displayUtf8 = \@Path path ->
     when path is
-        FromStr str -> Task.succeed str
+        FromStr str -> str
         NulTerminated bytes | ArbitraryBytes bytes ->
-            Env.locale |> Task.map Locale.display
+            Str.displayUtf8 bytes
 
 isEq : Path, Path -> Bool
 isEq = @Path p1, @Path p2 ->
