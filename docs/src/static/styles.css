@@ -1,19 +1,4 @@
 :root {
-  --link-color: #612bde;
-  --code-link-color: #5721d4;
-  --text-color: #333333;
-  --code-color: #222222;
-  --code-bg-color: #eeeeee;
-  --body-bg-color: #fdfdfd;
-  --border-color: #e9e9e9;
-  --faded-color: #4c4c4c;
-  --font-sans: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
-  --font-mono: SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier, monospace;
-  --top-header-height: 67px;
-  --sidebar-width: 280px;
-  --top-bar-bg: #8257e5;
-  --top-bar-fg: #ffffff;
-  --nav-link-hover-color: #000000;
   --purple-1: #f2f1f9;
   --purple-2: #d9d2ef;
   --purple-3: #a17ef1;
@@ -28,6 +13,23 @@
   --gray-3: #dddddd;
   --gray-4: #5b5b5b;
   --gray-5: #212121;
+  --link-color: var(--purple-5);
+  --code-link-color: #5721d4;
+  --text-color: #333333;
+  --code-color: #222222;
+  --code-bg-color: #eeeeee;
+  --body-bg-color: #fdfdfd;
+  --border-color: #e9e9e9;
+  --faded-color: #4c4c4c;
+  --font-sans: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier, monospace;
+  --top-header-height: 67px;
+  --sidebar-width: 280px;
+  --top-bar-bg: #8257e5;
+  --top-bar-fg: #ffffff;
+  --nav-link-hover-color: #000000;
+  --type-signature-color: var(--purple-5);
+  --type-signature-bg-color: var(--purple-1);
 }
 
 a {
@@ -70,8 +72,8 @@ a {
   font-family: var(--font-mono);
   font-size: 18px;
   font-weight: normal;
-  color: var(--purple-5);
-  background-color: var(--purple-1);
+  color: var(--type-signature-color);
+  background-color: var(--type-signature-bg-color);
   width: fit-content;
   padding: 8px 16px;
   border-radius: 8px;
@@ -279,7 +281,7 @@ footer p {
 }
 
 a, a:visited {
-  color: var(--purple-5);
+  color: var(--link-color);
 }
 
 h3 {
