@@ -256,7 +256,7 @@ impl LowLevelWrapperType {
             Symbol::LIST_KEEP_OKS => WrapperIsRequired,
             Symbol::LIST_KEEP_ERRS => WrapperIsRequired,
             Symbol::LIST_SORT_WITH => WrapperIsRequired,
-            Symbol::LIST_SUBLIST => CanBeReplacedBy(ListSublist),
+            Symbol::LIST_SUBLIST => WrapperIsRequired,
             Symbol::LIST_DROP_AT => CanBeReplacedBy(ListDropAt),
             Symbol::LIST_SWAP => CanBeReplacedBy(ListSwap),
             Symbol::LIST_ANY => WrapperIsRequired,
