@@ -1,5 +1,5 @@
 app "main"
-    packages { pf: "cli-platform" }
+    packages { pf: "cli-platform/Package-Config.roc" }
     imports [pf.Stdin, pf.Stdout, pf.Task.{ Task, await, loop, succeed }, AssocList.{ AssocList }]
     provides [main] to pf
 
