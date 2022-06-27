@@ -399,7 +399,7 @@ mod cli_run {
             use_valgrind: true,
         },
         platformSwitchingC:"platform-switching/c-platform" => Example {
-            filename: "main.roc",
+            filename: "rocLovesC.roc",
             executable_filename: "rocLovesC",
             stdin: &[],
             input_file: None,
@@ -407,7 +407,7 @@ mod cli_run {
             use_valgrind: true,
         },
         platformSwitchingRust:"platform-switching/rust-platform" => Example {
-            filename: "main.roc",
+            filename: "rocLovesRust.roc",
             executable_filename: "rocLovesRust",
             stdin: &[],
             input_file: None,
@@ -415,7 +415,7 @@ mod cli_run {
             use_valgrind: true,
         },
         platformSwitchingSwift:"platform-switching/swift-platform" => Example {
-            filename: "main.roc",
+            filename: "rocLovesSwift.roc",
             executable_filename: "rocLovesSwift",
             stdin: &[],
             input_file: None,
@@ -423,7 +423,7 @@ mod cli_run {
             use_valgrind: true,
         },
         platformSwitchingWebAssembly:"platform-switching/web-assembly-platform" => Example {
-            filename: "main.roc",
+            filename: "rocLovesWebAssembly.roc",
             executable_filename: "rocLovesWebAssembly",
             stdin: &[],
             input_file: None,
@@ -431,7 +431,7 @@ mod cli_run {
             use_valgrind: true,
         },
         platformSwitchingZig:"platform-switching/zig-platform" => Example {
-            filename: "main.roc",
+            filename: "rocLovesZig.roc",
             executable_filename: "rocLovesZig",
             stdin: &[],
             input_file: None,
