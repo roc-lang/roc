@@ -1506,8 +1506,8 @@ fn separate_union_lambdas(
     fields1: UnionLambdas,
     fields2: UnionLambdas,
 ) -> Separate<Symbol, VariableSubsSlice> {
-    debug_assert!(fields1.is_sorted_no_duplicates(subs));
-    debug_assert!(fields2.is_sorted_no_duplicates(subs));
+    debug_assert!(fields1.is_sorted(subs));
+    debug_assert!(fields2.is_sorted(subs));
     let it1 = fields1.iter_all().map(|(s, vars)| (subs[s], subs[vars]));
     let it2 = fields2.iter_all().map(|(s, vars)| (subs[s], subs[vars]));
 
