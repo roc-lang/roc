@@ -32,5 +32,5 @@ walk :
 walkUntil :
     OpenDir,
     state,
-    (state, DirEntry -> Task [Continue state, Done] (ReadDirErr x) fx)
+    (state, DirEntry -> Task [Done state, Continue state] (ReadDirErr x) fx)
     -> Task state (ReadDirErr x) [Read [Disk]*]fx
