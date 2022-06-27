@@ -1,8 +1,10 @@
 interface Locale
-    exposes [Locale, CharsetErr, toStr]
+    exposes [Locale, Charset, CharsetErr, toStr]
     imports [Path]
 
-Locale := Str
+Locale := {
+    # TODO
+}
 # Note: Windows has "locale names" and "locale identifers" and says "the use of locale names
 # is always preferable" on Windows Vista and later.
 # https://docs.microsoft.com/en-us/windows/win32/intl/calling-the--locale-name--functions
@@ -13,9 +15,13 @@ Locale := Str
 ## If the bytes are invalid for that charset, returns `Err`.
 toStr : Locale, List U8 -> Result Str (CharsetErr *)
 
+toStrUsingCharset : List U8, Charset -> Result Str (CharsetErr *)
+
 ## Like [toStr], except it converts charset errors into the [Unicode replacement character](https://unicode.org/glossary/#replacement_character)
 ## (`"�"`).
 display : Locale, List U8 -> Str
+
+charset : Locale -> Charset
 
 CharsetErr others : [
     CharsetErr {

@@ -26,11 +26,11 @@ entries : OpenDir -> Task (List DirEntry) (DirReadErr *) [Read [Disk]*]*
 walk :
     OpenDir,
     state,
-    (state, DirEntry -> Task state (ReadDirErr x) [Read [Disk]a]b)
-    -> Task state (ReadDirErr x) [Read [Disk]a]b
+    (state, DirEntry -> Task state (ReadDirErr x) fx)
+    -> Task state (ReadDirErr x) [Read [Disk]*]fx
 
 walkUntil :
     OpenDir,
     state,
-    (state, DirEntry -> Task [Continue state, Done] (ReadDirErr x) [Read [Disk]a]b)
-    -> Task state (ReadDirErr x) [Read [Disk]a]b
+    (state, DirEntry -> Task [Continue state, Done] (ReadDirErr x) fx)
+    -> Task state (ReadDirErr x) [Read [Disk]*]fx

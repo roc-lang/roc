@@ -2,26 +2,11 @@ interface Path
     exposes [Path, PathComponent, WindowsRoot, toComponents, walkComponents]
     imports [Locale, CharsetErr]
 
-## A [Path] can represent one of two types of path:
-## * _Canonical_ paths have the type `Path [Canonical]`. They are absolute paths (so, no ".." or "." path components) and have all symlinks resolved.
-## * _Unresolved_ paths have the type `Path *`. They come from Roc strings. They may be absolute or relative, and they may contain unresolved symlinks.
+## You can canonicalize a [Path] using [Path.canonicalize].
 ##
-## A [Path] can be either of these, depending on its type parameter. For convenience,
-## there is a type alias `CanPath : Path [Canonical]`. This way you have `Path *` for unresolved
-## paths, and [CanPath] for canonical ones.
-##
-## File operations (such as reading from a file) will typically accept either type of [Path],
-## but some operations in this module work differently with one or the other. For example,
-## [rootRaw] sometimes returns `None` because the path might be relative, whereas [rootCan]
-## always returns a root because it's guaranteed to be an absolute path, which must have a root.
-##
-## You can get a [Path] from a [Str] using [Path.fromStr], and you can convert it to
-## a [CanPath] using [Path.canonicalize].
-##
-## Note that comparing canonical paths is typically more reliable than comparing raw ones.
+## Comparing canonical paths is often more reliable than comparing raw ones.
 ## For example, `Path.fromStr "foo/bar/../baz" == Path.fromStr "foo/baz"` will return `False`,
-## because those are different [RawPath]s even though they would [canonicalize] to the same
-## [CanPath]s.
+## because those are different paths even though their canonical equivalents would be equal.
 ##
 ## Also note that canonicalization reads from the file system (in order to resolve symbolic
 ## links, and to convert relative paths into absolute ones). This means that it is not only
@@ -41,7 +26,7 @@ interface Path
 ## is valid on that disk, but invalid on the other disk. One way this could happen is if the
 ## directory on the ext4 disk has a filename containing a `:` in it. `:` is allowed in ext4
 ## paths but is considered invalid in FAT32 paths.
-Path canonical := [
+Path := [
     # We store these separately for two reasons:
     # 1. If I'm calling an OS API, passing a path I got from the OS is definitely safe.
     #    However, passing a Path I got from a RocStr might be unsafe; it may contain \0
@@ -51,25 +36,50 @@ Path canonical := [
     # 2. If I'm converting the Path to a Str, doing that conversion on a Path that was
     #    created from a RocStr needs no further processing. However, if it came from the OS,
     #    then we need to know what charset to assume it had, in order to decode it properly.
-    FromOs : List U8,
-    FromRoc : Str,
-]
-# Both UNIX and Windows paths will be UTF-8, because on Windows the host calls
-# `_setmbcp(_MB_CP_UTF8);` to set the process's Code Page to UTF-8 before doing anything else.
-# See https://docs.microsoft.com/en-us/windows/apps/design/globalizing/use-utf8-code-page#-a-vs--w-apis
-# and https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/setmbcp?view=msvc-170
-# for more details on the UTF-8 Code Page in Windows.
-#
-# Note that if type == Raw, this str may contain \0 characters, which means that before
-# we can use this as a char* in the host (either Windows or UNIX), we have to verify that
-# it has no \0 characters.
 
-CanPath : Path [Canonical]
+    # These come from the OS (e.g. when reading a directory, calling `canonicalize`,
+    # or reading an environment variable - which, incidentally, are nul-terminated),
+    # so we know they are both nul-terminated and do not contain interior nuls.
+    # As such, they can be passed directly to OS APIs.
+    NulTerminated : List U8,
+
+    # These come from userspace (e.g. Path.fromBytes), so they need to be checked for interior
+    # nuls and then nul-terminated before the host can pass them to OS APIs.
+    ArbitraryBytes : List U8,
+
+    # This was created as a RocStr, so it might have interior nul bytes but it's definitely UTF-8.
+    # That means we can `toStr` it trivially, but have to validate before sending it to OS
+    # APIs that expect a nul-terminated `char*`.
+    #
+    # Note that both UNIX and Windows APIs will accept UTF-8, because on Windows the host calls
+    # `_setmbcp(_MB_CP_UTF8);` to set the process's Code Page to UTF-8 before doing anything else.
+    # See https://docs.microsoft.com/en-us/windows/apps/design/globalizing/use-utf8-code-page#-a-vs--w-apis
+    # and https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/setmbcp?view=msvc-170
+    # for more details on the UTF-8 Code Page in Windows.
+    FromStr : Str,
+]
 
 ## ## Creating and transforming
 
-fromStr : Str -> Path *
-fromStr = \str -> @Path (FromRoc str)
+## Note that the path may not be valid depending on the filesystem where it is used.
+## For example, paths containing `:` are valid on ext4 and NTFS filesystems, but not
+## on FAT ones. So if you have multiple disks on the same machine, but they have
+## different filesystems, then this path could be valid on one but invalid on another!
+##
+## It's safest to assume paths are invalid (even syntactically) until given to an operation
+## which uses them to open a file. If that operation succeeds, then the path was valid
+## (at the time). Otherwise, error handling can happen for that operation rather than validating
+## up front for a false sense of security (given symlinks, parts of a path being renamed, etc.).
+fromStr : Str -> Path
+fromStr = \str -> @Path (FromStr str)
+
+## Not all filesystems use Unicode paths. This function can be used to create a path which
+## is not valid Unicode (like a Roc [Str] is), but which is valid for a particular filesystem.
+##
+## Note that if the list contains any `0` bytes, sending this path to any file operations
+## (e.g. [File.read] or [WriteStream.openPath]) will fail.
+fromBytes : List U8 -> Path
+fromBytes = \bytes -> @Path (ArbitraryBytes bytes)
 
 ## Note that canonicalization reads from the file system (in order to resolve symbolic
 ## links, and to convert relative paths into absolute ones). This means that it is not only
@@ -81,7 +91,7 @@ fromStr = \str -> @Path (FromRoc str)
 ## and can access the current working directory by turning a relative path into an
 ## absolute one (which can prepend the absolute path of the current working directory to
 ## the relative path).
-canonicalize : Path * -> Task CanPath (CanonicalizeErr *) [Metadata, Cwd]*
+canonicalize : Path -> Task Path (CanonicalizeErr *) [Metadata, Read [Env]]*
 
 ## Assumes the given [Path] is encoded in the given [Charset], and attempts to decode
 ## it as such. This decoding can fail if the [Path] is not in the given [Charset].
@@ -90,84 +100,119 @@ canonicalize : Path * -> Task CanPath (CanonicalizeErr *) [Metadata, Cwd]*
 ## they were originally encoded with. It's most common (but not guaranteed) that they will
 ## have been encoded with the same charset as the operating system's curent locale (which
 ## typically does not change after it is set during installation of the OS), so
-## [Locale.displayPath] should convert a [Path] to a valid string as long as the path
-## was created in the given [Locale]. (Use [Env.locale] to get the current locale.)
-toStr : Path *, Locale -> Result Str (CharsetErr *)
-toStr = \@Path path, locale ->
+## this should convert a [Path] to a valid string as long as the path was created
+## with the given [Charset]. (Use [Env.charset] to get the current system charset.)
+toStrUsingCharset : Path, Charset -> Result Str (CharsetErr *)
+toStrUsingCharset = \@Path path, charset ->
     when path is
-        FromOs bytes -> Locale.toStr locale bytes
         FromRoc str -> str
+        NulTerminated bytes | ArbitraryBytes bytes ->
+            Locale.toStr charset bytes
 
-## Assumes the path was encoded using the same locale as the one returned by
-## [Env.locale], and converts it to a [Str] while converting any characters which are invalid
-## in that locale into the [Unicode replacement character](https://unicode.org/glossary/#replacement_character)
-## (`"�"`).
+## Convert a path to a string suitable for displaying to the user, based on the
+## current system locale.
 ##
-## TODO: since this will be commonly used, explain again here about what the problem is
-##       and what edge cases can occur as a result.
-display : Path * -> Task Str * [Read [Env]]*
+## Converting paths to strings can be an unreliable operation, because operating systems
+## don't record the paths' encodings. This means it's possible for the path to have been
+## encoded with a different character set than the current system default, which means
+## when [display] converts them to a string, it may look like gibberish.
+## [Here is an example.](https://unix.stackexchange.com/questions/667652/can-a-file-path-be-invalid-utf-8/667863#667863)
+##
+## If you happen to know the [Charset] that was used to encode the path, you can use
+## [toStrUsingCharset] instead of [dislay]. This function assumes you don't know the charset
+## for sure, and instead want a best-effort decoding for the purpose of at least displaying
+## something to the user—even if it's incorrect—because that's better than showing an error.
+##
+## Some parts of the path may look like gibberish, and other parts may be replaced with the
+## [Unicode replacement character](https://unicode.org/glossary/#replacement_character)
+## (`"�"`) because they are invalid Unicode. This is a very lossy conversion, so the [Str]
+## produced by this task should almost certainly not be used for any other purpose besides
+## being displayed to the user.
+##
+## Fortunately, most operating systems keep the same [character encoding](https://en.wikipedia.org/wiki/Character_encoding)
+## they had when they were installed, and use it to encode all the file paths on the system.
+## This means it will usually work out that the path displays exactly what you'd expect.
+## Of course, how gracefully our programs handle edge cases like these sometimes makes all
+## the difference between a frustrating experience and a pleasant one.
+display : Path -> Task Str * [Read [Env]]*
 display = \@Path path ->
     when path is
-        FromOs bytes -> Env.locale |> Task.map Locale.display
-        FromRoc str -> Task.succeed str
+        FromStr str -> Task.succeed str
+        NulTerminated bytes | ArbitraryBytes bytes ->
+            Env.locale |> Task.map Locale.display
 
-isEq : Path a, Path a -> Bool
+isEq : Path, Path -> Bool
 isEq = @Path p1, @Path p2 ->
-    when (p1, p2) is
-        (FromOs bytes, FromOs bytes) -> bytes == bytes,
-        (FromRoc str, FromRoc str) -> str == str,
-        (FromOs bytes, FromRoc str)
-        | (FromRoc str, FromOs bytes) ->
-            # We can't know the encoding that was originally used in the path, so we convert
-            # the string to bytes and see if those bytes are equal to the path's bytes.
-            #
-            # This may sound unreliable, but it's how all paths are compared; since the OS
-            # doesn't record which encoding was used to encode the path name, the only
-            # reasonable# definition for path equality is byte-for-byte equality.
-            Str.isEqUtf8 str bytes
+    when p1 is
+        NulTerminated bytes1 | ArbitraryBytes bytes1 ->
+            when p2 is
+                NulTerminated bytes2 | ArbitraryBytes bytes2 -> bytes1 == bytes2
+                # We can't know the encoding that was originally used in the path, so we convert
+                # the string to bytes and see if those bytes are equal to the path's bytes.
+                #
+                # This may sound unreliable, but it's how all paths are compared; since the OS
+                # doesn't record which encoding was used to encode the path name, the only
+                # reasonable# definition for path equality is byte-for-byte equality.
+                FromStr str2 -> Str.isEqUtf8 str2 bytes1
+
+        FromStr str1 ->
+            when p2 is
+                NulTerminated bytes2 | ArbitraryBytes bytes2 -> Str.isEqUtf8 str1 bytes2
+                FromStr str2 -> str1 == str2
+
+compare : Path, Path -> [Lt, Eq, Gt]
+compare = @Path p1, @Path p2 ->
+    when p1 is
+        NulTerminated bytes1 | ArbitraryBytes bytes1 ->
+            when p2 is
+                NulTerminated bytes2 | ArbitraryBytes bytes2 -> Ord.compare bytes1 bytes2
+                FromStr str2 -> Str.compareUtf8 str2 bytes1
+
+        FromStr str1 ->
+            when p2 is
+                NulTerminated bytes2 | ArbitraryBytes bytes2 -> Ord.compare str1 bytes2
+                FromStr str2 -> str1 == str2
 
 ## Returns `True` if the path is absolute.
 ##
-## For a [CanPath], this is always `True`.
-##
-## For a [RawPath], this returns [True] only if the path begins with an absolute root
-## (see [CanPathRoot] for examples of roots) and it also contains no `..` or `.` path
+## A path is only absolute if it begins with an absolute root
+## (see [PathRoot] for examples of roots) _and_ it contains neither `..` nor `.` path
 ## components.
 ##
-## Note that an absolute path may contain unresolved symlinks, so it may not be canonical!
-isAbsolute : Path * -> Bool
+## Note that an absolute path may contain unresolved symlinks, so even an absolute path
+## may change when passed to [canonicalize].
+isAbsolute : Path -> Bool
 
 ## ## Path Components
 
-# ParentDir, # e.g. ".." on UNIX or Windows
-# CurrentDir, # e.g. "." on UNIX
-PathComponent : [ParentDir, CurrentDir]CanPathComponent
+PathComponent : [
+    ParentDir, # e.g. ".." on UNIX or Windows
+    CurrentDir, # e.g. "." on UNIX
+    Named Str, # e.g. "stuff" on UNIX
+    DirSep Str, # e.g. "/" on UNIX, "\" or "/" on Windows. Or, sometimes, "¥" on Windows - see
+                # https://docs.microsoft.com/en-us/windows/win32/intl/character-sets-used-in-file-names
+                #
+                # This is included as an option so if you're transforming part of a path,
+                # you can write back whatever separator was originally used.
+]
 
 PathRoot : [
     WindowsRoot WindowsRoot, # e.g. "C:" on Windows
     UnixRoot, # "/" on UNIX
-]
-
-CanPathComponent : [
-    Named Str, # e.g. "stuff" on UNIX
-    DirSep Str, # e.g. "/" on UNIX, "\" or "/" on Windows.
-                # This is included as an option so if you're transforming part of a path,
-                # you can write back whatever separator was originally used.
+    PathIsRelative, # no root
 ]
 
 WindowsRoot : [
     # TODO see https://doc.rust-lang.org/std/path/enum.Root.html
 ]
 
-# None means it's a relative path
-root : Path * -> [None]PathRoot
+root : Path -> PathRoot
 
-# None means it's a relative path
-toComponents : Path * -> ([None]PathRoot, List PathComponent)
+toComponents : Path -> (PathRoot, List PathComponent)
 
 walkComponents :
-    Path *,
+    Path,
     # None means it's a relative path
-    ([None]PathRoot -> state),
+    (PathRoot -> state),
     (state, PathComponent -> state)
     -> state
