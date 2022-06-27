@@ -1,14 +1,77 @@
-args : Task (List Str) [NonUnicodeArg (List U8)]* [Read [Args]*]*
+## Returns a list of the program's command-line arguments.
+##
+## Command-line arguments are not always valid Unicode, so this provides them
+## as `List U8`s of raw bytes; you can decode those however you like!
+##
+## See [argsUtf8] for an alternative which produces [Str] instead of [List U8].
+args : Task (List (List U8)) * [Read [Args]*]*
 
-argsAsBytes : Task (List (List U8)) [NonUnicodeArg (List U8)]* [Read [Args]*]*
+## Returns the program's command-line arguments, decoded as UTF-8 strings.
+## If any of the arguments aren't valid UTF-8, the entire task fails with `BadUtf8`.
+argsUtf8 :
+    Task
+        (List Str)
+        [BadUtf8 { argIndex : Nat, bytes : List U8 }]*
+        [Read [Args]*]*
 
+## Walk through the program's command-line arguments.
+##
+## Command-line arguments are not always valid Unicode, so this provides them
+## as `List U8`s of raw bytes; you can decode those however you like!
+##
+## See [walkArgsUtf8] for an alternative which produces [Str] instead of [List U8].
 walkArgs :
+    state,
+    (state, List U8 -> Task state err fx)
+    -> Task state err [Read [Args]*]fx
 
+
+# (state, List U8 -> state)
+task : Task MyState MyErr [Read [Args]*]MyFx
+task =
+    nestedTask : Task (Task MyState MyErr MyFx) * [Read [Args]*]*
+    nestedTask = Env.walkArgs (Task.succeed init) \innerTask, arg ->
+        state <- Task.await innerTask
+
+        doStuffToState state arg
+            |> Task.succeed
+
+    Task.join nestedTask
+
+# (state, List U8 -> Task state err fx)
+task : Task MyState MyErr [Read [Args]*]MyFx
+task = Env.walkArgs init \state, arg ->
+    doStuffToState state arg
+        |> Task.succeed
+
+## Walk through the program's command-line arguments until `Done` says to stop.
+##
+## Command-line arguments are not always valid Unicode, so this provides them
+## as `List U8`s of raw bytes; you can decode those however you like!
+##
+## See [walkArgsUtf8] for an alternative which produces [Str] instead of [List U8].
 walkArgsUntil :
+    state,
+    (state, List U8 -> Task [Done state, Continue state] err fx)
+    -> Task state err [Read [Args]*]fx
 
-walkArgsAsBytes :
+## Walk through the program's command-line arguments, decoded as UTF-8 strings.
+## If any of the arguments aren't valid UTF-8, the entire task fails with `BadUtf8`.
+walkArgsUtf8 :
+    state,
+    (state, Str -> Task state err fx)
+    -> Task
+        state
+        [BadUtf8 { argIndex : Nat, bytes : List U8 }]err
+        [Read [Args]*]fx
 
-walkArgsAsBytesUntil :
+walkArgsUtf8Until :
+    state,
+    (state, Str -> Task [Done state, Continue state] err fx)
+    -> Task
+        state
+        [BadUtf8 { argIndex : Nat, bytes : List U8 }]err
+        [Read [Args]*]fx
 
 ## Environment variable entries may not be valid Unicode. If this environment variable
 ## is not valid unicode, the task fails with `InvalidUnicodeVar` and the raw bytes
@@ -38,7 +101,7 @@ walkVars :
 
 walkVarsUntil :
     state,
-    (state, (List U8, List U8) -> Task [Done, Continue state] err fx)
+    (state, (List U8, List U8) -> Task [Done state, Continue state] err fx)
     -> Task state err [Read [Env]*]fx
 
 ## Get the system's current [Locale].
