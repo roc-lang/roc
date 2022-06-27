@@ -90,6 +90,7 @@ fn find_names_needed(
     roots: &mut Vec<Variable>,
     root_appearances: &mut MutMap<Variable, Appearances>,
     names_taken: &mut MutMap<Lowercase, Variable>,
+    find_under_alias: bool,
 ) {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
@@ -190,59 +191,151 @@ fn find_names_needed(
         Structure(Apply(_, args)) => {
             for index in args.into_iter() {
                 let var = subs[index];
-                find_names_needed(var, subs, roots, root_appearances, names_taken);
+                find_names_needed(
+                    var,
+                    subs,
+                    roots,
+                    root_appearances,
+                    names_taken,
+                    find_under_alias,
+                );
             }
         }
         Structure(Func(arg_vars, _closure_var, ret_var)) => {
             for index in arg_vars.into_iter() {
                 let var = subs[index];
-                find_names_needed(var, subs, roots, root_appearances, names_taken);
+                find_names_needed(
+                    var,
+                    subs,
+                    roots,
+                    root_appearances,
+                    names_taken,
+                    find_under_alias,
+                );
             }
 
-            find_names_needed(*ret_var, subs, roots, root_appearances, names_taken);
+            find_names_needed(
+                *ret_var,
+                subs,
+                roots,
+                root_appearances,
+                names_taken,
+                find_under_alias,
+            );
         }
         Structure(Record(sorted_fields, ext_var)) => {
             for index in sorted_fields.iter_variables() {
                 let var = subs[index];
-                find_names_needed(var, subs, roots, root_appearances, names_taken);
+                find_names_needed(
+                    var,
+                    subs,
+                    roots,
+                    root_appearances,
+                    names_taken,
+                    find_under_alias,
+                );
             }
 
-            find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
+            find_names_needed(
+                *ext_var,
+                subs,
+                roots,
+                root_appearances,
+                names_taken,
+                find_under_alias,
+            );
         }
         Structure(TagUnion(tags, ext_var)) => {
             for slice_index in tags.variables() {
                 let slice = subs[slice_index];
                 for var_index in slice {
                     let var = subs[var_index];
-                    find_names_needed(var, subs, roots, root_appearances, names_taken);
+                    find_names_needed(
+                        var,
+                        subs,
+                        roots,
+                        root_appearances,
+                        names_taken,
+                        find_under_alias,
+                    );
                 }
             }
 
-            find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
+            find_names_needed(
+                *ext_var,
+                subs,
+                roots,
+                root_appearances,
+                names_taken,
+                find_under_alias,
+            );
         }
         Structure(FunctionOrTagUnion(_, _, ext_var)) => {
-            find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
+            find_names_needed(
+                *ext_var,
+                subs,
+                roots,
+                root_appearances,
+                names_taken,
+                find_under_alias,
+            );
         }
         Structure(RecursiveTagUnion(rec_var, tags, ext_var)) => {
             for slice_index in tags.variables() {
                 let slice = subs[slice_index];
                 for var_index in slice {
                     let var = subs[var_index];
-                    find_names_needed(var, subs, roots, root_appearances, names_taken);
+                    find_names_needed(
+                        var,
+                        subs,
+                        roots,
+                        root_appearances,
+                        names_taken,
+                        find_under_alias,
+                    );
                 }
             }
 
-            find_names_needed(*ext_var, subs, roots, root_appearances, names_taken);
-            find_names_needed(*rec_var, subs, roots, root_appearances, names_taken);
+            find_names_needed(
+                *ext_var,
+                subs,
+                roots,
+                root_appearances,
+                names_taken,
+                find_under_alias,
+            );
+            find_names_needed(
+                *rec_var,
+                subs,
+                roots,
+                root_appearances,
+                names_taken,
+                find_under_alias,
+            );
         }
-        Alias(_symbol, args, _actual, _kind) => {
+        Alias(_symbol, args, actual, _kind) => {
             // only find names for named parameters!
             for var_index in args.into_iter().take(args.len()) {
                 let var = subs[var_index];
-                find_names_needed(var, subs, roots, root_appearances, names_taken);
+                find_names_needed(
+                    var,
+                    subs,
+                    roots,
+                    root_appearances,
+                    names_taken,
+                    find_under_alias,
+                );
             }
-            // TODO should we also look in the actual variable?
-            // find_names_needed(_actual, subs, roots, root_appearances, names_taken);
+            if find_under_alias {
+                find_names_needed(
+                    *actual,
+                    subs,
+                    roots,
+                    root_appearances,
+                    names_taken,
+                    find_under_alias,
+                );
+            }
         }
         LambdaSet(subs::LambdaSet {
             solved,
@@ -253,21 +346,49 @@ fn find_names_needed(
                 let slice = subs[slice_index];
                 for var_index in slice {
                     let var = subs[var_index];
-                    find_names_needed(var, subs, roots, root_appearances, names_taken);
+                    find_names_needed(
+                        var,
+                        subs,
+                        roots,
+                        root_appearances,
+                        names_taken,
+                        find_under_alias,
+                    );
                 }
             }
 
             for uls_index in unspecialized.into_iter() {
                 let Uls(var, _, _) = subs[uls_index];
-                find_names_needed(var, subs, roots, root_appearances, names_taken);
+                find_names_needed(
+                    var,
+                    subs,
+                    roots,
+                    root_appearances,
+                    names_taken,
+                    find_under_alias,
+                );
             }
 
             if let Some(rec_var) = recursion_var.into_variable() {
-                find_names_needed(rec_var, subs, roots, root_appearances, names_taken);
+                find_names_needed(
+                    rec_var,
+                    subs,
+                    roots,
+                    root_appearances,
+                    names_taken,
+                    find_under_alias,
+                );
             }
         }
         &RangedNumber(typ, _) => {
-            find_names_needed(typ, subs, roots, root_appearances, names_taken);
+            find_names_needed(
+                typ,
+                subs,
+                roots,
+                root_appearances,
+                names_taken,
+                find_under_alias,
+            );
         }
         Error | Structure(Erroneous(_)) | Structure(EmptyRecord) | Structure(EmptyTagUnion) => {
             // Errors and empty records don't need names.
@@ -279,14 +400,25 @@ struct NamedResult {
     recursion_structs_to_expand: Vec<Variable>,
 }
 
-fn name_all_type_vars(variable: Variable, subs: &mut Subs) -> NamedResult {
+fn name_all_type_vars(
+    variable: Variable,
+    subs: &mut Subs,
+    find_names_under_alias: bool,
+) -> NamedResult {
     let mut roots = Vec::new();
     let mut letters_used = 0;
     let mut appearances = MutMap::default();
     let mut taken = MutMap::default();
 
     // Populate names_needed
-    find_names_needed(variable, subs, &mut roots, &mut appearances, &mut taken);
+    find_names_needed(
+        variable,
+        subs,
+        &mut roots,
+        &mut appearances,
+        &mut taken,
+        find_names_under_alias,
+    );
 
     let mut recursion_structs_to_expand = vec![];
 
@@ -417,7 +549,7 @@ pub fn name_and_print_var(
     interns: &Interns,
     debug_print: DebugPrint,
 ) -> String {
-    let named_result = name_all_type_vars(var, subs);
+    let named_result = name_all_type_vars(var, subs, debug_print.print_only_under_alias);
     let content = subs.get_content_without_compacting(var);
     content_to_string(content, subs, home, interns, named_result, debug_print)
 }
@@ -976,31 +1108,33 @@ fn write_flat_type<'a>(
         }
 
         RecursiveTagUnion(rec_var, tags, ext_var) => {
-            buf.push('[');
+            write_parens!(parens == Parens::InTypeParam, buf, {
+                buf.push('[');
 
-            let (tags, new_ext_var) = tags.unsorted_tags_and_ext(subs, *ext_var);
-            write_sorted_tags2(env, ctx, subs, buf, tags, |tag| tag.0.as_str().to_string());
+                let (tags, new_ext_var) = tags.unsorted_tags_and_ext(subs, *ext_var);
+                write_sorted_tags2(env, ctx, subs, buf, tags, |tag| tag.0.as_str().to_string());
 
-            buf.push(']');
+                buf.push(']');
 
-            write_ext_content(
-                env,
-                ctx,
-                subs,
-                buf,
-                ExtContent::from_var(subs, new_ext_var),
-                parens,
-            );
+                write_ext_content(
+                    env,
+                    ctx,
+                    subs,
+                    buf,
+                    ExtContent::from_var(subs, new_ext_var),
+                    parens,
+                );
 
-            buf.push_str(" as ");
-            write_content(
-                env,
-                ctx,
-                subs.get_content_without_compacting(*rec_var),
-                subs,
-                buf,
-                parens,
-            )
+                buf.push_str(" as ");
+                write_content(
+                    env,
+                    ctx,
+                    subs.get_content_without_compacting(*rec_var),
+                    subs,
+                    buf,
+                    parens,
+                )
+            })
         }
         Erroneous(problem) => {
             buf.push_str(&format!("<Type Mismatch: {:?}>", problem));

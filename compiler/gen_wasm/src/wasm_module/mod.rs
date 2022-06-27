@@ -174,7 +174,7 @@ impl<'a> WasmModule<'a> {
         })
     }
 
-    pub fn eliminate_dead_code(&mut self, arena: &'a Bump, called_host_fns: &[u32]) {
+    pub fn eliminate_dead_code(&mut self, arena: &'a Bump, called_host_fns: BitVec<usize>) {
         if DEBUG_SETTINGS.skip_dead_code_elim {
             return;
         }
@@ -194,7 +194,9 @@ impl<'a> WasmModule<'a> {
             .filter(|ex| ex.ty == ExportType::Func)
             .map(|ex| ex.index);
 
-        // Indirect calls (function pointers) need special treatment
+        // The ElementSection lists all functions whose "address" is taken.
+        // Find their signatures so we can trace all possible indirect calls.
+        // (The call_indirect instruction specifies a function signature.)
         let indirect_callees_and_signatures = Vec::from_iter_in(
             self.element
                 .segments
@@ -223,6 +225,7 @@ impl<'a> WasmModule<'a> {
         //
         let mut live_import_fns = Vec::with_capacity_in(import_count, arena);
         let mut fn_index = 0;
+        let mut eliminated_import_count = 0;
         self.import.imports.retain(|import| {
             if !matches!(import.description, ImportDesc::Func { .. }) {
                 true
@@ -230,24 +233,30 @@ impl<'a> WasmModule<'a> {
                 let live = live_flags[fn_index];
                 if live {
                     live_import_fns.push(fn_index);
+                } else {
+                    eliminated_import_count += 1;
                 }
                 fn_index += 1;
                 live
             }
         });
 
-        // signatures
-        let live_import_count = live_import_fns.len();
-        let dead_import_count = host_fn_min as usize - live_import_count;
+        // Update the count of JS imports to replace with Wasm dummies
+        // (In addition to the ones we already replaced for each host-to-app call)
+        self.code.dead_import_dummy_count += eliminated_import_count as u32;
+
+        // FunctionSection
+        // Insert function signatures for the new Wasm dummy functions
         let signature_count = self.function.signatures.len();
         self.function
             .signatures
-            .extend(repeat(0).take(dead_import_count));
+            .extend(repeat(0).take(eliminated_import_count));
         self.function
             .signatures
-            .copy_within(0..signature_count, dead_import_count);
+            .copy_within(0..signature_count, eliminated_import_count);
 
-        // debug names
+        // NameSection
+        // For each live import, swap its debug name to the right position
         for (new_index, &old_index) in live_import_fns.iter().enumerate() {
             let old_name: &str = self.names.function_names[old_index].1;
             let new_name: &str = self.names.function_names[new_index].1;
@@ -255,11 +264,9 @@ impl<'a> WasmModule<'a> {
             self.names.function_names[old_index].1 = new_name;
         }
 
-        //
-        // Relocate Wasm calls to JS imports
+        // Relocate calls from host to JS imports
         // This must happen *before* we run dead code elimination on the code section,
         // so that byte offsets in the host's linking data will still be valid.
-        //
         for (new_index, &old_index) in live_import_fns.iter().enumerate() {
             if new_index == old_index {
                 continue;
@@ -275,16 +282,14 @@ impl<'a> WasmModule<'a> {
             );
         }
 
-        //
-        // For every eliminated JS import, insert a dummy Wasm function at the same index.
-        // This avoids shifting the indices of Wasm functions, which would require more linking work.
-        //
-        let dead_import_count = host_fn_min - live_import_fns.len() as u32;
-        self.code.dead_import_dummy_count += dead_import_count;
+        // Relocate calls from Roc app to JS imports
+        for code_builder in self.code.code_builders.iter_mut() {
+            code_builder.apply_import_relocs(&live_import_fns);
+        }
 
         //
         // Dead code elimination. Replace dead functions with tiny dummies.
-        // This is fast. Live function indices are unchanged, so no relocations are needed.
+        // Live function indices are unchanged, so no relocations are needed.
         //
         let dummy = CodeBuilder::dummy(arena);
         let mut dummy_bytes = Vec::with_capacity_in(dummy.size(), arena);
@@ -308,7 +313,7 @@ impl<'a> WasmModule<'a> {
     fn trace_live_host_functions<I: Iterator<Item = u32>>(
         &self,
         arena: &'a Bump,
-        called_host_fns: &[u32],
+        called_host_fns: BitVec<usize>,
         exported_fns: I,
         indirect_callees_and_signatures: Vec<'a, (u32, u32)>,
         host_fn_min: u32,
@@ -349,14 +354,10 @@ impl<'a> WasmModule<'a> {
         );
 
         // Loop variables for the main loop below
-        let capacity = host_fn_max as usize + self.code.code_builders.len();
-        let mut live_flags = BitVec::repeat(false, capacity);
-        let mut next_pass_fns = BitVec::repeat(false, capacity);
-        let mut current_pass_fns = BitVec::<usize>::repeat(false, capacity);
-
-        // Start with everything called from Roc and everything exported to JS
-        // Also include everything that can be indirectly called (crude, but good enough!)
-        for index in called_host_fns.iter().copied().chain(exported_fns) {
+        let mut live_flags = BitVec::repeat(false, called_host_fns.len());
+        let mut next_pass_fns = BitVec::repeat(false, called_host_fns.len());
+        let mut current_pass_fns = called_host_fns;
+        for index in exported_fns.filter(|i| *i < host_fn_max) {
             current_pass_fns.set(index as usize, true);
         }
 
@@ -381,11 +382,11 @@ impl<'a> WasmModule<'a> {
                 for (offset, symbol) in call_offsets_and_symbols.iter() {
                     if *offset > code_start && *offset < code_end {
                         // Find out which other function is being called
-                        let called_fn_index = symbol_fn_indices[*symbol as usize];
+                        let callee = symbol_fn_indices[*symbol as usize];
 
                         // If it's not already marked live, include it in the next pass
-                        if !live_flags[called_fn_index as usize] {
-                            next_pass_fns.set(called_fn_index as usize, true);
+                        if live_flags.get(callee as usize).as_deref() == Some(&false) {
+                            next_pass_fns.set(callee as usize, true);
                         }
                     }
                 }
@@ -393,14 +394,14 @@ impl<'a> WasmModule<'a> {
                 // For each indirect call in the body
                 for (offset, signature) in indirect_call_offsets_and_types.iter() {
                     if *offset > code_start && *offset < code_end {
-                        // Find which functions have the right type signature for this call
+                        // Find which indirect callees have the right type signature
                         let potential_callees = indirect_callees_and_signatures
                             .iter()
                             .filter(|(_, sig)| sig == signature)
                             .map(|(f, _)| *f);
                         // Mark them all as live
                         for f in potential_callees {
-                            if !live_flags[f as usize] {
+                            if live_flags.get(f as usize).as_deref() == Some(&false) {
                                 next_pass_fns.set(f as usize, true);
                             }
                         }
@@ -437,7 +438,11 @@ impl<'a> WasmModule<'a> {
     /// - Update all call sites for the swapped JS function
     /// - Update the FunctionSection to show the correct type signature for the swapped JS function
     /// - Insert a dummy function in the CodeSection, at the same index as the swapped JS function
-    pub fn link_host_to_app_calls(&mut self, host_to_app_map: Vec<'a, (&'a str, u32)>) {
+    pub fn link_host_to_app_calls(
+        &mut self,
+        arena: &'a Bump,
+        host_to_app_map: Vec<'a, (&'a str, u32)>,
+    ) {
         for (app_fn_name, app_fn_index) in host_to_app_map.into_iter() {
             // Find the host import, and the last imported function to swap with it.
             // Not all imports are functions, so the function index and import index may be different
@@ -510,13 +515,14 @@ impl<'a> WasmModule<'a> {
                 );
 
                 // Update the name in the debug info
-                let (_, debug_name) = self
+                if let Some((_, debug_name)) = self
                     .names
                     .function_names
                     .iter_mut()
                     .find(|(i, _)| *i as usize == host_fn_index)
-                    .unwrap();
-                debug_name.clone_from(&swap_fn_name);
+                {
+                    debug_name.clone_from(&swap_fn_name);
+                }
             }
 
             // Remember to insert a dummy function at the beginning of the code section
@@ -527,13 +533,16 @@ impl<'a> WasmModule<'a> {
             self.function.signatures.insert(0, 0);
 
             // Update the debug name for the dummy
-            let (_, debug_name) = self
+            if let Some((_, debug_name)) = self
                 .names
                 .function_names
                 .iter_mut()
                 .find(|(i, _)| *i as usize == swap_fn_index)
-                .unwrap();
-            debug_name.clone_from(&"linking_dummy");
+            {
+                debug_name.clone_from(
+                    &bumpalo::format!(in arena, "linking_dummy_{}", debug_name).into_bump_str(),
+                );
+            }
         }
     }
 

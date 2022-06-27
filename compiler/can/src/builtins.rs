@@ -187,6 +187,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         NUM_SUB_SATURATED => num_sub_saturated,
         NUM_MUL => num_mul,
         NUM_MUL_WRAP => num_mul_wrap,
+        NUM_MUL_SATURATED => num_mul_saturated,
         NUM_MUL_CHECKED => num_mul_checked,
         NUM_GT => num_gt,
         NUM_GTE => num_gte,
@@ -907,6 +908,11 @@ fn num_mul(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Num.mulWrap : Int a, Int a -> Int a
 fn num_mul_wrap(symbol: Symbol, var_store: &mut VarStore) -> Def {
     num_binop(symbol, var_store, LowLevel::NumMulWrap)
+}
+
+/// Num.mulSaturated : Num a, Num a -> Num a
+fn num_mul_saturated(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    num_binop(symbol, var_store, LowLevel::NumMulSaturated)
 }
 
 /// Num.mulChecked : Num a, Num a -> Result (Num a) [Overflow]*

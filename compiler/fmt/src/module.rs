@@ -198,7 +198,7 @@ impl<'a> Formattable for TypedIdent<'a> {
 
 fn fmt_package_name<'buf>(buf: &mut Buf<'buf>, name: PackageName, _indent: u16) {
     buf.push('"');
-    buf.push_str_allow_spaces(name.0);
+    buf.push_str_allow_spaces(name.to_str());
     buf.push('"');
 }
 

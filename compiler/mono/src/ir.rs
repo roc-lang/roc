@@ -18,9 +18,7 @@ use roc_debug_flags::{
 };
 use roc_error_macros::todo_abilities;
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
-use roc_late_solve::{
-    instantiate_rigids, resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed,
-};
+use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -29,8 +27,8 @@ use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
 use roc_target::TargetInfo;
 use roc_types::subs::{
-    Content, ExhaustiveMark, FlatType, RedundantMark, StorageSubs, Subs, Variable,
-    VariableSubsSlice,
+    instantiate_rigids, Content, ExhaustiveMark, FlatType, RedundantMark, StorageSubs, Subs,
+    Variable, VariableSubsSlice,
 };
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};

@@ -12,10 +12,9 @@ use roc_types::subs::Content;
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, Variable};
 use roc_unify::unify::{unify as unify_unify, Mode, Unified};
 
-pub use roc_solve::solve::instantiate_rigids;
-
 pub use roc_solve::ability::resolve_ability_specialization;
 pub use roc_solve::ability::Resolved;
+pub use roc_types::subs::instantiate_rigids;
 
 #[derive(Debug)]
 pub struct UnificationFailed;
@@ -145,6 +144,7 @@ pub fn unify(
             vars: _,
             must_implement_ability: _,
             lambda_sets_to_specialize,
+            extra_metadata: _,
         } => {
             let mut pools = Pools::default();
 

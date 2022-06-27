@@ -14,11 +14,12 @@
 
 pub mod encoding;
 
-use encoding::FlatEncodable;
+use encoding::{FlatEncodable, FlatEncodableKey};
 
+use roc_module::symbol::Symbol;
 use roc_types::subs::{Subs, Variable};
 
-#[derive(Hash)]
+#[derive(Hash, PartialEq, Eq, Debug)]
 #[repr(u8)]
 enum Strategy {
     Encoding,
@@ -26,20 +27,37 @@ enum Strategy {
     Decoding,
 }
 
-#[derive(Hash)]
+#[derive(Hash, PartialEq, Eq, Debug)]
+pub enum Derived<R>
+where
+    R: std::hash::Hash + PartialEq + Eq + std::fmt::Debug,
+{
+    /// If a derived implementation name is well-known ahead-of-time, we can inline the symbol
+    /// directly rather than associating a key for an implementation to be made later on.
+    Immediate(Symbol),
+    /// Key of the derived implementation to use. This allows association of derived implementation
+    /// names to a key, when the key is known ahead-of-time but the implementation (and it's name)
+    /// is yet-to-be-made.
+    Key(DeriveKey<R>),
+}
+
+#[derive(Hash, PartialEq, Eq, Debug)]
 pub struct DeriveKey<R>
 where
-    R: std::hash::Hash,
+    R: std::hash::Hash + PartialEq + Eq + std::fmt::Debug,
 {
     strategy: Strategy,
     pub repr: R,
 }
 
-impl<'a> DeriveKey<FlatEncodable<'a>> {
+impl<'a> Derived<FlatEncodableKey<'a>> {
     pub fn encoding(subs: &'a Subs, var: Variable) -> Self {
-        DeriveKey {
-            strategy: Strategy::Encoding,
-            repr: encoding::FlatEncodable::from_var(subs, var),
+        match encoding::FlatEncodable::from_var(subs, var) {
+            FlatEncodable::Immediate(imm) => Derived::Immediate(imm),
+            FlatEncodable::Key(repr) => Derived::Key(DeriveKey {
+                strategy: Strategy::Encoding,
+                repr,
+            }),
         }
     }
 }

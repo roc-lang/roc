@@ -165,6 +165,7 @@ enum FirstOrder {
     NumSubChecked,
     NumMul,
     NumMulWrap,
+    NumMulSaturated,
     NumMulChecked,
     NumGt,
     NumGte,

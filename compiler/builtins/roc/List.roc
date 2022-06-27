@@ -588,11 +588,11 @@ find : List elem, (elem -> Bool) -> Result elem [NotFound]*
 ##
 ## If `start` is outside the bounds of the given list, returns the empty list.
 ##
-## >>> List.sublist { start: 4, len: 0 } [1, 2, 3]
+## >>> List.sublist [1, 2, 3] { start: 4, len: 0 }
 ##
 ## If more elements are requested than exist in the list, returns as many as it can.
 ##
-## >>> List.sublist { start: 2, len: 10 } [1, 2, 3, 4, 5]
+## >>> List.sublist [1, 2, 3, 4, 5] { start: 2, len: 10 }
 ##
 ## > If you want a sublist which goes all the way to the end of the list, no
 ## > matter how long the list is, `List.takeLast` can do that more efficiently.

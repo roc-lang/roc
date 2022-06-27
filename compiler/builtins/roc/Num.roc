@@ -82,6 +82,7 @@ interface Num
             subChecked,
             subSaturated,
             mulWrap,
+            mulSaturated,
             mulChecked,
             intCast,
             bytesToU16,
@@ -378,7 +379,7 @@ Int range : Num (Integer range)
 ## access to hardware-accelerated performance, Roc follows these rules exactly.
 ##
 ## There's no literal syntax for these error values, but you can check to see if
-## you ended up with one of them by using [isNaN], [isFinite], and [isInfinite].
+## you ended up with one of them by using #isNaN, #isFinite, and #isInfinite.
 ## Whenever a function in this module could return one of these values, that
 ## possibility is noted in the function's documentation.
 ##
@@ -862,7 +863,14 @@ subSaturated : Num a, Num a -> Num a
 subChecked : Num a, Num a -> Result (Num a) [Overflow]*
 
 mulWrap : Int range, Int range -> Int range
-# mulSaturated : Num a, Num a -> Num a
+
+## Multiply two numbers, clamping on the maximum representable number rather than
+## overflowing.
+##
+## This is the same as [Num.mul] except for the saturating behavior if the
+## addition is to overflow.
+mulSaturated : Num a, Num a -> Num a
+
 ## Multiply two numbers and check for overflow.
 ##
 ## This is the same as [Num.mul] except if the operation overflows, instead of
@@ -1134,16 +1142,16 @@ toF64Checked : Num * -> Result F64 [OutOfBounds]*
 ##
 ## Always returns `True` when given a [Dec].
 ##
-## This is the opposite of [isInfinite], except when given [*NaN*](Num.isNaN). Both
-## [isFinite] and [isInfinite] return `False` for [*NaN*](Num.isNaN).
+## This is the opposite of #isInfinite, except when given [*NaN*](Num.isNaN). Both
+## #isFinite and #isInfinite return `False` for [*NaN*](Num.isNaN).
 # isFinite : Frac * -> Bool
 ## When given a [F64] or [F32] value, returns `True` if that value is either
 ## ∞ or -∞, and `False` otherwise.
 ##
 ## Always returns `False` when given a [Dec].
 ##
-## This is the opposite of [isFinite], except when given [*NaN*](Num.isNaN). Both
-## [isFinite] and [isInfinite] return `False` for [*NaN*](Num.isNaN).
+## This is the opposite of #isFinite, except when given [*NaN*](Num.isNaN). Both
+## #isFinite and #isInfinite return `False` for [*NaN*](Num.isNaN).
 # isInfinite : Frac * -> Bool
 ## When given a [F64] or [F32] value, returns `True` if that value is
 ## *NaN* ([not a number](https://en.wikipedia.org/wiki/NaN)), and `False` otherwise.
@@ -1166,7 +1174,7 @@ toF64Checked : Num * -> Result F64 [OutOfBounds]*
 ##
 ## Note that you should never put a *NaN* into a [Set], or use it as the key in
 ## a [Dict]. The result is entries that can never be removed from those
-## collections! See the documentation for [Set.add] and [Dict.insert] for details.
+## collections! See the documentation for [Set.insert] and [Dict.insert] for details.
 # isNaN : Frac * -> Bool
 ## Returns the higher of two numbers.
 ##
@@ -1215,7 +1223,7 @@ toF64Checked : Num * -> Result F64 [OutOfBounds]*
 ##
 ## This is called `shlWrap` because any bits shifted
 ## off the beginning of the number will be wrapped around to
-## the end. (In contrast, [shl] replaces discarded bits with zeroes.)
+## the end. (In contrast, #shl replaces discarded bits with zeroes.)
 # shlWrap : Int a, Int a -> Int a
 ## [Logical bit shift](https://en.wikipedia.org/wiki/Bitwise_operation#Logical_shift) right.
 ##
@@ -1225,7 +1233,7 @@ toF64Checked : Num * -> Result F64 [OutOfBounds]*
 ##
 ## This is called `shrWrap` because any bits shifted
 ## off the end of the number will be wrapped around to
-## the beginning. (In contrast, [shr] replaces discarded bits with zeroes.)
+## the beginning. (In contrast, #shr replaces discarded bits with zeroes.)
 # shrWrap : Int a, Int a -> Int a
 # ## Convert a number into a [Str], formatted with the given options.
 # ##

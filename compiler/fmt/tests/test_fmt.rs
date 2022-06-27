@@ -2264,7 +2264,7 @@ mod test_fmt {
 
                         Str,
                         Nat
-                        
+
                         -> Bool
 
                     foo
@@ -4313,7 +4313,7 @@ mod test_fmt {
     fn single_line_app() {
         module_formats_same(indoc!(
             r#"
-                app "Foo" packages { pf: "platform" } imports [] provides [main] to pf"#
+                app "Foo" packages { pf: "platform/main.roc" } imports [] provides [main] to pf"#
         ));
     }
 

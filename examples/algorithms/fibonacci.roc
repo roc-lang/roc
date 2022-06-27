@@ -1,5 +1,5 @@
 app "fibonacci"
-    packages { pf: "fibonacci-platform" }
+    packages { pf: "fibonacci-platform/main.roc" }
     imports []
     provides [main] to pf
 

@@ -1,5 +1,5 @@
 use super::keyboard_input;
-use super::resources::strings::PLATFORM_NAME;
+use super::resources::strings::PLATFORM_DIR_NAME;
 use crate::editor::mvc::ed_view;
 use crate::editor::mvc::ed_view::RenderedWgpu;
 use crate::editor::resources::strings::{HELLO_WORLD, NOTHING_OPENED};
@@ -523,11 +523,11 @@ fn read_main_roc_file(project_dir_path_opt: Option<&Path>) -> (PathBuf, String) 
 
 // returns path and content of app file
 fn init_new_roc_project(project_dir_path: &Path) -> (PathBuf, String) {
-    let orig_platform_path = Path::new("./examples/hello-world").join(PLATFORM_NAME);
+    let orig_platform_path = Path::new("./examples/hello-world").join(PLATFORM_DIR_NAME);
 
-    let roc_file_path = Path::new("./new-roc-project/UntitledApp.roc");
+    let roc_file_path = Path::new("./new-roc-project/main.roc");
 
-    let project_platform_path = project_dir_path.join(PLATFORM_NAME);
+    let project_platform_path = project_dir_path.join(PLATFORM_DIR_NAME);
 
     if !project_dir_path.exists() {
         fs::create_dir(project_dir_path).expect("Failed to create dir for roc project.");

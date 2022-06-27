@@ -31,6 +31,12 @@ pub fn walk_decl<V: Visitor>(visitor: &mut V, decl: &Declaration) {
         Declaration::DeclareRec(defs, _cycle_mark) => {
             visit_list!(visitor, visit_def, defs)
         }
+        Declaration::Expects(expects) => {
+            let it = expects.regions.iter().zip(expects.conditions.iter());
+            for (region, condition) in it {
+                visitor.visit_expr(condition, *region, Variable::BOOL);
+            }
+        }
         Declaration::Builtin(def) => visitor.visit_def(def),
         Declaration::InvalidCycle(_cycles) => {
             // ignore
