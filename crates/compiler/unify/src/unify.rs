@@ -1021,7 +1021,9 @@ fn unify_lambda_set_help<M: MetaCollector>(
                 let snapshot = subs.snapshot();
                 let outcome = unify_pool::<M>(subs, pool, var1, var2, ctx.mode);
 
-                if !outcome.mismatches.is_empty() {
+                if outcome.mismatches.is_empty() {
+                    subs.commit_snapshot(snapshot);
+                } else {
                     captures_unify = false;
                     subs.rollback_to(snapshot);
                     // Continue so the other variables can unify if possible, allowing us to re-use
@@ -1031,10 +1033,6 @@ fn unify_lambda_set_help<M: MetaCollector>(
         }
 
         if captures_unify {
-            debug_assert!((subs.get_subs_slice(vars1).iter())
-                .zip(subs.get_subs_slice(vars2).iter())
-                .all(|(v1, v2)| subs.equivalent_without_compacting(*v1, *v2)));
-
             new_lambdas.push((lambda_name, subs.get_subs_slice(vars1).to_vec()));
         } else {
             debug_assert!((subs.get_subs_slice(vars1).iter())
