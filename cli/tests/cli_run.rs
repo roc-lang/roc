@@ -533,7 +533,7 @@ mod cli_run {
             Example {
                 filename: "main.roc",
                 executable_filename: "main",
-                stdin: &["1\n", "a\n", "2\n", "b\n", "3\n", "c\n", "\n", "4\n", "d\n", "5\n", "e\n", "1\n", "f\n"],
+                stdin: &["1\n", "a\n", "2\n", "b\n", "3\n", "c\n", "\n", "4\n", "d\n", "5\n", "e\n", "1\n", "f\n", "\n"],
                 input_file: None,
                 expected_ending: "\
                     This example program takes the AssocList interface for a spin.\n\
