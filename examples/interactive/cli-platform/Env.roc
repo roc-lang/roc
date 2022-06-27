@@ -25,25 +25,6 @@ walkArgs :
     (state, List U8 -> Task state err fx)
     -> Task state err [Read [Args]*]fx
 
-
-# (state, List U8 -> state)
-task : Task MyState MyErr [Read [Args]*]MyFx
-task =
-    nestedTask : Task (Task MyState MyErr MyFx) * [Read [Args]*]*
-    nestedTask = Env.walkArgs (Task.succeed init) \innerTask, arg ->
-        state <- Task.await innerTask
-
-        doStuffToState state arg
-            |> Task.succeed
-
-    Task.join nestedTask
-
-# (state, List U8 -> Task state err fx)
-task : Task MyState MyErr [Read [Args]*]MyFx
-task = Env.walkArgs init \state, arg ->
-    doStuffToState state arg
-        |> Task.succeed
-
 ## Walk through the program's command-line arguments until `Done` says to stop.
 ##
 ## Command-line arguments are not always valid Unicode, so this provides them
