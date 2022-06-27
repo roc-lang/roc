@@ -1,5 +1,6 @@
 //! Pretty-prints the canonical AST back to check our work - do things look reasonable?
 
+use roc_can::def::Def;
 use roc_can::expr::Expr::{self, *};
 use roc_can::expr::{ClosureData, WhenBranch};
 use roc_can::pattern::{Pattern, RecordDestruct};
@@ -11,13 +12,9 @@ pub struct Ctx<'a> {
     pub interns: &'a Interns,
 }
 
-pub fn pretty_print(c: &Ctx, e: &Expr) -> String {
+pub fn pretty_print_def(c: &Ctx, d: &Def) -> String {
     let f = Arena::new();
-    expr(c, EPrec::Free, &f, e)
-        .append(f.hardline())
-        .1
-        .pretty(80)
-        .to_string()
+    def(c, &f, d).append(f.hardline()).1.pretty(80).to_string()
 }
 
 macro_rules! maybe_paren {
@@ -28,6 +25,23 @@ macro_rules! maybe_paren {
             $doc
         }
     };
+}
+
+fn def<'a>(c: &Ctx, f: &'a Arena<'a>, d: &'a Def) -> DocBuilder<'a, Arena<'a>> {
+    let Def {
+        loc_pattern,
+        loc_expr,
+        expr_var: _,
+        pattern_vars: _,
+        annotation: _,
+    } = d;
+
+    pattern(c, PPrec::Free, f, &loc_pattern.value)
+        .append(f.text(" ="))
+        .append(f.line())
+        .append(expr(c, EPrec::Free, f, &loc_expr.value))
+        .nest(2)
+        .group()
 }
 
 #[derive(PartialEq, PartialOrd)]
@@ -76,16 +90,19 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         )),
         When {
             loc_cond, branches, ..
-        } => f
-            .reflow("when ")
-            .append(expr(c, Free, f, &loc_cond.value))
-            .append(f.text(" is"))
-            .append(
-                f.concat(branches.iter().map(|b| f.line().append(branch(c, f, b))))
-                    .group(),
-            )
-            .nest(2)
-            .group(),
+        } => maybe_paren!(
+            Free,
+            p,
+            f.reflow("when ")
+                .append(expr(c, Free, f, &loc_cond.value))
+                .append(f.text(" is"))
+                .append(
+                    f.concat(branches.iter().map(|b| f.line().append(branch(c, f, b))))
+                        .group(),
+                )
+                .nest(2)
+                .group()
+        ),
         If {
             branches,
             final_else,

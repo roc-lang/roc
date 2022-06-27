@@ -313,7 +313,7 @@ pub fn get_module_ident_ids_mut<'a>(
         })
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "debug-symbols"))]
 lazy_static! {
     /// This is used in Debug builds only, to let us have a Debug instance
     /// which displays not only the Module ID, but also the Module Name which
@@ -348,14 +348,14 @@ impl ModuleId {
         (self.0.get() - 1) as usize
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "debug-symbols"))]
     pub fn register_debug_idents(self, ident_ids: &IdentIds) {
         let mut all = DEBUG_IDENT_IDS_BY_MODULE_ID.lock().expect("Failed to acquire lock for Debug interning into DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
 
         all.insert(self.to_zero_indexed() as u32, ident_ids.clone());
     }
 
-    #[cfg(not(debug_assertions))]
+    #[cfg(not(any(debug_assertions, feature = "debug-symbols")))]
     pub fn register_debug_idents(self, _ident_ids: &IdentIds) {
         // This is a no-op that should get DCE'd
     }
