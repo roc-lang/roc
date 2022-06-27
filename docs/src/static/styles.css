@@ -14,6 +14,20 @@
   --top-bar-bg: #8257e5;
   --top-bar-fg: #ffffff;
   --nav-link-hover-color: #000000;
+  --purple-1: #f2f1f9;
+  --purple-2: #d9d2ef;
+  --purple-3: #a17ef1;
+  --purple-4: #8d51f6;
+  --purple-5: #742af4;
+  --purple-6: #23143d;
+  --purple-7: #25222a;
+  --purple-8: #161519;
+  --purple-9: #111014;
+  --gray-1: #f8f8f8;
+  --gray-2: #f0f0f0;
+  --gray-3: #dddddd;
+  --gray-4: #5b5b5b;
+  --gray-5: #212121;
 }
 
 a {
