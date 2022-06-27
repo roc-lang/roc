@@ -1,10 +1,8 @@
-on: [pull_request]
+on:
+  schedule:
+    - cron:  '0 9 * * 1' # 9=9am utc+0, 1=monday
 
 name: Nightly Release macOS x86_64
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 env:
   ZIG_VERSION: 0.9.1
