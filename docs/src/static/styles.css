@@ -431,10 +431,16 @@ pre {
     --code-link-color: #b894ff;
     --top-bar-bg: #6845b9;
     --top-bar-fg: #eeeeee;
+    --type-signature-color: var(--grey-1);
+    --type-signature-bg-color: var(--purple-4);
   }
 
   html {
     scrollbar-color: #444444 #2f2f2f;
+  }
+
+  .entry-name a {
+    color: var(--type-signature-color);
   }
 }
 
