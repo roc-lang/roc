@@ -107,7 +107,11 @@ impl DerivedModule {
         let entry = self.map.entry(key.clone());
 
         entry.or_insert_with(|| {
-            let ident_id = if cfg!(any(debug_assertions, test, feature = "debug-derived-symbols")) {
+            let ident_id = if cfg!(any(
+                debug_assertions,
+                test,
+                feature = "debug-derived-symbols"
+            )) {
                 let debug_name = key.debug_name();
                 debug_assert!(
                     self.derived_ident_ids.get_id(&debug_name).is_none(),
