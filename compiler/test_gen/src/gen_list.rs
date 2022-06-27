@@ -2896,6 +2896,54 @@ fn list_find_empty_layout() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn list_find_index() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when List.findIndex ["a", "bc", "def"] (\s -> Str.countGraphemes s > 1) is
+                Ok v -> v
+                Err _ -> 999
+            "#
+        ),
+        1,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_find_index_not_found() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when List.findIndex ["a", "bc", "def"] (\s -> Str.countGraphemes s > 5) is
+                Ok v -> v
+                Err _ -> 999
+            "#
+        ),
+        999,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn list_find_index_empty_typed_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when List.findIndex [] (\s -> Str.countGraphemes s > 5) is
+                Ok v -> v
+                Err _ -> 999
+            "#
+        ),
+        999,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn monomorphized_lists() {
     assert_evals_to!(
         indoc!(

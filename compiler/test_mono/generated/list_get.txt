@@ -1,14 +1,14 @@
 procedure List.2 (#Attr.2, #Attr.3):
-    let List.145 : U64 = lowlevel ListLen #Attr.2;
-    let List.142 : Int1 = lowlevel NumLt #Attr.3 List.145;
-    if List.142 then
-        let List.144 : I64 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-        let List.143 : [C {}, C I64] = Ok List.144;
-        ret List.143;
+    let List.157 : U64 = lowlevel ListLen #Attr.2;
+    let List.154 : Int1 = lowlevel NumLt #Attr.3 List.157;
+    if List.154 then
+        let List.156 : I64 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+        let List.155 : [C {}, C I64] = Ok List.156;
+        ret List.155;
     else
-        let List.141 : {} = Struct {};
-        let List.140 : [C {}, C I64] = Err List.141;
-        ret List.140;
+        let List.153 : {} = Struct {};
+        let List.152 : [C {}, C I64] = Err List.153;
+        ret List.152;
 
 procedure Test.1 (Test.2):
     let Test.6 : List I64 = Array [1i64, 2i64, 3i64];

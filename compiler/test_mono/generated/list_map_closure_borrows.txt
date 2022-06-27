@@ -1,18 +1,18 @@
 procedure List.2 (#Attr.2, #Attr.3):
-    let List.145 : U64 = lowlevel ListLen #Attr.2;
-    let List.142 : Int1 = lowlevel NumLt #Attr.3 List.145;
-    if List.142 then
-        let List.144 : Str = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-        let List.143 : [C {}, C Str] = Ok List.144;
-        ret List.143;
+    let List.157 : U64 = lowlevel ListLen #Attr.2;
+    let List.154 : Int1 = lowlevel NumLt #Attr.3 List.157;
+    if List.154 then
+        let List.156 : Str = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+        let List.155 : [C {}, C Str] = Ok List.156;
+        ret List.155;
     else
-        let List.141 : {} = Struct {};
-        let List.140 : [C {}, C Str] = Err List.141;
-        ret List.140;
+        let List.153 : {} = Struct {};
+        let List.152 : [C {}, C Str] = Err List.153;
+        ret List.152;
 
 procedure List.5 (#Attr.2, #Attr.3):
-    let List.146 : List Str = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.3 #Attr.3;
-    ret List.146;
+    let List.158 : List Str = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.3 #Attr.3;
+    ret List.158;
 
 procedure Str.16 (#Attr.2, #Attr.3):
     let Str.65 : Str = lowlevel StrRepeat #Attr.2 #Attr.3;
