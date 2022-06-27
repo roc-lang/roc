@@ -81,6 +81,7 @@ a {
 
 .entry-name a {
   font-weight: bold;
+  color: var(--type-signature-color);
 }
 
 .pkg-full-name a {
@@ -437,10 +438,6 @@ pre {
 
   html {
     scrollbar-color: #444444 #2f2f2f;
-  }
-
-  .entry-name a {
-    color: var(--type-signature-color);
   }
 }
 
