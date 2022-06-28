@@ -15,7 +15,7 @@
   --gray-5: #212121;
   --link-color: var(--purple-5);
   --code-link-color: #5721d4;
-  --text-color: #333333;
+  --text-color: var(--gray-5);
   --code-color: #222222;
   --code-bg-color: var(--gray-2);
   --body-bg-color: #ffffff;
@@ -431,7 +431,7 @@ pre {
     --code-bg-color: var(--purple-7);
     --border-color: #555555;
     --code-color: #eeeeee;
-    --text-color: #cccccc;
+    --text-color: var(--gray-1);
     --logo-solid: #777777;
     --faded-color: #bbbbbb;
     --link-color: #c5a8ff;
