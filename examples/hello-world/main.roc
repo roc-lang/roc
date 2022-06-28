@@ -1,5 +1,5 @@
-app "hello"
-    packages { pf: "c-platform/main.roc" }
+app "helloWorld"
+    packages { pf: "platform/main.roc" }
     imports []
     provides [main] to pf
 

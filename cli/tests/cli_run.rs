@@ -293,26 +293,25 @@ mod cli_run {
                     let file_name = example_file(dir_name, example.filename);
 
                     match example.executable_filename {
-                        "helloWeb" => {
-                            // this is a web webassembly example, but we don't test with JS at the moment
-                            eprintln!("WARNING: skipping testing example {} because the test is broken right now!", example.filename);
-                            return;
-                        }
                         "form" => {
                             // test is skipped until we upgrate to zig 0.9 / llvm 13
                             eprintln!("WARNING: skipping testing example {} because the test is broken right now!", example.filename);
                             return;
                         }
-                        "helloSwift" => {
+                        "hello-gui" | "breakout" => {
+                            // Since these require opening a window, we do `roc build` on them but don't run them.
+                            run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[], None);
+                            return;
+                        }
+                        "rocLovesSwift" => {
                             if cfg!(not(target_os = "macos")) {
                                 eprintln!("WARNING: skipping testing example {} because it only works on MacOS.", example.filename);
                                 return;
                             }
                         }
-                        "hello-gui" | "breakout" => {
-                            // Since these require opening a window, we do `roc build` on them but don't run them.
-                            run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[], None);
-
+                        "rocLovesWebAssembly" => {
+                            // this is a web assembly example, but we don't test with JS at the moment
+                            eprintln!("WARNING: skipping testing example {} because it only works in a browser!", example.filename);
                             return;
                         }
                         _ => {}
@@ -385,50 +384,58 @@ mod cli_run {
     examples! {
         helloWorld:"hello-world" => Example {
             filename: "main.roc",
-            executable_filename: "hello",
+            executable_filename: "helloWorld",
             stdin: &[],
             input_file: None,
             expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
-        helloC:"hello-world/c-platform" => Example {
-            filename: "helloC.roc",
-            executable_filename: "helloC",
+        platformSwitching:"platform-switching" => Example {
+            filename: "main.roc",
+            executable_filename: "rocLovesPlatforms",
             stdin: &[],
             input_file: None,
-            expected_ending:"Hello, World!\n",
+            expected_ending:"Which platform am I running on now?\n",
             use_valgrind: true,
         },
-        helloZig:"hello-world/zig-platform" => Example {
-            filename: "helloZig.roc",
-            executable_filename: "helloZig",
+        platformSwitchingC:"platform-switching/c-platform" => Example {
+            filename: "rocLovesC.roc",
+            executable_filename: "rocLovesC",
             stdin: &[],
             input_file: None,
-            expected_ending:"Hello, World!\n",
+            expected_ending:"Roc <3 C!\n",
             use_valgrind: true,
         },
-        helloRust:"hello-world/rust-platform" => Example {
-            filename: "helloRust.roc",
-            executable_filename: "helloRust",
+        platformSwitchingRust:"platform-switching/rust-platform" => Example {
+            filename: "rocLovesRust.roc",
+            executable_filename: "rocLovesRust",
             stdin: &[],
             input_file: None,
-            expected_ending:"Hello, World!\n",
+            expected_ending:"Roc <3 Rust!\n",
             use_valgrind: true,
         },
-        helloSwift:"hello-world/swift-platform" => Example {
-            filename: "helloSwift.roc",
-            executable_filename: "helloSwift",
+        platformSwitchingSwift:"platform-switching/swift-platform" => Example {
+            filename: "rocLovesSwift.roc",
+            executable_filename: "rocLovesSwift",
             stdin: &[],
             input_file: None,
-            expected_ending:"Hello, World!\n",
+            expected_ending:"Roc <3 Swift!\n",
             use_valgrind: true,
         },
-        helloWeb:"hello-world/web-platform" => Example {
-            filename: "helloWeb.roc",
-            executable_filename: "helloWeb",
+        platformSwitchingWebAssembly:"platform-switching/web-assembly-platform" => Example {
+            filename: "rocLovesWebAssembly.roc",
+            executable_filename: "rocLovesWebAssembly",
             stdin: &[],
             input_file: None,
-            expected_ending:"Hello, World!\n",
+            expected_ending:"Roc <3 Web Assembly!\n",
+            use_valgrind: true,
+        },
+        platformSwitchingZig:"platform-switching/zig-platform" => Example {
+            filename: "rocLovesZig.roc",
+            executable_filename: "rocLovesZig",
+            stdin: &[],
+            input_file: None,
+            expected_ending:"Roc <3 Zig!\n",
             use_valgrind: true,
         },
         fib:"algorithms" => Example {
@@ -804,13 +811,13 @@ mod cli_run {
                 let example_dir_name = entry.file_name().into_string().unwrap();
 
                 // TODO: Improve this with a more-dynamic approach. (Read all subdirectories?)
-                // Some hello-world examples live in nested directories
-                if example_dir_name == "hello-world" {
+                // Some platform-switching examples live in nested directories
+                if example_dir_name == "platform-switching" {
                     for sub_dir in [
                         "c-platform",
                         "rust-platform",
                         "swift-platform",
-                        "web-platform",
+                        "web-assembly-platform",
                         "zig-platform",
                     ] {
                         all_examples.remove(format!("{}/{}", example_dir_name, sub_dir).as_str()).unwrap_or_else(|| {
