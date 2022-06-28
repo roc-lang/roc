@@ -6998,10 +6998,9 @@ mod solve_expr {
 
                 after : Lazy a, (a -> Lazy b) -> Lazy b
                 after = \effect, map ->
-                    thunk = \{} ->
+                    \{} ->
                         when map (effect {}) is
                             b -> b {}
-                    thunk
 
                 f = \_ -> \_ -> ""
                 g = \{ s1 } -> \_ -> s1

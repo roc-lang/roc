@@ -1600,3 +1600,32 @@ fn multimorphic_lambdas_with_non_capturing_function() {
         "#
     )
 }
+
+#[mono_test]
+fn multimorphic_lambdas_have_captured_function_in_closure() {
+    indoc!(
+        r#"
+        Lazy a : {} -> a
+
+        after : Lazy a, (a -> Lazy b) -> Lazy b
+        after = \effect, map ->
+            thunk = \{} ->
+                when map (effect {}) is
+                    b -> b {}
+            thunk
+
+        f = \_ -> \_ -> ""
+        g = \{ s1 } -> \_ -> s1
+
+        x : [True, False]
+        x = True
+
+        fun =
+            when x is
+                True -> after (\{} -> "") f
+                False -> after (\{} -> {s1: "s1"}) g
+
+        fun {}
+        "#
+    )
+}

@@ -986,7 +986,9 @@ impl<'a> LambdaSet<'a> {
     ) -> ClosureRepresentation<'a> {
         debug_assert!(
             self.set.iter().any(|(s, _)| *s == lambda_name),
-            "lambda not in set"
+            "lambda {:?} not in set {:#?}",
+            lambda_name,
+            self.set,
         );
 
         let comparator =

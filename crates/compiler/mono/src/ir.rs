@@ -3611,7 +3611,7 @@ fn specialize_naked_symbol<'a>(
         opt_fn_var,
         symbol,
         result,
-        LambdaName::only_receiver(original),
+        original,
     )
 }
 
@@ -4032,7 +4032,7 @@ pub fn with_hole<'a>(
                             Some(variable),
                             symbol,
                             stmt,
-                            LambdaName::only_receiver(symbol),
+                            symbol,
                         );
                     }
                     Field::Field(field) => {
@@ -4631,10 +4631,7 @@ pub fn with_hole<'a>(
                                     Some(record_var),
                                     specialized_structure_sym,
                                     stmt,
-                                    // This is only hit if somehow this field is an alias
-                                    // to an ability member, and ability members specialize to
-                                    // exactly one receiver
-                                    LambdaName::only_receiver(structure),
+                                    structure,
                                 );
                             }
                         }
@@ -7271,12 +7268,12 @@ fn specialize_symbol<'a>(
     arg_var: Option<Variable>,
     symbol: Symbol,
     result: Stmt<'a>,
-    original: LambdaName,
+    original: Symbol,
 ) -> Stmt<'a> {
-    match procs.get_partial_proc(original.source_name()) {
+    match procs.get_partial_proc(original) {
         None => {
             match arg_var {
-                Some(arg_var) if env.is_imported_symbol(original.source_name()) => {
+                Some(arg_var) if env.is_imported_symbol(original) => {
                     let raw = match layout_cache.raw_from_var(
                         env.arena,
                         arg_var,
@@ -7287,7 +7284,7 @@ fn specialize_symbol<'a>(
                         Err(e) => return_on_layout_error_help!(env, e),
                     };
 
-                    if procs.is_imported_module_thunk(original.source_name()) {
+                    if procs.is_imported_module_thunk(original) {
                         let layout = match raw {
                             RawFunctionLayout::ZeroArgumentThunk(layout) => layout,
                             RawFunctionLayout::Function(_, lambda_set, _) => {
@@ -7301,24 +7298,20 @@ fn specialize_symbol<'a>(
                         procs.insert_passed_by_name(
                             env,
                             arg_var,
-                            original,
+                            LambdaName::thunk(original),
                             top_level,
                             layout_cache,
                         );
 
-                        force_thunk(
-                            env,
-                            original.call_name(),
-                            layout,
-                            symbol,
-                            env.arena.alloc(result),
-                        )
+                        force_thunk(env, original, layout, symbol, env.arena.alloc(result))
                     } else {
                         let top_level = ProcLayout::from_raw(env.arena, raw);
                         procs.insert_passed_by_name(
                             env,
                             arg_var,
-                            original,
+                            // Imported symbol, so it must have exactly one receiver (since
+                            // top-levels can't capture)
+                            LambdaName::only_receiver(original),
                             top_level,
                             layout_cache,
                         );
@@ -7330,7 +7323,7 @@ fn specialize_symbol<'a>(
                 _ => {
                     // danger: a foreign symbol may not be specialized!
                     debug_assert!(
-                        !env.is_imported_symbol(original.source_name()),
+                        !env.is_imported_symbol(original),
                         "symbol {:?} while processing module {:?}",
                         original,
                         (env.home, &arg_var),
@@ -7362,17 +7355,6 @@ fn specialize_symbol<'a>(
                     let function_ptr_layout = ProcLayout::from_raw(env.arena, res_layout);
 
                     if captures {
-                        // this is a closure by capture, meaning it itself captures local variables.
-                        procs.insert_passed_by_name(
-                            env,
-                            arg_var,
-                            original,
-                            function_ptr_layout,
-                            layout_cache,
-                        );
-
-                        let closure_data = symbol;
-
                         let symbols = match captured {
                             CapturedSymbols::Captured(captured_symbols) => {
                                 Vec::from_iter_in(captured_symbols.iter(), env.arena)
@@ -7381,15 +7363,34 @@ fn specialize_symbol<'a>(
                             CapturedSymbols::None => unreachable!(),
                         };
 
+                        let lambda_name = find_lambda_name(
+                            env,
+                            layout_cache,
+                            lambda_set,
+                            original,
+                            symbols.iter().copied(),
+                        );
+
+                        // this is a closure by capture, meaning it itself captures local variables.
+                        procs.insert_passed_by_name(
+                            env,
+                            arg_var,
+                            lambda_name,
+                            function_ptr_layout,
+                            layout_cache,
+                        );
+
+                        let closure_data = symbol;
+
                         construct_closure_data(
                             env,
                             lambda_set,
-                            original,
+                            lambda_name,
                             symbols.iter().copied(),
                             closure_data,
                             env.arena.alloc(result),
                         )
-                    } else if procs.is_module_thunk(original.source_name()) {
+                    } else if procs.is_module_thunk(original) {
                         // this is a 0-argument thunk
 
                         // TODO suspicious
@@ -7400,38 +7401,35 @@ fn specialize_symbol<'a>(
                         procs.insert_passed_by_name(
                             env,
                             arg_var,
-                            original,
+                            LambdaName::thunk(original),
                             top_level,
                             layout_cache,
                         );
 
-                        force_thunk(
-                            env,
-                            original.call_name(),
-                            layout,
-                            symbol,
-                            env.arena.alloc(result),
-                        )
+                        force_thunk(env, original, layout, symbol, env.arena.alloc(result))
                     } else {
+                        // even though this function may not itself capture,
+                        // unification may still cause it to have an extra argument
+                        let lambda_name =
+                            find_lambda_name(env, layout_cache, lambda_set, original, &[]);
+
+                        debug_assert!(
+                            !lambda_name.is_multimorphic(),
+                            "no captures, but somehow this symbol is multimorphic"
+                        );
+
                         procs.insert_passed_by_name(
                             env,
                             arg_var,
-                            original,
+                            lambda_name,
                             function_ptr_layout,
                             layout_cache,
-                        );
-
-                        // even though this function may not itself capture,
-                        // unification may still cause it to have an extra argument
-                        debug_assert!(
-                            !original.is_multimorphic(),
-                            "no captures, but somehow this symbol is multimorphic"
                         );
 
                         construct_closure_data(
                             env,
                             lambda_set,
-                            original,
+                            lambda_name,
                             &[],
                             symbol,
                             env.arena.alloc(result),
@@ -7441,15 +7439,15 @@ fn specialize_symbol<'a>(
                 RawFunctionLayout::ZeroArgumentThunk(ret_layout) => {
                     // this is a 0-argument thunk
                     let top_level = ProcLayout::new(env.arena, &[], ret_layout);
-                    procs.insert_passed_by_name(env, arg_var, original, top_level, layout_cache);
-
-                    force_thunk(
+                    procs.insert_passed_by_name(
                         env,
-                        original.call_name(),
-                        ret_layout,
-                        symbol,
-                        env.arena.alloc(result),
-                    )
+                        arg_var,
+                        LambdaName::thunk(original),
+                        top_level,
+                        layout_cache,
+                    );
+
+                    force_thunk(env, original, ret_layout, symbol, env.arena.alloc(result))
                 }
             }
         }
@@ -7476,8 +7474,7 @@ fn assign_to_symbol<'a>(
                 Some(arg_var),
                 symbol,
                 result,
-                // The function symbol is the only receiver
-                LambdaName::only_receiver(original),
+                original,
             )
         }
         Value(_symbol) => result,
