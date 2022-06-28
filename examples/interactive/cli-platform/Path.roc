@@ -205,9 +205,43 @@ root : Path -> PathRoot
 
 toComponents : Path -> (PathRoot, List PathComponent)
 
-walkComponents :
+## Walk over the path's [components](#toComponents).
+walk :
     Path,
     # None means it's a relative path
     (PathRoot -> state),
     (state, PathComponent -> state)
     -> state
+
+## Returns the path without its last [component](#toComponents).
+##
+## If the path was empty or had only a [root](#PathRoot), returns the original path.
+dropLast : Path -> Path
+
+# TODO see https://doc.rust-lang.org/std/path/struct.Path.html#method.join for
+# the definition of the term "adjoin" - should we use that term?
+
+appendPath : Path, Path -> Path
+
+appendStr : Path, Str -> Path
+
+## Returns `True` if the first path begins with the second.
+startsWith : Path, Path -> Bool
+
+# TODO https://doc.rust-lang.org/std/path/struct.Path.html#method.strip_prefix
+
+# TODO idea: what if it's File.openRead and File.openWrite? And then e.g. File.metadata,
+# File.isDir, etc.
+
+## If the last component of this path has no `.`, appends `.` followed by the given string.
+## Otherwise, replaces everything after the last `.` with the given string.
+##
+## Examples:
+##
+##     Path.fromStr "foo/bar/baz" |> Path.withExtension "txt" #    foo/bar/baz.txt
+##     Path.fromStr "foo/bar/baz." |> Path.withExtension "txt" #   foo/bar/baz.txt
+##     Path.fromStr "foo/bar/baz.xz" |> Path.withExtension "txt" # foo/bar/baz.txt
+withExtension : Path, Str -> Path
+
+# NOTE: no withExtensionBytes because it's too narrow. If you really need to get some
+# non-Unicode in there, do it with
