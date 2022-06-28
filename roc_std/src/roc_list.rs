@@ -45,6 +45,10 @@ impl<T> RocList<T> {
         }
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.into_iter()
+    }
+
     /// Used for both roc_alloc and roc_realloc - given the number of elements,
     /// returns the number of bytes needed to allocate, taking into account both the
     /// size of the elements as well as the size of Storage.
@@ -464,6 +468,15 @@ where
 {
     fn from(slice: &[T]) -> Self {
         Self::from_slice(slice)
+    }
+}
+
+impl<'a, T> IntoIterator for &'a RocList<T> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_slice().iter()
     }
 }
 

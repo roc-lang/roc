@@ -62,6 +62,10 @@ test-zig:
 
 build-rust-test:
     FROM +copy-dirs
+    RUN echo "deb http://deb.debian.org/debian testing main contrib non-free" >> /etc/apt/sources.list # to get gcc 10.3
+    RUN apt -y update
+    RUN apt -y install gcc-10 g++-10 && rm /usr/bin/gcc && ln -s /usr/bin/gcc-10 /usr/bin/gcc # gcc-9 maybe causes segfault
+    RUN gcc --version
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         cargo test --locked --release --features with_sound --workspace --no-run && sccache --show-stats
 
@@ -91,6 +95,7 @@ test-rust:
     ENV ROC_NUM_WORKERS=1
     # run one of the benchmarks to make sure the host is compiled
     # not pre-compiling the host can cause race conditions
+    RUN gcc --version
     RUN echo "4" | cargo run --release examples/benchmarks/NQueens.roc
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         cargo test --locked --release --features with_sound --workspace && sccache --show-stats
