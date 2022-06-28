@@ -1527,24 +1527,22 @@ fn tail_call_with_different_layout() {
 }
 
 #[mono_test]
-#[ignore]
-fn lambda_sets_collide_with_captured_var() {
+fn multimorphic_lambda_set_capture() {
     indoc!(
         r#"
         capture : a -> ({} -> Str)
         capture = \val ->
-            thunk =
-                \{} ->
-                    when val is
-                        _ -> ""
-            thunk
+            \{} ->
+                when val is
+                    _ -> ""
 
         x : [True, False]
+        x = True
 
         fun =
             when x is
-                True -> capture 1u8
-                False -> capture 1u64
+                True -> capture {}
+                False -> capture ""
 
         fun {}
         "#

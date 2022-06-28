@@ -97,6 +97,10 @@ impl<K: PartialEq, V> VecMap<K, V> {
         self.keys.iter().zip(self.values.iter())
     }
 
+    pub fn iter_mut(&mut self) -> impl ExactSizeIterator<Item = (&K, &mut V)> {
+        self.keys.iter().zip(self.values.iter_mut())
+    }
+
     pub fn keys(&self) -> impl ExactSizeIterator<Item = &K> {
         self.keys.iter()
     }

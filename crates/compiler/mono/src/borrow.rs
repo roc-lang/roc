@@ -163,7 +163,7 @@ impl<'a> DeclarationToIndex<'a> {
             }
         }
         unreachable!(
-            "symbol/layout {:?} {:?} combo must be in DeclarationToIndex",
+            "symbol/layout {:?} {:#?} combo must be in DeclarationToIndex",
             needle_symbol, needle_layout
         )
     }

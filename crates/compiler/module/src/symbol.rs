@@ -998,7 +998,10 @@ define_builtins! {
     // Fake module for storing derived function symbols
     1 DERIVED: "#Derived" => {
     }
-    2 NUM: "Num" => {
+    // Fake module for storing fresh multimorphic function symbol names
+    2 MULTIMORPHIC: "#Multimorphic" => {
+    }
+    3 NUM: "Num" => {
         0 NUM_NUM: "Num"  // the Num.Num type alias
         1 NUM_I128: "I128"  // the Num.I128 type alias
         2 NUM_U128: "U128"  // the Num.U128 type alias
@@ -1141,7 +1144,7 @@ define_builtins! {
         139 NUM_MAX_F64: "maxF64"
         140 NUM_MIN_F64: "minF64"
     }
-    3 BOOL: "Bool" => {
+    4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" // the Bool.Bool type alias
         1 BOOL_FALSE: "False" imported // Bool.Bool = [False, True]
                                        // NB: not strictly needed; used for finding tag names in error suggestions
@@ -1154,7 +1157,7 @@ define_builtins! {
         7 BOOL_EQ: "isEq"
         8 BOOL_NEQ: "isNotEq"
     }
-    4 STR: "Str" => {
+    5 STR: "Str" => {
         0 STR_STR: "Str" imported // the Str.Str type alias
         1 STR_IS_EMPTY: "isEmpty"
         2 STR_APPEND: "#append" // unused
@@ -1191,7 +1194,7 @@ define_builtins! {
         33 STR_TO_I8: "toI8"
         34 STR_TO_SCALARS: "toScalars"
     }
-    5 LIST: "List" => {
+    6 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
         1 LIST_IS_EMPTY: "isEmpty"
         2 LIST_GET: "get"
@@ -1257,7 +1260,7 @@ define_builtins! {
         62 LIST_WITH_CAPACITY: "withCapacity"
         63 LIST_ITERATE: "iterate"
     }
-    6 RESULT: "Result" => {
+    7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" // the Result.Result type alias
         1 RESULT_OK: "Ok" imported // Result.Result a e = [Ok a, Err e]
                                    // NB: not strictly needed; used for finding tag names in error suggestions
@@ -1270,7 +1273,7 @@ define_builtins! {
         7 RESULT_IS_OK: "isOk"
         8 RESULT_IS_ERR: "isErr"
     }
-    7 DICT: "Dict" => {
+    8 DICT: "Dict" => {
         0 DICT_DICT: "Dict" imported // the Dict.Dict type alias
         1 DICT_EMPTY: "empty"
         2 DICT_SINGLE: "single"
@@ -1289,7 +1292,7 @@ define_builtins! {
         13 DICT_INTERSECTION: "intersection"
         14 DICT_DIFFERENCE: "difference"
     }
-    8 SET: "Set" => {
+    9 SET: "Set" => {
         0 SET_SET: "Set" imported // the Set.Set type alias
         1 SET_EMPTY: "empty"
         2 SET_SINGLE: "single"
@@ -1306,12 +1309,12 @@ define_builtins! {
         13 SET_CONTAINS: "contains"
         14 SET_TO_DICT: "toDict"
     }
-    9 BOX: "Box" => {
+    10 BOX: "Box" => {
         0 BOX_BOX_TYPE: "Box" imported // the Box.Box opaque type
         1 BOX_BOX_FUNCTION: "box" // Box.box
         2 BOX_UNBOX: "unbox"
     }
-    10 ENCODE: "Encode" => {
+    11 ENCODE: "Encode" => {
         0 ENCODE_ENCODER: "Encoder"
         1 ENCODE_ENCODING: "Encoding"
         2 ENCODE_TO_ENCODER: "toEncoder"
@@ -1339,9 +1342,9 @@ define_builtins! {
         24 ENCODE_APPEND: "append"
         25 ENCODE_TO_BYTES: "toBytes"
     }
-    11 JSON: "Json" => {
+    12 JSON: "Json" => {
         0 JSON_JSON: "Json"
     }
 
-    num_modules: 12 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    num_modules: 13 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

@@ -1,14 +1,14 @@
 use crate::ir::Parens;
-use bumpalo::collections::Vec;
+use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{default_hasher, MutMap};
+use roc_collections::VecMap;
 use roc_error_macros::{internal_error, todo_abilities};
 use roc_module::ident::{Lowercase, TagName};
-use roc_module::symbol::{Interns, Symbol};
+use roc_module::symbol::{IdentIds, Interns, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_target::{PtrWidth, TargetInfo};
-use roc_types::pretty_print::ResolvedLambdaSet;
 use roc_types::subs::{
     self, Content, FlatType, Label, RecordFields, Subs, UnionTags, UnsortedUnionLabels, Variable,
 };
@@ -17,6 +17,7 @@ use std::cmp::Ordering;
 use std::collections::hash_map::{DefaultHasher, Entry};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::{Arc, Mutex};
 use ven_pretty::{DocAllocator, DocBuilder};
 
 // if your changes cause this number to go down, great!
@@ -67,8 +68,8 @@ impl<'a> RawFunctionLayout<'a> {
         matches!(self, RawFunctionLayout::ZeroArgumentThunk(_))
     }
 
-    fn new_help<'b, F: FreshMultimorphicSymbol>(
-        env: &mut Env<'a, 'b, F>,
+    fn new_help<'b>(
+        env: &mut Env<'a, 'b>,
         var: Variable,
         content: Content,
     ) -> Result<Self, LayoutProblem> {
@@ -153,8 +154,8 @@ impl<'a> RawFunctionLayout<'a> {
         }
     }
 
-    fn layout_from_lambda_set<F: FreshMultimorphicSymbol>(
-        _env: &mut Env<'a, '_, F>,
+    fn layout_from_lambda_set(
+        _env: &mut Env<'a, '_>,
         _lset: subs::LambdaSet,
     ) -> Result<Self, LayoutProblem> {
         unreachable!()
@@ -162,8 +163,8 @@ impl<'a> RawFunctionLayout<'a> {
         // Self::layout_from_flat_type(env, lset.as_tag_union())
     }
 
-    fn layout_from_flat_type<F: FreshMultimorphicSymbol>(
-        env: &mut Env<'a, '_, F>,
+    fn layout_from_flat_type(
+        env: &mut Env<'a, '_>,
         flat_type: FlatType,
     ) -> Result<Self, LayoutProblem> {
         use roc_types::subs::FlatType::*;
@@ -189,7 +190,7 @@ impl<'a> RawFunctionLayout<'a> {
                     env.subs,
                     closure_var,
                     env.target_info,
-                    env.fresh_multimorphic_symbol,
+                    env.multimorphic_names,
                 )?;
 
                 Ok(Self::Function(fn_args, lambda_set, ret))
@@ -221,10 +222,7 @@ impl<'a> RawFunctionLayout<'a> {
     /// Returns Err(()) if given an error, or Ok(Layout) if given a non-erroneous Structure.
     /// Panics if given a FlexVar or RigidVar, since those should have been
     /// monomorphized away already!
-    fn from_var<F: FreshMultimorphicSymbol>(
-        env: &mut Env<'a, '_, F>,
-        var: Variable,
-    ) -> Result<Self, LayoutProblem> {
+    fn from_var(env: &mut Env<'a, '_>, var: Variable) -> Result<Self, LayoutProblem> {
         if env.is_seen(var) {
             unreachable!("The initial variable of a signature cannot be seen already")
         } else {
@@ -704,6 +702,158 @@ impl std::fmt::Debug for LambdaSet<'_> {
     }
 }
 
+#[derive(Default, Debug)]
+struct MultimorphicNamesTable {
+    /// (source symbol, captures layouts) -> multimorphic alias
+    ///
+    /// SAFETY: actually, the `Layout` is alive only as long as the `arena` is alive. We take care
+    /// to promote new layouts to the owned arena. Since we are using a bump-allocating arena, the
+    /// references will never be invalidated until the arena is dropped, which happens when this
+    /// struct is dropped.
+    /// Also, the `Layout`s we owned are never exposed back via the public API.
+    inner: VecMap<(Symbol, &'static [Layout<'static>]), Symbol>,
+    arena: Bump,
+    ident_ids: IdentIds,
+}
+
+impl MultimorphicNamesTable {
+    fn get<'b>(&self, name: Symbol, captures_layouts: &'b [Layout<'b>]) -> Option<Symbol> {
+        self.inner.get(&(name, captures_layouts)).copied()
+    }
+
+    fn insert<'b>(&mut self, name: Symbol, captures_layouts: &'b [Layout<'b>]) -> Symbol {
+        debug_assert!(!self.inner.contains_key(&(name, captures_layouts)));
+
+        let new_ident = self.ident_ids.gen_unique();
+        let new_symbol = Symbol::new(ModuleId::MULTIMORPHIC, new_ident);
+
+        let captures_layouts = self.promote_layout_slice(captures_layouts);
+
+        self.inner.insert((name, captures_layouts), new_symbol);
+
+        new_symbol
+    }
+
+    fn alloc_st<T>(&self, v: T) -> &'static T {
+        unsafe { std::mem::transmute::<_, &'static Bump>(&self.arena) }.alloc(v)
+    }
+
+    fn promote_layout<'b>(&self, layout: Layout<'b>) -> Layout<'static> {
+        match layout {
+            Layout::Builtin(builtin) => Layout::Builtin(self.promote_builtin(builtin)),
+            Layout::Struct {
+                field_order_hash,
+                field_layouts,
+            } => Layout::Struct {
+                field_order_hash,
+                field_layouts: self.promote_layout_slice(field_layouts),
+            },
+            Layout::Boxed(layout) => Layout::Boxed(self.alloc_st(self.promote_layout(*layout))),
+            Layout::Union(union_layout) => Layout::Union(self.promote_union_layout(union_layout)),
+            Layout::LambdaSet(lambda_set) => Layout::LambdaSet(self.promote_lambda_set(lambda_set)),
+            Layout::RecursivePointer => Layout::RecursivePointer,
+        }
+    }
+
+    fn promote_layout_slice<'b>(&self, layouts: &'b [Layout<'b>]) -> &'static [Layout<'static>] {
+        layouts
+            .iter()
+            .map(|layout| self.promote_layout(*layout))
+            .collect_in::<Vec<_>>(unsafe { std::mem::transmute(&self.arena) })
+            .into_bump_slice()
+    }
+
+    fn promote_layout_slice_slices<'b>(
+        &self,
+        layout_slices: &'b [&'b [Layout<'b>]],
+    ) -> &'static [&'static [Layout<'static>]] {
+        layout_slices
+            .iter()
+            .map(|slice| self.promote_layout_slice(slice))
+            .collect_in::<Vec<_>>(unsafe { std::mem::transmute(&self.arena) })
+            .into_bump_slice()
+    }
+
+    fn promote_builtin(&self, builtin: Builtin) -> Builtin<'static> {
+        match builtin {
+            Builtin::Int(w) => Builtin::Int(w),
+            Builtin::Float(w) => Builtin::Float(w),
+            Builtin::Bool => Builtin::Bool,
+            Builtin::Decimal => Builtin::Decimal,
+            Builtin::Str => Builtin::Str,
+            Builtin::Dict(k, v) => Builtin::Dict(
+                self.alloc_st(self.promote_layout(*k)),
+                self.alloc_st(self.promote_layout(*v)),
+            ),
+            Builtin::Set(k) => Builtin::Set(self.alloc_st(self.promote_layout(*k))),
+            Builtin::List(l) => Builtin::Set(self.alloc_st(self.promote_layout(*l))),
+        }
+    }
+
+    fn promote_union_layout(&self, union_layout: UnionLayout) -> UnionLayout<'static> {
+        match union_layout {
+            UnionLayout::NonRecursive(slices) => {
+                UnionLayout::NonRecursive(self.promote_layout_slice_slices(slices))
+            }
+            UnionLayout::Recursive(slices) => {
+                UnionLayout::Recursive(self.promote_layout_slice_slices(slices))
+            }
+            UnionLayout::NonNullableUnwrapped(slice) => {
+                UnionLayout::NonNullableUnwrapped(self.promote_layout_slice(slice))
+            }
+            UnionLayout::NullableWrapped {
+                nullable_id,
+                other_tags,
+            } => UnionLayout::NullableWrapped {
+                nullable_id,
+                other_tags: self.promote_layout_slice_slices(other_tags),
+            },
+            UnionLayout::NullableUnwrapped {
+                nullable_id,
+                other_fields,
+            } => UnionLayout::NullableUnwrapped {
+                nullable_id,
+                other_fields: self.promote_layout_slice(other_fields),
+            },
+        }
+    }
+
+    fn promote_lambda_set(&self, lambda_set: LambdaSet) -> LambdaSet<'static> {
+        let LambdaSet {
+            set,
+            representation,
+        } = lambda_set;
+        let set = set
+            .iter()
+            .map(|(name, slice)| (*name, self.promote_layout_slice(slice)))
+            .collect_in::<Vec<_>>(unsafe { std::mem::transmute(&self.arena) })
+            .into_bump_slice();
+        LambdaSet {
+            set,
+            representation: self.alloc_st(self.promote_layout(*representation)),
+        }
+    }
+}
+
+#[derive(Default, Debug)]
+pub struct MultimorphicNames(Arc<Mutex<MultimorphicNamesTable>>);
+
+impl Clone for MultimorphicNames {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl MultimorphicNames {
+    fn get<'b>(&self, name: Symbol, captures_layouts: &'b [Layout<'b>]) -> Option<Symbol> {
+        self.0.lock().unwrap().get(name, captures_layouts)
+    }
+
+    fn insert<'b>(&mut self, name: Symbol, captures_layouts: &'b [Layout<'b>]) -> Symbol {
+        self.0.lock().unwrap().insert(name, captures_layouts)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum LambdaNameInner {
     /// Standard lambda name assigned during canonicalize/constrain
@@ -806,8 +956,7 @@ impl<'a> LambdaSet<'a> {
     }
 
     /// Does the lambda set contain the given symbol?
-    /// NOTE: for multimorphic variants, this checks the alias name; the source name will always be
-    /// the name of the first multimorphic variant.
+    /// NOTE: for multimorphic variants, this checks the alias name.
     pub fn contains(&self, symbol: Symbol) -> bool {
         self.set.iter().any(|(s, _)| match s.0 {
             LambdaNameInner::Name(name) => name == symbol,
@@ -841,12 +990,23 @@ impl<'a> LambdaSet<'a> {
         self.layout_for_member(comparator)
     }
 
+    fn contains_source(&self, symbol: Symbol) -> bool {
+        self.set.iter().any(|(s, _)| match s.0 {
+            LambdaNameInner::Name(name) => name == symbol,
+            LambdaNameInner::Multimorphic { source, .. } => source == symbol,
+        })
+    }
+
+    /// Finds an alias name for a possible-multimorphic lambda variant in the lambda set.
     pub fn find_lambda_name(
         &self,
         function_symbol: Symbol,
         captures_layouts: &[Layout],
     ) -> LambdaName {
-        debug_assert!(self.contains(function_symbol), "function symbol not in set");
+        debug_assert!(
+            self.contains_source(function_symbol),
+            "function symbol not in set"
+        );
 
         let comparator = |other_name: LambdaName, other_captures_layouts: &[Layout]| {
             let other_name = match other_name.0 {
@@ -867,46 +1027,6 @@ impl<'a> LambdaSet<'a> {
 
         *name
     }
-
-    // Layout for a single member of the lambda set, when you are constructing a proc, and already
-    // know the multimorphic name (if any).
-    // pub fn layout_for_member_constructing_proc(
-    //     &self,
-    //     lambda_name: LambdaName,
-    // ) -> ClosureRepresentation<'a> {
-    //     debug_assert!(
-    //         self.set.iter().any(|(s, _)| *s == lambda_name),
-    //         "lambda not in set"
-    //     );
-
-    //     let comparator =
-    //         |other_name: LambdaName, _other_captures_layouts: &[Layout]| other_name == lambda_name;
-
-    //     self.layout_for_member(comparator)
-    // }
-
-    // Layout for a single member of the lambda set, when you are constructing a closure
-    // representation, and maybe need to pick out a multimorphic variant.
-    // pub fn layout_for_member_constructing_closure_data(
-    //     &self,
-    //     function_symbol: Symbol,
-    //     captures_layouts: &[Layout],
-    // ) -> ClosureRepresentation<'a> {
-    //     debug_assert!(self.contains(function_symbol), "function symbol not in set");
-
-    //     let comparator = |other_name: LambdaName, other_captures_layouts: &[Layout]| {
-    //         let other_name = match other_name.0 {
-    //             LambdaNameInner::Name(name) => name,
-    //             // Take the source, since we'll want to pick out the multimorphic name if it
-    //             // matches
-    //             LambdaNameInner::Multimorphic { source, .. } => source,
-    //         };
-    //         other_name == function_symbol
-    //             && captures_layouts.iter().eq(other_captures_layouts.iter())
-    //     };
-
-    //     self.layout_for_member(comparator)
-    // }
 
     fn layout_for_member<F>(&self, comparator: F) -> ClosureRepresentation<'a>
     where
@@ -1001,26 +1121,28 @@ impl<'a> LambdaSet<'a> {
         }
     }
 
-    pub fn from_var<F>(
+    pub fn from_var(
         arena: &'a Bump,
         subs: &Subs,
         closure_var: Variable,
         target_info: TargetInfo,
-        fresh_multimorphic_symbol: &mut F,
-    ) -> Result<Self, LayoutProblem>
-    where
-        F: FreshMultimorphicSymbol,
-    {
-        match roc_types::pretty_print::resolve_lambda_set(subs, closure_var) {
+        multimorphic_names: &mut MultimorphicNames,
+    ) -> Result<Self, LayoutProblem> {
+        match resolve_lambda_set(subs, closure_var) {
             ResolvedLambdaSet::Set(mut lambdas) => {
                 // sort the tags; make sure ordering stays intact!
                 lambdas.sort_by_key(|(sym, _)| *sym);
 
                 let mut set: Vec<(LambdaName, &[Layout])> =
                     Vec::with_capacity_in(lambdas.len(), arena);
+                let mut set_for_making_repr: std::vec::Vec<(Symbol, std::vec::Vec<Variable>)> =
+                    std::vec::Vec::with_capacity(lambdas.len());
 
                 let mut last_function_symbol = None;
-                for (function_symbol, variables) in lambdas.iter() {
+                let mut lambdas_it = lambdas.iter().peekable();
+
+                let mut has_multimorphic = false;
+                while let Some((function_symbol, variables)) = lambdas_it.next() {
                     let mut arguments = Vec::with_capacity_in(variables.len(), arena);
 
                     let mut env = Env {
@@ -1028,39 +1150,59 @@ impl<'a> LambdaSet<'a> {
                         subs,
                         seen: Vec::new_in(arena),
                         target_info,
-                        fresh_multimorphic_symbol,
+                        multimorphic_names,
                     };
 
                     for var in variables {
                         arguments.push(Layout::from_var(&mut env, *var)?);
                     }
 
-                    let lambda_name = match last_function_symbol {
-                        None => LambdaNameInner::Name(*function_symbol),
-                        Some(last_function_symbol) => {
-                            if function_symbol != last_function_symbol {
-                                LambdaNameInner::Name(*function_symbol)
-                            } else {
-                                LambdaNameInner::Multimorphic {
-                                    source: *function_symbol,
-                                    alias: (*fresh_multimorphic_symbol)(),
-                                }
-                            }
+                    let arguments = arguments.into_bump_slice();
+
+                    let is_multimorphic = match (last_function_symbol, lambdas_it.peek()) {
+                        (None, None) => false,
+                        (Some(sym), None) | (None, Some((sym, _))) => function_symbol == sym,
+                        (Some(sym1), Some((sym2, _))) => {
+                            function_symbol == sym1 || function_symbol == sym2
                         }
+                    };
+
+                    let lambda_name = if is_multimorphic {
+                        let alias = match multimorphic_names.get(*function_symbol, arguments) {
+                            Some(alias) => alias,
+                            None => multimorphic_names.insert(*function_symbol, arguments),
+                        };
+
+                        has_multimorphic = true;
+
+                        LambdaNameInner::Multimorphic {
+                            source: *function_symbol,
+                            alias,
+                        }
+                    } else {
+                        LambdaNameInner::Name(*function_symbol)
                     };
                     let lambda_name = LambdaName(lambda_name);
 
-                    set.push((lambda_name, arguments.into_bump_slice()));
+                    set.push((lambda_name, arguments));
+                    set_for_making_repr.push((lambda_name.call_name(), variables.to_vec()));
 
                     last_function_symbol = Some(function_symbol);
+                }
+
+                if has_multimorphic {
+                    // Must re-sort the set in case we added multimorphic lambdas since they may under
+                    // another name
+                    set.sort_by_key(|(name, _)| name.call_name());
+                    set_for_making_repr.sort_by_key(|(name, _)| *name);
                 }
 
                 let representation = arena.alloc(Self::make_representation(
                     arena,
                     subs,
-                    lambdas,
+                    set_for_making_repr,
                     target_info,
-                    fresh_multimorphic_symbol,
+                    multimorphic_names,
                 ));
 
                 Ok(LambdaSet {
@@ -1079,22 +1221,16 @@ impl<'a> LambdaSet<'a> {
         }
     }
 
-    fn make_representation<F: FreshMultimorphicSymbol>(
+    fn make_representation(
         arena: &'a Bump,
         subs: &Subs,
         tags: std::vec::Vec<(Symbol, std::vec::Vec<Variable>)>,
         target_info: TargetInfo,
-        fresh_multimorphic_symbol: &mut F,
+        multimorphic_names: &mut MultimorphicNames,
     ) -> Layout<'a> {
         // otherwise, this is a closure with a payload
-        let variant = union_sorted_tags_help(
-            arena,
-            tags,
-            None,
-            subs,
-            target_info,
-            fresh_multimorphic_symbol,
-        );
+        let variant =
+            union_sorted_tags_help(arena, tags, None, subs, target_info, multimorphic_names);
 
         use UnionVariant::*;
         match variant {
@@ -1149,6 +1285,40 @@ impl<'a> LambdaSet<'a> {
     }
 }
 
+enum ResolvedLambdaSet {
+    Set(std::vec::Vec<(Symbol, std::vec::Vec<Variable>)>),
+    /// TODO: figure out if this can happen in a correct program, or is the result of a bug in our
+    /// compiler. See https://github.com/rtfeldman/roc/issues/3163.
+    Unbound,
+}
+
+fn resolve_lambda_set(subs: &Subs, mut var: Variable) -> ResolvedLambdaSet {
+    let mut set = vec![];
+    loop {
+        match subs.get_content_without_compacting(var) {
+            Content::LambdaSet(subs::LambdaSet {
+                solved,
+                recursion_var: _,
+                unspecialized,
+            }) => {
+                debug_assert!(
+                    unspecialized.is_empty(),
+                    "unspecialized lambda sets left over during resolution: {:?}",
+                    roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(var), subs),
+                );
+                roc_types::pretty_print::push_union(subs, solved, &mut set);
+                return ResolvedLambdaSet::Set(set);
+            }
+            Content::RecursionVar { structure, .. } => {
+                var = *structure;
+            }
+            Content::FlexVar(_) => return ResolvedLambdaSet::Unbound,
+
+            c => internal_error!("called with a non-lambda set {:?}", c),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Builtin<'a> {
     Int(IntWidth),
@@ -1161,21 +1331,15 @@ pub enum Builtin<'a> {
     List(&'a Layout<'a>),
 }
 
-pub struct Env<'a, 'b, F>
-where
-    F: FreshMultimorphicSymbol,
-{
+pub struct Env<'a, 'b> {
     target_info: TargetInfo,
     arena: &'a Bump,
     seen: Vec<'a, Variable>,
     subs: &'b Subs,
-    fresh_multimorphic_symbol: &'b mut F,
+    multimorphic_names: &'b mut MultimorphicNames,
 }
 
-impl<'a, 'b, F> Env<'a, 'b, F>
-where
-    F: FreshMultimorphicSymbol,
-{
+impl<'a, 'b> Env<'a, 'b> {
     fn is_seen(&self, var: Variable) -> bool {
         let var = self.subs.get_root_key_without_compacting(var);
 
@@ -1225,8 +1389,8 @@ impl<'a> Layout<'a> {
         field_order_hash: FieldOrderHash::ZERO_FIELD_HASH,
     };
 
-    fn new_help<'b, F: FreshMultimorphicSymbol>(
-        env: &mut Env<'a, 'b, F>,
+    fn new_help<'b>(
+        env: &mut Env<'a, 'b>,
         var: Variable,
         content: Content,
     ) -> Result<Self, LayoutProblem> {
@@ -1284,10 +1448,7 @@ impl<'a> Layout<'a> {
     /// Returns Err(()) if given an error, or Ok(Layout) if given a non-erroneous Structure.
     /// Panics if given a FlexVar or RigidVar, since those should have been
     /// monomorphized away already!
-    fn from_var<F: FreshMultimorphicSymbol>(
-        env: &mut Env<'a, '_, F>,
-        var: Variable,
-    ) -> Result<Self, LayoutProblem> {
+    fn from_var(env: &mut Env<'a, '_>, var: Variable) -> Result<Self, LayoutProblem> {
         if env.is_seen(var) {
             Ok(Layout::RecursivePointer)
         } else {
@@ -1611,16 +1772,13 @@ impl<'a> LayoutCache<'a> {
         }
     }
 
-    pub fn from_var<F>(
+    pub fn from_var(
         &mut self,
         arena: &'a Bump,
         var: Variable,
         subs: &Subs,
-        fresh_multimorphic_symbol: &mut F,
-    ) -> Result<Layout<'a>, LayoutProblem>
-    where
-        F: FreshMultimorphicSymbol,
-    {
+        multimorphic_names: &mut MultimorphicNames,
+    ) -> Result<Layout<'a>, LayoutProblem> {
         // Store things according to the root Variable, to avoid duplicate work.
         let var = subs.get_root_key_without_compacting(var);
 
@@ -1629,18 +1787,18 @@ impl<'a> LayoutCache<'a> {
             subs,
             seen: Vec::new_in(arena),
             target_info: self.target_info,
-            fresh_multimorphic_symbol,
+            multimorphic_names,
         };
 
         Layout::from_var(&mut env, var)
     }
 
-    pub fn raw_from_var<F: FreshMultimorphicSymbol>(
+    pub fn raw_from_var(
         &mut self,
         arena: &'a Bump,
         var: Variable,
         subs: &Subs,
-        fresh_multimorphic_symbol: &mut F,
+        multimorphic_names: &mut MultimorphicNames,
     ) -> Result<RawFunctionLayout<'a>, LayoutProblem> {
         // Store things according to the root Variable, to avoid duplicate work.
         let var = subs.get_root_key_without_compacting(var);
@@ -1650,7 +1808,7 @@ impl<'a> LayoutCache<'a> {
             subs,
             seen: Vec::new_in(arena),
             target_info: self.target_info,
-            fresh_multimorphic_symbol,
+            multimorphic_names,
         };
         RawFunctionLayout::from_var(&mut env, var)
     }
@@ -1905,8 +2063,8 @@ impl<'a> Builtin<'a> {
     }
 }
 
-fn layout_from_lambda_set<'a, F: FreshMultimorphicSymbol>(
-    env: &mut Env<'a, '_, F>,
+fn layout_from_lambda_set<'a>(
+    env: &mut Env<'a, '_>,
     lset: subs::LambdaSet,
 ) -> Result<Layout<'a>, LayoutProblem> {
     // Lambda set is just a tag union from the layout's perspective.
@@ -1935,8 +2093,8 @@ fn layout_from_lambda_set<'a, F: FreshMultimorphicSymbol>(
     }
 }
 
-fn layout_from_flat_type<'a, F: FreshMultimorphicSymbol>(
-    env: &mut Env<'a, '_, F>,
+fn layout_from_flat_type<'a>(
+    env: &mut Env<'a, '_>,
     flat_type: FlatType,
 ) -> Result<Layout<'a>, LayoutProblem> {
     use roc_types::subs::FlatType::*;
@@ -2049,7 +2207,7 @@ fn layout_from_flat_type<'a, F: FreshMultimorphicSymbol>(
                 env.subs,
                 closure_var,
                 env.target_info,
-                env.fresh_multimorphic_symbol,
+                env.multimorphic_names,
             )?;
 
             Ok(Layout::LambdaSet(lambda_set))
@@ -2129,19 +2287,19 @@ fn layout_from_flat_type<'a, F: FreshMultimorphicSymbol>(
 
 pub type SortedField<'a> = (Lowercase, Variable, Result<Layout<'a>, Layout<'a>>);
 
-pub fn sort_record_fields<'a, F: FreshMultimorphicSymbol>(
+pub fn sort_record_fields<'a>(
     arena: &'a Bump,
     var: Variable,
     subs: &Subs,
     target_info: TargetInfo,
-    fresh_multimorphic_symbol: &mut F,
+    multimorphic_names: &mut MultimorphicNames,
 ) -> Result<Vec<'a, SortedField<'a>>, LayoutProblem> {
     let mut env = Env {
         arena,
         subs,
         seen: Vec::new_in(arena),
         target_info,
-        fresh_multimorphic_symbol,
+        multimorphic_names,
     };
 
     let (it, _) = match gather_fields_unsorted_iter(subs, RecordFields::empty(), var) {
@@ -2156,8 +2314,8 @@ pub fn sort_record_fields<'a, F: FreshMultimorphicSymbol>(
     sort_record_fields_help(&mut env, it)
 }
 
-fn sort_record_fields_help<'a, F: FreshMultimorphicSymbol>(
-    env: &mut Env<'a, '_, F>,
+fn sort_record_fields_help<'a>(
+    env: &mut Env<'a, '_>,
     fields_map: impl Iterator<Item = (Lowercase, RecordField<Variable>)>,
 ) -> Result<Vec<'a, SortedField<'a>>, LayoutProblem> {
     let target_info = env.target_info;
@@ -2343,12 +2501,12 @@ impl<'a> WrappedVariant<'a> {
     }
 }
 
-pub fn union_sorted_tags<'a, F: FreshMultimorphicSymbol>(
+pub fn union_sorted_tags<'a>(
     arena: &'a Bump,
     var: Variable,
     subs: &Subs,
     target_info: TargetInfo,
-    fresh_multimorphic_symbol: &mut F,
+    multimorphic_names: &mut MultimorphicNames,
 ) -> Result<UnionVariant<'a>, LayoutProblem> {
     let var =
         if let Content::RecursionVar { structure, .. } = subs.get_content_without_compacting(var) {
@@ -2369,7 +2527,7 @@ pub fn union_sorted_tags<'a, F: FreshMultimorphicSymbol>(
         | Err((_, Content::FlexVar(_) | Content::RigidVar(_)))
         | Err((_, Content::RecursionVar { .. })) => {
             let opt_rec_var = get_recursion_var(subs, var);
-            union_sorted_tags_help(arena, tags_vec, opt_rec_var, subs, target_info, fresh_multimorphic_symbol)
+            union_sorted_tags_help(arena, tags_vec, opt_rec_var, subs, target_info, multimorphic_names)
         }
         Err((_, Content::Error)) => return Err(LayoutProblem::Erroneous),
         Err(other) => panic!("invalid content in tag union variable: {:?}", other),
@@ -2398,8 +2556,8 @@ fn is_recursive_tag_union(layout: &Layout) -> bool {
     )
 }
 
-fn union_sorted_tags_help_new<'a, L, F: FreshMultimorphicSymbol>(
-    env: &mut Env<'a, '_, F>,
+fn union_sorted_tags_help_new<'a, L>(
+    env: &mut Env<'a, '_>,
     tags_list: &[(&'_ L, &[Variable])],
     opt_rec_var: Option<Variable>,
 ) -> UnionVariant<'a>
@@ -2589,13 +2747,13 @@ where
     }
 }
 
-pub fn union_sorted_tags_help<'a, L, F: FreshMultimorphicSymbol>(
+pub fn union_sorted_tags_help<'a, L>(
     arena: &'a Bump,
     mut tags_vec: std::vec::Vec<(L, std::vec::Vec<Variable>)>,
     opt_rec_var: Option<Variable>,
     subs: &Subs,
     target_info: TargetInfo,
-    fresh_multimorphic_symbol: &mut F,
+    multimorphic_names: &mut MultimorphicNames,
 ) -> UnionVariant<'a>
 where
     L: Into<TagOrClosure> + Ord + Clone,
@@ -2608,7 +2766,7 @@ where
         subs,
         seen: Vec::new_in(arena),
         target_info,
-        fresh_multimorphic_symbol,
+        multimorphic_names,
     };
 
     match tags_vec.len() {
@@ -2797,8 +2955,8 @@ where
     }
 }
 
-fn layout_from_newtype<'a, L: Label, F: FreshMultimorphicSymbol>(
-    env: &mut Env<'a, '_, F>,
+fn layout_from_newtype<'a, L: Label>(
+    env: &mut Env<'a, '_>,
     tags: &UnsortedUnionLabels<L>,
 ) -> Layout<'a> {
     debug_assert!(tags.is_newtype_wrapper(env.subs));
@@ -2821,10 +2979,7 @@ fn layout_from_newtype<'a, L: Label, F: FreshMultimorphicSymbol>(
     }
 }
 
-fn layout_from_union<'a, L, F: FreshMultimorphicSymbol>(
-    env: &mut Env<'a, '_, F>,
-    tags: &UnsortedUnionLabels<L>,
-) -> Layout<'a>
+fn layout_from_union<'a, L>(env: &mut Env<'a, '_>, tags: &UnsortedUnionLabels<L>) -> Layout<'a>
 where
     L: Label + Ord + Into<TagOrClosure>,
 {
@@ -2900,8 +3055,8 @@ where
     }
 }
 
-fn layout_from_recursive_union<'a, L, F: FreshMultimorphicSymbol>(
-    env: &mut Env<'a, '_, F>,
+fn layout_from_recursive_union<'a, L>(
+    env: &mut Env<'a, '_>,
     rec_var: Variable,
     tags: &UnsortedUnionLabels<L>,
 ) -> Result<Layout<'a>, LayoutProblem>
@@ -3082,8 +3237,8 @@ fn layout_from_num_content<'a>(
     }
 }
 
-fn dict_layout_from_key_value<'a, F: FreshMultimorphicSymbol>(
-    env: &mut Env<'a, '_, F>,
+fn dict_layout_from_key_value<'a>(
+    env: &mut Env<'a, '_>,
     key_var: Variable,
     value_var: Variable,
 ) -> Result<Layout<'a>, LayoutProblem> {
@@ -3118,8 +3273,8 @@ fn dict_layout_from_key_value<'a, F: FreshMultimorphicSymbol>(
 pub trait FreshMultimorphicSymbol: FnMut() -> Symbol {}
 impl<T> FreshMultimorphicSymbol for T where T: FnMut() -> Symbol {}
 
-pub fn list_layout_from_elem<'a, F: FreshMultimorphicSymbol>(
-    env: &mut Env<'a, '_, F>,
+pub fn list_layout_from_elem<'a>(
+    env: &mut Env<'a, '_>,
     element_var: Variable,
 ) -> Result<Layout<'a>, LayoutProblem> {
     let is_variable = |content| matches!(content, &Content::FlexVar(_) | &Content::RigidVar(_));
