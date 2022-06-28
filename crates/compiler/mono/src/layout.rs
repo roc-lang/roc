@@ -852,6 +852,16 @@ impl MultimorphicNames {
     fn insert<'b>(&mut self, name: Symbol, captures_layouts: &'b [Layout<'b>]) -> Symbol {
         self.0.lock().unwrap().insert(name, captures_layouts)
     }
+
+    /// Assumes there is only one clone still alive.
+    /// If there is more than one clone alive, `self` is returned.
+    pub fn try_unwrap_names(self) -> Result<IdentIds, Self> {
+        let mutex = Arc::try_unwrap(self.0).map_err(Self)?;
+        let table = mutex
+            .into_inner()
+            .expect("how can there be another lock if we consumed the only ref?");
+        Ok(table.ident_ids)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

@@ -2599,9 +2599,20 @@ fn finish_specialization(
         .into_inner()
         .into_module_ids();
 
+    let mut all_ident_ids = state.constrained_ident_ids;
+    let multimorphic_idents = state
+        .multimorphic_names
+        .try_unwrap_names()
+        .expect("There were still outstanding Arc references to multimorphic_names");
+    let old_idents = all_ident_ids.insert(ModuleId::MULTIMORPHIC, multimorphic_idents);
+    debug_assert!(
+        old_idents.is_none() || old_idents.unwrap().is_empty(),
+        "duplicate multimorphic idents"
+    );
+
     let interns = Interns {
         module_ids,
-        all_ident_ids: state.constrained_ident_ids,
+        all_ident_ids,
     };
 
     let State {

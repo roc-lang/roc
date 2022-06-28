@@ -3498,3 +3498,30 @@ fn polymorphic_lambda_captures_polymorphic_value() {
         u64
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn multimorphic_lambda_set_u64_vs_u8_capture() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            capture : _ -> ({} -> Str)
+            capture = \val ->
+                \{} ->
+                    Num.toStr val
+
+            x : [True, False]
+            x = True
+
+            fun =
+                when x is
+                    True -> capture 123u64
+                    False -> capture 18u8
+
+            fun {}
+            "#
+        ),
+        RocStr::from("123"),
+        RocStr
+    )
+}
