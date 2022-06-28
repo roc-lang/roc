@@ -8,7 +8,7 @@ use crate::ir::{
     Call, CallSpecId, CallType, Expr, HostExposedLayouts, JoinPointId, ModifyRc, Proc, ProcLayout,
     SelfRecursive, Stmt, UpdateModeId,
 };
-use crate::layout::{Builtin, Layout, UnionLayout};
+use crate::layout::{Builtin, LambdaName, Layout, UnionLayout};
 
 mod equality;
 mod refcount;
@@ -343,7 +343,7 @@ impl<'a> CodeGenHelp<'a> {
         };
 
         self.specializations[spec_index].proc = Some(Proc {
-            name: proc_symbol,
+            name: LambdaName::from_non_multimorphic(proc_symbol),
             args,
             body,
             closure_data_layout: None,

@@ -1525,3 +1525,28 @@ fn tail_call_with_different_layout() {
         "#
     )
 }
+
+#[mono_test]
+#[ignore]
+fn lambda_sets_collide_with_captured_var() {
+    indoc!(
+        r#"
+        capture : a -> ({} -> Str)
+        capture = \val ->
+            thunk =
+                \{} ->
+                    when val is
+                        _ -> ""
+            thunk
+
+        x : [True, False]
+
+        fun =
+            when x is
+                True -> capture 1u8
+                False -> capture 1u64
+
+        fun {}
+        "#
+    )
+}

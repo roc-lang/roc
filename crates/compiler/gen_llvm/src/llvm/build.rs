@@ -4185,7 +4185,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
 
             // only have top-level thunks for this proc's module in scope
             // this retain is not needed for correctness, but will cause less confusion when debugging
-            let home = proc.name.module_id();
+            let home = proc.name.call_name().module_id();
             current_scope.retain_top_level_thunks_for_module(home);
 
             build_proc(
@@ -4559,7 +4559,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
                             }
                         };
 
-                        let ident_string = proc.name.as_str(&env.interns);
+                        let ident_string = proc.name.call_name().as_str(&env.interns);
                         let fn_name: String = format!("{}_1", ident_string);
 
                         build_closure_caller(

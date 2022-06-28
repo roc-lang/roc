@@ -130,9 +130,9 @@ impl<'a> ReplApp<'a> for CliApp {
 
     /// Run user code that returns a type with a `Builtin` layout
     /// Size of the return value is statically determined from its Rust type
-    fn call_function<Return, F>(&self, main_fn_name: &str, transform: F) -> Expr<'a>
+    fn call_function<Return, F>(&self, main_fn_name: &str, mut transform: F) -> Expr<'a>
     where
-        F: Fn(&'a Self::Memory, Return) -> Expr<'a>,
+        F: FnMut(&'a Self::Memory, Return) -> Expr<'a>,
         Self::Memory: 'a,
     {
         run_jit_function!(self.lib, main_fn_name, Return, |v| transform(&CliMemory, v))
@@ -143,10 +143,10 @@ impl<'a> ReplApp<'a> for CliApp {
         &self,
         main_fn_name: &str,
         ret_bytes: usize,
-        transform: F,
+        mut transform: F,
     ) -> T
     where
-        F: Fn(&'a Self::Memory, usize) -> T,
+        F: FnMut(&'a Self::Memory, usize) -> T,
         Self::Memory: 'a,
     {
         run_jit_function_dynamic_type!(self.lib, main_fn_name, ret_bytes, |v| transform(
@@ -305,6 +305,7 @@ fn gen_and_eval_llvm<'a>(
 
     let app = CliApp { lib };
 
+    let mut env = env;
     let res_answer = jit_to_ast(
         &arena,
         &app,
@@ -312,6 +313,8 @@ fn gen_and_eval_llvm<'a>(
         main_fn_layout,
         content,
         &subs,
+        home,
+        env.interns.all_ident_ids.get_mut(&home).unwrap(),
         target_info,
     );
 

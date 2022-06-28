@@ -263,7 +263,7 @@ impl<'a> ParamMap<'a> {
             self.declarations[index + i] = param;
         }
 
-        self.visit_stmt(arena, proc.name, &proc.body);
+        self.visit_stmt(arena, proc.name.call_name(), &proc.body);
     }
 
     fn visit_proc_always_owned(
@@ -282,7 +282,7 @@ impl<'a> ParamMap<'a> {
             self.declarations[index + i] = param;
         }
 
-        self.visit_stmt(arena, proc.name, &proc.body);
+        self.visit_stmt(arena, proc.name.call_name(), &proc.body);
     }
 
     fn visit_stmt(&mut self, arena: &'a Bump, _fnid: Symbol, stmt: &Stmt<'a>) {
@@ -852,10 +852,10 @@ impl<'a> BorrowInfState<'a> {
 
         let ys = Vec::from_iter_in(proc.args.iter().map(|t| t.1), self.arena).into_bump_slice();
         self.update_param_set_symbols(ys);
-        self.current_proc = proc.name;
+        self.current_proc = proc.name.call_name();
 
         // ensure that current_proc is in the owned map
-        self.owned.entry(proc.name).or_default();
+        self.owned.entry(proc.name.call_name()).or_default();
 
         self.collect_stmt(param_map, &proc.body);
         self.update_param_map_declaration(param_map, param_offset, proc.args.len());

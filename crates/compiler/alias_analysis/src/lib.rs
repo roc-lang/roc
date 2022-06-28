@@ -23,7 +23,11 @@ pub const STATIC_LIST_NAME: ConstName = ConstName(b"THIS IS A STATIC LIST");
 const ENTRY_POINT_NAME: &[u8] = b"mainForHost";
 
 pub fn func_name_bytes(proc: &Proc) -> [u8; SIZE] {
-    func_name_bytes_help(proc.name, proc.args.iter().map(|x| x.0), &proc.ret_layout)
+    func_name_bytes_help(
+        proc.name.call_name(),
+        proc.args.iter().map(|x| x.0),
+        &proc.ret_layout,
+    )
 }
 
 #[inline(always)]

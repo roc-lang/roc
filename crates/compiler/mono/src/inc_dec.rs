@@ -1406,7 +1406,7 @@ fn visit_proc<'a, 'i>(
     proc: &mut Proc<'a>,
     layout: ProcLayout<'a>,
 ) {
-    let params = match param_map.get_symbol(proc.name, layout) {
+    let params = match param_map.get_symbol(proc.name.call_name(), layout) {
         Some(slice) => slice,
         None => Vec::from_iter_in(
             proc.args.iter().cloned().map(|(layout, symbol)| Param {

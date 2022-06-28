@@ -380,7 +380,7 @@ impl<'a> WasmBackend<'a> {
             println!("\ngenerating procedure {:?}\n", proc.name);
         }
 
-        self.append_proc_debug_name(proc.name);
+        self.append_proc_debug_name(proc.name.call_name());
 
         self.start_proc(proc);
 

@@ -106,8 +106,8 @@ trait Backend<'a> {
         proc: Proc<'a>,
         layout_ids: &mut LayoutIds<'a>,
     ) -> (Vec<u8>, Vec<Relocation>, Vec<'a, (Symbol, String)>) {
-        let layout_id = layout_ids.get(proc.name, &proc.ret_layout);
-        let proc_name = self.symbol_to_string(proc.name, layout_id);
+        let layout_id = layout_ids.get(proc.name.call_name(), &proc.ret_layout);
+        let proc_name = self.symbol_to_string(proc.name.call_name(), layout_id);
         self.reset(proc_name, proc.is_self_recursive);
         self.load_args(proc.args, &proc.ret_layout);
         for (layout, sym) in proc.args {

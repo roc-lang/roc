@@ -29,11 +29,12 @@ use roc_module::symbol::{
     IdentIds, IdentIdsByModule, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds,
     PackageQualified, Symbol,
 };
+use roc_mono::fresh_multimorphic_symbol;
 use roc_mono::ir::{
     CapturedSymbols, EntryPoint, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs,
     ProcsBase, UpdateModeIds,
 };
-use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
+use roc_mono::layout::{LambdaName, Layout, LayoutCache, LayoutProblem};
 use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
 use roc_parse::header::{HeaderFor, ModuleNameEnum, PackageName};
@@ -4545,8 +4546,12 @@ fn build_pending_specializations<'a>(
                 // never gets called by Roc code, it will never
                 // get specialized!
                 if is_host_exposed {
-                    let layout_result =
-                        layout_cache.raw_from_var(mono_env.arena, expr_var, mono_env.subs);
+                    let layout_result = layout_cache.raw_from_var(
+                        mono_env.arena,
+                        expr_var,
+                        mono_env.subs,
+                        fresh_multimorphic_symbol!(mono_env),
+                    );
 
                     // cannot specialize when e.g. main's type contains type variables
                     if let Err(e) = layout_result {
@@ -4571,7 +4576,7 @@ fn build_pending_specializations<'a>(
 
                     procs_base.host_specializations.insert_host_exposed(
                         mono_env.subs,
-                        symbol,
+                        LambdaName::only_receiver(symbol),
                         annotation,
                         expr_var,
                     );
@@ -4605,8 +4610,12 @@ fn build_pending_specializations<'a>(
                 // never gets called by Roc code, it will never
                 // get specialized!
                 if is_host_exposed {
-                    let layout_result =
-                        layout_cache.raw_from_var(mono_env.arena, expr_var, mono_env.subs);
+                    let layout_result = layout_cache.raw_from_var(
+                        mono_env.arena,
+                        expr_var,
+                        mono_env.subs,
+                        fresh_multimorphic_symbol!(mono_env),
+                    );
 
                     // cannot specialize when e.g. main's type contains type variables
                     if let Err(e) = layout_result {
@@ -4631,7 +4640,7 @@ fn build_pending_specializations<'a>(
 
                     procs_base.host_specializations.insert_host_exposed(
                         mono_env.subs,
-                        symbol,
+                        LambdaName::only_receiver(symbol),
                         annotation,
                         expr_var,
                     );
@@ -4683,8 +4692,12 @@ fn build_pending_specializations<'a>(
                 // never gets called by Roc code, it will never
                 // get specialized!
                 if is_host_exposed {
-                    let layout_result =
-                        layout_cache.raw_from_var(mono_env.arena, expr_var, mono_env.subs);
+                    let layout_result = layout_cache.raw_from_var(
+                        mono_env.arena,
+                        expr_var,
+                        mono_env.subs,
+                        fresh_multimorphic_symbol!(mono_env),
+                    );
 
                     // cannot specialize when e.g. main's type contains type variables
                     if let Err(e) = layout_result {
@@ -4709,7 +4722,7 @@ fn build_pending_specializations<'a>(
 
                     procs_base.host_specializations.insert_host_exposed(
                         mono_env.subs,
-                        symbol,
+                        LambdaName::only_receiver(symbol),
                         annotation,
                         expr_var,
                     );
@@ -4743,8 +4756,12 @@ fn build_pending_specializations<'a>(
                 // never gets called by Roc code, it will never
                 // get specialized!
                 if is_host_exposed {
-                    let layout_result =
-                        layout_cache.raw_from_var(mono_env.arena, expr_var, mono_env.subs);
+                    let layout_result = layout_cache.raw_from_var(
+                        mono_env.arena,
+                        expr_var,
+                        mono_env.subs,
+                        fresh_multimorphic_symbol!(mono_env),
+                    );
 
                     // cannot specialize when e.g. main's type contains type variables
                     if let Err(e) = layout_result {
@@ -4769,7 +4786,7 @@ fn build_pending_specializations<'a>(
 
                     procs_base.host_specializations.insert_host_exposed(
                         mono_env.subs,
-                        symbol,
+                        LambdaName::only_receiver(symbol),
                         annotation,
                         expr_var,
                     );
