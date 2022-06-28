@@ -1,4 +1,5 @@
 use bumpalo::{collections::vec::Vec, Bump};
+use roc_mono::layout::MultimorphicNames;
 use std::mem::size_of;
 
 use roc_collections::all::MutSet;
@@ -241,6 +242,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         .map_err(|js| format!("{:?}", js))?;
 
     let app = WasmReplApp { arena };
+    let mut multimorphic_names = MultimorphicNames::default();
 
     // Run the app and transform the result value to an AST `Expr`
     // Restore type constructor names, and other user-facing info that was erased during compilation.
@@ -251,7 +253,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         main_fn_layout,
         content,
         &subs,
-        module_id,  interns.all_ident_ids.get_mut(&module_id).unwrap(),
+        &mut multimorphic_names,
         target_info,
     );
 

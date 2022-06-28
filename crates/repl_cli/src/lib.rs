@@ -2,6 +2,7 @@ use bumpalo::Bump;
 use const_format::concatcp;
 use inkwell::context::Context;
 use libloading::Library;
+use roc_mono::layout::MultimorphicNames;
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
 use rustyline_derive::{Completer, Helper, Hinter};
@@ -305,7 +306,8 @@ fn gen_and_eval_llvm<'a>(
 
     let app = CliApp { lib };
 
-    let mut env = env;
+    let mut multimorphic_names = MultimorphicNames::default();
+
     let res_answer = jit_to_ast(
         &arena,
         &app,
@@ -313,8 +315,7 @@ fn gen_and_eval_llvm<'a>(
         main_fn_layout,
         content,
         &subs,
-        home,
-        env.interns.all_ident_ids.get_mut(&home).unwrap(),
+        &mut multimorphic_names,
         target_info,
     );
 

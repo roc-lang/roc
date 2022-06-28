@@ -1,16 +1,16 @@
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_mono::fresh_multimorphic_symbol;
 use std::cmp::{max_by_key, min_by_key};
 
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::TagName;
-use roc_module::symbol::{IdentIds, ModuleId, Symbol};
+use roc_module::symbol::Symbol;
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::{
-    union_sorted_tags_help, Builtin, Layout, LayoutCache, UnionLayout, UnionVariant, WrappedVariant,
+    union_sorted_tags_help, Builtin, Layout, LayoutCache, MultimorphicNames, UnionLayout,
+    UnionVariant, WrappedVariant,
 };
 use roc_parse::ast::{AssignedField, Collection, Expr, StrLiteral};
 use roc_region::all::{Loc, Region};
@@ -21,11 +21,10 @@ use roc_types::subs::{Content, FlatType, GetSubsSlice, RecordFields, Subs, Union
 use crate::{ReplApp, ReplAppMemory};
 
 struct Env<'a> {
-    home: ModuleId,
     arena: &'a Bump,
     subs: &'a Subs,
     target_info: TargetInfo,
-    ident_ids: &'a mut IdentIds,
+    multimorphic_names: &'a mut MultimorphicNames,
 }
 
 pub enum ToAstProblem {
@@ -48,16 +47,14 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
     layout: ProcLayout<'a>,
     content: &'a Content,
     subs: &'a Subs,
-    module_id: ModuleId,
-    ident_ids: &'a mut IdentIds,
+    multimorphic_names: &'a mut MultimorphicNames,
     target_info: TargetInfo,
 ) -> Result<Expr<'a>, ToAstProblem> {
     let mut env = Env {
         arena,
         subs,
         target_info,
-        home: module_id,
-        ident_ids,
+        multimorphic_names,
     };
 
     match layout {
@@ -193,7 +190,7 @@ fn get_tags_vars_and_variant<'a>(
         opt_rec_var,
         env.subs,
         env.target_info,
-        fresh_multimorphic_symbol!(env),
+        env.multimorphic_names,
     );
 
     (vars_of_tag, union_variant)
@@ -913,12 +910,7 @@ fn struct_to_ast<'a, M: ReplAppMemory>(
 
         let inner_content = env.subs.get_content_without_compacting(field.into_inner());
         let field_layout = layout_cache
-            .from_var(
-                arena,
-                field.into_inner(),
-                env.subs,
-                fresh_multimorphic_symbol!(env),
-            )
+            .from_var(arena, field.into_inner(), env.subs, env.multimorphic_names)
             .unwrap();
         let inner_layouts = arena.alloc([field_layout]);
 
@@ -957,12 +949,7 @@ fn struct_to_ast<'a, M: ReplAppMemory>(
         for (label, field) in record_fields.sorted_iterator(subs, Variable::EMPTY_RECORD) {
             let content = subs.get_content_without_compacting(field.into_inner());
             let field_layout = layout_cache
-                .from_var(
-                    arena,
-                    field.into_inner(),
-                    env.subs,
-                    fresh_multimorphic_symbol!(env),
-                )
+                .from_var(arena, field.into_inner(), env.subs, env.multimorphic_names)
                 .unwrap();
 
             let loc_expr = &*arena.alloc(Loc {
@@ -1162,7 +1149,7 @@ fn byte_to_ast<'a, M: ReplAppMemory>(
                         None,
                         env.subs,
                         env.target_info,
-                        fresh_multimorphic_symbol!(env),
+                        env.multimorphic_names,
                     );
 
                     match union_variant {

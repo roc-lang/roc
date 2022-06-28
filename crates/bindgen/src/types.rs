@@ -6,10 +6,10 @@ use roc_builtins::bitcode::{
     IntWidth::{self, *},
 };
 use roc_collections::VecMap;
-use roc_module::symbol::{Interns, ModuleId, Symbol};
+use roc_module::symbol::{Interns, Symbol};
 use roc_mono::layout::{
     cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Layout, LayoutCache,
-    UnionLayout,
+    MultimorphicNames, UnionLayout,
 };
 use roc_target::TargetInfo;
 use roc_types::{
@@ -410,41 +410,26 @@ pub struct Env<'a> {
     arena: &'a Bump,
     subs: &'a Subs,
     layout_cache: LayoutCache<'a>,
-    home: ModuleId,
     interns: &'a mut Interns,
     struct_names: Structs,
     enum_names: Enums,
     pending_recursive_types: VecMap<TypeId, Layout<'a>>,
     known_recursive_types: VecMap<Layout<'a>, TypeId>,
     target: TargetInfo,
-}
-
-macro_rules! fresh_multimorphic_symbol {
-    ($env:expr) => {
-        &mut || {
-            let ident_id = $env
-                .interns
-                .all_ident_ids
-                .get_mut(&$env.home)
-                .unwrap()
-                .gen_unique();
-            Symbol::new($env.home, ident_id)
-        }
-    };
+    multimorphic_names: &'a mut MultimorphicNames,
 }
 
 impl<'a> Env<'a> {
     pub fn new(
-        home: ModuleId,
         arena: &'a Bump,
         subs: &'a Subs,
         interns: &'a mut Interns,
         target: TargetInfo,
+        multimorphic_names: &'a mut MultimorphicNames,
     ) -> Self {
         Env {
             arena,
             subs,
-            home,
             interns,
             struct_names: Default::default(),
             enum_names: Default::default(),
@@ -452,6 +437,7 @@ impl<'a> Env<'a> {
             known_recursive_types: Default::default(),
             layout_cache: LayoutCache::new(target),
             target,
+            multimorphic_names,
         }
     }
 
@@ -473,7 +459,7 @@ impl<'a> Env<'a> {
     fn add_type(&mut self, var: Variable, types: &mut Types) -> TypeId {
         let layout = self
             .layout_cache
-            .from_var(self.arena, var, self.subs, fresh_multimorphic_symbol!(self))
+            .from_var(self.arena, var, self.subs, self.multimorphic_names)
             .expect("Something weird ended up in the content");
 
         add_type_help(self, layout, var, None, types)
@@ -609,7 +595,7 @@ fn add_type_help<'a>(
             let type_id = types.add(RocType::RecursivePointer(TypeId::PENDING), layout);
             let structure_layout = env
                 .layout_cache
-                .from_var(env.arena, *structure, subs, fresh_multimorphic_symbol!(env))
+                .from_var(env.arena, *structure, subs, env.multimorphic_names)
                 .unwrap();
 
             env.pending_recursive_types
@@ -717,7 +703,7 @@ where
             label,
             field_var,
             env.layout_cache
-                .from_var(env.arena, field_var, subs, fresh_multimorphic_symbol!(env))
+                .from_var(env.arena, field_var, subs, env.multimorphic_names)
                 .unwrap(),
         ));
     }
@@ -787,12 +773,7 @@ fn add_tag_union<'a>(
                     let payload_var = payload_vars.get(0).unwrap();
                     let payload_layout = env
                         .layout_cache
-                        .from_var(
-                            env.arena,
-                            *payload_var,
-                            env.subs,
-                            fresh_multimorphic_symbol!(env),
-                        )
+                        .from_var(env.arena, *payload_var, env.subs, env.multimorphic_names)
                         .expect("Something weird ended up in the content");
                     let payload_id = add_type_help(env, payload_layout, *payload_var, None, types);
 
@@ -943,7 +924,7 @@ fn struct_fields_needed<I: IntoIterator<Item = Variable>>(env: &mut Env<'_>, var
     vars.into_iter().fold(0, |count, var| {
         let layout = env
             .layout_cache
-            .from_var(arena, var, subs, fresh_multimorphic_symbol!(env))
+            .from_var(arena, var, subs, env.multimorphic_names)
             .unwrap();
 
         if layout.is_dropped_because_empty() {
