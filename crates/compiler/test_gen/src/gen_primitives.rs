@@ -3525,3 +3525,103 @@ fn multimorphic_lambda_set_u64_vs_u8_capture() {
         RocStr
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn multimorphic_lambdas_with_other_lambda_capture() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            capture : _ -> ({} -> Str)
+            capture = \val ->
+                \{} ->
+                    Num.toStr val
+
+            capture2 = \val -> \{} -> val
+
+            f = \x ->
+                g =
+                    when x is
+                        A -> capture 11u8
+                        B -> capture2 "lisa"
+                        C -> capture 187128u64
+                g {}
+
+            {a: f A, b: f B, c: f C}
+            "#
+        ),
+        (
+            RocStr::from("11"),
+            RocStr::from("lisa"),
+            RocStr::from("187128")
+        ),
+        (RocStr, RocStr, RocStr)
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn multimorphic_lambdas_with_non_capturing_function() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            capture : _ -> ({} -> Str)
+            capture = \val ->
+                \{} ->
+                    Num.toStr val
+
+            triv = \{} -> "triv"
+
+            f = \x ->
+                g =
+                    when x is
+                        A -> capture 11u8
+                        B -> triv
+                        C -> capture 187128u64
+                g {}
+
+            {a: f A, b: f B, c: f C}
+            "#
+        ),
+        (
+            RocStr::from("11"),
+            RocStr::from("triv"),
+            RocStr::from("187128")
+        ),
+        (RocStr, RocStr, RocStr)
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn multimorphic_lambdas_have_captured_function_in_closure() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Lazy a : {} -> a
+
+            after : Lazy a, (a -> Lazy b) -> Lazy b
+            after = \effect, map ->
+                thunk = \{} ->
+                    when map (effect {}) is
+                        b -> b {}
+                thunk
+
+            f = \_ -> \_ -> ""
+            g = \{ s1 } -> \_ -> s1
+
+            x : [True, False]
+            x = False
+
+            fun =
+                when x is
+                    True -> after (\{} -> "") f
+                    False -> after (\{} -> {s1: "s1"}) g
+
+            fun {}
+            "#
+        ),
+        RocStr::from("s1"),
+        RocStr
+    )
+}
