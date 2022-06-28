@@ -315,6 +315,11 @@ code {
   display: inline-block;
 }
 
+p code {
+  padding: 0 8px;
+  border-radius: 4px;
+}
+
 code a, a code {
   text-decoration: none;
   color: var(--code-link-color);
