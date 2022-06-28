@@ -981,16 +981,18 @@ impl Default for Sides {
     }
 }
 
+struct SeparatedUnionLambdas {
+    only_in_left: Vec<(Symbol, VariableSubsSlice)>,
+    only_in_right: Vec<(Symbol, VariableSubsSlice)>,
+    joined: Vec<(Symbol, VariableSubsSlice)>,
+}
+
 fn separate_union_lambdas(
     subs: &mut Subs,
     pool: &mut Pool,
     fields1: UnionLambdas,
     fields2: UnionLambdas,
-) -> (
-    Vec<(Symbol, VariableSubsSlice)>,
-    Vec<(Symbol, VariableSubsSlice)>,
-    Vec<(Symbol, VariableSubsSlice)>,
-) {
+) -> SeparatedUnionLambdas {
     debug_assert!(fields1.is_sorted(subs));
     debug_assert!(fields2.is_sorted(subs));
 
@@ -1086,7 +1088,11 @@ fn separate_union_lambdas(
         }
     }
 
-    (only_in_left, only_in_right, joined)
+    SeparatedUnionLambdas {
+        only_in_left,
+        only_in_right,
+        joined,
+    }
 }
 
 fn unify_lambda_set_help<M: MetaCollector>(
@@ -1117,22 +1123,26 @@ fn unify_lambda_set_help<M: MetaCollector>(
         "Recursion var is present, but it doesn't have a recursive content!"
     );
 
-    let (only_in_1, only_in_2, in_both) = separate_union_lambdas(subs, pool, solved1, solved2);
+    let SeparatedUnionLambdas {
+        only_in_left,
+        only_in_right,
+        joined,
+    } = separate_union_lambdas(subs, pool, solved1, solved2);
 
-    let all_lambdas = in_both
+    let all_lambdas = joined
         .into_iter()
         .map(|(name, slice)| (name, subs.get_subs_slice(slice).to_vec()));
 
     let all_lambdas = merge_sorted_preserving_duplicates(
         all_lambdas,
-        only_in_1.into_iter().map(|(name, subs_slice)| {
+        only_in_left.into_iter().map(|(name, subs_slice)| {
             let vec = subs.get_subs_slice(subs_slice).to_vec();
             (name, vec)
         }),
     );
     let all_lambdas = merge_sorted_preserving_duplicates(
         all_lambdas,
-        only_in_2.into_iter().map(|(name, subs_slice)| {
+        only_in_right.into_iter().map(|(name, subs_slice)| {
             let vec = subs.get_subs_slice(subs_slice).to_vec();
             (name, vec)
         }),
