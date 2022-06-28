@@ -11,7 +11,7 @@ install-other-libs:
     RUN apt -y install libasound2-dev # for editor sounds
     RUN apt -y install libunwind-dev pkg-config libx11-dev zlib1g-dev
     RUN apt -y install unzip # for www/build.sh
-    RUN apt -y install gcc-10 g++-10 && ln -s /usr/bin/gcc-10 /usr/bin/gcc # gcc-9 maybe causes segfault
+    RUN apt -y install gcc-10 g++-10 && rm /usr/bin/gcc && ln -s /usr/bin/gcc-10 /usr/bin/gcc # gcc-9 maybe causes segfault
 
 install-zig-llvm-valgrind-clippy-rustfmt:
     FROM +install-other-libs
