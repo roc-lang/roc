@@ -343,7 +343,7 @@ impl<'a> CodeGenHelp<'a> {
         };
 
         self.specializations[spec_index].proc = Some(Proc {
-            name: LambdaName::from_non_multimorphic(proc_symbol),
+            name: LambdaName::only_receiver(proc_symbol),
             args,
             body,
             closure_data_layout: None,

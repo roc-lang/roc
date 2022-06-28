@@ -916,11 +916,6 @@ impl LambdaName {
     }
 
     #[inline(always)]
-    pub fn from_non_multimorphic(name: Symbol) -> Self {
-        Self(LambdaNameInner::Name(name))
-    }
-
-    #[inline(always)]
     pub fn thunk(name: Symbol) -> Self {
         Self(LambdaNameInner::Name(name))
     }
@@ -3436,7 +3431,7 @@ mod test {
     #[test]
     fn width_and_alignment_union_empty_struct() {
         let lambda_set = LambdaSet {
-            set: &[(LambdaName::from_non_multimorphic(Symbol::LIST_MAP), &[])],
+            set: &[(LambdaName::only_receiver(Symbol::LIST_MAP), &[])],
             representation: &Layout::UNIT,
         };
 

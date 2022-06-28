@@ -2847,7 +2847,7 @@ fn generate_runtime_error_function<'a>(
     };
 
     Proc {
-        name: LambdaName::from_non_multimorphic(name),
+        name: LambdaName::only_receiver(name),
         args,
         body: runtime_error,
         closure_data_layout: None,
@@ -2949,7 +2949,7 @@ fn specialize_external<'a>(
                     );
 
                     let proc = Proc {
-                        name: LambdaName::from_non_multimorphic(name),
+                        name: LambdaName::only_receiver(name),
                         args: proc_arguments.into_bump_slice(),
                         body,
                         closure_data_layout: None,
@@ -3611,8 +3611,7 @@ fn specialize_naked_symbol<'a>(
         opt_fn_var,
         symbol,
         result,
-        // The function symbol is the only receiver, so not multimorphic
-        LambdaName::from_non_multimorphic(original),
+        LambdaName::only_receiver(original),
     )
 }
 
@@ -4033,9 +4032,7 @@ pub fn with_hole<'a>(
                             Some(variable),
                             symbol,
                             stmt,
-                            // If it's a known function (and not an expression) there can only be
-                            // one receiver, so not multimorphic
-                            LambdaName::from_non_multimorphic(symbol),
+                            LambdaName::only_receiver(symbol),
                         );
                     }
                     Field::Field(field) => {
@@ -4434,8 +4431,7 @@ pub fn with_hole<'a>(
 
             match procs.insert_anonymous(
                 env,
-                // Accessors never capture so they can't be multimorphic
-                LambdaName::from_non_multimorphic(name),
+                LambdaName::only_receiver(name),
                 function_type,
                 arguments,
                 *loc_body,
@@ -4636,9 +4632,9 @@ pub fn with_hole<'a>(
                                     specialized_structure_sym,
                                     stmt,
                                     // This is only hit if somehow this field is an alias
-                                    // to an ability member, but ability members can't capture, so
-                                    // it must be necessary non-multimorphic
-                                    LambdaName::from_non_multimorphic(structure),
+                                    // to an ability member, and ability members specialize to
+                                    // exactly one receiver
+                                    LambdaName::only_receiver(structure),
                                 );
                             }
                         }
@@ -4743,9 +4739,7 @@ pub fn with_hole<'a>(
                         env,
                         procs,
                         fn_var,
-                        // THEORY: calls to a known name can never be multimorphic, because they
-                        // only have one receiver
-                        LambdaName::from_non_multimorphic(proc_name),
+                        LambdaName::only_receiver(proc_name),
                         loc_args,
                         layout_cache,
                         assigned,
@@ -4760,8 +4754,7 @@ pub fn with_hole<'a>(
                         env,
                         procs,
                         fn_var,
-                        // Ability members never capture, can't be multimorphic
-                        LambdaName::from_non_multimorphic(specialization_proc_name),
+                        LambdaName::only_receiver(specialization_proc_name),
                         loc_args,
                         layout_cache,
                         assigned,
@@ -4899,7 +4892,7 @@ pub fn with_hole<'a>(
                                     let resolved_proc = match resolved_proc {
                                         Resolved::Specialization(symbol) => {
                                             // Ability members never capture, they cannot be multimorphic
-                                            LambdaName::from_non_multimorphic(symbol)
+                                            LambdaName::only_receiver(symbol)
                                         }
                                         Resolved::NeedsGenerated => {
                                             todo_abilities!("Generate impls for structural types")
@@ -5696,7 +5689,7 @@ fn tag_union_to_function<'a>(
     });
 
     // Lambda does not capture anything, can't be multimorphic
-    let lambda_name = LambdaName::from_non_multimorphic(proc_symbol);
+    let lambda_name = LambdaName::only_receiver(proc_symbol);
 
     let inserted = procs.insert_anonymous(
         env,
@@ -7191,12 +7184,7 @@ where
         // specialized, and wrap the original in a function pointer.
         let mut result = result;
         for (_, (variable, left)) in needed_specializations_of_left {
-            add_needed_external(
-                procs,
-                env,
-                variable,
-                LambdaName::from_non_multimorphic(right),
-            );
+            add_needed_external(procs, env, variable, LambdaName::thunk(right));
 
             let res_layout =
                 layout_cache.from_var(env.arena, variable, env.subs, env.multimorphic_names);
@@ -7208,12 +7196,7 @@ where
     } else if env.is_imported_symbol(right) {
         // if this is an imported symbol, then we must make sure it is
         // specialized, and wrap the original in a function pointer.
-        add_needed_external(
-            procs,
-            env,
-            variable,
-            LambdaName::from_non_multimorphic(right),
-        );
+        add_needed_external(procs, env, variable, LambdaName::only_receiver(right));
 
         // then we must construct its closure; since imported symbols have no closure, we use the empty struct
         let_empty_struct(left, env.arena.alloc(result))
