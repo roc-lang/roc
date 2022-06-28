@@ -45,7 +45,7 @@ Path := [
     # Note that the nul terminator byte is right after the end of the length (into the
     # unused capacity), so this can both be compared directly to other `List U8`s that
     # aren't nul-terminated, while also being able to be passed directly to OS APIs.
-    NulTerminated : List U8,
+    FromOperatingSystem : List U8,
 
     # These come from userspace (e.g. Path.fromBytes), so they need to be checked for interior
     # nuls and then nul-terminated before the host can pass them to OS APIs.
@@ -106,7 +106,7 @@ canonicalize : Path -> Task Path (CanonicalizeErr *) [Metadata, Read [Env]]*
 ##
 ## For a conversion to [Str] that is lossy but does not return a [Result], see
 ## [displayUtf8].
-toInner : Path -> [Unicode Str, Bytes (List U8)]
+toInner : Path -> [Str Str, Bytes (List U8)]
 
 ## Assumes a path is encoded as [UTF-8](https://en.wikipedia.org/wiki/UTF-8),
 ## and converts it to a string using [Str.displayUtf8].
@@ -168,7 +168,7 @@ compare = @Path p1, @Path p2 ->
                 NulTerminated bytes2 | ArbitraryBytes bytes2 -> Ord.compare str1 bytes2
                 FromStr str2 -> str1 == str2
 
-## Returns `True` if the path is absolute.
+## returns `True` if the path is absolute.
 ##
 ## A path is only absolute if it begins with an absolute root
 ## (see [PathRoot] for examples of roots) _and_ it contains neither `..` nor `.` path
@@ -176,7 +176,10 @@ compare = @Path p1, @Path p2 ->
 ##
 ## Note that an absolute path may contain unresolved symlinks, so even an absolute path
 ## may change when passed to [canonicalize].
-isAbsolute : Path -> Bool
+##
+## The answer to this question varies by operating system; on UNIX, "/blah" is an absolute
+## path, but on Windows, "/blah" is a relative path.
+isAbsolute : Path, OperatingSystem -> Bool
 
 ## ## Path Components
 
@@ -205,6 +208,15 @@ root : Path -> PathRoot
 
 toComponents : Path -> (PathRoot, List PathComponent)
 
+Path.join : Path, Path -> Path
+
+Path.join (Path.fromStr "/usr/local") (Path.fromStr "blah.txt")
+# /usr/local/blah.txt
+# "C:" "\"
+# "\\?\"
+# "foo\bar.txt"
+# Path.join (Path.fromStr "foo") (Path.fromStr "bar.txt")
+
 ## Walk over the path's [components](#toComponents).
 walk :
     Path,
@@ -227,6 +239,60 @@ appendStr : Path, Str -> Path
 
 ## Returns `True` if the first path begins with the second.
 startsWith : Path, Path -> Bool
+startsWith = \@Path path, @Path prefix ->
+    when path is
+        NulTerminated pathBytes | ArbitraryBytes pathBytes ->
+            when prefix is
+                NulTerminated prefixBytes | ArbitraryBytes prefixBytes ->
+                    List.startsWith pathBytes prefixBytes
+
+                FromStr prefixStr ->
+                    strLen = Str.byteCount str
+
+                    if strLen == List.len pathBytes then
+                        # Grab the first N bytes of the list, where N = byte length of string.
+                        bytesPrefix = List.takeAt pathBytes 0 strLen
+
+                        # Compare the two for equality.
+                        Str.isEqUtf8 prefixStr bytesPrefix
+                    else
+                        False
+
+        FromStr pathStr ->
+            when prefix is
+                NulTerminated prefixBytes | ArbitraryBytes prefixBytes ->
+                    Str.startsWithUtf8 pathStr prefixBytes
+
+                FromStr prefixStr ->
+                    Str.startsWith pathStr prefixStr
+
+## Returns `True` if the first path ends with the second.
+endsWith : Path, Path -> Bool
+endsWith = \@Path path, @Path prefix ->
+    when path is
+        NulTerminated pathBytes | ArbitraryBytes pathBytes ->
+            when suffix is
+                NulTerminated suffixBytes | ArbitraryBytes suffixBytes ->
+                    List.endsWith pathBytes suffixBytes
+
+                FromStr suffixStr ->
+                    strLen = Str.byteCount suffixStr
+                    if strLen == List.len pathBytes then
+                        # Grab the last N bytes of the list, where N = byte length of string.
+                        bytesSuffix = List.takeAt pathBytes (strLen - 1) strLen
+
+                        # Compare the two for equality.
+                        Str.startsWithUtf8 suffixStr bytesSuffix
+                    else
+                        False
+
+        FromStr pathStr ->
+            when suffix is
+                NulTerminated suffixBytes | ArbitraryBytes suffixBytes ->
+                    Str.endsWithUtf8 pathStr suffixBytes
+
+                FromStr suffixStr ->
+                    Str.endsWith pathStr suffixStr
 
 # TODO https://doc.rust-lang.org/std/path/struct.Path.html#method.strip_prefix
 
@@ -242,6 +308,11 @@ startsWith : Path, Path -> Bool
 ##     Path.fromStr "foo/bar/baz." |> Path.withExtension "txt" #   foo/bar/baz.txt
 ##     Path.fromStr "foo/bar/baz.xz" |> Path.withExtension "txt" # foo/bar/baz.txt
 withExtension : Path, Str -> Path
+withExtension = \@Path path, str ->
+    when path is
+        NulTerminated bytes | ArbitraryBytes bytes ->
+
+        FromStr str ->
 
 # NOTE: no withExtensionBytes because it's too narrow. If you really need to get some
 # non-Unicode in there, do it with

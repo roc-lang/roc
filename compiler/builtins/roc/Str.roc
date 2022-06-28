@@ -185,6 +185,8 @@ startsWithCodePt : Str, U32 -> Bool
 ## >>> Str.toUtf8 "🐦"
 toUtf8 : Str -> List U8
 
+# appendToUtf8 : Str, List U8 -> List U8
+
 # fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8Problem]*
 # fromUtf8Range : List U8 -> Result Str [BadUtf8 Utf8Problem Nat, OutOfBounds]*
 fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]*
@@ -216,6 +218,9 @@ fromUtf8Range : List U8, { start : Nat, count : Nat } -> Result Str [BadUtf8 Utf
 
 startsWith : Str, Str -> Bool
 endsWith : Str, Str -> Bool
+
+# startsWithUtf8 : Str, List U8 -> Bool
+# endsWithUtf8 : Str, List U8 -> Bool
 
 ## Return the string with any blank spaces removed from both the beginning
 ## as well as the end.
