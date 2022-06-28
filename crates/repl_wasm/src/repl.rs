@@ -108,9 +108,9 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
     /// Size of the return value is statically determined from its Rust type
     /// The `transform` callback takes the app's memory and the returned value
     /// _main_fn_name is always the same and we don't use it here
-    fn call_function<Return, F>(&self, _main_fn_name: &str, transform: F) -> Expr<'a>
+    fn call_function<Return, F>(&self, _main_fn_name: &str, mut transform: F) -> Expr<'a>
     where
-        F: Fn(&'a Self::Memory, Return) -> Expr<'a>,
+        F: FnMut(&'a Self::Memory, Return) -> Expr<'a>,
         Self::Memory: 'a,
     {
         let app_final_memory_size: usize = js_run_app();
@@ -138,10 +138,10 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
         &self,
         _main_fn_name: &str,
         _ret_bytes: usize,
-        transform: F,
+        mut transform: F,
     ) -> T
     where
-        F: Fn(&'a Self::Memory, usize) -> T,
+        F: FnMut(&'a Self::Memory, usize) -> T,
         Self::Memory: 'a,
     {
         let app_final_memory_size: usize = js_run_app();
@@ -251,6 +251,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         main_fn_layout,
         content,
         &subs,
+        module_id,  interns.all_ident_ids.get_mut(&module_id).unwrap(),
         target_info,
     );
 
