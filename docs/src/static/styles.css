@@ -249,6 +249,11 @@ footer p {
   font-family: var(--font-mono);
 }
 
+.sidebar-entry a,
+.sidebar-entry a:visited {
+  color: var(--text-color);
+}
+
 .sidebar-sub-entries a {
   display: block;
   line-height: 24px;
@@ -276,7 +281,6 @@ footer p {
   font-size: 18px;
   line-height: 24px;
   font-family: var(--font-mono);
-  font-weight: bold;
   display: block;
   width: 100%;
   padding: 8px 0;
@@ -422,7 +426,6 @@ pre {
   padding: 12px 16px;
   height: 48px;
   cursor: pointer;
-  color: var(--link-color);
 }
 
 #search-link:hover {
