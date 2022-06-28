@@ -300,9 +300,10 @@ h4 {
 }
 
 .code-snippet {
-  padding: 12px 16px;
+  padding: 8px 16px;
   display: block;
   box-sizing: border-box;
+  border-radius: 8px;
   font-family: var(--font-mono);
   background-color: var(--code-bg-color);
 }
@@ -327,8 +328,9 @@ code a:visited, a:visited code {
 
 pre {
   margin: 36px 0;
-  padding: 8px;
+  padding: 8px 16px;
   box-sizing: border-box;
+  border-radius: 8px;
   background-color: var(--code-bg-color);
   overflow-x: auto;
 }
