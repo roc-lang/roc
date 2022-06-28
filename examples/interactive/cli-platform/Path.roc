@@ -133,15 +133,15 @@ displayUtf8 : Path -> Str
 displayUtf8 = \@Path path ->
     when path is
         FromStr str -> str
-        NulTerminated bytes | ArbitraryBytes bytes ->
+        NoInteriorNul bytes | ArbitraryBytes bytes ->
             Str.displayUtf8 bytes
 
 isEq : Path, Path -> Bool
 isEq = @Path p1, @Path p2 ->
     when p1 is
-        NulTerminated bytes1 | ArbitraryBytes bytes1 ->
+        NoInteriorNul bytes1 | ArbitraryBytes bytes1 ->
             when p2 is
-                NulTerminated bytes2 | ArbitraryBytes bytes2 -> bytes1 == bytes2
+                NoInteriorNul bytes2 | ArbitraryBytes bytes2 -> bytes1 == bytes2
                 # We can't know the encoding that was originally used in the path, so we convert
                 # the string to bytes and see if those bytes are equal to the path's bytes.
                 #
@@ -152,34 +152,21 @@ isEq = @Path p1, @Path p2 ->
 
         FromStr str1 ->
             when p2 is
-                NulTerminated bytes2 | ArbitraryBytes bytes2 -> Str.isEqUtf8 str1 bytes2
+                NoInteriorNul bytes2 | ArbitraryBytes bytes2 -> Str.isEqUtf8 str1 bytes2
                 FromStr str2 -> str1 == str2
 
 compare : Path, Path -> [Lt, Eq, Gt]
 compare = @Path p1, @Path p2 ->
     when p1 is
-        NulTerminated bytes1 | ArbitraryBytes bytes1 ->
+        NoInteriorNul bytes1 | ArbitraryBytes bytes1 ->
             when p2 is
-                NulTerminated bytes2 | ArbitraryBytes bytes2 -> Ord.compare bytes1 bytes2
+                NoInteriorNul bytes2 | ArbitraryBytes bytes2 -> Ord.compare bytes1 bytes2
                 FromStr str2 -> Str.compareUtf8 str2 bytes1
 
         FromStr str1 ->
             when p2 is
-                NulTerminated bytes2 | ArbitraryBytes bytes2 -> Ord.compare str1 bytes2
+                NoInteriorNul bytes2 | ArbitraryBytes bytes2 -> Ord.compare str1 bytes2
                 FromStr str2 -> str1 == str2
-
-## returns `True` if the path is absolute.
-##
-## A path is only absolute if it begins with an absolute root
-## (see [PathRoot] for examples of roots) _and_ it contains neither `..` nor `.` path
-## components.
-##
-## Note that an absolute path may contain unresolved symlinks, so even an absolute path
-## may change when passed to [canonicalize].
-##
-## The answer to this question varies by operating system; on UNIX, "/blah" is an absolute
-## path, but on Windows, "/blah" is a relative path.
-isAbsolute : Path, OperatingSystem -> Bool
 
 ## ## Path Components
 
@@ -194,30 +181,25 @@ PathComponent : [
                 # you can write back whatever separator was originally used.
 ]
 
+## Note that a root of Slash (`/`) has different meanings on UNIX and on Windows.
+## * On UNIX, `/` at the beginning of the path refers to the filesystem root, and means the path is absolute.
+## * On Windows, `/` at the beginning of the path refers to the current disk drive, and means the path is relative.
 PathRoot : [
-    WindowsRoot WindowsRoot, # e.g. "C:" on Windows
-    UnixRoot, # "/" on UNIX
-    PathIsRelative, # no root
+    WindowsSpecificRoot WindowsRoot, # e.g. "C:" on Windows
+    Slash,
+    None,
 ]
 
 WindowsRoot : [
-    # TODO see https://doc.rust-lang.org/std/path/enum.Root.html
+    # TODO see https://doc.rust-lang.org/std/path/enum.Prefix.html
 ]
 
+## Returns the root of the path.
 root : Path -> PathRoot
 
-toComponents : Path -> (PathRoot, List PathComponent)
+components : Path -> (PathRoot, List PathComponent)
 
-Path.join : Path, Path -> Path
-
-Path.join (Path.fromStr "/usr/local") (Path.fromStr "blah.txt")
-# /usr/local/blah.txt
-# "C:" "\"
-# "\\?\"
-# "foo\bar.txt"
-# Path.join (Path.fromStr "foo") (Path.fromStr "bar.txt")
-
-## Walk over the path's [components](#toComponents).
+## Walk over the path's [components].
 walk :
     Path,
     # None means it's a relative path
@@ -225,25 +207,73 @@ walk :
     (state, PathComponent -> state)
     -> state
 
-## Returns the path without its last [component](#toComponents).
+## Returns the path without its last [`component`](#components).
 ##
-## If the path was empty or had only a [root](#PathRoot), returns the original path.
+## If the path was empty or contained only a [root](#PathRoot), returns the original path.
 dropLast : Path -> Path
 
 # TODO see https://doc.rust-lang.org/std/path/struct.Path.html#method.join for
 # the definition of the term "adjoin" - should we use that term?
 
-appendPath : Path, Path -> Path
+append : Path, Path -> Path
+append = \@Path prefix, @Path suffix ->
+    @Path when prefix is
+        NoInteriorNul prefixBytes ->
+            when suffix is
+                NoInteriorNul suffixBytes
+                    List.append prefixBytes suffixBytes
+                        # Neither prefix nor suffix had interior nuls, so the answer won't either.
+                        |> NoInteriorNul
+
+                ArbitraryBytes suffixBytes ->
+                    List.append prefixBytes suffixBytes
+                        |> ArbitraryBytes
+
+                FromStr suffixStr ->
+                    # Append suffixStr by writing it to the end of prefixBytes
+                    Str.writeUtf8 suffixStr prefixBytes (List.len prefixBytes)
+                        |> ArbitraryBytes
+
+        ArbitraryBytes prefixBytes ->
+            when suffix is
+                ArbitraryBytes suffixBytes | NoInteriorNul suffixBytes ->
+                    List.append prefixBytes suffixBytes
+                        |> ArbitraryBytes
+
+                FromStr suffixStr ->
+                    # Append suffixStr by writing it to the end of prefixBytes
+                    Str.writeUtf8 suffixStr prefixBytes (List.len prefixBytes)
+                        |> ArbitraryBytes
+
+        FromStr prefixStr ->
+            when suffix is
+                ArbitraryBytes suffixBytes | NoInteriorNul suffixBytes ->
+                    List.append (Str.toUtf8 prefixStr) suffixBytes
+                        |> ArbitraryBytes
+
+                FromStr suffixStr ->
+                    Str.append prefixStr suffixStr
+                        |> FromStr
 
 appendStr : Path, Str -> Path
+appendStr = \@Path prefix, suffixStr ->
+    @Path when prefix is
+        NoInteriorNul prefixBytes | ArbitraryBytes prefixBytes ->
+            # Append suffixStr by writing it to the end of prefixBytes
+            Str.writeUtf8 suffixStr prefixBytes (List.len prefixBytes)
+                |> ArbitraryBytes
+
+        FromStr prefixStr ->
+            Str.append prefixStr suffixStr
+                |> FromStr
 
 ## Returns `True` if the first path begins with the second.
 startsWith : Path, Path -> Bool
 startsWith = \@Path path, @Path prefix ->
     when path is
-        NulTerminated pathBytes | ArbitraryBytes pathBytes ->
+        NoInteriorNul pathBytes | ArbitraryBytes pathBytes ->
             when prefix is
-                NulTerminated prefixBytes | ArbitraryBytes prefixBytes ->
+                NoInteriorNul prefixBytes | ArbitraryBytes prefixBytes ->
                     List.startsWith pathBytes prefixBytes
 
                 FromStr prefixStr ->
@@ -260,7 +290,7 @@ startsWith = \@Path path, @Path prefix ->
 
         FromStr pathStr ->
             when prefix is
-                NulTerminated prefixBytes | ArbitraryBytes prefixBytes ->
+                NoInteriorNul prefixBytes | ArbitraryBytes prefixBytes ->
                     Str.startsWithUtf8 pathStr prefixBytes
 
                 FromStr prefixStr ->
@@ -270,9 +300,9 @@ startsWith = \@Path path, @Path prefix ->
 endsWith : Path, Path -> Bool
 endsWith = \@Path path, @Path prefix ->
     when path is
-        NulTerminated pathBytes | ArbitraryBytes pathBytes ->
+        NoInteriorNul pathBytes | ArbitraryBytes pathBytes ->
             when suffix is
-                NulTerminated suffixBytes | ArbitraryBytes suffixBytes ->
+                NoInteriorNul suffixBytes | ArbitraryBytes suffixBytes ->
                     List.endsWith pathBytes suffixBytes
 
                 FromStr suffixStr ->
@@ -288,7 +318,7 @@ endsWith = \@Path path, @Path prefix ->
 
         FromStr pathStr ->
             when suffix is
-                NulTerminated suffixBytes | ArbitraryBytes suffixBytes ->
+                NoInteriorNul suffixBytes | ArbitraryBytes suffixBytes ->
                     Str.endsWithUtf8 pathStr suffixBytes
 
                 FromStr suffixStr ->
@@ -308,11 +338,43 @@ endsWith = \@Path path, @Path prefix ->
 ##     Path.fromStr "foo/bar/baz." |> Path.withExtension "txt" #   foo/bar/baz.txt
 ##     Path.fromStr "foo/bar/baz.xz" |> Path.withExtension "txt" # foo/bar/baz.txt
 withExtension : Path, Str -> Path
-withExtension = \@Path path, str ->
+withExtension = \@Path path, extension ->
     when path is
-        NulTerminated bytes | ArbitraryBytes bytes ->
+        NoInteriorNul bytes | ArbitraryBytes bytes ->
+            beforeDot =
+                when List.splitLast '.' is
+                    Ok (before, _) -> before
+                    Err NotFound -> list
+
+            beforeDot
+                |> List.reserve (1 + List.len bytes)
+                |> List.append '.'
+                |> List.concat bytes
 
         FromStr str ->
+            beforeDot =
+                when Str.splitLast str "." is
+                    Ok (before, _) -> before
+                    Err NotFound -> str
+
+            beforeDot
+                |> Str.reserve (1 + Str.byteCount str)
+                |> Str.append "."
+                |> Str.concat str
 
 # NOTE: no withExtensionBytes because it's too narrow. If you really need to get some
 # non-Unicode in there, do it with
+
+# Returns `True` if the path is absolute.
+#
+# A path is only absolute if it begins with an absolute root
+# (see [PathRoot] for examples of roots) _and_ it contains neither `..` nor `.` path
+# components.
+#
+# Note that an absolute path may contain unresolved symlinks, so even an absolute path
+# may change when passed to [canonicalize].
+#
+# This returns a [Task] because the answer varies by operating system; on UNIX,
+# `/blah` is an absolute path, but on Windows, `/blah` is a relative path. The
+# task returns the appropriate answer for the operating system on which it's run.
+# isAbsolute

@@ -185,7 +185,9 @@ startsWithCodePt : Str, U32 -> Bool
 ## >>> Str.toUtf8 "🐦"
 toUtf8 : Str -> List U8
 
-# appendToUtf8 : Str, List U8 -> List U8
+# writeUtf8 : Str, List U8, Nat -> List U8
+# NOTE: in the implementation of this, must do index.min(list.len) - otherwise we could
+# end up with memory garbage in the middle of the list.
 
 # fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8Problem]*
 # fromUtf8Range : List U8 -> Result Str [BadUtf8 Utf8Problem Nat, OutOfBounds]*
