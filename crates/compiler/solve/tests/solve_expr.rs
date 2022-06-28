@@ -6974,12 +6974,18 @@ mod solve_expr {
                 fun =
                     when x is
                         True -> capture ""
+                        #       ^^^^^^^
                         False -> capture {}
+                        #        ^^^^^^^
                 fun
                 #^^^{-1}
                 "#
             ),
-            &["fun : {} -[[thunk(5) {}, thunk(5) Str]]-> Str"],
+            &[
+                "capture : Str -[[capture(1)]]-> ({} -[[thunk(5) {}, thunk(5) Str]]-> Str)",
+                "capture : {} -[[capture(1)]]-> ({} -[[thunk(5) {}, thunk(5) Str]]-> Str)",
+                "fun : {} -[[thunk(5) {}, thunk(5) Str]]-> Str",
+            ]
         );
     }
 
