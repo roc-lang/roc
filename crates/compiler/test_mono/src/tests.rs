@@ -1548,3 +1548,55 @@ fn multimorphic_lambda_set_capture() {
         "#
     )
 }
+
+#[mono_test]
+fn multimorphic_lambdas_with_other_lambda_capture() {
+    indoc!(
+        r#"
+        capture : a -> ({} -> Str)
+        capture = \val ->
+            \{} ->
+                when val is
+                    _ -> ""
+
+        capture2 = \val -> \{} -> "\(val)"
+
+        x : [A, B, C]
+        x = A
+
+        fun =
+            when x is
+                A -> capture {}
+                B -> capture2 "foo"
+                C -> capture 1u64
+
+        fun {}
+        "#
+    )
+}
+
+#[mono_test]
+fn multimorphic_lambdas_with_non_capturing_function() {
+    indoc!(
+        r#"
+        capture : a -> ({} -> Str)
+        capture = \val ->
+            \{} ->
+                when val is
+                    _ -> ""
+
+        triv = \{} -> ""
+
+        x : [A, B, C]
+        x = A
+
+        fun =
+            when x is
+                A -> capture {}
+                B -> triv
+                C -> capture 1u64
+
+        fun {}
+        "#
+    )
+}

@@ -993,8 +993,16 @@ fn separate_union_lambdas(
     fields1: UnionLambdas,
     fields2: UnionLambdas,
 ) -> SeparatedUnionLambdas {
-    debug_assert!(fields1.is_sorted(subs));
-    debug_assert!(fields2.is_sorted(subs));
+    debug_assert!(
+        fields1.is_sorted_allow_duplicates(subs),
+        "not sorted: {:?}",
+        fields1.iter_from_subs(subs).collect::<Vec<_>>()
+    );
+    debug_assert!(
+        fields2.is_sorted_allow_duplicates(subs),
+        "not sorted: {:?}",
+        fields2.iter_from_subs(subs).collect::<Vec<_>>()
+    );
 
     // lambda names -> (the captures for that lambda on the left side, the captures for that lambda on the right side)
     // e.g. [[F1 U8], [F1 U64], [F2 a]] ~ [[F1 Str], [F2 Str]] becomes
@@ -1002,13 +1010,43 @@ fn separate_union_lambdas(
     //   F2 -> { left: [ [a] ],         right: [ [Str] ] }
     let mut buckets: VecMap<Symbol, Sides> = VecMap::with_capacity(fields1.len() + fields2.len());
 
-    for (sym, vars) in fields1.iter_all() {
-        let bucket = buckets.get_or_insert(subs[sym], Sides::default);
-        bucket.left.push((subs[sym], subs[vars]));
-    }
-    for (sym, vars) in fields2.iter_all() {
-        let bucket = buckets.get_or_insert(subs[sym], Sides::default);
-        bucket.right.push((subs[sym], subs[vars]));
+    let (mut fields_left, mut fields_right) = (
+        fields1.iter_all().into_iter().peekable(),
+        fields2.iter_all().into_iter().peekable(),
+    );
+
+    loop {
+        use std::cmp::Ordering;
+
+        let ord = match (fields_left.peek(), fields_right.peek()) {
+            (Some((l, _)), Some((r, _))) => Some((subs[*l]).cmp(&subs[*r])),
+            (Some(_), None) => Some(Ordering::Less),
+            (None, Some(_)) => Some(Ordering::Greater),
+            (None, None) => None,
+        };
+
+        match ord {
+            Some(Ordering::Less) => {
+                let (sym, vars) = fields_left.next().unwrap();
+                let bucket = buckets.get_or_insert(subs[sym], Sides::default);
+                bucket.left.push((subs[sym], subs[vars]));
+            }
+            Some(Ordering::Greater) => {
+                let (sym, vars) = fields_right.next().unwrap();
+                let bucket = buckets.get_or_insert(subs[sym], Sides::default);
+                bucket.right.push((subs[sym], subs[vars]));
+            }
+            Some(Ordering::Equal) => {
+                let (sym, left_vars) = fields_left.next().unwrap();
+                let (_sym, right_vars) = fields_right.next().unwrap();
+                debug_assert_eq!(subs[sym], subs[_sym]);
+
+                let bucket = buckets.get_or_insert(subs[sym], Sides::default);
+                bucket.left.push((subs[sym], subs[left_vars]));
+                bucket.right.push((subs[sym], subs[right_vars]));
+            }
+            None => break,
+        }
     }
 
     let mut only_in_left = Vec::with_capacity(fields1.len());
@@ -1073,7 +1111,8 @@ fn separate_union_lambdas(
                         joined.push((lambda_name, left_slice));
                         // Remove the right slice, it unifies with the left so this is its unique
                         // unification.
-                        right.swap_remove(right_index);
+                        // Remove in-place so that the order is preserved.
+                        right.remove(right_index);
                         continue 'next_left;
                     }
 

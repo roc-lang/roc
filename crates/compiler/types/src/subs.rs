@@ -2650,10 +2650,21 @@ impl<L> UnionLabels<L>
 where
     L: Label + Ord,
 {
-    /// Checks if the union of labels is sorted by label.
-    /// Duplicates *are* admitted, since this represents a lambda set, in which we may have
-    /// duplicate lambda captures, if those lambda captures have different representations!
+    /// Checks if the union of labels is sorted by label, without duplicates.
     pub fn is_sorted(&self, subs: &Subs) -> bool {
+        let mut iter = self.iter_from_subs(subs).peekable();
+        while let Some((before, _)) = iter.next() {
+            if let Some((after, _)) = iter.peek() {
+                if before >= after {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Checks if the union of labels is sorted by label, without duplicates.
+    pub fn is_sorted_allow_duplicates(&self, subs: &Subs) -> bool {
         let mut iter = self.iter_from_subs(subs).peekable();
         while let Some((before, _)) = iter.next() {
             if let Some((after, _)) = iter.peek() {
