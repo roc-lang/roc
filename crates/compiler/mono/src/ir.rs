@@ -9103,15 +9103,22 @@ fn match_on_lambda_set<'a>(
         } => {
             let function_symbol = lambda_set.set[0].0;
 
+            let closure_info = match field_layouts {
+                [] => ClosureInfo::DoesNotCapture,
+                _ => ClosureInfo::Captures {
+                    lambda_set,
+                    closure_data_symbol,
+                    closure_data_layout: Layout::Struct {
+                        field_layouts,
+                        field_order_hash,
+                    },
+                },
+            };
+
             union_lambda_set_branch_help(
                 env,
                 function_symbol,
-                lambda_set,
-                closure_data_symbol,
-                Layout::Struct {
-                    field_layouts,
-                    field_order_hash,
-                },
+                closure_info,
                 argument_symbols,
                 argument_layouts,
                 return_layout,
@@ -9183,14 +9190,21 @@ fn union_lambda_set_to_switch<'a>(
 
     let mut branches = Vec::with_capacity_in(lambda_set.set.len(), env.arena);
 
-    for (i, (function_symbol, _)) in lambda_set.set.iter().enumerate() {
+    for (i, (function_symbol, capture_layouts)) in lambda_set.set.iter().enumerate() {
+        let closure_info = match capture_layouts {
+            [] => ClosureInfo::DoesNotCapture,
+            _ => ClosureInfo::Captures {
+                lambda_set,
+                closure_data_symbol,
+                closure_data_layout: closure_layout,
+            },
+        };
+
         let stmt = union_lambda_set_branch(
             env,
-            lambda_set,
             join_point_id,
             *function_symbol,
-            closure_data_symbol,
-            closure_layout,
+            closure_info,
             argument_symbols,
             argument_layouts,
             return_layout,
@@ -9229,11 +9243,9 @@ fn union_lambda_set_to_switch<'a>(
 #[allow(clippy::too_many_arguments)]
 fn union_lambda_set_branch<'a>(
     env: &mut Env<'a, '_>,
-    lambda_set: LambdaSet<'a>,
     join_point_id: JoinPointId,
     function_symbol: Symbol,
-    closure_data_symbol: Symbol,
-    closure_data_layout: Layout<'a>,
+    closure_info: ClosureInfo<'a>,
     argument_symbols_slice: &'a [Symbol],
     argument_layouts_slice: &'a [Layout<'a>],
     return_layout: &'a Layout<'a>,
@@ -9245,9 +9257,7 @@ fn union_lambda_set_branch<'a>(
     union_lambda_set_branch_help(
         env,
         function_symbol,
-        lambda_set,
-        closure_data_symbol,
-        closure_data_layout,
+        closure_info,
         argument_symbols_slice,
         argument_layouts_slice,
         return_layout,
@@ -9256,51 +9266,66 @@ fn union_lambda_set_branch<'a>(
     )
 }
 
+enum ClosureInfo<'a> {
+    Captures {
+        closure_data_symbol: Symbol,
+        /// The layout of this closure variant
+        closure_data_layout: Layout<'a>,
+        /// The whole lambda set representation this closure is a variant of
+        lambda_set: LambdaSet<'a>,
+    },
+    DoesNotCapture,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn union_lambda_set_branch_help<'a>(
     env: &mut Env<'a, '_>,
     function_symbol: Symbol,
-    lambda_set: LambdaSet<'a>,
-    closure_data_symbol: Symbol,
-    closure_data_layout: Layout<'a>,
+    closure_info: ClosureInfo<'a>,
     argument_symbols_slice: &'a [Symbol],
     argument_layouts_slice: &'a [Layout<'a>],
     return_layout: &'a Layout<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    let (argument_layouts, argument_symbols) = match closure_data_layout {
-        Layout::Struct {
-            field_layouts: &[], ..
-        }
-        | Layout::Builtin(Builtin::Bool)
-        | Layout::Builtin(Builtin::Int(IntWidth::U8)) => {
-            (argument_layouts_slice, argument_symbols_slice)
-        }
-        _ if lambda_set.member_does_not_need_closure_argument(function_symbol) => {
+    let (argument_layouts, argument_symbols) = match closure_info {
+        ClosureInfo::Captures {
+            lambda_set,
+            closure_data_symbol,
+            closure_data_layout,
+        } => match closure_data_layout {
+            Layout::Struct {
+                field_layouts: &[], ..
+            }
+            | Layout::Builtin(Builtin::Bool)
+            | Layout::Builtin(Builtin::Int(IntWidth::U8)) => {
+                (argument_layouts_slice, argument_symbols_slice)
+            }
+            _ => {
+                // extend layouts with the layout of the closure environment
+                let mut argument_layouts =
+                    Vec::with_capacity_in(argument_layouts_slice.len() + 1, env.arena);
+                argument_layouts.extend(argument_layouts_slice);
+                argument_layouts.push(Layout::LambdaSet(lambda_set));
+
+                // extend symbols with the symbol of the closure environment
+                let mut argument_symbols =
+                    Vec::with_capacity_in(argument_symbols_slice.len() + 1, env.arena);
+                argument_symbols.extend(argument_symbols_slice);
+                argument_symbols.push(closure_data_symbol);
+
+                (
+                    argument_layouts.into_bump_slice(),
+                    argument_symbols.into_bump_slice(),
+                )
+            }
+        },
+        ClosureInfo::DoesNotCapture => {
             // sometimes unification causes a function that does not itself capture anything
             // to still get a lambda set that does store information. We must not pass a closure
             // argument in this case
 
             (argument_layouts_slice, argument_symbols_slice)
-        }
-        _ => {
-            // extend layouts with the layout of the closure environment
-            let mut argument_layouts =
-                Vec::with_capacity_in(argument_layouts_slice.len() + 1, env.arena);
-            argument_layouts.extend(argument_layouts_slice);
-            argument_layouts.push(Layout::LambdaSet(lambda_set));
-
-            // extend symbols with the symbol of the closure environment
-            let mut argument_symbols =
-                Vec::with_capacity_in(argument_symbols_slice.len() + 1, env.arena);
-            argument_symbols.extend(argument_symbols_slice);
-            argument_symbols.push(closure_data_symbol);
-
-            (
-                argument_layouts.into_bump_slice(),
-                argument_symbols.into_bump_slice(),
-            )
         }
     };
 

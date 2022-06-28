@@ -741,17 +741,6 @@ impl<'a> LambdaSet<'a> {
         }
     }
 
-    pub fn member_does_not_need_closure_argument(&self, function_symbol: Symbol) -> bool {
-        match self.layout_for_member(function_symbol) {
-            ClosureRepresentation::Union {
-                alphabetic_order_fields,
-                ..
-            } => alphabetic_order_fields.is_empty(),
-            ClosureRepresentation::AlphabeticOrderStruct(fields) => fields.is_empty(),
-            ClosureRepresentation::Other(_) => false,
-        }
-    }
-
     pub fn layout_for_member(&self, function_symbol: Symbol) -> ClosureRepresentation<'a> {
         debug_assert!(
             self.set.iter().any(|(s, _)| *s == function_symbol),
