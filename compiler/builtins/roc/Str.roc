@@ -190,29 +190,29 @@ toUtf8 : Str -> List U8
 fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]*
 fromUtf8Range : List U8, { start : Nat, count : Nat } -> Result Str [BadUtf8 Utf8ByteProblem Nat, OutOfBounds]*
 
-## Returns `True` if the UTF-8 encoding of the string's contents produces the same bytes
-## as the given list of bytes.
-##
-## This gives the same answer as calling [Str.toUtf8] on the first argument and then calling
-## [Bool.isEq] on it. However, this can potentially run faster than that because it never has
-## to allocate an intermediate list - even for small strings.
-isEqUtf8 : Str, List U8 -> Bool
+# ## Returns `True` if the UTF-8 encoding of the string's contents produces the same bytes
+# ## as the given list of bytes.
+# ##
+# ## This gives the same answer as calling [Str.toUtf8] on the first argument and then calling
+# ## [Bool.isEq] on it. However, this can potentially run faster than that because it never has
+# ## to allocate an intermediate list - even for small strings.
+# isEqUtf8 : Str, List U8 -> Bool
 
-## Like [Ord.compare] but compares the UTF-8 encoding of the string's contents to the
-## given bytes.
-##
-## This gives the same answer as calling [Str.toUtf8] on the first argument and then calling
-## [Ord.compare] on it. However, this can potentially run faster than that because it never has
-## to allocate an intermediate list - even for small strings.
-compareUtf8 : Str, List U8 -> [Lt, Eq, Gt]
+# ## Like [Ord.compare] but compares the UTF-8 encoding of the string's contents to the
+# ## given bytes.
+# ##
+# ## This gives the same answer as calling [Str.toUtf8] on the first argument and then calling
+# ## [Ord.compare] on it. However, this can potentially run faster than that because it never has
+# ## to allocate an intermediate list - even for small strings.
+# compareUtf8 : Str, List U8 -> [Lt, Eq, Gt]
 
-## Like [fromUtf8], but replaces any invalid bytes with the
-## [Unicode replacement character](https://unicode.org/glossary/#replacement_character)
-## instead of returning an error.
-##
-## This is a lossy conversion, so it's rarely a good idea to use the [Str] returned by
-## this function for any purpose other than displaying it to a user.
-displayUtf8 : List U8 -> Str
+# ## Like [fromUtf8], but replaces any invalid bytes with the
+# ## [Unicode replacement character](https://unicode.org/glossary/#replacement_character)
+# ## instead of returning an error.
+# ##
+# ## This is a lossy conversion, so it's rarely a good idea to use the [Str] returned by
+# ## this function for any purpose other than displaying it to a user.
+# displayUtf8 : List U8 -> Str
 
 startsWith : Str, Str -> Bool
 endsWith : Str, Str -> Bool
