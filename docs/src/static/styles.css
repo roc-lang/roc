@@ -17,8 +17,8 @@
   --code-link-color: #5721d4;
   --text-color: #333333;
   --code-color: #222222;
-  --code-bg-color: #eeeeee;
-  --body-bg-color: #fdfdfd;
+  --code-bg-color: var(--gray-2);
+  --body-bg-color: #ffffff;
   --border-color: #e9e9e9;
   --faded-color: #4c4c4c;
   --font-sans: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
@@ -300,9 +300,10 @@ h4 {
 }
 
 .code-snippet {
-  padding: 12px 16px;
+  padding: 8px 16px;
   display: block;
   box-sizing: border-box;
+  border-radius: 8px;
   font-family: var(--font-mono);
   background-color: var(--code-bg-color);
 }
@@ -312,6 +313,11 @@ code {
   color: var(--code-color);
   background-color: var(--code-bg-color);
   display: inline-block;
+}
+
+p code {
+  padding: 0 8px;
+  border-radius: 4px;
 }
 
 code a, a code {
@@ -327,8 +333,9 @@ code a:visited, a:visited code {
 
 pre {
   margin: 36px 0;
-  padding: 8px;
+  padding: 8px 16px;
   box-sizing: border-box;
+  border-radius: 8px;
   background-color: var(--code-bg-color);
   overflow-x: auto;
 }
@@ -386,7 +393,6 @@ pre {
 #module-search {
   display: block;
   box-sizing: border-box;
-  background-color: var(--code-bg-color);
   width: 100%;
   box-sizing: border-box;
   font-size: 18px;
@@ -421,8 +427,8 @@ pre {
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --body-bg-color: #303030;
-    --code-bg-color: #393939;
+    --body-bg-color: var(--purple-8);
+    --code-bg-color: var(--purple-7);
     --border-color: #555555;
     --code-color: #eeeeee;
     --text-color: #cccccc;
