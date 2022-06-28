@@ -32,7 +32,7 @@ pub enum DeriveError {
     Underivable,
 }
 
-#[derive(Hash, PartialEq, Eq, Debug)]
+#[derive(Hash, PartialEq, Eq, Debug, Clone)]
 #[repr(u8)]
 pub enum DeriveKey {
     ToEncoder(FlatEncodableKey),
@@ -41,7 +41,7 @@ pub enum DeriveKey {
 }
 
 impl DeriveKey {
-    pub(self) fn debug_name(&self) -> String {
+    pub fn debug_name(&self) -> String {
         match self {
             DeriveKey::ToEncoder(key) => format!("toEncoder_{}", key.debug_name()),
             DeriveKey::Decoding => todo!(),

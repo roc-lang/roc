@@ -3956,11 +3956,29 @@ impl StorageSubs {
     }
 
     pub fn import_variable_from(&mut self, source: &Subs, variable: Variable) -> CopiedImport {
-        copy_import_to(source, &mut self.subs, variable, Rank::import())
+        copy_import_to(source, &mut self.subs, false, variable, Rank::import())
     }
 
     pub fn export_variable_to(&self, target: &mut Subs, variable: Variable) -> CopiedImport {
-        copy_import_to(&self.subs, target, variable, Rank::import())
+        copy_import_to(&self.subs, target, false, variable, Rank::import())
+    }
+
+    /// Like [`Self::export_variable_to`], but with the expectation that the exported variable is
+    /// going directly to a usage site, rather than to be generalized as a toplevel definition.
+    ///
+    /// This turns on bookkeeping not done when a type is exported as generalized to a toplevel.
+    /// In particular, this will add unspecialized lambda sets to the target [`Subs`]'
+    /// `uls_of_var` mapping of variables to the unspecialized lambda sets that should be resolved
+    /// when those variables are resolved.
+    ///
+    /// This is relevant e.g. in the compiler's derivers.
+    pub fn export_variable_to_directly_to_use_site(
+        &self,
+        target: &mut Subs,
+        variable: Variable,
+    ) -> CopiedImport {
+        // TODO: use a separate copy table to avoid &mut self
+        copy_import_to(&self.subs, target, true, variable, Rank::import())
     }
 
     pub fn merge_into(self, target: &mut Subs) -> impl Fn(Variable) -> Variable {
@@ -4603,6 +4621,12 @@ struct CopyImportEnv<'a> {
     copy_table: &'a mut VecMap<Variable, Variable>,
     source: &'a Subs,
     target: &'a mut Subs,
+    /// Whether to record copied unspecialized lambda set var in the target subs' `uls_of_var` as
+    /// they are copied.
+    /// You don't want this if you're importing a type into the toplevel where it will be
+    /// generalized, however you do want it if you're importing a type directly into a
+    /// specialization.
+    bookkeep_unspecialized_lambda_sets: bool,
     flex: Vec<Variable>,
     rigid: Vec<Variable>,
     flex_able: Vec<Variable>,
@@ -4611,7 +4635,13 @@ struct CopyImportEnv<'a> {
     registered: Vec<Variable>,
 }
 
-pub fn copy_import_to(source: &Subs, target: &mut Subs, var: Variable, rank: Rank) -> CopiedImport {
+pub fn copy_import_to(
+    source: &Subs,
+    target: &mut Subs,
+    bookkeep_unspecialized_lambda_sets: bool,
+    var: Variable,
+    rank: Rank,
+) -> CopiedImport {
     let mut arena = take_scratchpad();
 
     let copied_import = {
@@ -4624,6 +4654,7 @@ pub fn copy_import_to(source: &Subs, target: &mut Subs, var: Variable, rank: Ran
             copy_table: &mut copy_table,
             source,
             target,
+            bookkeep_unspecialized_lambda_sets,
             flex: Vec::new(),
             rigid: Vec::new(),
             flex_able: Vec::new(),
@@ -4645,6 +4676,7 @@ pub fn copy_import_to(source: &Subs, target: &mut Subs, var: Variable, rank: Ran
             translations,
             registered,
             target: _,
+            bookkeep_unspecialized_lambda_sets: _,
         } = env;
 
         CopiedImport {
@@ -4993,8 +5025,6 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
             let new_rec_var =
                 recursion_var.map(|rec_var| copy_import_to_help(env, max_rank, rec_var));
 
-            // NB: we are only copying across subs here, not instantiating like in deep_copy_var.
-            // So no bookkeeping should be done for the new unspecialized lambda sets.
             let new_unspecialized = SubsSlice::reserve_uls_slice(env.target, unspecialized.len());
             for (target_index, source_index) in
                 (new_unspecialized.into_iter()).zip(unspecialized.into_iter())
@@ -5002,6 +5032,10 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
                 let Uls(var, sym, region) = env.source[source_index];
                 let new_var = copy_import_to_help(env, max_rank, var);
                 env.target[target_index] = Uls(new_var, sym, region);
+
+                if env.bookkeep_unspecialized_lambda_sets {
+                    env.target.uls_of_var.add(new_var, copy);
+                }
             }
 
             let new_content = LambdaSet(self::LambdaSet {

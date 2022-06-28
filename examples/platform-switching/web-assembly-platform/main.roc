@@ -1,4 +1,4 @@
-platform "hello-world-in-swift"
+platform "echo-in-web-assembly"
     requires {} { main : Str }
     exposes []
     packages {}

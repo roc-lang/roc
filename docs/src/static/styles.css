@@ -1,10 +1,24 @@
 :root {
-  --link-color: #612bde;
+  --purple-1: #f2f1f9;
+  --purple-2: #d9d2ef;
+  --purple-3: #a17ef1;
+  --purple-4: #8d51f6;
+  --purple-5: #742af4;
+  --purple-6: #23143d;
+  --purple-7: #25222a;
+  --purple-8: #161519;
+  --purple-9: #111014;
+  --gray-1: #f8f8f8;
+  --gray-2: #f0f0f0;
+  --gray-3: #dddddd;
+  --gray-4: #5b5b5b;
+  --gray-5: #212121;
+  --link-color: var(--purple-5);
   --code-link-color: #5721d4;
   --text-color: #333333;
   --code-color: #222222;
-  --code-bg-color: #eeeeee;
-  --body-bg-color: #fdfdfd;
+  --code-bg-color: var(--gray-2);
+  --body-bg-color: #ffffff;
   --border-color: #e9e9e9;
   --faded-color: #4c4c4c;
   --font-sans: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
@@ -14,6 +28,8 @@
   --top-bar-bg: #8257e5;
   --top-bar-fg: #ffffff;
   --nav-link-hover-color: #000000;
+  --type-signature-color: var(--purple-5);
+  --type-signature-bg-color: var(--purple-1);
 }
 
 a {
@@ -54,6 +70,18 @@ a {
 .entry-name {
   white-space: pre-wrap;
   font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: normal;
+  color: var(--type-signature-color);
+  background-color: var(--type-signature-bg-color);
+  width: fit-content;
+  padding: 8px 16px;
+  border-radius: 8px;
+}
+
+.entry-name a {
+  font-weight: bold;
+  color: var(--type-signature-color);
 }
 
 .pkg-full-name a {
@@ -272,9 +300,10 @@ h4 {
 }
 
 .code-snippet {
-  padding: 12px 16px;
+  padding: 8px 16px;
   display: block;
   box-sizing: border-box;
+  border-radius: 8px;
   font-family: var(--font-mono);
   background-color: var(--code-bg-color);
 }
@@ -284,6 +313,11 @@ code {
   color: var(--code-color);
   background-color: var(--code-bg-color);
   display: inline-block;
+}
+
+p code {
+  padding: 0 8px;
+  border-radius: 4px;
 }
 
 code a, a code {
@@ -299,8 +333,9 @@ code a:visited, a:visited code {
 
 pre {
   margin: 36px 0;
-  padding: 8px;
+  padding: 8px 16px;
   box-sizing: border-box;
+  border-radius: 8px;
   background-color: var(--code-bg-color);
   overflow-x: auto;
 }
@@ -358,7 +393,6 @@ pre {
 #module-search {
   display: block;
   box-sizing: border-box;
-  background-color: var(--code-bg-color);
   width: 100%;
   box-sizing: border-box;
   font-size: 18px;
@@ -393,8 +427,8 @@ pre {
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --body-bg-color: #303030;
-    --code-bg-color: #393939;
+    --body-bg-color: var(--purple-8);
+    --code-bg-color: var(--purple-7);
     --border-color: #555555;
     --code-color: #eeeeee;
     --text-color: #cccccc;
@@ -404,6 +438,8 @@ pre {
     --code-link-color: #b894ff;
     --top-bar-bg: #6845b9;
     --top-bar-fg: #eeeeee;
+    --type-signature-color: var(--grey-1);
+    --type-signature-bg-color: var(--purple-4);
   }
 
   html {

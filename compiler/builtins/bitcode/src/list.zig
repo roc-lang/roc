@@ -805,10 +805,13 @@ pub fn listSingle(alignment: u32, element: Opaque, element_width: usize) callcon
 
 pub fn listAppend(list: RocList, alignment: u32, element: Opaque, element_width: usize, update_mode: UpdateMode) callconv(.C) RocList {
     const old_length = list.len();
-    var output = list.reallocate(alignment, old_length + 1, element_width);
-
-    // we'd need capacity to use update_mode here
-    _ = update_mode;
+    var output: RocList = undefined;
+    if (update_mode == .InPlace and list.capacity >= old_length + 1) {
+        output = list;
+        output.length += 1;
+    } else {
+        output = list.reallocate(alignment, old_length + 1, element_width);
+    }
 
     if (output.bytes) |target| {
         if (element) |source| {

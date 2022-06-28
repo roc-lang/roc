@@ -7,32 +7,29 @@
 use std::path::PathBuf;
 
 use bumpalo::Bump;
-use indoc::indoc;
+use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use ven_pretty::DocAllocator;
 
-use crate::pretty_print::{pretty_print, Ctx};
+use crate::pretty_print::{pretty_print_def, Ctx};
 use roc_can::{
-    abilities::{AbilitiesStore, ResolvedSpecializations},
+    abilities::{AbilitiesStore, ResolvedSpecializations, SpecializationLambdaSets},
     constraint::Constraints,
-    expected::Expected,
-    expr::Expr,
+    def::Def,
+    expr::Declarations,
     module::{ExposedByModule, ExposedForModule, ExposedModuleTypes, RigidVariables},
 };
 use roc_collections::VecSet;
-use roc_constrain::expr::constrain_expr;
+use roc_constrain::expr::constrain_decls;
 use roc_debug_flags::dbg_do;
-use roc_derive_key::{encoding::FlatEncodableKey, DeriveKey, Derived};
+use roc_derive::{synth_var, DerivedModule, StolenFromDerived};
+use roc_derive_key::{DeriveKey, Derived};
 use roc_load_internal::file::{add_imports, default_aliases, LoadedModule, Threading};
 use roc_module::{
-    ident::{ModuleName, TagName},
-    symbol::{IdentIds, Interns, ModuleId, Symbol},
+    ident::TagName,
+    symbol::{Interns, ModuleId, Symbol},
 };
-use roc_mono::derive::{
-    encoding::{self, Env},
-    synth_var,
-};
-use roc_region::all::{LineInfo, Region};
+use roc_region::all::LineInfo;
 use roc_reporting::report::{type_problem, RocDocAllocator};
 use roc_types::{
     pretty_print::{name_and_print_var, DebugPrint},
@@ -40,8 +37,10 @@ use roc_types::{
         AliasVariables, Content, ExposedTypesStorageSubs, FlatType, RecordFields, Subs, SubsIndex,
         SubsSlice, UnionTags, Variable,
     },
-    types::{AliasKind, RecordField, Type},
+    types::{AliasKind, RecordField},
 };
+
+const DERIVED_MODULE: ModuleId = ModuleId::DERIVED;
 
 fn encode_path() -> PathBuf {
     let repo_root = std::env::var("ROC_WORKSPACE_DIR").expect("are you running with `cargo test`?");
@@ -52,30 +51,74 @@ fn encode_path() -> PathBuf {
         .join("Encode.roc")
 }
 
-fn check_derived_typechecks(
-    derived: Expr,
+#[allow(clippy::too_many_arguments)]
+fn assemble_derived_golden(
+    subs: &mut Subs,
+    test_module: ModuleId,
+    interns: &Interns,
+    source_var: Variable,
+    derived_source: &str,
+    typ: Variable,
+    specialization_lsets: SpecializationLambdaSets,
+) -> String {
+    let mut print_var = |var: Variable, print_only_under_alias| {
+        let snapshot = subs.snapshot();
+        let pretty_type = name_and_print_var(
+            var,
+            subs,
+            test_module,
+            interns,
+            DebugPrint {
+                print_lambda_sets: true,
+                print_only_under_alias,
+            },
+        );
+        subs.rollback_to(snapshot);
+        pretty_type
+    };
+
+    let mut pretty_buf = String::new();
+
+    pretty_buf.push_str(&format!("# derived for {}\n", print_var(source_var, false)));
+
+    let pretty_type = print_var(typ, false);
+    pretty_buf.push_str(&format!("# {}\n", &pretty_type));
+
+    let pretty_type_under_aliases = print_var(typ, true);
+    pretty_buf.push_str(&format!("# {}\n", &pretty_type_under_aliases));
+
+    pretty_buf.push_str("# Specialization lambda sets:\n");
+    let mut specialization_lsets = specialization_lsets.into_iter().collect::<Vec<_>>();
+    specialization_lsets.sort_by_key(|(region, _)| *region);
+    for (region, var) in specialization_lsets {
+        let pretty_lset = print_var(var, false);
+        pretty_buf.push_str(&format!("#   @<{}>: {}\n", region, pretty_lset));
+    }
+
+    pretty_buf.push_str(derived_source);
+
+    pretty_buf
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_derived_typechecks_and_golden(
+    derived_def: Def,
     test_module: ModuleId,
     mut test_subs: Subs,
     interns: &Interns,
     exposed_encode_types: ExposedTypesStorageSubs,
     encode_abilities_store: AbilitiesStore,
-    expected_type: &str,
+    source_var: Variable,
+    derived_program: &str,
+    specialization_lsets: SpecializationLambdaSets,
+    check_golden: impl Fn(&str),
 ) {
     // constrain the derived
     let mut constraints = Constraints::new();
-    let mut env = roc_constrain::expr::Env {
-        rigids: Default::default(),
-        resolutions_to_make: Default::default(),
-        home: test_module,
-    };
-    let real_type = test_subs.fresh_unnamed_flex_var();
-    let constr = constrain_expr(
-        &mut constraints,
-        &mut env,
-        Region::zero(),
-        &derived,
-        Expected::NoExpectation(Type::Variable(real_type)),
-    );
+    let def_var = derived_def.expr_var;
+    let mut decls = Declarations::new();
+    decls.push_def(derived_def);
+    let constr = constrain_decls(&mut constraints, test_module, &decls);
 
     // the derived depends on stuff from Encode, so
     //   - we need to add those dependencies as imported on the constraint
@@ -154,16 +197,26 @@ fn check_derived_typechecks(
             .render_raw(80, &mut roc_reporting::report::CiWrite::new(&mut buf))
             .unwrap();
 
-        panic!("Derived does not typecheck:\n{}", buf);
+        panic!(
+            "Derived does not typecheck:\n{}\nDerived def:\n{}",
+            buf, derived_program
+        );
     }
 
-    let pretty_type =
-        name_and_print_var(real_type, subs, test_module, interns, DebugPrint::NOTHING);
+    let golden = assemble_derived_golden(
+        subs,
+        test_module,
+        interns,
+        source_var,
+        derived_program,
+        def_var,
+        specialization_lsets,
+    );
 
-    assert_eq!(expected_type, pretty_type);
+    check_golden(&golden)
 }
 
-fn derive_test<S>(synth_input: S, expected_type: &str, expected_source: &str)
+fn derive_test<S>(synth_input: S, check_golden: impl Fn(&str))
 where
     S: FnOnce(&mut Subs) -> Variable,
 {
@@ -173,8 +226,9 @@ where
 
     let LoadedModule {
         mut interns,
-        exposed_types_storage: mut exposed_encode_types,
+        exposed_types_storage: exposed_encode_types,
         abilities_store,
+        resolved_specializations,
         ..
     } = roc_load_internal::file::load_and_typecheck_str(
         &arena,
@@ -188,45 +242,52 @@ where
     )
     .unwrap();
 
-    let test_module = interns.module_id(&ModuleName::from("Test"));
-    let mut test_subs = Subs::new();
-    interns
-        .all_ident_ids
-        .insert(test_module, IdentIds::default());
+    let mut derived_module = DerivedModule::default();
 
-    let signature_var = synth_input(&mut test_subs);
-    let key = get_key(&test_subs, signature_var);
+    let mut stolen = derived_module.steal();
+    let source_var = synth_input(&mut stolen.subs);
+    let key = get_key(&stolen.subs, source_var);
+    derived_module.return_stolen(stolen);
 
-    let mut env = Env {
-        home: test_module,
-        arena: &arena,
-        subs: &mut test_subs,
-        ident_ids: interns.all_ident_ids.get_mut(&test_module).unwrap(),
-        exposed_encode_types: &mut exposed_encode_types,
-        derived_symbols: &Default::default(),
-    };
+    let mut exposed_by_module = ExposedByModule::default();
+    exposed_by_module.insert(
+        ModuleId::ENCODE,
+        ExposedModuleTypes {
+            exposed_types_storage_subs: exposed_encode_types.clone(),
+            resolved_specializations,
+        },
+    );
 
-    let derived = encoding::derive_to_encoder(&mut env, key);
-    test_module.register_debug_idents(interns.all_ident_ids.get(&test_module).unwrap());
+    let (_derived_symbol, derived_def, specialization_lsets) =
+        derived_module.get_or_insert(&exposed_by_module, key);
+    let specialization_lsets = specialization_lsets.clone();
+    let derived_def = derived_def.clone();
+
+    let StolenFromDerived { ident_ids, subs } = derived_module.steal();
+
+    interns.all_ident_ids.insert(DERIVED_MODULE, ident_ids);
+    DERIVED_MODULE.register_debug_idents(interns.all_ident_ids.get(&DERIVED_MODULE).unwrap());
 
     let ctx = Ctx { interns: &interns };
-    let derived_program = pretty_print(&ctx, &derived);
-    assert_eq!(expected_source, derived_program);
+    let derived_program = pretty_print_def(&ctx, &derived_def);
 
-    check_derived_typechecks(
-        derived,
-        test_module,
-        test_subs,
+    check_derived_typechecks_and_golden(
+        derived_def,
+        DERIVED_MODULE,
+        subs,
         &interns,
         exposed_encode_types,
         abilities_store,
-        expected_type,
+        source_var,
+        &derived_program,
+        specialization_lsets,
+        check_golden,
     );
 }
 
-fn get_key(subs: &Subs, var: Variable) -> FlatEncodableKey {
+fn get_key(subs: &Subs, var: Variable) -> DeriveKey {
     match Derived::encoding(subs, var) {
-        Ok(Derived::Key(DeriveKey::ToEncoder(repr))) => repr,
+        Ok(Derived::Key(key)) => key,
         _ => unreachable!(),
     }
 }
@@ -452,145 +513,215 @@ fn immediates() {
     check_immediate(v!(DEC), Symbol::ENCODE_DEC);
     check_immediate(v!(F32), Symbol::ENCODE_F32);
     check_immediate(v!(F64), Symbol::ENCODE_F64);
-    check_immediate(v!(STR), Symbol::ENCODE_STRING);
+}
+
+#[test]
+fn string() {
+    derive_test(v!(STR), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for Str
+        # Str -[[toEncoder_string(0)]]-> Encoder fmt | fmt has EncoderFormatting
+        # Str -[[toEncoder_string(0)]]-> (List U8, fmt -[[custom(2) Str]]-> List U8) | fmt has EncoderFormatting
+        # Specialization lambda sets:
+        #   @<1>: [[toEncoder_string(0)]]
+        #   @<2>: [[custom(2) Str]]
+        #Derived.toEncoder_string =
+          \#Derived.s ->
+            Encode.custom \#Derived.bytes, #Derived.fmt ->
+              Encode.appendWith #Derived.bytes (Encode.string #Derived.s) #Derived.fmt
+        "###
+        )
+    })
 }
 
 #[test]
 fn empty_record() {
-    derive_test(
-        v!(EMPTY_RECORD),
-        "{} -> Encoder fmt | fmt has EncoderFormatting",
-        indoc!(
-            r#"
-            \Test.0 -> Encode.record []
-            "#
-        ),
-    )
+    derive_test(v!(EMPTY_RECORD), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for {}
+        # {} -[[toEncoder_{}(0)]]-> Encoder fmt | fmt has EncoderFormatting
+        # {} -[[toEncoder_{}(0)]]-> (List U8, fmt -[[custom(2) {}]]-> List U8) | fmt has EncoderFormatting
+        # Specialization lambda sets:
+        #   @<1>: [[toEncoder_{}(0)]]
+        #   @<2>: [[custom(2) {}]]
+        #Derived.toEncoder_{} =
+          \#Derived.rcd ->
+            Encode.custom \#Derived.bytes, #Derived.fmt ->
+              Encode.appendWith #Derived.bytes (Encode.record []) #Derived.fmt
+        "###
+        )
+    })
 }
 
 #[test]
 fn zero_field_record() {
-    derive_test(
-        v!({}),
-        "{} -> Encoder fmt | fmt has EncoderFormatting",
-        indoc!(
-            r#"
-            \Test.0 -> Encode.record []
-            "#
-        ),
-    )
+    derive_test(v!({}), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for {}
+        # {} -[[toEncoder_{}(0)]]-> Encoder fmt | fmt has EncoderFormatting
+        # {} -[[toEncoder_{}(0)]]-> (List U8, fmt -[[custom(2) {}]]-> List U8) | fmt has EncoderFormatting
+        # Specialization lambda sets:
+        #   @<1>: [[toEncoder_{}(0)]]
+        #   @<2>: [[custom(2) {}]]
+        #Derived.toEncoder_{} =
+          \#Derived.rcd ->
+            Encode.custom \#Derived.bytes, #Derived.fmt ->
+              Encode.appendWith #Derived.bytes (Encode.record []) #Derived.fmt
+        "###
+        )
+    })
 }
 
 #[test]
 fn one_field_record() {
-    derive_test(
-        v!({ a: v!(U8), }),
-        "{ a : val } -> Encoder fmt | fmt has EncoderFormatting, val has Encoding",
-        indoc!(
-            r#"
-            \Test.0 -> Encode.record [{ value: Encode.toEncoder Test.0.a, key: "a", }]
-            "#
-        ),
-    )
+    derive_test(v!({ a: v!(U8), }), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for { a : U8 }
+        # { a : val } -[[toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting, val has Encoding
+        # { a : val } -[[toEncoder_{a}(0)]]-> (List U8, fmt -[[custom(2) { a : val }]]-> List U8) | fmt has EncoderFormatting, val has Encoding
+        # Specialization lambda sets:
+        #   @<1>: [[toEncoder_{a}(0)]]
+        #   @<2>: [[custom(2) { a : val }]] | val has Encoding
+        #Derived.toEncoder_{a} =
+          \#Derived.rcd ->
+            Encode.custom \#Derived.bytes, #Derived.fmt ->
+              Encode.appendWith #Derived.bytes (Encode.record [
+                { value: Encode.toEncoder #Derived.rcd.a, key: "a", },
+              ]) #Derived.fmt
+        "###
+        )
+    })
 }
 
 #[test]
 fn two_field_record() {
-    derive_test(
-        v!({ a: v!(U8), b: v!(STR), }),
-        "{ a : val, b : a } -> Encoder fmt | a has Encoding, fmt has EncoderFormatting, val has Encoding",
-        indoc!(
-            r#"
-            \Test.0 ->
-              Encode.record [
-                { value: Encode.toEncoder Test.0.a, key: "a", },
-                { value: Encode.toEncoder Test.0.b, key: "b", },
-              ]
-            "#
-        ),
-    )
+    derive_test(v!({ a: v!(U8), b: v!(STR), }), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for { a : U8, b : Str }
+        # { a : val, b : a } -[[toEncoder_{a,b}(0)]]-> Encoder fmt | a has Encoding, fmt has EncoderFormatting, val has Encoding
+        # { a : val, b : a } -[[toEncoder_{a,b}(0)]]-> (List U8, fmt -[[custom(2) { a : val, b : a }]]-> List U8) | a has Encoding, fmt has EncoderFormatting, val has Encoding
+        # Specialization lambda sets:
+        #   @<1>: [[toEncoder_{a,b}(0)]]
+        #   @<2>: [[custom(2) { a : val, b : a }]] | a has Encoding, val has Encoding
+        #Derived.toEncoder_{a,b} =
+          \#Derived.rcd ->
+            Encode.custom \#Derived.bytes, #Derived.fmt ->
+              Encode.appendWith #Derived.bytes (Encode.record [
+                { value: Encode.toEncoder #Derived.rcd.a, key: "a", },
+                { value: Encode.toEncoder #Derived.rcd.b, key: "b", },
+              ]) #Derived.fmt
+        "###
+        )
+    })
 }
 
 #[test]
 #[ignore = "NOTE: this would never actually happen, because [] is uninhabited, and hence toEncoder can never be called with a value of []!
 Rightfully it induces broken assertions in other parts of the compiler, so we ignore it."]
 fn empty_tag_union() {
-    derive_test(
-        v!(EMPTY_TAG_UNION),
-        "[] -> Encoder fmt | fmt has EncoderFormatting",
-        indoc!(
-            r#"
-            \Test.0 -> when Test.0 is
+    derive_test(v!(EMPTY_TAG_UNION), |golden| {
+        assert_snapshot!(
+            golden,
+            @r#"
             "#
-        ),
-    )
+        )
+    })
 }
 
 #[test]
 fn tag_one_label_zero_args() {
-    derive_test(
-        v!([A]),
-        "[A] -> Encoder fmt | fmt has EncoderFormatting",
-        indoc!(
-            r#"
-            \Test.0 -> when Test.0 is A -> Encode.tag "A" []
-            "#
-        ),
-    )
+    derive_test(v!([A]), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for [A]
+        # [A] -[[toEncoder_[A 0](0)]]-> Encoder fmt | fmt has EncoderFormatting
+        # [A] -[[toEncoder_[A 0](0)]]-> (List U8, fmt -[[custom(2) [A]]]-> List U8) | fmt has EncoderFormatting
+        # Specialization lambda sets:
+        #   @<1>: [[toEncoder_[A 0](0)]]
+        #   @<2>: [[custom(2) [A]]]
+        #Derived.toEncoder_[A 0] =
+          \#Derived.tag ->
+            Encode.custom \#Derived.bytes, #Derived.fmt ->
+              Encode.appendWith #Derived.bytes (when #Derived.tag is
+                A -> Encode.tag "A" []) #Derived.fmt
+        "###
+        )
+    })
 }
 
 #[test]
 fn tag_one_label_two_args() {
-    derive_test(
-        v!([A v!(U8) v!(STR)]),
-        "[A val a] -> Encoder fmt | a has Encoding, fmt has EncoderFormatting, val has Encoding",
-        indoc!(
-            r#"
-            \Test.0 ->
-              when Test.0 is
-                A Test.1 Test.2 ->
-                  Encode.tag "A" [Encode.toEncoder Test.1, Encode.toEncoder Test.2]
-            "#
-        ),
-    )
+    derive_test(v!([A v!(U8) v!(STR)]), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for [A U8 Str]
+        # [A val a] -[[toEncoder_[A 2](0)]]-> Encoder fmt | a has Encoding, fmt has EncoderFormatting, val has Encoding
+        # [A val a] -[[toEncoder_[A 2](0)]]-> (List U8, fmt -[[custom(4) [A val a]]]-> List U8) | a has Encoding, fmt has EncoderFormatting, val has Encoding
+        # Specialization lambda sets:
+        #   @<1>: [[toEncoder_[A 2](0)]]
+        #   @<2>: [[custom(4) [A val a]]] | a has Encoding, val has Encoding
+        #Derived.toEncoder_[A 2] =
+          \#Derived.tag ->
+            Encode.custom \#Derived.bytes, #Derived.fmt ->
+              Encode.appendWith #Derived.bytes (when #Derived.tag is
+                A #Derived.2 #Derived.3 ->
+                  Encode.tag "A" [
+                    Encode.toEncoder #Derived.2,
+                    Encode.toEncoder #Derived.3,
+                  ]) #Derived.fmt
+        "###
+        )
+    })
 }
 
 #[test]
 fn tag_two_labels() {
-    derive_test(
-        v!([A v!(U8) v!(STR) v!(U16), B v!(STR)]),
-        "[A val a b, B c] -> Encoder fmt | a has Encoding, b has Encoding, c has Encoding, fmt has EncoderFormatting, val has Encoding",
-        indoc!(
-            r#"
-            \Test.0 ->
-              when Test.0 is
-                A Test.1 Test.2 Test.3 ->
+    derive_test(v!([A v!(U8) v!(STR) v!(U16), B v!(STR)]), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for [A U8 Str U16, B Str]
+        # [A val a b, B c] -[[toEncoder_[A 3,B 1](0)]]-> Encoder fmt | a has Encoding, b has Encoding, c has Encoding, fmt has EncoderFormatting, val has Encoding
+        # [A val a b, B c] -[[toEncoder_[A 3,B 1](0)]]-> (List U8, fmt -[[custom(6) [A val a b, B c]]]-> List U8) | a has Encoding, b has Encoding, c has Encoding, fmt has EncoderFormatting, val has Encoding
+        # Specialization lambda sets:
+        #   @<1>: [[toEncoder_[A 3,B 1](0)]]
+        #   @<2>: [[custom(6) [A val a b, B c]]] | a has Encoding, b has Encoding, c has Encoding, val has Encoding
+        #Derived.toEncoder_[A 3,B 1] =
+          \#Derived.tag ->
+            Encode.custom \#Derived.bytes, #Derived.fmt ->
+              Encode.appendWith #Derived.bytes (when #Derived.tag is
+                A #Derived.2 #Derived.3 #Derived.4 ->
                   Encode.tag "A" [
-                    Encode.toEncoder Test.1,
-                    Encode.toEncoder Test.2,
-                    Encode.toEncoder Test.3,
+                    Encode.toEncoder #Derived.2,
+                    Encode.toEncoder #Derived.3,
+                    Encode.toEncoder #Derived.4,
                   ]
-                B Test.4 -> Encode.tag "B" [Encode.toEncoder Test.4]
-            "#
-        ),
-    )
+                B #Derived.5 -> Encode.tag "B" [Encode.toEncoder #Derived.5])
+              #Derived.fmt
+        "###
+        )
+    })
 }
 
 #[test]
 fn recursive_tag_union() {
-    derive_test(
-        v!([Nil, Cons v!(U8) v!(*lst) ] as lst),
-        "[Cons val a, Nil] -> Encoder fmt | a has Encoding, fmt has EncoderFormatting, val has Encoding",
-        indoc!(
-            r#"
-            \Test.0 ->
-              when Test.0 is
-                Cons Test.1 Test.2 ->
-                  Encode.tag "Cons" [Encode.toEncoder Test.1, Encode.toEncoder Test.2]
-                Nil -> Encode.tag "Nil" []
-            "#
-        ),
-    )
+    derive_test(v!([Nil, Cons v!(U8) v!(*lst) ] as lst), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for [Cons U8 $rec, Nil] as $rec
+        # [Cons val a, Nil] -[[toEncoder_[Cons 2,Nil 0](0)]]-> Encoder fmt | a has Encoding, fmt has EncoderFormatting, val has Encoding
+        # [Cons val a, Nil] -[[toEncoder_[Cons 2,Nil 0](0)]]-> (List U8, fmt -[[custom(4) [Cons val a, Nil]]]-> List U8) | a has Encoding, fmt has EncoderFormatting, val has Encoding
+        # Specialization lambda sets:
+        #   @<1>: [[toEncoder_[Cons 2,Nil 0](0)]]
+        #   @<2>: [[custom(4) [Cons val a, Nil]]] | a has Encoding, val has Encoding
+        #Derived.toEncoder_[Cons 2,Nil 0] =
+          \#Derived.tag ->
+            Encode.custom \#Derived.bytes, #Derived.fmt ->
+              Encode.appendWith #Derived.bytes (when #Derived.tag is
+                Cons #Derived.2 #Derived.3 ->
+                  Encode.tag "Cons" [
+                    Encode.toEncoder #Derived.2,
+                    Encode.toEncoder #Derived.3,
+                  ]
+                Nil -> Encode.tag "Nil" []) #Derived.fmt
+        "###
+        )
+    })
 }
 
 // }}} deriver tests

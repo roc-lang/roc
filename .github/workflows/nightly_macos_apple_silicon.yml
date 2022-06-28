@@ -2,7 +2,7 @@ on:
   schedule:
     - cron:  '0 9 * * *'
 
-name: Nightly Release Apple Silicon
+name: Nightly Release macOS Apple Silicon
 
 jobs:
   test-and-build:

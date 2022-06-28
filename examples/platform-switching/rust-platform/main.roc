@@ -1,4 +1,4 @@
-platform "hello-world-in-web-assembly"
+platform "echo-in-rust"
     requires {} { main : Str }
     exposes []
     packages {}

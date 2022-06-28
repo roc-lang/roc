@@ -13,6 +13,5 @@ defaults to running a file named `main.roc`. Other `roc` commands (like `roc bui
 
 This uses a very simple platform which does nothing more than printing the string you give it.
 
-The line `main = "Hello, World!\n"` sets this string to be `"Hello, World!"` with a newline at the end, and the lines `packages { pf: "c-platform/hello.roc" }` and `provides [main] to pf` specify that the `c-platform/` directory contains this app's platform.
+The line `main = "Hello, World!\n"` sets this string to be `"Hello, World!"` with a newline at the end, and the lines `packages { pf: "platform/main.roc" }` and `provides [main] to pf` specify that the `platform/` directory contains this app's platform.
 
-This platform is called `c-platform` because its low-level code is written in C. There's also a `rust-platform`, `zig-platform`, and so on; if you like, you can try switching `"c-platform/main.roc"` to `"zig-platform/main.roc"` or `"rust-platform/main.roc"` to try one of those platforms instead. They all do the same thing, so the application won't look any different, but if you want to start building your own platforms, this Hello World example gives you some very simple platforms to use as starting points too.

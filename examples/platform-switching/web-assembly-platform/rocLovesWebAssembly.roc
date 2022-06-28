@@ -1,6 +1,6 @@
-app "helloWeb"
+app "rocLovesWebAssembly"
     packages { pf: "main.roc" }
     imports []
     provides [main] to pf
 
-main = "Hello, World!\n"
+main = "Roc <3 Web Assembly!\n"

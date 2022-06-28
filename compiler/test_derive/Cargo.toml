@@ -16,7 +16,7 @@ roc_builtins = { path = "../builtins" }
 roc_load_internal = { path = "../load_internal" }
 roc_can = { path = "../can" }
 roc_derive_key = { path = "../derive_key" }
-roc_mono = { path = "../mono" }
+roc_derive = { path = "../derive", features = ["debug-derived-symbols"] }
 roc_target = { path = "../roc_target" }
 roc_types = { path = "../types" }
 roc_reporting = { path = "../../reporting" }
@@ -29,3 +29,4 @@ lazy_static = "1.4.0"
 indoc = "1.0.3"
 ven_pretty = { path = "../../vendor/pretty" }
 pretty_assertions = "1.0.0"
+insta = "1.15.0"
