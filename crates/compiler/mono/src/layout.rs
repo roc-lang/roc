@@ -845,12 +845,12 @@ impl Clone for MultimorphicNames {
 }
 
 impl MultimorphicNames {
-    fn get<'b>(&self, name: Symbol, captures_layouts: &'b [Layout<'b>]) -> Option<Symbol> {
-        self.0.lock().unwrap().get(name, captures_layouts)
-    }
-
-    fn insert<'b>(&mut self, name: Symbol, captures_layouts: &'b [Layout<'b>]) -> Symbol {
-        self.0.lock().unwrap().insert(name, captures_layouts)
+    fn get_or_insert<'b>(&self, name: Symbol, captures_layouts: &'b [Layout<'b>]) -> Symbol {
+        let mut table = self.0.lock().unwrap();
+        match table.get(name, captures_layouts) {
+            Some(symbol) => symbol,
+            None => table.insert(name, captures_layouts),
+        }
     }
 
     /// Assumes there is only one clone still alive.
@@ -1178,10 +1178,7 @@ impl<'a> LambdaSet<'a> {
                     };
 
                     let lambda_name = if is_multimorphic {
-                        let alias = match multimorphic_names.get(*function_symbol, arguments) {
-                            Some(alias) => alias,
-                            None => multimorphic_names.insert(*function_symbol, arguments),
-                        };
+                        let alias = multimorphic_names.get_or_insert(*function_symbol, arguments);
 
                         has_multimorphic = true;
 
