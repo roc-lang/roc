@@ -84,6 +84,10 @@ a {
   color: var(--type-signature-color);
 }
 
+.entry-name a:visited {
+  color: var(--type-signature-color);
+}
+
 .pkg-full-name a {
   padding-top: 12px;
   padding-bottom: 16px;
