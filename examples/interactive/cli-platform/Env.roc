@@ -1,3 +1,7 @@
+interface Env
+    exposes [args, argsUtf8, argList, ...]
+    imports []
+
 ## Returns a list of the program's command-line arguments.
 ##
 ## Command-line arguments are not always valid Unicode, so this provides them
@@ -24,6 +28,56 @@ walkArgs :
     state,
     (state, List U8 -> Task state err fx)
     -> Task state err [Read [Args]*]fx
+
+walkArgs :
+    state,
+    (state, List U8 -> state)
+    -> Task state * [Read [Args]*]*
+
+# How to print: "Processing arg number {argIndex}..."
+
+main =
+    {} <- Stdout.line "Starting..." |> Task.await
+
+    { answer } = Env.walkArgs { index: 0, answer: [] } \state, arg ->
+        answer = List.append state.answer arg
+
+        { answer, index: state.index + 1 }
+
+    answerStr = Num.toStr answer
+
+    Stdout.line "Answer: \(answerStr)"
+
+main =
+    {} <- Stdout.line "Starting..." |> Task.await
+
+    tasks = Env.walkArgs (Task.succeed { index: 0, answer: [] }) \prev, arg ->
+        state <- Task.await prev
+        str = Num.toStr (state.index + 1) ##################
+        {} <- Stdout.line "Processing arg number \(str)..." |> Task.await
+        answer = List.append state.answer arg
+
+        Task.succeed { answer, index: state.index + 1 }
+
+    { answer } <- Task.join tasks |> Task.await
+    answerStr = Num.toStr answer ####################
+
+    Stdout.line "Answer: \(answerStr)"
+
+main =
+    {} <- Stdout.line "Starting..." |> Task.await
+
+    task = Env.walkArgs { index: 0, answer: [] } \state, arg ->
+        str = Num.toStr (state.index + 1)
+        {} <- Stdout.line "Processing arg number \(str)..." |> Task.await
+        answer = List.append state.answer arg
+
+        Task.succeed { answer, index: state.index + 1 }
+
+    { answer } <- Task.await task
+    answerStr = Num.toStr answer
+
+    Stdout.line "Answer: \(answerStr)"
 
 
 # (state, List U8 -> state)
@@ -134,3 +188,77 @@ charset : Task Charset * [Read [Env]*]*
 # Also, env vars are literally global mutable variables, so...why are you setting them?
 # There's always a workaround involving passing values around!
 # Disallowing setEnv guarantees (assuming the host cooperates) that locale won't change.
+
+
+
+
+- super low-level file I/O
+- streaming I/O
+
+
+1. download zip from S3
+1. extract it
+1. run headless libreoffice on it
+
+
+--------- 10G CSV file ------------
+1. get something from network [4K chunks]
+1. decompress incrementally while downloading
+1. parse incrementally while downloading
+
+decompressAndParseDecoder =
+    # decoder that runs first decompress from List U8 into List U8, then decode that into CSV
+
+ReadStream.openHttps urlInfo decompressAndParseDecoder
+    |> ReadStream.readChunks 4096 [] \entries, entry -> List.append entries entry
+
+ReadStream.openHttps urlInfo decompressAndParseDecoder
+    |> ReadStream.readChunks 4096 (Task.succeed []) \prev, entry ->
+        { entries, totalBytes, bytesProcessed } <- Task.await prev
+
+        {} <- Stdout.line "\(percentage)..." |> Task.await
+
+        Task.succeed (List.append entries entry)
+
+RocBin
+
+#    -> Task (List CsvEntry) (ReadErr [DecodeErr Decode.Err]*) fx
+
+readChunks 4 JSON.fromUtf8
+
+1234
+
+👍 decoding succeeded, answer is 1234, AND I could keep going, I only stopped due to eof
+
+56.78
+
+👍 decoding succeeded, answer is 56.78, AND I could keep going, I only stopped due to eof
+
+"ab"
+
+👍 decoding succeeded, answer is "ab", and I could NOT keep going, there better not be more.
+
+"a"
+
+👍 decoding succeeded, answer is "a", and found leftovers of "\n"
+
+--------- csv ----------
+👍 decoding succeeded, answer is [1, 2, 3], and found leftovers with unclosed quotes
+
+DecodingResult ok err : [
+    OkAndCouldKeepGoing ok
+]
+
+123456.78
+
+
+
+
+
+
+
+
+
+
+
+

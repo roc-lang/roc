@@ -9,9 +9,18 @@ interface WriteStream
 ## When you open a file, for example using [openRead], that file will remain open as long as
 ## the [Stream] is still referenced anywhere in the program. Once the program no longer has
 ## a reference to the [Stream], the corresponding file will be closed automatically.
-WriteStream output permissions := [
+WriteStream input permissions := [
     Stdio {
         # We only allow writing strings to stdio, not arbitrary bytes, because on Windows
+
+
+
+        # TODO is this true? Can we write UTF-8 to Windows if the code page is set?
+        # TODO: if this is true, how do I send e.g. Ctrl-D to stdin? Can that be done? Should it?
+
+
+
+
         # stdio is UTF-16, whereas on Linux it's UTF-8. We need to know the text encoding
         # of the bytes you're sending it, so that we can convert to the native encoding -
         # and sending a Str is the most ergonomic way to ensure that.
@@ -19,19 +28,22 @@ WriteStream output permissions := [
         type : [Stdin, Stdout, Stderr],
     },
     NeedsClosing {
+        # How to translate the `input` type into a `List U8`.
+        # Functions like `map` wrap this in other functions.
         toBytes : input -> List U8,
 
+        # A stream should only ever be created in the host,
+        # because only the host can create an entry into the "needs closing on dealloc" hashmap!
+        #
         # A Windows HANDLE is an isize, and a UNIX file descriptor is i32.
         # A Nat will always be enough to fit either, on a 32-bit or 64-bit target.
         # On a 16-bit target, Nat will be too small, meaning that you can only have
         # ~65,000 files open at a time on your 16-bit target. That's probably way
         # more than you can have open on that target in practice anyway, so this seems fine.
-        # If somehow that does turn out to be a problem, we can always make this a 64-bit integer,
-        # which will be bigger than necessary on 32-bit and 16-bit targets, but will work
-        # everywhere.
-        #
-        # A stream should only ever be created in the host,
-        # because only the host can create an entry into the "needs closing on dealloc" hashmap!
+        # If somehow that does turn out to be a problem, we can always make this two different
+        # variants, e.g. FdNeedsClosing and HandleNeedsClosing, with Fd being I32 and Handle
+        # being Nat. But for now, this would be an extra conditional and more code complexity
+        # for no benefit in practice.
         handleOrFd : Nat,
 
         # TODO update everything below this line to reflect that now we do our own buffering,
@@ -234,13 +246,27 @@ flushAll : Task (StreamWriteErr *) [Write a]*
 
 ## ## Standard I/O
 
+############# TODO IPC can happen over stdin/stdout, so: use for List U8 over Str there.
+#############      could offer both Str and List U8 alternatives.
+
+writeUtf8 : Path, Str -> Task {} (WriteErr *) [Write [Disk]*]*
+
 # NOTE: this has to be Str because Windows uses UTF-16 stdio and Linux uses UTF-8,
 # so if we know it's UTF-8 strings on the Roc side, we can translate on the Windows side.
-stdin : WriteStream Str [Write [Stdin]]*
+stdin : WriteStream Str [Write [Stdin]*]*
 stdin = @WriteStream (Stdio { type: Stdin, toStr: \str -> str })
 
-stdout : WriteStream Str [Write [Stdout]]*
+stdout : WriteStream Str [Write [Stdout]*]*
 stdout = @WriteStream (Stdio { type: Stdout, toStr: \str -> str })
 
-stderr : WriteStream Str [Write [Stderr]]*
+stderr : WriteStream Str [Write [Stderr]*]*
 stderr = @WriteStream (Stdio { type: Stderr, toStr: \str -> str })
+
+stdinAppend : WriteStream Str [Append [Stdin]*]*
+stdinAppend = @WriteStream (Stdio { type: Stdin, toStr: \str -> str })
+
+stdoutAppend : WriteStream Str [Append [Stdout]*]*
+stdoutAppend = @WriteStream (Stdio { type: Stdout, toStr: \str -> str })
+
+stderrAppend : WriteStream Str [Append [Stderr]*]*
+stderrAppend = @WriteStream (Stdio { type: Stderr, toStr: \str -> str })

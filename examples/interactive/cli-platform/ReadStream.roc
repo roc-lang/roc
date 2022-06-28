@@ -2,6 +2,8 @@ interface ReadStream
     exposes [Stream, OpenErr, MetadataErr, ReadErr, WriteErr, fromStr, toStr]
     imports [File.{ Metadata }]
 
+ReadStream (List CsvEntry) [Read [Network]*]*
+
 ## A stream represents a buffered [file descriptor](https://en.wikipedia.org/wiki/File_descriptor)
 ## on UNIX systems or a buffered [file handle](https://docs.microsoft.com/en-us/windows/win32/fileio/file-handles)
 ## on Windows. The buffer size is 8192 bytes.
@@ -9,8 +11,8 @@ interface ReadStream
 ## When you open a file, for example using [openRead], that file will remain open as long as
 ## the [Stream] is still referenced anywhere in the program. Once the program no longer has
 ## a reference to the [Stream], the corresponding file will be closed automatically.
-ReadStream output permissions := {
-    fromBytes : List U8 -> Result input Decode.Err,
+ReadStream output fx := {
+    fromBytes : List U8 -> Result output Decode.Err,
 
     # A Windows HANDLE is an isize, and a UNIX file descriptor is i32.
     # A Nat will always be enough to fit either, on a 32-bit or 64-bit target.
@@ -61,6 +63,64 @@ ReadStream output permissions := {
     ],
 } # has no abilities, not even Eq, because it contains a function!
 
+ReadStream output permissions := [
+    Stdio {
+        # We make sure to provide this function with UTF-8 bytes only.
+        fromUtf8 : List U8 -> Result output Decode.Err,
+        type : [Stdin, Stdout, Stderr],
+    },
+    NeedsClosing {
+        # How to translate a list of bytes into the `output` type.
+        # Functions like `map` wrap this in other functions.
+        fromBytes : List U8 -> Result output Decode.Err,
+
+        # A stream should only ever be created in the host,
+        # because only the host can create an entry into the "needs closing on dealloc" hashmap!
+        #
+        # A Windows HANDLE is an isize, and a UNIX file descriptor is i32.
+        # A Nat will always be enough to fit either, on a 32-bit or 64-bit target.
+        # On a 16-bit target, Nat will be too small, meaning that you can only have
+        # ~65,000 files open at a time on your 16-bit target. That's probably way
+        # more than you can have open on that target in practice anyway, so this seems fine.
+        # If somehow that does turn out to be a problem, we can always make this two different
+        # variants, e.g. FdNeedsClosing and HandleNeedsClosing, with Fd being I32 and Handle
+        # being Nat. But for now, this would be an extra conditional and more code complexity
+        # for no benefit in practice.
+        handleOrFd : Nat,
+
+        # TODO update everything below this line to reflect that now we do our own buffering,
+        # and the buffer length is stored on the heap at the beginning of the buffer allocation
+        # (right after the refcount). Buffers for stdio are statically allocated, but buffers for
+        # other files are allocated per-open. Windows has strict alignment requirements for
+        # buffers, so we make sure to account for those when giving roc_alloc its alignment arg
+        # on Windows. We want to do this allocation ourselves because we need an allocation anyway
+        # in order to do the reference counting, and having libc do a separate allocation for
+        # buffering would be redundant.
+        # ------------------------------------------------------------------------------------a
+        # Standard I/O streams (stdout, stderr, stdin) are always open, so no heap
+        # allocation is needed to track whether there are any references left to them.
+        # Other files need closing, so we use a zero-sized Box to track the reference count.
+        #
+        # These buffers (and the Box, for NeedsClosingUnbuffered) are all allocated to a separate
+        # arena on the heap. This way, in the host's roc_dealloc, whenever it receives a request
+        # to deallocate a pointer, it checks to see if the pointer it received is within the
+        # address space of that arena. If so, then that pointer should have a corresponding entry
+        # in the global hashmap of pointers to file descriptors, which gets an entry inserted
+        # whenever we do an `open`.
+        #
+        # The `Buffered` variant does not distinguish between being a buffer for stdio or not,
+        # but when it's initially allocated, if it's for a stdio stream, its buffer gets
+        # allocated using normal roc_alloc, and no entry is made in the file descriptor hashmap.
+        # That way, it is never automatically closed (as it must not be).
+        #
+        # Separately, unbuffered stdio actually uses the Buffered variant - but with an empty list.
+        # This way there's no heap allocation (unlike if we used Unbuffered, which always has a Box),
+        # and we also don't need an extra variant causing an extra conditional branch (or jump table).
+        buffer : Box [],
+        # This is a (Box []) to emphasize that this should never be created outside the host,
+        # because only the host can create an entry into the "needs closing on dealloc" hashmap!
+    }
+] # has no abilities, not even Eq, because it contains a function!
 
 ## ## Opening a ReadStream
 
@@ -73,28 +133,29 @@ ReadStream output permissions := {
 ## This has a `Metadata` effect because, like [File.exists], it tells whether a file exists on disk.
 openPath :
     Path,
-    fmt # Can be Encode.bytes, which is a no-op EncodeFormat
+    fmt # Can be Decode.bytes, which is a no-op DecodeFormat
     -> Task
         (ReadStream output [Read [Disk]*]*)
         (OpenFileErr *)
         [Metadata]*
     | output has Decode
     | fmt has DecodeFormat
-# TODO what's the win32 call version of `open` in UNIX?
 
 openSocket :
     SocketInfo,
     fmt
     -> Task
-        (ReadStream output [Read [Socket]]*)
+        (ReadStream output [Net]*)
         (OpenSocketErr *)
         *
     | output has Decode
     | fmt has DecodeFormat
 
+# TODO open tempfiles, named pipes, etc.
+
 ## ## Transforming Data
 
-map : ReadStream a err fx, (a -> b) -> ReadStream b err fx
+map : ReadStream a fx, (a -> b) -> ReadStream b fx
 map = \@ReadStream stream, fromAtoB ->
     @ReadStream { stream &
         fromBytes: \bytes ->
@@ -144,17 +205,17 @@ byteSlice :
 # Then if we have a unique reference to it in the host, we can write directly into it for the
 # next iteration - so, no reallocations!
 readChunks :
-    ReadStream ok fx
+    ReadStream output fx
     Nat,
     state,
-    (state, ok -> Task state (ReadErr [DecodeErr Decode.Err]err) fx)
-    -> Task state (ReadErr [DecodeErr Decode.Err]err) fx
+    (state, output -> state)
+    -> Task state (ReadErr [DecodeErr Decode.Err]*) fx
 
 readChunksUntil :
     ReadStream ok err fx
     Nat,
     state,
-    (state, ok -> Task [Done, Continue state] (ReadErr [DecodeErr Decode.Err]err) fx)
+    (state, ok -> [Done state, Continue state])
     -> Task state (ReadErr [DecodeErr Decode.Err]err) fx
 
 
@@ -233,7 +294,7 @@ WriteErr a : [
 ]a
 MetadataErr : []
 
-
 ## Call [ReadStream.read] on the given [ReadStream], and pass its output to [WriteStream.append]
 ## on the given [WriteStream]. Repeat until the [ReadStream] runs out of data.
-pipeInto : ReadStream data fx, WriteStream data fx -> Task (StreamReadErr (StreamWriteErr *)) fx
+## Nat == chunk size
+pipeInto : ReadStream data fx, WriteStream data fx, Nat -> Task (StreamReadErr (StreamWriteErr *)) fx

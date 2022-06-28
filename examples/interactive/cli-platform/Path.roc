@@ -97,9 +97,6 @@ fromBytes = \bytes -> @Path (ArbitraryBytes bytes)
 ## the relative path).
 canonicalize : Path -> Task Path (CanonicalizeErr *) [Metadata, Read [Env]]*
 
-## Assumes the given [Path] is encoded in the given [Charset], and attempts to decode
-## it as such. This decoding can fail if the [Path] is not in the given [Charset].
-##
 ## Unfortunately, operating system paths do not include information about which charset
 ## they were originally encoded with. It's most common (but not guaranteed) that they will
 ## have been encoded with the same charset as the operating system's curent locale (which
@@ -109,12 +106,7 @@ canonicalize : Path -> Task Path (CanonicalizeErr *) [Metadata, Read [Env]]*
 ##
 ## For a conversion to [Str] that is lossy but does not return a [Result], see
 ## [displayUtf8].
-toStrUsingCharset : Path, Charset -> Result Str (CharsetErr *)
-toStrUsingCharset = \@Path path, charset ->
-    when path is
-        FromRoc str -> str
-        NulTerminated bytes | ArbitraryBytes bytes ->
-            Locale.toStr charset bytes
+toInner : Path -> [Unicode Str, Bytes (List U8)]
 
 ## Assumes a path is encoded as [UTF-8](https://en.wikipedia.org/wiki/UTF-8),
 ## and converts it to a string using [Str.displayUtf8].
