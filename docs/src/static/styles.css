@@ -386,7 +386,6 @@ pre {
 #module-search {
   display: block;
   box-sizing: border-box;
-  background-color: var(--code-bg-color);
   width: 100%;
   box-sizing: border-box;
   font-size: 18px;
