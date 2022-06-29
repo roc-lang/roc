@@ -15,7 +15,7 @@
   --gray-5: #212121;
   --link-color: var(--purple-5);
   --code-link-color: #5721d4;
-  --text-color: #333333;
+  --text-color: var(--gray-5);
   --code-color: #222222;
   --code-bg-color: var(--gray-2);
   --body-bg-color: #ffffff;
@@ -81,6 +81,10 @@ a {
 
 .entry-name a {
   font-weight: bold;
+  color: var(--type-signature-color);
+}
+
+.entry-name a:visited {
   color: var(--type-signature-color);
 }
 
@@ -245,6 +249,11 @@ footer p {
   font-family: var(--font-mono);
 }
 
+.sidebar-entry a,
+.sidebar-entry a:visited {
+  color: var(--text-color);
+}
+
 .sidebar-sub-entries a {
   display: block;
   line-height: 24px;
@@ -272,7 +281,6 @@ footer p {
   font-size: 18px;
   line-height: 24px;
   font-family: var(--font-mono);
-  font-weight: bold;
   display: block;
   width: 100%;
   padding: 8px 0;
@@ -418,7 +426,6 @@ pre {
   padding: 12px 16px;
   height: 48px;
   cursor: pointer;
-  color: var(--link-color);
 }
 
 #search-link:hover {
@@ -431,7 +438,7 @@ pre {
     --code-bg-color: var(--purple-7);
     --border-color: #555555;
     --code-color: #eeeeee;
-    --text-color: #cccccc;
+    --text-color: var(--gray-1);
     --logo-solid: #777777;
     --faded-color: #bbbbbb;
     --link-color: #c5a8ff;
