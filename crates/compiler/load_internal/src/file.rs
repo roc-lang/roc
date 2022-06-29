@@ -4994,6 +4994,120 @@ fn build_pending_specializations<'a>(
     }
 }
 
+/// Loads derived ability members up for specialization into the Derived module, prior to making
+/// their specializations.
+// TODO: right now, this runs sequentially, and no other modules are mono'd in parallel to the
+// derived module.
+#[allow(clippy::too_many_arguments)]
+fn load_derived_partial_procs<'a>(
+    home: ModuleId,
+    arena: &'a Bump,
+    derived_module: &SharedDerivedModule,
+    module_timing: &mut ModuleTiming,
+    layout_cache: &mut LayoutCache<'a>,
+    target_info: TargetInfo,
+    exposed_to_host: &ExposedToHost,
+    exposed_by_module: &ExposedByModule,
+    procs_base: &mut ProcsBase<'a>,
+    world_abilities: &mut WorldAbilities,
+) {
+    debug_assert_eq!(home, ModuleId::DERIVED);
+
+    let load_derived_procs_start = SystemTime::now();
+
+    let mut new_module_thunks = bumpalo::collections::Vec::new_in(arena);
+
+    let mut update_mode_ids = UpdateModeIds::new();
+
+    let derives_to_add: Vec<_> = {
+        let derived_module = derived_module.lock().unwrap();
+
+        derived_module
+            .iter_all()
+            .filter(|(_, (symbol, _, _))| !procs_base.partial_procs.contains_key(symbol))
+            // TODO: get rid of the clone below
+            .map(|(_, (symbol, def, _))| (*symbol, def.clone()))
+            .collect()
+    };
+
+    // dbg!(&derives_to_add);
+
+    // TODO: we can be even lazier here if we move `add_def_to_module` to happen in mono. Also, the
+    // timings would be more accurate.
+    for (derived_symbol, derived_def) in derives_to_add.into_iter() {
+        // TODO: can we steal and return once before and after the loop?
+        //
+        // IMPORTANT: when this happens, this should be the only thread running, otherwise we
+        // may hit a race between the time we return the stolen subs/ident ids and the time we
+        // retrieve them again. Currently we enforce this in the load build graph.
+        let StolenFromDerived {
+            mut subs,
+            mut ident_ids,
+        } = derived_module.lock().unwrap().steal();
+
+        let mut mono_env = roc_mono::ir::Env {
+            arena,
+            subs: &mut subs,
+            home,
+            ident_ids: &mut ident_ids,
+            target_info,
+            update_mode_ids: &mut update_mode_ids,
+            // call_specialization_counter=0 is reserved
+            call_specialization_counter: 1,
+            // NB: for getting pending specializations the module view is enough because we only need
+            // to know the types and abilities in our modules. Only for building *all* specializations
+            // do we need a global view.
+            abilities: AbilitiesView::World(world_abilities),
+            exposed_by_module,
+            derived_module,
+        };
+
+        let partial_proc = match derived_def.loc_expr.value {
+            roc_can::expr::Expr::Closure(roc_can::expr::ClosureData {
+                function_type,
+                arguments,
+                loc_body,
+                captured_symbols,
+                return_type,
+                recursive,
+                ..
+            }) => {
+                debug_assert!(captured_symbols.is_empty());
+                PartialProc::from_named_function(
+                    &mut mono_env,
+                    function_type,
+                    arguments.clone(),
+                    *loc_body,
+                    CapturedSymbols::None,
+                    recursive.is_recursive(),
+                    return_type,
+                )
+            }
+            _ => internal_error!(),
+        };
+
+        procs_base
+            .partial_procs
+            .insert(derived_symbol, partial_proc);
+
+        derived_module
+            .lock()
+            .unwrap()
+            .return_stolen(StolenFromDerived { subs, ident_ids });
+    }
+
+    if !new_module_thunks.is_empty() {
+        new_module_thunks.extend(procs_base.module_thunks);
+        procs_base.module_thunks = new_module_thunks.into_bump_slice();
+    }
+
+    let load_derived_procs_end = SystemTime::now();
+
+    module_timing.find_specializations = load_derived_procs_end
+        .duration_since(load_derived_procs_start)
+        .unwrap();
+}
+
 fn run_task<'a>(
     task: BuildTask<'a>,
     arena: &'a Bump,

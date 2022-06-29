@@ -148,21 +148,6 @@ pub struct IAbilitiesStore<Phase: ResolvePhase> {
 impl<Phase: ResolvePhase> Default for IAbilitiesStore<Phase> {
     fn default() -> Self {
         Self {
-            members_of_ability: Default::default(),
-            ability_members: Default::default(),
-            specialization_to_root: Default::default(),
-            declared_specializations: Default::default(),
-            next_specialization_id:
-                // Safety: 1 != 0
-                unsafe { NonZeroU32::new_unchecked(1) },
-            resolved_specializations: Default::default(),
-        }
-    }
-}
-
-impl<Phase: ResolvePhase> Default for IAbilitiesStore<Phase> {
-    fn default() -> Self {
-        Self {
              members_of_ability: Default::default(),
              ability_members: Default::default(),
              specialization_to_root: Default::default(),

@@ -158,6 +158,7 @@ fn check_derived_typechecks_and_golden(
         std::env::set_var(roc_debug_flags::ROC_PRINT_UNIFICATIONS_DERIVED, "1")
     );
     let (mut solved_subs, _, problems, _) = roc_solve::module::run_solve(
+        test_module,
         &constraints,
         constr,
         RigidVariables::default(),
@@ -259,7 +260,7 @@ where
         },
     );
 
-    let (_derived_symbol, derived_def, specialization_lsets) =
+    let (derived_symbol, derived_def, specialization_lsets) =
         derived_module.get_or_insert(&exposed_by_module, key);
     let derived_symbol = *derived_symbol;
     let specialization_lsets = specialization_lsets.clone();
