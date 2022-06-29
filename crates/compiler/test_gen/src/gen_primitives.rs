@@ -3607,21 +3607,20 @@ fn multimorphic_lambdas_have_captured_function_in_closure() {
                         b -> b {}
                 thunk
 
-            f = \_ -> \_ -> ""
+            f = \_ -> \_ -> "fun f"
             g = \{ s1 } -> \_ -> s1
 
-            x : [True, False]
-            x = False
+            fun = \x ->
+                h = 
+                    when x is
+                        True -> after (\{} -> "") f
+                        False -> after (\{} -> {s1: "s1"}) g
+                h {}
 
-            fun =
-                when x is
-                    True -> after (\{} -> "") f
-                    False -> after (\{} -> {s1: "s1"}) g
-
-            fun {}
+            {a: fun False, b: fun True}
             "#
         ),
-        RocStr::from("s1"),
-        RocStr
+        (RocStr::from("s1"), RocStr::from("fun f")),
+        (RocStr, RocStr)
     )
 }
