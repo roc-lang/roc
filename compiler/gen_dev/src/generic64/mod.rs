@@ -260,7 +260,9 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     fn ret(buf: &mut Vec<'_, u8>);
 }
 
-pub trait RegTrait: Copy + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + std::fmt::Display + 'static {
+pub trait RegTrait:
+    Copy + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + std::fmt::Display + 'static
+{
     fn value(&self) -> u8;
 }
 

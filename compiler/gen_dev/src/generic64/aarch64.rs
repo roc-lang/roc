@@ -92,7 +92,6 @@ impl std::fmt::Display for AArch64GeneralReg {
     }
 }
 
-
 impl AArch64GeneralReg {
     #[inline(always)]
     fn id(&self) -> u8 {
@@ -110,13 +109,9 @@ impl RegTrait for AArch64FloatReg {
 }
 impl std::fmt::Display for AArch64FloatReg {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "TODO",
-        )
+        write!(f, "TODO",)
     }
 }
-
 
 #[derive(Copy, Clone)]
 pub struct AArch64Assembler {}
