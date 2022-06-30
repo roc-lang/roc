@@ -1955,7 +1955,7 @@ mod tests {
         }
     }
 
-    macro_rules! test_helper {
+    macro_rules! gen_test {
         // TODO: Not sure if there is a better way to merge these together,
         // but I like the end use of this a lot better than the old tests.
         ($assemble_fn: expr, $format_fn: expr, $iter:expr) => {{
@@ -2034,7 +2034,7 @@ mod tests {
 
     #[test]
     fn test_add_reg64_imm32() {
-        test_helper!(
+        gen_test!(
             add_reg64_imm32,
             |reg, imm| format!("add {}, 0x{:x}", reg, imm),
             ALL_GENERAL_REGS,
@@ -2079,7 +2079,7 @@ mod tests {
 
     #[test]
     fn test_cmp_reg64_imm32() {
-        test_helper!(
+        gen_test!(
             cmp_reg64_imm32,
             |reg, imm| format!("cmp {}, 0x{:x}", reg, imm),
             ALL_GENERAL_REGS,
@@ -2095,7 +2095,7 @@ mod tests {
     #[test]
     fn test_jmp_imm32() {
         const INST_SIZE: i32 = 5;
-        test_helper!(
+        gen_test!(
             jmp_imm32,
             |imm| format!("jmp 0x{:x}", imm + INST_SIZE),
             [TEST_I32]
@@ -2105,7 +2105,7 @@ mod tests {
     #[test]
     fn test_jne_imm32() {
         const INST_SIZE: i32 = 6;
-        test_helper!(
+        gen_test!(
             jne_imm32,
             |imm| format!("jne 0x{:x}", imm + INST_SIZE),
             [TEST_I32]
@@ -2114,7 +2114,7 @@ mod tests {
 
     #[test]
     fn test_mov_reg64_imm32() {
-        test_helper!(
+        gen_test!(
             mov_reg64_imm32,
             |reg, imm| format!("mov {}, 0x{:x}", reg, imm),
             ALL_GENERAL_REGS,
@@ -2124,13 +2124,13 @@ mod tests {
 
     #[test]
     fn test_mov_reg64_imm64() {
-        test_helper!(
+        gen_test!(
             mov_reg64_imm64,
             |reg, imm| format!("movabs {}, 0x{:x}", reg, imm),
             ALL_GENERAL_REGS,
             [TEST_I64]
         );
-        test_helper!(
+        gen_test!(
             mov_reg64_imm64,
             |reg, imm| format!("mov {}, 0x{:x}", reg, imm),
             ALL_GENERAL_REGS,
@@ -2499,7 +2499,7 @@ mod tests {
 
     #[test]
     fn test_sub_reg64_imm32() {
-        test_helper!(
+        gen_test!(
             sub_reg64_imm32,
             |reg, imm| format!("sub {}, 0x{:x}", reg, imm),
             ALL_GENERAL_REGS,
