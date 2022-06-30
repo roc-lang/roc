@@ -1880,7 +1880,7 @@ mod tests {
 
     // Checks a register matches the capstone operand register.
     // This works for both general and float regs.
-    fn assert_operand_reg64_eq<Reg: std::string::ToString>(
+    fn assert_operand_reg64_eq<Reg: RegTrait>(
         cs: &Capstone,
         expected: Reg,
         operand: &arch::ArchOperand,
@@ -1918,14 +1918,10 @@ mod tests {
         }
     }
 
-    fn test_reg64_reg64_helper(
-        assemble: fn(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg),
-        expected_mnemonic: &str,
-        regs_dst: &[X86_64GeneralReg],
-        regs_src: &[X86_64GeneralReg],
-    ) {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
+    fn setup_capstone_and_arena<'a, T>(
+        arena: &'a bumpalo::Bump,
+    ) -> (bumpalo::collections::Vec<'a, T>, Capstone) {
+        let buf = bumpalo::vec![in arena];
         let cs = Capstone::new()
             .x86()
             .mode(arch::x86::ArchMode::Mode64)
@@ -1933,78 +1929,68 @@ mod tests {
             .detail(true)
             .build()
             .expect("Failed to create Capstone object");
-        for dst in regs_dst {
-            for src in regs_src {
-                buf.clear();
-                assemble(&mut buf, *dst, *src);
-
-                let instructions = cs.disasm_all(&buf, 0).unwrap();
-                assert_eq!(1, instructions.len());
-                let inst = &instructions[0];
-                assert_eq!(Some(expected_mnemonic), inst.mnemonic());
-
-                let detail = cs.insn_detail(inst).unwrap();
-                let operands = detail.arch_detail().operands();
-                assert_eq!(2, operands.len());
-                assert_operand_reg64_eq(&cs, *dst, &operands[0]);
-                assert_operand_reg64_eq(&cs, *src, &operands[1]);
-            }
-        }
+        (buf, cs)
     }
 
-    // TODO: look into merging this into the above function. They are the same except for types.
-    fn test_freg64_freg64_helper(
-        assemble: fn(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg),
+    // Jumps are special, their immeadiate is incremented by the length of the instruction.
+    fn test_jmp_helper<T: Copy>(
+        assemble: fn(buf: &mut Vec<'_, u8>, imm: T),
         expected_mnemonic: &str,
-        regs_dst: &[X86_64FloatReg],
-        regs_src: &[X86_64FloatReg],
-    ) {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        let cs = Capstone::new()
-            .x86()
-            .mode(arch::x86::ArchMode::Mode64)
-            .syntax(arch::x86::ArchSyntax::Intel)
-            .detail(true)
-            .build()
-            .expect("Failed to create Capstone object");
-        for dst in regs_dst {
-            for src in regs_src {
-                buf.clear();
-                assemble(&mut buf, *dst, *src);
-
-                let instructions = cs.disasm_all(&buf, 0).unwrap();
-                assert_eq!(1, instructions.len());
-                let inst = &instructions[0];
-                assert_eq!(Some(expected_mnemonic), inst.mnemonic());
-
-                let detail = cs.insn_detail(inst).unwrap();
-                let operands = detail.arch_detail().operands();
-                assert_eq!(2, operands.len());
-                assert_operand_reg64_eq(&cs, *dst, &operands[0]);
-                assert_operand_reg64_eq(&cs, *src, &operands[1]);
-            }
-        }
-    }
-
-    // TODO: look into nicer way to make this generic. I essentially want to support any int type.
-    fn test_reg64_imm_helper<T: Copy>(
-        assemble: fn(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: T),
-        expected_mnemonic: &str,
-        regs_dst: &[X86_64GeneralReg],
         immediates: &[T],
     ) where
         i64: From<T>,
     {
         let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        let cs = Capstone::new()
-            .x86()
-            .mode(arch::x86::ArchMode::Mode64)
-            .syntax(arch::x86::ArchSyntax::Intel)
-            .detail(true)
-            .build()
-            .expect("Failed to create Capstone object");
+        let (mut buf, cs) = setup_capstone_and_arena(&arena);
+        for imm in immediates {
+            buf.clear();
+            assemble(&mut buf, *imm);
+
+            let instructions = cs.disasm_all(&buf, 0).unwrap();
+            assert_eq!(1, instructions.len());
+            let inst = &instructions[0];
+            assert_eq!(Some(expected_mnemonic), inst.mnemonic());
+
+            let detail = cs.insn_detail(inst).unwrap();
+            let operands = detail.arch_detail().operands();
+            assert_eq!(1, operands.len());
+            assert_operand_imm_eq::<i64>(i64::from(*imm) + buf.len() as i64, &operands[0]);
+        }
+    }
+
+    fn test_reg64_helper<Reg: RegTrait>(
+        assemble: fn(buf: &mut Vec<'_, u8>, dst: Reg),
+        expected_mnemonic: &str,
+        regs_dst: &[Reg],
+    ) {
+        let arena = bumpalo::Bump::new();
+        let (mut buf, cs) = setup_capstone_and_arena(&arena);
+        for dst in regs_dst {
+            buf.clear();
+            assemble(&mut buf, *dst);
+
+            let instructions = cs.disasm_all(&buf, 0).unwrap();
+            assert_eq!(1, instructions.len());
+            let inst = &instructions[0];
+            assert_eq!(Some(expected_mnemonic), inst.mnemonic());
+
+            let detail = cs.insn_detail(inst).unwrap();
+            let operands = detail.arch_detail().operands();
+            assert_eq!(1, operands.len());
+            assert_operand_reg64_eq(&cs, *dst, &operands[0]);
+        }
+    }
+
+    fn test_reg64_imm_helper<Reg: RegTrait, T: Copy>(
+        assemble: fn(buf: &mut Vec<'_, u8>, dst: Reg, imm: T),
+        expected_mnemonic: &str,
+        regs_dst: &[Reg],
+        immediates: &[T],
+    ) where
+        i64: From<T>,
+    {
+        let arena = bumpalo::Bump::new();
+        let (mut buf, cs) = setup_capstone_and_arena(&arena);
         for dst in regs_dst {
             for imm in immediates {
                 buf.clear();
@@ -2024,33 +2010,30 @@ mod tests {
         }
     }
 
-    fn test_reg64_helper(
-        assemble: fn(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg),
+    fn test_reg64_reg64_helper<Reg1: RegTrait, Reg2: RegTrait>(
+        assemble: fn(buf: &mut Vec<'_, u8>, dst: Reg1, src: Reg2),
         expected_mnemonic: &str,
-        regs_dst: &[X86_64GeneralReg],
+        regs_dst: &[Reg1],
+        regs_src: &[Reg2],
     ) {
         let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        let cs = Capstone::new()
-            .x86()
-            .mode(arch::x86::ArchMode::Mode64)
-            .syntax(arch::x86::ArchSyntax::Intel)
-            .detail(true)
-            .build()
-            .expect("Failed to create Capstone object");
+        let (mut buf, cs) = setup_capstone_and_arena(&arena);
         for dst in regs_dst {
-            buf.clear();
-            assemble(&mut buf, *dst);
+            for src in regs_src {
+                buf.clear();
+                assemble(&mut buf, *dst, *src);
 
-            let instructions = cs.disasm_all(&buf, 0).unwrap();
-            assert_eq!(1, instructions.len());
-            let inst = &instructions[0];
-            assert_eq!(Some(expected_mnemonic), inst.mnemonic());
+                let instructions = cs.disasm_all(&buf, 0).unwrap();
+                assert_eq!(1, instructions.len());
+                let inst = &instructions[0];
+                assert_eq!(Some(expected_mnemonic), inst.mnemonic());
 
-            let detail = cs.insn_detail(inst).unwrap();
-            let operands = detail.arch_detail().operands();
-            assert_eq!(1, operands.len());
-            assert_operand_reg64_eq(&cs, *dst, &operands[0]);
+                let detail = cs.insn_detail(inst).unwrap();
+                let operands = detail.arch_detail().operands();
+                assert_eq!(2, operands.len());
+                assert_operand_reg64_eq(&cs, *dst, &operands[0]);
+                assert_operand_reg64_eq(&cs, *src, &operands[1]);
+            }
         }
     }
 
@@ -2071,12 +2054,12 @@ mod tests {
 
     #[test]
     fn test_addsd_freg64_freg64() {
-        test_freg64_freg64_helper(addsd_freg64_freg64, "addsd", ALL_FLOAT_REGS, ALL_FLOAT_REGS);
+        test_reg64_reg64_helper(addsd_freg64_freg64, "addsd", ALL_FLOAT_REGS, ALL_FLOAT_REGS);
     }
 
     #[test]
     fn test_andpd_freg64_freg64() {
-        test_freg64_freg64_helper(andpd_freg64_freg64, "andpd", ALL_FLOAT_REGS, ALL_FLOAT_REGS);
+        test_reg64_reg64_helper(andpd_freg64_freg64, "andpd", ALL_FLOAT_REGS, ALL_FLOAT_REGS);
     }
 
     #[test]
@@ -2106,20 +2089,12 @@ mod tests {
 
     #[test]
     fn test_jmp_imm32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        jmp_imm32(&mut buf, TEST_I32);
-        assert_eq!(0xE9, buf[0]);
-        assert_eq!(TEST_I32.to_le_bytes(), &buf[1..]);
+        test_jmp_helper(jmp_imm32, "jmp", &[TEST_I32])
     }
 
     #[test]
     fn test_jne_imm32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        jne_imm32(&mut buf, TEST_I32);
-        assert_eq!([0x0F, 0x85], &buf[..2]);
-        assert_eq!(TEST_I32.to_le_bytes(), &buf[2..]);
+        test_jmp_helper(jne_imm32, "jne", &[TEST_I32])
     }
 
     #[test]
@@ -2318,7 +2293,7 @@ mod tests {
 
     #[test]
     fn test_movsd_freg64_freg64() {
-        test_freg64_freg64_helper(
+        test_reg64_reg64_helper(
             raw_movsd_freg64_freg64,
             "movsd",
             ALL_FLOAT_REGS,
@@ -2377,61 +2352,42 @@ mod tests {
     fn test_cvtsi2_help() {
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
-        let cvtsi2ss_code: u8 = 0x2A;
-        let cvttss2si_code: u8 = 0x2C;
+        const CVTSI2SS_CODE: u8 = 0x2A;
+        const CVTTSS2SI_CODE: u8 = 0x2C;
 
+        test_reg64_reg64_helper(
+            |buf, r1, r2| cvtsi2_help(buf, 0xF3, CVTSI2SS_CODE, r1, r2),
+            "cvtsi2ss",
+            ALL_FLOAT_REGS,
+            ALL_GENERAL_REGS,
+        );
+        // test_reg64_reg64_helper(
+        //     |buf, r1, r2| cvtsi2_help(buf, 0xF3, CVTTSS2SI_CODE, r1, r2),
+        //     "cvttss2si",
+        //     ALL_FLOAT_REGS,
+        //     ALL_GENERAL_REGS,
+        // );
         for (op_code, reg1, reg2, expected) in &[
             (
-                cvtsi2ss_code,
-                X86_64FloatReg::XMM0,
-                X86_64GeneralReg::RDI,
-                [0xF3, 0x48, 0x0F, 0x2A, 0xC7],
-            ),
-            (
-                cvtsi2ss_code,
-                X86_64FloatReg::XMM15,
-                X86_64GeneralReg::RDI,
-                [0xF3, 0x4C, 0x0F, 0x2A, 0xFF],
-            ),
-            (
-                cvtsi2ss_code,
-                X86_64FloatReg::XMM0,
-                X86_64GeneralReg::RAX,
-                [0xF3, 0x48, 0x0F, 0x2A, 0xC0],
-            ),
-            (
-                cvtsi2ss_code,
-                X86_64FloatReg::XMM0,
-                X86_64GeneralReg::R15,
-                [0xF3, 0x49, 0x0F, 0x2A, 0xC7],
-            ),
-        ] {
-            buf.clear();
-            cvtsi2_help(&mut buf, 0xF3, *op_code, *reg1, *reg2);
-            assert_eq!(expected, &buf[..]);
-        }
-
-        for (op_code, reg1, reg2, expected) in &[
-            (
-                cvttss2si_code,
+                CVTTSS2SI_CODE,
                 X86_64GeneralReg::RAX,
                 X86_64FloatReg::XMM0,
                 [0xF3, 0x48, 0x0F, 0x2C, 0xC0],
             ),
             (
-                cvttss2si_code,
+                CVTTSS2SI_CODE,
                 X86_64GeneralReg::RAX,
                 X86_64FloatReg::XMM15,
                 [0xF3, 0x49, 0x0F, 0x2C, 0xC7],
             ),
             (
-                cvttss2si_code,
+                CVTTSS2SI_CODE,
                 X86_64GeneralReg::RAX,
                 X86_64FloatReg::XMM0,
                 [0xF3, 0x48, 0x0F, 0x2C, 0xC0],
             ),
             (
-                cvttss2si_code,
+                CVTTSS2SI_CODE,
                 X86_64GeneralReg::R15,
                 X86_64FloatReg::XMM0,
                 [0xF3, 0x4C, 0x0F, 0x2C, 0xF8],
@@ -2445,25 +2401,22 @@ mod tests {
 
     #[test]
     fn test_cvtsx2_help() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        let cvtss2sd_code: u8 = 0x5A;
-
-        {
-            let (op_code, reg1, reg2, expected) = &(
-                cvtss2sd_code,
-                X86_64FloatReg::XMM1,
-                X86_64FloatReg::XMM0,
-                [0xF3, 0x0F, 0x5A, 0xC8],
-            );
-            buf.clear();
-            cvtsx2_help(&mut buf, 0xF3, *op_code, *reg1, *reg2);
-            assert_eq!(expected, &buf[..]);
-        }
+        const CVTSS2SD_CODE: u8 = 0x5A;
+        test_reg64_reg64_helper(
+            |buf, r1, r2| cvtsi2_help(buf, 0xF3, CVTSS2SD_CODE, r1, r2),
+            "cvtss2sd",
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS,
+        );
     }
 
     #[test]
     fn test_set_reg64_help() {
+        // test_reg64_helper(
+        //     |buf, reg| set_reg64_help(0x94, buf, reg),
+        //     "sete",
+        //     ALL_GENERAL_REGS,
+        // );
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
 

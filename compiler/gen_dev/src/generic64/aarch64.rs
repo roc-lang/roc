@@ -49,6 +49,49 @@ impl RegTrait for AArch64GeneralReg {
         *self as u8
     }
 }
+impl std::fmt::Display for AArch64GeneralReg {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                AArch64GeneralReg::X0 => "x0",
+                AArch64GeneralReg::X1 => "x1",
+                AArch64GeneralReg::X2 => "x2",
+                AArch64GeneralReg::X3 => "x3",
+                AArch64GeneralReg::X4 => "x4",
+                AArch64GeneralReg::X5 => "x5",
+                AArch64GeneralReg::X6 => "x6",
+                AArch64GeneralReg::X7 => "x7",
+                AArch64GeneralReg::XR => "xr",
+                AArch64GeneralReg::X9 => "x9",
+                AArch64GeneralReg::X10 => "x10",
+                AArch64GeneralReg::X11 => "x11",
+                AArch64GeneralReg::X12 => "x12",
+                AArch64GeneralReg::X13 => "x13",
+                AArch64GeneralReg::X14 => "x14",
+                AArch64GeneralReg::X15 => "x15",
+                AArch64GeneralReg::IP0 => "ip0",
+                AArch64GeneralReg::IP1 => "ip1",
+                AArch64GeneralReg::PR => "pr",
+                AArch64GeneralReg::X19 => "x19",
+                AArch64GeneralReg::X20 => "x20",
+                AArch64GeneralReg::X21 => "x21",
+                AArch64GeneralReg::X22 => "x22",
+                AArch64GeneralReg::X23 => "x23",
+                AArch64GeneralReg::X24 => "x24",
+                AArch64GeneralReg::X25 => "x25",
+                AArch64GeneralReg::X26 => "x26",
+                AArch64GeneralReg::X27 => "x27",
+                AArch64GeneralReg::X28 => "x28",
+                AArch64GeneralReg::FP => "fp",
+                AArch64GeneralReg::LR => "lr",
+                AArch64GeneralReg::ZRSP => "zrsp",
+            }
+        )
+    }
+}
+
 
 impl AArch64GeneralReg {
     #[inline(always)]
@@ -65,6 +108,15 @@ impl RegTrait for AArch64FloatReg {
         *self as u8
     }
 }
+impl std::fmt::Display for AArch64FloatReg {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "TODO",
+        )
+    }
+}
+
 
 #[derive(Copy, Clone)]
 pub struct AArch64Assembler {}
