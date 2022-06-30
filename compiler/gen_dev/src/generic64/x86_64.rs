@@ -1954,36 +1954,15 @@ mod tests {
         (buf, cs)
     }
 
-    fn test_reg64_helper<Reg: RegTrait>(
-        assemble: fn(buf: &mut Vec<'_, u8>, dst: Reg),
-        expected_mnemonic: &str,
-        regs_dst: &[Reg],
-    ) {
-        let arena = bumpalo::Bump::new();
-        let (mut buf, cs) = setup_capstone_and_arena(&arena);
-        for dst in regs_dst {
-            buf.clear();
-            assemble(&mut buf, *dst);
-
-            let instructions = cs.disasm_all(&buf, 0).unwrap();
-            assert_eq!(1, instructions.len());
-            let inst = &instructions[0];
-            assert_eq!(Some(expected_mnemonic), inst.mnemonic());
-
-            let detail = cs.insn_detail(inst).unwrap();
-            let operands = detail.arch_detail().operands();
-            assert_eq!(1, operands.len());
-            assert_operand_reg64_eq(&cs, *dst, &operands[0]);
-        }
-    }
-
     fn merge_instructions_without_line_numbers(instructions: capstone::Instructions) -> String {
         instructions
             .iter()
             .map(|inst| {
                 inst.to_string()
+                    .trim()
                     .split(' ')
                     .skip(1)
+                    .map(|x| x.trim())
                     .collect::<std::vec::Vec<&str>>()
                     .join(" ")
             })
@@ -1994,6 +1973,16 @@ mod tests {
     macro_rules! gen_test {
         // TODO: Not sure if there is a better way to merge these together,
         // but I like the end use of this a lot better than the old tests.
+        ($assemble_fn: expr, $format_fn: expr) => {{
+            let arena = bumpalo::Bump::new();
+            let (mut buf, cs) = setup_capstone_and_arena(&arena);
+            $assemble_fn(&mut buf);
+            let instructions = cs.disasm_all(&buf, 0).unwrap();
+            assert_eq!(
+                $format_fn(),
+                merge_instructions_without_line_numbers(instructions)
+            );
+        }};
         ($assemble_fn: expr, $format_fn: expr, $iter:expr) => {{
             let arena = bumpalo::Bump::new();
             let (mut buf, cs) = setup_capstone_and_arena(&arena);
@@ -2041,33 +2030,6 @@ mod tests {
         }};
     }
 
-    fn test_reg64_reg64_helper<Reg1: RegTrait, Reg2: RegTrait>(
-        assemble: fn(buf: &mut Vec<'_, u8>, dst: Reg1, src: Reg2),
-        expected_mnemonic: &str,
-        regs_dst: &[Reg1],
-        regs_src: &[Reg2],
-    ) {
-        let arena = bumpalo::Bump::new();
-        let (mut buf, cs) = setup_capstone_and_arena(&arena);
-        for dst in regs_dst {
-            for src in regs_src {
-                buf.clear();
-                assemble(&mut buf, *dst, *src);
-
-                let instructions = cs.disasm_all(&buf, 0).unwrap();
-                assert_eq!(1, instructions.len());
-                let inst = &instructions[0];
-                assert_eq!(Some(expected_mnemonic), inst.mnemonic());
-
-                let detail = cs.insn_detail(inst).unwrap();
-                let operands = detail.arch_detail().operands();
-                assert_eq!(2, operands.len());
-                assert_operand_reg64_eq(&cs, *dst, &operands[0]);
-                assert_operand_reg64_eq(&cs, *src, &operands[1]);
-            }
-        }
-    }
-
     #[test]
     fn test_add_reg64_imm32() {
         gen_test!(
@@ -2080,36 +2042,61 @@ mod tests {
 
     #[test]
     fn test_add_reg64_reg64() {
-        test_reg64_reg64_helper(add_reg64_reg64, "add", ALL_GENERAL_REGS, ALL_GENERAL_REGS);
+        gen_test!(
+            add_reg64_reg64,
+            |reg1, reg2| format!("add {}, {}", reg1, reg2),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
     }
 
     #[test]
     fn test_sub_reg64_reg64() {
-        test_reg64_reg64_helper(sub_reg64_reg64, "sub", ALL_GENERAL_REGS, ALL_GENERAL_REGS);
+        gen_test!(
+            sub_reg64_reg64,
+            |reg1, reg2| format!("sub {}, {}", reg1, reg2),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
     }
 
     #[test]
     fn test_addsd_freg64_freg64() {
-        test_reg64_reg64_helper(addsd_freg64_freg64, "addsd", ALL_FLOAT_REGS, ALL_FLOAT_REGS);
+        gen_test!(
+            addsd_freg64_freg64,
+            |reg1, reg2| format!("addsd {}, {}", reg1, reg2),
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
     }
 
     #[test]
     fn test_andpd_freg64_freg64() {
-        test_reg64_reg64_helper(andpd_freg64_freg64, "andpd", ALL_FLOAT_REGS, ALL_FLOAT_REGS);
+        gen_test!(
+            andpd_freg64_freg64,
+            |reg1, reg2| format!("andpd {}, {}", reg1, reg2),
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
     }
 
     #[test]
     fn test_xor_reg64_reg64() {
-        test_reg64_reg64_helper(xor_reg64_reg64, "xor", ALL_GENERAL_REGS, ALL_GENERAL_REGS);
+        gen_test!(
+            xor_reg64_reg64,
+            |reg1, reg2| format!("xor {}, {}", reg1, reg2),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
     }
 
     #[test]
     fn test_cmovl_reg64_reg64() {
-        test_reg64_reg64_helper(
+        gen_test!(
             cmovl_reg64_reg64,
-            "cmovl",
+            |reg1, reg2| format!("cmovl {}, {}", reg1, reg2),
             ALL_GENERAL_REGS,
-            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
         );
     }
 
@@ -2125,7 +2112,12 @@ mod tests {
 
     #[test]
     fn test_imul_reg64_reg64() {
-        test_reg64_reg64_helper(imul_reg64_reg64, "imul", ALL_GENERAL_REGS, ALL_GENERAL_REGS);
+        gen_test!(
+            imul_reg64_reg64,
+            |reg1, reg2| format!("imul {}, {}", reg1, reg2),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
     }
 
     #[test]
@@ -2176,11 +2168,11 @@ mod tests {
 
     #[test]
     fn test_mov_reg64_reg64() {
-        test_reg64_reg64_helper(
+        gen_test!(
             raw_mov_reg64_reg64,
-            "mov",
+            |reg1, reg2| format!("mov {}, {}", reg1, reg2),
             ALL_GENERAL_REGS,
-            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
         );
     }
 
@@ -2359,11 +2351,11 @@ mod tests {
 
     #[test]
     fn test_movsd_freg64_freg64() {
-        test_reg64_reg64_helper(
+        gen_test!(
             raw_movsd_freg64_freg64,
-            "movsd",
+            |reg1, reg2| format!("movsd {}, {}", reg1, reg2),
             ALL_FLOAT_REGS,
-            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
         );
     }
 
@@ -2411,7 +2403,7 @@ mod tests {
 
     #[test]
     fn test_neg_reg64() {
-        test_reg64_helper(neg_reg64, "neg", ALL_GENERAL_REGS);
+        gen_test!(neg_reg64, |reg| format!("neg {}", reg), ALL_GENERAL_REGS);
     }
 
     #[test]
@@ -2421,11 +2413,11 @@ mod tests {
         const CVTSI2SS_CODE: u8 = 0x2A;
         const CVTTSS2SI_CODE: u8 = 0x2C;
 
-        test_reg64_reg64_helper(
+        gen_test!(
             |buf, r1, r2| cvtsi2_help(buf, 0xF3, CVTSI2SS_CODE, r1, r2),
-            "cvtsi2ss",
+            |reg1, reg2| format!("cvtsi2ss {}, {}", reg1, reg2),
             ALL_FLOAT_REGS,
-            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
         );
         // test_reg64_reg64_helper(
         //     |buf, r1, r2| cvtsi2_help(buf, 0xF3, CVTTSS2SI_CODE, r1, r2),
@@ -2468,74 +2460,26 @@ mod tests {
     #[test]
     fn test_cvtsx2_help() {
         const CVTSS2SD_CODE: u8 = 0x5A;
-        test_reg64_reg64_helper(
+        gen_test!(
             |buf, r1, r2| cvtsi2_help(buf, 0xF3, CVTSS2SD_CODE, r1, r2),
-            "cvtss2sd",
+            |reg1, reg2| format!("cvtss2sd {}, {}", reg1, reg2),
             ALL_FLOAT_REGS,
-            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
         );
     }
 
     #[test]
     fn test_set_reg64_help() {
-        // test_reg64_helper(
-        //     |buf, reg| set_reg64_help(0x94, buf, reg),
-        //     "sete",
-        //     ALL_GENERAL_REGS,
-        // );
         gen_test!(
             |buf, reg| set_reg64_help(0x94, buf, reg),
             |reg: X86_64GeneralReg| format!("sete {}\nand {}, 1", reg.low_8bits_string(), reg),
             ALL_GENERAL_REGS
         );
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-
-        // tests for 7 bytes in the output buffer
-        let (reg, expected) = (
-            X86_64GeneralReg::RAX,
-            [
-                0x0F, 0x94, 0xC0, // SETE al ; al are the 8 lower weight bits of rax
-                0x48, 0x83, 0xE0, 0x01, // AND rax, 1
-            ],
-        );
-        buf.clear();
-        set_reg64_help(0x94, &mut buf, reg); // sete_reg64
-        assert_eq!(expected, &buf[..]);
-
-        // tests for 8 bytes in the output buffer
-        for (reg, expected) in &[
-            (
-                X86_64GeneralReg::RSP,
-                [
-                    // SETE spl ; spl are the 8 lower weight bits of rsp
-                    0x40, 0x0F, 0x94, 0xC4, //
-                    // AND rsp, 1
-                    0x48, 0x83, 0xE4, 0x01,
-                ],
-            ),
-            (
-                X86_64GeneralReg::R15,
-                [
-                    // SETE r15b ; r15b are the 8 lower weight bits of r15
-                    0x41, 0x0F, 0x94, 0xC7, //
-                    // AND rsp, 1
-                    0x49, 0x83, 0xE7, 0x01,
-                ],
-            ),
-        ] {
-            buf.clear();
-            set_reg64_help(0x94, &mut buf, *reg); // sete_reg64
-            assert_eq!(expected, &buf[..]);
-        }
     }
 
     #[test]
     fn test_ret() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        ret(&mut buf);
-        assert_eq!(&[0xC3], &buf[..]);
+        gen_test!(|buf| ret(buf), || "ret");
     }
 
     #[test]
@@ -2550,11 +2494,11 @@ mod tests {
 
     #[test]
     fn test_pop_reg64() {
-        test_reg64_helper(pop_reg64, "pop", ALL_GENERAL_REGS);
+        gen_test!(pop_reg64, |reg| format!("pop {}", reg), ALL_GENERAL_REGS);
     }
 
     #[test]
     fn test_push_reg64() {
-        test_reg64_helper(push_reg64, "push", ALL_GENERAL_REGS);
+        gen_test!(push_reg64, |reg| format!("push {}", reg), ALL_GENERAL_REGS);
     }
 }
