@@ -1174,8 +1174,14 @@ mod tests {
     use crate::disassembler_test;
     use capstone::prelude::*;
 
+    enum ZRSPKind {
+        UsesZR,
+        UsesSP,
+    }
+    use ZRSPKind::*;
+
     impl AArch64GeneralReg {
-        fn capstone_string(&self) -> String {
+        fn capstone_string(&self, zrsp_kind: ZRSPKind) -> String {
             match self {
                 AArch64GeneralReg::XR => "x8".to_owned(),
                 AArch64GeneralReg::IP0 => "x16".to_owned(),
@@ -1183,6 +1189,10 @@ mod tests {
                 AArch64GeneralReg::PR => "x18".to_owned(),
                 AArch64GeneralReg::FP => "x29".to_owned(),
                 AArch64GeneralReg::LR => "x30".to_owned(),
+                AArch64GeneralReg::ZRSP => match zrsp_kind {
+                    UsesZR => "xzr".to_owned(),
+                    UsesSP => "sp".to_owned(),
+                },
                 _ => format!("{}", self),
             }
         }
@@ -1246,9 +1256,9 @@ mod tests {
             add_reg64_reg64_reg64,
             |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, reg3: AArch64GeneralReg| format!(
                 "add {}, {}, {}",
-                reg1.capstone_string(),
-                reg2.capstone_string(),
-                reg3.capstone_string()
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesZR),
+                reg3.capstone_string(UsesZR)
             ),
             ALL_GENERAL_REGS,
             ALL_GENERAL_REGS,
@@ -1258,15 +1268,18 @@ mod tests {
 
     #[test]
     fn test_add_reg64_reg64_imm12() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        add_reg64_reg64_imm12(
-            &mut buf,
-            AArch64GeneralReg::X10,
-            AArch64GeneralReg::X21,
-            0x123,
+        disassembler_test!(
+            add_reg64_reg64_imm12,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
+                "add {}, {}, #0x{:x}",
+                reg1.capstone_string(UsesSP),
+                reg2.capstone_string(UsesSP),
+                imm
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [0x123]
         );
-        assert_eq!(&buf, &[0xAA, 0x8E, 0x04, 0x91]);
     }
 
     #[test]
