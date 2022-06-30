@@ -14,6 +14,8 @@ use roc_target::TargetInfo;
 use std::marker::PhantomData;
 
 pub(crate) mod aarch64;
+#[cfg(test)]
+mod disassembler_test_macro;
 pub(crate) mod storage;
 pub(crate) mod x86_64;
 

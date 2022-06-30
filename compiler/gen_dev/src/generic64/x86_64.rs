@@ -1863,6 +1863,7 @@ fn xor_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64Gene
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::disassembler_test;
     use capstone::prelude::*;
 
     const TEST_I32: i32 = 0x12345678;
@@ -1935,69 +1936,9 @@ mod tests {
             .join("\n")
     }
 
-    macro_rules! gen_test {
-        // TODO: Not sure if there is a better way to merge these together,
-        // but I like the end use of this a lot better than the old tests.
-        ($assemble_fn: expr, $format_fn: expr) => {{
-            let arena = bumpalo::Bump::new();
-            let (mut buf, cs) = setup_capstone_and_arena(&arena);
-            $assemble_fn(&mut buf);
-            let instructions = cs.disasm_all(&buf, 0).unwrap();
-            assert_eq!(
-                $format_fn(),
-                merge_instructions_without_line_numbers(instructions)
-            );
-        }};
-        ($assemble_fn: expr, $format_fn: expr, $iter:expr) => {{
-            let arena = bumpalo::Bump::new();
-            let (mut buf, cs) = setup_capstone_and_arena(&arena);
-            for i in $iter.iter() {
-                buf.clear();
-                $assemble_fn(&mut buf, *i);
-                let instructions = cs.disasm_all(&buf, 0).unwrap();
-                assert_eq!(
-                    $format_fn(*i),
-                    merge_instructions_without_line_numbers(instructions)
-                );
-            }
-        }};
-        ($assemble_fn: expr, $format_fn: expr, $iter:expr, $iter2:expr) => {{
-            let arena = bumpalo::Bump::new();
-            let (mut buf, cs) = setup_capstone_and_arena(&arena);
-            for i in $iter.iter() {
-                for i2 in $iter2.iter() {
-                    buf.clear();
-                    $assemble_fn(&mut buf, *i, *i2);
-                    let instructions = cs.disasm_all(&buf, 0).unwrap();
-                    assert_eq!(
-                        $format_fn(*i, *i2),
-                        merge_instructions_without_line_numbers(instructions)
-                    );
-                }
-            }
-        }};
-        ($assemble_fn: expr, $format_fn: expr, $iter:expr, $iter2:expr, $iter3:expr) => {{
-            let arena = bumpalo::Bump::new();
-            let (mut buf, cs) = setup_capstone_and_arena(&arena);
-            for i in $iter.iter() {
-                for i2 in $iter2.iter() {
-                    for i3 in $iter3.iter() {
-                        buf.clear();
-                        $assemble_fn(&mut buf, *i, *i2, *i3);
-                        let instructions = cs.disasm_all(&buf, 0).unwrap();
-                        assert_eq!(
-                            $format_fn(*i, *i2, *i3),
-                            merge_instructions_without_line_numbers(instructions)
-                        );
-                    }
-                }
-            }
-        }};
-    }
-
     #[test]
     fn test_add_reg64_imm32() {
-        gen_test!(
+        disassembler_test!(
             add_reg64_imm32,
             |reg, imm| format!("add {}, 0x{:x}", reg, imm),
             ALL_GENERAL_REGS,
@@ -2007,7 +1948,7 @@ mod tests {
 
     #[test]
     fn test_add_reg64_reg64() {
-        gen_test!(
+        disassembler_test!(
             add_reg64_reg64,
             |reg1, reg2| format!("add {}, {}", reg1, reg2),
             ALL_GENERAL_REGS,
@@ -2017,7 +1958,7 @@ mod tests {
 
     #[test]
     fn test_sub_reg64_reg64() {
-        gen_test!(
+        disassembler_test!(
             sub_reg64_reg64,
             |reg1, reg2| format!("sub {}, {}", reg1, reg2),
             ALL_GENERAL_REGS,
@@ -2027,7 +1968,7 @@ mod tests {
 
     #[test]
     fn test_addsd_freg64_freg64() {
-        gen_test!(
+        disassembler_test!(
             addsd_freg64_freg64,
             |reg1, reg2| format!("addsd {}, {}", reg1, reg2),
             ALL_FLOAT_REGS,
@@ -2037,7 +1978,7 @@ mod tests {
 
     #[test]
     fn test_andpd_freg64_freg64() {
-        gen_test!(
+        disassembler_test!(
             andpd_freg64_freg64,
             |reg1, reg2| format!("andpd {}, {}", reg1, reg2),
             ALL_FLOAT_REGS,
@@ -2047,7 +1988,7 @@ mod tests {
 
     #[test]
     fn test_xor_reg64_reg64() {
-        gen_test!(
+        disassembler_test!(
             xor_reg64_reg64,
             |reg1, reg2| format!("xor {}, {}", reg1, reg2),
             ALL_GENERAL_REGS,
@@ -2057,7 +1998,7 @@ mod tests {
 
     #[test]
     fn test_cmovl_reg64_reg64() {
-        gen_test!(
+        disassembler_test!(
             cmovl_reg64_reg64,
             |reg1, reg2| format!("cmovl {}, {}", reg1, reg2),
             ALL_GENERAL_REGS,
@@ -2067,7 +2008,7 @@ mod tests {
 
     #[test]
     fn test_cmp_reg64_imm32() {
-        gen_test!(
+        disassembler_test!(
             cmp_reg64_imm32,
             |reg, imm| format!("cmp {}, 0x{:x}", reg, imm),
             ALL_GENERAL_REGS,
@@ -2077,7 +2018,7 @@ mod tests {
 
     #[test]
     fn test_imul_reg64_reg64() {
-        gen_test!(
+        disassembler_test!(
             imul_reg64_reg64,
             |reg1, reg2| format!("imul {}, {}", reg1, reg2),
             ALL_GENERAL_REGS,
@@ -2088,7 +2029,7 @@ mod tests {
     #[test]
     fn test_jmp_imm32() {
         const INST_SIZE: i32 = 5;
-        gen_test!(
+        disassembler_test!(
             jmp_imm32,
             |imm| format!("jmp 0x{:x}", imm + INST_SIZE),
             [TEST_I32]
@@ -2098,7 +2039,7 @@ mod tests {
     #[test]
     fn test_jne_imm32() {
         const INST_SIZE: i32 = 6;
-        gen_test!(
+        disassembler_test!(
             jne_imm32,
             |imm| format!("jne 0x{:x}", imm + INST_SIZE),
             [TEST_I32]
@@ -2107,7 +2048,7 @@ mod tests {
 
     #[test]
     fn test_mov_reg64_imm32() {
-        gen_test!(
+        disassembler_test!(
             mov_reg64_imm32,
             |reg, imm| format!("mov {}, 0x{:x}", reg, imm),
             ALL_GENERAL_REGS,
@@ -2117,13 +2058,13 @@ mod tests {
 
     #[test]
     fn test_mov_reg64_imm64() {
-        gen_test!(
+        disassembler_test!(
             mov_reg64_imm64,
             |reg, imm| format!("movabs {}, 0x{:x}", reg, imm),
             ALL_GENERAL_REGS,
             [TEST_I64]
         );
-        gen_test!(
+        disassembler_test!(
             mov_reg64_imm64,
             |reg, imm| format!("mov {}, 0x{:x}", reg, imm),
             ALL_GENERAL_REGS,
@@ -2133,7 +2074,7 @@ mod tests {
 
     #[test]
     fn test_mov_reg64_reg64() {
-        gen_test!(
+        disassembler_test!(
             raw_mov_reg64_reg64,
             |reg1, reg2| format!("mov {}, {}", reg1, reg2),
             ALL_GENERAL_REGS,
@@ -2143,7 +2084,7 @@ mod tests {
 
     #[test]
     fn test_movsd_freg64_base64_offset32() {
-        gen_test!(
+        disassembler_test!(
             movsd_freg64_base64_offset32,
             |reg1, reg2, imm| format!("movsd {}, qword ptr [{} + 0x{:x}]", reg1, reg2, imm),
             ALL_FLOAT_REGS,
@@ -2154,7 +2095,7 @@ mod tests {
 
     #[test]
     fn test_movsd_base64_offset32_freg64() {
-        gen_test!(
+        disassembler_test!(
             movsd_base64_offset32_freg64,
             |reg1, imm, reg2| format!("movsd qword ptr [{} + 0x{:x}], {}", reg1, imm, reg2),
             ALL_GENERAL_REGS,
@@ -2165,7 +2106,7 @@ mod tests {
 
     #[test]
     fn test_mov_reg64_base64_offset32() {
-        gen_test!(
+        disassembler_test!(
             mov_reg64_base64_offset32,
             |reg1, reg2, imm| format!("mov {}, qword ptr [{} + 0x{:x}]", reg1, reg2, imm),
             ALL_GENERAL_REGS,
@@ -2176,7 +2117,7 @@ mod tests {
 
     #[test]
     fn test_mov_base64_offset32_reg64() {
-        gen_test!(
+        disassembler_test!(
             mov_base64_offset32_reg64,
             |reg1, imm, reg2| format!("mov qword ptr [{} + 0x{:x}], {}", reg1, imm, reg2),
             ALL_GENERAL_REGS,
@@ -2187,7 +2128,7 @@ mod tests {
 
     #[test]
     fn test_movzx_reg64_base8_offset32() {
-        gen_test!(
+        disassembler_test!(
             movzx_reg64_base8_offset32,
             |reg1, reg2, imm| format!("movzx {}, byte ptr [{} + 0x{:x}]", reg1, reg2, imm),
             ALL_GENERAL_REGS,
@@ -2198,7 +2139,7 @@ mod tests {
 
     #[test]
     fn test_movsd_freg64_freg64() {
-        gen_test!(
+        disassembler_test!(
             raw_movsd_freg64_freg64,
             |reg1, reg2| format!("movsd {}, {}", reg1, reg2),
             ALL_FLOAT_REGS,
@@ -2208,7 +2149,7 @@ mod tests {
 
     #[test]
     fn test_movss_freg32_rip_offset32() {
-        gen_test!(
+        disassembler_test!(
             movss_freg32_rip_offset32,
             |reg, imm| format!("movss {}, dword ptr [rip + 0x{:x}]", reg, imm),
             ALL_FLOAT_REGS,
@@ -2218,7 +2159,7 @@ mod tests {
 
     #[test]
     fn test_movsd_freg64_rip_offset32() {
-        gen_test!(
+        disassembler_test!(
             movsd_freg64_rip_offset32,
             |reg, imm| format!("movsd {}, qword ptr [rip + 0x{:x}]", reg, imm),
             ALL_FLOAT_REGS,
@@ -2228,20 +2169,20 @@ mod tests {
 
     #[test]
     fn test_neg_reg64() {
-        gen_test!(neg_reg64, |reg| format!("neg {}", reg), ALL_GENERAL_REGS);
+        disassembler_test!(neg_reg64, |reg| format!("neg {}", reg), ALL_GENERAL_REGS);
     }
 
     #[test]
     fn test_cvtsi2_help() {
         const CVTSI2SS_CODE: u8 = 0x2A;
         const CVTTSS2SI_CODE: u8 = 0x2C;
-        gen_test!(
+        disassembler_test!(
             |buf, r1, r2| cvtsi2_help(buf, 0xF3, CVTSI2SS_CODE, r1, r2),
             |reg1, reg2| format!("cvtsi2ss {}, {}", reg1, reg2),
             ALL_FLOAT_REGS,
             ALL_GENERAL_REGS
         );
-        gen_test!(
+        disassembler_test!(
             |buf, r1, r2| cvtsi2_help(buf, 0xF3, CVTTSS2SI_CODE, r1, r2),
             |reg1, reg2| format!("cvttss2si {}, {}", reg1, reg2),
             ALL_GENERAL_REGS,
@@ -2252,7 +2193,7 @@ mod tests {
     #[test]
     fn test_cvtsx2_help() {
         const CVTSS2SD_CODE: u8 = 0x5A;
-        gen_test!(
+        disassembler_test!(
             |buf, r1, r2| cvtsi2_help(buf, 0xF3, CVTSS2SD_CODE, r1, r2),
             |reg1, reg2| format!("cvtss2sd {}, {}", reg1, reg2),
             ALL_FLOAT_REGS,
@@ -2262,7 +2203,7 @@ mod tests {
 
     #[test]
     fn test_set_reg64_help() {
-        gen_test!(
+        disassembler_test!(
             |buf, reg| set_reg64_help(0x94, buf, reg),
             |reg: X86_64GeneralReg| format!("sete {}\nand {}, 1", reg.low_8bits_string(), reg),
             ALL_GENERAL_REGS
@@ -2271,12 +2212,12 @@ mod tests {
 
     #[test]
     fn test_ret() {
-        gen_test!(|buf| ret(buf), || "ret");
+        disassembler_test!(|buf| ret(buf), || "ret");
     }
 
     #[test]
     fn test_sub_reg64_imm32() {
-        gen_test!(
+        disassembler_test!(
             sub_reg64_imm32,
             |reg, imm| format!("sub {}, 0x{:x}", reg, imm),
             ALL_GENERAL_REGS,
@@ -2286,11 +2227,11 @@ mod tests {
 
     #[test]
     fn test_pop_reg64() {
-        gen_test!(pop_reg64, |reg| format!("pop {}", reg), ALL_GENERAL_REGS);
+        disassembler_test!(pop_reg64, |reg| format!("pop {}", reg), ALL_GENERAL_REGS);
     }
 
     #[test]
     fn test_push_reg64() {
-        gen_test!(push_reg64, |reg| format!("push {}", reg), ALL_GENERAL_REGS);
+        disassembler_test!(push_reg64, |reg| format!("push {}", reg), ALL_GENERAL_REGS);
     }
 }
