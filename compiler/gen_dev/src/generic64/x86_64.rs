@@ -33,6 +33,28 @@ pub enum X86_64GeneralReg {
     R14 = 14,
     R15 = 15,
 }
+impl X86_64GeneralReg {
+    fn low_8bits_string(&self) -> &str {
+        match self {
+            X86_64GeneralReg::RAX => "al",
+            X86_64GeneralReg::RBX => "bl",
+            X86_64GeneralReg::RCX => "cl",
+            X86_64GeneralReg::RDX => "dl",
+            X86_64GeneralReg::RBP => "bpl",
+            X86_64GeneralReg::RSP => "spl",
+            X86_64GeneralReg::RDI => "dil",
+            X86_64GeneralReg::RSI => "sil",
+            X86_64GeneralReg::R8 => "r8b",
+            X86_64GeneralReg::R9 => "r9b",
+            X86_64GeneralReg::R10 => "r10b",
+            X86_64GeneralReg::R11 => "r11b",
+            X86_64GeneralReg::R12 => "r12b",
+            X86_64GeneralReg::R13 => "r13b",
+            X86_64GeneralReg::R14 => "r14b",
+            X86_64GeneralReg::R15 => "r15b",
+        }
+    }
+}
 impl RegTrait for X86_64GeneralReg {
     fn value(&self) -> u8 {
         *self as u8
@@ -1955,6 +1977,20 @@ mod tests {
         }
     }
 
+    fn merge_instructions_without_line_numbers(instructions: capstone::Instructions) -> String {
+        instructions
+            .iter()
+            .map(|inst| {
+                inst.to_string()
+                    .split(' ')
+                    .skip(1)
+                    .collect::<std::vec::Vec<&str>>()
+                    .join(" ")
+            })
+            .collect::<std::vec::Vec<String>>()
+            .join("\n")
+    }
+
     macro_rules! gen_test {
         // TODO: Not sure if there is a better way to merge these together,
         // but I like the end use of this a lot better than the old tests.
@@ -1965,9 +2001,10 @@ mod tests {
                 buf.clear();
                 $assemble_fn(&mut buf, *i);
                 let instructions = cs.disasm_all(&buf, 0).unwrap();
-                assert_eq!(1, instructions.len());
-                let inst = &instructions[0];
-                assert_eq!(format!("0x0: {}", $format_fn(*i)), inst.to_string());
+                assert_eq!(
+                    $format_fn(*i),
+                    merge_instructions_without_line_numbers(instructions)
+                );
             }
         }};
         ($assemble_fn: expr, $format_fn: expr, $iter:expr, $iter2:expr) => {{
@@ -1978,9 +2015,10 @@ mod tests {
                     buf.clear();
                     $assemble_fn(&mut buf, *i, *i2);
                     let instructions = cs.disasm_all(&buf, 0).unwrap();
-                    assert_eq!(1, instructions.len());
-                    let inst = &instructions[0];
-                    assert_eq!(format!("0x0: {}", $format_fn(*i, *i2)), inst.to_string());
+                    assert_eq!(
+                        $format_fn(*i, *i2),
+                        merge_instructions_without_line_numbers(instructions)
+                    );
                 }
             }
         }};
@@ -1993,11 +2031,9 @@ mod tests {
                         buf.clear();
                         $assemble_fn(&mut buf, *i, *i2, *i3);
                         let instructions = cs.disasm_all(&buf, 0).unwrap();
-                        assert_eq!(1, instructions.len());
-                        let inst = &instructions[0];
                         assert_eq!(
-                            format!("0x0: {}", $format_fn(*i, *i2, *i3)),
-                            inst.to_string()
+                            $format_fn(*i, *i2, *i3),
+                            merge_instructions_without_line_numbers(instructions)
                         );
                     }
                 }
@@ -2447,6 +2483,11 @@ mod tests {
         //     "sete",
         //     ALL_GENERAL_REGS,
         // );
+        gen_test!(
+            |buf, reg| set_reg64_help(0x94, buf, reg),
+            |reg: X86_64GeneralReg| format!("sete {}\nand {}, 1", reg.low_8bits_string(), reg),
+            ALL_GENERAL_REGS
+        );
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
 
