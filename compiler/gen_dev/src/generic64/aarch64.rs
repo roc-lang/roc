@@ -1202,7 +1202,7 @@ mod tests {
     //const TEST_I32: i32 = 0x12345678;
     //const TEST_I64: i64 = 0x12345678_9ABCDEF0;
 
-    const ALL_GENERAL_REGS: &'static [AArch64GeneralReg] = &[
+    const ALL_GENERAL_REGS: &[AArch64GeneralReg] = &[
         AArch64GeneralReg::X0,
         AArch64GeneralReg::X1,
         AArch64GeneralReg::X2,
@@ -1237,9 +1237,9 @@ mod tests {
         AArch64GeneralReg::ZRSP,
     ];
 
-    fn setup_capstone_and_arena<'a, T>(
-        arena: &'a bumpalo::Bump,
-    ) -> (bumpalo::collections::Vec<'a, T>, Capstone) {
+    fn setup_capstone_and_arena<T>(
+        arena: &bumpalo::Bump,
+    ) -> (bumpalo::collections::Vec<T>, Capstone) {
         let buf = bumpalo::vec![in arena];
         let cs = Capstone::new()
             .arm64()

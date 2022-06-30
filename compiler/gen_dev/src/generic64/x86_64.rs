@@ -1869,7 +1869,7 @@ mod tests {
     const TEST_I32: i32 = 0x12345678;
     const TEST_I64: i64 = 0x1234_5678_9ABC_DEF0;
 
-    const ALL_GENERAL_REGS: &'static [X86_64GeneralReg] = &[
+    const ALL_GENERAL_REGS: &[X86_64GeneralReg] = &[
         X86_64GeneralReg::RAX,
         X86_64GeneralReg::RBX,
         X86_64GeneralReg::RCX,
@@ -1887,7 +1887,7 @@ mod tests {
         X86_64GeneralReg::R14,
         X86_64GeneralReg::R15,
     ];
-    const ALL_FLOAT_REGS: &'static [X86_64FloatReg] = &[
+    const ALL_FLOAT_REGS: &[X86_64FloatReg] = &[
         X86_64FloatReg::XMM0,
         X86_64FloatReg::XMM1,
         X86_64FloatReg::XMM2,
@@ -1906,9 +1906,9 @@ mod tests {
         X86_64FloatReg::XMM15,
     ];
 
-    fn setup_capstone_and_arena<'a, T>(
-        arena: &'a bumpalo::Bump,
-    ) -> (bumpalo::collections::Vec<'a, T>, Capstone) {
+    fn setup_capstone_and_arena<T>(
+        arena: &bumpalo::Bump,
+    ) -> (bumpalo::collections::Vec<T>, Capstone) {
         let buf = bumpalo::vec![in arena];
         let cs = Capstone::new()
             .x86()
@@ -2196,7 +2196,7 @@ mod tests {
 
     #[test]
     fn test_ret() {
-        disassembler_test!(|buf| ret(buf), || "ret");
+        disassembler_test!(ret, || "ret");
     }
 
     #[test]
