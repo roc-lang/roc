@@ -1082,7 +1082,7 @@ fn add_reg64_reg64_reg64(
     src1: AArch64GeneralReg,
     src2: AArch64GeneralReg,
 ) {
-    let inst = ArithmeticShifted::new(false, false, ShiftType::LSL, 0, src1, src2, dst);
+    let inst = ArithmeticShifted::new(false, false, ShiftType::LSL, 0, src2, src1, dst);
 
     buf.extend(inst.bytes());
 }
@@ -1171,22 +1171,89 @@ fn ret_reg64(buf: &mut Vec<'_, u8>, xn: AArch64GeneralReg) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::disassembler_test;
+    use capstone::prelude::*;
+
+    impl AArch64GeneralReg {
+        fn capstone_string(&self) -> String {
+            match self {
+                AArch64GeneralReg::XR => "x8".to_owned(),
+                AArch64GeneralReg::IP0 => "x16".to_owned(),
+                AArch64GeneralReg::IP1 => "x17".to_owned(),
+                AArch64GeneralReg::PR => "x18".to_owned(),
+                AArch64GeneralReg::FP => "x29".to_owned(),
+                AArch64GeneralReg::LR => "x30".to_owned(),
+                _ => format!("{}", self),
+            }
+        }
+    }
 
     const TEST_U16: u16 = 0x1234;
     //const TEST_I32: i32 = 0x12345678;
     //const TEST_I64: i64 = 0x12345678_9ABCDEF0;
 
+    const ALL_GENERAL_REGS: &'static [AArch64GeneralReg] = &[
+        AArch64GeneralReg::X0,
+        AArch64GeneralReg::X1,
+        AArch64GeneralReg::X2,
+        AArch64GeneralReg::X3,
+        AArch64GeneralReg::X4,
+        AArch64GeneralReg::X5,
+        AArch64GeneralReg::X6,
+        AArch64GeneralReg::X7,
+        AArch64GeneralReg::XR,
+        AArch64GeneralReg::X9,
+        AArch64GeneralReg::X10,
+        AArch64GeneralReg::X11,
+        AArch64GeneralReg::X12,
+        AArch64GeneralReg::X13,
+        AArch64GeneralReg::X14,
+        AArch64GeneralReg::X15,
+        AArch64GeneralReg::IP0,
+        AArch64GeneralReg::IP1,
+        AArch64GeneralReg::PR,
+        AArch64GeneralReg::X19,
+        AArch64GeneralReg::X20,
+        AArch64GeneralReg::X21,
+        AArch64GeneralReg::X22,
+        AArch64GeneralReg::X23,
+        AArch64GeneralReg::X24,
+        AArch64GeneralReg::X25,
+        AArch64GeneralReg::X26,
+        AArch64GeneralReg::X27,
+        AArch64GeneralReg::X28,
+        AArch64GeneralReg::FP,
+        AArch64GeneralReg::LR,
+        AArch64GeneralReg::ZRSP,
+    ];
+
+    fn setup_capstone_and_arena<'a, T>(
+        arena: &'a bumpalo::Bump,
+    ) -> (bumpalo::collections::Vec<'a, T>, Capstone) {
+        let buf = bumpalo::vec![in arena];
+        let cs = Capstone::new()
+            .arm64()
+            .mode(arch::arm64::ArchMode::Arm)
+            .detail(true)
+            .build()
+            .expect("Failed to create Capstone object");
+        (buf, cs)
+    }
+
     #[test]
     fn test_add_reg64_reg64_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        add_reg64_reg64_reg64(
-            &mut buf,
-            AArch64GeneralReg::X10,
-            AArch64GeneralReg::ZRSP,
-            AArch64GeneralReg::X21,
+        disassembler_test!(
+            add_reg64_reg64_reg64,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, reg3: AArch64GeneralReg| format!(
+                "add {}, {}, {}",
+                reg1.capstone_string(),
+                reg2.capstone_string(),
+                reg3.capstone_string()
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
         );
-        assert_eq!(&buf, &[0xAA, 0x02, 0x1F, 0x8B]);
     }
 
     #[test]
