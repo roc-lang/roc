@@ -1309,18 +1309,36 @@ mod tests {
 
     #[test]
     fn test_mov_reg64_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        mov_reg64_reg64(&mut buf, AArch64GeneralReg::X10, AArch64GeneralReg::X21);
-        assert_eq!(&buf, &[0xEA, 0x03, 0x15, 0xAA]);
+        disassembler_test!(
+            mov_reg64_reg64,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg| format!(
+                "mov {}, {}",
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesZR),
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
     }
 
     #[test]
     fn test_movk_reg64_imm16() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        movk_reg64_imm16(&mut buf, AArch64GeneralReg::X21, TEST_U16, 3);
-        assert_eq!(&buf, &[0x95, 0x46, 0xE2, 0xF2]);
+        disassembler_test!(
+            movk_reg64_imm16,
+            |reg1: AArch64GeneralReg, imm, hw| format!(
+                "movk {}, #0x{:x}{}",
+                reg1.capstone_string(UsesZR),
+                imm,
+                if hw > 0 {
+                    format!(", lsl #{}", hw * 16)
+                } else {
+                    "".to_owned()
+                }
+            ),
+            ALL_GENERAL_REGS,
+            [TEST_U16],
+            [0, 1, 2, 3]
+        );
     }
 
     #[test]
