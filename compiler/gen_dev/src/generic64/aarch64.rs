@@ -524,7 +524,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             todo!("negative base offsets for AArch64");
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
-            str_reg64_imm12(buf, src, AArch64GeneralReg::FP, (offset as u16) >> 3);
+            str_reg64_reg64_imm12(buf, src, AArch64GeneralReg::FP, (offset as u16) >> 3);
         } else {
             todo!("base offsets over 32k for AArch64");
         }
@@ -557,7 +557,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             todo!("negative mem offsets for AArch64");
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
-            str_reg64_imm12(buf, src, dst, (offset as u16) >> 3);
+            str_reg64_reg64_imm12(buf, src, dst, (offset as u16) >> 3);
         } else {
             todo!("mem offsets over 32k for AArch64");
         }
@@ -619,7 +619,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             todo!("negative stack offsets for AArch64");
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
-            str_reg64_imm12(buf, src, AArch64GeneralReg::ZRSP, (offset as u16) >> 3);
+            str_reg64_reg64_imm12(buf, src, AArch64GeneralReg::ZRSP, (offset as u16) >> 3);
         } else {
             todo!("stack offsets over 32k for AArch64");
         }
@@ -1136,7 +1136,7 @@ fn movz_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, h
 /// `STR Xt, [Xn, #offset]` -> Store Xt to Xn + Offset. ZRSP is SP.
 /// Note: imm12 is the offest divided by 8.
 #[inline(always)]
-fn str_reg64_imm12(
+fn str_reg64_reg64_imm12(
     buf: &mut Vec<'_, u8>,
     src: AArch64GeneralReg,
     base: AArch64GeneralReg,
@@ -1284,6 +1284,7 @@ mod tests {
 
     #[test]
     fn test_ldr_reg64_reg64_imm12() {
+        // TODO: It looks like there is a bug wiht load and str implementations. They generate a different offset that speicified.
         // disassembler_test!(
         //     ldr_reg64_reg64_imm12,
         //     |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
@@ -1343,17 +1344,38 @@ mod tests {
 
     #[test]
     fn test_movz_reg64_imm16() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        movz_reg64_imm16(&mut buf, AArch64GeneralReg::X21, TEST_U16, 3);
-        assert_eq!(&buf, &[0x95, 0x46, 0xE2, 0xD2]);
+        disassembler_test!(
+            movz_reg64_imm16,
+            |reg1: AArch64GeneralReg, imm, hw| format!(
+                "mov {}, #0x{:x}{}",
+                reg1.capstone_string(UsesZR),
+                imm,
+                "0000".repeat(hw as usize)
+            ),
+            ALL_GENERAL_REGS,
+            [TEST_U16],
+            [0, 1, 2, 3]
+        );
     }
 
     #[test]
-    fn test_str_reg64_imm12() {
+    fn test_str_reg64_reg64_imm12() {
+        // TODO: It looks like there is a bug wiht load and str implementations. They generate a different offset that speicified.
+        // disassembler_test!(
+        //     str_reg64_reg64_imm12,
+        //     |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
+        //         "str {}, [{}, #0x{:x}]",
+        //         reg1.capstone_string(UsesSP),
+        //         reg2.capstone_string(UsesSP),
+        //         imm
+        //     ),
+        //     ALL_GENERAL_REGS,
+        //     ALL_GENERAL_REGS,
+        //     [0x123]
+        // );
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
-        str_reg64_imm12(
+        str_reg64_reg64_imm12(
             &mut buf,
             AArch64GeneralReg::X21,
             AArch64GeneralReg::ZRSP,
@@ -1364,19 +1386,31 @@ mod tests {
 
     #[test]
     fn test_sub_reg64_reg64_imm12() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        sub_reg64_reg64_imm12(
-            &mut buf,
-            AArch64GeneralReg::X10,
-            AArch64GeneralReg::X21,
-            0x123,
+        disassembler_test!(
+            sub_reg64_reg64_imm12,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
+                "sub {}, {}, #0x{:x}",
+                reg1.capstone_string(UsesSP),
+                reg2.capstone_string(UsesSP),
+                imm
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [0x123]
         );
-        assert_eq!(&buf, &[0xAA, 0x8E, 0x04, 0xD1]);
     }
 
     #[test]
     fn test_ret_reg64() {
+        disassembler_test!(
+            ret_reg64,
+            |reg1: AArch64GeneralReg| if reg1 == AArch64GeneralReg::LR {
+                "ret".to_owned()
+            } else {
+                format!("ret {}", reg1.capstone_string(UsesZR))
+            },
+            ALL_GENERAL_REGS
+        );
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
         ret_reg64(&mut buf, AArch64GeneralReg::LR);
