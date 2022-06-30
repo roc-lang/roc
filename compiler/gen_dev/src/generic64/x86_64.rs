@@ -1639,12 +1639,14 @@ fn movsd_base64_offset32_freg64(
     offset: i32,
     src: X86_64FloatReg,
 ) {
+    let rex = add_rm_extension(base, REX_W);
+    let rex = add_reg_extension(src, rex);
     let src_mod = (src as u8 % 8) << 3;
     let base_mod = base as u8 % 8;
     buf.reserve(10);
     buf.push(0xF2);
     if src as u8 > 7 || base as u8 > 7 {
-        buf.push(0x44);
+        buf.push(rex);
     }
     buf.extend(&[0x0F, 0x11, 0x80 + src_mod + base_mod]);
     // Using RSP or R12 requires a secondary index byte.
@@ -1662,12 +1664,14 @@ fn movsd_freg64_base64_offset32(
     base: X86_64GeneralReg,
     offset: i32,
 ) {
+    let rex = add_rm_extension(base, REX_W);
+    let rex = add_reg_extension(dst, rex);
     let dst_mod = (dst as u8 % 8) << 3;
     let base_mod = base as u8 % 8;
     buf.reserve(10);
     buf.push(0xF2);
     if dst as u8 > 7 || base as u8 > 7 {
-        buf.push(0x44);
+        buf.push(rex);
     }
     buf.extend(&[0x0F, 0x10, 0x80 + dst_mod + base_mod]);
     // Using RSP or R12 requires a secondary index byte.
@@ -1899,46 +1903,6 @@ mod tests {
         X86_64FloatReg::XMM14,
         X86_64FloatReg::XMM15,
     ];
-
-    // Checks a register matches the capstone operand register.
-    // This works for both general and float regs.
-    fn assert_operand_reg64_eq<Reg: RegTrait>(
-        cs: &Capstone,
-        expected: Reg,
-        operand: &arch::ArchOperand,
-    ) {
-        if let arch::ArchOperand::X86Operand(arch::x86::X86Operand {
-            op_type: arch::x86::X86OperandType::Reg(reg_id),
-            ..
-        }) = operand
-        {
-            assert_eq!(Some(expected.to_string()), cs.reg_name(*reg_id));
-        } else {
-            panic!(
-                "Failed to match operand type with register instead got: {:?}",
-                operand
-            );
-        }
-    }
-
-    // Checks an integer matches the capstone operand immediate.
-    fn assert_operand_imm_eq<T>(expected: T, operand: &arch::ArchOperand)
-    where
-        i64: From<T>,
-    {
-        if let arch::ArchOperand::X86Operand(arch::x86::X86Operand {
-            op_type: arch::x86::X86OperandType::Imm(imm),
-            ..
-        }) = operand
-        {
-            assert_eq!(i64::from(expected), *imm);
-        } else {
-            panic!(
-                "Failed to match operand type with immediate instead got: {:?}",
-                operand
-            );
-        }
-    }
 
     fn setup_capstone_and_arena<'a, T>(
         arena: &'a bumpalo::Bump,
@@ -2177,87 +2141,25 @@ mod tests {
     }
 
     #[test]
-    fn test_movsd_freg64_base32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, offset), expected) in &[
-            (
-                (X86_64FloatReg::XMM0, TEST_I32),
-                vec![0xF2, 0x0F, 0x10, 0x85],
-            ),
-            (
-                (X86_64FloatReg::XMM15, TEST_I32),
-                vec![0xF2, 0x44, 0x0F, 0x10, 0xBD],
-            ),
-        ] {
-            buf.clear();
-            movsd_freg64_base64_offset32(&mut buf, *dst, X86_64GeneralReg::RBP, *offset);
-            assert_eq!(expected, &buf[..buf.len() - 4]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[buf.len() - 4..]);
-        }
+    fn test_movsd_freg64_base64_offset32() {
+        gen_test!(
+            movsd_freg64_base64_offset32,
+            |reg1, reg2, imm| format!("movsd {}, qword ptr [{} + 0x{:x}]", reg1, reg2, imm),
+            ALL_FLOAT_REGS,
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
     }
 
     #[test]
-    fn test_movsd_base32_freg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((offset, src), expected) in &[
-            (
-                (TEST_I32, X86_64FloatReg::XMM0),
-                vec![0xF2, 0x0F, 0x11, 0x85],
-            ),
-            (
-                (TEST_I32, X86_64FloatReg::XMM15),
-                vec![0xF2, 0x44, 0x0F, 0x11, 0xBD],
-            ),
-        ] {
-            buf.clear();
-            movsd_base64_offset32_freg64(&mut buf, X86_64GeneralReg::RBP, *offset, *src);
-            assert_eq!(expected, &buf[..buf.len() - 4]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[buf.len() - 4..]);
-        }
-    }
-
-    #[test]
-    fn test_movsd_freg64_stack32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, offset), expected) in &[
-            (
-                (X86_64FloatReg::XMM0, TEST_I32),
-                vec![0xF2, 0x0F, 0x10, 0x84, 0x24],
-            ),
-            (
-                (X86_64FloatReg::XMM15, TEST_I32),
-                vec![0xF2, 0x44, 0x0F, 0x10, 0xBC, 0x24],
-            ),
-        ] {
-            buf.clear();
-            movsd_freg64_base64_offset32(&mut buf, *dst, X86_64GeneralReg::RSP, *offset);
-            assert_eq!(expected, &buf[..buf.len() - 4]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[buf.len() - 4..]);
-        }
-    }
-
-    #[test]
-    fn test_movsd_stack32_freg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((offset, src), expected) in &[
-            (
-                (TEST_I32, X86_64FloatReg::XMM0),
-                vec![0xF2, 0x0F, 0x11, 0x84, 0x24],
-            ),
-            (
-                (TEST_I32, X86_64FloatReg::XMM15),
-                vec![0xF2, 0x44, 0x0F, 0x11, 0xBC, 0x24],
-            ),
-        ] {
-            buf.clear();
-            movsd_base64_offset32_freg64(&mut buf, X86_64GeneralReg::RSP, *offset, *src);
-            assert_eq!(expected, &buf[..buf.len() - 4]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[buf.len() - 4..]);
-        }
+    fn test_movsd_base64_offset32_freg64() {
+        gen_test!(
+            movsd_base64_offset32_freg64,
+            |reg1, imm, reg2| format!("movsd qword ptr [{} + 0x{:x}], {}", reg1, imm, reg2),
+            ALL_GENERAL_REGS,
+            [TEST_I32],
+            ALL_FLOAT_REGS
+        );
     }
 
     #[test]
