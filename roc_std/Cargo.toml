@@ -9,7 +9,7 @@ repository = "https://github.com/rtfeldman/roc"
 version = "0.1.0"
 
 [dependencies]
-static_assertions = "0.1"
+static_assertions = "1.1.0"
 arrayvec = "0.7.2"
 
 [dev-dependencies]
