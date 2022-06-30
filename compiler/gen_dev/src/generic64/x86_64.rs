@@ -33,29 +33,6 @@ pub enum X86_64GeneralReg {
     R14 = 14,
     R15 = 15,
 }
-impl X86_64GeneralReg {
-    #[allow(dead_code)]
-    fn low_8bits_string(&self) -> &str {
-        match self {
-            X86_64GeneralReg::RAX => "al",
-            X86_64GeneralReg::RBX => "bl",
-            X86_64GeneralReg::RCX => "cl",
-            X86_64GeneralReg::RDX => "dl",
-            X86_64GeneralReg::RBP => "bpl",
-            X86_64GeneralReg::RSP => "spl",
-            X86_64GeneralReg::RDI => "dil",
-            X86_64GeneralReg::RSI => "sil",
-            X86_64GeneralReg::R8 => "r8b",
-            X86_64GeneralReg::R9 => "r9b",
-            X86_64GeneralReg::R10 => "r10b",
-            X86_64GeneralReg::R11 => "r11b",
-            X86_64GeneralReg::R12 => "r12b",
-            X86_64GeneralReg::R13 => "r13b",
-            X86_64GeneralReg::R14 => "r14b",
-            X86_64GeneralReg::R15 => "r15b",
-        }
-    }
-}
 impl RegTrait for X86_64GeneralReg {
     fn value(&self) -> u8 {
         *self as u8
@@ -1866,6 +1843,28 @@ mod tests {
     use crate::disassembler_test;
     use capstone::prelude::*;
 
+    impl X86_64GeneralReg {
+        fn low_8bits_string(&self) -> &str {
+            match self {
+                X86_64GeneralReg::RAX => "al",
+                X86_64GeneralReg::RBX => "bl",
+                X86_64GeneralReg::RCX => "cl",
+                X86_64GeneralReg::RDX => "dl",
+                X86_64GeneralReg::RBP => "bpl",
+                X86_64GeneralReg::RSP => "spl",
+                X86_64GeneralReg::RDI => "dil",
+                X86_64GeneralReg::RSI => "sil",
+                X86_64GeneralReg::R8 => "r8b",
+                X86_64GeneralReg::R9 => "r9b",
+                X86_64GeneralReg::R10 => "r10b",
+                X86_64GeneralReg::R11 => "r11b",
+                X86_64GeneralReg::R12 => "r12b",
+                X86_64GeneralReg::R13 => "r13b",
+                X86_64GeneralReg::R14 => "r14b",
+                X86_64GeneralReg::R15 => "r15b",
+            }
+        }
+    }
     const TEST_I32: i32 = 0x12345678;
     const TEST_I64: i64 = 0x1234_5678_9ABC_DEF0;
 
@@ -1918,22 +1917,6 @@ mod tests {
             .build()
             .expect("Failed to create Capstone object");
         (buf, cs)
-    }
-
-    fn merge_instructions_without_line_numbers(instructions: capstone::Instructions) -> String {
-        instructions
-            .iter()
-            .map(|inst| {
-                inst.to_string()
-                    .trim()
-                    .split(' ')
-                    .skip(1)
-                    .map(|x| x.trim())
-                    .collect::<std::vec::Vec<&str>>()
-                    .join(" ")
-            })
-            .collect::<std::vec::Vec<String>>()
-            .join("\n")
     }
 
     #[test]
