@@ -5,7 +5,7 @@ use roc_ast::mem_pool::pool_str::PoolStr;
 use roc_code_markup::slow_pool::MarkNodeId;
 
 use crate::editor::ed_error::EdResult;
-use crate::editor::ed_error::StringParseError;
+use crate::editor::ed_error::StringParseSnafu;
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::mvc::ed_update::get_node_context;
@@ -125,7 +125,7 @@ fn update_small_int_num(number: &mut IntVal, updated_str: &str) -> EdResult<()> 
 fn check_parse_res<T, E: std::fmt::Debug>(parse_res: Result<T, E>) -> EdResult<T> {
     match parse_res {
         Ok(some_type) => Ok(some_type),
-        Err(parse_err) => StringParseError {
+        Err(parse_err) => StringParseSnafu {
             msg: format!("{:?}", parse_err),
         }
         .fail(),

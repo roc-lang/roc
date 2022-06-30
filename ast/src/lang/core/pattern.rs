@@ -16,7 +16,7 @@ use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError, ShadowKin
 use roc_region::all::Region;
 use roc_types::subs::Variable;
 
-use crate::ast_error::{ASTResult, UnexpectedPattern2Variant};
+use crate::ast_error::{ASTResult, UnexpectedPattern2VariantSnafu};
 use crate::constrain::Constraint;
 use crate::lang::core::expr::expr_to_expr2::to_expr_id;
 use crate::lang::env::Env;
@@ -517,7 +517,7 @@ pub fn symbols_from_pattern(pool: &Pool, initial: &Pattern2) -> Vec<Symbol> {
 pub fn get_identifier_string(pattern: &Pattern2, interns: &Interns) -> ASTResult<String> {
     match pattern {
         Pattern2::Identifier(symbol) => Ok(symbol.as_str(interns).to_string()),
-        other => UnexpectedPattern2Variant {
+        other => UnexpectedPattern2VariantSnafu {
             required_pattern2: "Identifier".to_string(),
             encountered_pattern2: format!("{:?}", other),
         }

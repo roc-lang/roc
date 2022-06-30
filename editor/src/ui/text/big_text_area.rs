@@ -9,7 +9,7 @@ use crate::ui::text::{
     selection::{validate_raw_sel, RawSelection, Selection},
     text_pos::TextPos,
 };
-use crate::ui::ui_error::{OutOfBounds, UIResult};
+use crate::ui::ui_error::{OutOfBoundsSnafu, UIResult};
 use crate::ui::util::is_newline;
 use crate::window::keyboard_input::{no_mods, Modifiers};
 use bumpalo::Bump;
@@ -30,7 +30,7 @@ impl BigTextArea {
     fn check_bounds(&self, char_indx: usize) -> UIResult<()> {
         ensure!(
             char_indx <= self.text_buffer.nr_of_chars(),
-            OutOfBounds {
+            OutOfBoundsSnafu {
                 index: char_indx,
                 collection_name: "TextBuffer",
                 len: self.text_buffer.nr_of_chars()

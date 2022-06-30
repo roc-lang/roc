@@ -5,7 +5,7 @@ use roc_code_markup::markup::nodes::{self};
 use roc_code_markup::slow_pool::MarkNodeId;
 
 use crate::editor::ed_error::EdResult;
-use crate::editor::ed_error::{MissingParent, UnexpectedASTNode};
+use crate::editor::ed_error::{MissingParentSnafu, UnexpectedASTNodeSnafu};
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::mvc::ed_update::get_node_context;
@@ -71,14 +71,14 @@ pub fn add_blank_child(
 
                 Ok((blank_elt_id, list_ast_node_id.to_expr_id()?, parent_id))
             }
-            _ => UnexpectedASTNode {
+            _ => UnexpectedASTNodeSnafu {
                 required_node_type: "List".to_string(),
                 encountered_node_type: ast_node_to_string(ast_node_id, ed_model.module.env.pool),
             }
             .fail(),
         }
     } else {
-        MissingParent {
+        MissingParentSnafu {
             node_id: curr_mark_node_id,
         }
         .fail()
@@ -108,7 +108,7 @@ pub fn add_blank_child(
 
             Ok(())
         }
-        _ => UnexpectedASTNode {
+        _ => UnexpectedASTNodeSnafu {
             required_node_type: "List".to_string(),
             encountered_node_type: ast_node_to_string(ast_node_id, ed_model.module.env.pool),
         }

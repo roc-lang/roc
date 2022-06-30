@@ -1,8 +1,8 @@
 use crate::editor::code_lines::CodeLines;
 use crate::editor::grid_node_map::GridNodeMap;
 use crate::editor::{
-    ed_error::SrcParseError,
-    ed_error::{EdResult, EmptyCodeString, MissingParent, NoNodeAtCaretPosition},
+    ed_error::SrcParseSnafu,
+    ed_error::{EdResult, EmptyCodeStringSnafu, MissingParentSnafu, NoNodeAtCaretPositionSnafu},
 };
 use crate::graphics::primitives::rect::Rect;
 use crate::ui::text::caret_w_select::{CaretPos, CaretWSelect};
@@ -67,7 +67,7 @@ pub fn init_model<'a>(
     let mut mark_node_pool = SlowPool::default();
 
     let (markup_ids, mark_id_ast_id_map) = if code_str.is_empty() {
-        EmptyCodeString {}.fail()
+        EmptyCodeStringSnafu {}.fail()
     } else {
         Ok(ast_to_mark_nodes(
             &mut module.env,
@@ -170,13 +170,13 @@ impl<'a> EdModel<'a> {
                     &self.mark_id_ast_id_map,
                 )?)
             } else {
-                MissingParent {
+                MissingParentSnafu {
                     node_id: curr_mark_node_id,
                 }
                 .fail()
             }
         } else {
-            NoNodeAtCaretPosition {
+            NoNodeAtCaretPositionSnafu {
                 caret_pos: self.get_caret(),
             }
             .fail()
@@ -205,13 +205,13 @@ impl<'a> EdModule<'a> {
 
             match parse_res {
                 Ok(ast) => Ok(EdModule { env, ast }),
-                Err(err) => SrcParseError {
+                Err(err) => SrcParseSnafu {
                     syntax_err: format!("{:?}", err),
                 }
                 .fail(),
             }
         } else {
-            EmptyCodeString {}.fail()
+            EmptyCodeStringSnafu {}.fail()
         }
     }
 }

@@ -3,7 +3,7 @@
 use super::lines::Lines;
 use super::text_pos::TextPos;
 use crate::ui::theme::UITheme;
-use crate::ui::ui_error::{InvalidSelection, UIResult};
+use crate::ui::ui_error::{InvalidSelectionSnafu, UIResult};
 use bumpalo::collections::Vec as BumpVec;
 use snafu::ensure;
 use std::fmt;
@@ -47,7 +47,7 @@ pub fn validate_sel_opt(start_pos: TextPos, end_pos: TextPos) -> UIResult<Option
 pub fn validate_selection(start_pos: TextPos, end_pos: TextPos) -> UIResult<Selection> {
     ensure!(
         start_pos.line <= end_pos.line,
-        InvalidSelection {
+        InvalidSelectionSnafu {
             err_msg: format!(
                 "start_pos.line ({}) should be smaller than or equal to end_pos.line ({})",
                 start_pos.line, end_pos.line
@@ -57,7 +57,7 @@ pub fn validate_selection(start_pos: TextPos, end_pos: TextPos) -> UIResult<Sele
 
     ensure!(
         !(start_pos.line == end_pos.line && start_pos.column >= end_pos.column),
-        InvalidSelection {
+        InvalidSelectionSnafu {
             err_msg: format!(
                 "start_pos.column ({}) should be smaller than end_pos.column ({}) when start_pos.line equals end_pos.line",
                 start_pos.column,

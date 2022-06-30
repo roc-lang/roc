@@ -1,12 +1,12 @@
 use crate::editor::ed_error::EdResult;
-use crate::editor::ed_error::NestedNodeWithoutChildren;
-use crate::editor::ed_error::{NoDefMarkNodeBeforeLineNr, NodeIdNotInGridNodeMap};
+use crate::editor::ed_error::NestedNodeWithoutChildrenSnafu;
+use crate::editor::ed_error::{NoDefMarkNodeBeforeLineNrSnafu, NodeIdNotInGridNodeMapSnafu};
 use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::util::first_last_index_of;
 use crate::editor::util::index_of;
 use crate::ui::text::selection::Selection;
 use crate::ui::text::text_pos::TextPos;
-use crate::ui::ui_error::{LineInsertionFailed, OutOfBounds, UIResult};
+use crate::ui::ui_error::{LineInsertionFailedSnafu, OutOfBoundsSnafu, UIResult};
 use crate::ui::util::{slice_get, slice_get_mut};
 use roc_ast::lang::core::ast::ASTNodeId;
 use roc_code_markup::markup::mark_id_ast_id_map::MarkIdAstIdMap;
@@ -44,7 +44,7 @@ impl GridNodeMap {
 
             self.insert_between_line(line_nr, index, len, node_id)?;
         } else {
-            LineInsertionFailed {
+            LineInsertionFailedSnafu {
                 line_nr,
                 nr_of_lines,
             }
@@ -60,7 +60,7 @@ impl GridNodeMap {
 
             Ok(())
         } else {
-            OutOfBounds {
+            OutOfBoundsSnafu {
                 index: line_nr,
                 collection_name: "code_lines.lines".to_owned(),
                 len: self.lines.len(),
@@ -92,7 +92,7 @@ impl GridNodeMap {
                 Ok(())
             }
             Ordering::Equal => self.insert_empty_line(line_nr + 1),
-            Ordering::Greater => OutOfBounds {
+            Ordering::Greater => OutOfBoundsSnafu {
                 index: line_nr,
                 collection_name: "grid_node_map.lines".to_owned(),
                 len: self.lines.len(),
@@ -200,7 +200,7 @@ impl GridNodeMap {
         if let Some(last_pos) = last_pos_opt {
             Ok(last_pos)
         } else {
-            NodeIdNotInGridNodeMap { node_id }.fail()
+            NodeIdNotInGridNodeMapSnafu { node_id }.fail()
         }
     }
 
@@ -345,7 +345,7 @@ impl GridNodeMap {
         while !children_ids.is_empty() {
             first_child_id = *children_ids
                 .first()
-                .with_context(|| NestedNodeWithoutChildren {
+                .with_context(|| NestedNodeWithoutChildrenSnafu {
                     node_id: nested_node_id,
                 })?;
 
@@ -372,7 +372,7 @@ impl GridNodeMap {
         while !children_ids.is_empty() {
             last_child_id = *children_ids
                 .last()
-                .with_context(|| NestedNodeWithoutChildren {
+                .with_context(|| NestedNodeWithoutChildrenSnafu {
                     node_id: nested_node_id,
                 })?;
 
@@ -410,7 +410,7 @@ impl GridNodeMap {
             }
         }
 
-        NoDefMarkNodeBeforeLineNr { line_nr }.fail()
+        NoDefMarkNodeBeforeLineNrSnafu { line_nr }.fail()
     }
 }
 
