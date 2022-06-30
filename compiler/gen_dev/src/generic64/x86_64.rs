@@ -1932,32 +1932,6 @@ mod tests {
         (buf, cs)
     }
 
-    // Jumps are special, their immeadiate is incremented by the length of the instruction.
-    fn test_jmp_helper<T: Copy>(
-        assemble: fn(buf: &mut Vec<'_, u8>, imm: T),
-        expected_mnemonic: &str,
-        immediates: &[T],
-    ) where
-        i64: From<T>,
-    {
-        let arena = bumpalo::Bump::new();
-        let (mut buf, cs) = setup_capstone_and_arena(&arena);
-        for imm in immediates {
-            buf.clear();
-            assemble(&mut buf, *imm);
-
-            let instructions = cs.disasm_all(&buf, 0).unwrap();
-            assert_eq!(1, instructions.len());
-            let inst = &instructions[0];
-            assert_eq!(Some(expected_mnemonic), inst.mnemonic());
-
-            let detail = cs.insn_detail(inst).unwrap();
-            let operands = detail.arch_detail().operands();
-            assert_eq!(1, operands.len());
-            assert_operand_imm_eq::<i64>(i64::from(*imm) + buf.len() as i64, &operands[0]);
-        }
-    }
-
     fn test_reg64_helper<Reg: RegTrait>(
         assemble: fn(buf: &mut Vec<'_, u8>, dst: Reg),
         expected_mnemonic: &str,
@@ -1979,6 +1953,53 @@ mod tests {
             assert_eq!(1, operands.len());
             assert_operand_reg64_eq(&cs, *dst, &operands[0]);
         }
+    }
+
+    macro_rules! test_helper {
+        // TODO: Not sure if there is a better way to merge these together,
+        // but I like the end use of this a lot better than the old tests.
+        ($assemble_fn: expr, $format_fn: expr, $iter:expr) => {{
+            let arena = bumpalo::Bump::new();
+            let (mut buf, cs) = setup_capstone_and_arena(&arena);
+            for i in $iter {
+                buf.clear();
+                $assemble_fn(&mut buf, i);
+                let instructions = cs.disasm_all(&buf, 0).unwrap();
+                assert_eq!(1, instructions.len());
+                let inst = &instructions[0];
+                assert_eq!(format!("0x0: {}", $format_fn(i)), inst.to_string());
+            }
+        }};
+        ($assemble_fn: expr, $format_fn: expr, $iter:expr, $iter2:expr) => {{
+            let arena = bumpalo::Bump::new();
+            let (mut buf, cs) = setup_capstone_and_arena(&arena);
+            for i in $iter {
+                for i2 in $iter2 {
+                    buf.clear();
+                    $assemble_fn(&mut buf, i, i2);
+                    let instructions = cs.disasm_all(&buf, 0).unwrap();
+                    assert_eq!(1, instructions.len());
+                    let inst = &instructions[0];
+                    assert_eq!(format!("0x0: {}", $format_fn(i, i2)), inst.to_string());
+                }
+            }
+        }};
+        ($assemble_fn: expr, $format_fn: expr, $iter:expr, $iter2:expr, $iter3:expr) => {{
+            let arena = bumpalo::Bump::new();
+            let (mut buf, cs) = setup_capstone_and_arena(&arena);
+            for i in $iter {
+                for i2 in $iter2 {
+                    for i3 in $iter3 {
+                        buf.clear();
+                        $assemble_fn(&mut buf, i, i2, i3);
+                        let instructions = cs.disasm_all(&buf, 0).unwrap();
+                        assert_eq!(1, instructions.len());
+                        let inst = &instructions[0];
+                        assert_eq!(format!("0x0: {}", $format_fn(i, i2, i3)), inst.to_string());
+                    }
+                }
+            }
+        }};
     }
 
     fn test_reg64_imm_helper<Reg: RegTrait, T: Copy>(
@@ -2089,12 +2110,22 @@ mod tests {
 
     #[test]
     fn test_jmp_imm32() {
-        test_jmp_helper(jmp_imm32, "jmp", &[TEST_I32])
+        const INST_SIZE: i32 = 5;
+        test_helper!(
+            jmp_imm32,
+            |imm| format!("jmp 0x{:x}", imm + INST_SIZE),
+            [TEST_I32]
+        );
     }
 
     #[test]
     fn test_jne_imm32() {
-        test_jmp_helper(jne_imm32, "jne", &[TEST_I32])
+        const INST_SIZE: i32 = 6;
+        test_helper!(
+            jne_imm32,
+            |imm| format!("jne 0x{:x}", imm + INST_SIZE),
+            [TEST_I32]
+        );
     }
 
     #[test]
