@@ -97,7 +97,6 @@ appendHelp = \prefix, suffix ->
                 |> Str.append "/"
                 |> Str.append suffix
 
-
 ## Internal helper. This is intentionally unexposed so that you don't accidentally
 ## double-encode things. If you want to percent-encode something, you can always do:
 ##
@@ -110,35 +109,36 @@ appendHelp = \prefix, suffix ->
 ## https://stackoverflow.com/questions/2678551/when-should-space-be-encoded-to-plus-or-20/47188851#47188851
 percentEncode : Str -> Str
 percentEncode = \input ->
-    # TODO Str.walkCodePts can give you both a u32 and also a Str, so
-    # you can append it to something if need be. Every code point is a valid Str.
+    # TODO `Str.replaceUtf8 : Str, (U8 -> [Same, Replace Str]) -> Str` can let you translate UTF-8 bytes into strings.
     #
     # TODO instead of starting with "", start with Str.withCapacity based on
     # some the length of the given str. (Maybe be optimistic and assume it's the same length,
     # then let it get doubled if we're wrong.)
-    List.walkCodePts input "" \output, codePt, codePtAsStr ->
-        Str.append output when codePt is
-            ':' -> "%3A"
-            '/' -> "%2F"
-            '?' -> "%3F"
-            '#' -> "%23"
-            '[' -> "%5B"
-            ']' -> "%5D"
-            '@' -> "%40"
-            '!' -> "%21"
-            '$' -> "%24"
-            '&' -> "%26"
-            '\'' -> "%27"
-            '(' -> "%28"
-            ')' -> "%29"
-            '*' -> "%2A"
-            '+' -> "%2B"
-            ',' -> "%2C"
-            ';' -> "%3B"
-            '=' -> "%3D"
-            '%' -> "%25"
-            ' ' -> "%20"
-            _ -> codePtAsStr
+    #
+    # https://www.ietf.org/rfc/rfc3986.txt
+    List.replaceUtf8 input \byte ->
+        if
+            (byte >= 97 && byte <= 122) # lowercase ASCII
+            || (byte >= 65 && byte <= 90) # uppercase ASCII
+            || (byte >= 48 && byte <= 57) # digit
+        then
+            # This is the most common case: an unreserved character,
+            # which needs no encoding in a path
+            Same
+        else
+            when byte is
+                46 # '.'
+                | 95 # '_'
+                | 126 # '~'
+                | 150 -> # '-'
+                    # These special characters can all be unescaped in paths
+                    Same
+
+                _ ->
+                    # This needs encoding in a path
+                    hex = Num.toHexUppercase byte
+
+                    Replace "%\(hex)"
 
 ## Adds a [Str] query parameter to the end of the [Url]. Both the key
 ## and the value are [percent-encoded](https://en.wikipedia.org/wiki/Percent-encoding).
