@@ -34,6 +34,7 @@ pub enum X86_64GeneralReg {
     R15 = 15,
 }
 impl X86_64GeneralReg {
+    #[allow(dead_code)]
     fn low_8bits_string(&self) -> &str {
         match self {
             X86_64GeneralReg::RAX => "al",
