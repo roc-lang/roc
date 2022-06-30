@@ -1284,28 +1284,18 @@ mod tests {
 
     #[test]
     fn test_ldr_reg64_reg64_imm12() {
-        // TODO: It looks like there is a bug wiht load and str implementations. They generate a different offset that speicified.
-        // disassembler_test!(
-        //     ldr_reg64_reg64_imm12,
-        //     |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
-        //         "ldr {}, [{}, #0x{:x}]",
-        //         reg1.capstone_string(UsesSP),
-        //         reg2.capstone_string(UsesSP),
-        //         imm
-        //     ),
-        //     ALL_GENERAL_REGS,
-        //     ALL_GENERAL_REGS,
-        //     [0x123]
-        // );
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        ldr_reg64_reg64_imm12(
-            &mut buf,
-            AArch64GeneralReg::X21,
-            AArch64GeneralReg::ZRSP,
-            0x123,
+        disassembler_test!(
+            ldr_reg64_reg64_imm12,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
+                "ldr {}, [{}, #0x{:x}]",
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesSP),
+                imm << 3
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [0x123]
         );
-        assert_eq!(&buf, &[0xF5, 0x8F, 0x44, 0xF9]);
     }
 
     #[test]
@@ -1360,28 +1350,18 @@ mod tests {
 
     #[test]
     fn test_str_reg64_reg64_imm12() {
-        // TODO: It looks like there is a bug wiht load and str implementations. They generate a different offset that speicified.
-        // disassembler_test!(
-        //     str_reg64_reg64_imm12,
-        //     |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
-        //         "str {}, [{}, #0x{:x}]",
-        //         reg1.capstone_string(UsesSP),
-        //         reg2.capstone_string(UsesSP),
-        //         imm
-        //     ),
-        //     ALL_GENERAL_REGS,
-        //     ALL_GENERAL_REGS,
-        //     [0x123]
-        // );
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        str_reg64_reg64_imm12(
-            &mut buf,
-            AArch64GeneralReg::X21,
-            AArch64GeneralReg::ZRSP,
-            0x123,
+        disassembler_test!(
+            str_reg64_reg64_imm12,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
+                "str {}, [{}, #0x{:x}]",
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesSP),
+                imm << 3
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [0x123]
         );
-        assert_eq!(&buf, &[0xF5, 0x8F, 0x04, 0xF9]);
     }
 
     #[test]
