@@ -2163,92 +2163,36 @@ mod tests {
     }
 
     #[test]
-    fn test_mov_reg64_base32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, offset), expected) in &[
-            ((X86_64GeneralReg::RAX, TEST_I32), [0x48, 0x8B, 0x85]),
-            ((X86_64GeneralReg::R15, TEST_I32), [0x4C, 0x8B, 0xBD]),
-        ] {
-            buf.clear();
-            mov_reg64_base64_offset32(&mut buf, *dst, X86_64GeneralReg::RBP, *offset);
-            assert_eq!(expected, &buf[..3]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
-        }
+    fn test_mov_reg64_base64_offset32() {
+        gen_test!(
+            mov_reg64_base64_offset32,
+            |reg1, reg2, imm| format!("mov {}, qword ptr [{} + 0x{:x}]", reg1, reg2, imm),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
     }
 
     #[test]
-    fn test_mov_base32_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((offset, src), expected) in &[
-            ((TEST_I32, X86_64GeneralReg::RAX), [0x48, 0x89, 0x85]),
-            ((TEST_I32, X86_64GeneralReg::R15), [0x4C, 0x89, 0xBD]),
-        ] {
-            buf.clear();
-            mov_base64_offset32_reg64(&mut buf, X86_64GeneralReg::RBP, *offset, *src);
-            assert_eq!(expected, &buf[..3]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
-        }
+    fn test_mov_base64_offset32_reg64() {
+        gen_test!(
+            mov_base64_offset32_reg64,
+            |reg1, imm, reg2| format!("mov qword ptr [{} + 0x{:x}], {}", reg1, imm, reg2),
+            ALL_GENERAL_REGS,
+            [TEST_I32],
+            ALL_GENERAL_REGS
+        );
     }
 
     #[test]
     fn test_movzx_reg64_base8_offset32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, src, offset), expected) in &[
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::RBP, TEST_I32),
-                vec![0x48, 0x0F, 0xB6, 0x85],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::RBP, TEST_I32),
-                vec![0x4C, 0x0F, 0xB6, 0xBD],
-            ),
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::RSP, TEST_I32),
-                vec![0x48, 0x0F, 0xB6, 0x84, 0x24],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::RSP, TEST_I32),
-                vec![0x4C, 0x0F, 0xB6, 0xBC, 0x24],
-            ),
-        ] {
-            buf.clear();
-            movzx_reg64_base8_offset32(&mut buf, *dst, *src, *offset);
-            assert_eq!(expected, &buf[..expected.len()]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[expected.len()..]);
-        }
-    }
-
-    #[test]
-    fn test_mov_reg64_stack32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, offset), expected) in &[
-            ((X86_64GeneralReg::RAX, TEST_I32), [0x48, 0x8B, 0x84, 0x24]),
-            ((X86_64GeneralReg::R15, TEST_I32), [0x4C, 0x8B, 0xBC, 0x24]),
-        ] {
-            buf.clear();
-            mov_reg64_base64_offset32(&mut buf, *dst, X86_64GeneralReg::RSP, *offset);
-            assert_eq!(expected, &buf[..4]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[4..]);
-        }
-    }
-
-    #[test]
-    fn test_mov_stack32_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((offset, src), expected) in &[
-            ((TEST_I32, X86_64GeneralReg::RAX), [0x48, 0x89, 0x84, 0x24]),
-            ((TEST_I32, X86_64GeneralReg::R15), [0x4C, 0x89, 0xBC, 0x24]),
-        ] {
-            buf.clear();
-            mov_base64_offset32_reg64(&mut buf, X86_64GeneralReg::RSP, *offset, *src);
-            assert_eq!(expected, &buf[..4]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[4..]);
-        }
+        gen_test!(
+            movzx_reg64_base8_offset32,
+            |reg1, reg2, imm| format!("movzx {}, byte ptr [{} + 0x{:x}]", reg1, reg2, imm),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
     }
 
     #[test]
@@ -2263,44 +2207,22 @@ mod tests {
 
     #[test]
     fn test_movss_freg32_rip_offset32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, offset), expected) in &[
-            (
-                (X86_64FloatReg::XMM0, TEST_I32),
-                vec![0xF3, 0x0F, 0x10, 0x05],
-            ),
-            (
-                (X86_64FloatReg::XMM15, TEST_I32),
-                vec![0xF3, 0x44, 0x0F, 0x10, 0x3D],
-            ),
-        ] {
-            buf.clear();
-            movss_freg32_rip_offset32(&mut buf, *dst, *offset as u32);
-            assert_eq!(&expected[..], &buf[..(buf.len() - 4)]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[(buf.len() - 4)..]);
-        }
+        gen_test!(
+            movss_freg32_rip_offset32,
+            |reg, imm| format!("movss {}, dword ptr [rip + 0x{:x}]", reg, imm),
+            ALL_FLOAT_REGS,
+            [TEST_I32 as u32]
+        );
     }
 
     #[test]
     fn test_movsd_freg64_rip_offset32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, offset), expected) in &[
-            (
-                (X86_64FloatReg::XMM0, TEST_I32),
-                vec![0xF2, 0x0F, 0x10, 0x05],
-            ),
-            (
-                (X86_64FloatReg::XMM15, TEST_I32),
-                vec![0xF2, 0x44, 0x0F, 0x10, 0x3D],
-            ),
-        ] {
-            buf.clear();
-            movsd_freg64_rip_offset32(&mut buf, *dst, *offset as u32);
-            assert_eq!(&expected[..], &buf[..(buf.len() - 4)]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[(buf.len() - 4)..]);
-        }
+        gen_test!(
+            movsd_freg64_rip_offset32,
+            |reg, imm| format!("movsd {}, qword ptr [rip + 0x{:x}]", reg, imm),
+            ALL_FLOAT_REGS,
+            [TEST_I32 as u32]
+        );
     }
 
     #[test]
@@ -2310,53 +2232,20 @@ mod tests {
 
     #[test]
     fn test_cvtsi2_help() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
         const CVTSI2SS_CODE: u8 = 0x2A;
         const CVTTSS2SI_CODE: u8 = 0x2C;
-
         gen_test!(
             |buf, r1, r2| cvtsi2_help(buf, 0xF3, CVTSI2SS_CODE, r1, r2),
             |reg1, reg2| format!("cvtsi2ss {}, {}", reg1, reg2),
             ALL_FLOAT_REGS,
             ALL_GENERAL_REGS
         );
-        // test_reg64_reg64_helper(
-        //     |buf, r1, r2| cvtsi2_help(buf, 0xF3, CVTTSS2SI_CODE, r1, r2),
-        //     "cvttss2si",
-        //     ALL_FLOAT_REGS,
-        //     ALL_GENERAL_REGS,
-        // );
-        for (op_code, reg1, reg2, expected) in &[
-            (
-                CVTTSS2SI_CODE,
-                X86_64GeneralReg::RAX,
-                X86_64FloatReg::XMM0,
-                [0xF3, 0x48, 0x0F, 0x2C, 0xC0],
-            ),
-            (
-                CVTTSS2SI_CODE,
-                X86_64GeneralReg::RAX,
-                X86_64FloatReg::XMM15,
-                [0xF3, 0x49, 0x0F, 0x2C, 0xC7],
-            ),
-            (
-                CVTTSS2SI_CODE,
-                X86_64GeneralReg::RAX,
-                X86_64FloatReg::XMM0,
-                [0xF3, 0x48, 0x0F, 0x2C, 0xC0],
-            ),
-            (
-                CVTTSS2SI_CODE,
-                X86_64GeneralReg::R15,
-                X86_64FloatReg::XMM0,
-                [0xF3, 0x4C, 0x0F, 0x2C, 0xF8],
-            ),
-        ] {
-            buf.clear();
-            cvtsi2_help(&mut buf, 0xF3, *op_code, *reg1, *reg2);
-            assert_eq!(expected, &buf[..]);
-        }
+        gen_test!(
+            |buf, r1, r2| cvtsi2_help(buf, 0xF3, CVTTSS2SI_CODE, r1, r2),
+            |reg1, reg2| format!("cvttss2si {}, {}", reg1, reg2),
+            ALL_GENERAL_REGS,
+            ALL_FLOAT_REGS
+        );
     }
 
     #[test]
