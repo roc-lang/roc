@@ -509,7 +509,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             todo!("negative base offsets for AArch64");
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
-            ldr_reg64_imm12(buf, dst, AArch64GeneralReg::FP, (offset as u16) >> 3);
+            ldr_reg64_reg64_imm12(buf, dst, AArch64GeneralReg::FP, (offset as u16) >> 3);
         } else {
             todo!("base offsets over 32k for AArch64");
         }
@@ -541,7 +541,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             todo!("negative mem offsets for AArch64");
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
-            ldr_reg64_imm12(buf, dst, src, (offset as u16) >> 3);
+            ldr_reg64_reg64_imm12(buf, dst, src, (offset as u16) >> 3);
         } else {
             todo!("mem offsets over 32k for AArch64");
         }
@@ -604,7 +604,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             todo!("negative stack offsets for AArch64");
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
-            ldr_reg64_imm12(buf, dst, AArch64GeneralReg::ZRSP, (offset as u16) >> 3);
+            ldr_reg64_reg64_imm12(buf, dst, AArch64GeneralReg::ZRSP, (offset as u16) >> 3);
         } else {
             todo!("stack offsets over 32k for AArch64");
         }
@@ -1090,7 +1090,7 @@ fn add_reg64_reg64_reg64(
 /// `LDR Xt, [Xn, #offset]` -> Load Xn + Offset Xt. ZRSP is SP.
 /// Note: imm12 is the offest divided by 8.
 #[inline(always)]
-fn ldr_reg64_imm12(
+fn ldr_reg64_reg64_imm12(
     buf: &mut Vec<'_, u8>,
     dst: AArch64GeneralReg,
     base: AArch64GeneralReg,
@@ -1283,10 +1283,22 @@ mod tests {
     }
 
     #[test]
-    fn test_ldr_reg64_imm12() {
+    fn test_ldr_reg64_reg64_imm12() {
+        // disassembler_test!(
+        //     ldr_reg64_reg64_imm12,
+        //     |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
+        //         "ldr {}, [{}, #0x{:x}]",
+        //         reg1.capstone_string(UsesSP),
+        //         reg2.capstone_string(UsesSP),
+        //         imm
+        //     ),
+        //     ALL_GENERAL_REGS,
+        //     ALL_GENERAL_REGS,
+        //     [0x123]
+        // );
         let arena = bumpalo::Bump::new();
         let mut buf = bumpalo::vec![in &arena];
-        ldr_reg64_imm12(
+        ldr_reg64_reg64_imm12(
             &mut buf,
             AArch64GeneralReg::X21,
             AArch64GeneralReg::ZRSP,
