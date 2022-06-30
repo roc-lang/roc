@@ -1391,9 +1391,5 @@ mod tests {
             },
             ALL_GENERAL_REGS
         );
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        ret_reg64(&mut buf, AArch64GeneralReg::LR);
-        assert_eq!(&buf, &[0xC0, 0x03, 0x5F, 0xD6]);
     }
 }
