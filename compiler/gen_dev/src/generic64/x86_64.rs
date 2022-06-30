@@ -1961,74 +1961,48 @@ mod tests {
         ($assemble_fn: expr, $format_fn: expr, $iter:expr) => {{
             let arena = bumpalo::Bump::new();
             let (mut buf, cs) = setup_capstone_and_arena(&arena);
-            for i in $iter {
+            for i in $iter.iter() {
                 buf.clear();
-                $assemble_fn(&mut buf, i);
+                $assemble_fn(&mut buf, *i);
                 let instructions = cs.disasm_all(&buf, 0).unwrap();
                 assert_eq!(1, instructions.len());
                 let inst = &instructions[0];
-                assert_eq!(format!("0x0: {}", $format_fn(i)), inst.to_string());
+                assert_eq!(format!("0x0: {}", $format_fn(*i)), inst.to_string());
             }
         }};
         ($assemble_fn: expr, $format_fn: expr, $iter:expr, $iter2:expr) => {{
             let arena = bumpalo::Bump::new();
             let (mut buf, cs) = setup_capstone_and_arena(&arena);
-            for i in $iter {
-                for i2 in $iter2 {
+            for i in $iter.iter() {
+                for i2 in $iter2.iter() {
                     buf.clear();
-                    $assemble_fn(&mut buf, i, i2);
+                    $assemble_fn(&mut buf, *i, *i2);
                     let instructions = cs.disasm_all(&buf, 0).unwrap();
                     assert_eq!(1, instructions.len());
                     let inst = &instructions[0];
-                    assert_eq!(format!("0x0: {}", $format_fn(i, i2)), inst.to_string());
+                    assert_eq!(format!("0x0: {}", $format_fn(*i, *i2)), inst.to_string());
                 }
             }
         }};
         ($assemble_fn: expr, $format_fn: expr, $iter:expr, $iter2:expr, $iter3:expr) => {{
             let arena = bumpalo::Bump::new();
             let (mut buf, cs) = setup_capstone_and_arena(&arena);
-            for i in $iter {
-                for i2 in $iter2 {
-                    for i3 in $iter3 {
+            for i in $iter.iter() {
+                for i2 in $iter2.iter() {
+                    for i3 in $iter3.iter() {
                         buf.clear();
-                        $assemble_fn(&mut buf, i, i2, i3);
+                        $assemble_fn(&mut buf, *i, *i2, *i3);
                         let instructions = cs.disasm_all(&buf, 0).unwrap();
                         assert_eq!(1, instructions.len());
                         let inst = &instructions[0];
-                        assert_eq!(format!("0x0: {}", $format_fn(i, i2, i3)), inst.to_string());
+                        assert_eq!(
+                            format!("0x0: {}", $format_fn(*i, *i2, *i3)),
+                            inst.to_string()
+                        );
                     }
                 }
             }
         }};
-    }
-
-    fn test_reg64_imm_helper<Reg: RegTrait, T: Copy>(
-        assemble: fn(buf: &mut Vec<'_, u8>, dst: Reg, imm: T),
-        expected_mnemonic: &str,
-        regs_dst: &[Reg],
-        immediates: &[T],
-    ) where
-        i64: From<T>,
-    {
-        let arena = bumpalo::Bump::new();
-        let (mut buf, cs) = setup_capstone_and_arena(&arena);
-        for dst in regs_dst {
-            for imm in immediates {
-                buf.clear();
-                assemble(&mut buf, *dst, *imm);
-
-                let instructions = cs.disasm_all(&buf, 0).unwrap();
-                assert_eq!(1, instructions.len());
-                let inst = &instructions[0];
-                assert_eq!(Some(expected_mnemonic), inst.mnemonic());
-
-                let detail = cs.insn_detail(inst).unwrap();
-                let operands = detail.arch_detail().operands();
-                assert_eq!(2, operands.len());
-                assert_operand_reg64_eq(&cs, *dst, &operands[0]);
-                assert_operand_imm_eq(*imm, &operands[1]);
-            }
-        }
     }
 
     fn test_reg64_reg64_helper<Reg1: RegTrait, Reg2: RegTrait>(
@@ -2060,7 +2034,12 @@ mod tests {
 
     #[test]
     fn test_add_reg64_imm32() {
-        test_reg64_imm_helper(add_reg64_imm32, "add", ALL_GENERAL_REGS, &[TEST_I32]);
+        test_helper!(
+            add_reg64_imm32,
+            |reg, imm| format!("add {}, 0x{:x}", reg, imm),
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
     }
 
     #[test]
@@ -2100,7 +2079,12 @@ mod tests {
 
     #[test]
     fn test_cmp_reg64_imm32() {
-        test_reg64_imm_helper(cmp_reg64_imm32, "cmp", ALL_GENERAL_REGS, &[TEST_I32]);
+        test_helper!(
+            cmp_reg64_imm32,
+            |reg, imm| format!("cmp {}, 0x{:x}", reg, imm),
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
     }
 
     #[test]
@@ -2130,13 +2114,28 @@ mod tests {
 
     #[test]
     fn test_mov_reg64_imm32() {
-        test_reg64_imm_helper(mov_reg64_imm32, "mov", ALL_GENERAL_REGS, &[TEST_I32]);
+        test_helper!(
+            mov_reg64_imm32,
+            |reg, imm| format!("mov {}, 0x{:x}", reg, imm),
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
     }
 
     #[test]
     fn test_mov_reg64_imm64() {
-        test_reg64_imm_helper(mov_reg64_imm64, "movabs", ALL_GENERAL_REGS, &[TEST_I64]);
-        test_reg64_imm_helper(mov_reg64_imm64, "mov", ALL_GENERAL_REGS, &[TEST_I32 as i64]);
+        test_helper!(
+            mov_reg64_imm64,
+            |reg, imm| format!("movabs {}, 0x{:x}", reg, imm),
+            ALL_GENERAL_REGS,
+            [TEST_I64]
+        );
+        test_helper!(
+            mov_reg64_imm64,
+            |reg, imm| format!("mov {}, 0x{:x}", reg, imm),
+            ALL_GENERAL_REGS,
+            [TEST_I32 as i64]
+        );
     }
 
     #[test]
@@ -2500,7 +2499,12 @@ mod tests {
 
     #[test]
     fn test_sub_reg64_imm32() {
-        test_reg64_imm_helper(sub_reg64_imm32, "sub", ALL_GENERAL_REGS, &[TEST_I32]);
+        test_helper!(
+            sub_reg64_imm32,
+            |reg, imm| format!("sub {}, 0x{:x}", reg, imm),
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
     }
 
     #[test]
