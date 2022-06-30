@@ -343,11 +343,12 @@ impl GridNodeMap {
         let mut first_child_id = 0;
 
         while !children_ids.is_empty() {
-            first_child_id = *children_ids
-                .first()
-                .with_context(|| NestedNodeWithoutChildrenSnafu {
-                    node_id: nested_node_id,
-                })?;
+            first_child_id =
+                *children_ids
+                    .first()
+                    .with_context(|| NestedNodeWithoutChildrenSnafu {
+                        node_id: nested_node_id,
+                    })?;
 
             children_ids = ed_model
                 .mark_node_pool
@@ -370,11 +371,12 @@ impl GridNodeMap {
         let mut last_child_id = 0;
 
         while !children_ids.is_empty() {
-            last_child_id = *children_ids
-                .last()
-                .with_context(|| NestedNodeWithoutChildrenSnafu {
-                    node_id: nested_node_id,
-                })?;
+            last_child_id =
+                *children_ids
+                    .last()
+                    .with_context(|| NestedNodeWithoutChildrenSnafu {
+                        node_id: nested_node_id,
+                    })?;
 
             children_ids = ed_model
                 .mark_node_pool

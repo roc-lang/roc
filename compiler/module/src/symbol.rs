@@ -643,10 +643,11 @@ impl IdentIds {
     }
 
     pub fn get_name_str_res(&self, ident_id: IdentId) -> ModuleResult<&str> {
-        self.get_name(ident_id).with_context(|| IdentIdNotFoundSnafu {
-            ident_id,
-            ident_ids_str: format!("{:?}", self),
-        })
+        self.get_name(ident_id)
+            .with_context(|| IdentIdNotFoundSnafu {
+                ident_id,
+                ident_ids_str: format!("{:?}", self),
+            })
     }
 
     pub fn len(&self) -> usize {

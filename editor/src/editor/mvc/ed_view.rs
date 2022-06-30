@@ -73,7 +73,9 @@ pub fn model_to_wgpu<'a>(
     txt_coords: Vector2<f32>,
     config: &Config,
 ) -> EdResult<RenderedWgpu> {
-    let glyph_dim_rect = ed_model.glyph_dim_rect_opt.context(MissingGlyphDimsSnafu {})?;
+    let glyph_dim_rect = ed_model
+        .glyph_dim_rect_opt
+        .context(MissingGlyphDimsSnafu {})?;
 
     let mut all_rendered = RenderedWgpu::new();
 

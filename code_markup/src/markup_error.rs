@@ -60,6 +60,8 @@ impl From<UtilError> for MarkError {
 
         // hack to handle MarkError derive
         let dummy_res: Result<(), NoneError> = Err(NoneError {});
-        dummy_res.context(UtilErrorBacktraceSnafu { msg }).unwrap_err()
+        dummy_res
+            .context(UtilErrorBacktraceSnafu { msg })
+            .unwrap_err()
     }
 }

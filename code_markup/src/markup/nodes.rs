@@ -9,7 +9,9 @@ use super::{
     mark_id_ast_id_map::MarkIdAstIdMap,
 };
 
-use crate::markup_error::{ExpectedTextNodeSnafu, NestedNodeMissingChildSnafu, NestedNodeRequiredSnafu};
+use crate::markup_error::{
+    ExpectedTextNodeSnafu, NestedNodeMissingChildSnafu, NestedNodeRequiredSnafu,
+};
 use itertools::Itertools;
 use roc_ast::{
     lang::{core::ast::ASTNodeId, env::Env},
