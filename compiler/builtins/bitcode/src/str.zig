@@ -239,7 +239,7 @@ pub const RocStr = extern struct {
         const length = self.len();
         const longest_small_str = @sizeOf(RocStr) - 1;
 
-        // NOTE: We want to compare length here, *NOT* check for is_small_str!
+        // NOTE: We want to compare length here, *NOT* check for isSmallStr!
         // This is because we explicitly want the empty string to be handled in
         // this branch, even though the empty string is not a small string.
         //
