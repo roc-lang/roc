@@ -103,7 +103,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_TO_I8 => str_to_num,
         LIST_LEN => list_len,
         LIST_GET_UNSAFE => list_get_unsafe,
-        LIST_REPLACE => list_replace,
+        LIST_REPLACE_UNSAFE => list_replace_unsafe,
         LIST_SET => list_set,
         LIST_APPEND => list_append,
         LIST_FIRST => list_first,
@@ -2175,98 +2175,12 @@ fn list_get_unsafe(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListGetUnsafe, var_store)
 }
 
-/// List.replace : List elem, Nat, elem -> { list: List elem, value: elem }
-fn list_replace(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let arg_list = Symbol::ARG_1;
-    let arg_index = Symbol::ARG_2;
-    let arg_elem = Symbol::ARG_3;
-    let bool_var = var_store.fresh();
-    let len_var = var_store.fresh();
-    let elem_var = var_store.fresh();
-    let list_arg_var = var_store.fresh();
-    let ret_record_var = var_store.fresh();
-    let ret_result_var = var_store.fresh();
-
-    let list_field = Field {
-        var: list_arg_var,
-        region: Region::zero(),
-        loc_expr: Box::new(Loc::at_zero(Expr::Var(arg_list))),
-    };
-
-    let value_field = Field {
-        var: elem_var,
-        region: Region::zero(),
-        loc_expr: Box::new(Loc::at_zero(Expr::Var(arg_elem))),
-    };
-
-    // Perform a bounds check. If it passes, run LowLevel::ListReplaceUnsafe.
-    // Otherwise, return the list unmodified.
-    let body = If {
-        cond_var: bool_var,
-        branch_var: ret_result_var,
-        branches: vec![(
-            // if-condition
-            no_region(
-                // index < List.len list
-                RunLowLevel {
-                    op: LowLevel::NumLt,
-                    args: vec![
-                        (len_var, Var(arg_index)),
-                        (
-                            len_var,
-                            RunLowLevel {
-                                op: LowLevel::ListLen,
-                                args: vec![(list_arg_var, Var(arg_list))],
-                                ret_var: len_var,
-                            },
-                        ),
-                    ],
-                    ret_var: bool_var,
-                },
-            ),
-            // then-branch
-            no_region(
-                // List.replaceUnsafe list index elem
-                RunLowLevel {
-                    op: LowLevel::ListReplaceUnsafe,
-                    args: vec![
-                        (list_arg_var, Var(arg_list)),
-                        (len_var, Var(arg_index)),
-                        (elem_var, Var(arg_elem)),
-                    ],
-                    ret_var: ret_record_var,
-                },
-            ),
-        )],
-        final_else: Box::new(
-            // else-branch
-            no_region(record(
-                vec![("list".into(), list_field), ("value".into(), value_field)],
-                var_store,
-            )),
-        ),
-    };
-
-    defn(
-        symbol,
-        vec![
-            (list_arg_var, Symbol::ARG_1),
-            (len_var, Symbol::ARG_2),
-            (elem_var, Symbol::ARG_3),
-        ],
-        var_store,
-        body,
-        ret_result_var,
-    )
+/// List.replaceUnsafe : List elem, Nat, elem -> { list: List elem, value: elem }
+fn list_replace_unsafe(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_3(symbol, LowLevel::ListReplaceUnsafe, var_store)
 }
 
 /// List.set : List elem, Nat, elem -> List elem
-///
-/// List.set :
-///     Attr (w | u | v) (List (Attr u a)),
-///     Attr * Int,
-///     Attr (u | v) a
-///     -> Attr * (List (Attr u  a))
 fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let arg_list = Symbol::ARG_1;
     let arg_index = Symbol::ARG_2;

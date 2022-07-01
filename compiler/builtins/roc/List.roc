@@ -214,7 +214,17 @@ get = \list, index ->
     else
         Err OutOfBounds
 
+# unsafe primitive that does not perform a bounds check
+# but will cause a reference count increment on the value it got out of the list
+replaceUnsafe : List a, Nat, a -> { list : List a, value : a }
+
 replace : List a, Nat, a -> { list : List a, value : a }
+replace = \list, index, newValue ->
+    if index < List.len list then
+        List.replaceUnsafe list index newValue
+
+    else
+        { list, value: newValue }
 
 ## Replaces the element at the given index with a replacement.
 ##

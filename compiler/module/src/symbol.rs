@@ -1251,6 +1251,7 @@ define_builtins! {
         58 LIST_IS_UNIQUE: "#isUnique"
         59 LIST_FIND_INDEX: "findIndex"
         60 LIST_GET_UNSAFE: "getUnsafe"
+        61 LIST_REPLACE_UNSAFE: "replaceUnsafe"
     }
     6 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" // the Result.Result type alias
