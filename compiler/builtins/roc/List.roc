@@ -284,6 +284,8 @@ last : List a -> Result a [ListWasEmpty]*
 ##             |> List.single
 ##
 single : a -> List a
+single = \x -> [x]
+
 ## Returns a list with the given length, where every element is the given value.
 ##
 ##
