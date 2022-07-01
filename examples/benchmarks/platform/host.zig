@@ -205,6 +205,9 @@ fn roc_fx_getInt_32bit(output: *GetInt) callconv(.C) void {
 }
 
 fn roc_fx_getInt_help() !i64 {
+    const stdout = std.io.getStdOut().writer();
+    stdout.print("Please enter an integer\n", .{}) catch unreachable;
+
     const stdin = std.io.getStdIn().reader();
     var buf: [40]u8 = undefined;
 
