@@ -134,7 +134,9 @@ impl<'a> Storage<'a> {
     }
 
     fn allocate_stack_memory(&mut self, size: u32, alignment_bytes: u32) -> u32 {
-        if self.stack_frame_pointer.is_none() && size > 0 {
+        // Note: We need a stack frame pointer even if size is zero.
+        // e.g. when passing an empty record to a Zig builtin, we pass the frame pointer
+        if self.stack_frame_pointer.is_none() {
             let next_local_id = self.get_next_local_id();
             self.stack_frame_pointer = Some(next_local_id);
             self.local_types.push(PTR_TYPE);
