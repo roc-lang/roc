@@ -3,7 +3,7 @@ use roc_module::{called_via::CalledVia, symbol::Symbol};
 use roc_parse::ast::StrLiteral;
 
 use crate::{
-    ast_error::{ASTResult, UnexpectedASTNode},
+    ast_error::{ASTResult, UnexpectedASTNodeSnafu},
     lang::{
         core::expr::{
             expr2::{ArrString, ARR_STRING_CAPACITY},
@@ -225,7 +225,7 @@ pub fn update_str_expr(
             }
         }
         Expr2::Str(old_pool_str) => Either::OldPoolStr(*old_pool_str),
-        other => UnexpectedASTNode {
+        other => UnexpectedASTNodeSnafu {
             required_node_type: "SmallStr or Str",
             encountered_node_type: format!("{:?}", other),
         }

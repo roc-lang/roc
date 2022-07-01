@@ -81,7 +81,7 @@ wasmer-wasi = "2.2.1"
 pretty_assertions = "1.0.0"
 roc_test_utils = { path = "../test_utils" }
 indoc = "1.0.3"
-serial_test = "0.5.1"
+serial_test = "0.8.0"
 criterion = { git = "https://github.com/Anton-4/criterion.rs"}
 cli_utils = { path = "../cli_utils" }
 strum = "0.24.0"

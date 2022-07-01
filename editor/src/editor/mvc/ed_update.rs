@@ -5,7 +5,7 @@ use std::process::Stdio;
 
 use crate::editor::code_lines::CodeLines;
 use crate::editor::ed_error::EdResult;
-use crate::editor::ed_error::{MissingSelection, RocCheckFailed};
+use crate::editor::ed_error::{MissingSelectionSnafu, RocCheckFailedSnafu};
 use crate::editor::grid_node_map::GridNodeMap;
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
@@ -574,7 +574,7 @@ impl<'a> EdModel<'a> {
             self.mark_node_pool
                 .replace_node(sel_block.mark_node_id, blank_replacement);
 
-            let active_selection = self.get_selection().context(MissingSelection {})?;
+            let active_selection = self.get_selection().context(MissingSelectionSnafu {})?;
 
             self.grid_node_map.del_selection(active_selection)?;
 
@@ -630,7 +630,7 @@ impl<'a> EdModel<'a> {
             .output()?;
 
         if !cmd_out.status.success() {
-            RocCheckFailed.fail()?
+            RocCheckFailedSnafu.fail()?
         }
 
         Ok(())

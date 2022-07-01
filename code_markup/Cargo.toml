@@ -12,6 +12,6 @@ roc_module = { path = "../compiler/module" }
 roc_utils = { path = "../utils" }
 serde = { version = "1.0.130", features = ["derive"] }
 palette = "0.6.0"
-snafu = { version = "0.6.10", features = ["backtraces"] }
+snafu = { version = "0.7.1", features = ["backtraces"] }
 bumpalo = { version = "3.8.0", features = ["collections"] }
 itertools = "0.10.1"
