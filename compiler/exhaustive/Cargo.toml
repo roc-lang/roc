@@ -9,4 +9,3 @@ edition = "2021"
 roc_collections = { path = "../collections" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
-roc_std = { path = "../../roc_std", default-features = false }

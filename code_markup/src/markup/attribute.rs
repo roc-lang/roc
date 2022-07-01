@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use snafu::ensure;
 
-use crate::markup_error::{CaretNotFound, MarkResult};
+use crate::markup_error::{CaretNotFoundSnafu, MarkResult};
 
 #[derive(Debug, Copy, Clone)]
 pub struct Caret {
@@ -117,7 +117,7 @@ impl Attributes {
 
         let new_len = self.all.len();
 
-        ensure!(old_len != new_len, CaretNotFound { node_id });
+        ensure!(old_len != new_len, CaretNotFoundSnafu { node_id });
 
         Ok(())
     }

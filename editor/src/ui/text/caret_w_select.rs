@@ -138,7 +138,7 @@ pub mod test_caret_w_select {
     use crate::ui::text::caret_w_select::CaretWSelect;
     use crate::ui::text::selection::validate_selection;
     use crate::ui::text::text_pos::TextPos;
-    use crate::ui::ui_error::OutOfBounds;
+    use crate::ui::ui_error::OutOfBoundsSnafu;
     use crate::ui::ui_error::UIResult;
     use crate::ui::util::slice_get;
     use core::cmp::Ordering;
@@ -314,7 +314,7 @@ pub mod test_caret_w_select {
     ) -> UIResult<&mut <usize as SliceIndex<[T]>>::Output> {
         let vec_len = vec.len();
 
-        let elt_ref = vec.get_mut(index).context(OutOfBounds {
+        let elt_ref = vec.get_mut(index).context(OutOfBoundsSnafu {
             index,
             collection_name: "Slice",
             len: vec_len,

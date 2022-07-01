@@ -27,7 +27,7 @@ pub fn build_module<'a>(
     interns: &'a mut Interns,
     target: &Triple,
     procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
-) -> Object {
+) -> Object<'a> {
     match target {
         Triple {
             architecture: TargetArch::X86_64,
@@ -165,8 +165,8 @@ fn generate_wrapper<'a, B: Backend<'a>>(
 fn build_object<'a, B: Backend<'a>>(
     procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
     mut backend: B,
-    mut output: Object,
-) -> Object {
+    mut output: Object<'a>,
+) -> Object<'a> {
     let data_section = output.section_id(StandardSection::Data);
 
     let arena = backend.env().arena;
@@ -318,7 +318,7 @@ fn build_object<'a, B: Backend<'a>>(
 }
 
 fn build_proc_symbol<'a, B: Backend<'a>>(
-    output: &mut Object,
+    output: &mut Object<'a>,
     layout_ids: &mut LayoutIds<'a>,
     procs: &mut Vec<'a, (String, SectionId, SymbolId, Proc<'a>)>,
     backend: &B,

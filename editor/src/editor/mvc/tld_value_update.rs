@@ -2,7 +2,7 @@ use roc_ast::lang::core::{def::def2::Def2, expr::expr2::Expr2};
 use roc_code_markup::slow_pool::MarkNodeId;
 
 use crate::{
-    editor::ed_error::{EdResult, FailedToUpdateIdentIdName, KeyNotFound},
+    editor::ed_error::{EdResult, FailedToUpdateIdentIdNameSnafu, KeyNotFoundSnafu},
     ui::text::text_pos::TextPos,
 };
 
@@ -39,7 +39,7 @@ pub fn start_new_tld_value(ed_model: &mut EdModel, new_char: &char) -> EdResult<
         // this might create different IdentId for interns and env.ident_ids which may be a problem
         module_ident_ids_ref.add_str(&ident_str);
     } else {
-        KeyNotFound {
+        KeyNotFoundSnafu {
             key_str: format!("{:?}", ed_model.module.env.home),
         }
         .fail()?
@@ -89,7 +89,7 @@ pub fn update_tld_val_name(
                 .update_key(&old_val_name, &val_name_str);
 
             if let Err(err_str) = update_val_name_res {
-                FailedToUpdateIdentIdName { err_str }.fail()?;
+                FailedToUpdateIdentIdNameSnafu { err_str }.fail()?;
             }
 
             ed_model.simple_move_caret_right(old_caret_pos, 1);

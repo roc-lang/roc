@@ -381,7 +381,7 @@ impl RocDec {
 
         // The :019 in the following write! is computed as Self::DECIMAL_PLACES + 1. If you change
         // Self::DECIMAL_PLACES, this assert should remind you to change that format string as well.
-        static_assertions::const_assert!(Self::DECIMAL_PLACES + 1 == 19);
+        static_assertions::const_assert!(RocDec::DECIMAL_PLACES + 1 == 19);
 
         // By using the :019 format, we're guaranteeing that numbers less than 1, say 0.01234
         // get their leading zeros placed in bytes for us. i.e. `string = b"0012340000000000000"`

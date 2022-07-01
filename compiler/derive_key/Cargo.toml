@@ -11,7 +11,6 @@ roc_error_macros = { path = "../../error_macros" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 roc_types = { path = "../types" }
-roc_can = { path = "../can" }
 
 [features]
 default = []

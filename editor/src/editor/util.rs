@@ -1,5 +1,5 @@
-use super::ed_error::{EdResult, KeyNotFound};
-use crate::editor::ed_error::IndexOfFailed;
+use super::ed_error::{EdResult, KeyNotFoundSnafu};
+use crate::editor::ed_error::IndexOfFailedSnafu;
 use snafu::OptionExt;
 use std::collections::HashMap;
 
@@ -8,7 +8,7 @@ pub fn map_get<'a, K: ::std::fmt::Debug + std::hash::Hash + std::cmp::Eq, V>(
     hash_map: &'a HashMap<K, V>,
     key: &K,
 ) -> EdResult<&'a V> {
-    let value = hash_map.get(key).context(KeyNotFound {
+    let value = hash_map.get(key).context(KeyNotFoundSnafu {
         key_str: format!("{:?}", key),
     })?;
 
@@ -23,7 +23,7 @@ pub fn index_of<T: ::std::fmt::Debug + std::cmp::Eq>(elt: T, slice: &[T]) -> EdR
             let elt_str = format!("{:?}", elt);
             let collection_str = format!("{:?}", slice);
 
-            IndexOfFailed {
+            IndexOfFailedSnafu {
                 elt_str,
                 collection_str,
             }
@@ -59,7 +59,7 @@ pub fn first_last_index_of<T: ::std::fmt::Debug + std::cmp::Eq>(
         let elt_str = format!("{:?}", elt);
         let collection_str = format!("{:?}", slice);
 
-        IndexOfFailed {
+        IndexOfFailedSnafu {
             elt_str,
             collection_str,
         }

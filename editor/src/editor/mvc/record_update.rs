@@ -1,6 +1,6 @@
 use crate::editor::ed_error::EdResult;
-use crate::editor::ed_error::MissingParent;
-use crate::editor::ed_error::RecordWithoutFields;
+use crate::editor::ed_error::MissingParentSnafu;
+use crate::editor::ed_error::RecordWithoutFieldsSnafu;
 use crate::editor::mvc::app_update::InputOutcome;
 use crate::editor::mvc::ed_model::EdModel;
 use crate::editor::mvc::ed_update::get_node_context;
@@ -106,7 +106,7 @@ pub fn update_empty_record(
 
                 parent.add_child_at_index(new_child_index, record_field_node_id)?;
             } else {
-                MissingParent {
+                MissingParentSnafu {
                     node_id: curr_mark_node_id,
                 }
                 .fail()?
@@ -179,7 +179,7 @@ pub fn update_record_colon(
                                     let first_field_mut = fields
                                         .iter_mut(ed_model.module.env.pool)
                                         .next()
-                                        .with_context(|| RecordWithoutFields {})?;
+                                        .with_context(|| RecordWithoutFieldsSnafu {})?;
 
                                     *first_field_mut = RecordField::LabeledValue(
                                         *first_field_mut.get_record_field_pool_str(),
@@ -243,7 +243,7 @@ pub fn update_record_field(
     let first_field = record_fields
         .iter(ed_model.module.env.pool)
         .next()
-        .with_context(|| RecordWithoutFields {})?;
+        .with_context(|| RecordWithoutFieldsSnafu {})?;
 
     let field_pool_str = first_field
         .get_record_field_pool_str()
@@ -259,7 +259,7 @@ pub fn update_record_field(
     let first_field_mut = record_fields
         .iter_mut(ed_model.module.env.pool)
         .next()
-        .with_context(|| RecordWithoutFields {})?;
+        .with_context(|| RecordWithoutFieldsSnafu {})?;
 
     let field_pool_str_mut = first_field_mut.get_record_field_pool_str_mut();
     *field_pool_str_mut = new_field_pool_str;
@@ -268,7 +268,7 @@ pub fn update_record_field(
     let first_field_b = record_fields
         .iter(ed_model.module.env.pool)
         .next()
-        .with_context(|| RecordWithoutFields {})?;
+        .with_context(|| RecordWithoutFieldsSnafu {})?;
 
     match first_field_b {
         RecordField::InvalidLabelOnly(_, _) => {
