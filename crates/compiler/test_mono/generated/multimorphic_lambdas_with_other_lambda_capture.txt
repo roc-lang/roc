@@ -1,26 +1,26 @@
-procedure #Multimorphic.0 (Test.33, #Attr.12):
-    let Test.5 : U64 = UnionAtIndex (Id 0) (Index 0) #Attr.12;
-    dec #Attr.12;
-    let Test.35 : Str = "";
-    ret Test.35;
-
-procedure #Multimorphic.1 (Test.21, #Attr.12):
-    let Test.5 : {} = UnionAtIndex (Id 1) (Index 0) #Attr.12;
-    dec #Attr.12;
-    let Test.23 : Str = "";
-    ret Test.23;
-
 procedure Test.1 (Test.5):
-    let Test.20 : [C U64, C {}, C Str] = ClosureTag(#Multimorphic.1) Test.5;
+    let Test.20 : [C U64, C {}, C Str] = ClosureTag(Test.6) Test.5;
     ret Test.20;
 
 procedure Test.1 (Test.5):
-    let Test.32 : [C U64, C {}, C Str] = ClosureTag(#Multimorphic.0) Test.5;
+    let Test.32 : [C U64, C {}, C Str] = ClosureTag(Test.6) Test.5;
     ret Test.32;
 
 procedure Test.2 (Test.7):
     let Test.26 : [C U64, C {}, C Str] = ClosureTag(Test.8) Test.7;
     ret Test.26;
+
+procedure Test.6 (Test.21, #Attr.12):
+    let Test.5 : U64 = UnionAtIndex (Id 0) (Index 0) #Attr.12;
+    dec #Attr.12;
+    let Test.35 : Str = "";
+    ret Test.35;
+
+procedure Test.6 (Test.21, #Attr.12):
+    let Test.5 : {} = UnionAtIndex (Id 1) (Index 0) #Attr.12;
+    dec #Attr.12;
+    let Test.23 : Str = "";
+    ret Test.23;
 
 procedure Test.8 (Test.27, #Attr.12):
     let Test.7 : Str = UnionAtIndex (Id 2) (Index 0) #Attr.12;
@@ -38,11 +38,11 @@ procedure Test.0 ():
         in
         switch Test.12:
             case 0:
-                let Test.14 : Str = CallByName #Multimorphic.0 Test.11 Test.4;
+                let Test.14 : Str = CallByName Test.6 Test.11 Test.4;
                 jump Test.13 Test.14;
         
             case 1:
-                let Test.15 : Str = CallByName #Multimorphic.1 Test.11 Test.4;
+                let Test.15 : Str = CallByName Test.6 Test.11 Test.4;
                 jump Test.13 Test.15;
         
             default:

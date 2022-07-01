@@ -1530,19 +1530,18 @@ fn tail_call_with_different_layout() {
 fn multimorphic_lambda_set_capture() {
     indoc!(
         r#"
-        capture : a -> ({} -> Str)
+        capture : _ -> ({} -> Str)
         capture = \val ->
             \{} ->
-                when val is
-                    _ -> ""
+                Num.toStr val
 
         x : [True, False]
         x = True
 
         fun =
             when x is
-                True -> capture {}
-                False -> capture ""
+                True -> capture 123u64
+                False -> capture 18u8
 
         fun {}
         "#

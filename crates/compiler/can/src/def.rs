@@ -7,6 +7,7 @@ use crate::annotation::make_apply_symbol;
 use crate::annotation::IntroducedVariables;
 use crate::annotation::OwnedNamedOrAble;
 use crate::env::Env;
+use crate::expr::AccessorData;
 use crate::expr::AnnotatedMark;
 use crate::expr::ClosureData;
 use crate::expr::Declarations;
@@ -1554,7 +1555,10 @@ fn canonicalize_pending_value_def<'a>(
                     region: loc_ann.region,
                 }
             } else {
-                let symbol = scope.gen_unique_symbol();
+                let symbol = match &loc_can_pattern.value {
+                    Pattern::Identifier(symbol) => *symbol,
+                    _ => scope.gen_unique_symbol(),
+                };
 
                 // generate a fake pattern for each argument. this makes signatures
                 // that are functions only crash when they are applied.
@@ -1724,6 +1728,36 @@ fn canonicalize_pending_body<'a>(
 
                 (loc_can_expr, def_references)
             }
+
+            // Turn f = .foo into f = \rcd -[f]-> rcd.foo
+            // (
+            //     Pattern::Identifier(defined_symbol)
+            //     | Pattern::AbilityMemberSpecialization {
+            //         ident: defined_symbol,
+            //         ..
+            //     },
+            //     ast::Expr::AccessorFunction(field),
+            // ) => {
+            //     let (loc_can_expr, can_output) = (
+            //         Loc::at(
+            //             loc_expr.region,
+            //             Accessor(AccessorData {
+            //                 name: scope.gen_unique_symbol(),
+            //                 function_var: var_store.fresh(),
+            //                 record_var: var_store.fresh(),
+            //                 ext_var: var_store.fresh(),
+            //                 closure_var: var_store.fresh(),
+            //                 field_var: var_store.fresh(),
+            //                 field: (*field).into(),
+            //             }),
+            //         ),
+            //         Output::default(),
+            //     );
+            //     let def_references = DefReferences::Value(can_output.references.clone());
+            //     output.union(can_output);
+
+            //     (loc_can_expr, def_references)
+            // }
 
             _ => {
                 let (loc_can_expr, can_output) =

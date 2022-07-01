@@ -132,7 +132,7 @@ struct ModuleCache<'a> {
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
     late_specializations: MutMap<ModuleId, LateSpecializationsModule<'a>>,
-    external_specializations_requested: MutMap<ModuleId, Vec<ExternalSpecializations>>,
+    external_specializations_requested: MutMap<ModuleId, Vec<ExternalSpecializations<'a>>>,
 
     /// Various information
     imports: MutMap<ModuleId, MutSet<ModuleId>>,
@@ -717,7 +717,7 @@ enum Msg<'a> {
         module_id: ModuleId,
         ident_ids: IdentIds,
         layout_cache: LayoutCache<'a>,
-        external_specializations_requested: BumpMap<ModuleId, ExternalSpecializations>,
+        external_specializations_requested: BumpMap<ModuleId, ExternalSpecializations<'a>>,
         procs_base: ProcsBase<'a>,
         procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
         update_mode_ids: UpdateModeIds,
@@ -1013,7 +1013,7 @@ enum BuildTask<'a> {
         subs: Subs,
         procs_base: ProcsBase<'a>,
         layout_cache: LayoutCache<'a>,
-        specializations_we_must_make: Vec<ExternalSpecializations>,
+        specializations_we_must_make: Vec<ExternalSpecializations<'a>>,
         module_timing: ModuleTiming,
         world_abilities: WorldAbilities,
         derived_symbols: GlobalDerivedSymbols,
@@ -2678,6 +2678,7 @@ fn finish_specialization(
                     layout: roc_mono::ir::ProcLayout {
                         arguments: &[],
                         result: Layout::struct_no_name_order(&[]),
+                        captures_niche: &[],
                     },
                     symbol,
                 }
@@ -4425,7 +4426,7 @@ fn make_specializations<'a>(
     mut subs: Subs,
     procs_base: ProcsBase<'a>,
     mut layout_cache: LayoutCache<'a>,
-    specializations_we_must_make: Vec<ExternalSpecializations>,
+    specializations_we_must_make: Vec<ExternalSpecializations<'a>>,
     mut module_timing: ModuleTiming,
     target_info: TargetInfo,
     world_abilities: WorldAbilities,

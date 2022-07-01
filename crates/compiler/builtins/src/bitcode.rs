@@ -29,7 +29,7 @@ pub enum DecWidth {
 }
 
 #[repr(u8)]
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub enum FloatWidth {
     F32,
     F64,
@@ -76,7 +76,7 @@ impl FloatWidth {
 }
 
 #[repr(u8)]
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub enum IntWidth {
     U8 = 0,
     U16 = 1,

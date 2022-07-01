@@ -170,7 +170,7 @@ impl<'a> CodeGenHelp<'a> {
         let arg_layouts = self.arena.alloc([layout]);
         let expr = Expr::Call(Call {
             call_type: CallType::ByName {
-                name: proc_name,
+                name: LambdaName::only_receiver(proc_name),
                 ret_layout,
                 arg_layouts,
                 specialization_id: CallSpecId::BACKEND_DUMMY,
@@ -262,7 +262,7 @@ impl<'a> CodeGenHelp<'a> {
 
             Some(Expr::Call(Call {
                 call_type: CallType::ByName {
-                    name: proc_name,
+                    name: LambdaName::only_receiver(proc_name),
                     ret_layout,
                     arg_layouts,
                     specialization_id: CallSpecId::BACKEND_DUMMY,
@@ -375,19 +375,23 @@ impl<'a> CodeGenHelp<'a> {
             HelperOp::Inc => ProcLayout {
                 arguments: self.arena.alloc([*layout, self.layout_isize]),
                 result: LAYOUT_UNIT,
+                captures_niche: &[],
             },
             HelperOp::Dec => ProcLayout {
                 arguments: self.arena.alloc([*layout]),
                 result: LAYOUT_UNIT,
+                captures_niche: &[],
             },
             HelperOp::Reset => ProcLayout {
                 arguments: self.arena.alloc([*layout]),
                 result: *layout,
+                captures_niche: &[],
             },
             HelperOp::DecRef(_) => unreachable!("No generated Proc for DecRef"),
             HelperOp::Eq => ProcLayout {
                 arguments: self.arena.alloc([*layout, *layout]),
                 result: LAYOUT_BOOL,
+                captures_niche: &[],
             },
         };
 

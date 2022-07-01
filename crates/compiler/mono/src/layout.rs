@@ -232,7 +232,7 @@ impl<'a> RawFunctionLayout<'a> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FieldOrderHash(u64);
 
 impl FieldOrderHash {
@@ -254,7 +254,7 @@ impl FieldOrderHash {
 }
 
 /// Types for code gen must be monomorphic. No type variables allowed!
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Layout<'a> {
     Builtin(Builtin<'a>),
     Struct {
@@ -276,7 +276,7 @@ pub enum Layout<'a> {
     RecursivePointer,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum UnionLayout<'a> {
     /// A non-recursive tag union
     /// e.g. `Result a e : [Ok a, Err e]`
@@ -678,16 +678,13 @@ impl std::fmt::Debug for SetElement<'_> {
 impl std::fmt::Debug for LambdaSet<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         struct Helper<'a> {
-            set: &'a [(LambdaName, &'a [Layout<'a>])],
+            set: &'a [(Symbol, &'a [Layout<'a>])],
         }
 
         impl std::fmt::Debug for Helper<'_> {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 let entries = self.set.iter().map(|x| SetElement {
-                    symbol: match (x.0).0 {
-                        LambdaNameInner::Name(name) => name,
-                        LambdaNameInner::Multimorphic { alias, .. } => alias,
-                    },
+                    symbol: x.0,
                     layout: x.1,
                 });
 
@@ -864,74 +861,61 @@ impl MultimorphicNames {
     }
 }
 
+static_assertions::assert_eq_size!(&[Layout], Option<&[Layout]>);
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum LambdaNameInner {
-    /// Standard lambda name assigned during canonicalize/constrain
-    Name(Symbol),
+pub struct LambdaName<'a> {
+    name: Symbol,
     /// Sometimes we can end up with lambdas of the same name and different captures in the same
     /// lambda set, like [[Thunk U8, Thunk Str]]. See also https://github.com/rtfeldman/roc/issues/3336.
-    /// We call such lambdas "multi-morphic".
     ///
-    /// The current compilation scheme in such cases is to assign an alias name for subsequent such
-    /// lambda names, and then code-gen those lambda variants under a different `Proc`. In our
-    /// example, the lambda set would be transformed to something like
-    /// [[Thunk U8, Multimorphic(Thunk, ThunkAliasStr) Str]] which tells us to specialize the
-    /// second variant using the proc `Thunk` but under the name `ThunkAliasStr`, with that
-    /// particular closure layout.
-    ///
-    /// Currently we do no de-duplication of alias names. This does make compilation faster, but
-    /// also we should expect redundant multimorphic aliases to be somewhat rare, as that means a
-    /// non-unitary lambda set is the same in multiple areas of a program.
-    Multimorphic {
-        /// The lambda we came from, e.g. `Thunk` in the example
-        source: Symbol,
-        /// The lambda we become, e.g. `ThunkAliasStr` in the example
-        alias: Symbol,
-    },
+    /// By recording the captures layouts this lambda expects in its identifier, we can distinguish
+    /// between such differences.
+    pub captures_niche: &'a [Layout<'a>],
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct LambdaName(LambdaNameInner);
-
-impl LambdaName {
+impl LambdaName<'_> {
     #[inline(always)]
-    pub fn source_name(&self) -> Symbol {
-        match self.0 {
-            LambdaNameInner::Name(name) => name,
-            LambdaNameInner::Multimorphic { source, .. } => source,
-        }
+    pub fn name(&self) -> Symbol {
+        self.name
     }
 
     #[inline(always)]
-    pub fn call_name(&self) -> Symbol {
-        match self.0 {
-            LambdaNameInner::Name(name) => name,
-            LambdaNameInner::Multimorphic { alias, .. } => alias,
-        }
-    }
-
-    #[inline(always)]
-    pub fn is_multimorphic(&self) -> bool {
-        matches!(self.0, LambdaNameInner::Multimorphic { .. })
+    pub fn no_captures(&self) -> bool {
+        self.captures_niche.is_empty()
     }
 
     #[inline(always)]
     pub fn thunk(name: Symbol) -> Self {
-        Self(LambdaNameInner::Name(name))
+        Self {
+            name,
+            captures_niche: &[],
+        }
     }
 
     // When the function name is known, so there can only be one possible receiver, in such cases
     // the lambda cannot be multimorphic.
     #[inline(always)]
     pub fn only_receiver(name: Symbol) -> Self {
-        Self(LambdaNameInner::Name(name))
+        Self {
+            name,
+            captures_niche: &[],
+        }
+    }
+
+    #[inline(always)]
+    pub fn replace_name(&self, name: Symbol) -> Self {
+        Self {
+            name,
+            captures_niche: self.captures_niche,
+        }
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LambdaSet<'a> {
     /// collection of function names and their closure arguments
-    pub set: &'a [(LambdaName, &'a [Layout<'a>])],
+    pub set: &'a [(Symbol, &'a [Layout<'a>])],
     /// how the closure will be represented at runtime
     representation: &'a Layout<'a>,
 }
@@ -961,12 +945,8 @@ impl<'a> LambdaSet<'a> {
     }
 
     /// Does the lambda set contain the given symbol?
-    /// NOTE: for multimorphic variants, this checks the alias name.
     pub fn contains(&self, symbol: Symbol) -> bool {
-        self.set.iter().any(|(s, _)| match s.0 {
-            LambdaNameInner::Name(name) => name == symbol,
-            LambdaNameInner::Multimorphic { alias, .. } => alias == symbol,
-        })
+        self.set.iter().any(|(s, _)| *s == symbol)
     }
 
     pub fn is_represented(&self) -> Option<Layout<'a>> {
@@ -980,28 +960,25 @@ impl<'a> LambdaSet<'a> {
         }
     }
 
+    pub fn iter_set(&self) -> impl ExactSizeIterator<Item = LambdaName<'a>> {
+        self.set.iter().map(|(name, captures_layouts)| LambdaName {
+            name: *name,
+            captures_niche: captures_layouts,
+        })
+    }
+
     pub fn layout_for_member_with_lambda_name(
         &self,
         lambda_name: LambdaName,
     ) -> ClosureRepresentation<'a> {
-        debug_assert!(
-            self.set.iter().any(|(s, _)| *s == lambda_name),
-            "lambda {:?} not in set {:#?}",
-            lambda_name,
-            self.set,
-        );
+        debug_assert!(self.contains(lambda_name.name));
 
-        let comparator =
-            |other_name: LambdaName, _other_captures_layouts: &[Layout]| other_name == lambda_name;
+        let comparator = |other_name: Symbol, other_captures_layouts: &[Layout]| {
+            other_name == lambda_name.name
+                && other_captures_layouts.iter().eq(lambda_name.captures_niche)
+        };
 
         self.layout_for_member(comparator)
-    }
-
-    fn contains_source(&self, symbol: Symbol) -> bool {
-        self.set.iter().any(|(s, _)| match s.0 {
-            LambdaNameInner::Name(name) => name == symbol,
-            LambdaNameInner::Multimorphic { source, .. } => source == symbol,
-        })
     }
 
     /// Finds an alias name for a possible-multimorphic lambda variant in the lambda set.
@@ -1009,35 +986,28 @@ impl<'a> LambdaSet<'a> {
         &self,
         function_symbol: Symbol,
         captures_layouts: &[Layout],
-    ) -> LambdaName {
-        debug_assert!(
-            self.contains_source(function_symbol),
-            "function symbol not in set"
-        );
+    ) -> LambdaName<'a> {
+        debug_assert!(self.contains(function_symbol), "function symbol not in set");
 
-        let comparator = |other_name: LambdaName, other_captures_layouts: &[Layout]| {
-            let other_name = match other_name.0 {
-                LambdaNameInner::Name(name) => name,
-                // Take the source, since we'll want to pick out the multimorphic name if it
-                // matches
-                LambdaNameInner::Multimorphic { source, .. } => source,
-            };
-            other_name == function_symbol
-                && captures_layouts.iter().eq(other_captures_layouts.iter())
+        let comparator = |other_name: Symbol, other_captures_layouts: &[Layout]| {
+            other_name == function_symbol && other_captures_layouts.iter().eq(captures_layouts)
         };
 
-        let (name, _) = self
+        let (name, layouts) = self
             .set
             .iter()
             .find(|(name, layouts)| comparator(*name, layouts))
             .expect("no lambda set found");
 
-        *name
+        LambdaName {
+            name: *name,
+            captures_niche: layouts,
+        }
     }
 
     fn layout_for_member<F>(&self, comparator: F) -> ClosureRepresentation<'a>
     where
-        F: Fn(LambdaName, &[Layout]) -> bool,
+        F: Fn(Symbol, &[Layout]) -> bool,
     {
         match self.representation {
             Layout::Union(union) => {
@@ -1054,10 +1024,7 @@ impl<'a> LambdaSet<'a> {
                             .find(|(_, (s, layouts))| comparator(*s, layouts))
                             .unwrap();
 
-                        let closure_name = match name.0 {
-                            LambdaNameInner::Name(name) => name,
-                            LambdaNameInner::Multimorphic { alias, .. } => alias,
-                        };
+                        let closure_name = *name;
 
                         ClosureRepresentation::Union {
                             tag_id: index as TagIdIntType,
@@ -1140,15 +1107,14 @@ impl<'a> LambdaSet<'a> {
                 // sort the tags; make sure ordering stays intact!
                 lambdas.sort_by_key(|(sym, _)| *sym);
 
-                let mut set: Vec<(LambdaName, &[Layout])> =
-                    Vec::with_capacity_in(lambdas.len(), arena);
-                let mut set_for_making_repr: std::vec::Vec<(Symbol, std::vec::Vec<Variable>)> =
+                let mut set: Vec<(Symbol, &[Layout])> = Vec::with_capacity_in(lambdas.len(), arena);
+                let mut set_with_variables: std::vec::Vec<(Symbol, std::vec::Vec<Variable>)> =
                     std::vec::Vec::with_capacity(lambdas.len());
 
                 let mut last_function_symbol = None;
                 let mut lambdas_it = lambdas.iter().peekable();
 
-                let mut has_multimorphic = false;
+                let mut has_duplicate_lambda_names = false;
                 while let Some((function_symbol, variables)) = lambdas_it.next() {
                     let mut arguments = Vec::with_capacity_in(variables.len(), arena);
 
@@ -1174,37 +1140,42 @@ impl<'a> LambdaSet<'a> {
                         }
                     };
 
-                    let lambda_name = if is_multimorphic {
-                        let alias = multimorphic_names.get_or_insert(*function_symbol, arguments);
+                    has_duplicate_lambda_names = has_duplicate_lambda_names || is_multimorphic;
 
-                        has_multimorphic = true;
-
-                        LambdaNameInner::Multimorphic {
-                            source: *function_symbol,
-                            alias,
-                        }
-                    } else {
-                        LambdaNameInner::Name(*function_symbol)
-                    };
-                    let lambda_name = LambdaName(lambda_name);
-
-                    set.push((lambda_name, arguments));
-                    set_for_making_repr.push((lambda_name.call_name(), variables.to_vec()));
+                    set.push((*function_symbol, arguments));
+                    set_with_variables.push((*function_symbol, variables.to_vec()));
 
                     last_function_symbol = Some(function_symbol);
                 }
 
-                if has_multimorphic {
-                    // Must re-sort the set in case we added multimorphic lambdas since they may under
-                    // another name
-                    set.sort_by_key(|(name, _)| name.call_name());
-                    set_for_making_repr.sort_by_key(|(name, _)| *name);
-                }
+                let (set, set_with_variables) = if has_duplicate_lambda_names {
+                    // If we have a lambda set with duplicate names, then we sort first by name,
+                    // and break ties by sorting on the layout. We need to do this again since the
+                    // first sort would not have sorted on the layout.
+
+                    // TODO: be more efficient, we can compute the permutation once and then apply
+                    // it to both vectors.
+                    let mut joined = set
+                        .into_iter()
+                        .zip(set_with_variables.into_iter())
+                        .collect::<std::vec::Vec<_>>();
+                    joined.sort_by(|(lam_and_captures1, _), (lam_and_captures2, _)| {
+                        lam_and_captures1.cmp(lam_and_captures2)
+                    });
+                    let (set, set_with_variables): (std::vec::Vec<_>, std::vec::Vec<_>) =
+                        joined.into_iter().unzip();
+
+                    let set = Vec::from_iter_in(set, arena);
+
+                    (set, set_with_variables)
+                } else {
+                    (set, set_with_variables)
+                };
 
                 let representation = arena.alloc(Self::make_representation(
                     arena,
                     subs,
-                    set_for_making_repr,
+                    set_with_variables,
                     target_info,
                     multimorphic_names,
                 ));
@@ -1323,7 +1294,7 @@ fn resolve_lambda_set(subs: &Subs, mut var: Variable) -> ResolvedLambdaSet {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Builtin<'a> {
     Int(IntWidth),
     Float(FloatWidth),
@@ -3433,7 +3404,7 @@ mod test {
     #[test]
     fn width_and_alignment_union_empty_struct() {
         let lambda_set = LambdaSet {
-            set: &[(LambdaName::only_receiver(Symbol::LIST_MAP), &[])],
+            set: &[(Symbol::LIST_MAP, &[])],
             representation: &Layout::UNIT,
         };
 
