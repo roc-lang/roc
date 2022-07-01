@@ -1730,34 +1730,34 @@ fn canonicalize_pending_body<'a>(
             }
 
             // Turn f = .foo into f = \rcd -[f]-> rcd.foo
-            // (
-            //     Pattern::Identifier(defined_symbol)
-            //     | Pattern::AbilityMemberSpecialization {
-            //         ident: defined_symbol,
-            //         ..
-            //     },
-            //     ast::Expr::AccessorFunction(field),
-            // ) => {
-            //     let (loc_can_expr, can_output) = (
-            //         Loc::at(
-            //             loc_expr.region,
-            //             Accessor(AccessorData {
-            //                 name: scope.gen_unique_symbol(),
-            //                 function_var: var_store.fresh(),
-            //                 record_var: var_store.fresh(),
-            //                 ext_var: var_store.fresh(),
-            //                 closure_var: var_store.fresh(),
-            //                 field_var: var_store.fresh(),
-            //                 field: (*field).into(),
-            //             }),
-            //         ),
-            //         Output::default(),
-            //     );
-            //     let def_references = DefReferences::Value(can_output.references.clone());
-            //     output.union(can_output);
+            (
+                Pattern::Identifier(defined_symbol)
+                | Pattern::AbilityMemberSpecialization {
+                    ident: defined_symbol,
+                    ..
+                },
+                ast::Expr::AccessorFunction(field),
+            ) => {
+                let (loc_can_expr, can_output) = (
+                    Loc::at(
+                        loc_expr.region,
+                        Accessor(AccessorData {
+                            name: *defined_symbol,
+                            function_var: var_store.fresh(),
+                            record_var: var_store.fresh(),
+                            ext_var: var_store.fresh(),
+                            closure_var: var_store.fresh(),
+                            field_var: var_store.fresh(),
+                            field: (*field).into(),
+                        }),
+                    ),
+                    Output::default(),
+                );
+                let def_references = DefReferences::Value(can_output.references.clone());
+                output.union(can_output);
 
-            //     (loc_can_expr, def_references)
-            // }
+                (loc_can_expr, def_references)
+            }
 
             _ => {
                 let (loc_can_expr, can_output) =
