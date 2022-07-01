@@ -33,7 +33,7 @@ use roc_mono::ir::{
     CapturedSymbols, EntryPoint, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs,
     ProcsBase, UpdateModeIds,
 };
-use roc_mono::layout::{LambdaName, Layout, LayoutCache, LayoutProblem, MultimorphicNames};
+use roc_mono::layout::{LambdaName, Layout, LayoutCache, LayoutProblem};
 use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
 use roc_parse::header::{HeaderFor, ModuleNameEnum, PackageName};
@@ -428,7 +428,6 @@ fn start_phase<'a>(
                     exposed_to_host: state.exposed_to_host.clone(),
                     abilities_store,
                     derived_symbols,
-                    multimorphic_names: state.multimorphic_names.clone(),
                 }
             }
             Phase::MakeSpecializations => {
@@ -498,7 +497,6 @@ fn start_phase<'a>(
                     module_timing,
                     world_abilities: state.world_abilities.clone_ref(),
                     derived_symbols,
-                    multimorphic_names: state.multimorphic_names.clone(),
                 }
             }
         }
@@ -828,8 +826,6 @@ struct State<'a> {
 
     pub render: RenderTarget,
 
-    pub multimorphic_names: MultimorphicNames,
-
     /// All abilities across all modules.
     pub world_abilities: WorldAbilities,
 
@@ -880,7 +876,6 @@ impl<'a> State<'a> {
             layout_caches: std::vec::Vec::with_capacity(number_of_workers),
             cached_subs: Arc::new(Mutex::new(cached_subs)),
             render,
-            multimorphic_names: MultimorphicNames::default(),
             make_specializations_pass: MakeSpecializationsPass::Pass(1),
             world_abilities: Default::default(),
         }
@@ -1005,7 +1000,6 @@ enum BuildTask<'a> {
         exposed_to_host: ExposedToHost,
         abilities_store: AbilitiesStore,
         derived_symbols: GlobalDerivedSymbols,
-        multimorphic_names: MultimorphicNames,
     },
     MakeSpecializations {
         module_id: ModuleId,
@@ -1017,7 +1011,6 @@ enum BuildTask<'a> {
         module_timing: ModuleTiming,
         world_abilities: WorldAbilities,
         derived_symbols: GlobalDerivedSymbols,
-        multimorphic_names: MultimorphicNames,
     },
 }
 
@@ -2599,16 +2592,7 @@ fn finish_specialization(
         .into_inner()
         .into_module_ids();
 
-    let mut all_ident_ids = state.constrained_ident_ids;
-    let multimorphic_idents = state
-        .multimorphic_names
-        .try_unwrap_names()
-        .expect("There were still outstanding Arc references to multimorphic_names");
-    let old_idents = all_ident_ids.insert(ModuleId::MULTIMORPHIC, multimorphic_idents);
-    debug_assert!(
-        old_idents.is_none() || old_idents.unwrap().is_empty(),
-        "duplicate multimorphic idents"
-    );
+    let all_ident_ids = state.constrained_ident_ids;
 
     let interns = Interns {
         module_ids,
@@ -4431,7 +4415,6 @@ fn make_specializations<'a>(
     target_info: TargetInfo,
     world_abilities: WorldAbilities,
     derived_symbols: GlobalDerivedSymbols,
-    mut multimorphic_names: MultimorphicNames,
 ) -> Msg<'a> {
     let make_specializations_start = SystemTime::now();
     let mut update_mode_ids = UpdateModeIds::new();
@@ -4447,7 +4430,6 @@ fn make_specializations<'a>(
         call_specialization_counter: 1,
         abilities: AbilitiesView::World(world_abilities),
         derived_symbols: &derived_symbols,
-        multimorphic_names: &mut multimorphic_names,
     };
 
     let mut procs = Procs::new_in(arena);
@@ -4511,7 +4493,6 @@ fn build_pending_specializations<'a>(
     exposed_to_host: ExposedToHost, // TODO remove
     abilities_store: AbilitiesStore,
     derived_symbols: GlobalDerivedSymbols,
-    mut multimorphic_names: MultimorphicNames,
 ) -> Msg<'a> {
     let find_specializations_start = SystemTime::now();
 
@@ -4541,7 +4522,6 @@ fn build_pending_specializations<'a>(
         // do we need a global view.
         abilities: AbilitiesView::Module(&abilities_store),
         derived_symbols: &derived_symbols,
-        multimorphic_names: &mut multimorphic_names,
     };
 
     // Add modules' decls to Procs
@@ -4568,12 +4548,8 @@ fn build_pending_specializations<'a>(
                 // never gets called by Roc code, it will never
                 // get specialized!
                 if is_host_exposed {
-                    let layout_result = layout_cache.raw_from_var(
-                        mono_env.arena,
-                        expr_var,
-                        mono_env.subs,
-                        mono_env.multimorphic_names,
-                    );
+                    let layout_result =
+                        layout_cache.raw_from_var(mono_env.arena, expr_var, mono_env.subs);
 
                     // cannot specialize when e.g. main's type contains type variables
                     if let Err(e) = layout_result {
@@ -4632,12 +4608,8 @@ fn build_pending_specializations<'a>(
                 // never gets called by Roc code, it will never
                 // get specialized!
                 if is_host_exposed {
-                    let layout_result = layout_cache.raw_from_var(
-                        mono_env.arena,
-                        expr_var,
-                        mono_env.subs,
-                        mono_env.multimorphic_names,
-                    );
+                    let layout_result =
+                        layout_cache.raw_from_var(mono_env.arena, expr_var, mono_env.subs);
 
                     // cannot specialize when e.g. main's type contains type variables
                     if let Err(e) = layout_result {
@@ -4714,12 +4686,8 @@ fn build_pending_specializations<'a>(
                 // never gets called by Roc code, it will never
                 // get specialized!
                 if is_host_exposed {
-                    let layout_result = layout_cache.raw_from_var(
-                        mono_env.arena,
-                        expr_var,
-                        mono_env.subs,
-                        mono_env.multimorphic_names,
-                    );
+                    let layout_result =
+                        layout_cache.raw_from_var(mono_env.arena, expr_var, mono_env.subs);
 
                     // cannot specialize when e.g. main's type contains type variables
                     if let Err(e) = layout_result {
@@ -4778,12 +4746,8 @@ fn build_pending_specializations<'a>(
                 // never gets called by Roc code, it will never
                 // get specialized!
                 if is_host_exposed {
-                    let layout_result = layout_cache.raw_from_var(
-                        mono_env.arena,
-                        expr_var,
-                        mono_env.subs,
-                        mono_env.multimorphic_names,
-                    );
+                    let layout_result =
+                        layout_cache.raw_from_var(mono_env.arena, expr_var, mono_env.subs);
 
                     // cannot specialize when e.g. main's type contains type variables
                     if let Err(e) = layout_result {
@@ -4936,7 +4900,6 @@ fn run_task<'a>(
             exposed_to_host,
             abilities_store,
             derived_symbols,
-            multimorphic_names,
         } => Ok(build_pending_specializations(
             arena,
             solved_subs,
@@ -4950,7 +4913,6 @@ fn run_task<'a>(
             exposed_to_host,
             abilities_store,
             derived_symbols,
-            multimorphic_names,
         )),
         MakeSpecializations {
             module_id,
@@ -4962,7 +4924,6 @@ fn run_task<'a>(
             module_timing,
             world_abilities,
             derived_symbols,
-            multimorphic_names,
         } => Ok(make_specializations(
             arena,
             module_id,
@@ -4975,7 +4936,6 @@ fn run_task<'a>(
             target_info,
             world_abilities,
             derived_symbols,
-            multimorphic_names,
         )),
     }?;
 

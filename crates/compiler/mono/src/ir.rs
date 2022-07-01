@@ -2,7 +2,7 @@
 
 use crate::layout::{
     Builtin, ClosureRepresentation, LambdaName, LambdaSet, Layout, LayoutCache, LayoutProblem,
-    MultimorphicNames, RawFunctionLayout, TagIdIntType, TagOrClosure, UnionLayout, WrappedVariant,
+    RawFunctionLayout, TagIdIntType, TagOrClosure, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
@@ -824,25 +824,19 @@ impl<'a> SymbolSpecializations<'a> {
         let arena = env.arena;
         let subs: &Subs = env.subs;
 
-        let layout =
-            match layout_cache.from_var(arena, specialization_var, subs, env.multimorphic_names) {
-                Ok(layout) => layout,
-                // This can happen when the def symbol has a type error. In such cases just use the
-                // def symbol, which is erroring.
-                Err(_) => return symbol,
-            };
+        let layout = match layout_cache.from_var(arena, specialization_var, subs) {
+            Ok(layout) => layout,
+            // This can happen when the def symbol has a type error. In such cases just use the
+            // def symbol, which is erroring.
+            Err(_) => return symbol,
+        };
 
         let is_closure = matches!(
             subs.get_content_without_compacting(specialization_var),
             Content::Structure(FlatType::Func(..))
         );
         let function_mark = if is_closure {
-            let fn_layout = match layout_cache.raw_from_var(
-                arena,
-                specialization_var,
-                subs,
-                env.multimorphic_names,
-            ) {
+            let fn_layout = match layout_cache.raw_from_var(arena, specialization_var, subs) {
                 Ok(layout) => layout,
                 // This can happen when the def symbol has a type error. In such cases just use the
                 // def symbol, which is erroring.
@@ -1024,7 +1018,7 @@ impl<'a> Procs<'a> {
         layout_cache: &mut LayoutCache<'a>,
     ) -> Result<ProcLayout<'a>, RuntimeError> {
         let raw_layout = layout_cache
-            .raw_from_var(env.arena, annotation, env.subs, env.multimorphic_names)
+            .raw_from_var(env.arena, annotation, env.subs)
             .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
         let top_level = ProcLayout::from_raw(env.arena, raw_layout, name.captures_niche);
@@ -1303,7 +1297,6 @@ pub struct Env<'a, 'i> {
     pub call_specialization_counter: u32,
     pub abilities: AbilitiesView<'i>,
     pub derived_symbols: &'i GlobalDerivedSymbols,
-    pub multimorphic_names: &'i mut MultimorphicNames,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
@@ -2902,7 +2895,7 @@ fn specialize_external<'a>(
 
         for (symbol, variable) in host_exposed_variables {
             let layout = layout_cache
-                .raw_from_var(env.arena, *variable, env.subs, env.multimorphic_names)
+                .raw_from_var(env.arena, *variable, env.subs)
                 .unwrap();
 
             let name = env.unique_symbol();
@@ -3229,7 +3222,7 @@ fn build_specialized_proc_from_var<'a>(
     pattern_symbols: &[Symbol],
     fn_var: Variable,
 ) -> Result<SpecializedLayout<'a>, LayoutProblem> {
-    match layout_cache.raw_from_var(env.arena, fn_var, env.subs, env.multimorphic_names)? {
+    match layout_cache.raw_from_var(env.arena, fn_var, env.subs)? {
         RawFunctionLayout::Function(pattern_layouts, closure_layout, ret_layout) => {
             let mut pattern_layouts_vec = Vec::with_capacity_in(pattern_layouts.len(), env.arena);
             pattern_layouts_vec.extend_from_slice(pattern_layouts);
@@ -3448,7 +3441,7 @@ where
 
     // for debugging only
     let raw = layout_cache
-        .raw_from_var(env.arena, fn_var, env.subs, env.multimorphic_names)
+        .raw_from_var(env.arena, fn_var, env.subs)
         .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
 
     let raw = if procs.is_module_thunk(proc_name.name()) {
@@ -3587,7 +3580,7 @@ fn specialize_naked_symbol<'a>(
 
         return result;
     } else if env.is_imported_symbol(symbol) {
-        match layout_cache.from_var(env.arena, variable, env.subs, env.multimorphic_names) {
+        match layout_cache.from_var(env.arena, variable, env.subs) {
             Err(e) => panic!("invalid layout {:?}", e),
             Ok(_) => {
                 // this is a 0-arity thunk
@@ -3969,7 +3962,6 @@ pub fn with_hole<'a>(
                 record_var,
                 env.subs,
                 env.target_info,
-                env.multimorphic_names,
             ) {
                 Ok(fields) => fields,
                 Err(_) => return Stmt::RuntimeError("Can't create record with improper layout"),
@@ -4023,7 +4015,7 @@ pub fn with_hole<'a>(
 
             // creating a record from the var will unpack it if it's just a single field.
             let layout = layout_cache
-                .from_var(env.arena, record_var, env.subs, env.multimorphic_names)
+                .from_var(env.arena, record_var, env.subs)
                 .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
             let field_symbols = field_symbols.into_bump_slice();
@@ -4081,8 +4073,8 @@ pub fn with_hole<'a>(
             final_else,
         } => {
             match (
-                layout_cache.from_var(env.arena, branch_var, env.subs, env.multimorphic_names),
-                layout_cache.from_var(env.arena, cond_var, env.subs, env.multimorphic_names),
+                layout_cache.from_var(env.arena, branch_var, env.subs),
+                layout_cache.from_var(env.arena, cond_var, env.subs),
             ) {
                 (Ok(ret_layout), Ok(cond_layout)) => {
                     // if the hole is a return, then we don't need to merge the two
@@ -4181,7 +4173,7 @@ pub fn with_hole<'a>(
                         }
 
                         let layout = layout_cache
-                            .from_var(env.arena, branch_var, env.subs, env.multimorphic_names)
+                            .from_var(env.arena, branch_var, env.subs)
                             .unwrap_or_else(|err| {
                                 panic!("TODO turn fn_var into a RuntimeError {:?}", err)
                             });
@@ -4248,7 +4240,7 @@ pub fn with_hole<'a>(
             );
 
             let layout = layout_cache
-                .from_var(env.arena, expr_var, env.subs, env.multimorphic_names)
+                .from_var(env.arena, expr_var, env.subs)
                 .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
             let param = Param {
@@ -4271,8 +4263,7 @@ pub fn with_hole<'a>(
             ..
         } if loc_elems.is_empty() => {
             // because an empty list has an unknown element type, it is handled differently
-            let opt_elem_layout =
-                layout_cache.from_var(env.arena, elem_var, env.subs, env.multimorphic_names);
+            let opt_elem_layout = layout_cache.from_var(env.arena, elem_var, env.subs);
 
             match opt_elem_layout {
                 Ok(elem_layout) => {
@@ -4326,7 +4317,7 @@ pub fn with_hole<'a>(
             let arg_symbols = arg_symbols.into_bump_slice();
 
             let elem_layout = layout_cache
-                .from_var(env.arena, elem_var, env.subs, env.multimorphic_names)
+                .from_var(env.arena, elem_var, env.subs)
                 .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
             let expr = Expr::Array {
@@ -4362,7 +4353,6 @@ pub fn with_hole<'a>(
                 record_var,
                 env.subs,
                 env.target_info,
-                env.multimorphic_names,
             ) {
                 Ok(fields) => fields,
                 Err(_) => return Stmt::RuntimeError("Can't access record with improper layout"),
@@ -4413,7 +4403,7 @@ pub fn with_hole<'a>(
                     };
 
                     let layout = layout_cache
-                        .from_var(env.arena, field_var, env.subs, env.multimorphic_names)
+                        .from_var(env.arena, field_var, env.subs)
                         .unwrap_or_else(|err| {
                             panic!("TODO turn fn_var into a RuntimeError {:?}", err)
                         });
@@ -4460,12 +4450,7 @@ pub fn with_hole<'a>(
                 Ok(_) => {
                     let raw_layout = return_on_layout_error!(
                         env,
-                        layout_cache.raw_from_var(
-                            env.arena,
-                            function_type,
-                            env.subs,
-                            env.multimorphic_names,
-                        )
+                        layout_cache.raw_from_var(env.arena, function_type, env.subs,)
                     );
 
                     match raw_layout {
@@ -4513,7 +4498,6 @@ pub fn with_hole<'a>(
                 record_var,
                 env.subs,
                 env.target_info,
-                env.multimorphic_names,
             ) {
                 Ok(fields) => fields,
                 Err(_) => return Stmt::RuntimeError("Can't update record with improper layout"),
@@ -4558,7 +4542,7 @@ pub fn with_hole<'a>(
             let symbols = symbols.into_bump_slice();
 
             let record_layout = layout_cache
-                .from_var(env.arena, record_var, env.subs, env.multimorphic_names)
+                .from_var(env.arena, record_var, env.subs)
                 .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
             let field_layouts = match &record_layout {
@@ -4666,12 +4650,7 @@ pub fn with_hole<'a>(
         }) => {
             let loc_body = *boxed_body;
 
-            let raw = layout_cache.raw_from_var(
-                env.arena,
-                function_type,
-                env.subs,
-                env.multimorphic_names,
-            );
+            let raw = layout_cache.raw_from_var(env.arena, function_type, env.subs);
 
             match return_on_layout_error!(env, raw) {
                 RawFunctionLayout::ZeroArgumentThunk(_) => {
@@ -4805,12 +4784,7 @@ pub fn with_hole<'a>(
 
                     let full_layout = return_on_layout_error!(
                         env,
-                        layout_cache.raw_from_var(
-                            env.arena,
-                            fn_var,
-                            env.subs,
-                            env.multimorphic_names,
-                        )
+                        layout_cache.raw_from_var(env.arena, fn_var, env.subs,)
                     );
 
                     // if the function expression (loc_expr) is already a symbol,
@@ -4988,10 +4962,8 @@ pub fn with_hole<'a>(
             let arg_symbols = arg_symbols.into_bump_slice();
 
             // layout of the return type
-            let layout = return_on_layout_error!(
-                env,
-                layout_cache.from_var(env.arena, ret_var, env.subs, env.multimorphic_names,)
-            );
+            let layout =
+                return_on_layout_error!(env, layout_cache.from_var(env.arena, ret_var, env.subs,));
 
             let call = self::Call {
                 call_type: CallType::Foreign {
@@ -5026,10 +4998,8 @@ pub fn with_hole<'a>(
             let arg_symbols = arg_symbols.into_bump_slice();
 
             // layout of the return type
-            let layout = return_on_layout_error!(
-                env,
-                layout_cache.from_var(env.arena, ret_var, env.subs, env.multimorphic_names,)
-            );
+            let layout =
+                return_on_layout_error!(env, layout_cache.from_var(env.arena, ret_var, env.subs,));
 
             macro_rules! match_on_closure_argument {
                 ( $ho:ident, [$($x:ident),* $(,)?]) => {{
@@ -5039,7 +5009,7 @@ pub fn with_hole<'a>(
 
                     let closure_data_layout = return_on_layout_error!(
                         env,
-                        layout_cache.raw_from_var(env.arena, closure_data_var, env.subs,env.multimorphic_names)
+                        layout_cache.raw_from_var(env.arena, closure_data_var, env.subs)
                     );
 
                     // NB: I don't think the top_level here can capture anything??
@@ -5289,7 +5259,7 @@ where
         .into_iter()
         .map(|(_, var)| {
             layout_cache
-                .from_var(env.arena, *var, env.subs, env.multimorphic_names)
+                .from_var(env.arena, *var, env.subs)
                 .expect("layout problem for capture")
         })
         .collect_in::<Vec<_>>(env.arena);
@@ -5421,13 +5391,8 @@ fn convert_tag_union<'a>(
     arena: &'a Bump,
 ) -> Stmt<'a> {
     use crate::layout::UnionVariant::*;
-    let res_variant = crate::layout::union_sorted_tags(
-        env.arena,
-        variant_var,
-        env.subs,
-        env.target_info,
-        env.multimorphic_names,
-    );
+    let res_variant =
+        crate::layout::union_sorted_tags(env.arena, variant_var, env.subs, env.target_info);
     let variant = match res_variant {
         Ok(cached) => cached,
         Err(LayoutProblem::UnresolvedTypeVar(_)) => {
@@ -5486,7 +5451,7 @@ fn convert_tag_union<'a>(
 
             // Layout will unpack this unwrapped tack if it only has one (non-zero-sized) field
             let layout = layout_cache
-                .from_var(env.arena, variant_var, env.subs, env.multimorphic_names)
+                .from_var(env.arena, variant_var, env.subs)
                 .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
             // even though this was originally a Tag, we treat it as a Struct from now on
@@ -5514,7 +5479,7 @@ fn convert_tag_union<'a>(
             // version is not the same as the minimal version.
             let union_layout = match return_on_layout_error!(
                 env,
-                layout_cache.from_var(env.arena, variant_var, env.subs, env.multimorphic_names,)
+                layout_cache.from_var(env.arena, variant_var, env.subs,)
             ) {
                 Layout::Union(ul) => ul,
                 _ => unreachable!(),
@@ -5712,7 +5677,7 @@ fn tag_union_to_function<'a>(
             // only need to construct closure data
             let raw_layout = return_on_layout_error!(
                 env,
-                layout_cache.raw_from_var(env.arena, whole_var, env.subs, env.multimorphic_names,)
+                layout_cache.raw_from_var(env.arena, whole_var, env.subs,)
             );
 
             match raw_layout {
@@ -5753,7 +5718,7 @@ fn sorted_field_symbols<'a>(
 
     for (var, mut arg) in args.drain(..) {
         // Layout will unpack this unwrapped tag if it only has one (non-zero-sized) field
-        let layout = match layout_cache.from_var(env.arena, var, env.subs, env.multimorphic_names) {
+        let layout = match layout_cache.from_var(env.arena, var, env.subs) {
             Ok(cached) => cached,
             Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                 // this argument has type `forall a. a`, which is isomorphic to
@@ -5851,13 +5816,7 @@ fn register_capturing_closure<'a>(
 
         let captured_symbols = match *env.subs.get_content_without_compacting(function_type) {
             Content::Structure(FlatType::Func(_, closure_var, _)) => {
-                match LambdaSet::from_var(
-                    env.arena,
-                    env.subs,
-                    closure_var,
-                    env.target_info,
-                    env.multimorphic_names,
-                ) {
+                match LambdaSet::from_var(env.arena, env.subs, closure_var, env.target_info) {
                     Ok(lambda_set) => {
                         if let Layout::Struct {
                             field_layouts: &[], ..
@@ -5888,12 +5847,7 @@ fn register_capturing_closure<'a>(
                     captured_symbols.is_empty(),
                     "{:?} with layout {:?} {:?} {:?}",
                     &captured_symbols,
-                    layout_cache.raw_from_var(
-                        env.arena,
-                        function_type,
-                        env.subs,
-                        env.multimorphic_names,
-                    ),
+                    layout_cache.raw_from_var(env.arena, function_type, env.subs,),
                     env.subs,
                     (function_type, closure_type),
                 );
@@ -5972,10 +5926,10 @@ pub fn from_can<'a>(
             final_else,
         } => {
             let ret_layout = layout_cache
-                .from_var(env.arena, branch_var, env.subs, env.multimorphic_names)
+                .from_var(env.arena, branch_var, env.subs)
                 .expect("invalid ret_layout");
             let cond_layout = layout_cache
-                .from_var(env.arena, cond_var, env.subs, env.multimorphic_names)
+                .from_var(env.arena, cond_var, env.subs)
                 .expect("invalid cond_layout");
 
             let mut stmt = from_can(env, branch_var, final_else.value, procs, layout_cache);
@@ -6019,8 +5973,7 @@ pub fn from_can<'a>(
             let mut layouts = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
 
             for (_, var) in lookups_in_cond {
-                let res_layout =
-                    layout_cache.from_var(env.arena, var, env.subs, env.multimorphic_names);
+                let res_layout = layout_cache.from_var(env.arena, var, env.subs);
                 let layout = return_on_layout_error!(env, res_layout);
                 layouts.push(layout);
             }
@@ -6187,15 +6140,11 @@ fn from_can_when<'a>(
     }
     let opt_branches = to_opt_branches(env, procs, branches, exhaustive_mark, layout_cache);
 
-    let cond_layout = return_on_layout_error!(
-        env,
-        layout_cache.from_var(env.arena, cond_var, env.subs, env.multimorphic_names,)
-    );
+    let cond_layout =
+        return_on_layout_error!(env, layout_cache.from_var(env.arena, cond_var, env.subs,));
 
-    let ret_layout = return_on_layout_error!(
-        env,
-        layout_cache.from_var(env.arena, expr_var, env.subs, env.multimorphic_names,)
-    );
+    let ret_layout =
+        return_on_layout_error!(env, layout_cache.from_var(env.arena, expr_var, env.subs,));
 
     let arena = env.arena;
     let it = opt_branches
@@ -7188,8 +7137,7 @@ where
         for (_, (variable, left)) in needed_specializations_of_left {
             add_needed_external(procs, env, variable, LambdaName::thunk(right));
 
-            let res_layout =
-                layout_cache.from_var(env.arena, variable, env.subs, env.multimorphic_names);
+            let res_layout = layout_cache.from_var(env.arena, variable, env.subs);
             let layout = return_on_layout_error!(env, res_layout);
 
             result = force_thunk(env, right, layout, left, env.arena.alloc(result));
@@ -7279,12 +7227,7 @@ fn specialize_symbol<'a>(
         None => {
             match arg_var {
                 Some(arg_var) if env.is_imported_symbol(original) => {
-                    let raw = match layout_cache.raw_from_var(
-                        env.arena,
-                        arg_var,
-                        env.subs,
-                        env.multimorphic_names,
-                    ) {
+                    let raw = match layout_cache.raw_from_var(env.arena, arg_var, env.subs) {
                         Ok(v) => v,
                         Err(e) => return_on_layout_error_help!(env, e),
                     };
@@ -7347,7 +7290,7 @@ fn specialize_symbol<'a>(
             // to it in the IR.
             let res_layout = return_on_layout_error!(
                 env,
-                layout_cache.raw_from_var(env.arena, arg_var, env.subs, env.multimorphic_names,)
+                layout_cache.raw_from_var(env.arena, arg_var, env.subs,)
             );
 
             // we have three kinds of functions really. Plain functions, closures by capture,
@@ -7587,7 +7530,7 @@ fn call_by_name<'a>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     // Register a pending_specialization for this function
-    match layout_cache.raw_from_var(env.arena, fn_var, env.subs, env.multimorphic_names) {
+    match layout_cache.raw_from_var(env.arena, fn_var, env.subs) {
         Err(LayoutProblem::UnresolvedTypeVar(var)) => {
             let msg = format!(
                 "Hit an unresolved type variable {:?} when creating a layout for {:?} (var {:?})",
@@ -7775,7 +7718,7 @@ fn call_by_name_help<'a>(
     // the variables of the given arguments
     let mut pattern_vars = Vec::with_capacity_in(loc_args.len(), arena);
     for (var, _) in &loc_args {
-        match layout_cache.from_var(env.arena, *var, env.subs, env.multimorphic_names) {
+        match layout_cache.from_var(env.arena, *var, env.subs) {
             Ok(_) => {
                 pattern_vars.push(*var);
             }
@@ -8436,14 +8379,9 @@ fn from_can_pattern_help<'a>(
             use crate::layout::UnionVariant::*;
             use roc_exhaustive::Union;
 
-            let res_variant = crate::layout::union_sorted_tags(
-                env.arena,
-                *whole_var,
-                env.subs,
-                env.target_info,
-                env.multimorphic_names,
-            )
-            .map_err(Into::into);
+            let res_variant =
+                crate::layout::union_sorted_tags(env.arena, *whole_var, env.subs, env.target_info)
+                    .map_err(Into::into);
 
             let variant = match res_variant {
                 Ok(cached) => cached,
@@ -8526,12 +8464,12 @@ fn from_can_pattern_help<'a>(
 
                     arguments.sort_by(|arg1, arg2| {
                         let size1 = layout_cache
-                            .from_var(env.arena, arg1.0, env.subs, env.multimorphic_names)
+                            .from_var(env.arena, arg1.0, env.subs)
                             .map(|x| x.alignment_bytes(env.target_info))
                             .unwrap_or(0);
 
                         let size2 = layout_cache
-                            .from_var(env.arena, arg2.0, env.subs, env.multimorphic_names)
+                            .from_var(env.arena, arg2.0, env.subs)
                             .map(|x| x.alignment_bytes(env.target_info))
                             .unwrap_or(0);
 
@@ -8566,12 +8504,10 @@ fn from_can_pattern_help<'a>(
                         let mut temp = arguments.clone();
 
                         temp.sort_by(|arg1, arg2| {
-                            let layout1 = layout_cache
-                                .from_var(env.arena, arg1.0, env.subs, env.multimorphic_names)
-                                .unwrap();
-                            let layout2 = layout_cache
-                                .from_var(env.arena, arg2.0, env.subs, env.multimorphic_names)
-                                .unwrap();
+                            let layout1 =
+                                layout_cache.from_var(env.arena, arg1.0, env.subs).unwrap();
+                            let layout2 =
+                                layout_cache.from_var(env.arena, arg2.0, env.subs).unwrap();
 
                             let size1 = layout1.alignment_bytes(env.target_info);
                             let size2 = layout2.alignment_bytes(env.target_info);
@@ -8586,12 +8522,7 @@ fn from_can_pattern_help<'a>(
                     // from `layouts` would unroll recursive tag unions, and that leads to
                     // problems down the line because we hash layouts and an unrolled
                     // version is not the same as the minimal version.
-                    let layout = match layout_cache.from_var(
-                        env.arena,
-                        *whole_var,
-                        env.subs,
-                        env.multimorphic_names,
-                    ) {
+                    let layout = match layout_cache.from_var(env.arena, *whole_var, env.subs) {
                         Ok(Layout::Union(ul)) => ul,
                         _ => unreachable!(),
                     };
@@ -8882,7 +8813,7 @@ fn from_can_pattern_help<'a>(
         } => {
             let (arg_var, loc_arg_pattern) = &(**argument);
             let arg_layout = layout_cache
-                .from_var(env.arena, *arg_var, env.subs, env.multimorphic_names)
+                .from_var(env.arena, *arg_var, env.subs)
                 .unwrap();
             let mono_arg_pattern = from_can_pattern_help(
                 env,
@@ -8903,14 +8834,9 @@ fn from_can_pattern_help<'a>(
             ..
         } => {
             // sorted fields based on the type
-            let sorted_fields = crate::layout::sort_record_fields(
-                env.arena,
-                *whole_var,
-                env.subs,
-                env.target_info,
-                env.multimorphic_names,
-            )
-            .map_err(RuntimeError::from)?;
+            let sorted_fields =
+                crate::layout::sort_record_fields(env.arena, *whole_var, env.subs, env.target_info)
+                    .map_err(RuntimeError::from)?;
 
             // sorted fields based on the destruct
             let mut mono_destructs = Vec::with_capacity_in(destructs.len(), env.arena);

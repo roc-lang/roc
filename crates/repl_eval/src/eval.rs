@@ -9,8 +9,7 @@ use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::{
-    union_sorted_tags_help, Builtin, Layout, LayoutCache, MultimorphicNames, UnionLayout,
-    UnionVariant, WrappedVariant,
+    union_sorted_tags_help, Builtin, Layout, LayoutCache, UnionLayout, UnionVariant, WrappedVariant,
 };
 use roc_parse::ast::{AssignedField, Collection, Expr, StrLiteral};
 use roc_region::all::{Loc, Region};
@@ -24,7 +23,6 @@ struct Env<'a> {
     arena: &'a Bump,
     subs: &'a Subs,
     target_info: TargetInfo,
-    multimorphic_names: &'a mut MultimorphicNames,
 }
 
 pub enum ToAstProblem {
@@ -47,14 +45,12 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
     layout: ProcLayout<'a>,
     content: &'a Content,
     subs: &'a Subs,
-    multimorphic_names: &'a mut MultimorphicNames,
     target_info: TargetInfo,
 ) -> Result<Expr<'a>, ToAstProblem> {
     let mut env = Env {
         arena,
         subs,
         target_info,
-        multimorphic_names,
     };
 
     match layout {
@@ -185,14 +181,8 @@ fn get_tags_vars_and_variant<'a>(
 
     let vars_of_tag: MutMap<_, _> = tags_vec.iter().cloned().collect();
 
-    let union_variant = union_sorted_tags_help(
-        env.arena,
-        tags_vec,
-        opt_rec_var,
-        env.subs,
-        env.target_info,
-        env.multimorphic_names,
-    );
+    let union_variant =
+        union_sorted_tags_help(env.arena, tags_vec, opt_rec_var, env.subs, env.target_info);
 
     (vars_of_tag, union_variant)
 }
@@ -911,7 +901,7 @@ fn struct_to_ast<'a, M: ReplAppMemory>(
 
         let inner_content = env.subs.get_content_without_compacting(field.into_inner());
         let field_layout = layout_cache
-            .from_var(arena, field.into_inner(), env.subs, env.multimorphic_names)
+            .from_var(arena, field.into_inner(), env.subs)
             .unwrap();
         let inner_layouts = arena.alloc([field_layout]);
 
@@ -950,7 +940,7 @@ fn struct_to_ast<'a, M: ReplAppMemory>(
         for (label, field) in record_fields.sorted_iterator(subs, Variable::EMPTY_RECORD) {
             let content = subs.get_content_without_compacting(field.into_inner());
             let field_layout = layout_cache
-                .from_var(arena, field.into_inner(), env.subs, env.multimorphic_names)
+                .from_var(arena, field.into_inner(), env.subs)
                 .unwrap();
 
             let loc_expr = &*arena.alloc(Loc {
@@ -1150,7 +1140,6 @@ fn byte_to_ast<'a, M: ReplAppMemory>(
                         None,
                         env.subs,
                         env.target_info,
-                        env.multimorphic_names,
                     );
 
                     match union_variant {

@@ -1,7 +1,6 @@
 use crate::types::{Env, Types};
 use bumpalo::Bump;
 use roc_load::{LoadedModule, Threading};
-use roc_mono::layout::MultimorphicNames;
 use roc_reporting::report::RenderTarget;
 use roc_target::{Architecture, TargetInfo};
 use std::io;
@@ -36,8 +35,6 @@ pub fn load_types(
         threading,
     )
     .expect("Problem loading platform module");
-
-    let mut multimorphic_names = MultimorphicNames::default();
 
     let decls = declarations_by_id.remove(&home).unwrap();
     let subs = solved.inner_mut();
@@ -77,13 +74,7 @@ pub fn load_types(
     let types_and_targets = Architecture::iter()
         .map(|arch| {
             let target_info = arch.into();
-            let mut env = Env::new(
-                arena,
-                subs,
-                &mut interns,
-                target_info,
-                &mut multimorphic_names,
-            );
+            let mut env = Env::new(arena, subs, &mut interns, target_info);
 
             (env.vars_to_types(variables.clone()), target_info)
         })
