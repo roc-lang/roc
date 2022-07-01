@@ -102,7 +102,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_TO_U8 => str_to_num,
         STR_TO_I8 => str_to_num,
         LIST_LEN => list_len,
-        LIST_GET => list_get,
+        LIST_GET_UNSAFE => list_get_unsafe,
         LIST_REPLACE => list_replace,
         LIST_SET => list_set,
         LIST_APPEND => list_append,
@@ -2179,82 +2179,9 @@ fn list_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// List.get : List elem, Int -> Result elem [OutOfBounds]*
-///
-/// List.get :
-///     Attr (* | u) (List (Attr u a)),
-///     Attr * Int
-///     -> Attr * (Result (Attr u a) (Attr * [OutOfBounds]*))
-fn list_get(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let arg_list = Symbol::ARG_1;
-    let arg_index = Symbol::ARG_2;
-    let bool_var = var_store.fresh();
-    let len_var = var_store.fresh();
-    let list_var = var_store.fresh();
-    let elem_var = var_store.fresh();
-    let ret_var = var_store.fresh();
-
-    // Perform a bounds check. If it passes, run LowLevel::ListGetUnsafe
-    let body = If {
-        cond_var: bool_var,
-        branch_var: var_store.fresh(),
-        branches: vec![(
-            // if-condition
-            no_region(
-                // index < List.len list
-                RunLowLevel {
-                    op: LowLevel::NumLt,
-                    args: vec![
-                        (len_var, Var(arg_index)),
-                        (
-                            len_var,
-                            RunLowLevel {
-                                op: LowLevel::ListLen,
-                                args: vec![(list_var, Var(arg_list))],
-                                ret_var: len_var,
-                            },
-                        ),
-                    ],
-                    ret_var: bool_var,
-                },
-            ),
-            // then-branch
-            no_region(
-                // Ok
-                tag(
-                    "Ok",
-                    vec![
-                        // List#getUnsafe list index
-                        RunLowLevel {
-                            op: LowLevel::ListGetUnsafe,
-                            args: vec![(list_var, Var(arg_list)), (len_var, Var(arg_index))],
-                            ret_var: elem_var,
-                        },
-                    ],
-                    var_store,
-                ),
-            ),
-        )],
-        final_else: Box::new(
-            // else-branch
-            no_region(
-                // Err
-                tag(
-                    "Err",
-                    vec![tag("OutOfBounds", Vec::new(), var_store)],
-                    var_store,
-                ),
-            ),
-        ),
-    };
-
-    defn(
-        symbol,
-        vec![(list_var, Symbol::ARG_1), (len_var, Symbol::ARG_2)],
-        var_store,
-        body,
-        ret_var,
-    )
+/// List.getUnsafe : List elem, Int -> elem
+fn list_get_unsafe(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::ListGetUnsafe, var_store)
 }
 
 /// List.replace : List elem, Nat, elem -> { list: List elem, value: elem }

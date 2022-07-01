@@ -202,7 +202,18 @@ isEmpty : List a -> Bool
 isEmpty = \list ->
     List.len list == 0
 
+# unsafe primitive that does not perform a bounds check
+# but will cause a reference count increment on the value it got out of the list
+getUnsafe : List a, Nat -> a
+
 get : List a, Nat -> Result a [OutOfBounds]*
+get = \list, index ->
+    if index < List.len list then
+        Ok (List.getUnsafe list index)
+
+    else
+        Err OutOfBounds
+
 replace : List a, Nat, a -> { list : List a, value : a }
 
 ## Replaces the element at the given index with a replacement.
