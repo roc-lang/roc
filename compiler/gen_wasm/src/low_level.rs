@@ -425,6 +425,27 @@ impl<'a> LowLevelCall<'a> {
                 let elems = backend.env.arena.alloc([ListLiteralElement::Symbol(elem)]);
                 backend.expr_array(self.ret_symbol, &self.ret_storage, elem_layout, elems)
             }
+            ListWithCapacity => {
+                // List.withCapacity : Nat -> List elem
+
+                let capacity: Symbol = self.arguments[0];
+                let elem_layout = unwrap_list_elem_layout(self.ret_layout);
+                let (elem_width, elem_align) = elem_layout.stack_size_and_alignment(TARGET_INFO);
+
+                // Zig arguments              Wasm types
+                //  (return pointer)           i32
+                //  capacity: usize            i32
+                //  alignment: u32             i32
+                //  element_width: usize       i32
+
+                backend
+                    .storage
+                    .load_symbols(&mut backend.code_builder, &[self.ret_symbol, capacity]);
+                backend.code_builder.i32_const(elem_align as i32);
+                backend.code_builder.i32_const(elem_width as i32);
+
+                backend.call_host_fn_after_loading_args(bitcode::LIST_WITH_CAPACITY, 4, false);
+            }
             ListRepeat => {
                 // List.repeat : elem, Nat -> List elem
 

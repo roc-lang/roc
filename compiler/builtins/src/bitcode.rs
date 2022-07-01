@@ -367,6 +367,7 @@ pub const LIST_SUBLIST: &str = "roc_builtins.list.sublist";
 pub const LIST_DROP_AT: &str = "roc_builtins.list.drop_at";
 pub const LIST_SWAP: &str = "roc_builtins.list.swap";
 pub const LIST_SINGLE: &str = "roc_builtins.list.single";
+pub const LIST_WITH_CAPACITY: &str = "roc_builtins.list.with_capacity";
 pub const LIST_JOIN: &str = "roc_builtins.list.join";
 pub const LIST_RANGE: &str = "roc_builtins.list.range";
 pub const LIST_REVERSE: &str = "roc_builtins.list.reverse";

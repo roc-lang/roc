@@ -123,6 +123,22 @@ pub fn list_single<'a, 'ctx, 'env>(
     )
 }
 
+pub fn list_with_capacity<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    capacity: IntValue<'ctx>,
+    element_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    call_list_bitcode_fn(
+        env,
+        &[
+            capacity.into(),
+            env.alignment_intvalue(element_layout),
+            layout_width(env, element_layout),
+        ],
+        bitcode::LIST_WITH_CAPACITY,
+    )
+}
+
 /// List.repeat : elem, Nat -> List elem
 pub fn list_repeat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,

@@ -803,6 +803,12 @@ pub fn listSingle(alignment: u32, element: Opaque, element_width: usize) callcon
     return output;
 }
 
+pub fn listWithCapacity(capacity: usize, alignment: u32, element_width: usize) callconv(.C) RocList {
+    var output = RocList.allocate(alignment, capacity, element_width);
+    output.length = 0;
+    return output;
+}
+
 pub fn listAppend(list: RocList, alignment: u32, element: Opaque, element_width: usize, update_mode: UpdateMode) callconv(.C) RocList {
     const old_length = list.len();
     var output: RocList = undefined;
