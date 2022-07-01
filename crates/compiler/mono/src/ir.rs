@@ -458,7 +458,7 @@ impl<'a> Proc<'a> {
 pub struct HostSpecializations<'a> {
     /// Not a bumpalo vec because bumpalo is not thread safe
     /// Separate array so we can search for membership quickly
-    /// If it's a value and not a lambda, the value is recorded as LambdaName::thunk.
+    /// If it's a value and not a lambda, the value is recorded as LambdaName::no_niche.
     symbol_or_lambdas: std::vec::Vec<LambdaName<'a>>,
     storage_subs: StorageSubs,
     /// For each symbol, what types to specialize it for, points into the storage_subs
@@ -542,7 +542,7 @@ impl<'a> HostSpecializations<'a> {
 pub struct ExternalSpecializations<'a> {
     /// Not a bumpalo vec because bumpalo is not thread safe
     /// Separate array so we can search for membership quickly
-    /// If it's a value and not a lambda, the value is recorded as LambdaName::thunk.
+    /// If it's a value and not a lambda, the value is recorded as LambdaName::no_niche.
     pub symbol_or_lambda: std::vec::Vec<LambdaName<'a>>,
     storage_subs: StorageSubs,
     /// For each symbol, what types to specialize it for, points into the storage_subs
@@ -606,7 +606,7 @@ impl<'a> ExternalSpecializations<'a> {
 #[derive(Clone, Debug)]
 pub struct Suspended<'a> {
     pub store: StorageSubs,
-    /// LambdaName::thunk if it's a value
+    /// LambdaName::no_niche if it's a value
     pub symbol_or_lambdas: Vec<'a, LambdaName<'a>>,
     pub layouts: Vec<'a, ProcLayout<'a>>,
     pub variables: Vec<'a, Variable>,
@@ -3008,6 +3008,8 @@ fn specialize_external<'a>(
             };
 
             // I'm not sure how to handle the closure case, does it ever occur?
+            debug_assert!(matches!(captured_symbols, CapturedSymbols::None));
+
             let proc = Proc {
                 name: lambda_name,
                 args: &[],
@@ -5655,7 +5657,7 @@ fn tag_union_to_function<'a>(
         ext_var,
     });
 
-    // Lambda does not capture anything, can't be multimorphic
+    // Lambda does not capture anything, can't have a captures niche
     let lambda_name = LambdaName::no_niche(proc_symbol);
 
     let inserted = procs.insert_anonymous(

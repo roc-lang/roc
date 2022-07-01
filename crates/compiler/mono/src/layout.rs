@@ -3074,9 +3074,6 @@ fn dict_layout_from_key_value<'a>(
     )))
 }
 
-pub trait FreshMultimorphicSymbol: FnMut() -> Symbol {}
-impl<T> FreshMultimorphicSymbol for T where T: FnMut() -> Symbol {}
-
 pub fn list_layout_from_elem<'a>(
     env: &mut Env<'a, '_>,
     element_var: Variable,
