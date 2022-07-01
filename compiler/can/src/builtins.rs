@@ -56,7 +56,6 @@ pub fn builtin_dependencies(symbol: Symbol) -> &'static [Symbol] {
         Symbol::LIST_SORT_DESC => &[Symbol::LIST_SORT_WITH],
         Symbol::LIST_PRODUCT => &[Symbol::LIST_WALK, Symbol::NUM_MUL],
         Symbol::LIST_SUM => &[Symbol::LIST_WALK, Symbol::NUM_ADD],
-        Symbol::LIST_JOIN_MAP => &[Symbol::LIST_WALK, Symbol::LIST_CONCAT],
         Symbol::LIST_SET => &[Symbol::LIST_REPLACE],
         _ => &[],
     }
@@ -109,8 +108,6 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_IS_EMPTY => list_is_empty,
         LIST_CONCAT => list_concat,
         LIST_PREPEND => list_prepend,
-        LIST_JOIN => list_join,
-        LIST_JOIN_MAP => list_join_map,
         LIST_MAP => list_map,
         LIST_MAP2 => list_map2,
         LIST_MAP3 => list_map3,
@@ -2559,26 +2556,6 @@ fn list_prepend(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// List.join : List (List elem) -> List elem
-fn list_join(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let list_var = var_store.fresh();
-    let list_of_list_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::ListJoin,
-        args: vec![(list_of_list_var, Var(Symbol::ARG_1))],
-        ret_var: list_var,
-    };
-
-    defn(
-        symbol,
-        vec![(list_of_list_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        list_var,
-    )
-}
-
 /// List.walk : List elem, state, (state, elem -> state) -> state
 fn list_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_3(symbol, LowLevel::ListWalk, var_store)
@@ -2592,90 +2569,6 @@ fn list_walk_backwards(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// List.walkUntil : List elem, state, (state, elem -> [Continue state, Stop state]) -> state
 fn list_walk_until(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_3(symbol, LowLevel::ListWalkUntil, var_store)
-}
-
-/// List.joinMap : List before, (before -> List after) -> List after
-fn list_join_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let before = var_store.fresh();
-    let list_before = var_store.fresh();
-    let after = var_store.fresh();
-    let list_after = var_store.fresh();
-    let before2list_after = var_store.fresh();
-    let t_concat_clos = var_store.fresh();
-    let mapper_lambda_set = var_store.fresh();
-
-    // \state, elem -> List.concat state (mapper elem)
-    let concat_clos = Closure(ClosureData {
-        function_type: t_concat_clos,
-        closure_type: var_store.fresh(),
-        return_type: list_after,
-        name: Symbol::LIST_JOIN_MAP_CONCAT,
-        recursive: Recursive::NotRecursive,
-        captured_symbols: vec![(Symbol::ARG_2, before2list_after)],
-        arguments: vec![
-            (
-                list_after,
-                AnnotatedMark::new(var_store),
-                no_region(Pattern::Identifier(Symbol::ARG_3)),
-            ),
-            (
-                before,
-                AnnotatedMark::new(var_store),
-                no_region(Pattern::Identifier(Symbol::ARG_4)),
-            ),
-        ],
-        loc_body: {
-            let mapper = Box::new((
-                before2list_after,
-                no_region(Var(Symbol::ARG_2)),
-                mapper_lambda_set,
-                list_after, // return type
-            ));
-            // (mapper elem)
-            let mapper_elem = Call(
-                mapper,
-                vec![(before, no_region(Var(Symbol::ARG_4)))],
-                CalledVia::Space,
-            );
-            Box::new(no_region(RunLowLevel {
-                op: LowLevel::ListConcat,
-                args: vec![(list_after, Var(Symbol::ARG_3)), (list_after, mapper_elem)],
-                ret_var: list_after,
-            }))
-        },
-    });
-
-    // List.joinMap = \input_list, mapper ->
-    //   List.walk [] input_list (\state, elem -> List.concat state (mapper elem))
-    let body = RunLowLevel {
-        op: LowLevel::ListWalk,
-        args: vec![
-            // input_list : List before
-            (list_before, Var(Symbol::ARG_1)),
-            // [] : List after
-            (
-                list_after,
-                List {
-                    elem_var: after,
-                    loc_elems: vec![],
-                },
-            ),
-            // \state, elem -> List.concat state (mapper elem)
-            (t_concat_clos, concat_clos),
-        ],
-        ret_var: list_after,
-    };
-
-    defn(
-        symbol,
-        vec![
-            (list_before, Symbol::ARG_1),
-            (before2list_after, Symbol::ARG_2),
-        ],
-        var_store,
-        body,
-        list_after,
-    )
 }
 
 /// List.keepIf : List elem, (elem -> Bool) -> List elem

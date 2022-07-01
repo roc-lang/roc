@@ -137,8 +137,6 @@ enum FirstOrder {
     ListConcat,
     ListAppend,
     ListPrepend,
-    ListJoin,
-    ListRange,
     ListSwap,
     DictSize,
     DictEmpty,

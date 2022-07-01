@@ -145,23 +145,6 @@ pub fn list_repeat<'a, 'ctx, 'env>(
     )
 }
 
-/// List.join : List (List elem) -> List elem
-pub fn list_join<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    outer_list: BasicValueEnum<'ctx>,
-    element_layout: &Layout<'a>,
-) -> BasicValueEnum<'ctx> {
-    call_list_bitcode_fn(
-        env,
-        &[
-            list_to_c_abi(env, outer_list).into(),
-            env.alignment_intvalue(element_layout),
-            layout_width(env, element_layout),
-        ],
-        bitcode::LIST_JOIN,
-    )
-}
-
 pub fn list_get_unsafe<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,

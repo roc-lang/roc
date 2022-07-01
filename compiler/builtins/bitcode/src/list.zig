@@ -1149,34 +1149,6 @@ fn swapElements(source_ptr: [*]u8, element_width: usize, index_1: usize, index_2
     return swap(element_width, element_at_i, element_at_j);
 }
 
-pub fn listJoin(list_of_lists: RocList, alignment: u32, element_width: usize) callconv(.C) RocList {
-    var total_length: usize = 0;
-
-    const slice_of_lists = @ptrCast([*]RocList, @alignCast(@alignOf(RocList), list_of_lists.bytes));
-
-    var i: usize = 0;
-    while (i < list_of_lists.len()) : (i += 1) {
-        total_length += slice_of_lists[i].len();
-    }
-
-    const output = RocList.allocate(alignment, total_length, element_width);
-
-    if (output.bytes) |target| {
-        var elements_copied: usize = 0;
-
-        i = 0;
-        while (i < list_of_lists.len()) : (i += 1) {
-            const list = slice_of_lists[i];
-            if (list.bytes) |source| {
-                @memcpy(target + elements_copied * element_width, source, list.len() * element_width);
-                elements_copied += list.len();
-            }
-        }
-    }
-
-    return output;
-}
-
 pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_width: usize) callconv(.C) RocList {
     if (list_a.isEmpty()) {
         return list_b;

@@ -9,10 +9,10 @@ use crate::llvm::build_dict::{
 use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
     self, allocate_list, empty_polymorphic_list, list_all, list_any, list_append, list_concat,
-    list_drop_at, list_find_unsafe, list_get_unsafe, list_join, list_keep_errs, list_keep_if,
-    list_keep_oks, list_len, list_map, list_map2, list_map3, list_map4, list_map_with_index,
-    list_prepend,  list_replace_unsafe, list_sort_with, list_sublist, list_swap,
-    list_symbol_to_c_abi, list_to_c_abi, list_with_capacity,
+    list_drop_at, list_find_unsafe, list_get_unsafe, list_keep_errs, list_keep_if, list_keep_oks,
+    list_len, list_map, list_map2, list_map3, list_map4, list_map_with_index, list_prepend,
+    list_replace_unsafe, list_sort_with, list_sublist, list_swap, list_symbol_to_c_abi,
+    list_to_c_abi, list_with_capacity,
 };
 use crate::llvm::build_str::{
     str_from_float, str_from_int, str_from_utf8, str_from_utf8_range, str_split,
@@ -5683,17 +5683,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
             list_prepend(env, original_wrapper, elem, elem_layout)
-        }
-        ListJoin => {
-            // List.join : List (List elem) -> List elem
-            debug_assert_eq!(args.len(), 1);
-
-            let (list, outer_list_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let inner_list_layout = list_element_layout!(outer_list_layout);
-            let element_layout = list_element_layout!(inner_list_layout);
-
-            list_join(env, list, element_layout)
         }
         ListGetUnsafe => {
             // List.get : List elem, Nat -> [Ok elem, OutOfBounds]*
