@@ -1951,7 +1951,7 @@ pub fn call_higher_order_lowlevel<'a>(
         let passed_proc_layout = ProcLayout {
             arguments: argument_layouts,
             result: *result_layout,
-            captures_niche: fn_name.captures_niche,
+            captures_niche: fn_name.captures_niche(),
         };
         let passed_proc_index = backend
             .proc_lookup
@@ -1985,7 +1985,7 @@ pub fn call_higher_order_lowlevel<'a>(
         ProcLayout {
             arguments: wrapper_arg_layouts.into_bump_slice(),
             result: Layout::UNIT,
-            captures_niche: &[],
+            captures_niche: fn_name.captures_niche(),
         }
     };
 

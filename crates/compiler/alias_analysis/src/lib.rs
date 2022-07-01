@@ -12,7 +12,7 @@ use roc_mono::ir::{
     Call, CallType, Expr, HigherOrderLowLevel, HostExposedLayouts, ListLiteralElement, Literal,
     ModifyRc, OptLevel, Proc, Stmt,
 };
-use roc_mono::layout::{Builtin, Layout, RawFunctionLayout, UnionLayout};
+use roc_mono::layout::{Builtin, CapturesNiche, Layout, RawFunctionLayout, UnionLayout};
 
 // just using one module for now
 pub const MOD_APP: ModName = ModName(b"UserApp");
@@ -26,7 +26,7 @@ pub fn func_name_bytes(proc: &Proc) -> [u8; SIZE] {
     let bytes = func_name_bytes_help(
         proc.name.name(),
         proc.args.iter().map(|x| x.0),
-        proc.name.captures_niche.iter().copied(),
+        proc.name.captures_niche(),
         &proc.ret_layout,
     );
     bytes
@@ -67,15 +67,14 @@ impl TagUnionId {
     }
 }
 
-pub fn func_name_bytes_help<'a, I1, I2>(
+pub fn func_name_bytes_help<'a, I>(
     symbol: Symbol,
-    argument_layouts: I2,
-    captures_niche: I1,
+    argument_layouts: I,
+    captures_niche: CapturesNiche<'a>,
     return_layout: &Layout<'a>,
 ) -> [u8; SIZE]
 where
-    I1: IntoIterator<Item = Layout<'a>>,
-    I2: IntoIterator<Item = Layout<'a>>,
+    I: IntoIterator<Item = Layout<'a>>,
 {
     let mut name_bytes = [0u8; SIZE];
 
@@ -90,9 +89,7 @@ where
             layout.hash(&mut hasher);
         }
 
-        for capture_layout in captures_niche {
-            capture_layout.hash(&mut hasher);
-        }
+        captures_niche.hash(&mut hasher);
 
         return_layout.hash(&mut hasher);
 
@@ -185,7 +182,12 @@ where
                     match layout {
                         RawFunctionLayout::Function(_, _, _) => {
                             let it = top_level.arguments.iter().copied();
-                            let bytes = func_name_bytes_help(*symbol, it, [], &top_level.result);
+                            let bytes = func_name_bytes_help(
+                                *symbol,
+                                it,
+                                CapturesNiche::no_niche(),
+                                &top_level.result,
+                            );
 
                             host_exposed_functions.push((bytes, top_level.arguments));
                         }
@@ -193,7 +195,7 @@ where
                             let bytes = func_name_bytes_help(
                                 *symbol,
                                 [Layout::UNIT],
-                                [],
+                                CapturesNiche::no_niche(),
                                 &top_level.result,
                             );
 
@@ -223,7 +225,7 @@ where
         let roc_main_bytes = func_name_bytes_help(
             entry_point.symbol,
             entry_point.layout.arguments.iter().copied(),
-            std::iter::empty(),
+            CapturesNiche::no_niche(),
             &entry_point.layout.result,
         );
         let roc_main = FuncName(&roc_main_bytes);
@@ -658,8 +660,8 @@ fn call_spec(
 
             let arg_value_id = build_tuple_value(builder, env, block, call.arguments)?;
             let args_it = arg_layouts.iter().copied();
-            let captures_it = name.captures_niche.iter().copied();
-            let bytes = func_name_bytes_help(name.name(), args_it, captures_it, ret_layout);
+            let captures_niche = name.captures_niche();
+            let bytes = func_name_bytes_help(name.name(), args_it, captures_niche, ret_layout);
             let name = FuncName(&bytes);
             let module = MOD_APP;
             builder.add_call(block, spec_var, module, name, arg_value_id)
@@ -703,11 +705,11 @@ fn call_spec(
             let update_mode_var = UpdateModeVar(&mode);
 
             let args_it = passed_function.argument_layouts.iter().copied();
-            let captures_it = passed_function.name.captures_niche.iter().copied();
+            let captures_niche = passed_function.name.captures_niche();
             let bytes = func_name_bytes_help(
                 passed_function.name.name(),
                 args_it,
-                captures_it,
+                captures_niche,
                 &passed_function.return_layout,
             );
             let name = FuncName(&bytes);

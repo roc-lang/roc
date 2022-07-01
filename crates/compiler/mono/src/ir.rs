@@ -1,8 +1,8 @@
 #![allow(clippy::manual_map)]
 
 use crate::layout::{
-    Builtin, ClosureRepresentation, LambdaName, LambdaSet, Layout, LayoutCache, LayoutProblem,
-    RawFunctionLayout, TagIdIntType, TagOrClosure, UnionLayout, WrappedVariant,
+    Builtin, CapturesNiche, ClosureRepresentation, LambdaName, LambdaSet, Layout, LayoutCache,
+    LayoutProblem, RawFunctionLayout, TagIdIntType, TagOrClosure, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
@@ -1021,7 +1021,7 @@ impl<'a> Procs<'a> {
             .raw_from_var(env.arena, annotation, env.subs)
             .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
-        let top_level = ProcLayout::from_raw(env.arena, raw_layout, name.captures_niche);
+        let top_level = ProcLayout::from_raw(env.arena, raw_layout, name.captures_niche());
 
         // anonymous functions cannot reference themselves, therefore cannot be tail-recursive
         // EXCEPT when the closure conversion makes it tail-recursive.
@@ -1131,7 +1131,7 @@ impl<'a> Procs<'a> {
                                     let top_level = ProcLayout::from_raw(
                                         env.arena,
                                         layout,
-                                        proc.name.captures_niche,
+                                        proc.name.captures_niche(),
                                     );
 
                                     debug_assert_eq!(
@@ -1238,7 +1238,7 @@ impl<'a> Procs<'a> {
                         let proper_layout = ProcLayout {
                             arguments,
                             result: proc.ret_layout,
-                            captures_niche: proc.name.captures_niche,
+                            captures_niche: proc.name.captures_niche(),
                         };
 
                         // NOTE: some function are specialized to have a closure, but don't actually
@@ -2634,7 +2634,7 @@ fn specialize_suspended<'a>(
         match specialize_variable(env, procs, name, layout_cache, var, &[], partial_proc) {
             Ok((proc, layout)) => {
                 // TODO thiscode is duplicated elsewhere
-                let top_level = ProcLayout::from_raw(env.arena, layout, proc.name.captures_niche);
+                let top_level = ProcLayout::from_raw(env.arena, layout, proc.name.captures_niche());
 
                 if procs.is_module_thunk(proc.name.name()) {
                     debug_assert!(
@@ -2655,7 +2655,8 @@ fn specialize_suspended<'a>(
             }) => {
                 let proc = generate_runtime_error_function(env, name.name(), attempted_layout);
 
-                let top_level = ProcLayout::from_raw(env.arena, attempted_layout, &[]);
+                let top_level =
+                    ProcLayout::from_raw(env.arena, attempted_layout, CapturesNiche::no_niche());
 
                 procs
                     .specialized
@@ -2779,7 +2780,7 @@ fn specialize_external_help<'a>(
 
     match specialization_result {
         Ok((proc, layout)) => {
-            let top_level = ProcLayout::from_raw(env.arena, layout, proc.name.captures_niche);
+            let top_level = ProcLayout::from_raw(env.arena, layout, proc.name.captures_niche());
 
             if procs.is_module_thunk(name.name()) {
                 debug_assert!(top_level.arguments.is_empty());
@@ -2793,7 +2794,7 @@ fn specialize_external_help<'a>(
             let proc = generate_runtime_error_function(env, name.name(), attempted_layout);
 
             let top_level =
-                ProcLayout::from_raw(env.arena, attempted_layout, proc.name.captures_niche);
+                ProcLayout::from_raw(env.arena, attempted_layout, proc.name.captures_niche());
 
             procs
                 .specialized
@@ -2951,12 +2952,10 @@ fn specialize_external<'a>(
                         host_exposed_layouts: HostExposedLayouts::NotHostExposed,
                     };
 
-                    let captures_niche = &[];
-
                     let top_level = ProcLayout::new(
                         env.arena,
                         top_level_arguments.into_bump_slice(),
-                        captures_niche,
+                        CapturesNiche::no_niche(),
                         *return_layout,
                     );
 
@@ -3502,15 +3501,15 @@ where
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ProcLayout<'a> {
     pub arguments: &'a [Layout<'a>],
-    pub captures_niche: &'a [Layout<'a>],
     pub result: Layout<'a>,
+    pub captures_niche: CapturesNiche<'a>,
 }
 
 impl<'a> ProcLayout<'a> {
     pub fn new(
         arena: &'a Bump,
         old_arguments: &'a [Layout<'a>],
-        old_captures_niche: &'a [Layout<'a>],
+        old_captures_niche: CapturesNiche<'a>,
         result: Layout<'a>,
     ) -> Self {
         let mut arguments = Vec::with_capacity_in(old_arguments.len(), arena);
@@ -3520,19 +3519,12 @@ impl<'a> ProcLayout<'a> {
             arguments.push(*other);
         }
 
-        let mut captures_niche = Vec::with_capacity_in(old_captures_niche.len(), arena);
-
-        for old in old_captures_niche {
-            let other = old;
-            captures_niche.push(*other);
-        }
-
         let other = result;
         let new_result = other;
 
         ProcLayout {
             arguments: arguments.into_bump_slice(),
-            captures_niche: captures_niche.into_bump_slice(),
+            captures_niche: old_captures_niche,
             result: new_result,
         }
     }
@@ -3540,7 +3532,7 @@ impl<'a> ProcLayout<'a> {
     pub fn from_raw(
         arena: &'a Bump,
         raw: RawFunctionLayout<'a>,
-        captures_niche: &'a [Layout<'a>],
+        captures_niche: CapturesNiche<'a>,
     ) -> Self {
         match raw {
             RawFunctionLayout::Function(arguments, lambda_set, result) => {
@@ -3548,7 +3540,7 @@ impl<'a> ProcLayout<'a> {
                 ProcLayout::new(arena, arguments, captures_niche, *result)
             }
             RawFunctionLayout::ZeroArgumentThunk(result) => {
-                ProcLayout::new(arena, &[], &[], result)
+                ProcLayout::new(arena, &[], CapturesNiche::no_niche(), result)
             }
         }
     }
@@ -5017,8 +5009,8 @@ pub fn with_hole<'a>(
                         layout_cache.raw_from_var(env.arena, closure_data_var, env.subs)
                     );
 
-                    // NB: I don't think the top_level here can capture anything??
-                    let top_level_capture_niche = &[];
+                    // NB: I don't think the top_level here can have a captures niche?
+                    let top_level_capture_niche = CapturesNiche::no_niche();
                     let top_level = ProcLayout::from_raw(env.arena, closure_data_layout, top_level_capture_niche);
 
                     let arena = env.arena;
@@ -7246,8 +7238,8 @@ fn specialize_symbol<'a>(
                         };
 
                         let raw = RawFunctionLayout::ZeroArgumentThunk(layout);
-                        let captures_niche = &[];
-                        let top_level = ProcLayout::from_raw(env.arena, raw, captures_niche);
+                        let top_level =
+                            ProcLayout::from_raw(env.arena, raw, CapturesNiche::no_niche());
 
                         procs.insert_passed_by_name(
                             env,
@@ -7261,8 +7253,8 @@ fn specialize_symbol<'a>(
                     } else {
                         // Imported symbol, so it must have no captures niche (since
                         // top-levels can't capture)
-                        let captures_niche = &[];
-                        let top_level = ProcLayout::from_raw(env.arena, raw, captures_niche);
+                        let top_level =
+                            ProcLayout::from_raw(env.arena, raw, CapturesNiche::no_niche());
                         procs.insert_passed_by_name(
                             env,
                             arg_var,
@@ -7324,8 +7316,11 @@ fn specialize_symbol<'a>(
                         );
 
                         // define the function pointer
-                        let function_ptr_layout =
-                            ProcLayout::from_raw(env.arena, res_layout, lambda_name.captures_niche);
+                        let function_ptr_layout = ProcLayout::from_raw(
+                            env.arena,
+                            res_layout,
+                            lambda_name.captures_niche(),
+                        );
 
                         // this is a closure by capture, meaning it itself captures local variables.
                         procs.insert_passed_by_name(
@@ -7353,7 +7348,8 @@ fn specialize_symbol<'a>(
                         // let layout = Layout::Closure(argument_layouts, lambda_set, ret_layout);
                         // panic!("suspicious");
                         let layout = Layout::LambdaSet(lambda_set);
-                        let top_level = ProcLayout::new(env.arena, &[], &[], layout);
+                        let top_level =
+                            ProcLayout::new(env.arena, &[], CapturesNiche::no_niche(), layout);
                         procs.insert_passed_by_name(
                             env,
                             arg_var,
@@ -7372,8 +7368,11 @@ fn specialize_symbol<'a>(
                         debug_assert!(lambda_name.no_captures());
 
                         // define the function pointer
-                        let function_ptr_layout =
-                            ProcLayout::from_raw(env.arena, res_layout, lambda_name.captures_niche);
+                        let function_ptr_layout = ProcLayout::from_raw(
+                            env.arena,
+                            res_layout,
+                            lambda_name.captures_niche(),
+                        );
 
                         procs.insert_passed_by_name(
                             env,
@@ -7395,7 +7394,8 @@ fn specialize_symbol<'a>(
                 }
                 RawFunctionLayout::ZeroArgumentThunk(ret_layout) => {
                     // this is a 0-argument thunk
-                    let top_level = ProcLayout::new(env.arena, &[], &[], ret_layout);
+                    let top_level =
+                        ProcLayout::new(env.arena, &[], CapturesNiche::no_niche(), ret_layout);
                     procs.insert_passed_by_name(
                         env,
                         arg_var,
@@ -7715,7 +7715,7 @@ fn call_by_name_help<'a>(
         ProcLayout::new(
             env.arena,
             argument_layouts,
-            proc_name.captures_niche,
+            proc_name.captures_niche(),
             *ret_layout,
         )
     };
@@ -7967,7 +7967,7 @@ fn call_by_name_module_thunk<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    let top_level_layout = ProcLayout::new(env.arena, &[], &[], *ret_layout);
+    let top_level_layout = ProcLayout::new(env.arena, &[], CapturesNiche::no_niche(), *ret_layout);
 
     let inner_layout = *ret_layout;
 
@@ -8095,7 +8095,7 @@ fn call_specialized_proc<'a>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     let proc_name = proc.name;
-    let function_layout = ProcLayout::from_raw(env.arena, layout, proc_name.captures_niche);
+    let function_layout = ProcLayout::from_raw(env.arena, layout, proc_name.captures_niche());
 
     procs
         .specialized

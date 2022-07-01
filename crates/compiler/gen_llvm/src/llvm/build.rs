@@ -63,7 +63,7 @@ use roc_mono::ir::{
     ModifyRc, OptLevel, ProcLayout,
 };
 use roc_mono::layout::{
-    Builtin, LambdaName, LambdaSet, Layout, LayoutIds, TagIdIntType, UnionLayout,
+    Builtin, CapturesNiche, LambdaName, LambdaSet, Layout, LayoutIds, TagIdIntType, UnionLayout,
 };
 use roc_std::RocDec;
 use roc_target::{PtrWidth, TargetInfo};
@@ -717,7 +717,12 @@ fn promote_to_main_function<'a, 'ctx, 'env>(
     top_level: ProcLayout<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
     let it = top_level.arguments.iter().copied();
-    let bytes = roc_alias_analysis::func_name_bytes_help(symbol, it, [], &top_level.result);
+    let bytes = roc_alias_analysis::func_name_bytes_help(
+        symbol,
+        it,
+        CapturesNiche::no_niche(),
+        &top_level.result,
+    );
     let func_name = FuncName(&bytes);
     let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
 
@@ -729,7 +734,14 @@ fn promote_to_main_function<'a, 'ctx, 'env>(
     );
 
     // NOTE fake layout; it is only used for debug prints
-    let roc_main_fn = function_value_by_func_spec(env, *func_spec, symbol, &[], &[], &Layout::UNIT);
+    let roc_main_fn = function_value_by_func_spec(
+        env,
+        *func_spec,
+        symbol,
+        &[],
+        CapturesNiche::no_niche(),
+        &Layout::UNIT,
+    );
 
     let main_fn_name = "$Test.main";
 
@@ -3298,7 +3310,7 @@ fn expose_function_to_host<'a, 'ctx, 'env>(
     symbol: Symbol,
     roc_function: FunctionValue<'ctx>,
     arguments: &'a [Layout<'a>],
-    captures_niche: &'a [Layout<'a>],
+    captures_niche: CapturesNiche<'a>,
     return_layout: Layout<'a>,
     layout_ids: &mut LayoutIds<'a>,
 ) {
@@ -4305,7 +4317,7 @@ fn build_proc_header<'a, 'ctx, 'env>(
             symbol,
             fn_val,
             arguments.into_bump_slice(),
-            proc.name.captures_niche,
+            proc.name.captures_niche(),
             proc.ret_layout,
             layout_ids,
         );
@@ -4538,7 +4550,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
                         let bytes = roc_alias_analysis::func_name_bytes_help(
                             symbol,
                             it,
-                            [],
+                            CapturesNiche::no_niche(),
                             &top_level.result,
                         );
                         let func_name = FuncName(&bytes);
@@ -4557,7 +4569,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
                                     *func_spec,
                                     symbol,
                                     top_level.arguments,
-                                    &[],
+                                    CapturesNiche::no_niche(),
                                     &top_level.result,
                                 )
                             }
@@ -4634,7 +4646,7 @@ fn function_value_by_func_spec<'a, 'ctx, 'env>(
     func_spec: FuncSpec,
     symbol: Symbol,
     arguments: &[Layout<'a>],
-    captures_niche: &[Layout<'a>],
+    captures_niche: CapturesNiche<'a>,
     result: &Layout<'a>,
 ) -> FunctionValue<'ctx> {
     let fn_name = func_spec_name(env.arena, &env.interns, symbol, func_spec);
@@ -4646,7 +4658,7 @@ fn function_value_by_func_spec<'a, 'ctx, 'env>(
 fn function_value_by_name_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     arguments: &[Layout<'a>],
-    _captures_niche: &[Layout<'a>],
+    _captures_niche: CapturesNiche<'a>,
     result: &Layout<'a>,
     symbol: Symbol,
     fn_name: &str,
@@ -4696,7 +4708,7 @@ fn roc_call_with_args<'a, 'ctx, 'env>(
         func_spec,
         name.name(),
         argument_layouts,
-        name.captures_niche,
+        name.captures_niche(),
         result_layout,
     );
 
@@ -4889,7 +4901,7 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 func_spec,
                 function_name.name(),
                 argument_layouts,
-                function_name.captures_niche,
+                function_name.captures_niche(),
                 return_layout,
             );
 

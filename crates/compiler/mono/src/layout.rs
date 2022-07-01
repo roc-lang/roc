@@ -692,33 +692,61 @@ impl std::fmt::Debug for LambdaSet<'_> {
     }
 }
 
+/// Sometimes we can end up with lambdas of the same name and different captures in the same
+/// lambda set, like `fun` having lambda set `[[thunk U64, thunk U8]]` due to the following program:
+///
+/// ```roc
+/// capture : _ -> ({} -> Str)
+/// capture = \val ->
+///     thunk = \{} -> Num.toStr val
+///     thunk
+///
+/// fun = \x ->
+///     when x is
+///         True -> capture 123u64
+///         False -> capture 18u8
+/// ```
+///
+/// By recording the captures layouts this lambda expects in its identifier, we can distinguish
+/// between such differences when constructing closure capture data.
+///
+/// See also https://github.com/rtfeldman/roc/issues/3336.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct CapturesNiche<'a>(&'a [Layout<'a>]);
+
+impl CapturesNiche<'_> {
+    pub fn no_niche() -> Self {
+        Self(&[])
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct LambdaName<'a> {
     name: Symbol,
-    /// Sometimes we can end up with lambdas of the same name and different captures in the same
-    /// lambda set, like [[Thunk U8, Thunk Str]]. See also https://github.com/rtfeldman/roc/issues/3336.
-    ///
-    /// By recording the captures layouts this lambda expects in its identifier, we can distinguish
-    /// between such differences.
-    pub captures_niche: &'a [Layout<'a>],
+    captures_niche: CapturesNiche<'a>,
 }
 
-impl LambdaName<'_> {
+impl<'a> LambdaName<'a> {
     #[inline(always)]
     pub fn name(&self) -> Symbol {
         self.name
     }
 
     #[inline(always)]
+    pub fn captures_niche(&self) -> CapturesNiche<'a> {
+        self.captures_niche
+    }
+
+    #[inline(always)]
     pub fn no_captures(&self) -> bool {
-        self.captures_niche.is_empty()
+        self.captures_niche.0.is_empty()
     }
 
     #[inline(always)]
     pub fn no_niche(name: Symbol) -> Self {
         Self {
             name,
-            captures_niche: &[],
+            captures_niche: CapturesNiche::no_niche(),
         }
     }
 
@@ -782,7 +810,7 @@ impl<'a> LambdaSet<'a> {
     pub fn iter_set(&self) -> impl ExactSizeIterator<Item = LambdaName<'a>> {
         self.set.iter().map(|(name, captures_layouts)| LambdaName {
             name: *name,
-            captures_niche: captures_layouts,
+            captures_niche: CapturesNiche(captures_layouts),
         })
     }
 
@@ -794,7 +822,9 @@ impl<'a> LambdaSet<'a> {
 
         let comparator = |other_name: Symbol, other_captures_layouts: &[Layout]| {
             other_name == lambda_name.name
-                && other_captures_layouts.iter().eq(lambda_name.captures_niche)
+                && other_captures_layouts
+                    .iter()
+                    .eq(lambda_name.captures_niche.0)
         };
 
         self.layout_for_member(comparator)
@@ -820,7 +850,7 @@ impl<'a> LambdaSet<'a> {
 
         LambdaName {
             name: *name,
-            captures_niche: layouts,
+            captures_niche: CapturesNiche(layouts),
         }
     }
 

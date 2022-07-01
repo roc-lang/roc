@@ -33,7 +33,7 @@ use roc_mono::ir::{
     CapturedSymbols, EntryPoint, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs,
     ProcsBase, UpdateModeIds,
 };
-use roc_mono::layout::{LambdaName, Layout, LayoutCache, LayoutProblem};
+use roc_mono::layout::{CapturesNiche, LambdaName, Layout, LayoutCache, LayoutProblem};
 use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
 use roc_parse::header::{HeaderFor, ModuleNameEnum, PackageName};
@@ -2662,7 +2662,7 @@ fn finish_specialization(
                     layout: roc_mono::ir::ProcLayout {
                         arguments: &[],
                         result: Layout::struct_no_name_order(&[]),
-                        captures_niche: &[],
+                        captures_niche: CapturesNiche::no_niche(),
                     },
                     symbol,
                 }
