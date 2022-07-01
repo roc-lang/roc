@@ -26,12 +26,8 @@ pub enum LowLevel {
     ListLen,
     ListWithCapacity,
     ListGetUnsafe,
-    ListSingle,
-    ListRepeat,
     ListReplaceUnsafe,
-    ListReverse,
     ListConcat,
-    ListContains,
     ListAppend,
     ListPrepend,
     ListJoin,
@@ -51,8 +47,6 @@ pub enum LowLevel {
     ListSublist,
     ListDropAt,
     ListSwap,
-    ListAny,
-    ListAll,
     ListFindUnsafe,
     ListIsUnique,
     DictSize,
@@ -146,8 +140,6 @@ macro_rules! higher_order {
             | ListKeepOks
             | ListKeepErrs
             | ListSortWith
-            | ListAny
-            | ListAll
             | ListFindUnsafe
             | DictWalk
     };
@@ -178,8 +170,6 @@ impl LowLevel {
             ListKeepOks => 1,
             ListKeepErrs => 1,
             ListSortWith => 1,
-            ListAny => 1,
-            ListAll => 1,
             ListFindUnsafe => 1,
             DictWalk => 2,
             _ => unreachable!(),
@@ -236,11 +226,7 @@ impl LowLevelWrapperType {
             Symbol::LIST_LEN => CanBeReplacedBy(ListLen),
             Symbol::LIST_GET => WrapperIsRequired,
             Symbol::LIST_REPLACE => WrapperIsRequired,
-            Symbol::LIST_SINGLE => CanBeReplacedBy(ListSingle),
-            Symbol::LIST_REPEAT => CanBeReplacedBy(ListRepeat),
-            Symbol::LIST_REVERSE => CanBeReplacedBy(ListReverse),
             Symbol::LIST_CONCAT => CanBeReplacedBy(ListConcat),
-            Symbol::LIST_CONTAINS => CanBeReplacedBy(ListContains),
             Symbol::LIST_APPEND => CanBeReplacedBy(ListAppend),
             Symbol::LIST_PREPEND => CanBeReplacedBy(ListPrepend),
             Symbol::LIST_JOIN => CanBeReplacedBy(ListJoin),

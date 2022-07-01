@@ -5,7 +5,7 @@ use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_mono::code_gen_help::HelperOp;
-use roc_mono::ir::{HigherOrderLowLevel, ListLiteralElement, PassedFunction, ProcLayout};
+use roc_mono::ir::{HigherOrderLowLevel, PassedFunction, ProcLayout};
 use roc_mono::layout::{Builtin, FieldOrderHash, Layout, UnionLayout};
 use roc_mono::low_level::HigherOrder;
 
@@ -290,7 +290,7 @@ impl<'a> LowLevelCall<'a> {
 
             ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk
             | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
-            | ListAny | ListAll | ListFindUnsafe | DictWalk => {
+            | ListFindUnsafe | DictWalk => {
                 internal_error!("HigherOrder lowlevels should not be handled here")
             }
 
@@ -419,12 +419,6 @@ impl<'a> LowLevelCall<'a> {
                 // There is an in-place version of this but we don't use it for dev backends. No morphic_lib analysis.
                 backend.call_host_fn_after_loading_args(bitcode::LIST_REPLACE, 8, false);
             }
-            ListSingle => {
-                let elem = self.arguments[0];
-                let elem_layout = &backend.storage.symbol_layouts[&elem].clone();
-                let elems = backend.env.arena.alloc([ListLiteralElement::Symbol(elem)]);
-                backend.expr_array(self.ret_symbol, &self.ret_storage, elem_layout, elems)
-            }
             ListWithCapacity => {
                 // List.withCapacity : Nat -> List elem
 
@@ -445,72 +439,6 @@ impl<'a> LowLevelCall<'a> {
                 backend.code_builder.i32_const(elem_width as i32);
 
                 backend.call_host_fn_after_loading_args(bitcode::LIST_WITH_CAPACITY, 4, false);
-            }
-            ListRepeat => {
-                // List.repeat : elem, Nat -> List elem
-
-                let element: Symbol = self.arguments[0];
-                let count: Symbol = self.arguments[1];
-                let elem_layout = unwrap_list_elem_layout(self.ret_layout);
-                let (elem_width, elem_align) = elem_layout.stack_size_and_alignment(TARGET_INFO);
-
-                let (elem_local, elem_offset, elem_in_memory_layout) =
-                    ensure_symbol_is_in_memory(backend, element, *elem_layout, backend.env.arena);
-
-                let inc_fn = backend.get_refcount_fn_index(elem_in_memory_layout, HelperOp::Inc);
-                let inc_fn_ptr = backend.get_fn_ptr(inc_fn);
-
-                // Zig arguments              Wasm types
-                //  (return pointer)           i32
-                //  count: usize               i32
-                //  alignment: u32             i32
-                //  element: Opaque            i32
-                //  element_width: usize       i32
-                //  inc_n_element: IncN        i32
-
-                backend
-                    .storage
-                    .load_symbols(&mut backend.code_builder, &[self.ret_symbol, count]);
-                backend.code_builder.i32_const(elem_align as i32);
-
-                backend.code_builder.get_local(elem_local);
-                if elem_offset > 0 {
-                    backend.code_builder.i32_const(elem_offset as i32);
-                    backend.code_builder.i32_add();
-                }
-
-                backend.code_builder.i32_const(elem_width as i32);
-                backend.code_builder.i32_const(inc_fn_ptr);
-
-                backend.call_host_fn_after_loading_args(bitcode::LIST_REPEAT, 6, false);
-            }
-            ListReverse => {
-                // List.reverse : List elem -> List elem
-                // Zig arguments              Wasm types
-                //  (return pointer)           i32
-                //  list: RocList              i64, i32
-                //  alignment: u32             i32
-                //  element_width: usize       i32
-                //  update_mode: UpdateMode    i32
-
-                // Load the arguments that have symbols
-                backend.storage.load_symbols_for_call(
-                    backend.env.arena,
-                    &mut backend.code_builder,
-                    self.arguments,
-                    self.ret_symbol,
-                    &WasmLayout::new(&self.ret_layout),
-                    CallConv::Zig,
-                );
-
-                // Load monomorphization constants
-                let elem_layout = unwrap_list_elem_layout(self.ret_layout);
-                let (elem_width, elem_align) = elem_layout.stack_size_and_alignment(TARGET_INFO);
-                backend.code_builder.i32_const(elem_align as i32);
-                backend.code_builder.i32_const(elem_width as i32);
-                backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
-
-                backend.call_host_fn_after_loading_args(bitcode::LIST_REVERSE, 6, false);
             }
             ListConcat => {
                 // List.concat : List elem, List elem -> List elem
@@ -539,7 +467,6 @@ impl<'a> LowLevelCall<'a> {
 
                 backend.call_host_fn_after_loading_args(bitcode::LIST_CONCAT, 7, false);
             }
-            ListContains => todo!("{:?}", self.lowlevel),
             ListAppend => {
                 // List.append : List elem, elem -> List elem
 

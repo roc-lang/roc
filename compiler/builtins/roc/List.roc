@@ -274,6 +274,10 @@ concat : List a, List a -> List a
 
 ## Returns the last element in the list, or `ListWasEmpty` if it was empty.
 last : List a -> Result a [ListWasEmpty]*
+last = \list ->
+    when List.get list (Num.subSaturated (List.len list) 1) is
+        Ok v -> Ok v
+        Err _ -> Err ListWasEmpty
 
 ## A list with a single element in it.
 ##
@@ -290,11 +294,28 @@ single = \x -> [x]
 ##
 ##
 repeat : a, Nat -> List a
+repeat = \value, count ->
+    repeatHelp value count (List.withCapacity count)
+
+repeatHelp : a, Nat, List a -> List a
+repeatHelp = \value, count, accum ->
+    if count > 0 then
+        repeatHelp value (count - 1) (List.append accum value)
+    else
+        accum
 
 ## Returns the list with its elements reversed.
 ##
 ## >>> List.reverse [1, 2, 3]
 reverse : List a -> List a
+reverse = \list ->
+    reverseHelp list 0 (Num.subSaturated (List.len list) 1)
+
+reverseHelp = \list, left, right ->
+    if left < right then
+        reverseHelp (List.swap list left right) (left + 1) (right - 1)
+    else
+        list
 
 ## Join the given lists together into one list.
 ##
@@ -513,6 +534,10 @@ swap : List a, Nat, Nat -> List a
 
 ## Returns the first element in the list, or `ListWasEmpty` if it was empty.
 first : List a -> Result a [ListWasEmpty]*
+first = \list ->
+    when List.get list 0 is
+        Ok v -> Ok v
+        Err _ -> Err ListWasEmpty
 
 ## Remove the first element from the list.
 ##

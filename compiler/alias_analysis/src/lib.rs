@@ -1332,16 +1332,6 @@ fn lowlevel_spec(
 
             with_new_heap_cell(builder, block, bag)
         }
-        ListReverse => {
-            let list = env.symbols[&arguments[0]];
-
-            let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
-            let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
-
-            let _unit = builder.add_update(block, update_mode_var, cell)?;
-
-            with_new_heap_cell(builder, block, bag)
-        }
         ListAppend => {
             let list = env.symbols[&arguments[0]];
             let to_insert = env.symbols[&arguments[1]];
