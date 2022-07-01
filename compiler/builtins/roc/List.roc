@@ -370,10 +370,30 @@ product = \list ->
 ## Run the given predicate on each element of the list, returning `True` if
 ## any of the elements satisfy it.
 any : List a, (a -> Bool) -> Bool
+any = \list, predicate ->
+    looper = \{}, element ->
+        if predicate element then
+            Break {}
+        else
+            Continue {}
+
+    when List.iterate list {} looper is
+        Continue {} -> False
+        Break {} -> True
 
 ## Run the given predicate on each element of the list, returning `True` if
 ## all of the elements satisfy it.
 all : List a, (a -> Bool) -> Bool
+all = \list, predicate ->
+    looper = \{}, element ->
+        if predicate element then
+            Continue {}
+        else
+            Break {}
+
+    when List.iterate list {} looper is
+        Continue {} -> True
+        Break {} -> False
 
 ## Run the given function on each element of a list, and return all the
 ## elements for which the function returned `True`.
