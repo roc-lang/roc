@@ -371,6 +371,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "capstone"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1097e608594dad3bad608295567f757742b883606fe150faf7a9740b849730d8"
+dependencies = [
+ "capstone-sys",
+ "libc",
+]
+
+[[package]]
+name = "capstone-sys"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e7f651d5ec4c2a2e6c508f2c8032655003cd728ec85663e9796616990e25b5a"
+dependencies = [
+ "cc",
+ "libc",
+]
+
+[[package]]
 name = "cast"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -455,9 +475,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "3.2.7"
+version = "3.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b7b16274bb247b45177db843202209b12191b631a14a9d06e41b3777d6ecf14"
+checksum = "190814073e85d238f31ff738fcb0bf6910cedeb73376c87cd69291028966fd83"
 dependencies = [
  "atty",
  "bitflags",
@@ -3313,7 +3333,7 @@ name = "roc-bindgen"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "clap 3.2.7",
+ "clap 3.2.8",
  "cli_utils",
  "ctor",
  "dircpy",
@@ -3447,7 +3467,7 @@ name = "roc_cli"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "clap 3.2.7",
+ "clap 3.2.8",
  "cli_utils",
  "const_format",
  "criterion 0.3.5 (git+https://github.com/Anton-4/criterion.rs)",
@@ -3582,7 +3602,7 @@ dependencies = [
 name = "roc_docs_cli"
 version = "0.1.0"
 dependencies = [
- "clap 3.2.7",
+ "clap 3.2.8",
  "roc_docs",
 ]
 
@@ -3668,6 +3688,7 @@ name = "roc_gen_dev"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
+ "capstone",
  "object 0.29.0",
  "packed_struct",
  "roc_builtins",
@@ -3753,7 +3774,7 @@ version = "0.1.0"
 dependencies = [
  "bincode",
  "bumpalo",
- "clap 3.2.7",
+ "clap 3.2.8",
  "iced-x86",
  "memmap2 0.5.4",
  "object 0.29.0",

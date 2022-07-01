@@ -49,6 +49,48 @@ impl RegTrait for AArch64GeneralReg {
         *self as u8
     }
 }
+impl std::fmt::Display for AArch64GeneralReg {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                AArch64GeneralReg::X0 => "x0",
+                AArch64GeneralReg::X1 => "x1",
+                AArch64GeneralReg::X2 => "x2",
+                AArch64GeneralReg::X3 => "x3",
+                AArch64GeneralReg::X4 => "x4",
+                AArch64GeneralReg::X5 => "x5",
+                AArch64GeneralReg::X6 => "x6",
+                AArch64GeneralReg::X7 => "x7",
+                AArch64GeneralReg::XR => "xr",
+                AArch64GeneralReg::X9 => "x9",
+                AArch64GeneralReg::X10 => "x10",
+                AArch64GeneralReg::X11 => "x11",
+                AArch64GeneralReg::X12 => "x12",
+                AArch64GeneralReg::X13 => "x13",
+                AArch64GeneralReg::X14 => "x14",
+                AArch64GeneralReg::X15 => "x15",
+                AArch64GeneralReg::IP0 => "ip0",
+                AArch64GeneralReg::IP1 => "ip1",
+                AArch64GeneralReg::PR => "pr",
+                AArch64GeneralReg::X19 => "x19",
+                AArch64GeneralReg::X20 => "x20",
+                AArch64GeneralReg::X21 => "x21",
+                AArch64GeneralReg::X22 => "x22",
+                AArch64GeneralReg::X23 => "x23",
+                AArch64GeneralReg::X24 => "x24",
+                AArch64GeneralReg::X25 => "x25",
+                AArch64GeneralReg::X26 => "x26",
+                AArch64GeneralReg::X27 => "x27",
+                AArch64GeneralReg::X28 => "x28",
+                AArch64GeneralReg::FP => "fp",
+                AArch64GeneralReg::LR => "lr",
+                AArch64GeneralReg::ZRSP => "zrsp",
+            }
+        )
+    }
+}
 
 impl AArch64GeneralReg {
     #[inline(always)]
@@ -63,6 +105,11 @@ pub enum AArch64FloatReg {}
 impl RegTrait for AArch64FloatReg {
     fn value(&self) -> u8 {
         *self as u8
+    }
+}
+impl std::fmt::Display for AArch64FloatReg {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "TODO",)
     }
 }
 
@@ -462,7 +509,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             todo!("negative base offsets for AArch64");
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
-            ldr_reg64_imm12(buf, dst, AArch64GeneralReg::FP, (offset as u16) >> 3);
+            ldr_reg64_reg64_imm12(buf, dst, AArch64GeneralReg::FP, (offset as u16) >> 3);
         } else {
             todo!("base offsets over 32k for AArch64");
         }
@@ -477,7 +524,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             todo!("negative base offsets for AArch64");
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
-            str_reg64_imm12(buf, src, AArch64GeneralReg::FP, (offset as u16) >> 3);
+            str_reg64_reg64_imm12(buf, src, AArch64GeneralReg::FP, (offset as u16) >> 3);
         } else {
             todo!("base offsets over 32k for AArch64");
         }
@@ -494,7 +541,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             todo!("negative mem offsets for AArch64");
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
-            ldr_reg64_imm12(buf, dst, src, (offset as u16) >> 3);
+            ldr_reg64_reg64_imm12(buf, dst, src, (offset as u16) >> 3);
         } else {
             todo!("mem offsets over 32k for AArch64");
         }
@@ -510,7 +557,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             todo!("negative mem offsets for AArch64");
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
-            str_reg64_imm12(buf, src, dst, (offset as u16) >> 3);
+            str_reg64_reg64_imm12(buf, src, dst, (offset as u16) >> 3);
         } else {
             todo!("mem offsets over 32k for AArch64");
         }
@@ -557,7 +604,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             todo!("negative stack offsets for AArch64");
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
-            ldr_reg64_imm12(buf, dst, AArch64GeneralReg::ZRSP, (offset as u16) >> 3);
+            ldr_reg64_reg64_imm12(buf, dst, AArch64GeneralReg::ZRSP, (offset as u16) >> 3);
         } else {
             todo!("stack offsets over 32k for AArch64");
         }
@@ -572,7 +619,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             todo!("negative stack offsets for AArch64");
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
-            str_reg64_imm12(buf, src, AArch64GeneralReg::ZRSP, (offset as u16) >> 3);
+            str_reg64_reg64_imm12(buf, src, AArch64GeneralReg::ZRSP, (offset as u16) >> 3);
         } else {
             todo!("stack offsets over 32k for AArch64");
         }
@@ -1035,7 +1082,7 @@ fn add_reg64_reg64_reg64(
     src1: AArch64GeneralReg,
     src2: AArch64GeneralReg,
 ) {
-    let inst = ArithmeticShifted::new(false, false, ShiftType::LSL, 0, src1, src2, dst);
+    let inst = ArithmeticShifted::new(false, false, ShiftType::LSL, 0, src2, src1, dst);
 
     buf.extend(inst.bytes());
 }
@@ -1043,7 +1090,7 @@ fn add_reg64_reg64_reg64(
 /// `LDR Xt, [Xn, #offset]` -> Load Xn + Offset Xt. ZRSP is SP.
 /// Note: imm12 is the offest divided by 8.
 #[inline(always)]
-fn ldr_reg64_imm12(
+fn ldr_reg64_reg64_imm12(
     buf: &mut Vec<'_, u8>,
     dst: AArch64GeneralReg,
     base: AArch64GeneralReg,
@@ -1089,7 +1136,7 @@ fn movz_reg64_imm16(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, imm16: u16, h
 /// `STR Xt, [Xn, #offset]` -> Store Xt to Xn + Offset. ZRSP is SP.
 /// Note: imm12 is the offest divided by 8.
 #[inline(always)]
-fn str_reg64_imm12(
+fn str_reg64_reg64_imm12(
     buf: &mut Vec<'_, u8>,
     src: AArch64GeneralReg,
     base: AArch64GeneralReg,
@@ -1124,105 +1171,225 @@ fn ret_reg64(buf: &mut Vec<'_, u8>, xn: AArch64GeneralReg) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::disassembler_test;
+    use capstone::prelude::*;
+
+    enum ZRSPKind {
+        UsesZR,
+        UsesSP,
+    }
+    use ZRSPKind::*;
+
+    impl AArch64GeneralReg {
+        fn capstone_string(&self, zrsp_kind: ZRSPKind) -> String {
+            match self {
+                AArch64GeneralReg::XR => "x8".to_owned(),
+                AArch64GeneralReg::IP0 => "x16".to_owned(),
+                AArch64GeneralReg::IP1 => "x17".to_owned(),
+                AArch64GeneralReg::PR => "x18".to_owned(),
+                AArch64GeneralReg::FP => "x29".to_owned(),
+                AArch64GeneralReg::LR => "x30".to_owned(),
+                AArch64GeneralReg::ZRSP => match zrsp_kind {
+                    UsesZR => "xzr".to_owned(),
+                    UsesSP => "sp".to_owned(),
+                },
+                _ => format!("{}", self),
+            }
+        }
+    }
 
     const TEST_U16: u16 = 0x1234;
     //const TEST_I32: i32 = 0x12345678;
     //const TEST_I64: i64 = 0x12345678_9ABCDEF0;
 
+    const ALL_GENERAL_REGS: &[AArch64GeneralReg] = &[
+        AArch64GeneralReg::X0,
+        AArch64GeneralReg::X1,
+        AArch64GeneralReg::X2,
+        AArch64GeneralReg::X3,
+        AArch64GeneralReg::X4,
+        AArch64GeneralReg::X5,
+        AArch64GeneralReg::X6,
+        AArch64GeneralReg::X7,
+        AArch64GeneralReg::XR,
+        AArch64GeneralReg::X9,
+        AArch64GeneralReg::X10,
+        AArch64GeneralReg::X11,
+        AArch64GeneralReg::X12,
+        AArch64GeneralReg::X13,
+        AArch64GeneralReg::X14,
+        AArch64GeneralReg::X15,
+        AArch64GeneralReg::IP0,
+        AArch64GeneralReg::IP1,
+        AArch64GeneralReg::PR,
+        AArch64GeneralReg::X19,
+        AArch64GeneralReg::X20,
+        AArch64GeneralReg::X21,
+        AArch64GeneralReg::X22,
+        AArch64GeneralReg::X23,
+        AArch64GeneralReg::X24,
+        AArch64GeneralReg::X25,
+        AArch64GeneralReg::X26,
+        AArch64GeneralReg::X27,
+        AArch64GeneralReg::X28,
+        AArch64GeneralReg::FP,
+        AArch64GeneralReg::LR,
+        AArch64GeneralReg::ZRSP,
+    ];
+
+    fn setup_capstone_and_arena<T>(
+        arena: &bumpalo::Bump,
+    ) -> (bumpalo::collections::Vec<T>, Capstone) {
+        let buf = bumpalo::vec![in arena];
+        let cs = Capstone::new()
+            .arm64()
+            .mode(arch::arm64::ArchMode::Arm)
+            .detail(true)
+            .build()
+            .expect("Failed to create Capstone object");
+        (buf, cs)
+    }
+
     #[test]
     fn test_add_reg64_reg64_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        add_reg64_reg64_reg64(
-            &mut buf,
-            AArch64GeneralReg::X10,
-            AArch64GeneralReg::ZRSP,
-            AArch64GeneralReg::X21,
+        disassembler_test!(
+            add_reg64_reg64_reg64,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, reg3: AArch64GeneralReg| format!(
+                "add {}, {}, {}",
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesZR),
+                reg3.capstone_string(UsesZR)
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
         );
-        assert_eq!(&buf, &[0xAA, 0x02, 0x1F, 0x8B]);
     }
 
     #[test]
     fn test_add_reg64_reg64_imm12() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        add_reg64_reg64_imm12(
-            &mut buf,
-            AArch64GeneralReg::X10,
-            AArch64GeneralReg::X21,
-            0x123,
+        disassembler_test!(
+            add_reg64_reg64_imm12,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
+                "add {}, {}, #0x{:x}",
+                reg1.capstone_string(UsesSP),
+                reg2.capstone_string(UsesSP),
+                imm
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [0x123]
         );
-        assert_eq!(&buf, &[0xAA, 0x8E, 0x04, 0x91]);
     }
 
     #[test]
-    fn test_ldr_reg64_imm12() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        ldr_reg64_imm12(
-            &mut buf,
-            AArch64GeneralReg::X21,
-            AArch64GeneralReg::ZRSP,
-            0x123,
+    fn test_ldr_reg64_reg64_imm12() {
+        disassembler_test!(
+            ldr_reg64_reg64_imm12,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
+                "ldr {}, [{}, #0x{:x}]",
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesSP),
+                imm << 3
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [0x123]
         );
-        assert_eq!(&buf, &[0xF5, 0x8F, 0x44, 0xF9]);
     }
 
     #[test]
     fn test_mov_reg64_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        mov_reg64_reg64(&mut buf, AArch64GeneralReg::X10, AArch64GeneralReg::X21);
-        assert_eq!(&buf, &[0xEA, 0x03, 0x15, 0xAA]);
+        disassembler_test!(
+            mov_reg64_reg64,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg| format!(
+                "mov {}, {}",
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesZR),
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
     }
 
     #[test]
     fn test_movk_reg64_imm16() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        movk_reg64_imm16(&mut buf, AArch64GeneralReg::X21, TEST_U16, 3);
-        assert_eq!(&buf, &[0x95, 0x46, 0xE2, 0xF2]);
+        disassembler_test!(
+            movk_reg64_imm16,
+            |reg1: AArch64GeneralReg, imm, hw| format!(
+                "movk {}, #0x{:x}{}",
+                reg1.capstone_string(UsesZR),
+                imm,
+                if hw > 0 {
+                    format!(", lsl #{}", hw * 16)
+                } else {
+                    "".to_owned()
+                }
+            ),
+            ALL_GENERAL_REGS,
+            [TEST_U16],
+            [0, 1, 2, 3]
+        );
     }
 
     #[test]
     fn test_movz_reg64_imm16() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        movz_reg64_imm16(&mut buf, AArch64GeneralReg::X21, TEST_U16, 3);
-        assert_eq!(&buf, &[0x95, 0x46, 0xE2, 0xD2]);
+        disassembler_test!(
+            movz_reg64_imm16,
+            |reg1: AArch64GeneralReg, imm, hw| format!(
+                "mov {}, #0x{:x}{}",
+                reg1.capstone_string(UsesZR),
+                imm,
+                "0000".repeat(hw as usize)
+            ),
+            ALL_GENERAL_REGS,
+            [TEST_U16],
+            [0, 1, 2, 3]
+        );
     }
 
     #[test]
-    fn test_str_reg64_imm12() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        str_reg64_imm12(
-            &mut buf,
-            AArch64GeneralReg::X21,
-            AArch64GeneralReg::ZRSP,
-            0x123,
+    fn test_str_reg64_reg64_imm12() {
+        disassembler_test!(
+            str_reg64_reg64_imm12,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
+                "str {}, [{}, #0x{:x}]",
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesSP),
+                imm << 3
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [0x123]
         );
-        assert_eq!(&buf, &[0xF5, 0x8F, 0x04, 0xF9]);
     }
 
     #[test]
     fn test_sub_reg64_reg64_imm12() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        sub_reg64_reg64_imm12(
-            &mut buf,
-            AArch64GeneralReg::X10,
-            AArch64GeneralReg::X21,
-            0x123,
+        disassembler_test!(
+            sub_reg64_reg64_imm12,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
+                "sub {}, {}, #0x{:x}",
+                reg1.capstone_string(UsesSP),
+                reg2.capstone_string(UsesSP),
+                imm
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [0x123]
         );
-        assert_eq!(&buf, &[0xAA, 0x8E, 0x04, 0xD1]);
     }
 
     #[test]
     fn test_ret_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        ret_reg64(&mut buf, AArch64GeneralReg::LR);
-        assert_eq!(&buf, &[0xC0, 0x03, 0x5F, 0xD6]);
+        disassembler_test!(
+            ret_reg64,
+            |reg1: AArch64GeneralReg| if reg1 == AArch64GeneralReg::LR {
+                "ret".to_owned()
+            } else {
+                format!("ret {}", reg1.capstone_string(UsesZR))
+            },
+            ALL_GENERAL_REGS
+        );
     }
 }
