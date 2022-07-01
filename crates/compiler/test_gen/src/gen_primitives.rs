@@ -3501,7 +3501,7 @@ fn polymorphic_lambda_captures_polymorphic_value() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn multimorphic_lambda_set_u64_vs_u8_capture() {
+fn lambda_capture_niche_u64_vs_u8_capture() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -3528,7 +3528,7 @@ fn multimorphic_lambda_set_u64_vs_u8_capture() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn multimorphic_lambdas_with_other_lambda_capture() {
+fn lambda_capture_niches_with_other_lambda_capture() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -3561,7 +3561,7 @@ fn multimorphic_lambdas_with_other_lambda_capture() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn multimorphic_lambdas_with_non_capturing_function() {
+fn lambda_capture_niches_with_non_capturing_function() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -3594,7 +3594,7 @@ fn multimorphic_lambdas_with_non_capturing_function() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn multimorphic_lambdas_have_captured_function_in_closure() {
+fn lambda_capture_niches_have_captured_function_in_closure() {
     assert_evals_to!(
         indoc!(
             r#"
