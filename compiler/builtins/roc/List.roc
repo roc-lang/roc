@@ -518,6 +518,23 @@ mapWithIndex : List a, (a, Nat -> b) -> List b
 ##
 ## >>> List.range 2 8
 range : Int a, Int a -> List (Int a)
+range = \start, end ->
+    when Num.compare start end is
+        GT -> []
+        EQ -> [start]
+        LT ->
+            length = Num.intCast (start - end)
+
+            rangeHelp (List.withCapacity length) start end
+
+rangeHelp : List (Int a), Int a, Int a -> List (Int a)
+rangeHelp = \accum, start, end ->
+    if end <= start then
+        accum
+    else
+        rangeHelp (List.append accum start) (start + 1) end
+
+## Sort with a custom comparison function
 sortWith : List a, (a, a -> [LT, EQ, GT]) -> List a
 
 ## Sorts a list in ascending order (lowest to highest), using a function which
@@ -720,6 +737,11 @@ intersperse : List elem, elem -> List elem
 ## `others` list will have the same elements as the original list.)
 split : List elem, Nat -> { before : List elem, others : List elem }
 
+## Primitive for iterating over a List, being able to decide at every element whether to continue
+iterate : List elem, s, (s, elem -> [Continue s, Break b]) -> [Continue s, Break b]
+iterate = \list, init, func ->
+    iterHelp list init func 0 (List.len list)
+
 ## internal helper
 iterHelp : List elem, s, (s, elem -> [Continue s, Break b]), Nat, Nat -> [Continue s, Break b]
 iterHelp = \list, state, f, index, length ->
@@ -731,8 +753,3 @@ iterHelp = \list, state, f, index, length ->
                 Break b
     else
         Continue state
-
-## Primitive for iterating over a List, being able to decide at every element whether to continue
-iterate : List elem, s, (s, elem -> [Continue s, Break b]) -> [Continue s, Break b]
-iterate = \list, init, func ->
-    iterHelp list init func 0 (List.len list)

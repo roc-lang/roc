@@ -11,7 +11,7 @@ use crate::llvm::build_list::{
     self, allocate_list, empty_polymorphic_list, list_all, list_any, list_append, list_concat,
     list_drop_at, list_find_unsafe, list_get_unsafe, list_join, list_keep_errs, list_keep_if,
     list_keep_oks, list_len, list_map, list_map2, list_map3, list_map4, list_map_with_index,
-    list_prepend, list_range, list_replace_unsafe, list_sort_with, list_sublist, list_swap,
+    list_prepend,  list_replace_unsafe, list_sort_with, list_sublist, list_swap,
     list_symbol_to_c_abi, list_to_c_abi, list_with_capacity,
 };
 use crate::llvm::build_str::{
@@ -5604,20 +5604,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             let element_layout = list_element_layout!(list_layout);
 
             list_concat(env, first_list, second_list, element_layout)
-        }
-        ListRange => {
-            // List.contains : List elem, elem -> Bool
-            debug_assert_eq!(args.len(), 2);
-
-            let (low, low_layout) = load_symbol_and_layout(scope, &args[0]);
-            let high = load_symbol(scope, &args[1]);
-
-            let int_width = match low_layout {
-                Layout::Builtin(Builtin::Int(int_width)) => *int_width,
-                _ => unreachable!(),
-            };
-
-            list_range(env, int_width, low.into_int_value(), high.into_int_value())
         }
         ListAppend => {
             // List.append : List elem, elem -> List elem

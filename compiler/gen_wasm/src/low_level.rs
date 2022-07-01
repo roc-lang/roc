@@ -536,7 +536,6 @@ impl<'a> LowLevelCall<'a> {
 
                 backend.call_host_fn_after_loading_args(bitcode::LIST_JOIN, 5, false);
             }
-            ListRange => todo!("{:?}", self.lowlevel),
             ListSublist => {
                 // As a low-level, record is destructured
                 //  List.sublist : List elem, start : Nat, len : Nat -> List elem

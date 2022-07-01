@@ -14,7 +14,7 @@ use inkwell::types::{BasicType, BasicTypeEnum, PointerType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
 use morphic_lib::UpdateMode;
-use roc_builtins::bitcode::{self, IntWidth};
+use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
@@ -488,38 +488,6 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
     } else {
         env.builder.build_load(result_ptr, "load_result")
     }
-}
-
-/// List.range : Int a, Int a -> List (Int a)
-pub fn list_range<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    int_width: IntWidth,
-    low: IntValue<'ctx>,
-    high: IntValue<'ctx>,
-) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-
-    let low_ptr = builder.build_alloca(low.get_type(), "low_ptr");
-    env.builder.build_store(low_ptr, low);
-
-    let high_ptr = builder.build_alloca(high.get_type(), "high_ptr");
-    env.builder.build_store(high_ptr, high);
-
-    let int_width = env
-        .context
-        .i8_type()
-        .const_int(int_width as u64, false)
-        .into();
-
-    call_list_bitcode_fn(
-        env,
-        &[
-            int_width,
-            pass_as_opaque(env, low_ptr),
-            pass_as_opaque(env, high_ptr),
-        ],
-        bitcode::LIST_RANGE,
-    )
 }
 
 /// List.keepIf : List elem, (elem -> Bool) -> List elem

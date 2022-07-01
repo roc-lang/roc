@@ -917,7 +917,6 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListKeepIf | ListKeepOks | ListKeepErrs => {
             arena.alloc_slice_copy(&[owned, function, closure_data])
         }
-        ListRange => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
         ListWalk | ListWalkUntil | ListWalkBackwards => {
             arena.alloc_slice_copy(&[owned, owned, function, closure_data])
         }

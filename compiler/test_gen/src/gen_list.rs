@@ -2597,7 +2597,7 @@ fn cleanup_because_exception() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_range() {
     assert_evals_to!(
         "List.range 0 -1",
