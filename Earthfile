@@ -152,7 +152,7 @@ prep-bench-folder:
     ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld -C target-cpu=native"
     ARG BENCH_SUFFIX=branch
     RUN cargo criterion -V
-    RUN --mount=type=cache,target=$SCCACHE_DIR cd cli && cargo criterion --no-run
+    RUN --mount=type=cache,target=$SCCACHE_DIR cd crates/cli && cargo criterion --no-run
     RUN mkdir -p bench-folder/compiler/builtins/bitcode/src
     RUN mkdir -p bench-folder/target/release/deps
     RUN mkdir -p bench-folder/examples/benchmarks

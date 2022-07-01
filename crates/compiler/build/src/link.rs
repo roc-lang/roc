@@ -65,7 +65,7 @@ pub fn link(
 }
 
 fn find_zig_str_path() -> PathBuf {
-    let zig_str_path = PathBuf::from("compiler/builtins/bitcode/src/str.zig");
+    let zig_str_path = PathBuf::from("crates/compiler/builtins/bitcode/src/str.zig");
 
     if std::path::Path::exists(&zig_str_path) {
         return zig_str_path;
