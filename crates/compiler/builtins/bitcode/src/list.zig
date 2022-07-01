@@ -31,9 +31,14 @@ pub const RocList = extern struct {
         return RocList{ .bytes = null, .length = 0, .capacity = 0 };
     }
 
-    pub fn isEq(self: RocList, other: RocList) bool {
-        if ((self.len() != other.len()) or self.isEmpty()) {
+    pub fn eql(self: RocList, other: RocList) bool {
+        if (self.len() != other.len()) {
             return false;
+        }
+
+        // Their lengths are the same, and one is empty; they're both empty!
+        if (self.isEmpty()) {
+            return true;
         }
 
         var index: usize = 0;
@@ -69,12 +74,10 @@ pub const RocList = extern struct {
         utils.decref(self.bytes, self.len(), @alignOf(T));
     }
 
-    pub fn elements(self: RocList, comptime T: type) [*]T {
-        const refcount_byte_count = math.max(@alignOf(usize), @alignOf(T));
-        const addr = @ptrToInt(self.bytes) + refcount_byte_count;
-
-        // The first element is stored right after the refcount.
-        return @intToPtr([*]T, addr);
+    pub fn elements(self: RocList, comptime T: type) ?[*]T {
+        // Is there a better way to make this cast happen?
+        // @ptrCast gives an error because this increases alignment.
+        return @intToPtr(?[*]T, @ptrToInt(self.bytes));
     }
 
     pub fn isUnique(self: RocList) bool {
