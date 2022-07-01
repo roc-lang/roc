@@ -202,8 +202,27 @@ isEmpty : List a -> Bool
 isEmpty = \list ->
     List.len list == 0
 
+# unsafe primitive that does not perform a bounds check
+# but will cause a reference count increment on the value it got out of the list
+getUnsafe : List a, Nat -> a
+
 get : List a, Nat -> Result a [OutOfBounds]*
+get = \list, index ->
+    if index < List.len list then
+        Ok (List.getUnsafe list index)
+    else
+        Err OutOfBounds
+
+# unsafe primitive that does not perform a bounds check
+# but will cause a reference count increment on the value it got out of the list
+replaceUnsafe : List a, Nat, a -> { list : List a, value : a }
+
 replace : List a, Nat, a -> { list : List a, value : a }
+replace = \list, index, newValue ->
+    if index < List.len list then
+        List.replaceUnsafe list index newValue
+    else
+        { list, value: newValue }
 
 ## Replaces the element at the given index with a replacement.
 ##
@@ -469,11 +488,15 @@ first : List a -> Result a [ListWasEmpty]*
 ##
 ## Returns the new list (with the removed element missing).
 dropFirst : List elem -> List elem
+dropFirst = \list ->
+    List.dropAt list 0
 
 ## Remove the last element from the list.
 ##
 ## Returns the new list (with the removed element missing).
 dropLast : List elem -> List elem
+dropLast = \list ->
+    List.dropAt list (Num.subSaturated (List.len list) 1)
 
 ## Returns the given number of elements from the beginning of the list.
 ##
