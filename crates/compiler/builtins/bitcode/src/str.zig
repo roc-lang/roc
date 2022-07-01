@@ -468,7 +468,7 @@ pub fn strNumberOfBytes(string: RocStr) callconv(.C) usize {
 }
 
 // Str.toCodePts : Str -> List U32
-pub fn strToCodePts(string: RocStr) callconv(.C) RocList {
+pub fn strToScalars(string: RocStr) callconv(.C) RocList {
     const str_len = string.len();
 
     if (str_len == 0) {
@@ -560,21 +560,7 @@ pub fn strToCodePts(string: RocStr) callconv(.C) RocList {
     return answer;
 }
 
-test "strToCodePts: One ASCII char" {
-    const str = RocStr.fromSlice("R");
-    const array = [_]u32{ 82 };
-    var known_at_runtime_zero: usize = 0;
-    const slice = array[known_at_runtime_zero..array.len];
-    const expected = RocList.fromSlice(u32, slice);
-    const actual = strToCodePts(str);
-
-    try expect(RocList.eql(actual, expected));
-    defer RocList.deinit(actual, u32);
-    defer RocList.deinit(expected, u32);
-    defer RocStr.deinit(str);
-}
-
-test "strToCodePts: One ASCII char" {
+test "strToScalars: One ASCII char" {
     const str = RocStr.fromSlice("R");
     defer RocStr.deinit(str);
 
@@ -582,13 +568,13 @@ test "strToCodePts: One ASCII char" {
     const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
     defer RocList.deinit(expected, u32);
 
-    const actual = strToCodePts(str);
+    const actual = strToScalars(str);
     defer RocList.deinit(actual, u32);
 
     try expect(RocList.eql(actual, expected));
 }
 
-test "strToCodePts: Multiple ASCII chars" {
+test "strToScalars: Multiple ASCII chars" {
     const str = RocStr.init("Roc!", 4);
     defer RocStr.deinit(str);
 
@@ -596,7 +582,7 @@ test "strToCodePts: Multiple ASCII chars" {
     const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
     defer RocList.deinit(expected, u32);
 
-    const actual = strToCodePts(str);
+    const actual = strToScalars(str);
     defer RocList.deinit(actual, u32);
 
     try expect(RocList.eql(actual, expected));
