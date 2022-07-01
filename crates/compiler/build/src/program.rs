@@ -261,7 +261,6 @@ pub fn gen_from_mono_module_llvm(
         exposed_to_host: loaded.exposed_to_host.values.keys().copied().collect(),
     };
 
-    dbg!(21);
     roc_gen_llvm::llvm::build::build_procedures(
         &env,
         opt_level,

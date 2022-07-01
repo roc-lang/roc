@@ -14,4 +14,4 @@ roc_types = { path = "../types" }
 
 [features]
 default = []
-debug-derived-symbols = ["roc_module/debug-symbols"]
+debug-derived-symbols = []

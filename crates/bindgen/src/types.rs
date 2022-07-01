@@ -410,7 +410,7 @@ pub struct Env<'a> {
     arena: &'a Bump,
     subs: &'a Subs,
     layout_cache: LayoutCache<'a>,
-    interns: &'a mut Interns,
+    interns: &'a Interns,
     struct_names: Structs,
     enum_names: Enums,
     pending_recursive_types: VecMap<TypeId, Layout<'a>>,
