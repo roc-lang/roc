@@ -210,7 +210,6 @@ get : List a, Nat -> Result a [OutOfBounds]*
 get = \list, index ->
     if index < List.len list then
         Ok (List.getUnsafe list index)
-
     else
         Err OutOfBounds
 
@@ -222,7 +221,6 @@ replace : List a, Nat, a -> { list : List a, value : a }
 replace = \list, index, newValue ->
     if index < List.len list then
         List.replaceUnsafe list index newValue
-
     else
         { list, value: newValue }
 
