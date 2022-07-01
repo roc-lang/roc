@@ -327,9 +327,9 @@ reverseHelp = \list, left, right ->
 join : List (List a) -> List a
 join = \lists ->
     totalLength =
-        List.walk list 0 (\state, elem -> state + List.len elem)
+        List.walk lists 0 (\state, list -> state + List.len list)
 
-    List.walk list (List.withCapacity totalLength) (\state, elem -> List.concat state elem)
+    List.walk lists (List.withCapacity totalLength) (\state, list -> List.concat state list)
 
 contains : List a, a -> Bool
 contains = \list, needle ->

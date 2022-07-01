@@ -2804,7 +2804,7 @@ fn list_walk_until() {
             satisfyA = \_ -> []
 
             oneOfResult =
-                List.walkUntil [satisfyA] [] \_, _ -> Stop []
+                List.walkUntil [satisfyA] [] \_, _ -> Break []
 
             main =
                 when oneOfResult is
@@ -3004,10 +3004,10 @@ fn do_pass_bool_byte_closure_layout() {
                 \input ->
                     walker = \accum, (Pair u rest) ->
                         if predicate u then
-                            Stop [Pair u rest]
+                            Break [Pair u rest]
 
                         else
-                            Stop accum
+                            Break accum
 
                     List.walkUntil (any input) [] walker
 
@@ -3019,7 +3019,7 @@ fn do_pass_bool_byte_closure_layout() {
                     walker = \accum, p ->
                         output = p input
                         if List.len output == 1 then
-                            Stop output
+                            Break output
 
                         else
                             Continue accum
