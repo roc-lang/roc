@@ -1527,7 +1527,7 @@ fn tail_call_with_different_layout() {
 }
 
 #[mono_test]
-fn multimorphic_lambda_set_capture() {
+fn lambda_capture_niche_u8_vs_u64() {
     indoc!(
         r#"
         capture : _ -> ({} -> Str)
@@ -1549,7 +1549,7 @@ fn multimorphic_lambda_set_capture() {
 }
 
 #[mono_test]
-fn multimorphic_lambdas_with_other_lambda_capture() {
+fn lambda_capture_niches_with_other_lambda_capture() {
     indoc!(
         r#"
         capture : a -> ({} -> Str)
@@ -1575,7 +1575,7 @@ fn multimorphic_lambdas_with_other_lambda_capture() {
 }
 
 #[mono_test]
-fn multimorphic_lambdas_with_non_capturing_function() {
+fn lambda_capture_niches_with_non_capturing_function() {
     indoc!(
         r#"
         capture : a -> ({} -> Str)
@@ -1601,7 +1601,7 @@ fn multimorphic_lambdas_with_non_capturing_function() {
 }
 
 #[mono_test]
-fn multimorphic_lambdas_have_captured_function_in_closure() {
+fn lambda_capture_niches_have_captured_function_in_closure() {
     indoc!(
         r#"
         Lazy a : {} -> a

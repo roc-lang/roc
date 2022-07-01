@@ -1,0 +1,85 @@
+procedure Test.11 (Test.37):
+    let Test.38 : Str = "";
+    ret Test.38;
+
+procedure Test.13 (Test.51, #Attr.12):
+    let Test.12 : Str = StructAtIndex 0 #Attr.12;
+    inc Test.12;
+    dec #Attr.12;
+    ret Test.12;
+
+procedure Test.15 (Test.39):
+    let Test.40 : Str = "";
+    ret Test.40;
+
+procedure Test.16 (Test.54):
+    let Test.56 : Str = "s1";
+    ret Test.56;
+
+procedure Test.2 (Test.7, Test.8):
+    let Test.9 : [C {} {}, C {} {}] = ClosureTag(Test.9) Test.7 Test.8;
+    ret Test.9;
+
+procedure Test.2 (Test.7, Test.8):
+    let Test.9 : [C {} {}, C {} {}] = ClosureTag(Test.9) Test.7 Test.8;
+    ret Test.9;
+
+procedure Test.3 (Test.17):
+    let Test.36 : {} = Struct {};
+    ret Test.36;
+
+procedure Test.4 (Test.18):
+    let Test.50 : {Str} = Struct {Test.18};
+    ret Test.50;
+
+procedure Test.9 (Test.29, #Attr.12):
+    let Test.8 : {} = UnionAtIndex (Id 0) (Index 1) #Attr.12;
+    let Test.7 : {} = UnionAtIndex (Id 0) (Index 0) #Attr.12;
+    let Test.35 : {} = Struct {};
+    let Test.34 : Str = CallByName Test.15 Test.35;
+    let Test.31 : {} = CallByName Test.3 Test.34;
+    dec Test.34;
+    let Test.33 : {} = Struct {};
+    let Test.32 : Str = CallByName Test.11 Test.33;
+    ret Test.32;
+
+procedure Test.9 (Test.29, #Attr.12):
+    let Test.8 : {} = UnionAtIndex (Id 1) (Index 1) #Attr.12;
+    let Test.7 : {} = UnionAtIndex (Id 1) (Index 0) #Attr.12;
+    let Test.49 : {} = Struct {};
+    let Test.48 : Str = CallByName Test.16 Test.49;
+    let Test.45 : {Str} = CallByName Test.4 Test.48;
+    let Test.47 : {} = Struct {};
+    let Test.46 : Str = CallByName Test.13 Test.47 Test.45;
+    ret Test.46;
+
+procedure Test.0 ():
+    let Test.5 : Int1 = true;
+    joinpoint Test.25 Test.6:
+        let Test.20 : {} = Struct {};
+        let Test.21 : U8 = GetTagId Test.6;
+        joinpoint Test.22 Test.19:
+            ret Test.19;
+        in
+        switch Test.21:
+            case 0:
+                let Test.23 : Str = CallByName Test.9 Test.20 Test.6;
+                jump Test.22 Test.23;
+        
+            default:
+                let Test.24 : Str = CallByName Test.9 Test.20 Test.6;
+                jump Test.22 Test.24;
+        
+    in
+    let Test.57 : Int1 = true;
+    let Test.58 : Int1 = lowlevel Eq Test.57 Test.5;
+    if Test.58 then
+        let Test.27 : {} = Struct {};
+        let Test.28 : {} = Struct {};
+        let Test.26 : [C {} {}, C {} {}] = CallByName Test.2 Test.27 Test.28;
+        jump Test.25 Test.26;
+    else
+        let Test.42 : {} = Struct {};
+        let Test.43 : {} = Struct {};
+        let Test.41 : [C {} {}, C {} {}] = CallByName Test.2 Test.42 Test.43;
+        jump Test.25 Test.41;

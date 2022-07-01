@@ -1,0 +1,65 @@
+procedure List.2 (List.71, List.72):
+    let List.228 : U64 = CallByName List.6 List.71;
+    let List.224 : Int1 = CallByName Num.22 List.72 List.228;
+    if List.224 then
+        let List.226 : I64 = CallByName List.60 List.71 List.72;
+        let List.225 : [C {}, C I64] = Ok List.226;
+        ret List.225;
+    else
+        let List.223 : {} = Struct {};
+        let List.222 : [C {}, C I64] = Err List.223;
+        ret List.222;
+
+procedure List.6 (#Attr.2):
+    let List.229 : U64 = lowlevel ListLen #Attr.2;
+    ret List.229;
+
+procedure List.60 (#Attr.2, #Attr.3):
+    let List.227 : I64 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.227;
+
+procedure List.9 (List.147):
+    let List.220 : U64 = 0i64;
+    let List.213 : [C {}, C I64] = CallByName List.2 List.147 List.220;
+    let List.217 : U8 = 1i64;
+    let List.218 : U8 = GetTagId List.213;
+    let List.219 : Int1 = lowlevel Eq List.217 List.218;
+    if List.219 then
+        let List.148 : I64 = UnionAtIndex (Id 1) (Index 0) List.213;
+        let List.214 : [C Int1, C I64] = Ok List.148;
+        ret List.214;
+    else
+        let List.216 : Int1 = true;
+        let List.215 : [C Int1, C I64] = Err List.216;
+        ret List.215;
+
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Num.188 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.188;
+
+procedure Str.27 (#Attr.2):
+    let #Attr.3 : {I64, U8} = lowlevel StrToNum #Attr.2;
+    let Str.41 : U8 = StructAtIndex 1 #Attr.3;
+    let Str.42 : U8 = 0i64;
+    let Str.38 : Int1 = lowlevel NumGt Str.41 Str.42;
+    if Str.38 then
+        let Str.40 : Int1 = false;
+        let Str.39 : [C Int1, C I64] = Err Str.40;
+        ret Str.39;
+    else
+        let Str.37 : I64 = StructAtIndex 0 #Attr.3;
+        let Str.36 : [C Int1, C I64] = Ok Str.37;
+        ret Str.36;
+
+procedure Test.0 ():
+    let Test.4 : Int1 = true;
+    if Test.4 then
+        let Test.6 : List I64 = Array [];
+        let Test.5 : [C Int1, C I64] = CallByName List.9 Test.6;
+        dec Test.6;
+        ret Test.5;
+    else
+        let Test.3 : Str = "";
+        let Test.2 : [C Int1, C I64] = CallByName Str.27 Test.3;
+        dec Test.3;
+        ret Test.2;

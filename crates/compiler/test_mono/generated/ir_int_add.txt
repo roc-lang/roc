@@ -1,10 +1,20 @@
 procedure List.6 (#Attr.2):
+<<<<<<< HEAD
     let List.284 : U64 = lowlevel ListLen #Attr.2;
     ret List.284;
+=======
+<<<<<<< HEAD:crates/compiler/test_mono/generated/ir_int_add.txt
+    let List.259 : U64 = lowlevel ListLen #Attr.2;
+    ret List.259;
+=======
+    let List.213 : U64 = lowlevel ListLen #Attr.2;
+    ret List.213;
+>>>>>>> a5fc399f4 (Rename multimorphic tests to capture niche):compiler/test_mono/generated/ir_int_add.txt
+>>>>>>> 25bb3751b (Rename multimorphic tests to capture niche)
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.275 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.275;
+    let Num.190 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.190;
 
 procedure Test.0 ():
     let Test.1 : List I64 = Array [1i64, 2i64];

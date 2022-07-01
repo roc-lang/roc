@@ -1,6 +1,16 @@
 procedure List.4 (#Attr.2, #Attr.3):
+<<<<<<< HEAD
     let List.284 : List U8 = lowlevel ListAppend #Attr.2 #Attr.3;
     ret List.284;
+=======
+<<<<<<< HEAD:crates/compiler/test_mono/generated/encode.txt
+    let List.259 : List U8 = lowlevel ListAppend #Attr.2 #Attr.3;
+    ret List.259;
+=======
+    let List.213 : List U8 = lowlevel ListAppend #Attr.2 #Attr.3;
+    ret List.213;
+>>>>>>> a5fc399f4 (Rename multimorphic tests to capture niche):compiler/test_mono/generated/encode.txt
+>>>>>>> 25bb3751b (Rename multimorphic tests to capture niche)
 
 procedure Test.20 (Test.22):
     let Test.34 : {U8} = Struct {Test.22};
