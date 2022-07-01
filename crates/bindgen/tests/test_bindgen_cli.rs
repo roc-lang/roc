@@ -178,7 +178,6 @@ mod bindgen_cli_run {
             .parent()
             .unwrap()
             .join("fixture-templates");
-        dbg!(&fixture_templates_dir);
 
         // Copy the rust template from the templates directory into the fixture dir.
         dircpy::CopyBuilder::new(fixture_templates_dir.join("rust"), platform_dir)
