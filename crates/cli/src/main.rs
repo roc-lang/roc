@@ -241,7 +241,10 @@ fn main() -> io::Result<()> {
             Ok(format_exit_code)
         }
         Some((CMD_VERSION, _)) => {
-            print!("{}", concatcp!("roc ", include_str!("../../version.txt")));
+            print!(
+                "{}",
+                concatcp!("roc ", include_str!("../../../version.txt"))
+            );
 
             Ok(0)
         }

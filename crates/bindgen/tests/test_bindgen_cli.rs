@@ -34,7 +34,7 @@ mod bindgen_cli_run {
 
         let output = Command::new("cargo")
             .args(args)
-            .current_dir(root_dir().join("cli"))
+            .current_dir(root_dir().join("crates").join("cli"))
             .output()
             .unwrap_or_else(|err| {
                 panic!(
@@ -178,6 +178,7 @@ mod bindgen_cli_run {
             .parent()
             .unwrap()
             .join("fixture-templates");
+        dbg!(&fixture_templates_dir);
 
         // Copy the rust template from the templates directory into the fixture dir.
         dircpy::CopyBuilder::new(fixture_templates_dir.join("rust"), platform_dir)
