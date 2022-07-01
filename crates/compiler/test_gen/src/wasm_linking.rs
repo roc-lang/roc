@@ -110,7 +110,7 @@ fn build_app_mono<'a>(
     );
 
     let proc = Proc {
-        name: LambdaName::only_receiver(app_proc),
+        name: LambdaName::no_niche(app_proc),
         args: &[],
         body,
         closure_data_layout: None,

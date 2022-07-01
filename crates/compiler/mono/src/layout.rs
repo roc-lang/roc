@@ -715,17 +715,7 @@ impl LambdaName<'_> {
     }
 
     #[inline(always)]
-    pub fn thunk(name: Symbol) -> Self {
-        Self {
-            name,
-            captures_niche: &[],
-        }
-    }
-
-    // When the function name is known, so there can only be one possible receiver, in such cases
-    // the lambda cannot be multimorphic.
-    #[inline(always)]
-    pub fn only_receiver(name: Symbol) -> Self {
+    pub fn no_niche(name: Symbol) -> Self {
         Self {
             name,
             captures_niche: &[],

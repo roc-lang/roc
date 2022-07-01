@@ -2839,7 +2839,7 @@ fn generate_runtime_error_function<'a>(
     };
 
     Proc {
-        name: LambdaName::only_receiver(name),
+        name: LambdaName::no_niche(name),
         args,
         body: runtime_error,
         closure_data_layout: None,
@@ -2941,7 +2941,7 @@ fn specialize_external<'a>(
                     );
 
                     let proc = Proc {
-                        name: LambdaName::only_receiver(name),
+                        name: LambdaName::no_niche(name),
                         args: proc_arguments.into_bump_slice(),
                         body,
                         closure_data_layout: None,
@@ -4439,7 +4439,7 @@ pub fn with_hole<'a>(
 
             match procs.insert_anonymous(
                 env,
-                LambdaName::only_receiver(name),
+                LambdaName::no_niche(name),
                 function_type,
                 arguments,
                 *loc_body,
@@ -4798,7 +4798,12 @@ pub fn with_hole<'a>(
                         Imported(thunk_name) => {
                             debug_assert!(procs.is_imported_module_thunk(thunk_name));
 
-                            add_needed_external(procs, env, fn_var, LambdaName::thunk(thunk_name));
+                            add_needed_external(
+                                procs,
+                                env,
+                                fn_var,
+                                LambdaName::no_niche(thunk_name),
+                            );
 
                             let function_symbol = env.unique_symbol();
 
@@ -5659,7 +5664,7 @@ fn tag_union_to_function<'a>(
     });
 
     // Lambda does not capture anything, can't be multimorphic
-    let lambda_name = LambdaName::only_receiver(proc_symbol);
+    let lambda_name = LambdaName::no_niche(proc_symbol);
 
     let inserted = procs.insert_anonymous(
         env,
@@ -7135,7 +7140,7 @@ where
         // specialized, and wrap the original in a function pointer.
         let mut result = result;
         for (_, (variable, left)) in needed_specializations_of_left {
-            add_needed_external(procs, env, variable, LambdaName::thunk(right));
+            add_needed_external(procs, env, variable, LambdaName::no_niche(right));
 
             let res_layout = layout_cache.from_var(env.arena, variable, env.subs);
             let layout = return_on_layout_error!(env, res_layout);
@@ -7146,7 +7151,7 @@ where
     } else if env.is_imported_symbol(right) {
         // if this is an imported symbol, then we must make sure it is
         // specialized, and wrap the original in a function pointer.
-        add_needed_external(procs, env, variable, LambdaName::only_receiver(right));
+        add_needed_external(procs, env, variable, LambdaName::no_niche(right));
 
         // then we must construct its closure; since imported symbols have no closure, we use the empty struct
         let_empty_struct(left, env.arena.alloc(result))
@@ -7198,7 +7203,7 @@ fn force_thunk<'a>(
 ) -> Stmt<'a> {
     let call = self::Call {
         call_type: CallType::ByName {
-            name: LambdaName::thunk(thunk_name),
+            name: LambdaName::no_niche(thunk_name),
             ret_layout: env.arena.alloc(layout),
             arg_layouts: &[],
             specialization_id: env.next_call_specialization_id(),
@@ -7247,7 +7252,7 @@ fn specialize_symbol<'a>(
                         procs.insert_passed_by_name(
                             env,
                             arg_var,
-                            LambdaName::thunk(original),
+                            LambdaName::no_niche(original),
                             top_level,
                             layout_cache,
                         );
@@ -7261,7 +7266,7 @@ fn specialize_symbol<'a>(
                         procs.insert_passed_by_name(
                             env,
                             arg_var,
-                            LambdaName::only_receiver(original),
+                            LambdaName::no_niche(original),
                             top_level,
                             layout_cache,
                         );
@@ -7352,7 +7357,7 @@ fn specialize_symbol<'a>(
                         procs.insert_passed_by_name(
                             env,
                             arg_var,
-                            LambdaName::thunk(original),
+                            LambdaName::no_niche(original),
                             top_level,
                             layout_cache,
                         );
@@ -7394,7 +7399,7 @@ fn specialize_symbol<'a>(
                     procs.insert_passed_by_name(
                         env,
                         arg_var,
-                        LambdaName::thunk(original),
+                        LambdaName::no_niche(original),
                         top_level,
                         layout_cache,
                     );
@@ -7644,7 +7649,7 @@ fn call_by_name<'a>(
                     hole,
                 )
             } else if env.is_imported_symbol(proc_name) {
-                add_needed_external(procs, env, fn_var, LambdaName::thunk(proc_name));
+                add_needed_external(procs, env, fn_var, LambdaName::no_niche(proc_name));
                 force_thunk(env, proc_name, ret_layout, assigned, hole)
             } else {
                 panic!("most likely we're trying to call something that is not a function");
@@ -7699,7 +7704,7 @@ fn call_by_name_help<'a>(
             );
             name
         }
-        None => LambdaName::only_receiver(proc_name),
+        None => LambdaName::no_niche(proc_name),
     };
 
     // If required, add an extra argument to the layout that is the captured environment
@@ -7996,7 +8001,7 @@ fn call_by_name_module_thunk<'a>(
                 // register the pending specialization, so this gets code genned later
                 suspended.specialization(
                     env.subs,
-                    LambdaName::thunk(proc_name),
+                    LambdaName::no_niche(proc_name),
                     top_level_layout,
                     fn_var,
                 );
@@ -8018,7 +8023,7 @@ fn call_by_name_module_thunk<'a>(
                         match specialize_variable(
                             env,
                             procs,
-                            LambdaName::thunk(proc_name),
+                            LambdaName::no_niche(proc_name),
                             layout_cache,
                             fn_var,
                             &[],

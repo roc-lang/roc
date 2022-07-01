@@ -170,7 +170,7 @@ impl<'a> CodeGenHelp<'a> {
         let arg_layouts = self.arena.alloc([layout]);
         let expr = Expr::Call(Call {
             call_type: CallType::ByName {
-                name: LambdaName::only_receiver(proc_name),
+                name: LambdaName::no_niche(proc_name),
                 ret_layout,
                 arg_layouts,
                 specialization_id: CallSpecId::BACKEND_DUMMY,
@@ -262,7 +262,7 @@ impl<'a> CodeGenHelp<'a> {
 
             Some(Expr::Call(Call {
                 call_type: CallType::ByName {
-                    name: LambdaName::only_receiver(proc_name),
+                    name: LambdaName::no_niche(proc_name),
                     ret_layout,
                     arg_layouts,
                     specialization_id: CallSpecId::BACKEND_DUMMY,
@@ -343,7 +343,7 @@ impl<'a> CodeGenHelp<'a> {
         };
 
         self.specializations[spec_index].proc = Some(Proc {
-            name: LambdaName::only_receiver(proc_symbol),
+            name: LambdaName::no_niche(proc_symbol),
             args,
             body,
             closure_data_layout: None,
