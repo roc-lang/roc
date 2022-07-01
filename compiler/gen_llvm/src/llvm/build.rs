@@ -13,6 +13,7 @@ use crate::llvm::build_list::{
     list_keep_if, list_keep_oks, list_len, list_map, list_map2, list_map3, list_map4,
     list_map_with_index, list_prepend, list_range, list_repeat, list_replace_unsafe, list_reverse,
     list_single, list_sort_with, list_sublist, list_swap, list_symbol_to_c_abi, list_to_c_abi,
+    list_with_capacity,
 };
 use crate::llvm::build_str::{
     str_from_float, str_from_int, str_from_utf8, str_from_utf8_range, str_split,
@@ -5584,6 +5585,15 @@ fn run_low_level<'a, 'ctx, 'env>(
             let arg = load_symbol(scope, &args[0]);
 
             list_len(env.builder, arg.into_struct_value()).into()
+        }
+        ListWithCapacity => {
+            // List.withCapacity : Nat -> List a
+            debug_assert_eq!(args.len(), 1);
+
+            let list_len = load_symbol(scope, &args[0]).into_int_value();
+            let result_layout = *layout;
+
+            list_with_capacity(env, list_len, &list_element_layout!(result_layout))
         }
         ListSingle => {
             // List.single : a -> List a

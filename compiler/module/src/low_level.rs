@@ -24,6 +24,7 @@ pub enum LowLevel {
     StrTrimRight,
     StrToNum,
     ListLen,
+    ListWithCapacity,
     ListGetUnsafe,
     ListSingle,
     ListRepeat,

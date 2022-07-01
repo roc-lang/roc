@@ -1253,6 +1253,7 @@ define_builtins! {
         59 LIST_FIND_INDEX: "findIndex"
         60 LIST_GET_UNSAFE: "getUnsafe"
         61 LIST_REPLACE_UNSAFE: "replaceUnsafe"
+        62 LIST_WITH_CAPACITY: "withCapacity"
     }
     6 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" // the Result.Result type alias

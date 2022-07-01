@@ -102,6 +102,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_TO_U8 => str_to_num,
         STR_TO_I8 => str_to_num,
         LIST_LEN => list_len,
+        LIST_WITH_CAPACITY => list_with_capacity,
         LIST_GET_UNSAFE => list_get_unsafe,
         LIST_REPLACE_UNSAFE => list_replace_unsafe,
         LIST_SET => list_set,
@@ -2150,24 +2151,14 @@ fn list_single(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// List.len : List * -> Int
+/// List.len : List a -> Nat
 fn list_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let len_var = var_store.fresh();
-    let list_var = var_store.fresh();
+    lowlevel_1(symbol, LowLevel::ListLen, var_store)
+}
 
-    let body = RunLowLevel {
-        op: LowLevel::ListLen,
-        args: vec![(list_var, Var(Symbol::ARG_1))],
-        ret_var: len_var,
-    };
-
-    defn(
-        symbol,
-        vec![(list_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        len_var,
-    )
+/// List.withCapacity : Nat -> List a
+fn list_with_capacity(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::ListWithCapacity, var_store)
 }
 
 /// List.getUnsafe : List elem, Int -> elem
