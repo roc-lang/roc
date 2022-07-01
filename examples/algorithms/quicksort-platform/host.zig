@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const str = @import("str");
+const list = @import("/home/folkertdev/roc/roc/compiler/builtins/bitcode/src/list.zig");
 const RocStr = str.RocStr;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
@@ -81,9 +82,9 @@ export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
 }
 
 // warning! the array is currently stack-allocated so don't make this too big
-const NUM_NUMS = 100;
+const NUM_NUMS = 3 * 10_000;
 
-const RocList = extern struct { elements: [*]i64, length: usize };
+const RocList = extern struct { elements: [*]RocStr, length: usize, capacity: usize };
 
 const Unit = extern struct {};
 
@@ -95,13 +96,20 @@ pub export fn main() u8 {
     // set refcount to one
     raw_numbers[0] = -9223372036854775808;
 
-    var numbers = raw_numbers[1..];
+    var numbers = @ptrCast([*]RocStr, raw_numbers[1..]);
 
-    for (numbers) |_, i| {
-        numbers[i] = @mod(@intCast(i64, i), 12);
+    const expected_bytes = "I am a very long string so must be refcounted";
+    const expected = RocStr.init(expected_bytes, expected_bytes.len);
+
+    {
+        var n: usize = 0;
+        while (n < NUM_NUMS / 3) : (n += 1) {
+            // numbers[i] = @mod(@intCast(i64, i), 12);
+            numbers[n] = RocStr.clone(str.InPlace.InPlace, expected);
+        }
     }
 
-    var roc_list = RocList{ .elements = numbers, .length = NUM_NUMS };
+    var roc_list = RocList{ .elements = numbers, .length = NUM_NUMS / 3, .capacity = NUM_NUMS / 3 };
 
     // start time
     var ts1: std.os.timespec = undefined;
@@ -109,7 +117,11 @@ pub export fn main() u8 {
 
     // actually call roc to populate the callresult
     var callresult: RocList = undefined;
-    roc__mainForHost_1_exposed_generic(&callresult, &roc_list);
+
+    var n: usize = 0;
+    while (n < 100) : (n += 1) {
+        roc__mainForHost_1_exposed_generic(&callresult, &roc_list);
+    }
 
     // const callresult: RocList = roc__mainForHost_1_exposed_generic(&roc_list);
 

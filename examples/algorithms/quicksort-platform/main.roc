@@ -1,9 +1,9 @@
 platform "quicksort"
-    requires {} { quicksort : List I64 -> List I64 }
+    requires {} { quicksort : List Str -> List Str }
     exposes []
     packages {}
     imports []
     provides [mainForHost]
 
-mainForHost : List I64 -> List I64
+mainForHost : List Str -> List Str
 mainForHost = \list -> quicksort list
