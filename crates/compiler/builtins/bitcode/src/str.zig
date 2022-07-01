@@ -56,6 +56,10 @@ pub const RocStr = extern struct {
         return result;
     }
 
+    pub fn fromSlice(slice: []const u8) RocStr {
+        return RocStr.init(slice.ptr, slice.len);
+    }
+
     pub fn initBig(_: InPlace, number_of_chars: usize) RocStr {
         const first_element = utils.allocateWithRefcount(number_of_chars, @sizeOf(usize));
 
@@ -467,11 +471,23 @@ pub fn strNumberOfBytes(string: RocStr) callconv(.C) usize {
 pub fn strToCodePts(string: RocStr) callconv(.C) RocList {
     const str_len = string.len();
 
+    if (str_len == 0) {
+        return RocList.empty();
+    }
+
+    var capacity = str_len;
+
+    if (!string.isSmallStr()) {
+        capacity = string.capacity();
+    }
+
     // For purposes of preallocation, assume the number of code points is the same
     // as the number of bytes. This might be longer than necessary, but definitely
     // should not require a second allocation.
-    var answer = RocList.allocate(@alignOf(u32), string.capacity(), @sizeOf(u32));
-    var answer_elems = answer.elements(u32);
+    var answer = RocList.allocate(@alignOf(u32), capacity, @sizeOf(u32));
+
+    // We already did an early return to verify the string was nonempty.
+    var answer_elems = answer.elements(u32) orelse unreachable;
     var src_index: usize = 0;
     var answer_index: usize = 0;
 
@@ -545,18 +561,45 @@ pub fn strToCodePts(string: RocStr) callconv(.C) RocList {
 }
 
 test "strToCodePts: One ASCII char" {
-    const str = RocStr.init("R", 1);
-    const array = [_]u32{ 1, 2, 3, 4 };
+    const str = RocStr.fromSlice("R");
+    const array = [_]u32{ 82 };
     var known_at_runtime_zero: usize = 0;
     const slice = array[known_at_runtime_zero..array.len];
     const expected = RocList.fromSlice(u32, slice);
     const actual = strToCodePts(str);
 
-    try expect(RocList.isEq(actual, expected));
+    try expect(RocList.eql(actual, expected));
+    defer RocList.deinit(actual, u32);
+    defer RocList.deinit(expected, u32);
+    defer RocStr.deinit(str);
+}
 
-    RocList.deinit(actual, u32);
-    RocList.deinit(expected, u32);
-    RocStr.deinit(str);
+test "strToCodePts: One ASCII char" {
+    const str = RocStr.fromSlice("R");
+    defer RocStr.deinit(str);
+
+    const expected_array = [_]u32{ 82 };
+    const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
+    defer RocList.deinit(expected, u32);
+
+    const actual = strToCodePts(str);
+    defer RocList.deinit(actual, u32);
+
+    try expect(RocList.eql(actual, expected));
+}
+
+test "strToCodePts: Multiple ASCII chars" {
+    const str = RocStr.init("Roc!", 4);
+    defer RocStr.deinit(str);
+
+    const expected_array = [_]u32{ 82, 111, 99, 33 };
+    const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
+    defer RocList.deinit(expected, u32);
+
+    const actual = strToCodePts(str);
+    defer RocList.deinit(actual, u32);
+
+    try expect(RocList.eql(actual, expected));
 }
 
 // Str.fromInt
