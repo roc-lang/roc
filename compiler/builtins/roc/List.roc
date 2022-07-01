@@ -480,11 +480,15 @@ first : List a -> Result a [ListWasEmpty]*
 ##
 ## Returns the new list (with the removed element missing).
 dropFirst : List elem -> List elem
+dropFirst = \list ->
+    List.dropAt list 0
 
 ## Remove the last element from the list.
 ##
 ## Returns the new list (with the removed element missing).
 dropLast : List elem -> List elem
+dropLast = \list ->
+    List.dropAt list (Num.subSaturated (List.len list) 1)
 
 ## Returns the given number of elements from the beginning of the list.
 ##
