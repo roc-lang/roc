@@ -575,7 +575,7 @@ test "strToScalars: One ASCII char" {
 }
 
 test "strToScalars: Multiple ASCII chars" {
-    const str = RocStr.init("Roc!", 4);
+    const str = RocStr.fromSlice("Roc!");
     defer RocStr.deinit(str);
 
     const expected_array = [_]u32{ 82, 111, 99, 33 };
