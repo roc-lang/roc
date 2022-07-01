@@ -809,7 +809,7 @@ fn list_walk_implements_position() {
         findHelp = \list, needle ->
             List.walkUntil list { n: 0, v: None } \{ n, v }, element ->
                 if element == needle then
-                    Stop { n, v: Some n }
+                    Break { n, v: Some n }
                 else
                     Continue { n: n + 1, v }
 
@@ -832,7 +832,7 @@ fn list_walk_until_even_prefix_sum() {
                 Continue (a + b)
 
             else
-                Stop a
+                Break a
 
         List.walkUntil [2, 4, 8, 9] 0 helper"#,
         2 + 4 + 8,

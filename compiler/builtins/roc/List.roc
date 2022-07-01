@@ -383,7 +383,11 @@ walkBackwards : List elem, state, (state, elem -> state) -> state
 ##
 ## As such, it is typically better for performance to use this over [List.walk]
 ## if returning `Done` earlier than the last element is expected to be common.
-walkUntil : List elem, state, (state, elem -> [Continue state, Stop state]) -> state
+walkUntil : List elem, state, (state, elem -> [Continue state, Break state]) -> state
+walkUntil = \list, initial, step ->
+    when List.iterate list initial step is
+        Continue new -> new
+        Break new -> new
 
 sum : List (Num a) -> Num a
 sum = \list ->
@@ -679,16 +683,15 @@ find = \array, pred ->
 ## If no satisfying element is found, an `Err NotFound` is returned.
 findIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]*
 findIndex = \list, matcher ->
-    foundIndex = List.walkUntil list 0 \index, elem ->
+    foundIndex = List.iterate list 0 \index, elem ->
         if matcher elem then
-            Stop index
+            Break index
         else
             Continue (index + 1)
 
-    if foundIndex < List.len list then
-        Ok foundIndex
-    else
-        Err NotFound
+    when foundIndex is
+        Break index -> Ok index
+        Continue _ -> Err NotFound
 
 ## Returns a subsection of the given list, beginning at the `start` index and
 ## including a total of `len` elements.

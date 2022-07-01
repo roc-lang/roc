@@ -1214,11 +1214,11 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
     );
 
     fn until_type(content: SolvedType) -> SolvedType {
-        // [LT, EQ, GT]
+        // [Continue, Break]
         SolvedType::TagUnion(
             vec![
                 (TagName("Continue".into()), vec![content.clone()]),
-                (TagName("Stop".into()), vec![content]),
+                (TagName("Break".into()), vec![content]),
             ],
             Box::new(SolvedType::EmptyTagUnion),
         )
