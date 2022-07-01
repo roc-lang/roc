@@ -9,6 +9,7 @@ interface List
             map,
             len,
             withCapacity,
+            iterate,
             walkBackwards,
             concat,
             first,
@@ -653,3 +654,20 @@ intersperse : List elem, elem -> List elem
 ## means if you give an index of 0, the `before` list will be empty and the
 ## `others` list will have the same elements as the original list.)
 split : List elem, Nat -> { before : List elem, others : List elem }
+
+## internal helper
+iterHelp : List elem, s, (s, elem -> [Continue s, Break b]), Nat, Nat -> [Continue s, Break b]
+iterHelp = \list, state, f, index, length ->
+    if index < length then
+        when f state (List.getUnsafe list index) is
+            Continue nextState ->
+                iterHelp list nextState f (index + 1) length
+            Break b ->
+                Break b
+    else
+        Continue state
+
+## Primitive for iterating over a List, being able to decide at every element whether to continue
+iterate : List elem, s, (s, elem -> [Continue s, Break b]) -> [Continue s, Break b]
+iterate = \list, init, func ->
+    iterHelp list init func 0 (List.len list)
