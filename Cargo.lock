@@ -3963,7 +3963,6 @@ dependencies = [
  "roc_collections",
  "roc_gen_wasm",
  "roc_load",
- "roc_mono",
  "roc_parse",
  "roc_repl_eval",
  "roc_reporting",

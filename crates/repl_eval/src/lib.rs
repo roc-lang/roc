@@ -12,7 +12,7 @@ pub trait ReplApp<'a> {
     /// The `transform` callback takes the app's memory and the returned value
     fn call_function<Return, F>(&self, main_fn_name: &str, transform: F) -> Expr<'a>
     where
-        F: FnMut(&'a Self::Memory, Return) -> Expr<'a>,
+        F: Fn(&'a Self::Memory, Return) -> Expr<'a>,
         Self::Memory: 'a;
 
     /// Run user code that returns a struct or union, whose size is provided as an argument
@@ -24,7 +24,7 @@ pub trait ReplApp<'a> {
         transform: F,
     ) -> T
     where
-        F: FnMut(&'a Self::Memory, usize) -> T,
+        F: Fn(&'a Self::Memory, usize) -> T,
         Self::Memory: 'a;
 }
 
