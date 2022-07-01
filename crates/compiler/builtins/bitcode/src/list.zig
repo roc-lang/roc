@@ -3,6 +3,7 @@ const utils = @import("utils.zig");
 const RocResult = utils.RocResult;
 const UpdateMode = utils.UpdateMode;
 const mem = std.mem;
+const math = std.math;
 
 const EqFn = fn (?[*]u8, ?[*]u8) callconv(.C) bool;
 const CompareFn = fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) u8;
@@ -28,6 +29,14 @@ pub const RocList = extern struct {
 
     pub fn empty() RocList {
         return RocList{ .bytes = null, .length = 0, .capacity = 0 };
+    }
+
+    pub fn first_elem_ptr(self: RocList, comptime elem_type: type) [*]elem_type {
+        const refcount_byte_count = math.max(@alignOf(usize), @alignOf(elem_type));
+        const addr = @ptrToInt(self.bytes) + refcount_byte_count;
+
+        // The first element is stored right after the refcount.
+        return @intToPtr([*]elem_type, addr);
     }
 
     pub fn isUnique(self: RocList) bool {
