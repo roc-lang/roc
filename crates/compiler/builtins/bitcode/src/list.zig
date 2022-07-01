@@ -31,12 +31,50 @@ pub const RocList = extern struct {
         return RocList{ .bytes = null, .length = 0, .capacity = 0 };
     }
 
-    pub fn first_elem_ptr(self: RocList, comptime elem_type: type) [*]elem_type {
-        const refcount_byte_count = math.max(@alignOf(usize), @alignOf(elem_type));
+    pub fn isEq(self: RocList, other: RocList) bool {
+        if ((self.len() != other.len()) or self.isEmpty()) {
+            return false;
+        }
+
+        var index: usize = 0;
+        const self_bytes = self.bytes orelse unreachable;
+        const other_bytes = other.bytes orelse unreachable;
+
+        while (index < self.len()) {
+            if (self_bytes[index] != other_bytes[index]) {
+                return false;
+            }
+
+            index += 1;
+        }
+
+        return true;
+    }
+
+    pub fn fromSlice(comptime T: type, slice: []const T) RocList {
+        var list = allocate(@alignOf(T), slice.len, @sizeOf(T));
+
+        if (slice.len > 0) {
+            const dest = list.bytes orelse unreachable;
+            const src = @ptrCast([*]const u8, slice.ptr);
+            const num_bytes = slice.len * @sizeOf(T);
+
+            @memcpy(dest, src, num_bytes);
+        }
+
+        return list;
+    }
+
+    pub fn deinit(self: RocList, comptime T: type) void {
+        utils.decref(self.bytes, self.len(), @alignOf(T));
+    }
+
+    pub fn elements(self: RocList, comptime T: type) [*]T {
+        const refcount_byte_count = math.max(@alignOf(usize), @alignOf(T));
         const addr = @ptrToInt(self.bytes) + refcount_byte_count;
 
         // The first element is stored right after the refcount.
-        return @intToPtr([*]elem_type, addr);
+        return @intToPtr([*]T, addr);
     }
 
     pub fn isUnique(self: RocList) bool {
