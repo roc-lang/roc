@@ -1,6 +1,6 @@
 procedure List.4 (#Attr.2, #Attr.3):
-    let List.152 : List I64 = lowlevel ListAppend #Attr.2 #Attr.3;
-    ret List.152;
+    let List.162 : List I64 = lowlevel ListAppend #Attr.2 #Attr.3;
+    ret List.162;
 
 procedure Test.1 (Test.2):
     let Test.6 : I64 = 42i64;

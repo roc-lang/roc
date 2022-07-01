@@ -53,11 +53,11 @@ install-zig-llvm-valgrind-clippy-rustfmt:
 
 copy-dirs:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
-    COPY --dir bindgen cli cli_utils compiler docs docs_cli editor ast code_markup error_macros highlight utils test_utils reporting repl_cli repl_eval repl_test repl_wasm repl_www roc_std vendor examples linker Cargo.toml Cargo.lock version.txt www wasi-libc-sys ./
+    COPY --dir crates repl_www examples Cargo.toml Cargo.lock version.txt www ./
 
 test-zig:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
-    COPY --dir compiler/builtins/bitcode ./
+    COPY --dir crates/compiler/builtins/bitcode ./
     RUN cd bitcode && ./run-tests.sh && ./run-wasm-tests.sh
 
 build-rust-test:
@@ -84,7 +84,7 @@ check-rustfmt:
 
 check-typos:
     RUN cargo install typos-cli --version 1.0.11 # version set to prevent confusion if the version is updated automatically
-    COPY --dir .github ci cli cli_utils compiler docs editor examples ast code_markup highlight utils linker nightly_benches packages roc_std www *.md LEGAL_DETAILS shell.nix version.txt ./
+    COPY --dir .github ci crates examples nightly_benches www *.md LEGAL_DETAILS flake.nix version.txt ./
     RUN typos
 
 test-rust:
