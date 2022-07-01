@@ -302,7 +302,10 @@ reverse : List a -> List a
 ##
 ## >>> List.join []
 join : List (List a) -> List a
+
 contains : List a, a -> Bool
+contains = \list, needle ->
+    List.any list (\x -> x == needle)
 
 ## Build a value using each element in the list.
 ##
@@ -631,6 +634,18 @@ joinMap = \list, mapper ->
 ## Returns the first element of the list satisfying a predicate function.
 ## If no satisfying element is found, an `Err NotFound` is returned.
 find : List elem, (elem -> Bool) -> Result elem [NotFound]*
+find = \array, pred ->
+    callback = \_, elem ->
+        if pred elem then
+            Break elem
+        else
+            Continue {}
+
+    when List.iterate array {} callback is
+        Continue {} ->
+            Err NotFound
+        Break found ->
+            Ok found
 
 ## Returns the index at which the first element in the list
 ## satisfying a predicate function can be found.
