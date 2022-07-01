@@ -1125,26 +1125,29 @@ impl<'a> Procs<'a> {
                                 &[],
                                 partial_proc_id,
                             ) {
-                                Ok((proc, layout)) => {
-                                    let top_level = ProcLayout::from_raw(
+                                Ok((proc, _ignore_layout)) => {
+                                    // the `layout` is a function pointer, while `_ignore_layout` can be a
+                                    // closure. We only specialize functions, storing this value with a closure
+                                    // layout will give trouble.
+                                    let arguments = Vec::from_iter_in(
+                                        proc.args.iter().map(|(l, _)| *l),
                                         env.arena,
-                                        layout,
-                                        proc.name.captures_niche(),
-                                    );
+                                    )
+                                    .into_bump_slice();
 
-                                    debug_assert_eq!(
-                                        outside_layout, top_level,
-                                        "different raw layouts for {:?}",
-                                        proc.name
-                                    );
+                                    let proper_layout = ProcLayout {
+                                        arguments,
+                                        result: proc.ret_layout,
+                                        captures_niche: proc.name.captures_niche(),
+                                    };
 
-                                    if self.is_module_thunk(proc.name.name()) {
-                                        debug_assert!(top_level.arguments.is_empty());
-                                    }
-
+                                    // NOTE: some functions are specialized to have a closure, but don't actually
+                                    // need any closure argument. Here is where we correct this sort of thing,
+                                    // by trusting the layout of the Proc, not of what we specialize for
+                                    self.specialized.remove_specialized(name.name(), &layout);
                                     self.specialized.insert_specialized(
                                         name.name(),
-                                        top_level,
+                                        proper_layout,
                                         proc,
                                     );
                                 }
@@ -1239,7 +1242,7 @@ impl<'a> Procs<'a> {
                             captures_niche: proc.name.captures_niche(),
                         };
 
-                        // NOTE: some function are specialized to have a closure, but don't actually
+                        // NOTE: some functions are specialized to have a closure, but don't actually
                         // need any closure argument. Here is where we correct this sort of thing,
                         // by trusting the layout of the Proc, not of what we specialize for
                         self.specialized.remove_specialized(symbol.name(), &layout);
