@@ -14,6 +14,8 @@ use roc_target::TargetInfo;
 use std::marker::PhantomData;
 
 pub(crate) mod aarch64;
+#[cfg(test)]
+mod disassembler_test_macro;
 pub(crate) mod storage;
 pub(crate) mod x86_64;
 
@@ -260,7 +262,9 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     fn ret(buf: &mut Vec<'_, u8>);
 }
 
-pub trait RegTrait: Copy + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + 'static {
+pub trait RegTrait:
+    Copy + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + std::fmt::Display + 'static
+{
     fn value(&self) -> u8;
 }
 

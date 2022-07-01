@@ -38,6 +38,32 @@ impl RegTrait for X86_64GeneralReg {
         *self as u8
     }
 }
+impl std::fmt::Display for X86_64GeneralReg {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                X86_64GeneralReg::RAX => "rax",
+                X86_64GeneralReg::RBX => "rbx",
+                X86_64GeneralReg::RCX => "rcx",
+                X86_64GeneralReg::RDX => "rdx",
+                X86_64GeneralReg::RBP => "rbp",
+                X86_64GeneralReg::RSP => "rsp",
+                X86_64GeneralReg::RDI => "rdi",
+                X86_64GeneralReg::RSI => "rsi",
+                X86_64GeneralReg::R8 => "r8",
+                X86_64GeneralReg::R9 => "r9",
+                X86_64GeneralReg::R10 => "r10",
+                X86_64GeneralReg::R11 => "r11",
+                X86_64GeneralReg::R12 => "r12",
+                X86_64GeneralReg::R13 => "r13",
+                X86_64GeneralReg::R14 => "r14",
+                X86_64GeneralReg::R15 => "r15",
+            }
+        )
+    }
+}
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub enum X86_64FloatReg {
@@ -61,6 +87,32 @@ pub enum X86_64FloatReg {
 impl RegTrait for X86_64FloatReg {
     fn value(&self) -> u8 {
         *self as u8
+    }
+}
+impl std::fmt::Display for X86_64FloatReg {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                X86_64FloatReg::XMM0 => "xmm0",
+                X86_64FloatReg::XMM1 => "xmm1",
+                X86_64FloatReg::XMM2 => "xmm2",
+                X86_64FloatReg::XMM3 => "xmm3",
+                X86_64FloatReg::XMM4 => "xmm4",
+                X86_64FloatReg::XMM5 => "xmm5",
+                X86_64FloatReg::XMM6 => "xmm6",
+                X86_64FloatReg::XMM7 => "xmm7",
+                X86_64FloatReg::XMM8 => "xmm8",
+                X86_64FloatReg::XMM9 => "xmm9",
+                X86_64FloatReg::XMM10 => "xmm10",
+                X86_64FloatReg::XMM11 => "xmm11",
+                X86_64FloatReg::XMM12 => "xmm12",
+                X86_64FloatReg::XMM13 => "xmm13",
+                X86_64FloatReg::XMM14 => "xmm14",
+                X86_64FloatReg::XMM15 => "xmm15",
+            }
+        )
     }
 }
 
@@ -885,10 +937,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src1: X86_64GeneralReg,
         imm32: i32,
     ) {
-        if dst != src1 {
-            mov_reg64_reg64(buf, dst, src1);
-        }
-
+        mov_reg64_reg64(buf, dst, src1);
         add_reg64_imm32(buf, dst, imm32);
     }
     #[inline(always)]
@@ -940,10 +989,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
     ) {
-        if dst != src1 {
-            mov_reg64_reg64(buf, dst, src1);
-        }
-
+        mov_reg64_reg64(buf, dst, src1);
         imul_reg64_reg64(buf, dst, src2);
     }
 
@@ -1111,10 +1157,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src1: X86_64GeneralReg,
         imm32: i32,
     ) {
-        if dst != src1 {
-            mov_reg64_reg64(buf, dst, src1);
-        }
-
+        mov_reg64_reg64(buf, dst, src1);
         sub_reg64_imm32(buf, dst, imm32);
     }
     #[inline(always)]
@@ -1124,10 +1167,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
     ) {
-        if dst != src1 {
-            mov_reg64_reg64(buf, dst, src1);
-        }
-
+        mov_reg64_reg64(buf, dst, src1);
         sub_reg64_reg64(buf, dst, src2);
     }
 
@@ -1431,11 +1471,19 @@ fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i64) {
 }
 
 /// `MOV r/m64,r64` -> Move r64 to r/m64.
+/// This will not generate anything if dst and src are the same.
 #[inline(always)]
 fn mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
     if dst != src {
-        binop_reg64_reg64(0x89, buf, dst, src);
+        raw_mov_reg64_reg64(buf, dst, src);
     }
+}
+
+/// `MOV r/m64,r64` -> Move r64 to r/m64.
+/// This will always generate the move. It is used for verification.
+#[inline(always)]
+fn raw_mov_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
+    binop_reg64_reg64(0x89, buf, dst, src);
 }
 
 // The following base and stack based operations could be optimized based on how many bytes the offset actually is.
@@ -1504,11 +1552,18 @@ fn movzx_reg64_base8_offset32(
 }
 
 /// `MOVSD xmm1,xmm2` -> Move scalar double-precision floating-point value from xmm2 to xmm1 register.
+/// This will not generate anything if dst and src are the same.
 #[inline(always)]
 fn movsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
-    if dst == src {
-        return;
+    if dst != src {
+        raw_movsd_freg64_freg64(buf, dst, src);
     }
+}
+
+/// `MOVSD xmm1,xmm2` -> Move scalar double-precision floating-point value from xmm2 to xmm1 register.
+/// This will always generate the move. It is used for verification.
+#[inline(always)]
+fn raw_movsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
     let dst_high = dst as u8 > 7;
     let dst_mod = dst as u8 % 8;
     let src_high = src as u8 > 7;
@@ -1562,12 +1617,14 @@ fn movsd_base64_offset32_freg64(
     offset: i32,
     src: X86_64FloatReg,
 ) {
+    let rex = add_rm_extension(base, REX_W);
+    let rex = add_reg_extension(src, rex);
     let src_mod = (src as u8 % 8) << 3;
     let base_mod = base as u8 % 8;
     buf.reserve(10);
     buf.push(0xF2);
     if src as u8 > 7 || base as u8 > 7 {
-        buf.push(0x44);
+        buf.push(rex);
     }
     buf.extend(&[0x0F, 0x11, 0x80 + src_mod + base_mod]);
     // Using RSP or R12 requires a secondary index byte.
@@ -1585,12 +1642,14 @@ fn movsd_freg64_base64_offset32(
     base: X86_64GeneralReg,
     offset: i32,
 ) {
+    let rex = add_rm_extension(base, REX_W);
+    let rex = add_reg_extension(dst, rex);
     let dst_mod = (dst as u8 % 8) << 3;
     let base_mod = base as u8 % 8;
     buf.reserve(10);
     buf.push(0xF2);
     if dst as u8 > 7 || base as u8 > 7 {
-        buf.push(0x44);
+        buf.push(rex);
     }
     buf.extend(&[0x0F, 0x10, 0x80 + dst_mod + base_mod]);
     // Using RSP or R12 requires a secondary index byte.
@@ -1781,755 +1840,382 @@ fn xor_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64Gene
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::disassembler_test;
+    use capstone::prelude::*;
 
+    impl X86_64GeneralReg {
+        #[allow(dead_code)]
+        fn low_8bits_string(&self) -> &str {
+            match self {
+                X86_64GeneralReg::RAX => "al",
+                X86_64GeneralReg::RBX => "bl",
+                X86_64GeneralReg::RCX => "cl",
+                X86_64GeneralReg::RDX => "dl",
+                X86_64GeneralReg::RBP => "bpl",
+                X86_64GeneralReg::RSP => "spl",
+                X86_64GeneralReg::RDI => "dil",
+                X86_64GeneralReg::RSI => "sil",
+                X86_64GeneralReg::R8 => "r8b",
+                X86_64GeneralReg::R9 => "r9b",
+                X86_64GeneralReg::R10 => "r10b",
+                X86_64GeneralReg::R11 => "r11b",
+                X86_64GeneralReg::R12 => "r12b",
+                X86_64GeneralReg::R13 => "r13b",
+                X86_64GeneralReg::R14 => "r14b",
+                X86_64GeneralReg::R15 => "r15b",
+            }
+        }
+    }
     const TEST_I32: i32 = 0x12345678;
     const TEST_I64: i64 = 0x1234_5678_9ABC_DEF0;
 
+    const ALL_GENERAL_REGS: &[X86_64GeneralReg] = &[
+        X86_64GeneralReg::RAX,
+        X86_64GeneralReg::RBX,
+        X86_64GeneralReg::RCX,
+        X86_64GeneralReg::RDX,
+        X86_64GeneralReg::RBP,
+        X86_64GeneralReg::RSP,
+        X86_64GeneralReg::RDI,
+        X86_64GeneralReg::RSI,
+        X86_64GeneralReg::R8,
+        X86_64GeneralReg::R9,
+        X86_64GeneralReg::R10,
+        X86_64GeneralReg::R11,
+        X86_64GeneralReg::R12,
+        X86_64GeneralReg::R13,
+        X86_64GeneralReg::R14,
+        X86_64GeneralReg::R15,
+    ];
+    const ALL_FLOAT_REGS: &[X86_64FloatReg] = &[
+        X86_64FloatReg::XMM0,
+        X86_64FloatReg::XMM1,
+        X86_64FloatReg::XMM2,
+        X86_64FloatReg::XMM3,
+        X86_64FloatReg::XMM4,
+        X86_64FloatReg::XMM5,
+        X86_64FloatReg::XMM6,
+        X86_64FloatReg::XMM7,
+        X86_64FloatReg::XMM8,
+        X86_64FloatReg::XMM9,
+        X86_64FloatReg::XMM10,
+        X86_64FloatReg::XMM11,
+        X86_64FloatReg::XMM12,
+        X86_64FloatReg::XMM13,
+        X86_64FloatReg::XMM14,
+        X86_64FloatReg::XMM15,
+    ];
+
+    fn setup_capstone_and_arena<T>(
+        arena: &bumpalo::Bump,
+    ) -> (bumpalo::collections::Vec<T>, Capstone) {
+        let buf = bumpalo::vec![in arena];
+        let cs = Capstone::new()
+            .x86()
+            .mode(arch::x86::ArchMode::Mode64)
+            .syntax(arch::x86::ArchSyntax::Intel)
+            .detail(true)
+            .build()
+            .expect("Failed to create Capstone object");
+        (buf, cs)
+    }
+
     #[test]
     fn test_add_reg64_imm32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for (dst, expected) in &[
-            (X86_64GeneralReg::RAX, [0x48, 0x81, 0xC0]),
-            (X86_64GeneralReg::R15, [0x49, 0x81, 0xC7]),
-        ] {
-            buf.clear();
-            add_reg64_imm32(&mut buf, *dst, TEST_I32);
-            assert_eq!(expected, &buf[..3]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
-        }
+        disassembler_test!(
+            add_reg64_imm32,
+            |reg, imm| format!("add {}, 0x{:x}", reg, imm),
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
     }
 
     #[test]
     fn test_add_reg64_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, src), expected) in &[
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::RAX),
-                [0x48, 0x01, 0xC0],
-            ),
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::R15),
-                [0x4C, 0x01, 0xF8],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::RAX),
-                [0x49, 0x01, 0xC7],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::R15),
-                [0x4D, 0x01, 0xFF],
-            ),
-        ] {
-            buf.clear();
-            add_reg64_reg64(&mut buf, *dst, *src);
-            assert_eq!(expected, &buf[..]);
-        }
+        disassembler_test!(
+            add_reg64_reg64,
+            |reg1, reg2| format!("add {}, {}", reg1, reg2),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
     }
 
     #[test]
     fn test_sub_reg64_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, src), expected) in &[
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::RAX),
-                [0x48, 0x29, 0xC0],
-            ),
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::R15),
-                [0x4C, 0x29, 0xF8],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::RAX),
-                [0x49, 0x29, 0xC7],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::R15),
-                [0x4D, 0x29, 0xFF],
-            ),
-        ] {
-            buf.clear();
-            sub_reg64_reg64(&mut buf, *dst, *src);
-            assert_eq!(expected, &buf[..]);
-        }
+        disassembler_test!(
+            sub_reg64_reg64,
+            |reg1, reg2| format!("sub {}, {}", reg1, reg2),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
     }
 
     #[test]
     fn test_addsd_freg64_freg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, src), expected) in &[
-            (
-                (X86_64FloatReg::XMM0, X86_64FloatReg::XMM0),
-                vec![0xF2, 0x0F, 0x58, 0xC0],
-            ),
-            (
-                (X86_64FloatReg::XMM0, X86_64FloatReg::XMM15),
-                vec![0xF2, 0x41, 0x0F, 0x58, 0xC7],
-            ),
-            (
-                (X86_64FloatReg::XMM15, X86_64FloatReg::XMM0),
-                vec![0xF2, 0x44, 0x0F, 0x58, 0xF8],
-            ),
-            (
-                (X86_64FloatReg::XMM15, X86_64FloatReg::XMM15),
-                vec![0xF2, 0x45, 0x0F, 0x58, 0xFF],
-            ),
-        ] {
-            buf.clear();
-            addsd_freg64_freg64(&mut buf, *dst, *src);
-            assert_eq!(&expected[..], &buf[..]);
-        }
+        disassembler_test!(
+            addsd_freg64_freg64,
+            |reg1, reg2| format!("addsd {}, {}", reg1, reg2),
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
     }
 
     #[test]
     fn test_andpd_freg64_freg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-
-        for ((dst, src), expected) in &[
-            (
-                (X86_64FloatReg::XMM0, X86_64FloatReg::XMM0),
-                vec![0x66, 0x0F, 0x54, 0xC0],
-            ),
-            (
-                (X86_64FloatReg::XMM0, X86_64FloatReg::XMM15),
-                vec![0x66, 0x41, 0x0F, 0x54, 0xC7],
-            ),
-            (
-                (X86_64FloatReg::XMM15, X86_64FloatReg::XMM0),
-                vec![0x66, 0x44, 0x0F, 0x54, 0xF8],
-            ),
-            (
-                (X86_64FloatReg::XMM15, X86_64FloatReg::XMM15),
-                vec![0x66, 0x45, 0x0F, 0x54, 0xFF],
-            ),
-        ] {
-            buf.clear();
-            andpd_freg64_freg64(&mut buf, *dst, *src);
-            assert_eq!(&expected[..], &buf[..]);
-        }
+        disassembler_test!(
+            andpd_freg64_freg64,
+            |reg1, reg2| format!("andpd {}, {}", reg1, reg2),
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
     }
 
     #[test]
     fn test_xor_reg64_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, src), expected) in &[
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::RAX),
-                [0x48, 0x31, 0xC0],
-            ),
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::R15),
-                [0x4C, 0x31, 0xF8],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::RAX),
-                [0x49, 0x31, 0xC7],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::R15),
-                [0x4D, 0x31, 0xFF],
-            ),
-        ] {
-            buf.clear();
-            xor_reg64_reg64(&mut buf, *dst, *src);
-            assert_eq!(expected, &buf[..]);
-        }
+        disassembler_test!(
+            xor_reg64_reg64,
+            |reg1, reg2| format!("xor {}, {}", reg1, reg2),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
     }
 
     #[test]
     fn test_cmovl_reg64_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, src), expected) in &[
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::RAX),
-                [0x48, 0x0F, 0x4C, 0xC0],
-            ),
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::R15),
-                [0x49, 0x0F, 0x4C, 0xC7],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::RAX),
-                [0x4C, 0x0F, 0x4C, 0xF8],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::R15),
-                [0x4D, 0x0F, 0x4C, 0xFF],
-            ),
-        ] {
-            buf.clear();
-            cmovl_reg64_reg64(&mut buf, *dst, *src);
-            assert_eq!(expected, &buf[..]);
-        }
+        disassembler_test!(
+            cmovl_reg64_reg64,
+            |reg1, reg2| format!("cmovl {}, {}", reg1, reg2),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
     }
 
     #[test]
     fn test_cmp_reg64_imm32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for (dst, expected) in &[
-            (X86_64GeneralReg::RAX, [0x48, 0x81, 0xF8]),
-            (X86_64GeneralReg::R15, [0x49, 0x81, 0xFF]),
-        ] {
-            buf.clear();
-            cmp_reg64_imm32(&mut buf, *dst, TEST_I32);
-            assert_eq!(expected, &buf[..3]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
-        }
+        disassembler_test!(
+            cmp_reg64_imm32,
+            |reg, imm| format!("cmp {}, 0x{:x}", reg, imm),
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
     }
 
     #[test]
     fn test_imul_reg64_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, src), expected) in &[
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::RAX),
-                [0x48, 0x0F, 0xAF, 0xC0],
-            ),
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::R15),
-                [0x49, 0x0F, 0xAF, 0xC7],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::RAX),
-                [0x4C, 0x0F, 0xAF, 0xF8],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::R15),
-                [0x4D, 0x0F, 0xAF, 0xFF],
-            ),
-        ] {
-            buf.clear();
-            imul_reg64_reg64(&mut buf, *dst, *src);
-            assert_eq!(expected, &buf[..]);
-        }
+        disassembler_test!(
+            imul_reg64_reg64,
+            |reg1, reg2| format!("imul {}, {}", reg1, reg2),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
     }
 
     #[test]
     fn test_jmp_imm32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        jmp_imm32(&mut buf, TEST_I32);
-        assert_eq!(0xE9, buf[0]);
-        assert_eq!(TEST_I32.to_le_bytes(), &buf[1..]);
+        const INST_SIZE: i32 = 5;
+        disassembler_test!(
+            jmp_imm32,
+            |imm| format!("jmp 0x{:x}", imm + INST_SIZE),
+            [TEST_I32]
+        );
     }
 
     #[test]
     fn test_jne_imm32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        jne_imm32(&mut buf, TEST_I32);
-        assert_eq!([0x0F, 0x85], &buf[..2]);
-        assert_eq!(TEST_I32.to_le_bytes(), &buf[2..]);
+        const INST_SIZE: i32 = 6;
+        disassembler_test!(
+            jne_imm32,
+            |imm| format!("jne 0x{:x}", imm + INST_SIZE),
+            [TEST_I32]
+        );
     }
 
     #[test]
     fn test_mov_reg64_imm32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for (dst, expected) in &[
-            (X86_64GeneralReg::RAX, [0x48, 0xC7, 0xC0]),
-            (X86_64GeneralReg::R15, [0x49, 0xC7, 0xC7]),
-        ] {
-            buf.clear();
-            mov_reg64_imm32(&mut buf, *dst, TEST_I32);
-            assert_eq!(expected, &buf[..3]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
-        }
+        disassembler_test!(
+            mov_reg64_imm32,
+            |reg, imm| format!("mov {}, 0x{:x}", reg, imm),
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
     }
 
     #[test]
     fn test_mov_reg64_imm64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for (dst, expected) in &[
-            (X86_64GeneralReg::RAX, [0x48, 0xB8]),
-            (X86_64GeneralReg::R15, [0x49, 0xBF]),
-        ] {
-            buf.clear();
-            mov_reg64_imm64(&mut buf, *dst, TEST_I64);
-            assert_eq!(expected, &buf[..2]);
-            assert_eq!(TEST_I64.to_le_bytes(), &buf[2..]);
-        }
-        for (dst, expected) in &[
-            (X86_64GeneralReg::RAX, [0x48, 0xC7, 0xC0]),
-            (X86_64GeneralReg::R15, [0x49, 0xC7, 0xC7]),
-        ] {
-            buf.clear();
-            mov_reg64_imm64(&mut buf, *dst, TEST_I32 as i64);
-            assert_eq!(expected, &buf[..3]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
-        }
+        disassembler_test!(
+            mov_reg64_imm64,
+            |reg, imm| format!("movabs {}, 0x{:x}", reg, imm),
+            ALL_GENERAL_REGS,
+            [TEST_I64]
+        );
+        disassembler_test!(
+            mov_reg64_imm64,
+            |reg, imm| format!("mov {}, 0x{:x}", reg, imm),
+            ALL_GENERAL_REGS,
+            [TEST_I32 as i64]
+        );
     }
 
     #[test]
     fn test_mov_reg64_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, src), expected) in &[
-            ((X86_64GeneralReg::RAX, X86_64GeneralReg::RAX), vec![]),
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::RCX),
-                vec![0x48, 0x89, 0xC8],
-            ),
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::R15),
-                vec![0x4C, 0x89, 0xF8],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::RAX),
-                vec![0x49, 0x89, 0xC7],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::R14),
-                vec![0x4D, 0x89, 0xF7],
-            ),
-        ] {
-            buf.clear();
-            mov_reg64_reg64(&mut buf, *dst, *src);
-            assert_eq!(&expected[..], &buf[..]);
-        }
+        disassembler_test!(
+            raw_mov_reg64_reg64,
+            |reg1, reg2| format!("mov {}, {}", reg1, reg2),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
     }
 
     #[test]
-    fn test_movsd_freg64_base32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, offset), expected) in &[
-            (
-                (X86_64FloatReg::XMM0, TEST_I32),
-                vec![0xF2, 0x0F, 0x10, 0x85],
-            ),
-            (
-                (X86_64FloatReg::XMM15, TEST_I32),
-                vec![0xF2, 0x44, 0x0F, 0x10, 0xBD],
-            ),
-        ] {
-            buf.clear();
-            movsd_freg64_base64_offset32(&mut buf, *dst, X86_64GeneralReg::RBP, *offset);
-            assert_eq!(expected, &buf[..buf.len() - 4]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[buf.len() - 4..]);
-        }
+    fn test_movsd_freg64_base64_offset32() {
+        disassembler_test!(
+            movsd_freg64_base64_offset32,
+            |reg1, reg2, imm| format!("movsd {}, qword ptr [{} + 0x{:x}]", reg1, reg2, imm),
+            ALL_FLOAT_REGS,
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
     }
 
     #[test]
-    fn test_movsd_base32_freg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((offset, src), expected) in &[
-            (
-                (TEST_I32, X86_64FloatReg::XMM0),
-                vec![0xF2, 0x0F, 0x11, 0x85],
-            ),
-            (
-                (TEST_I32, X86_64FloatReg::XMM15),
-                vec![0xF2, 0x44, 0x0F, 0x11, 0xBD],
-            ),
-        ] {
-            buf.clear();
-            movsd_base64_offset32_freg64(&mut buf, X86_64GeneralReg::RBP, *offset, *src);
-            assert_eq!(expected, &buf[..buf.len() - 4]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[buf.len() - 4..]);
-        }
+    fn test_movsd_base64_offset32_freg64() {
+        disassembler_test!(
+            movsd_base64_offset32_freg64,
+            |reg1, imm, reg2| format!("movsd qword ptr [{} + 0x{:x}], {}", reg1, imm, reg2),
+            ALL_GENERAL_REGS,
+            [TEST_I32],
+            ALL_FLOAT_REGS
+        );
     }
 
     #[test]
-    fn test_movsd_freg64_stack32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, offset), expected) in &[
-            (
-                (X86_64FloatReg::XMM0, TEST_I32),
-                vec![0xF2, 0x0F, 0x10, 0x84, 0x24],
-            ),
-            (
-                (X86_64FloatReg::XMM15, TEST_I32),
-                vec![0xF2, 0x44, 0x0F, 0x10, 0xBC, 0x24],
-            ),
-        ] {
-            buf.clear();
-            movsd_freg64_base64_offset32(&mut buf, *dst, X86_64GeneralReg::RSP, *offset);
-            assert_eq!(expected, &buf[..buf.len() - 4]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[buf.len() - 4..]);
-        }
+    fn test_mov_reg64_base64_offset32() {
+        disassembler_test!(
+            mov_reg64_base64_offset32,
+            |reg1, reg2, imm| format!("mov {}, qword ptr [{} + 0x{:x}]", reg1, reg2, imm),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
     }
 
     #[test]
-    fn test_movsd_stack32_freg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((offset, src), expected) in &[
-            (
-                (TEST_I32, X86_64FloatReg::XMM0),
-                vec![0xF2, 0x0F, 0x11, 0x84, 0x24],
-            ),
-            (
-                (TEST_I32, X86_64FloatReg::XMM15),
-                vec![0xF2, 0x44, 0x0F, 0x11, 0xBC, 0x24],
-            ),
-        ] {
-            buf.clear();
-            movsd_base64_offset32_freg64(&mut buf, X86_64GeneralReg::RSP, *offset, *src);
-            assert_eq!(expected, &buf[..buf.len() - 4]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[buf.len() - 4..]);
-        }
-    }
-
-    #[test]
-    fn test_mov_reg64_base32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, offset), expected) in &[
-            ((X86_64GeneralReg::RAX, TEST_I32), [0x48, 0x8B, 0x85]),
-            ((X86_64GeneralReg::R15, TEST_I32), [0x4C, 0x8B, 0xBD]),
-        ] {
-            buf.clear();
-            mov_reg64_base64_offset32(&mut buf, *dst, X86_64GeneralReg::RBP, *offset);
-            assert_eq!(expected, &buf[..3]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
-        }
-    }
-
-    #[test]
-    fn test_mov_base32_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((offset, src), expected) in &[
-            ((TEST_I32, X86_64GeneralReg::RAX), [0x48, 0x89, 0x85]),
-            ((TEST_I32, X86_64GeneralReg::R15), [0x4C, 0x89, 0xBD]),
-        ] {
-            buf.clear();
-            mov_base64_offset32_reg64(&mut buf, X86_64GeneralReg::RBP, *offset, *src);
-            assert_eq!(expected, &buf[..3]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
-        }
+    fn test_mov_base64_offset32_reg64() {
+        disassembler_test!(
+            mov_base64_offset32_reg64,
+            |reg1, imm, reg2| format!("mov qword ptr [{} + 0x{:x}], {}", reg1, imm, reg2),
+            ALL_GENERAL_REGS,
+            [TEST_I32],
+            ALL_GENERAL_REGS
+        );
     }
 
     #[test]
     fn test_movzx_reg64_base8_offset32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, src, offset), expected) in &[
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::RBP, TEST_I32),
-                vec![0x48, 0x0F, 0xB6, 0x85],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::RBP, TEST_I32),
-                vec![0x4C, 0x0F, 0xB6, 0xBD],
-            ),
-            (
-                (X86_64GeneralReg::RAX, X86_64GeneralReg::RSP, TEST_I32),
-                vec![0x48, 0x0F, 0xB6, 0x84, 0x24],
-            ),
-            (
-                (X86_64GeneralReg::R15, X86_64GeneralReg::RSP, TEST_I32),
-                vec![0x4C, 0x0F, 0xB6, 0xBC, 0x24],
-            ),
-        ] {
-            buf.clear();
-            movzx_reg64_base8_offset32(&mut buf, *dst, *src, *offset);
-            assert_eq!(expected, &buf[..expected.len()]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[expected.len()..]);
-        }
-    }
-
-    #[test]
-    fn test_mov_reg64_stack32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, offset), expected) in &[
-            ((X86_64GeneralReg::RAX, TEST_I32), [0x48, 0x8B, 0x84, 0x24]),
-            ((X86_64GeneralReg::R15, TEST_I32), [0x4C, 0x8B, 0xBC, 0x24]),
-        ] {
-            buf.clear();
-            mov_reg64_base64_offset32(&mut buf, *dst, X86_64GeneralReg::RSP, *offset);
-            assert_eq!(expected, &buf[..4]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[4..]);
-        }
-    }
-
-    #[test]
-    fn test_mov_stack32_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((offset, src), expected) in &[
-            ((TEST_I32, X86_64GeneralReg::RAX), [0x48, 0x89, 0x84, 0x24]),
-            ((TEST_I32, X86_64GeneralReg::R15), [0x4C, 0x89, 0xBC, 0x24]),
-        ] {
-            buf.clear();
-            mov_base64_offset32_reg64(&mut buf, X86_64GeneralReg::RSP, *offset, *src);
-            assert_eq!(expected, &buf[..4]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[4..]);
-        }
+        disassembler_test!(
+            movzx_reg64_base8_offset32,
+            |reg1, reg2, imm| format!("movzx {}, byte ptr [{} + 0x{:x}]", reg1, reg2, imm),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
     }
 
     #[test]
     fn test_movsd_freg64_freg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, src), expected) in &[
-            ((X86_64FloatReg::XMM0, X86_64FloatReg::XMM0), vec![]),
-            (
-                (X86_64FloatReg::XMM0, X86_64FloatReg::XMM15),
-                vec![0xF2, 0x41, 0x0F, 0x10, 0xC7],
-            ),
-            (
-                (X86_64FloatReg::XMM15, X86_64FloatReg::XMM0),
-                vec![0xF2, 0x44, 0x0F, 0x10, 0xF8],
-            ),
-            ((X86_64FloatReg::XMM15, X86_64FloatReg::XMM15), vec![]),
-        ] {
-            buf.clear();
-            movsd_freg64_freg64(&mut buf, *dst, *src);
-            assert_eq!(&expected[..], &buf[..]);
-        }
+        disassembler_test!(
+            raw_movsd_freg64_freg64,
+            |reg1, reg2| format!("movsd {}, {}", reg1, reg2),
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
     }
 
     #[test]
     fn test_movss_freg32_rip_offset32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, offset), expected) in &[
-            (
-                (X86_64FloatReg::XMM0, TEST_I32),
-                vec![0xF3, 0x0F, 0x10, 0x05],
-            ),
-            (
-                (X86_64FloatReg::XMM15, TEST_I32),
-                vec![0xF3, 0x44, 0x0F, 0x10, 0x3D],
-            ),
-        ] {
-            buf.clear();
-            movss_freg32_rip_offset32(&mut buf, *dst, *offset as u32);
-            assert_eq!(&expected[..], &buf[..(buf.len() - 4)]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[(buf.len() - 4)..]);
-        }
+        disassembler_test!(
+            movss_freg32_rip_offset32,
+            |reg, imm| format!("movss {}, dword ptr [rip + 0x{:x}]", reg, imm),
+            ALL_FLOAT_REGS,
+            [TEST_I32 as u32]
+        );
     }
 
     #[test]
     fn test_movsd_freg64_rip_offset32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for ((dst, offset), expected) in &[
-            (
-                (X86_64FloatReg::XMM0, TEST_I32),
-                vec![0xF2, 0x0F, 0x10, 0x05],
-            ),
-            (
-                (X86_64FloatReg::XMM15, TEST_I32),
-                vec![0xF2, 0x44, 0x0F, 0x10, 0x3D],
-            ),
-        ] {
-            buf.clear();
-            movsd_freg64_rip_offset32(&mut buf, *dst, *offset as u32);
-            assert_eq!(&expected[..], &buf[..(buf.len() - 4)]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[(buf.len() - 4)..]);
-        }
+        disassembler_test!(
+            movsd_freg64_rip_offset32,
+            |reg, imm| format!("movsd {}, qword ptr [rip + 0x{:x}]", reg, imm),
+            ALL_FLOAT_REGS,
+            [TEST_I32 as u32]
+        );
     }
 
     #[test]
     fn test_neg_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for (reg, expected) in &[
-            (X86_64GeneralReg::RAX, [0x48, 0xF7, 0xD8]),
-            (X86_64GeneralReg::R15, [0x49, 0xF7, 0xDF]),
-        ] {
-            buf.clear();
-            neg_reg64(&mut buf, *reg);
-            assert_eq!(expected, &buf[..]);
-        }
+        disassembler_test!(neg_reg64, |reg| format!("neg {}", reg), ALL_GENERAL_REGS);
     }
 
     #[test]
     fn test_cvtsi2_help() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        let cvtsi2ss_code: u8 = 0x2A;
-        let cvttss2si_code: u8 = 0x2C;
-
-        for (op_code, reg1, reg2, expected) in &[
-            (
-                cvtsi2ss_code,
-                X86_64FloatReg::XMM0,
-                X86_64GeneralReg::RDI,
-                [0xF3, 0x48, 0x0F, 0x2A, 0xC7],
-            ),
-            (
-                cvtsi2ss_code,
-                X86_64FloatReg::XMM15,
-                X86_64GeneralReg::RDI,
-                [0xF3, 0x4C, 0x0F, 0x2A, 0xFF],
-            ),
-            (
-                cvtsi2ss_code,
-                X86_64FloatReg::XMM0,
-                X86_64GeneralReg::RAX,
-                [0xF3, 0x48, 0x0F, 0x2A, 0xC0],
-            ),
-            (
-                cvtsi2ss_code,
-                X86_64FloatReg::XMM0,
-                X86_64GeneralReg::R15,
-                [0xF3, 0x49, 0x0F, 0x2A, 0xC7],
-            ),
-        ] {
-            buf.clear();
-            cvtsi2_help(&mut buf, 0xF3, *op_code, *reg1, *reg2);
-            assert_eq!(expected, &buf[..]);
-        }
-
-        for (op_code, reg1, reg2, expected) in &[
-            (
-                cvttss2si_code,
-                X86_64GeneralReg::RAX,
-                X86_64FloatReg::XMM0,
-                [0xF3, 0x48, 0x0F, 0x2C, 0xC0],
-            ),
-            (
-                cvttss2si_code,
-                X86_64GeneralReg::RAX,
-                X86_64FloatReg::XMM15,
-                [0xF3, 0x49, 0x0F, 0x2C, 0xC7],
-            ),
-            (
-                cvttss2si_code,
-                X86_64GeneralReg::RAX,
-                X86_64FloatReg::XMM0,
-                [0xF3, 0x48, 0x0F, 0x2C, 0xC0],
-            ),
-            (
-                cvttss2si_code,
-                X86_64GeneralReg::R15,
-                X86_64FloatReg::XMM0,
-                [0xF3, 0x4C, 0x0F, 0x2C, 0xF8],
-            ),
-        ] {
-            buf.clear();
-            cvtsi2_help(&mut buf, 0xF3, *op_code, *reg1, *reg2);
-            assert_eq!(expected, &buf[..]);
-        }
+        const CVTSI2SS_CODE: u8 = 0x2A;
+        const CVTTSS2SI_CODE: u8 = 0x2C;
+        disassembler_test!(
+            |buf, r1, r2| cvtsi2_help(buf, 0xF3, CVTSI2SS_CODE, r1, r2),
+            |reg1, reg2| format!("cvtsi2ss {}, {}", reg1, reg2),
+            ALL_FLOAT_REGS,
+            ALL_GENERAL_REGS
+        );
+        disassembler_test!(
+            |buf, r1, r2| cvtsi2_help(buf, 0xF3, CVTTSS2SI_CODE, r1, r2),
+            |reg1, reg2| format!("cvttss2si {}, {}", reg1, reg2),
+            ALL_GENERAL_REGS,
+            ALL_FLOAT_REGS
+        );
     }
 
     #[test]
     fn test_cvtsx2_help() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        let cvtss2sd_code: u8 = 0x5A;
-
-        {
-            let (op_code, reg1, reg2, expected) = &(
-                cvtss2sd_code,
-                X86_64FloatReg::XMM1,
-                X86_64FloatReg::XMM0,
-                [0xF3, 0x0F, 0x5A, 0xC8],
-            );
-            buf.clear();
-            cvtsx2_help(&mut buf, 0xF3, *op_code, *reg1, *reg2);
-            assert_eq!(expected, &buf[..]);
-        }
+        const CVTSS2SD_CODE: u8 = 0x5A;
+        disassembler_test!(
+            |buf, r1, r2| cvtsi2_help(buf, 0xF3, CVTSS2SD_CODE, r1, r2),
+            |reg1, reg2| format!("cvtss2sd {}, {}", reg1, reg2),
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
     }
 
     #[test]
     fn test_set_reg64_help() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-
-        // tests for 7 bytes in the output buffer
-        let (reg, expected) = (
-            X86_64GeneralReg::RAX,
-            [
-                0x0F, 0x94, 0xC0, // SETE al ; al are the 8 lower weight bits of rax
-                0x48, 0x83, 0xE0, 0x01, // AND rax, 1
-            ],
+        disassembler_test!(
+            |buf, reg| set_reg64_help(0x94, buf, reg),
+            |reg: X86_64GeneralReg| format!("sete {}\nand {}, 1", reg.low_8bits_string(), reg),
+            ALL_GENERAL_REGS
         );
-        buf.clear();
-        set_reg64_help(0x94, &mut buf, reg); // sete_reg64
-        assert_eq!(expected, &buf[..]);
-
-        // tests for 8 bytes in the output buffer
-        for (reg, expected) in &[
-            (
-                X86_64GeneralReg::RSP,
-                [
-                    // SETE spl ; spl are the 8 lower weight bits of rsp
-                    0x40, 0x0F, 0x94, 0xC4, //
-                    // AND rsp, 1
-                    0x48, 0x83, 0xE4, 0x01,
-                ],
-            ),
-            (
-                X86_64GeneralReg::R15,
-                [
-                    // SETE r15b ; r15b are the 8 lower weight bits of r15
-                    0x41, 0x0F, 0x94, 0xC7, //
-                    // AND rsp, 1
-                    0x49, 0x83, 0xE7, 0x01,
-                ],
-            ),
-        ] {
-            buf.clear();
-            set_reg64_help(0x94, &mut buf, *reg); // sete_reg64
-            assert_eq!(expected, &buf[..]);
-        }
     }
 
     #[test]
     fn test_ret() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        ret(&mut buf);
-        assert_eq!(&[0xC3], &buf[..]);
+        disassembler_test!(ret, || "ret");
     }
 
     #[test]
     fn test_sub_reg64_imm32() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for (dst, expected) in &[
-            (X86_64GeneralReg::RAX, [0x48, 0x81, 0xE8]),
-            (X86_64GeneralReg::R15, [0x49, 0x81, 0xEF]),
-        ] {
-            buf.clear();
-            sub_reg64_imm32(&mut buf, *dst, TEST_I32);
-            assert_eq!(expected, &buf[..3]);
-            assert_eq!(TEST_I32.to_le_bytes(), &buf[3..]);
-        }
+        disassembler_test!(
+            sub_reg64_imm32,
+            |reg, imm| format!("sub {}, 0x{:x}", reg, imm),
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
     }
 
     #[test]
     fn test_pop_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for (dst, expected) in &[
-            (X86_64GeneralReg::RAX, vec![0x58]),
-            (X86_64GeneralReg::R15, vec![0x41, 0x5F]),
-        ] {
-            buf.clear();
-            pop_reg64(&mut buf, *dst);
-            assert_eq!(&expected[..], &buf[..]);
-        }
+        disassembler_test!(pop_reg64, |reg| format!("pop {}", reg), ALL_GENERAL_REGS);
     }
 
     #[test]
     fn test_push_reg64() {
-        let arena = bumpalo::Bump::new();
-        let mut buf = bumpalo::vec![in &arena];
-        for (src, expected) in &[
-            (X86_64GeneralReg::RAX, vec![0x50]),
-            (X86_64GeneralReg::R15, vec![0x41, 0x57]),
-        ] {
-            buf.clear();
-            push_reg64(&mut buf, *src);
-            assert_eq!(&expected[..], &buf[..]);
-        }
+        disassembler_test!(push_reg64, |reg| format!("push {}", reg), ALL_GENERAL_REGS);
     }
 }
