@@ -328,7 +328,7 @@ fn list_drop() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_drop_at() {
     assert_evals_to!(
         "List.dropAt [1, 2, 3] 0",
@@ -376,7 +376,7 @@ fn list_intersperse() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_drop_at_shared() {
     assert_evals_to!(
         indoc!(
