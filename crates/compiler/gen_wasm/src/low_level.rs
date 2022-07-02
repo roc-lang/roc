@@ -556,7 +556,50 @@ impl<'a> LowLevelCall<'a> {
 
                 backend.call_host_fn_after_loading_args(bitcode::LIST_SUBLIST, 8, false);
             }
-            ListDropAt => todo!("{:?}", self.lowlevel),
+            ListDropAt => {
+                // List.dropAt : List elem, Nat -> List elem
+                let list: Symbol = self.arguments[0];
+                let drop_index: Symbol = self.arguments[1];
+
+                let elem_layout = unwrap_list_elem_layout(self.ret_layout);
+                let (elem_width, elem_align) = elem_layout.stack_size_and_alignment(TARGET_INFO);
+
+                // The refcount function receives a pointer to an element in the list
+                // This is the same as a Struct containing the element
+                let in_memory_layout = Layout::Struct {
+                    field_order_hash: FieldOrderHash::from_ordered_fields(&[]),
+                    field_layouts: backend.env.arena.alloc([*elem_layout]),
+                };
+                let dec_fn = backend.get_refcount_fn_index(in_memory_layout, HelperOp::Dec);
+                let dec_fn_ptr = backend.get_fn_ptr(dec_fn);
+
+                // Zig arguments              Wasm types
+                //  (return pointer)           i32
+                //  list: RocList,             i64, i32
+                //  element_width: usize,      i32
+                //  alignment: u32,            i32
+                //  drop_index: usize,         i32
+                //  dec: Dec,                  i32
+
+                // Load the return pointer and the list
+                backend.storage.load_symbols_for_call(
+                    backend.env.arena,
+                    &mut backend.code_builder,
+                    &[list],
+                    self.ret_symbol,
+                    &WasmLayout::new(&self.ret_layout),
+                    CallConv::Zig,
+                );
+
+                backend.code_builder.i32_const(elem_width as i32);
+                backend.code_builder.i32_const(elem_align as i32);
+                backend
+                    .storage
+                    .load_symbols(&mut backend.code_builder, &[drop_index]);
+                backend.code_builder.i32_const(dec_fn_ptr);
+
+                backend.call_host_fn_after_loading_args(bitcode::LIST_DROP_AT, 6, false);
+            }
             ListSwap => {
                 // List.swap : List elem, Nat, Nat -> List elem
                 let list: Symbol = self.arguments[0];
