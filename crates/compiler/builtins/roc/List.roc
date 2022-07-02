@@ -454,6 +454,7 @@ all = \list, predicate ->
 keepIf : List a, (a -> Bool) -> List a
 keepIf = \list, predicate ->
     length = List.len list
+
     keepIfHelp list predicate 0 0 length
 
 keepIfHelp : List a, (a -> Bool), Nat, Nat, Nat -> List a
@@ -463,7 +464,6 @@ keepIfHelp = \list, predicate, kept, index, length ->
             keepIfHelp (List.swap list kept index) predicate (kept + 1) (index + 1) length
         else
             keepIfHelp list predicate kept (index + 1) length
-
     else
         List.takeFirst list kept
 
@@ -489,6 +489,13 @@ dropIf = \list, predicate ->
 ## >>>
 ## >>> List.keepOks ["", "a", "bc", "", "d", "ef", ""]
 keepOks : List before, (before -> Result after *) -> List after
+keepOks = \list, toResult ->
+    walker = \accum, element ->
+        when toResult element is
+            Ok keep -> List.append accum keep
+            Err _drop -> accum
+
+    List.walk list (List.withCapacity (List.len list)) walker
 
 ## This works like [List.map], except only the transformed values that are
 ## wrapped in `Err` are kept. Any that are wrapped in `Ok` are dropped.
@@ -499,6 +506,13 @@ keepOks : List before, (before -> Result after *) -> List after
 ## >>>
 ## >>> List.keepErrs ["", "a", "bc", "", "d", "ef", ""]
 keepErrs : List before, (before -> Result * after) -> List after
+keepErrs = \list, toResult ->
+    walker = \accum, element ->
+        when toResult element is
+            Ok _drop -> accum
+            Err keep -> List.append accum keep
+
+    List.walk list (List.withCapacity (List.len list)) walker
 
 ## Convert each element in the list to something new, by calling a conversion
 ## function on each of them. Then return a new list of the converted values.
