@@ -817,31 +817,6 @@ fn call_spec(
 
                     add_loop(builder, block, state_type, init_state, loop_body)
                 }
-                ListWalkUntil { xs, state } => {
-                    let list = env.symbols[xs];
-                    let state = env.symbols[state];
-
-                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
-                        let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
-
-                        let element = builder.add_bag_get(block, bag)?;
-
-                        let continue_or_stop = call_function!(builder, block, [state, element]);
-
-                        // just assume it is a continue
-                        let unwrapped = builder.add_unwrap_union(block, continue_or_stop, 0)?;
-                        let new_state = builder.add_get_tuple_field(block, unwrapped, 0)?;
-
-                        Ok(new_state)
-                    };
-
-                    let state_layout = argument_layouts[0];
-                    let state_type =
-                        layout_spec(builder, &state_layout, &WhenRecursive::Unreachable)?;
-                    let init_state = state;
-
-                    add_loop(builder, block, state_type, init_state, loop_body)
-                }
 
                 // List.mapWithIndex : List before, (before, Nat -> after) -> List after
                 ListMapWithIndex { xs } => {

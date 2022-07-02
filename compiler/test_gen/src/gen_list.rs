@@ -823,7 +823,7 @@ fn list_walk_implements_position() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_walk_until_even_prefix_sum() {
     assert_evals_to!(
         r#"

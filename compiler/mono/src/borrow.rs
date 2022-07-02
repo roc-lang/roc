@@ -613,7 +613,6 @@ impl<'a> BorrowInfState<'a> {
                         self.own_var(*xs);
                     }
                     ListWalk { xs, state }
-                    | ListWalkUntil { xs, state }
                     | ListWalkBackwards { xs, state }
                     | DictWalk { xs, state } => {
                         // own the default value if the function wants to own it
@@ -916,7 +915,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListKeepIf | ListKeepOks | ListKeepErrs => {
             arena.alloc_slice_copy(&[owned, function, closure_data])
         }
-        ListWalk | ListWalkUntil | ListWalkBackwards => {
+        ListWalk | ListWalkBackwards => {
             arena.alloc_slice_copy(&[owned, owned, function, closure_data])
         }
         ListSortWith => arena.alloc_slice_copy(&[owned, function, closure_data]),

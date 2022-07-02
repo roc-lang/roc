@@ -126,7 +126,6 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_KEEP_ERRS=> list_keep_errs,
         LIST_WALK => list_walk,
         LIST_WALK_BACKWARDS => list_walk_backwards,
-        LIST_WALK_UNTIL => list_walk_until,
         LIST_SORT_WITH => list_sort_with,
         LIST_IS_UNIQUE => list_is_unique,
         DICT_LEN => dict_len,
@@ -2564,11 +2563,6 @@ fn list_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// List.walkBackwards : List elem, state, (state, elem -> state) -> state
 fn list_walk_backwards(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_3(symbol, LowLevel::ListWalkBackwards, var_store)
-}
-
-/// List.walkUntil : List elem, state, (state, elem -> [Continue state, Stop state]) -> state
-fn list_walk_until(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    lowlevel_3(symbol, LowLevel::ListWalkUntil, var_store)
 }
 
 /// List.keepIf : List elem, (elem -> Bool) -> List elem

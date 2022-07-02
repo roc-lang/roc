@@ -827,7 +827,6 @@ impl<'a> Context<'a> {
                 handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
             }
             ListWalk { xs, state: _ }
-            | ListWalkUntil { xs, state: _ }
             | ListWalkBackwards { xs, state: _ }
             | DictWalk { xs, state: _ } => {
                 let ownerships = [

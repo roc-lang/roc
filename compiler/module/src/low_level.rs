@@ -37,7 +37,6 @@ pub enum LowLevel {
     ListMapWithIndex,
     ListKeepIf,
     ListWalk,
-    ListWalkUntil,
     ListWalkBackwards,
     ListKeepOks,
     ListKeepErrs,
@@ -133,7 +132,6 @@ macro_rules! higher_order {
             | ListMapWithIndex
             | ListKeepIf
             | ListWalk
-            | ListWalkUntil
             | ListWalkBackwards
             | ListKeepOks
             | ListKeepErrs
@@ -163,7 +161,6 @@ impl LowLevel {
             ListMapWithIndex => 1,
             ListKeepIf => 1,
             ListWalk => 2,
-            ListWalkUntil => 2,
             ListWalkBackwards => 2,
             ListKeepOks => 1,
             ListKeepErrs => 1,

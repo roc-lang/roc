@@ -5077,7 +5077,6 @@ pub fn with_hole<'a>(
                     match_on_closure_argument!(ListSortWith, [xs])
                 }
                 ListWalk => walk!(ListWalk),
-                ListWalkUntil => walk!(ListWalkUntil),
                 ListWalkBackwards => walk!(ListWalkBackwards),
                 DictWalk => walk!(DictWalk),
                 ListMap2 => {

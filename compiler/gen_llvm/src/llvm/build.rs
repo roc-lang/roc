@@ -5227,9 +5227,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
         ListWalk { xs, state } => {
             list_walk!(crate::llvm::build_list::ListWalk::Walk, xs, state)
         }
-        ListWalkUntil { xs, state } => {
-            list_walk!(crate::llvm::build_list::ListWalk::WalkUntil, xs, state)
-        }
         ListWalkBackwards { xs, state } => {
             list_walk!(crate::llvm::build_list::ListWalk::WalkBackwards, xs, state)
         }
@@ -6162,7 +6159,7 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
 
         ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk
-        | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
+        | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
         | ListFindUnsafe | DictWalk => {
             unreachable!("these are higher order, and are handled elsewhere")
         }
