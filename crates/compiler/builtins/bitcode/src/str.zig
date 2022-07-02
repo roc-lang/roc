@@ -618,6 +618,65 @@ test "strToScalars: Multiple 2-byte UTF-8 characters" {
     try expect(RocList.eql(actual, expected));
 }
 
+test "strToScalars: One 3-byte UTF-8 character" {
+    const str = RocStr.fromSlice("鹏");
+    defer RocStr.deinit(str);
+
+    const expected_array = [_]u32{ 40527 };
+    const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
+    defer RocList.deinit(expected, u32);
+
+    const actual = strToScalars(str);
+    defer RocList.deinit(actual, u32);
+
+    try expect(RocList.eql(actual, expected));
+}
+
+test "strToScalars: Multiple 3-byte UTF-8 characters" {
+    const str = RocStr.fromSlice("鹏很有趣");
+    defer RocStr.deinit(str);
+
+    const expected_array = [_]u32{ 40527, 24456, 26377, 36259 };
+    const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
+    defer RocList.deinit(expected, u32);
+
+    const actual = strToScalars(str);
+    defer RocList.deinit(actual, u32);
+
+    try expect(RocList.eql(actual, expected));
+}
+
+test "strToScalars: One 4-byte UTF-8 character" {
+    // from https://design215.com/toolbox/utf8-4byte-characters.php
+    const str = RocStr.fromSlice("𒀀");
+    defer RocStr.deinit(str);
+
+    const expected_array = [_]u32{ 73728 };
+    const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
+    defer RocList.deinit(expected, u32);
+
+    const actual = strToScalars(str);
+    defer RocList.deinit(actual, u32);
+
+    try expect(RocList.eql(actual, expected));
+}
+
+test "strToScalars: Multiple 4-byte UTF-8 characters" {
+    // from https://design215.com/toolbox/utf8-4byte-characters.php
+    const str = RocStr.fromSlice("𒀀𒀁");
+    defer RocStr.deinit(str);
+
+    const expected_array = [_]u32{ 73728, 73729 };
+    const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
+    defer RocList.deinit(expected, u32);
+
+    const actual = strToScalars(str);
+    defer RocList.deinit(actual, u32);
+
+    try expect(RocList.eql(actual, expected));
+}
+
+
 // Str.fromInt
 pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
