@@ -496,14 +496,14 @@ fn str_starts_with() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn str_starts_with_code_point() {
+fn str_starts_with_scalar() {
     assert_evals_to!(
-        &format!(r#"Str.startsWithCodePt "foobar" {}"#, 'f' as u32),
+        &format!(r#"Str.startsWithScalar "foobar" {}"#, 'f' as u32),
         true,
         bool
     );
     assert_evals_to!(
-        &format!(r#"Str.startsWithCodePt "zoobar" {}"#, 'f' as u32),
+        &format!(r#"Str.startsWithScalar "zoobar" {}"#, 'f' as u32),
         false,
         bool
     );

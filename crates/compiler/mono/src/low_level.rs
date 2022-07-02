@@ -105,7 +105,7 @@ enum FirstOrder {
     StrJoinWith,
     StrIsEmpty,
     StrStartsWith,
-    StrStartsWithCodePt,
+    StrStartsWithScalar,
     StrEndsWith,
     StrSplit,
     StrCountGraphemes,

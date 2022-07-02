@@ -490,80 +490,92 @@ fn strToScalars(string: RocStr) callconv(.C) RocList {
     // should not require a second allocation.
     var answer = RocList.allocate(@alignOf(u32), capacity, @sizeOf(u32));
 
-    // We already did an early return to verify the string was nonempty.
+    // `orelse unreachable` is fine here, because we already did an early
+    // return to verify the string was nonempty.
     var answer_elems = answer.elements(u32) orelse unreachable;
     var src_index: usize = 0;
     var answer_index: usize = 0;
 
     while (src_index < str_len) {
-        const utf8_byte = string.getUnchecked(src_index);
-
-        // How UTF-8 bytes work:
-        // https://docs.teradata.com/r/Teradata-Database-International-Character-Set-Support/June-2017/Client-Character-Set-Options/UTF8-Client-Character-Set-Support/UTF8-Multibyte-Sequences
-        if (utf8_byte <= 127) {
-            // It's an ASCII character. Copy it over directly.
-            answer_elems[answer_index] = @intCast(u32, utf8_byte);
-            src_index += 1;
-        } else if (utf8_byte >> 5 == 0b0000_0110) {
-            // Its three high order bits are 110, so this is a two-byte sequence.
-
-            // Example:
-            //     utf-8:   1100 1111   1011 0001
-            //     code pt: 0000 0011   1111 0001 (decimal: 1009)
-
-            // Discard the first byte's high order bits of 110.
-            var code_pt = @intCast(u32, utf8_byte & 0b0001_1111);
-
-            // Discard the second byte's high order bits of 10.
-            code_pt <<= 6;
-            code_pt |= string.getUnchecked(src_index + 1) & 0b0011_1111;
-
-            answer_elems[answer_index] = code_pt;
-            src_index += 2;
-        } else if (utf8_byte >> 4 == 0b0000_1110) {
-            // Its four high order bits are 1110, so this is a three-byte sequence.
-
-            // Discard the first byte's high order bits of 1110.
-            var code_pt = @intCast(u32, utf8_byte & 0b0000_1111);
-
-            // Discard the second byte's high order bits of 10.
-            code_pt <<= 6;
-            code_pt |= string.getUnchecked(src_index + 1) & 0b0011_1111;
-
-            // Discard the third byte's high order bits of 10 (same as second byte).
-            code_pt <<= 6;
-            code_pt |= string.getUnchecked(src_index + 2) & 0b0011_1111;
-
-            answer_elems[answer_index] = code_pt;
-            src_index += 3;
-        } else {
-            // This must be a four-byte sequence, so the five high order bits should be 11110.
-
-            // Discard the first byte's high order bits of 11110.
-            var code_pt = @intCast(u32, utf8_byte & 0b0000_0111);
-
-            // Discard the second byte's high order bits of 10.
-            code_pt <<= 6;
-            code_pt |= string.getUnchecked(src_index + 1) & 0b0011_1111;
-
-            // Discard the third byte's high order bits of 10 (same as second byte).
-            code_pt <<= 6;
-            code_pt |= string.getUnchecked(src_index + 2) & 0b0011_1111;
-
-            // Discard the fourth byte's high order bits of 10 (same as second and third).
-            code_pt <<= 6;
-            code_pt |= string.getUnchecked(src_index + 3) & 0b0011_1111;
-
-            answer_elems[answer_index] = code_pt;
-            src_index += 4;
-        }
-
+        src_index += writeNextScalar(string, src_index, answer_elems, answer_index);
         answer_index += 1;
     }
 
     answer.length = answer_index;
 
     return answer;
+}
+
+// Given a non-empty RocStr, and a src_index byte index into that string,
+// and a destination [*]u32, and an index into that destination,
+// Parses the next scalar value out of the string (at the given byte index),
+// writes it into the destination, and returns the number of bytes parsed.
+inline fn writeNextScalar(non_empty_string: RocStr, src_index: usize, dest: [*]u32, dest_index: usize) usize {
+    const utf8_byte = non_empty_string.getUnchecked(src_index);
+
+    // How UTF-8 bytes work:
+    // https://docs.teradata.com/r/Teradata-Database-International-Character-Set-Support/June-2017/Client-Character-Set-Options/UTF8-Client-Character-Set-Support/UTF8-Multibyte-Sequences
+    if (utf8_byte <= 127) {
+        // It's an ASCII character. Copy it over directly.
+        dest[dest_index] = @intCast(u32, utf8_byte);
+
+        return 1;
+    } else if (utf8_byte >> 5 == 0b0000_0110) {
+        // Its three high order bits are 110, so this is a two-byte sequence.
+
+        // Example:
+        //     utf-8:   1100 1111   1011 0001
+        //     code pt: 0000 0011   1111 0001 (decimal: 1009)
+
+        // Discard the first byte's high order bits of 110.
+        var code_pt = @intCast(u32, utf8_byte & 0b0001_1111);
+
+        // Discard the second byte's high order bits of 10.
+        code_pt <<= 6;
+        code_pt |= non_empty_string.getUnchecked(src_index + 1) & 0b0011_1111;
+
+        dest[dest_index] = code_pt;
+
+        return 2;
+    } else if (utf8_byte >> 4 == 0b0000_1110) {
+        // Its four high order bits are 1110, so this is a three-byte sequence.
+
+        // Discard the first byte's high order bits of 1110.
+        var code_pt = @intCast(u32, utf8_byte & 0b0000_1111);
+
+        // Discard the second byte's high order bits of 10.
+        code_pt <<= 6;
+        code_pt |= non_empty_string.getUnchecked(src_index + 1) & 0b0011_1111;
+
+        // Discard the third byte's high order bits of 10 (same as second byte).
+        code_pt <<= 6;
+        code_pt |= non_empty_string.getUnchecked(src_index + 2) & 0b0011_1111;
+
+        dest[dest_index] = code_pt;
+
+        return 3;
+    } else {
+        // This must be a four-byte sequence, so the five high order bits should be 11110.
+
+        // Discard the first byte's high order bits of 11110.
+        var code_pt = @intCast(u32, utf8_byte & 0b0000_0111);
+
+        // Discard the second byte's high order bits of 10.
+        code_pt <<= 6;
+        code_pt |= non_empty_string.getUnchecked(src_index + 1) & 0b0011_1111;
+
+        // Discard the third byte's high order bits of 10 (same as second byte).
+        code_pt <<= 6;
+        code_pt |= non_empty_string.getUnchecked(src_index + 2) & 0b0011_1111;
+
+        // Discard the fourth byte's high order bits of 10 (same as second and third).
+        code_pt <<= 6;
+        code_pt |= non_empty_string.getUnchecked(src_index + 3) & 0b0011_1111;
+
+        dest[dest_index] = code_pt;
+
+        return 4;
+    }
 }
 
 test "strToScalars: empty string" {
@@ -1211,56 +1223,60 @@ pub fn repeat(string: RocStr, count: usize) callconv(.C) RocStr {
     return ret_string;
 }
 
-// Str.startsWithCodePt
-pub fn startsWithCodePt(string: RocStr, prefix: u32) callconv(.C) bool {
-    const bytes_ptr = string.asU8ptr();
+// Str.startsWithScalar
+pub fn startsWithScalar(string: RocStr, prefix: u32) callconv(.C) bool {
+    const str_len = string.len();
 
-    var buffer: [4]u8 = undefined;
-
-    var width = std.unicode.utf8Encode(@truncate(u21, prefix), &buffer) catch unreachable;
-
-    var i: usize = 0;
-    while (i < width) : (i += 1) {
-        const a = buffer[i];
-        const b = bytes_ptr[i];
-        if (a != b) {
-            return false;
-        }
+    if (str_len == 0) {
+        return false;
     }
 
-    return true;
+    // Write this (non-empty) string's first scalar into `first_scalar`
+    var first_scalar: [1]u32 = undefined;
+
+    _ = writeNextScalar(string, 0, &first_scalar, 0);
+
+    // Return whether `first_scalar` equals `prefix`
+    return @ptrCast(*u32, &first_scalar).* == prefix;
 }
 
-test "startsWithCodePt: ascii char" {
-    const whole = RocStr.init("foobar", 6);
-    const prefix = 'f';
-    try expect(startsWithCodePt(whole, prefix));
+test "startsWithScalar: empty string" {
+    const whole = RocStr.empty();
+    const prefix: u32 = 'x';
+    try expect(!startsWithScalar(whole, prefix));
 }
 
-test "startsWithCodePt: emoji" {
-    const yes = RocStr.init("💖foobar", 10);
-    const no = RocStr.init("foobar", 6);
-    const prefix = '💖';
-    try expect(startsWithCodePt(yes, prefix));
-    try expect(!startsWithCodePt(no, prefix));
+test "startsWithScalar: ascii char" {
+    const whole = RocStr.fromSlice("foobar");
+    const prefix: u32 = 'f';
+    try expect(startsWithScalar(whole, prefix));
+}
+
+test "startsWithScalar: emoji" {
+    const yes = RocStr.fromSlice("💖foobar");
+    const no = RocStr.fromSlice("foobar");
+    const prefix: u32 = '💖';
+
+    try expect(startsWithScalar(yes, prefix));
+    try expect(!startsWithScalar(no, prefix));
 }
 
 test "startsWith: foo starts with fo" {
-    const foo = RocStr.init("foo", 3);
-    const fo = RocStr.init("fo", 2);
+    const foo = RocStr.fromSlice("foo");
+    const fo = RocStr.fromSlice("fo");
     try expect(startsWith(foo, fo));
 }
 
 test "startsWith: 123456789123456789 starts with 123456789123456789" {
-    const str = RocStr.init("123456789123456789", 18);
+    const str = RocStr.fromSlice("123456789123456789");
     defer str.deinit();
     try expect(startsWith(str, str));
 }
 
 test "startsWith: 12345678912345678910 starts with 123456789123456789" {
-    const str = RocStr.init("12345678912345678910", 20);
+    const str = RocStr.fromSlice("12345678912345678910");
     defer str.deinit();
-    const prefix = RocStr.init("123456789123456789", 18);
+    const prefix = RocStr.fromSlice("123456789123456789");
     defer prefix.deinit();
 
     try expect(startsWith(str, prefix));

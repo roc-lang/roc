@@ -939,7 +939,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         NumBytesToU16 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         NumBytesToU32 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrStartsWith | StrEndsWith => arena.alloc_slice_copy(&[owned, borrowed]),
-        StrStartsWithCodePt => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+        StrStartsWithScalar => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrFromUtf8 => arena.alloc_slice_copy(&[owned]),
         StrFromUtf8Range => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrToUtf8 => arena.alloc_slice_copy(&[owned]),

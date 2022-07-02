@@ -231,8 +231,8 @@ impl<'a> LowLevelCall<'a> {
                 _ => internal_error!("invalid storage for Str"),
             },
             StrStartsWith => self.load_args_and_call_zig(backend, bitcode::STR_STARTS_WITH),
-            StrStartsWithCodePt => {
-                self.load_args_and_call_zig(backend, bitcode::STR_STARTS_WITH_CODE_PT)
+            StrStartsWithScalar => {
+                self.load_args_and_call_zig(backend, bitcode::STR_STARTS_WITH_SCALAR)
             }
             StrEndsWith => self.load_args_and_call_zig(backend, bitcode::STR_ENDS_WITH),
             StrSplit => {
