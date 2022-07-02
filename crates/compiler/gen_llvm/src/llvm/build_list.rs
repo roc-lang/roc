@@ -1,7 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 use crate::llvm::bitcode::{
-    build_dec_wrapper, build_eq_wrapper, build_has_tag_id, build_inc_n_wrapper, build_inc_wrapper,
-    call_bitcode_fn, call_list_bitcode_fn, call_void_bitcode_fn,
+    build_dec_wrapper, build_has_tag_id, build_inc_n_wrapper, build_inc_wrapper, call_bitcode_fn,
+    call_list_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build::{
     allocate_with_refcount_help, cast_basic_basic, Env, RocFunctionCall, Scope,
@@ -14,7 +14,7 @@ use inkwell::types::{BasicType, BasicTypeEnum, PointerType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
 use morphic_lib::UpdateMode;
-use roc_builtins::bitcode::{self, IntWidth};
+use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
@@ -106,23 +106,6 @@ pub fn pass_as_opaque<'a, 'ctx, 'env>(
     )
 }
 
-/// List.single : a -> List a
-pub fn list_single<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    element: BasicValueEnum<'ctx>,
-    element_layout: &Layout<'a>,
-) -> BasicValueEnum<'ctx> {
-    call_list_bitcode_fn(
-        env,
-        &[
-            env.alignment_intvalue(element_layout),
-            pass_element_as_opaque(env, element, *element_layout),
-            layout_width(env, element_layout),
-        ],
-        bitcode::LIST_SINGLE,
-    )
-}
-
 pub fn list_with_capacity<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     capacity: IntValue<'ctx>,
@@ -159,42 +142,6 @@ pub fn list_repeat<'a, 'ctx, 'env>(
             inc_element_fn.as_global_value().as_pointer_value().into(),
         ],
         bitcode::LIST_REPEAT,
-    )
-}
-
-/// List.join : List (List elem) -> List elem
-pub fn list_join<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    outer_list: BasicValueEnum<'ctx>,
-    element_layout: &Layout<'a>,
-) -> BasicValueEnum<'ctx> {
-    call_list_bitcode_fn(
-        env,
-        &[
-            list_to_c_abi(env, outer_list).into(),
-            env.alignment_intvalue(element_layout),
-            layout_width(env, element_layout),
-        ],
-        bitcode::LIST_JOIN,
-    )
-}
-
-/// List.reverse : List elem -> List elem
-pub fn list_reverse<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    list: BasicValueEnum<'ctx>,
-    element_layout: &Layout<'a>,
-    update_mode: UpdateMode,
-) -> BasicValueEnum<'ctx> {
-    call_list_bitcode_fn(
-        env,
-        &[
-            list_to_c_abi(env, list).into(),
-            env.alignment_intvalue(element_layout),
-            layout_width(env, element_layout),
-            pass_update_mode(env, update_mode),
-        ],
-        bitcode::LIST_REVERSE,
     )
 }
 
@@ -524,63 +471,6 @@ pub fn list_walk_generic<'a, 'ctx, 'env>(
     } else {
         env.builder.build_load(result_ptr, "load_result")
     }
-}
-
-/// List.range : Int a, Int a -> List (Int a)
-pub fn list_range<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    int_width: IntWidth,
-    low: IntValue<'ctx>,
-    high: IntValue<'ctx>,
-) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-
-    let low_ptr = builder.build_alloca(low.get_type(), "low_ptr");
-    env.builder.build_store(low_ptr, low);
-
-    let high_ptr = builder.build_alloca(high.get_type(), "high_ptr");
-    env.builder.build_store(high_ptr, high);
-
-    let int_width = env
-        .context
-        .i8_type()
-        .const_int(int_width as u64, false)
-        .into();
-
-    call_list_bitcode_fn(
-        env,
-        &[
-            int_width,
-            pass_as_opaque(env, low_ptr),
-            pass_as_opaque(env, high_ptr),
-        ],
-        bitcode::LIST_RANGE,
-    )
-}
-
-/// List.contains : List elem, elem -> Bool
-pub fn list_contains<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_ids: &mut LayoutIds<'a>,
-    element: BasicValueEnum<'ctx>,
-    element_layout: &Layout<'a>,
-    list: BasicValueEnum<'ctx>,
-) -> BasicValueEnum<'ctx> {
-    let eq_fn = build_eq_wrapper(env, layout_ids, element_layout)
-        .as_global_value()
-        .as_pointer_value()
-        .into();
-
-    call_bitcode_fn(
-        env,
-        &[
-            list_to_c_abi(env, list).into(),
-            pass_element_as_opaque(env, element, *element_layout),
-            layout_width(env, element_layout),
-            eq_fn,
-        ],
-        bitcode::LIST_CONTAINS,
-    )
 }
 
 /// List.keepIf : List elem, (elem -> Bool) -> List elem

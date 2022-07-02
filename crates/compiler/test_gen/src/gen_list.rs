@@ -809,7 +809,7 @@ fn list_walk_implements_position() {
         findHelp = \list, needle ->
             List.walkUntil list { n: 0, v: None } \{ n, v }, element ->
                 if element == needle then
-                    Stop { n, v: Some n }
+                    Break { n, v: Some n }
                 else
                     Continue { n: n + 1, v }
 
@@ -832,7 +832,7 @@ fn list_walk_until_even_prefix_sum() {
                 Continue (a + b)
 
             else
-                Stop a
+                Break a
 
         List.walkUntil [2, 4, 8, 9] 0 helper"#,
         2 + 4 + 8,
@@ -1197,7 +1197,7 @@ fn list_map2_different_lengths() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm"))]
 fn list_join_empty_list() {
     assert_evals_to!(
         "List.join []",
@@ -1207,7 +1207,7 @@ fn list_join_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm"))]
 fn list_join_one_list() {
     assert_evals_to!(
         "List.join [[1, 2, 3]]",
@@ -1217,7 +1217,7 @@ fn list_join_one_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm"))]
 fn list_join_two_non_empty_lists() {
     assert_evals_to!(
         "List.join [[1, 2, 3] , [4 ,5, 6]]",
@@ -1227,7 +1227,7 @@ fn list_join_two_non_empty_lists() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm"))]
 fn list_join_two_non_empty_lists_of_float() {
     assert_evals_to!(
         "List.join [[1.2, 1.1], [2.1, 2.2]]",
@@ -1237,7 +1237,7 @@ fn list_join_two_non_empty_lists_of_float() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm"))]
 fn list_join_to_big_list() {
     assert_evals_to!(
         indoc!(
@@ -1263,7 +1263,7 @@ fn list_join_to_big_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm"))]
 fn list_join_defined_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -1281,7 +1281,7 @@ fn list_join_defined_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm"))]
 fn list_join_all_empty_lists() {
     assert_evals_to!(
         "List.join [[], [], []]",
@@ -1291,7 +1291,7 @@ fn list_join_all_empty_lists() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm"))]
 fn list_join_one_empty_list() {
     assert_evals_to!(
         "List.join [[1.2, 1.1], []]",
@@ -2597,7 +2597,7 @@ fn cleanup_because_exception() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_range() {
     assert_evals_to!(
         "List.range 0 -1",

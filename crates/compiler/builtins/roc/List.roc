@@ -9,6 +9,7 @@ interface List
             map,
             len,
             withCapacity,
+            iterate,
             walkBackwards,
             concat,
             first,
@@ -273,6 +274,10 @@ concat : List a, List a -> List a
 
 ## Returns the last element in the list, or `ListWasEmpty` if it was empty.
 last : List a -> Result a [ListWasEmpty]*
+last = \list ->
+    when List.get list (Num.subSaturated (List.len list) 1) is
+        Ok v -> Ok v
+        Err _ -> Err ListWasEmpty
 
 ## A list with a single element in it.
 ##
@@ -283,15 +288,34 @@ last : List a -> Result a [ListWasEmpty]*
 ##             |> List.single
 ##
 single : a -> List a
+single = \x -> [x]
+
 ## Returns a list with the given length, where every element is the given value.
 ##
 ##
 repeat : a, Nat -> List a
+repeat = \value, count ->
+    repeatHelp value count (List.withCapacity count)
+
+repeatHelp : a, Nat, List a -> List a
+repeatHelp = \value, count, accum ->
+    if count > 0 then
+        repeatHelp value (count - 1) (List.append accum value)
+    else
+        accum
 
 ## Returns the list with its elements reversed.
 ##
 ## >>> List.reverse [1, 2, 3]
 reverse : List a -> List a
+reverse = \list ->
+    reverseHelp list 0 (Num.subSaturated (List.len list) 1)
+
+reverseHelp = \list, left, right ->
+    if left < right then
+        reverseHelp (List.swap list left right) (left + 1) (right - 1)
+    else
+        list
 
 ## Join the given lists together into one list.
 ##
@@ -301,7 +325,15 @@ reverse : List a -> List a
 ##
 ## >>> List.join []
 join : List (List a) -> List a
+join = \lists ->
+    totalLength =
+        List.walk lists 0 (\state, list -> state + List.len list)
+
+    List.walk lists (List.withCapacity totalLength) (\state, list -> List.concat state list)
+
 contains : List a, a -> Bool
+contains = \list, needle ->
+    List.any list (\x -> x == needle)
 
 ## Build a value using each element in the list.
 ##
@@ -356,7 +388,11 @@ walkBackwards : List elem, state, (state, elem -> state) -> state
 ##
 ## As such, it is typically better for performance to use this over [List.walk]
 ## if returning `Done` earlier than the last element is expected to be common.
-walkUntil : List elem, state, (state, elem -> [Continue state, Stop state]) -> state
+walkUntil : List elem, state, (state, elem -> [Continue state, Break state]) -> state
+walkUntil = \list, initial, step ->
+    when List.iterate list initial step is
+        Continue new -> new
+        Break new -> new
 
 sum : List (Num a) -> Num a
 sum = \list ->
@@ -369,10 +405,30 @@ product = \list ->
 ## Run the given predicate on each element of the list, returning `True` if
 ## any of the elements satisfy it.
 any : List a, (a -> Bool) -> Bool
+any = \list, predicate ->
+    looper = \{}, element ->
+        if predicate element then
+            Break {}
+        else
+            Continue {}
+
+    when List.iterate list {} looper is
+        Continue {} -> False
+        Break {} -> True
 
 ## Run the given predicate on each element of the list, returning `True` if
 ## all of the elements satisfy it.
 all : List a, (a -> Bool) -> Bool
+all = \list, predicate ->
+    looper = \{}, element ->
+        if predicate element then
+            Continue {}
+        else
+            Break {}
+
+    when List.iterate list {} looper is
+        Continue {} -> True
+        Break {} -> False
 
 ## Run the given function on each element of a list, and return all the
 ## elements for which the function returned `True`.
@@ -467,6 +523,23 @@ mapWithIndex : List a, (a, Nat -> b) -> List b
 ##
 ## >>> List.range 2 8
 range : Int a, Int a -> List (Int a)
+range = \start, end ->
+    when Num.compare start end is
+        GT -> []
+        EQ -> [start]
+        LT ->
+            length = Num.intCast (start - end)
+
+            rangeHelp (List.withCapacity length) start end
+
+rangeHelp : List (Int a), Int a, Int a -> List (Int a)
+rangeHelp = \accum, start, end ->
+    if end <= start then
+        accum
+    else
+        rangeHelp (List.append accum start) (start + 1) end
+
+## Sort with a custom comparison function
 sortWith : List a, (a, a -> [LT, EQ, GT]) -> List a
 
 ## Sorts a list in ascending order (lowest to highest), using a function which
@@ -487,6 +560,10 @@ swap : List a, Nat, Nat -> List a
 
 ## Returns the first element in the list, or `ListWasEmpty` if it was empty.
 first : List a -> Result a [ListWasEmpty]*
+first = \list ->
+    when List.get list 0 is
+        Ok v -> Ok v
+        Err _ -> Err ListWasEmpty
 
 ## Remove the first element from the list.
 ##
@@ -610,22 +687,33 @@ joinMap = \list, mapper ->
 ## Returns the first element of the list satisfying a predicate function.
 ## If no satisfying element is found, an `Err NotFound` is returned.
 find : List elem, (elem -> Bool) -> Result elem [NotFound]*
+find = \array, pred ->
+    callback = \_, elem ->
+        if pred elem then
+            Break elem
+        else
+            Continue {}
+
+    when List.iterate array {} callback is
+        Continue {} ->
+            Err NotFound
+        Break found ->
+            Ok found
 
 ## Returns the index at which the first element in the list
 ## satisfying a predicate function can be found.
 ## If no satisfying element is found, an `Err NotFound` is returned.
 findIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]*
 findIndex = \list, matcher ->
-    foundIndex = List.walkUntil list 0 \index, elem ->
+    foundIndex = List.iterate list 0 \index, elem ->
         if matcher elem then
-            Stop index
+            Break index
         else
             Continue (index + 1)
 
-    if foundIndex < List.len list then
-        Ok foundIndex
-    else
-        Err NotFound
+    when foundIndex is
+        Break index -> Ok index
+        Continue _ -> Err NotFound
 
 ## Returns a subsection of the given list, beginning at the `start` index and
 ## including a total of `len` elements.
@@ -653,3 +741,20 @@ intersperse : List elem, elem -> List elem
 ## means if you give an index of 0, the `before` list will be empty and the
 ## `others` list will have the same elements as the original list.)
 split : List elem, Nat -> { before : List elem, others : List elem }
+
+## Primitive for iterating over a List, being able to decide at every element whether to continue
+iterate : List elem, s, (s, elem -> [Continue s, Break b]) -> [Continue s, Break b]
+iterate = \list, init, func ->
+    iterHelp list init func 0 (List.len list)
+
+## internal helper
+iterHelp : List elem, s, (s, elem -> [Continue s, Break b]), Nat, Nat -> [Continue s, Break b]
+iterHelp = \list, state, f, index, length ->
+    if index < length then
+        when f state (List.getUnsafe list index) is
+            Continue nextState ->
+                iterHelp list nextState f (index + 1) length
+            Break b ->
+                Break b
+    else
+        Continue state
