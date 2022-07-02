@@ -619,6 +619,8 @@ dropLast = \list ->
 ## a Unique list, because [List.first] returns the first element as well -
 ## which introduces a conditional bounds check as well as a memory load.
 takeFirst : List elem, Nat -> List elem
+takeFirst = \list, outputLength ->
+    List.sublist list { start: 0, len: outputLength }
 
 ## Returns the given number of elements from the end of the list.
 ##
@@ -647,6 +649,8 @@ takeFirst : List elem, Nat -> List elem
 ## a Unique list, because [List.first] returns the first element as well -
 ## which introduces a conditional bounds check as well as a memory load.
 takeLast : List elem, Nat -> List elem
+takeLast = \list, outputLength ->
+    List.sublist list { start: Num.subSaturated (List.len list) outputLength, len: outputLength }
 
 ## Drops n elements from the beginning of the list.
 drop : List elem, Nat -> List elem

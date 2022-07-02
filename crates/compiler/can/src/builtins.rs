@@ -112,8 +112,6 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_MAP2 => list_map2,
         LIST_MAP3 => list_map3,
         LIST_MAP4 => list_map4,
-        LIST_TAKE_FIRST => list_take_first,
-        LIST_TAKE_LAST => list_take_last,
         LIST_SUBLIST => list_sublist,
         LIST_SPLIT => list_split,
         LIST_INTERSPERSE => list_intersperse,
@@ -2117,97 +2115,6 @@ fn list_swap(symbol: Symbol, var_store: &mut VarStore) -> Def {
             (index1_var, Symbol::ARG_2),
             (index2_var, Symbol::ARG_3),
         ],
-        var_store,
-        body,
-        list_var,
-    )
-}
-
-/// List.takeFirst : List elem, Nat -> List elem
-fn list_take_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let list_var = var_store.fresh();
-    let len_var = var_store.fresh();
-    let zero = int::<i128>(
-        len_var,
-        Variable::NATURAL,
-        0,
-        IntBound::Exact(IntWidth::Nat),
-    );
-
-    let body = RunLowLevel {
-        op: LowLevel::ListSublist,
-        args: vec![
-            (list_var, Var(Symbol::ARG_1)),
-            (len_var, zero),
-            (len_var, Var(Symbol::ARG_2)),
-        ],
-        ret_var: list_var,
-    };
-
-    defn(
-        symbol,
-        vec![(list_var, Symbol::ARG_1), (len_var, Symbol::ARG_2)],
-        var_store,
-        body,
-        list_var,
-    )
-}
-
-/// List.takeLast : List elem, Nat -> List elem
-fn list_take_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let list_var = var_store.fresh();
-    let len_var = var_store.fresh();
-
-    let zero = int::<i128>(
-        len_var,
-        Variable::NATURAL,
-        0,
-        IntBound::Exact(IntWidth::Nat),
-    );
-    let bool_var = var_store.fresh();
-
-    let get_list_len = RunLowLevel {
-        op: LowLevel::ListLen,
-        args: vec![(list_var, Var(Symbol::ARG_1))],
-        ret_var: len_var,
-    };
-
-    let get_sub = RunLowLevel {
-        op: LowLevel::NumSubWrap,
-        args: vec![
-            (len_var, get_list_len.clone()),
-            (len_var, Var(Symbol::ARG_2)),
-        ],
-        ret_var: len_var,
-    };
-
-    let get_start = If {
-        cond_var: bool_var,
-        branch_var: len_var,
-        branches: vec![(
-            no_region(RunLowLevel {
-                op: LowLevel::NumGt,
-                args: vec![(len_var, get_list_len), (len_var, Var(Symbol::ARG_2))],
-                ret_var: bool_var,
-            }),
-            no_region(get_sub),
-        )],
-        final_else: Box::new(no_region(zero)),
-    };
-
-    let body = RunLowLevel {
-        op: LowLevel::ListSublist,
-        args: vec![
-            (list_var, Var(Symbol::ARG_1)),
-            (len_var, get_start),
-            (len_var, Var(Symbol::ARG_2)),
-        ],
-        ret_var: list_var,
-    };
-
-    defn(
-        symbol,
-        vec![(list_var, Symbol::ARG_1), (len_var, Symbol::ARG_2)],
         var_store,
         body,
         list_var,
