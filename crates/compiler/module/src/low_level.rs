@@ -119,13 +119,7 @@ pub enum LowLevel {
 
 macro_rules! higher_order {
     () => {
-        ListMap
-            | ListMap2
-            | ListMap3
-            | ListMap4
-            | ListMapWithIndex
-            | ListSortWith
-            | DictWalk
+        ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListSortWith | DictWalk
     };
 }
 
