@@ -43,15 +43,6 @@ pub enum HigherOrder {
     ListSortWith {
         xs: Symbol,
     },
-    ListAny {
-        xs: Symbol,
-    },
-    ListAll {
-        xs: Symbol,
-    },
-    ListFindUnsafe {
-        xs: Symbol,
-    },
     DictWalk {
         xs: Symbol,
         state: Symbol,
@@ -72,10 +63,7 @@ impl HigherOrder {
             HigherOrder::ListKeepOks { .. } => 1,
             HigherOrder::ListKeepErrs { .. } => 1,
             HigherOrder::ListSortWith { .. } => 2,
-            HigherOrder::ListFindUnsafe { .. } => 1,
             HigherOrder::DictWalk { .. } => 2,
-            HigherOrder::ListAny { .. } => 1,
-            HigherOrder::ListAll { .. } => 1,
         }
     }
 
@@ -90,10 +78,7 @@ impl HigherOrder {
             | ListSortWith { .. }
             | ListKeepIf { .. }
             | ListKeepOks { .. }
-            | ListKeepErrs { .. }
-            | ListAny { .. }
-            | ListAll { .. }
-            | ListFindUnsafe { .. } => 2,
+            | ListKeepErrs { .. } => 2,
             ListMap2 { .. } => 3,
             ListMap3 { .. } => 4,
             ListMap4 { .. } => 5,

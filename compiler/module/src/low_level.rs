@@ -42,7 +42,6 @@ pub enum LowLevel {
     ListSublist,
     ListDropAt,
     ListSwap,
-    ListFindUnsafe,
     ListIsUnique,
     DictSize,
     DictEmpty,
@@ -132,7 +131,6 @@ macro_rules! higher_order {
             | ListKeepOks
             | ListKeepErrs
             | ListSortWith
-            | ListFindUnsafe
             | DictWalk
     };
 }
@@ -159,7 +157,6 @@ impl LowLevel {
             ListKeepOks => 1,
             ListKeepErrs => 1,
             ListSortWith => 1,
-            ListFindUnsafe => 1,
             DictWalk => 2,
             _ => unreachable!(),
         }
