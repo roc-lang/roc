@@ -761,7 +761,7 @@ sublist : List elem, { start : Nat, len : Nat } -> List elem
 ## >>> List.intersperse 9 [1, 2, 3]     # [1, 9, 2, 9, 3]
 intersperse : List elem, elem -> List elem
 intersperse = \list, sep ->
-    capacity = Num.shiftLeftBy (List.len list) 1
+    capacity = 2 * List.len list
     init = List.withCapacity capacity
     newList = List.walk list init (\acc, elem -> acc |> List.append elem |> List.append sep)
 
