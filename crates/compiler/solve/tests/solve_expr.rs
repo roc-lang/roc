@@ -7023,4 +7023,31 @@ mod solve_expr {
             print_only_under_alias = true,
         );
     }
+
+    #[test]
+    fn lambda_set_niche_same_layout_different_constructor() {
+        infer_queries!(
+            indoc!(
+                r#"
+                capture : a -> ({} -> Str)
+                capture = \val ->
+                    thunk =
+                        \{} ->
+                            when val is
+                                _ -> ""
+                    thunk
+
+                x : [True, False]
+
+                fun =
+                    when x is
+                        True -> capture {a: ""}
+                        False -> capture (A "")
+                fun
+                #^^^{-1}
+                "#
+            ),
+            &["fun : {} -[[thunk(5) [A Str]*, thunk(5) { a : Str }]]-> Str",]
+        );
+    }
 }
