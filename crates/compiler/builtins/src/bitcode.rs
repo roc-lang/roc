@@ -311,6 +311,7 @@ pub const STR_COUNT_SEGMENTS: &str = "roc_builtins.str.count_segments";
 pub const STR_CONCAT: &str = "roc_builtins.str.concat";
 pub const STR_JOIN_WITH: &str = "roc_builtins.str.joinWith";
 pub const STR_STR_SPLIT_IN_PLACE: &str = "roc_builtins.str.str_split_in_place";
+pub const STR_TO_SCALARS: &str = "roc_builtins.str.to_scalars";
 pub const STR_COUNT_GRAPEHEME_CLUSTERS: &str = "roc_builtins.str.count_grapheme_clusters";
 pub const STR_STARTS_WITH: &str = "roc_builtins.str.starts_with";
 pub const STR_STARTS_WITH_CODE_PT: &str = "roc_builtins.str.starts_with_code_point";

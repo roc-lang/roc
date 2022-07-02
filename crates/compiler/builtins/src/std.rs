@@ -873,6 +873,13 @@ pub fn types() -> MutMap<Symbol, (SolvedType, Region)> {
         Box::new(str_type()),
     );
 
+    // Str.toScalars : Str -> List U32
+    add_top_level_function_type!(
+        Symbol::STR_TO_SCALARS,
+        vec![str_type()],
+        Box::new(list_type(u32_type())),
+    );
+
     // isEmpty : Str -> Bool
     add_top_level_function_type!(
         Symbol::STR_IS_EMPTY,

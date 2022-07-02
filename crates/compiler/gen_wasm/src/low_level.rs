@@ -217,6 +217,7 @@ impl<'a> LowLevelCall<'a> {
         match self.lowlevel {
             // Str
             StrConcat => self.load_args_and_call_zig(backend, bitcode::STR_CONCAT),
+            StrToScalars => self.load_args_and_call_zig(backend, bitcode::STR_TO_SCALARS),
             StrJoinWith => self.load_args_and_call_zig(backend, bitcode::STR_JOIN_WITH),
             StrIsEmpty => match backend.storage.get(&self.arguments[0]) {
                 StoredValue::StackMemory { location, .. } => {

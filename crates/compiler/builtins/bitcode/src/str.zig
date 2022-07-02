@@ -470,7 +470,7 @@ pub fn strNumberOfBytes(string: RocStr) callconv(.C) usize {
 
 // Str.toScalars
 pub fn strToScalarsC(str: RocStr) callconv(.C) RocList {
-    return @call(.{ .modifier = always_inline }, strToScalars, .{ RocStr, str });
+    return @call(.{ .modifier = always_inline }, strToScalars, .{ str });
 }
 
 fn strToScalars(string: RocStr) callconv(.C) RocList {
