@@ -523,8 +523,8 @@ fn strToScalars(string: RocStr) callconv(.C) RocList {
         } else if (utf8_byte >> 4 == 0b0000_1110) {
             // Its four high order bits are 1110, so this is a three-byte sequence.
 
-            // Discard the first byte's high order bits of 110.
-            var code_pt = @intCast(u32, utf8_byte & 0b0001_1111);
+            // Discard the first byte's high order bits of 1110.
+            var code_pt = @intCast(u32, utf8_byte & 0b0000_1111);
 
             // Discard the second byte's high order bits of 10.
             code_pt <<= 6;
@@ -539,8 +539,8 @@ fn strToScalars(string: RocStr) callconv(.C) RocList {
         } else {
             // This must be a four-byte sequence, so the five high order bits should be 11110.
 
-            // Discard the first byte's high order bits of 110.
-            var code_pt = @intCast(u32, utf8_byte & 0b0001_1111);
+            // Discard the first byte's high order bits of 11110.
+            var code_pt = @intCast(u32, utf8_byte & 0b0000_0111);
 
             // Discard the second byte's high order bits of 10.
             code_pt <<= 6;
