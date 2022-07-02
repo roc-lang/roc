@@ -119,9 +119,6 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_DROP_AT => list_drop_at,
         LIST_SWAP => list_swap,
         LIST_MAP_WITH_INDEX => list_map_with_index,
-        LIST_KEEP_IF => list_keep_if,
-        LIST_KEEP_OKS => list_keep_oks,
-        LIST_KEEP_ERRS=> list_keep_errs,
         LIST_WALK => list_walk,
         LIST_WALK_BACKWARDS => list_walk_backwards,
         LIST_WALK_UNTIL => list_walk_until,
@@ -2476,39 +2473,6 @@ fn list_walk_backwards(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// List.walkUntil : List elem, state, (state, elem -> [Continue state, Stop state]) -> state
 fn list_walk_until(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_3(symbol, LowLevel::ListWalkUntil, var_store)
-}
-
-/// List.keepIf : List elem, (elem -> Bool) -> List elem
-fn list_keep_if(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let list_var = var_store.fresh();
-    let func_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::ListKeepIf,
-        args: vec![
-            (list_var, Var(Symbol::ARG_1)),
-            (func_var, Var(Symbol::ARG_2)),
-        ],
-        ret_var: list_var,
-    };
-
-    defn(
-        symbol,
-        vec![(list_var, Symbol::ARG_1), (func_var, Symbol::ARG_2)],
-        var_store,
-        body,
-        list_var,
-    )
-}
-
-/// List.keepOks : List before, (before -> Result after *) -> List after
-fn list_keep_oks(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    lowlevel_2(symbol, LowLevel::ListKeepOks, var_store)
-}
-
-/// List.keepErrs: List before, (before -> Result * after) -> List after
-fn list_keep_errs(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    lowlevel_2(symbol, LowLevel::ListKeepErrs, var_store)
 }
 
 /// List.map : List before, (before -> after) -> List after

@@ -594,69 +594,6 @@ fn build_tuple_type(
     builder.add_tuple_type(&field_types)
 }
 
-#[repr(u32)]
-#[derive(Clone, Copy)]
-enum KeepResult {
-    Errs = ERR_TAG_ID,
-    Oks = OK_TAG_ID,
-}
-
-impl KeepResult {
-    fn invert(&self) -> Self {
-        match self {
-            KeepResult::Errs => KeepResult::Oks,
-            KeepResult::Oks => KeepResult::Errs,
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum ResultRepr<'a> {
-    /// This is basically a `Result * whatever` or `Result [] whatever` (in keepOks, arguments flipped for keepErrs).
-    /// Such a `Result` gets a `Bool` layout at currently. We model the `*` or `[]` as a unit
-    /// (empty tuple) in morphic, otherwise we run into trouble when we need to crate a value of
-    /// type void
-    ResultStarStar,
-    ResultConcrete {
-        err: Layout<'a>,
-        ok: Layout<'a>,
-    },
-}
-
-impl<'a> ResultRepr<'a> {
-    fn from_layout(layout: &Layout<'a>) -> Self {
-        match layout {
-            Layout::Union(UnionLayout::NonRecursive(tags)) => ResultRepr::ResultConcrete {
-                err: tags[ERR_TAG_ID as usize][0],
-                ok: tags[OK_TAG_ID as usize][0],
-            },
-            Layout::Builtin(Builtin::Bool) => ResultRepr::ResultStarStar,
-            other => unreachable!("unexpected layout: {:?}", other),
-        }
-    }
-
-    fn unwrap(
-        &self,
-        builder: &mut FuncDefBuilder,
-        block: BlockId,
-        err_or_ok: ValueId,
-        keep_tag_id: u32,
-    ) -> Result<ValueId> {
-        match self {
-            ResultRepr::ResultConcrete { .. } => {
-                let unwrapped = builder.add_unwrap_union(block, err_or_ok, keep_tag_id)?;
-
-                builder.add_get_tuple_field(block, unwrapped, 0)
-            }
-            ResultRepr::ResultStarStar => {
-                // Void/EmptyTagUnion is represented as a unit value in morphic
-                // using `union {}` runs into trouble where we have to crate a value of that type
-                builder.add_make_tuple(block, &[])
-            }
-        }
-    }
-}
-
 fn add_loop(
     builder: &mut FuncDefBuilder,
     block: BlockId,
@@ -1023,120 +960,6 @@ fn call_spec(
                         layout_spec(builder, &state_layout, &WhenRecursive::Unreachable)?;
 
                     let init_state = new_list(builder, block, output_element_type)?;
-
-                    add_loop(builder, block, state_type, init_state, loop_body)
-                }
-                ListKeepIf { xs } => {
-                    let list = env.symbols[xs];
-
-                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
-                        let bag = builder.add_get_tuple_field(block, state, LIST_BAG_INDEX)?;
-                        let cell = builder.add_get_tuple_field(block, state, LIST_CELL_INDEX)?;
-
-                        let element = builder.add_bag_get(block, bag)?;
-
-                        let _ = call_function!(builder, block, [element]);
-
-                        // NOTE: we assume the element is not kept
-                        builder.add_update(block, update_mode_var, cell)?;
-
-                        let removed = builder.add_bag_remove(block, bag)?;
-
-                        // decrement the removed element
-                        let removed_element = builder.add_get_tuple_field(block, removed, 1)?;
-                        builder.add_recursive_touch(block, removed_element)?;
-
-                        let new_bag = builder.add_get_tuple_field(block, removed, 0)?;
-
-                        with_new_heap_cell(builder, block, new_bag)
-                    };
-
-                    let state_layout = Layout::Builtin(Builtin::List(&argument_layouts[0]));
-                    let state_type =
-                        layout_spec(builder, &state_layout, &WhenRecursive::Unreachable)?;
-                    let init_state = list;
-
-                    add_loop(builder, block, state_type, init_state, loop_body)
-                }
-                ListKeepOks { xs } | ListKeepErrs { xs } => {
-                    let list = env.symbols[xs];
-
-                    let keep_result = match op {
-                        ListKeepOks { .. } => KeepResult::Oks,
-                        ListKeepErrs { .. } => KeepResult::Errs,
-                        _ => unreachable!(),
-                    };
-
-                    let result_repr = ResultRepr::from_layout(return_layout);
-
-                    let output_element_layout = match (keep_result, result_repr) {
-                        (KeepResult::Errs, ResultRepr::ResultConcrete { err, .. }) => err,
-                        (KeepResult::Oks, ResultRepr::ResultConcrete { ok, .. }) => ok,
-                        (_, ResultRepr::ResultStarStar) => {
-                            // we represent this case as Unit, while Void is maybe more natural
-                            // but using Void we'd need to crate values of type Void, which is not
-                            // possible
-                            Layout::UNIT
-                        }
-                    };
-
-                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
-                        let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
-
-                        let element = builder.add_bag_get(block, bag)?;
-
-                        let err_or_ok = call_function!(builder, block, [element]);
-
-                        let kept_branch = builder.add_block();
-                        let not_kept_branch = builder.add_block();
-
-                        let element_kept = {
-                            let block = kept_branch;
-
-                            // a Result can be represented as a Int1
-                            let new_element = result_repr.unwrap(
-                                builder,
-                                block,
-                                err_or_ok,
-                                keep_result as u32,
-                            )?;
-
-                            list_append(builder, block, update_mode_var, state, new_element)?
-                        };
-
-                        let element_not_kept = {
-                            let block = not_kept_branch;
-
-                            // a Result can be represented as a Int1
-                            let dropped_element = result_repr.unwrap(
-                                builder,
-                                block,
-                                err_or_ok,
-                                keep_result.invert() as u32,
-                            )?;
-
-                            // decrement the element we will not keep
-                            builder.add_recursive_touch(block, dropped_element)?;
-
-                            state
-                        };
-
-                        builder.add_choice(
-                            block,
-                            &[
-                                BlockExpr(not_kept_branch, element_not_kept),
-                                BlockExpr(kept_branch, element_kept),
-                            ],
-                        )
-                    };
-
-                    let output_element_type =
-                        layout_spec(builder, &output_element_layout, &WhenRecursive::Unreachable)?;
-                    let init_state = new_list(builder, block, output_element_type)?;
-
-                    let state_layout = Layout::Builtin(Builtin::List(&output_element_layout));
-                    let state_type =
-                        layout_spec(builder, &state_layout, &WhenRecursive::Unreachable)?;
 
                     add_loop(builder, block, state_type, init_state, loop_body)
                 }
@@ -1830,9 +1653,6 @@ fn static_list_type<TC: TypeContext>(builder: &mut TC) -> Result<TypeId> {
 
     builder.add_tuple_type(&[cell, bag])
 }
-
-const OK_TAG_ID: u32 = 1;
-const ERR_TAG_ID: u32 = 0;
 
 const LIST_CELL_INDEX: u32 = 0;
 const LIST_BAG_INDEX: u32 = 1;
