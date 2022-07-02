@@ -79,9 +79,7 @@ pub const RocList = extern struct {
     }
 
     pub fn elements(self: RocList, comptime T: type) ?[*]T {
-        // Is there a better way to make this cast happen?
-        // @ptrCast gives an error because this increases alignment.
-        return @intToPtr(?[*]T, @ptrToInt(self.bytes));
+        return @ptrCast(?[*]T, @alignCast(@alignOf(T), self.bytes));
     }
 
     pub fn isUnique(self: RocList) bool {
