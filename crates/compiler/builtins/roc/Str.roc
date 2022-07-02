@@ -9,7 +9,7 @@ interface Str
             split,
             repeat,
             countGraphemes,
-            startsWithCodePt,
+            startsWithScalar,
             toUtf8,
             fromUtf8,
             fromUtf8Range,
@@ -165,13 +165,13 @@ countGraphemes : Str -> Nat
 ##
 ## **Performance Note:** This runs slightly faster than [Str.startsWith], so
 ## if you want to check whether a string begins with something that's representable
-## in a single code point, you can use (for example) `Str.startsWithCodePt '鹏'`
-## instead of `Str.startsWithCodePt "鹏"`. ('鹏' evaluates to the [U32]
+## in a single code point, you can use (for example) `Str.startsWithScalar '鹏'`
+## instead of `Str.startsWithScalar "鹏"`. ('鹏' evaluates to the [U32]
 ## value `40527`.) This will not work for graphemes which take up multiple code
-## points, however; `Str.startsWithCodePt '👩‍👩‍👦‍👦'` would be a compiler error
+## points, however; `Str.startsWithScalar '👩‍👩‍👦‍👦'` would be a compiler error
 ## because 👩‍👩‍👦‍👦 takes up multiple code points and cannot be represented as a
-## single [U32]. You'd need to use `Str.startsWithCodePt "🕊"` instead.
-startsWithCodePt : Str, U32 -> Bool
+## single [U32]. You'd need to use `Str.startsWithScalar "🕊"` instead.
+startsWithScalar : Str, U32 -> Bool
 
 ## Return a [List] of the [unicode scalar values](https://unicode.org/glossary/#unicode_scalar_value)
 ## in the given string.

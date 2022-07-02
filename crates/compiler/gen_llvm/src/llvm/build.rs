@@ -5432,14 +5432,14 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             call_bitcode_fn(env, &[string, prefix], bitcode::STR_STARTS_WITH)
         }
-        StrStartsWithCodePt => {
-            // Str.startsWithCodePt : Str, U32 -> Bool
+        StrStartsWithScalar => {
+            // Str.startsWithScalar : Str, U32 -> Bool
             debug_assert_eq!(args.len(), 2);
 
             let string = load_symbol(scope, &args[0]);
             let prefix = load_symbol(scope, &args[1]);
 
-            call_bitcode_fn(env, &[string, prefix], bitcode::STR_STARTS_WITH_CODE_PT)
+            call_bitcode_fn(env, &[string, prefix], bitcode::STR_STARTS_WITH_SCALAR)
         }
         StrEndsWith => {
             // Str.startsWith : Str, Str -> Bool
