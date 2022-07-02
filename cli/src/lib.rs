@@ -1055,7 +1055,7 @@ impl ExecutableFile {
     pub unsafe fn execve(&self, argv: &[*const c_char], envp: &[*const c_char]) -> c_int {
         use std::os::unix::ffi::OsStrExt;
 
-        let ExecutableFile::OnDisk(dir, path) = self;
+        let ExecutableFile::OnDisk(_dir, path) = self;
         let path_cstring = CString::new(path.as_os_str().as_bytes()).unwrap();
 
         libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr())
