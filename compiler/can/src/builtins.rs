@@ -56,7 +56,6 @@ pub fn builtin_dependencies(symbol: Symbol) -> &'static [Symbol] {
         Symbol::LIST_SORT_DESC => &[Symbol::LIST_SORT_WITH],
         Symbol::LIST_PRODUCT => &[Symbol::LIST_WALK, Symbol::NUM_MUL],
         Symbol::LIST_SUM => &[Symbol::LIST_WALK, Symbol::NUM_ADD],
-        Symbol::LIST_JOIN_MAP => &[Symbol::LIST_WALK, Symbol::LIST_CONCAT],
         Symbol::LIST_SET => &[Symbol::LIST_REPLACE],
         _ => &[],
     }
@@ -105,19 +104,10 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_WITH_CAPACITY => list_with_capacity,
         LIST_GET_UNSAFE => list_get_unsafe,
         LIST_REPLACE_UNSAFE => list_replace_unsafe,
-        LIST_SET => list_set,
         LIST_APPEND => list_append,
-        LIST_FIRST => list_first,
-        LIST_LAST => list_last,
         LIST_IS_EMPTY => list_is_empty,
-        LIST_SINGLE => list_single,
-        LIST_REPEAT => list_repeat,
-        LIST_REVERSE => list_reverse,
         LIST_CONCAT => list_concat,
-        LIST_CONTAINS => list_contains,
         LIST_PREPEND => list_prepend,
-        LIST_JOIN => list_join,
-        LIST_JOIN_MAP => list_join_map,
         LIST_MAP => list_map,
         LIST_MAP2 => list_map2,
         LIST_MAP3 => list_map3,
@@ -134,14 +124,10 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_KEEP_IF => list_keep_if,
         LIST_KEEP_OKS => list_keep_oks,
         LIST_KEEP_ERRS=> list_keep_errs,
-        LIST_RANGE => list_range,
         LIST_WALK => list_walk,
         LIST_WALK_BACKWARDS => list_walk_backwards,
         LIST_WALK_UNTIL => list_walk_until,
         LIST_SORT_WITH => list_sort_with,
-        LIST_ANY => list_any,
-        LIST_ALL => list_all,
-        LIST_FIND => list_find,
         LIST_IS_UNIQUE => list_is_unique,
         DICT_LEN => dict_len,
         DICT_EMPTY => dict_empty,
@@ -1517,25 +1503,6 @@ fn list_is_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// List.reverse : List elem -> List elem
-fn list_reverse(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let list_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::ListReverse,
-        args: vec![(list_var, Var(Symbol::ARG_1))],
-        ret_var: list_var,
-    };
-
-    defn(
-        symbol,
-        vec![(list_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        list_var,
-    )
-}
-
 /// Str.split : Str, Str -> List Str
 fn str_split(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let str_var = var_store.fresh();
@@ -2107,50 +2074,6 @@ fn list_concat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// List.repeat : elem, Nat -> List elem
-fn list_repeat(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let elem_var = var_store.fresh();
-    let len_var = var_store.fresh();
-    let list_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::ListRepeat,
-        args: vec![
-            (elem_var, Var(Symbol::ARG_1)),
-            (len_var, Var(Symbol::ARG_2)),
-        ],
-        ret_var: list_var,
-    };
-
-    defn(
-        symbol,
-        vec![(elem_var, Symbol::ARG_1), (len_var, Symbol::ARG_2)],
-        var_store,
-        body,
-        list_var,
-    )
-}
-
-/// List.single : elem -> List elem
-fn list_single(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let elem_var = var_store.fresh();
-    let list_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::ListSingle,
-        args: vec![(elem_var, Var(Symbol::ARG_1))],
-        ret_var: list_var,
-    };
-
-    defn(
-        symbol,
-        vec![(elem_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        list_var,
-    )
-}
-
 /// List.len : List a -> Nat
 fn list_len(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::ListLen, var_store)
@@ -2169,91 +2092,6 @@ fn list_get_unsafe(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// List.replaceUnsafe : List elem, Nat, elem -> { list: List elem, value: elem }
 fn list_replace_unsafe(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_3(symbol, LowLevel::ListReplaceUnsafe, var_store)
-}
-
-/// List.set : List elem, Nat, elem -> List elem
-fn list_set(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let arg_list = Symbol::ARG_1;
-    let arg_index = Symbol::ARG_2;
-    let arg_elem = Symbol::ARG_3;
-    let bool_var = var_store.fresh();
-    let len_var = var_store.fresh();
-    let elem_var = var_store.fresh();
-    let replace_record_var = var_store.fresh();
-    let list_arg_var = var_store.fresh(); // Uniqueness type Attr differs between
-    let list_ret_var = var_store.fresh(); // the arg list and the returned list
-
-    let replace_function = (
-        var_store.fresh(),
-        Loc::at_zero(Expr::Var(Symbol::LIST_REPLACE)),
-        var_store.fresh(),
-        replace_record_var,
-    );
-
-    let replace_call = Expr::Call(
-        Box::new(replace_function),
-        vec![
-            (list_arg_var, Loc::at_zero(Var(arg_list))),
-            (len_var, Loc::at_zero(Var(arg_index))),
-            (elem_var, Loc::at_zero(Var(arg_elem))),
-        ],
-        CalledVia::Space,
-    );
-
-    // Perform a bounds check. If it passes, run LowLevel::ListSet.
-    // Otherwise, return the list unmodified.
-    let body = If {
-        cond_var: bool_var,
-        branch_var: list_ret_var,
-        branches: vec![(
-            // if-condition
-            no_region(
-                // index < List.len list
-                RunLowLevel {
-                    op: LowLevel::NumLt,
-                    args: vec![
-                        (len_var, Var(arg_index)),
-                        (
-                            len_var,
-                            RunLowLevel {
-                                op: LowLevel::ListLen,
-                                args: vec![(list_arg_var, Var(arg_list))],
-                                ret_var: len_var,
-                            },
-                        ),
-                    ],
-                    ret_var: bool_var,
-                },
-            ),
-            // then-branch
-            no_region(Access {
-                record_var: replace_record_var,
-                ext_var: var_store.fresh(),
-                field_var: list_ret_var,
-                loc_expr: Box::new(no_region(
-                    // List.replaceUnsafe list index elem
-                    replace_call,
-                )),
-                field: "list".into(),
-            }),
-        )],
-        final_else: Box::new(
-            // else-branch
-            no_region(Var(arg_list)),
-        ),
-    };
-
-    defn(
-        symbol,
-        vec![
-            (list_arg_var, Symbol::ARG_1),
-            (len_var, Symbol::ARG_2),
-            (elem_var, Symbol::ARG_3),
-        ],
-        var_store,
-        body,
-        list_ret_var,
-    )
 }
 
 /// List.swap : List elem, Nat, Nat -> List elem
@@ -2718,26 +2556,6 @@ fn list_prepend(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// List.join : List (List elem) -> List elem
-fn list_join(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let list_var = var_store.fresh();
-    let list_of_list_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::ListJoin,
-        args: vec![(list_of_list_var, Var(Symbol::ARG_1))],
-        ret_var: list_var,
-    };
-
-    defn(
-        symbol,
-        vec![(list_of_list_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        list_var,
-    )
-}
-
 /// List.walk : List elem, state, (state, elem -> state) -> state
 fn list_walk(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_3(symbol, LowLevel::ListWalk, var_store)
@@ -2751,90 +2569,6 @@ fn list_walk_backwards(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// List.walkUntil : List elem, state, (state, elem -> [Continue state, Stop state]) -> state
 fn list_walk_until(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_3(symbol, LowLevel::ListWalkUntil, var_store)
-}
-
-/// List.joinMap : List before, (before -> List after) -> List after
-fn list_join_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let before = var_store.fresh();
-    let list_before = var_store.fresh();
-    let after = var_store.fresh();
-    let list_after = var_store.fresh();
-    let before2list_after = var_store.fresh();
-    let t_concat_clos = var_store.fresh();
-    let mapper_lambda_set = var_store.fresh();
-
-    // \state, elem -> List.concat state (mapper elem)
-    let concat_clos = Closure(ClosureData {
-        function_type: t_concat_clos,
-        closure_type: var_store.fresh(),
-        return_type: list_after,
-        name: Symbol::LIST_JOIN_MAP_CONCAT,
-        recursive: Recursive::NotRecursive,
-        captured_symbols: vec![(Symbol::ARG_2, before2list_after)],
-        arguments: vec![
-            (
-                list_after,
-                AnnotatedMark::new(var_store),
-                no_region(Pattern::Identifier(Symbol::ARG_3)),
-            ),
-            (
-                before,
-                AnnotatedMark::new(var_store),
-                no_region(Pattern::Identifier(Symbol::ARG_4)),
-            ),
-        ],
-        loc_body: {
-            let mapper = Box::new((
-                before2list_after,
-                no_region(Var(Symbol::ARG_2)),
-                mapper_lambda_set,
-                list_after, // return type
-            ));
-            // (mapper elem)
-            let mapper_elem = Call(
-                mapper,
-                vec![(before, no_region(Var(Symbol::ARG_4)))],
-                CalledVia::Space,
-            );
-            Box::new(no_region(RunLowLevel {
-                op: LowLevel::ListConcat,
-                args: vec![(list_after, Var(Symbol::ARG_3)), (list_after, mapper_elem)],
-                ret_var: list_after,
-            }))
-        },
-    });
-
-    // List.joinMap = \input_list, mapper ->
-    //   List.walk [] input_list (\state, elem -> List.concat state (mapper elem))
-    let body = RunLowLevel {
-        op: LowLevel::ListWalk,
-        args: vec![
-            // input_list : List before
-            (list_before, Var(Symbol::ARG_1)),
-            // [] : List after
-            (
-                list_after,
-                List {
-                    elem_var: after,
-                    loc_elems: vec![],
-                },
-            ),
-            // \state, elem -> List.concat state (mapper elem)
-            (t_concat_clos, concat_clos),
-        ],
-        ret_var: list_after,
-    };
-
-    defn(
-        symbol,
-        vec![
-            (list_before, Symbol::ARG_1),
-            (before2list_after, Symbol::ARG_2),
-        ],
-        var_store,
-        body,
-        list_after,
-    )
 }
 
 /// List.keepIf : List elem, (elem -> Bool) -> List elem
@@ -2860,11 +2594,6 @@ fn list_keep_if(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
-/// List.contains : List elem, elem -> Bool
-fn list_contains(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    lowlevel_2(symbol, LowLevel::ListContains, var_store)
-}
-
 /// List.keepOks : List before, (before -> Result after *) -> List after
 fn list_keep_oks(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListKeepOks, var_store)
@@ -2873,11 +2602,6 @@ fn list_keep_oks(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// List.keepErrs: List before, (before -> Result * after) -> List after
 fn list_keep_errs(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListKeepErrs, var_store)
-}
-
-/// List.range: Int a, Int a -> List (Int a)
-fn list_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    lowlevel_2(symbol, LowLevel::ListRange, var_store)
 }
 
 /// List.map : List before, (before -> after) -> List after
@@ -2908,93 +2632,6 @@ fn list_map4(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// List.sortWith : List a, (a, a -> Ordering) -> List a
 fn list_sort_with(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListSortWith, var_store)
-}
-
-/// List.any: List elem, (elem -> Bool) -> Bool
-fn list_any(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    lowlevel_2(symbol, LowLevel::ListAny, var_store)
-}
-
-/// List.all: List elem, (elem -> Bool) -> Bool
-fn list_all(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    lowlevel_2(symbol, LowLevel::ListAll, var_store)
-}
-
-/// List.find : List elem, (elem -> Bool) -> Result elem [NotFound]*
-fn list_find(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let list = Symbol::ARG_1;
-    let find_predicate = Symbol::ARG_2;
-
-    let find_result = Symbol::LIST_FIND_RESULT;
-
-    let t_list = var_store.fresh();
-    let t_pred_fn = var_store.fresh();
-    let t_bool = var_store.fresh();
-    let t_found = var_store.fresh();
-    let t_value = var_store.fresh();
-    let t_ret = var_store.fresh();
-    let t_find_result = var_store.fresh();
-    let t_ext_var1 = var_store.fresh();
-    let t_ext_var2 = var_store.fresh();
-
-    // ListFindUnsafe returns { value: elem, found: Bool }.
-    // When `found` is true, the value was found. Otherwise `List.find` should return `Err ...`
-    let find_result_def = Def {
-        annotation: None,
-        expr_var: t_find_result,
-        loc_expr: no_region(RunLowLevel {
-            op: LowLevel::ListFindUnsafe,
-            args: vec![(t_list, Var(list)), (t_pred_fn, Var(find_predicate))],
-            ret_var: t_find_result,
-        }),
-        loc_pattern: no_region(Pattern::Identifier(find_result)),
-        pattern_vars: Default::default(),
-    };
-
-    let get_value = Access {
-        record_var: t_find_result,
-        ext_var: t_ext_var1,
-        field_var: t_value,
-        loc_expr: Box::new(no_region(Var(find_result))),
-        field: "value".into(),
-    };
-
-    let get_found = Access {
-        record_var: t_find_result,
-        ext_var: t_ext_var2,
-        field_var: t_found,
-        loc_expr: Box::new(no_region(Var(find_result))),
-        field: "found".into(),
-    };
-
-    let make_ok = tag("Ok", vec![get_value], var_store);
-
-    let make_err = tag(
-        "Err",
-        vec![tag("NotFound", Vec::new(), var_store)],
-        var_store,
-    );
-
-    let inspect = If {
-        cond_var: t_bool,
-        branch_var: t_ret,
-        branches: vec![(
-            // if-condition
-            no_region(get_found),
-            no_region(make_ok),
-        )],
-        final_else: Box::new(no_region(make_err)),
-    };
-
-    let body = LetNonRec(Box::new(find_result_def), Box::new(no_region(inspect)));
-
-    defn(
-        symbol,
-        vec![(t_list, Symbol::ARG_1), (t_pred_fn, Symbol::ARG_2)],
-        var_store,
-        body,
-        t_ret,
-    )
 }
 
 /// List.isUnique : List * -> Bool
@@ -3714,203 +3351,6 @@ fn num_div_ceil_checked(symbol: Symbol, var_store: &mut VarStore) -> Def {
     defn(
         symbol,
         vec![(num_var, Symbol::ARG_1), (num_var, Symbol::ARG_2)],
-        var_store,
-        body,
-        ret_var,
-    )
-}
-
-/// List.first : List elem -> Result elem [ListWasEmpty]*
-///
-/// List.first :
-///     Attr (* | u) (List (Attr u a)),
-///     -> Attr * (Result (Attr u a) (Attr * [OutOfBounds]*))
-fn list_first(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let bool_var = var_store.fresh();
-    let list_var = var_store.fresh();
-    let len_var = Variable::NAT;
-    let zero_var = len_var;
-    let zero_precision_var = Variable::NATURAL;
-    let list_elem_var = var_store.fresh();
-    let ret_var = var_store.fresh();
-
-    // Perform a bounds check. If it passes, delegate to List.getUnsafe.
-    let body = If {
-        cond_var: bool_var,
-        branch_var: var_store.fresh(),
-        branches: vec![(
-            // if-condition
-            no_region(
-                // List.len list != 0
-                RunLowLevel {
-                    op: LowLevel::NotEq,
-                    args: vec![
-                        (
-                            len_var,
-                            int::<i128>(zero_var, zero_precision_var, 0, int_no_bound()),
-                        ),
-                        (
-                            len_var,
-                            RunLowLevel {
-                                op: LowLevel::ListLen,
-                                args: vec![(list_var, Var(Symbol::ARG_1))],
-                                ret_var: len_var,
-                            },
-                        ),
-                    ],
-                    ret_var: bool_var,
-                },
-            ),
-            // list was not empty
-            no_region(
-                // Ok (List.#getUnsafe list 0)
-                tag(
-                    "Ok",
-                    vec![
-                        // List.#getUnsafe list 0
-                        RunLowLevel {
-                            op: LowLevel::ListGetUnsafe,
-                            args: vec![
-                                (list_var, Var(Symbol::ARG_1)),
-                                (
-                                    len_var,
-                                    int::<i128>(zero_var, zero_precision_var, 0, int_no_bound()),
-                                ),
-                            ],
-                            ret_var: list_elem_var,
-                        },
-                    ],
-                    var_store,
-                ),
-            ),
-        )],
-        final_else: Box::new(
-            // list was empty
-            no_region(
-                // Err ListWasEmpty
-                tag(
-                    "Err",
-                    vec![tag("ListWasEmpty", Vec::new(), var_store)],
-                    var_store,
-                ),
-            ),
-        ),
-    };
-
-    defn(
-        symbol,
-        vec![(list_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        ret_var,
-    )
-}
-
-/// List.last : List elem -> Result elem [ListWasEmpty]*
-///
-/// List.last :
-///     Attr (* | u) (List (Attr u a)),
-///     -> Attr * (Result (Attr u a) (Attr * [OutOfBounds]*))
-fn list_last(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let arg_var = var_store.fresh();
-    let bool_var = var_store.fresh();
-    let list_var = var_store.fresh();
-    let len_var = Variable::NAT;
-    let num_var = len_var;
-    let num_precision_var = Variable::NATURAL;
-    let list_elem_var = var_store.fresh();
-    let ret_var = var_store.fresh();
-
-    // Perform a bounds check. If it passes, delegate to List.getUnsafe.
-    let body = If {
-        cond_var: bool_var,
-        branch_var: var_store.fresh(),
-        branches: vec![(
-            // if-condition
-            no_region(
-                // List.len list != 0
-                RunLowLevel {
-                    op: LowLevel::NotEq,
-                    args: vec![
-                        (
-                            len_var,
-                            int::<i128>(num_var, num_precision_var, 0, int_no_bound()),
-                        ),
-                        (
-                            len_var,
-                            RunLowLevel {
-                                op: LowLevel::ListLen,
-                                args: vec![(list_var, Var(Symbol::ARG_1))],
-                                ret_var: len_var,
-                            },
-                        ),
-                    ],
-                    ret_var: bool_var,
-                },
-            ),
-            // list was not empty
-            no_region(
-                // Ok (List.getUnsafe list (Num.sub (List.len list) 1))
-                tag(
-                    "Ok",
-                    vec![
-                        // List.getUnsafe list (Num.sub (List.len list) 1)
-                        RunLowLevel {
-                            op: LowLevel::ListGetUnsafe,
-                            args: vec![
-                                (list_var, Var(Symbol::ARG_1)),
-                                (
-                                    len_var,
-                                    // Num.sub (List.len list) 1
-                                    RunLowLevel {
-                                        op: LowLevel::NumSubWrap,
-                                        args: vec![
-                                            (
-                                                arg_var,
-                                                // List.len list
-                                                RunLowLevel {
-                                                    op: LowLevel::ListLen,
-                                                    args: vec![(list_var, Var(Symbol::ARG_1))],
-                                                    ret_var: len_var,
-                                                },
-                                            ),
-                                            (
-                                                arg_var,
-                                                int::<i128>(
-                                                    num_var,
-                                                    num_precision_var,
-                                                    1,
-                                                    int_no_bound(),
-                                                ),
-                                            ),
-                                        ],
-                                        ret_var: len_var,
-                                    },
-                                ),
-                            ],
-                            ret_var: list_elem_var,
-                        },
-                    ],
-                    var_store,
-                ),
-            ),
-        )],
-        final_else: Box::new(
-            // list was empty
-            no_region(
-                // Err ListWasEmpty
-                tag(
-                    "Err",
-                    vec![tag("ListWasEmpty", Vec::new(), var_store)],
-                    var_store,
-                ),
-            ),
-        ),
-    };
-
-    defn(
-        symbol,
-        vec![(list_var, Symbol::ARG_1)],
         var_store,
         body,
         ret_var,

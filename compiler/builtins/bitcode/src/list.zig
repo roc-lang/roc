@@ -990,66 +990,6 @@ pub fn listDropAt(
     }
 }
 
-pub fn listRange(width: utils.IntWidth, low: Opaque, high: Opaque) callconv(.C) RocList {
-    return switch (width) {
-        .U8 => helper1(u8, low, high),
-        .U16 => helper1(u16, low, high),
-        .U32 => helper1(u32, low, high),
-        .U64 => helper1(u64, low, high),
-        .U128 => helper1(u128, low, high),
-        .I8 => helper1(i8, low, high),
-        .I16 => helper1(i16, low, high),
-        .I32 => helper1(i32, low, high),
-        .I64 => helper1(i64, low, high),
-        .I128 => helper1(i128, low, high),
-    };
-}
-
-fn helper1(comptime T: type, low: Opaque, high: Opaque) RocList {
-    const ptr1 = @ptrCast(*T, @alignCast(@alignOf(T), low));
-    const ptr2 = @ptrCast(*T, @alignCast(@alignOf(T), high));
-
-    return listRangeHelp(T, ptr1.*, ptr2.*);
-}
-
-fn listRangeHelp(comptime T: type, low: T, high: T) RocList {
-    const Order = std.math.Order;
-
-    switch (std.math.order(low, high)) {
-        Order.gt => {
-            return RocList.empty();
-        },
-
-        Order.eq => {
-            const list = RocList.allocate(@alignOf(usize), 1, @sizeOf(T));
-            const buffer = @ptrCast([*]T, @alignCast(@alignOf(T), list.bytes orelse unreachable));
-
-            buffer[0] = low;
-
-            return list;
-        },
-
-        Order.lt => {
-            const length: usize = @intCast(usize, high - low);
-            const list = RocList.allocate(@alignOf(usize), length, @sizeOf(T));
-
-            const buffer = @ptrCast([*]T, @alignCast(@alignOf(T), list.bytes orelse unreachable));
-
-            var i: usize = 0;
-            var current = low;
-
-            while (i < length) {
-                buffer[i] = current;
-
-                i += 1;
-                current += 1;
-            }
-
-            return list;
-        },
-    }
-}
-
 fn partition(source_ptr: [*]u8, transform: Opaque, wrapper: CompareFn, element_width: usize, low: isize, high: isize) isize {
     const pivot = source_ptr + (@intCast(usize, high) * element_width);
     var i = (low - 1); // Index of smaller element and indicates the right position of pivot found so far
@@ -1207,34 +1147,6 @@ fn swapElements(source_ptr: [*]u8, element_width: usize, index_1: usize, index_2
     var element_at_j = source_ptr + (index_2 * element_width);
 
     return swap(element_width, element_at_i, element_at_j);
-}
-
-pub fn listJoin(list_of_lists: RocList, alignment: u32, element_width: usize) callconv(.C) RocList {
-    var total_length: usize = 0;
-
-    const slice_of_lists = @ptrCast([*]RocList, @alignCast(@alignOf(RocList), list_of_lists.bytes));
-
-    var i: usize = 0;
-    while (i < list_of_lists.len()) : (i += 1) {
-        total_length += slice_of_lists[i].len();
-    }
-
-    const output = RocList.allocate(alignment, total_length, element_width);
-
-    if (output.bytes) |target| {
-        var elements_copied: usize = 0;
-
-        i = 0;
-        while (i < list_of_lists.len()) : (i += 1) {
-            const list = slice_of_lists[i];
-            if (list.bytes) |source| {
-                @memcpy(target + elements_copied * element_width, source, list.len() * element_width);
-                elements_copied += list.len();
-            }
-        }
-    }
-
-    return output;
 }
 
 pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_width: usize) callconv(.C) RocList {

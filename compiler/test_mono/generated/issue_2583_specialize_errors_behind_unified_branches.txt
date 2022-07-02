@@ -1,16 +1,41 @@
-procedure List.9 (#Attr.2):
-    let List.170 : U64 = 0i64;
-    let List.171 : U64 = lowlevel ListLen #Attr.2;
-    let List.166 : Int1 = lowlevel NotEq List.170 List.171;
-    if List.166 then
-        let List.169 : U64 = 0i64;
-        let List.168 : I64 = lowlevel ListGetUnsafe #Attr.2 List.169;
-        let List.167 : [C Int1, C I64] = Ok List.168;
-        ret List.167;
+procedure List.2 (List.72, List.73):
+    let List.254 : U64 = CallByName List.6 List.72;
+    let List.250 : Int1 = CallByName Num.22 List.73 List.254;
+    if List.250 then
+        let List.252 : I64 = CallByName List.60 List.72 List.73;
+        let List.251 : [C {}, C I64] = Ok List.252;
+        ret List.251;
     else
-        let List.165 : Int1 = true;
-        let List.164 : [C Int1, C I64] = Err List.165;
-        ret List.164;
+        let List.249 : {} = Struct {};
+        let List.248 : [C {}, C I64] = Err List.249;
+        ret List.248;
+
+procedure List.6 (#Attr.2):
+    let List.255 : U64 = lowlevel ListLen #Attr.2;
+    ret List.255;
+
+procedure List.60 (#Attr.2, #Attr.3):
+    let List.253 : I64 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.253;
+
+procedure List.9 (List.166):
+    let List.246 : U64 = 0i64;
+    let List.239 : [C {}, C I64] = CallByName List.2 List.166 List.246;
+    let List.243 : U8 = 1i64;
+    let List.244 : U8 = GetTagId List.239;
+    let List.245 : Int1 = lowlevel Eq List.243 List.244;
+    if List.245 then
+        let List.167 : I64 = UnionAtIndex (Id 1) (Index 0) List.239;
+        let List.240 : [C Int1, C I64] = Ok List.167;
+        ret List.240;
+    else
+        let List.242 : Int1 = true;
+        let List.241 : [C Int1, C I64] = Err List.242;
+        ret List.241;
+
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Num.273 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.273;
 
 procedure Str.27 (#Attr.2):
     let #Attr.3 : {I64, U8} = lowlevel StrToNum #Attr.2;

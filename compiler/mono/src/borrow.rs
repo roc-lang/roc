@@ -907,22 +907,15 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         StrTrimRight => arena.alloc_slice_copy(&[owned]),
         StrSplit => arena.alloc_slice_copy(&[borrowed, borrowed]),
         StrToNum => arena.alloc_slice_copy(&[borrowed]),
-        ListSingle => arena.alloc_slice_copy(&[irrelevant]),
-        // List.repeat : elem, Nat -> List.elem
-        ListRepeat => arena.alloc_slice_copy(&[borrowed, irrelevant]),
-        ListReverse => arena.alloc_slice_copy(&[owned]),
         ListPrepend => arena.alloc_slice_copy(&[owned, owned]),
         StrJoinWith => arena.alloc_slice_copy(&[borrowed, borrowed]),
-        ListJoin => arena.alloc_slice_copy(&[irrelevant]),
         ListMap | ListMapWithIndex => arena.alloc_slice_copy(&[owned, function, closure_data]),
         ListMap2 => arena.alloc_slice_copy(&[owned, owned, function, closure_data]),
         ListMap3 => arena.alloc_slice_copy(&[owned, owned, owned, function, closure_data]),
         ListMap4 => arena.alloc_slice_copy(&[owned, owned, owned, owned, function, closure_data]),
-        ListKeepIf | ListKeepOks | ListKeepErrs | ListAny | ListAll => {
+        ListKeepIf | ListKeepOks | ListKeepErrs => {
             arena.alloc_slice_copy(&[owned, function, closure_data])
         }
-        ListContains => arena.alloc_slice_copy(&[borrowed, irrelevant]),
-        ListRange => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
         ListWalk | ListWalkUntil | ListWalkBackwards => {
             arena.alloc_slice_copy(&[owned, owned, function, closure_data])
         }

@@ -5061,17 +5061,6 @@ pub fn with_hole<'a>(
                         stmt,
                     )
                 }
-                ListAny => {
-                    debug_assert_eq!(arg_symbols.len(), 2);
-                    let xs = arg_symbols[0];
-                    match_on_closure_argument!(ListAny, [xs])
-                }
-                ListAll => {
-                    debug_assert_eq!(arg_symbols.len(), 2);
-                    let xs = arg_symbols[0];
-                    match_on_closure_argument!(ListAll, [xs])
-                }
-
                 ListKeepOks => {
                     debug_assert_eq!(arg_symbols.len(), 2);
                     let xs = arg_symbols[0];

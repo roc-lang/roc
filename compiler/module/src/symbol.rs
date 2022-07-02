@@ -1254,6 +1254,7 @@ define_builtins! {
         60 LIST_GET_UNSAFE: "getUnsafe"
         61 LIST_REPLACE_UNSAFE: "replaceUnsafe"
         62 LIST_WITH_CAPACITY: "withCapacity"
+        63 LIST_ITERATE: "iterate"
     }
     6 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" // the Result.Result type alias

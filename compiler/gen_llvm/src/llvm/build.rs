@@ -9,11 +9,10 @@ use crate::llvm::build_dict::{
 use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
     self, allocate_list, empty_polymorphic_list, list_all, list_any, list_append, list_concat,
-    list_contains, list_drop_at, list_find_unsafe, list_get_unsafe, list_join, list_keep_errs,
-    list_keep_if, list_keep_oks, list_len, list_map, list_map2, list_map3, list_map4,
-    list_map_with_index, list_prepend, list_range, list_repeat, list_replace_unsafe, list_reverse,
-    list_single, list_sort_with, list_sublist, list_swap, list_symbol_to_c_abi, list_to_c_abi,
-    list_with_capacity,
+    list_drop_at, list_find_unsafe, list_get_unsafe, list_keep_errs, list_keep_if, list_keep_oks,
+    list_len, list_map, list_map2, list_map3, list_map4, list_map_with_index, list_prepend,
+    list_replace_unsafe, list_sort_with, list_sublist, list_swap, list_symbol_to_c_abi,
+    list_to_c_abi, list_with_capacity,
 };
 use crate::llvm::build_str::{
     str_from_float, str_from_int, str_from_utf8, str_from_utf8_range, str_split,
@@ -5595,33 +5594,6 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             list_with_capacity(env, list_len, &list_element_layout!(result_layout))
         }
-        ListSingle => {
-            // List.single : a -> List a
-            debug_assert_eq!(args.len(), 1);
-
-            let (arg, arg_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            list_single(env, arg, arg_layout)
-        }
-        ListRepeat => {
-            // List.repeat : elem, Nat -> List elem
-            debug_assert_eq!(args.len(), 2);
-
-            let (elem, elem_layout) = load_symbol_and_layout(scope, &args[0]);
-            let list_len = load_symbol(scope, &args[1]).into_int_value();
-
-            list_repeat(env, layout_ids, elem, elem_layout, list_len)
-        }
-        ListReverse => {
-            // List.reverse : List elem -> List elem
-            debug_assert_eq!(args.len(), 1);
-
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let element_layout = list_element_layout!(list_layout);
-
-            list_reverse(env, list, element_layout, update_mode)
-        }
         ListConcat => {
             debug_assert_eq!(args.len(), 2);
 
@@ -5632,30 +5604,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             let element_layout = list_element_layout!(list_layout);
 
             list_concat(env, first_list, second_list, element_layout)
-        }
-        ListContains => {
-            // List.contains : List elem, elem -> Bool
-            debug_assert_eq!(args.len(), 2);
-
-            let list = load_symbol(scope, &args[0]);
-
-            let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
-
-            list_contains(env, layout_ids, elem, elem_layout, list)
-        }
-        ListRange => {
-            // List.contains : List elem, elem -> Bool
-            debug_assert_eq!(args.len(), 2);
-
-            let (low, low_layout) = load_symbol_and_layout(scope, &args[0]);
-            let high = load_symbol(scope, &args[1]);
-
-            let int_width = match low_layout {
-                Layout::Builtin(Builtin::Int(int_width)) => *int_width,
-                _ => unreachable!(),
-            };
-
-            list_range(env, int_width, low.into_int_value(), high.into_int_value())
         }
         ListAppend => {
             // List.append : List elem, elem -> List elem
@@ -5735,17 +5683,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
             list_prepend(env, original_wrapper, elem, elem_layout)
-        }
-        ListJoin => {
-            // List.join : List (List elem) -> List elem
-            debug_assert_eq!(args.len(), 1);
-
-            let (list, outer_list_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let inner_list_layout = list_element_layout!(outer_list_layout);
-            let element_layout = list_element_layout!(inner_list_layout);
-
-            list_join(env, list, element_layout)
         }
         ListGetUnsafe => {
             // List.get : List elem, Nat -> [Ok elem, OutOfBounds]*
@@ -6226,7 +6163,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
         ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk
         | ListWalkUntil | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
-        | ListAny | ListAll | ListFindUnsafe | DictWalk => {
+        | ListFindUnsafe | DictWalk => {
             unreachable!("these are higher order, and are handled elsewhere")
         }
 
