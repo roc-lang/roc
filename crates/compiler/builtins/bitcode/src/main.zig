@@ -41,9 +41,6 @@ comptime {
     exportListFn(list.listMap3, "map3");
     exportListFn(list.listMap4, "map4");
     exportListFn(list.listMapWithIndex, "map_with_index");
-    exportListFn(list.listKeepIf, "keep_if");
-    exportListFn(list.listKeepOks, "keep_oks");
-    exportListFn(list.listKeepErrs, "keep_errs");
     exportListFn(list.listAppend, "append");
     exportListFn(list.listPrepend, "prepend");
     exportListFn(list.listWithCapacity, "with_capacity");

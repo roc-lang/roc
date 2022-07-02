@@ -384,179 +384,6 @@ pub fn listMap4(
     }
 }
 
-pub fn listKeepIf(
-    list: RocList,
-    caller: Caller1,
-    data: Opaque,
-    inc_n_data: IncN,
-    data_is_owned: bool,
-    alignment: u32,
-    element_width: usize,
-    inc: Inc,
-    dec: Dec,
-) callconv(.C) RocList {
-    if (list.bytes) |source_ptr| {
-        const size = list.len();
-        var i: usize = 0;
-        var output = RocList.allocate(alignment, list.len(), list.len() * element_width);
-        const target_ptr = output.bytes orelse unreachable;
-
-        if (data_is_owned) {
-            inc_n_data(data, size);
-        }
-
-        var kept: usize = 0;
-        while (i < size) : (i += 1) {
-            var keep = false;
-            const element = source_ptr + (i * element_width);
-            inc(element);
-            caller(data, element, @ptrCast(?[*]u8, &keep));
-
-            if (keep) {
-                @memcpy(target_ptr + (kept * element_width), element, element_width);
-
-                kept += 1;
-            } else {
-                dec(element);
-            }
-        }
-
-        if (kept == 0) {
-            // if the output is empty, deallocate the space we made for the result
-            utils.decref(output.bytes, size * element_width, alignment);
-            return RocList.empty();
-        } else {
-            output.length = kept;
-
-            return output;
-        }
-    } else {
-        return RocList.empty();
-    }
-}
-
-pub fn listKeepOks(
-    list: RocList,
-    caller: Caller1,
-    data: Opaque,
-    inc_n_data: IncN,
-    data_is_owned: bool,
-    alignment: u32,
-    before_width: usize,
-    result_width: usize,
-    after_width: usize,
-    has_tag_id: HasTagId,
-    dec_result: Dec,
-) callconv(.C) RocList {
-    const good_constructor: u16 = 1;
-
-    return listKeepResult(
-        list,
-        good_constructor,
-        caller,
-        data,
-        inc_n_data,
-        data_is_owned,
-        alignment,
-        before_width,
-        result_width,
-        after_width,
-        has_tag_id,
-        dec_result,
-    );
-}
-
-pub fn listKeepErrs(
-    list: RocList,
-    caller: Caller1,
-    data: Opaque,
-    inc_n_data: IncN,
-    data_is_owned: bool,
-    alignment: u32,
-    before_width: usize,
-    result_width: usize,
-    after_width: usize,
-    has_tag_id: HasTagId,
-    dec_result: Dec,
-) callconv(.C) RocList {
-    const good_constructor: u16 = 0;
-
-    return listKeepResult(
-        list,
-        good_constructor,
-        caller,
-        data,
-        inc_n_data,
-        data_is_owned,
-        alignment,
-        before_width,
-        result_width,
-        after_width,
-        has_tag_id,
-        dec_result,
-    );
-}
-
-pub fn listKeepResult(
-    list: RocList,
-    good_constructor: u16,
-    caller: Caller1,
-    data: Opaque,
-    inc_n_data: IncN,
-    data_is_owned: bool,
-    alignment: u32,
-    before_width: usize,
-    result_width: usize,
-    after_width: usize,
-    has_tag_id: HasTagId,
-    dec_result: Dec,
-) RocList {
-    if (list.bytes) |source_ptr| {
-        const size = list.len();
-        var i: usize = 0;
-        var output = RocList.allocate(alignment, list.len(), list.len() * after_width);
-        const target_ptr = output.bytes orelse unreachable;
-
-        // TODO handle alloc failing!
-        var temporary = utils.alloc(result_width, alignment) orelse unreachable;
-
-        if (data_is_owned) {
-            inc_n_data(data, size);
-        }
-
-        var kept: usize = 0;
-        while (i < size) : (i += 1) {
-            const before_element = source_ptr + (i * before_width);
-            caller(data, before_element, temporary);
-
-            // a record { matched: bool, data: ?[*]u8 }
-            // for now, that data pointer is just the input `temporary` pointer
-            // this will change in the future to only return a pointer to the
-            // payload of the tag
-            const answer = has_tag_id(good_constructor, temporary);
-            if (answer.matched) {
-                const contents = (answer.data orelse unreachable);
-                @memcpy(target_ptr + (kept * after_width), contents, after_width);
-                kept += 1;
-            } else {
-                dec_result(temporary);
-            }
-        }
-
-        utils.dealloc(temporary, alignment);
-
-        if (kept == 0) {
-            utils.decref(output.bytes, size * after_width, alignment);
-            return RocList.empty();
-        } else {
-            output.length = kept;
-            return output;
-        }
-    } else {
-        return RocList.empty();
-    }
-}
-
 pub fn listWithCapacity(capacity: usize, alignment: u32, element_width: usize) callconv(.C) RocList {
     var output = RocList.allocate(alignment, capacity, element_width);
     output.length = 0;
@@ -645,6 +472,7 @@ pub fn listSublist(
     if (len == 0) {
         return RocList.empty();
     }
+
     if (list.bytes) |source_ptr| {
         const size = list.len();
 
@@ -670,14 +498,20 @@ pub fn listSublist(
             dec(element);
         }
 
-        const output = RocList.allocate(alignment, keep_len, element_width);
-        const target_ptr = output.bytes orelse unreachable;
+        if (start == 0 and list.isUnique()) {
+            var output = list;
+            output.length = keep_len;
+            return output;
+        } else {
+            const output = RocList.allocate(alignment, keep_len, element_width);
+            const target_ptr = output.bytes orelse unreachable;
 
-        @memcpy(target_ptr, source_ptr + start * element_width, keep_len * element_width);
+            @memcpy(target_ptr, source_ptr + start * element_width, keep_len * element_width);
 
-        utils.decref(list.bytes, size * element_width, alignment);
+            utils.decref(list.bytes, size * element_width, alignment);
 
-        return output;
+            return output;
+        }
     }
 
     return RocList.empty();

@@ -477,6 +477,20 @@ all = \list, predicate ->
 ## list unaltered.
 ##
 keepIf : List a, (a -> Bool) -> List a
+keepIf = \list, predicate ->
+    length = List.len list
+
+    keepIfHelp list predicate 0 0 length
+
+keepIfHelp : List a, (a -> Bool), Nat, Nat, Nat -> List a
+keepIfHelp = \list, predicate, kept, index, length ->
+    if index < length then
+        if predicate (List.getUnsafe list index) then
+            keepIfHelp (List.swap list kept index) predicate (kept + 1) (index + 1) length
+        else
+            keepIfHelp list predicate kept (index + 1) length
+    else
+        List.takeFirst list kept
 
 ## Run the given function on each element of a list, and return all the
 ## elements for which the function returned `False`.
@@ -500,6 +514,13 @@ dropIf = \list, predicate ->
 ## >>>
 ## >>> List.keepOks ["", "a", "bc", "", "d", "ef", ""]
 keepOks : List before, (before -> Result after *) -> List after
+keepOks = \list, toResult ->
+    walker = \accum, element ->
+        when toResult element is
+            Ok keep -> List.append accum keep
+            Err _drop -> accum
+
+    List.walk list (List.withCapacity (List.len list)) walker
 
 ## This works like [List.map], except only the transformed values that are
 ## wrapped in `Err` are kept. Any that are wrapped in `Ok` are dropped.
@@ -510,6 +531,13 @@ keepOks : List before, (before -> Result after *) -> List after
 ## >>>
 ## >>> List.keepErrs ["", "a", "bc", "", "d", "ef", ""]
 keepErrs : List before, (before -> Result * after) -> List after
+keepErrs = \list, toResult ->
+    walker = \accum, element ->
+        when toResult element is
+            Ok _drop -> accum
+            Err keep -> List.append accum keep
+
+    List.walk list (List.withCapacity (List.len list)) walker
 
 ## Convert each element in the list to something new, by calling a conversion
 ## function on each of them. Then return a new list of the converted values.
@@ -630,6 +658,8 @@ dropLast = \list ->
 ## a Unique list, because [List.first] returns the first element as well -
 ## which introduces a conditional bounds check as well as a memory load.
 takeFirst : List elem, Nat -> List elem
+takeFirst = \list, outputLength ->
+    List.sublist list { start: 0, len: outputLength }
 
 ## Returns the given number of elements from the end of the list.
 ##
@@ -658,6 +688,8 @@ takeFirst : List elem, Nat -> List elem
 ## a Unique list, because [List.first] returns the first element as well -
 ## which introduces a conditional bounds check as well as a memory load.
 takeLast : List elem, Nat -> List elem
+takeLast = \list, outputLength ->
+    List.sublist list { start: Num.subSaturated (List.len list) outputLength, len: outputLength }
 
 ## Drops n elements from the beginning of the list.
 drop : List elem, Nat -> List elem

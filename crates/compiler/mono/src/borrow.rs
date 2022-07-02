@@ -552,10 +552,7 @@ impl<'a> BorrowInfState<'a> {
                 };
 
                 match op {
-                    ListMap { xs }
-                    | ListKeepIf { xs }
-                    | ListKeepOks { xs }
-                    | ListKeepErrs { xs } => {
+                    ListMap { xs } => {
                         // own the list if the function wants to own the element
                         if !function_ps[0].borrow {
                             self.own_var(*xs);
@@ -907,9 +904,6 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListMap2 => arena.alloc_slice_copy(&[owned, owned, function, closure_data]),
         ListMap3 => arena.alloc_slice_copy(&[owned, owned, owned, function, closure_data]),
         ListMap4 => arena.alloc_slice_copy(&[owned, owned, owned, owned, function, closure_data]),
-        ListKeepIf | ListKeepOks | ListKeepErrs => {
-            arena.alloc_slice_copy(&[owned, function, closure_data])
-        }
         ListSortWith => arena.alloc_slice_copy(&[owned, function, closure_data]),
 
         // TODO when we have lists with capacity (if ever)

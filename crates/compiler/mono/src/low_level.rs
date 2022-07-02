@@ -23,15 +23,6 @@ pub enum HigherOrder {
     ListMapWithIndex {
         xs: Symbol,
     },
-    ListKeepIf {
-        xs: Symbol,
-    },
-    ListKeepOks {
-        xs: Symbol,
-    },
-    ListKeepErrs {
-        xs: Symbol,
-    },
     ListSortWith {
         xs: Symbol,
     },
@@ -49,9 +40,6 @@ impl HigherOrder {
             HigherOrder::ListMap3 { .. } => 3,
             HigherOrder::ListMap4 { .. } => 4,
             HigherOrder::ListMapWithIndex { .. } => 2,
-            HigherOrder::ListKeepIf { .. } => 1,
-            HigherOrder::ListKeepOks { .. } => 1,
-            HigherOrder::ListKeepErrs { .. } => 1,
             HigherOrder::ListSortWith { .. } => 2,
             HigherOrder::DictWalk { .. } => 2,
         }
@@ -63,12 +51,7 @@ impl HigherOrder {
         use HigherOrder::*;
 
         match self {
-            ListMap { .. }
-            | ListMapWithIndex { .. }
-            | ListSortWith { .. }
-            | ListKeepIf { .. }
-            | ListKeepOks { .. }
-            | ListKeepErrs { .. } => 2,
+            ListMap { .. } | ListMapWithIndex { .. } | ListSortWith { .. } => 2,
             ListMap2 { .. } => 3,
             ListMap3 { .. } => 4,
             ListMap4 { .. } => 5,
