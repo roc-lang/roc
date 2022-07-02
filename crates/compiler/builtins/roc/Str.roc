@@ -175,29 +175,6 @@ startsWithCodePt : Str, U32 -> Bool
 
 toScalars : Str -> List U32
 
-# walkScalars : Str, state, (state, U32, Str -> state) -> state
-# walkScalars = \inputStr, init, update ->
-#     # TODO rewrite this in Zig to speed it up a ton!
-#     answer =
-#         List.walk
-#             (toUtf8 inputStr)
-#             { index: 0, answer: init }
-#             \{ index, state }, byte ->
-#                 { codePt, codePtStr } =
-#                     if byte <= 127 then
-#                         # This can never fail. Also, this list means one allocation per step! 😱
-#                         str = Str.fromUtf8 [byte] |> Result.withDefault ""
-
-#                         { codePt: Num.toU32 byte, codePtStr: str }
-#                     else
-#                         # TODO handle multibyte UTF-8 string by looking ahead in the list as needed
-#                         # https://docs.teradata.com/r/Teradata-Database-International-Character-Set-Support/June-2017/Client-Character-Set-Options/UTF8-Client-Character-Set-Support/UTF8-Multibyte-Sequences
-
-#                 { index: index + 1, state: update state codePt codePtStr }
-
-#     answer.state
-
-
 ## Return a [List] of the string's [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit).
 ## (To split the string into a [List] of smaller [Str] values instead of [U8] values,
 ## see [Str.split].)
