@@ -1686,7 +1686,7 @@ fn str_to_scalars(symbol: Symbol, var_store: &mut VarStore) -> Def {
     let body = RunLowLevel {
         op: LowLevel::StrToScalars,
         args: vec![(str_var, Var(Symbol::ARG_1))],
-        ret_var: str_var,
+        ret_var: list_u32_var,
     };
 
     defn(
