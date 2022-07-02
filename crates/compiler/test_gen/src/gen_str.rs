@@ -1652,6 +1652,8 @@ fn to_scalar_2_byte() {
     );
 }
 
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn to_scalar_3_byte() {
     assert_evals_to!(
         indoc!(
@@ -1674,6 +1676,8 @@ fn to_scalar_3_byte() {
     );
 }
 
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn to_scalar_4_byte() {
     // from https://design215.com/toolbox/utf8-4byte-characters.php
     assert_evals_to!(
