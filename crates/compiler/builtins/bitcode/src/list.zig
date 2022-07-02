@@ -3,6 +3,7 @@ const utils = @import("utils.zig");
 const RocResult = utils.RocResult;
 const UpdateMode = utils.UpdateMode;
 const mem = std.mem;
+const math = std.math;
 
 const EqFn = fn (?[*]u8, ?[*]u8) callconv(.C) bool;
 const CompareFn = fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) u8;
@@ -28,6 +29,57 @@ pub const RocList = extern struct {
 
     pub fn empty() RocList {
         return RocList{ .bytes = null, .length = 0, .capacity = 0 };
+    }
+
+    pub fn eql(self: RocList, other: RocList) bool {
+        if (self.len() != other.len()) {
+            return false;
+        }
+
+        // Their lengths are the same, and one is empty; they're both empty!
+        if (self.isEmpty()) {
+            return true;
+        }
+
+        var index: usize = 0;
+        const self_bytes = self.bytes orelse unreachable;
+        const other_bytes = other.bytes orelse unreachable;
+
+        while (index < self.len()) {
+            if (self_bytes[index] != other_bytes[index]) {
+                return false;
+            }
+
+            index += 1;
+        }
+
+        return true;
+    }
+
+    pub fn fromSlice(comptime T: type, slice: []const T) RocList {
+        if (slice.len == 0) {
+            return RocList.empty();
+        }
+
+        var list = allocate(@alignOf(T), slice.len, @sizeOf(T));
+
+        if (slice.len > 0) {
+            const dest = list.bytes orelse unreachable;
+            const src = @ptrCast([*]const u8, slice.ptr);
+            const num_bytes = slice.len * @sizeOf(T);
+
+            @memcpy(dest, src, num_bytes);
+        }
+
+        return list;
+    }
+
+    pub fn deinit(self: RocList, comptime T: type) void {
+        utils.decref(self.bytes, self.len(), @alignOf(T));
+    }
+
+    pub fn elements(self: RocList, comptime T: type) ?[*]T {
+        return @ptrCast(?[*]T, @alignCast(@alignOf(T), self.bytes));
     }
 
     pub fn isUnique(self: RocList) bool {

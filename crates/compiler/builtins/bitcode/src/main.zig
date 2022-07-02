@@ -152,6 +152,7 @@ comptime {
 const str = @import("str.zig");
 comptime {
     exportStrFn(str.init, "init");
+    exportStrFn(str.strToScalarsC, "to_scalars");
     exportStrFn(str.strSplitInPlaceC, "str_split_in_place");
     exportStrFn(str.countSegments, "count_segments");
     exportStrFn(str.countGraphemeClusters, "count_grapheme_clusters");

@@ -1,9 +1,9 @@
 interface Str
     exposes
         [
-            concat,
             Utf8Problem,
             Utf8ByteProblem,
+            concat,
             isEmpty,
             joinWith,
             split,
@@ -32,6 +32,7 @@ interface Str
             toI16,
             toU8,
             toI8,
+            toScalars,
         ]
     imports [Bool.{ Bool }, Result.{ Result }]
 
@@ -171,6 +172,13 @@ countGraphemes : Str -> Nat
 ## because 👩‍👩‍👦‍👦 takes up multiple code points and cannot be represented as a
 ## single [U32]. You'd need to use `Str.startsWithCodePt "🕊"` instead.
 startsWithCodePt : Str, U32 -> Bool
+
+## Return a [List] of the [unicode scalar values](https://unicode.org/glossary/#unicode_scalar_value)
+## in the given string.
+##
+## (Strings contain only scalar values, not [surrogate code points](https://unicode.org/glossary/#surrogate_code_point),
+## so this is equivalent to returning a list of the string's [code points](https://unicode.org/glossary/#code_point).)
+toScalars : Str -> List U32
 
 ## Return a [List] of the string's [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit).
 ## (To split the string into a [List] of smaller [Str] values instead of [U8] values,

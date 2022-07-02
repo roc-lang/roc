@@ -1603,3 +1603,100 @@ fn issue_2811() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn to_scalar_1_byte() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.toScalars "R"
+            "#
+        ),
+        RocList::from_slice(&[82u32]),
+        RocList<u32>
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.toScalars "Roc!"
+            "#
+        ),
+        RocList::from_slice(&[82u32, 111, 99, 33]),
+        RocList<u32>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn to_scalar_2_byte() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.toScalars "é"
+            "#
+        ),
+        RocList::from_slice(&[233u32]),
+        RocList<u32>
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.toScalars "Cäfés"
+            "#
+        ),
+        RocList::from_slice(&[67u32, 228, 102, 233, 115]),
+        RocList<u32>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn to_scalar_3_byte() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.toScalars "鹏"
+            "#
+        ),
+        RocList::from_slice(&[40527u32]),
+        RocList<u32>
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.toScalars "鹏很有趣"
+            "#
+        ),
+        RocList::from_slice(&[40527u32, 24456, 26377, 36259]),
+        RocList<u32>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn to_scalar_4_byte() {
+    // from https://design215.com/toolbox/utf8-4byte-characters.php
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.toScalars "𒀀"
+            "#
+        ),
+        RocList::from_slice(&[73728u32]),
+        RocList<u32>
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.toScalars "𒀀𒀁"
+            "#
+        ),
+        RocList::from_slice(&[73728u32, 73729u32]),
+        RocList<u32>
+    );
+}

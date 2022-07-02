@@ -56,6 +56,10 @@ pub const RocStr = extern struct {
         return result;
     }
 
+    pub fn fromSlice(slice: []const u8) RocStr {
+        return RocStr.init(slice.ptr, slice.len);
+    }
+
     pub fn initBig(_: InPlace, number_of_chars: usize) RocStr {
         const first_element = utils.allocateWithRefcount(number_of_chars, @sizeOf(usize));
 
@@ -227,6 +231,17 @@ pub const RocStr = extern struct {
         return self.str_capacity ^ MASK;
     }
 
+    // This does a small string check, but no bounds checking whatsoever!
+    pub fn getUnchecked(self: RocStr, index: usize) u8 {
+        if (self.isSmallStr()) {
+            return self.asArray()[index];
+        } else {
+            const bytes = self.str_bytes orelse unreachable;
+
+            return bytes[index];
+        }
+    }
+
     pub fn isEmpty(self: RocStr) bool {
         return self.len() == 0;
     }
@@ -239,7 +254,7 @@ pub const RocStr = extern struct {
         const length = self.len();
         const longest_small_str = @sizeOf(RocStr) - 1;
 
-        // NOTE: We want to compare length here, *NOT* check for is_small_str!
+        // NOTE: We want to compare length here, *NOT* check for isSmallStr!
         // This is because we explicitly want the empty string to be handled in
         // this branch, even though the empty string is not a small string.
         //
@@ -450,6 +465,230 @@ pub fn strEqual(self: RocStr, other: RocStr) callconv(.C) bool {
 // Str.numberOfBytes
 pub fn strNumberOfBytes(string: RocStr) callconv(.C) usize {
     return string.len();
+}
+
+// Str.toScalars
+pub fn strToScalarsC(str: RocStr) callconv(.C) RocList {
+    return @call(.{ .modifier = always_inline }, strToScalars, .{str});
+}
+
+fn strToScalars(string: RocStr) callconv(.C) RocList {
+    const str_len = string.len();
+
+    if (str_len == 0) {
+        return RocList.empty();
+    }
+
+    var capacity = str_len;
+
+    if (!string.isSmallStr()) {
+        capacity = string.capacity();
+    }
+
+    // For purposes of preallocation, assume the number of code points is the same
+    // as the number of bytes. This might be longer than necessary, but definitely
+    // should not require a second allocation.
+    var answer = RocList.allocate(@alignOf(u32), capacity, @sizeOf(u32));
+
+    // We already did an early return to verify the string was nonempty.
+    var answer_elems = answer.elements(u32) orelse unreachable;
+    var src_index: usize = 0;
+    var answer_index: usize = 0;
+
+    while (src_index < str_len) {
+        const utf8_byte = string.getUnchecked(src_index);
+
+        // How UTF-8 bytes work:
+        // https://docs.teradata.com/r/Teradata-Database-International-Character-Set-Support/June-2017/Client-Character-Set-Options/UTF8-Client-Character-Set-Support/UTF8-Multibyte-Sequences
+        if (utf8_byte <= 127) {
+            // It's an ASCII character. Copy it over directly.
+            answer_elems[answer_index] = @intCast(u32, utf8_byte);
+            src_index += 1;
+        } else if (utf8_byte >> 5 == 0b0000_0110) {
+            // Its three high order bits are 110, so this is a two-byte sequence.
+
+            // Example:
+            //     utf-8:   1100 1111   1011 0001
+            //     code pt: 0000 0011   1111 0001 (decimal: 1009)
+
+            // Discard the first byte's high order bits of 110.
+            var code_pt = @intCast(u32, utf8_byte & 0b0001_1111);
+
+            // Discard the second byte's high order bits of 10.
+            code_pt <<= 6;
+            code_pt |= string.getUnchecked(src_index + 1) & 0b0011_1111;
+
+            answer_elems[answer_index] = code_pt;
+            src_index += 2;
+        } else if (utf8_byte >> 4 == 0b0000_1110) {
+            // Its four high order bits are 1110, so this is a three-byte sequence.
+
+            // Discard the first byte's high order bits of 1110.
+            var code_pt = @intCast(u32, utf8_byte & 0b0000_1111);
+
+            // Discard the second byte's high order bits of 10.
+            code_pt <<= 6;
+            code_pt |= string.getUnchecked(src_index + 1) & 0b0011_1111;
+
+            // Discard the third byte's high order bits of 10 (same as second byte).
+            code_pt <<= 6;
+            code_pt |= string.getUnchecked(src_index + 2) & 0b0011_1111;
+
+            answer_elems[answer_index] = code_pt;
+            src_index += 3;
+        } else {
+            // This must be a four-byte sequence, so the five high order bits should be 11110.
+
+            // Discard the first byte's high order bits of 11110.
+            var code_pt = @intCast(u32, utf8_byte & 0b0000_0111);
+
+            // Discard the second byte's high order bits of 10.
+            code_pt <<= 6;
+            code_pt |= string.getUnchecked(src_index + 1) & 0b0011_1111;
+
+            // Discard the third byte's high order bits of 10 (same as second byte).
+            code_pt <<= 6;
+            code_pt |= string.getUnchecked(src_index + 2) & 0b0011_1111;
+
+            // Discard the fourth byte's high order bits of 10 (same as second and third).
+            code_pt <<= 6;
+            code_pt |= string.getUnchecked(src_index + 3) & 0b0011_1111;
+
+            answer_elems[answer_index] = code_pt;
+            src_index += 4;
+        }
+
+        answer_index += 1;
+    }
+
+    answer.length = answer_index;
+
+    return answer;
+}
+
+test "strToScalars: empty string" {
+    const str = RocStr.fromSlice("");
+    defer RocStr.deinit(str);
+
+    const expected = RocList.empty();
+    const actual = strToScalars(str);
+    defer RocList.deinit(actual, u32);
+
+    try expect(RocList.eql(actual, expected));
+}
+
+test "strToScalars: One ASCII char" {
+    const str = RocStr.fromSlice("R");
+    defer RocStr.deinit(str);
+
+    const expected_array = [_]u32{82};
+    const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
+    defer RocList.deinit(expected, u32);
+
+    const actual = strToScalars(str);
+    defer RocList.deinit(actual, u32);
+
+    try expect(RocList.eql(actual, expected));
+}
+
+test "strToScalars: Multiple ASCII chars" {
+    const str = RocStr.fromSlice("Roc!");
+    defer RocStr.deinit(str);
+
+    const expected_array = [_]u32{ 82, 111, 99, 33 };
+    const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
+    defer RocList.deinit(expected, u32);
+
+    const actual = strToScalars(str);
+    defer RocList.deinit(actual, u32);
+
+    try expect(RocList.eql(actual, expected));
+}
+
+test "strToScalars: One 2-byte UTF-8 character" {
+    const str = RocStr.fromSlice("é");
+    defer RocStr.deinit(str);
+
+    const expected_array = [_]u32{233};
+    const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
+    defer RocList.deinit(expected, u32);
+
+    const actual = strToScalars(str);
+    defer RocList.deinit(actual, u32);
+
+    try expect(RocList.eql(actual, expected));
+}
+
+test "strToScalars: Multiple 2-byte UTF-8 characters" {
+    const str = RocStr.fromSlice("Cäfés");
+    defer RocStr.deinit(str);
+
+    const expected_array = [_]u32{ 67, 228, 102, 233, 115 };
+    const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
+    defer RocList.deinit(expected, u32);
+
+    const actual = strToScalars(str);
+    defer RocList.deinit(actual, u32);
+
+    try expect(RocList.eql(actual, expected));
+}
+
+test "strToScalars: One 3-byte UTF-8 character" {
+    const str = RocStr.fromSlice("鹏");
+    defer RocStr.deinit(str);
+
+    const expected_array = [_]u32{40527};
+    const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
+    defer RocList.deinit(expected, u32);
+
+    const actual = strToScalars(str);
+    defer RocList.deinit(actual, u32);
+
+    try expect(RocList.eql(actual, expected));
+}
+
+test "strToScalars: Multiple 3-byte UTF-8 characters" {
+    const str = RocStr.fromSlice("鹏很有趣");
+    defer RocStr.deinit(str);
+
+    const expected_array = [_]u32{ 40527, 24456, 26377, 36259 };
+    const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
+    defer RocList.deinit(expected, u32);
+
+    const actual = strToScalars(str);
+    defer RocList.deinit(actual, u32);
+
+    try expect(RocList.eql(actual, expected));
+}
+
+test "strToScalars: One 4-byte UTF-8 character" {
+    // from https://design215.com/toolbox/utf8-4byte-characters.php
+    const str = RocStr.fromSlice("𒀀");
+    defer RocStr.deinit(str);
+
+    const expected_array = [_]u32{73728};
+    const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
+    defer RocList.deinit(expected, u32);
+
+    const actual = strToScalars(str);
+    defer RocList.deinit(actual, u32);
+
+    try expect(RocList.eql(actual, expected));
+}
+
+test "strToScalars: Multiple 4-byte UTF-8 characters" {
+    // from https://design215.com/toolbox/utf8-4byte-characters.php
+    const str = RocStr.fromSlice("𒀀𒀁");
+    defer RocStr.deinit(str);
+
+    const expected_array = [_]u32{ 73728, 73729 };
+    const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
+    defer RocList.deinit(expected, u32);
+
+    const actual = strToScalars(str);
+    defer RocList.deinit(actual, u32);
+
+    try expect(RocList.eql(actual, expected));
 }
 
 // Str.fromInt

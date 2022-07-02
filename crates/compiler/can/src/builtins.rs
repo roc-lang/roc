@@ -73,6 +73,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         BOOL_NOT => bool_not,
         STR_CONCAT => str_concat,
         STR_JOIN_WITH => str_join_with,
+        STR_TO_SCALARS => str_to_scalars,
         STR_SPLIT => str_split,
         STR_IS_EMPTY => str_is_empty,
         STR_STARTS_WITH => str_starts_with,
@@ -1669,6 +1670,26 @@ fn str_concat(symbol: Symbol, var_store: &mut VarStore) -> Def {
         var_store,
         body,
         str_var,
+    )
+}
+
+/// Str.toScalars : Str -> List U32
+fn str_to_scalars(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    let str_var = var_store.fresh();
+    let list_u32_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op: LowLevel::StrToScalars,
+        args: vec![(str_var, Var(Symbol::ARG_1))],
+        ret_var: list_u32_var,
+    };
+
+    defn(
+        symbol,
+        vec![(str_var, Symbol::ARG_1)],
+        var_store,
+        body,
+        list_u32_var,
     )
 }
 

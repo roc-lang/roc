@@ -183,7 +183,7 @@ pub fn decref(
 
     var bytes = bytes_or_null orelse return;
 
-    const isizes: [*]isize = @ptrCast([*]isize, @alignCast(@sizeOf(isize), bytes));
+    const isizes: [*]isize = @ptrCast([*]isize, @alignCast(@alignOf(isize), bytes));
 
     decref_ptr_to_refcount(isizes - 1, alignment);
 }

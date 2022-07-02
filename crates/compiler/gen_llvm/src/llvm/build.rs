@@ -5310,6 +5310,14 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             call_str_bitcode_fn(env, &[list.into(), string], bitcode::STR_JOIN_WITH)
         }
+        StrToScalars => {
+            // Str.toScalars : Str -> List U32
+            debug_assert_eq!(args.len(), 1);
+
+            let string = load_symbol(scope, &args[0]);
+
+            call_list_bitcode_fn(env, &[string], bitcode::STR_TO_SCALARS)
+        }
         StrStartsWith => {
             // Str.startsWith : Str, Str -> Bool
             debug_assert_eq!(args.len(), 2);

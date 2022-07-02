@@ -27,12 +27,12 @@ procedure Num.22 (#Attr.2, #Attr.3):
     ret Num.273;
 
 procedure Str.16 (#Attr.2, #Attr.3):
-    let Str.65 : Str = lowlevel StrRepeat #Attr.2 #Attr.3;
-    ret Str.65;
+    let Str.67 : Str = lowlevel StrRepeat #Attr.2 #Attr.3;
+    ret Str.67;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.66 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.66;
+    let Str.68 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.68;
 
 procedure Test.1 ():
     let Test.21 : Str = "lllllllllllllllllllllooooooooooong";

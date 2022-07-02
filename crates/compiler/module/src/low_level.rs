@@ -23,6 +23,7 @@ pub enum LowLevel {
     StrTrimLeft,
     StrTrimRight,
     StrToNum,
+    StrToScalars,
     ListLen,
     ListWithCapacity,
     ListGetUnsafe,
@@ -184,6 +185,7 @@ impl LowLevelWrapperType {
 
         match symbol {
             Symbol::STR_CONCAT => CanBeReplacedBy(StrConcat),
+            Symbol::STR_TO_SCALARS => CanBeReplacedBy(StrToScalars),
             Symbol::STR_JOIN_WITH => CanBeReplacedBy(StrJoinWith),
             Symbol::STR_IS_EMPTY => CanBeReplacedBy(StrIsEmpty),
             Symbol::STR_STARTS_WITH => CanBeReplacedBy(StrStartsWith),
