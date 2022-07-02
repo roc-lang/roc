@@ -467,8 +467,13 @@ pub fn strNumberOfBytes(string: RocStr) callconv(.C) usize {
     return string.len();
 }
 
-// Str.toCodePts : Str -> List U32
-pub fn strToScalars(string: RocStr) callconv(.C) RocList {
+
+// Str.toScalars
+pub fn strToScalarsC(str: RocStr) callconv(.C) RocList {
+    return @call(.{ .modifier = always_inline }, strToScalars, .{ RocStr, str });
+}
+
+fn strToScalars(string: RocStr) callconv(.C) RocList {
     const str_len = string.len();
 
     if (str_len == 0) {
@@ -675,7 +680,6 @@ test "strToScalars: Multiple 4-byte UTF-8 characters" {
 
     try expect(RocList.eql(actual, expected));
 }
-
 
 // Str.fromInt
 pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
