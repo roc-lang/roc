@@ -2939,3 +2939,22 @@ fn monomorphized_lists() {
         u64
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn with_capacity() {
+    // see https://github.com/rtfeldman/roc/issues/1732
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.withCapacity 10
+                |> List.append 0u64
+                |> List.append 1u64
+                |> List.append 2u64
+                |> List.append 3u64
+            "#
+        ),
+        RocList::from_slice(&[0, 1, 2, 3]),
+        RocList<u64>
+    );
+}

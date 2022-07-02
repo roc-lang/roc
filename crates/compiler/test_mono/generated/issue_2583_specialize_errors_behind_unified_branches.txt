@@ -1,16 +1,16 @@
 procedure List.9 (#Attr.2):
-    let List.168 : U64 = 0i64;
-    let List.169 : U64 = lowlevel ListLen #Attr.2;
-    let List.164 : Int1 = lowlevel NotEq List.168 List.169;
-    if List.164 then
-        let List.167 : U64 = 0i64;
-        let List.166 : I64 = lowlevel ListGetUnsafe #Attr.2 List.167;
-        let List.165 : [C Int1, C I64] = Ok List.166;
-        ret List.165;
+    let List.170 : U64 = 0i64;
+    let List.171 : U64 = lowlevel ListLen #Attr.2;
+    let List.166 : Int1 = lowlevel NotEq List.170 List.171;
+    if List.166 then
+        let List.169 : U64 = 0i64;
+        let List.168 : I64 = lowlevel ListGetUnsafe #Attr.2 List.169;
+        let List.167 : [C Int1, C I64] = Ok List.168;
+        ret List.167;
     else
-        let List.163 : Int1 = true;
-        let List.162 : [C Int1, C I64] = Err List.163;
-        ret List.162;
+        let List.165 : Int1 = true;
+        let List.164 : [C Int1, C I64] = Err List.165;
+        ret List.164;
 
 procedure Str.27 (#Attr.2):
     let #Attr.3 : {I64, U8} = lowlevel StrToNum #Attr.2;

@@ -8,6 +8,7 @@ interface List
             append,
             map,
             len,
+            withCapacity,
             walkBackwards,
             concat,
             first,
@@ -258,6 +259,9 @@ prepend : List a, a -> List a
 ## is exactly equal to the highest valid #I32 value. This means the #U32 this function
 ## returns can always be safely converted to an #I32 without losing any data.
 len : List a -> Nat
+
+## Create a list with space for at least capacity elements
+withCapacity : Nat -> List a
 
 ## Put two lists together.
 ##
