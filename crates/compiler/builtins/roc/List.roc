@@ -790,3 +790,5 @@ iterHelp = \list, state, f, index, length ->
                 Break b
     else
         Continue state
+
+unreachable : [] -> a

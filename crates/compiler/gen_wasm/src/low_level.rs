@@ -1631,6 +1631,17 @@ impl<'a> LowLevelCall<'a> {
             BoxExpr | UnboxExpr => {
                 unreachable!("The {:?} operation is turned into mono Expr", self.lowlevel)
             }
+
+            Unreachable => match self.ret_storage {
+                StoredValue::VirtualMachineStack { value_type, .. }
+                | StoredValue::Local { value_type, .. } => match value_type {
+                    ValueType::I32 => backend.code_builder.i32_const(0),
+                    ValueType::I64 => backend.code_builder.i64_const(0),
+                    ValueType::F32 => backend.code_builder.f32_const(0.0),
+                    ValueType::F64 => backend.code_builder.f64_const(0.0),
+                },
+                StoredValue::StackMemory { .. } => { /* do nothing */ }
+            },
         }
     }
 
