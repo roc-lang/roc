@@ -452,6 +452,20 @@ all = \list, predicate ->
 ## list unaltered.
 ##
 keepIf : List a, (a -> Bool) -> List a
+keepIf = \list, predicate ->
+    length = List.len list
+    keepIfHelp list predicate 0 0 length
+
+keepIfHelp : List a, (a -> Bool), Nat, Nat, Nat -> List a
+keepIfHelp = \list, predicate, kept, index, length ->
+    if index < length then
+        if predicate (List.getUnsafe list index) then
+            keepIfHelp (List.swap list kept index) predicate (kept + 1) (index + 1) length
+        else
+            keepIfHelp list predicate kept (index + 1) length
+
+    else
+        List.takeFirst list kept
 
 ## Run the given function on each element of a list, and return all the
 ## elements for which the function returned `False`.
