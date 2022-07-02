@@ -557,6 +557,8 @@ pub fn strToScalars(string: RocStr) callconv(.C) RocList {
         answer_index += 1;
     }
 
+    answer.length = answer_index;
+
     return answer;
 }
 
@@ -579,6 +581,34 @@ test "strToScalars: Multiple ASCII chars" {
     defer RocStr.deinit(str);
 
     const expected_array = [_]u32{ 82, 111, 99, 33 };
+    const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
+    defer RocList.deinit(expected, u32);
+
+    const actual = strToScalars(str);
+    defer RocList.deinit(actual, u32);
+
+    try expect(RocList.eql(actual, expected));
+}
+
+test "strToScalars: One 2-byte UTF-8 character" {
+    const str = RocStr.fromSlice("é");
+    defer RocStr.deinit(str);
+
+    const expected_array = [_]u32{ 233 };
+    const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
+    defer RocList.deinit(expected, u32);
+
+    const actual = strToScalars(str);
+    defer RocList.deinit(actual, u32);
+
+    try expect(RocList.eql(actual, expected));
+}
+
+test "strToScalars: Multiple 2-byte UTF-8 characters" {
+    const str = RocStr.fromSlice("Cäfés");
+    defer RocStr.deinit(str);
+
+    const expected_array = [_]u32{ 67, 228, 102, 233, 115 };
     const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
     defer RocList.deinit(expected, u32);
 
