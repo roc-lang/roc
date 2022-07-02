@@ -5043,34 +5043,6 @@ pub fn with_hole<'a>(
                     let xs = arg_symbols[0];
                     match_on_closure_argument!(ListMapWithIndex, [xs])
                 }
-                ListKeepIf => {
-                    debug_assert_eq!(arg_symbols.len(), 2);
-                    let xs = arg_symbols[0];
-                    let stmt = match_on_closure_argument!(ListKeepIf, [xs]);
-
-                    // See the comment in `walk!`. We use List.keepIf to implement
-                    // other builtins, where the closure can be an actual closure rather
-                    // than a symbol.
-                    assign_to_symbol(
-                        env,
-                        procs,
-                        layout_cache,
-                        args[1].0, // the closure
-                        Loc::at_zero(args[1].1.clone()),
-                        arg_symbols[1],
-                        stmt,
-                    )
-                }
-                ListKeepOks => {
-                    debug_assert_eq!(arg_symbols.len(), 2);
-                    let xs = arg_symbols[0];
-                    match_on_closure_argument!(ListKeepOks, [xs])
-                }
-                ListKeepErrs => {
-                    debug_assert_eq!(arg_symbols.len(), 2);
-                    let xs = arg_symbols[0];
-                    match_on_closure_argument!(ListKeepErrs, [xs])
-                }
                 ListSortWith => {
                     debug_assert_eq!(arg_symbols.len(), 2);
                     let xs = arg_symbols[0];

@@ -693,13 +693,7 @@ impl<'a> Context<'a> {
         let after_arguments = &arguments[op.function_index()..];
 
         match *op {
-            ListMap { xs }
-            | ListKeepIf { xs }
-            | ListKeepOks { xs }
-            | ListKeepErrs { xs }
-            | ListAny { xs }
-            | ListAll { xs }
-            | ListFindUnsafe { xs } => {
+            ListMap { xs } | ListAny { xs } | ListAll { xs } | ListFindUnsafe { xs } => {
                 let ownerships = [(xs, function_ps[0])];
 
                 let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
