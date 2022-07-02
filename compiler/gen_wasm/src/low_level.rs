@@ -288,9 +288,8 @@ impl<'a> LowLevelCall<'a> {
 
             ListIsUnique => self.load_args_and_call_zig(backend, bitcode::LIST_IS_UNIQUE),
 
-            ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf | ListWalk
-            | ListWalkBackwards | ListKeepOks | ListKeepErrs | ListSortWith
-            | ListFindUnsafe | DictWalk => {
+            ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListKeepIf
+            | ListKeepOks | ListKeepErrs | ListSortWith | ListFindUnsafe | DictWalk => {
                 internal_error!("HigherOrder lowlevels should not be handled here")
             }
 

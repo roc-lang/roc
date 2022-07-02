@@ -36,8 +36,6 @@ pub enum LowLevel {
     ListMap4,
     ListMapWithIndex,
     ListKeepIf,
-    ListWalk,
-    ListWalkBackwards,
     ListKeepOks,
     ListKeepErrs,
     ListSortWith,
@@ -131,8 +129,6 @@ macro_rules! higher_order {
             | ListMap4
             | ListMapWithIndex
             | ListKeepIf
-            | ListWalk
-            | ListWalkBackwards
             | ListKeepOks
             | ListKeepErrs
             | ListSortWith
@@ -160,8 +156,6 @@ impl LowLevel {
             ListMap4 => 4,
             ListMapWithIndex => 1,
             ListKeepIf => 1,
-            ListWalk => 2,
-            ListWalkBackwards => 2,
             ListKeepOks => 1,
             ListKeepErrs => 1,
             ListSortWith => 1,
@@ -230,9 +224,6 @@ impl LowLevelWrapperType {
             Symbol::LIST_MAP4 => WrapperIsRequired,
             Symbol::LIST_MAP_WITH_INDEX => WrapperIsRequired,
             Symbol::LIST_KEEP_IF => WrapperIsRequired,
-            Symbol::LIST_WALK => WrapperIsRequired,
-            Symbol::LIST_WALK_UNTIL => WrapperIsRequired,
-            Symbol::LIST_WALK_BACKWARDS => WrapperIsRequired,
             Symbol::LIST_KEEP_OKS => WrapperIsRequired,
             Symbol::LIST_KEEP_ERRS => WrapperIsRequired,
             Symbol::LIST_SORT_WITH => WrapperIsRequired,

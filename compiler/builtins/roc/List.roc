@@ -755,7 +755,15 @@ findIndex = \list, matcher ->
 ## Some languages have a function called **`slice`** which works similarly to this.
 sublist : List elem, { start : Nat, len : Nat } -> List elem
 
+
+## Intersperses `sep` between the elements of `list`
+## >>> List.intersperse 9 [1, 2, 3]     # [1, 9, 2, 9, 3]
 intersperse : List elem, elem -> List elem
+intersperse = \list, sep ->
+    capacity = Num.shiftLeftBy (List.len list) 1
+    init = List.withCapacity capacity
+    newList = List.walk list init (\acc, elem -> acc |> List.append elem |> List.append sep)
+    List.dropLast newList
 
 ## Splits the list into two lists, around the given index.
 ##
