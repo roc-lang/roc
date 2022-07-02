@@ -153,12 +153,12 @@ prep-bench-folder:
     ARG BENCH_SUFFIX=branch
     RUN cargo criterion -V
     RUN --mount=type=cache,target=$SCCACHE_DIR cd crates/cli && cargo criterion --no-run
-    RUN mkdir -p bench-folder/compiler/builtins/bitcode/src
+    RUN mkdir -p bench-folder/crates/compiler/builtins/bitcode/src
     RUN mkdir -p bench-folder/target/release/deps
     RUN mkdir -p bench-folder/examples/benchmarks
     RUN cp examples/benchmarks/*.roc bench-folder/examples/benchmarks/
     RUN cp -r examples/benchmarks/platform bench-folder/examples/benchmarks/
-    RUN cp compiler/builtins/bitcode/src/str.zig bench-folder/compiler/builtins/bitcode/src
+    RUN cp crates/compiler/builtins/bitcode/src/str.zig bench-folder/crates/compiler/builtins/bitcode/src
     RUN cp target/release/roc bench-folder/target/release
     # copy the most recent time bench to bench-folder
     RUN cp target/release/deps/`ls -t target/release/deps/ | grep time_bench | head -n 1` bench-folder/target/release/deps/time_bench
