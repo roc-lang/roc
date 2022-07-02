@@ -181,7 +181,7 @@ impl fmt::Debug for Symbol {
                     // might be used in a panic error message, and if we panick
                     // while we're already panicking it'll kill the process
                     // without printing any of the errors!
-                    println!("DEBUG INFO: Failed to acquire lock for Debug reading from DEBUG_IDENT_IDS_BY_MODULE_ID, presumably because a thread panicked: {:?}", err);
+                    writeln!(f, "DEBUG INFO: Failed to acquire lock for Debug reading from DEBUG_IDENT_IDS_BY_MODULE_ID, presumably because a thread panicked: {:?}", err)?;
 
                     fallback_debug_fmt(*self, f)
                 }
