@@ -1628,3 +1628,27 @@ fn lambda_capture_niches_have_captured_function_in_closure() {
         "#
     )
 }
+
+#[mono_test]
+fn lambda_set_niche_same_layout_different_constructor() {
+    indoc!(
+        r#"
+        capture : a -> ({} -> Str)
+        capture = \val ->
+            thunk =
+                \{} ->
+                    when val is
+                        _ -> ""
+            thunk
+
+        x : [True, False]
+        x = True
+
+        fun =
+            when x is
+                True -> capture {a: ""}
+                False -> capture (A "")
+        fun
+        "#
+    )
+}

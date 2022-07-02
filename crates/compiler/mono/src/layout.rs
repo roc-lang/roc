@@ -1009,6 +1009,11 @@ impl<'a> LambdaSet<'a> {
                     joined.sort_by(|(lam_and_captures1, _), (lam_and_captures2, _)| {
                         lam_and_captures1.cmp(lam_and_captures2)
                     });
+                    // Remove duplicate lambda captures layouts unification can't see as
+                    // duplicates, for example [[Thunk {a: Str}, Thunk [A Str]]], each of which are
+                    // newtypes over the lambda layout `Thunk Str`.
+                    joined.dedup_by_key(|((name, captures), _)| (*name, *captures));
+
                     let (set, set_with_variables): (std::vec::Vec<_>, std::vec::Vec<_>) =
                         joined.into_iter().unzip();
 
