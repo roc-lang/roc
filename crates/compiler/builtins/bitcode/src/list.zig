@@ -57,6 +57,10 @@ pub const RocList = extern struct {
     }
 
     pub fn fromSlice(comptime T: type, slice: []const T) RocList {
+        if (slice.len == 0) {
+            return RocList.empty();
+        }
+
         var list = allocate(@alignOf(T), slice.len, @sizeOf(T));
 
         if (slice.len > 0) {
