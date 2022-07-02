@@ -5421,7 +5421,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let string = load_symbol(scope, &args[0]);
 
-            call_str_bitcode_fn(env, &[string], bitcode::STR_TO_SCALARS)
+            call_list_bitcode_fn(env, &[string], bitcode::STR_TO_SCALARS)
         }
         StrStartsWith => {
             // Str.startsWith : Str, Str -> Bool
