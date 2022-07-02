@@ -467,10 +467,9 @@ pub fn strNumberOfBytes(string: RocStr) callconv(.C) usize {
     return string.len();
 }
 
-
 // Str.toScalars
 pub fn strToScalarsC(str: RocStr) callconv(.C) RocList {
-    return @call(.{ .modifier = always_inline }, strToScalars, .{ str });
+    return @call(.{ .modifier = always_inline }, strToScalars, .{str});
 }
 
 fn strToScalars(string: RocStr) callconv(.C) RocList {
@@ -582,7 +581,7 @@ test "strToScalars: One ASCII char" {
     const str = RocStr.fromSlice("R");
     defer RocStr.deinit(str);
 
-    const expected_array = [_]u32{ 82 };
+    const expected_array = [_]u32{82};
     const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
     defer RocList.deinit(expected, u32);
 
@@ -610,7 +609,7 @@ test "strToScalars: One 2-byte UTF-8 character" {
     const str = RocStr.fromSlice("é");
     defer RocStr.deinit(str);
 
-    const expected_array = [_]u32{ 233 };
+    const expected_array = [_]u32{233};
     const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
     defer RocList.deinit(expected, u32);
 
@@ -638,7 +637,7 @@ test "strToScalars: One 3-byte UTF-8 character" {
     const str = RocStr.fromSlice("鹏");
     defer RocStr.deinit(str);
 
-    const expected_array = [_]u32{ 40527 };
+    const expected_array = [_]u32{40527};
     const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
     defer RocList.deinit(expected, u32);
 
@@ -667,7 +666,7 @@ test "strToScalars: One 4-byte UTF-8 character" {
     const str = RocStr.fromSlice("𒀀");
     defer RocStr.deinit(str);
 
-    const expected_array = [_]u32{ 73728 };
+    const expected_array = [_]u32{73728};
     const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
     defer RocList.deinit(expected, u32);
 
