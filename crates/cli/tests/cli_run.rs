@@ -366,7 +366,7 @@ mod cli_run {
                     all_examples.insert($name, $example);
                 )*
 
-                check_for_tests("../examples", &mut all_examples);
+                check_for_tests("../../examples", &mut all_examples);
             }
         }
     }
@@ -699,7 +699,7 @@ mod cli_run {
                     all_benchmarks.insert(benchmark.filename, benchmark);
                 )*
 
-                check_for_benchmarks("../examples/benchmarks", &mut all_benchmarks);
+                check_for_benchmarks("../../examples/benchmarks", &mut all_benchmarks);
             }
         }
     }

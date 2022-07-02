@@ -382,7 +382,8 @@ pub fn example_file(dir_name: &str, file_name: &str) -> PathBuf {
 pub fn fixtures_dir(dir_name: &str) -> PathBuf {
     let mut path = root_dir();
 
-    // Descend into cli/tests/fixtures/{dir_name}
+    // Descend into crates/cli/tests/fixtures/{dir_name}
+    path.push("crates");
     path.push("cli");
     path.push("tests");
     path.push("fixtures");
@@ -405,6 +406,7 @@ pub fn known_bad_file(file_name: &str) -> PathBuf {
     let mut path = root_dir();
 
     // Descend into cli/tests/known_bad/{file_name}
+    path.push("crates");
     path.push("cli");
     path.push("tests");
     path.push("known_bad");

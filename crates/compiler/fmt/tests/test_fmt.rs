@@ -4940,9 +4940,13 @@ mod test_fmt {
     /// `cargo run -- format $(find compiler/builtins/roc -name \*.roc)`
     fn test_fmt_builtins() {
         let mut count = 0;
-        let mut root = workspace_root();
-        root.push("compiler/builtins/roc");
-        for entry in walkdir::WalkDir::new(&root) {
+        let builtins_path = workspace_root()
+            .join("crates")
+            .join("compiler")
+            .join("builtins")
+            .join("roc");
+
+        for entry in walkdir::WalkDir::new(&builtins_path) {
             let entry = entry.unwrap();
             let path = entry.path();
             if path.extension() == Some(std::ffi::OsStr::new("roc")) {
@@ -4955,7 +4959,7 @@ mod test_fmt {
         assert!(
             count > 0,
             "Expecting to find at least 1 .roc file to format under {}",
-            root.display()
+            builtins_path.display()
         );
     }
 

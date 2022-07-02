@@ -2092,7 +2092,7 @@ name = "roc_std"
 version = "0.1.0"
 dependencies = [
  "arrayvec",
- "static_assertions 0.1.1",
+ "static_assertions",
 ]
 
 [[package]]
@@ -2298,12 +2298,6 @@ dependencies = [
 
 [[package]]
 name = "static_assertions"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f406d6ee68db6796e11ffd7b4d171864c58b7451e79ef9460ea33c287a1f89a7"
-
-[[package]]
-name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
@@ -2413,7 +2407,7 @@ checksum = "4ee73e6e4924fe940354b8d4d98cad5231175d615cd855b758adc658c0aac6a0"
 dependencies = [
  "cfg-if 1.0.0",
  "rand",
- "static_assertions 1.1.0",
+ "static_assertions",
 ]
 
 [[package]]
