@@ -1304,35 +1304,49 @@ impl<'a> WasmBackend<'a> {
         storage: &StoredValue,
         fields: &'a [Symbol],
     ) {
-        if matches!(layout, Layout::Struct { .. }) {
-            match storage {
-                StoredValue::StackMemory { location, size, .. } => {
-                    if *size > 0 {
-                        let (local_id, struct_offset) =
-                            location.local_and_offset(self.storage.stack_frame_pointer);
-                        let mut field_offset = struct_offset;
-                        for field in fields.iter() {
-                            field_offset += self.storage.copy_value_to_memory(
-                                &mut self.code_builder,
-                                local_id,
-                                field_offset,
-                                *field,
-                            );
+        match layout {
+            Layout::Struct { .. } => {
+                match storage {
+                    StoredValue::StackMemory { location, size, .. } => {
+                        if *size > 0 {
+                            let (local_id, struct_offset) =
+                                location.local_and_offset(self.storage.stack_frame_pointer);
+                            let mut field_offset = struct_offset;
+                            for field in fields.iter() {
+                                field_offset += self.storage.copy_value_to_memory(
+                                    &mut self.code_builder,
+                                    local_id,
+                                    field_offset,
+                                    *field,
+                                );
+                            }
+                        } else {
+                            // Zero-size struct. No code to emit.
+                            // These values are purely conceptual, they only exist internally in the compiler
                         }
-                    } else {
-                        // Zero-size struct. No code to emit.
-                        // These values are purely conceptual, they only exist internally in the compiler
                     }
+                    _ => {
+                        internal_error!("Cannot create struct {:?} with storage {:?}", sym, storage)
+                    }
+                };
+            }
+            Layout::LambdaSet(lambdaset) => {
+                self.expr_struct(sym, &lambdaset.runtime_representation(), storage, fields)
+            }
+            _ => {
+                if !fields.is_empty() {
+                    // Struct expression but not Struct layout => single element. Copy it.
+                    let field_storage = self.storage.get(&fields[0]).to_owned();
+                    self.storage.clone_value(
+                        &mut self.code_builder,
+                        storage,
+                        &field_storage,
+                        fields[0],
+                    );
+                } else {
+                    // Empty record. Nothing to do.
                 }
-                _ => internal_error!("Cannot create struct {:?} with storage {:?}", sym, storage),
-            };
-        } else if !fields.is_empty() {
-            // Struct expression but not Struct layout => single element. Copy it.
-            let field_storage = self.storage.get(&fields[0]).to_owned();
-            self.storage
-                .clone_value(&mut self.code_builder, storage, &field_storage, fields[0]);
-        } else {
-            // Empty record. Nothing to do.
+            }
         }
     }
 

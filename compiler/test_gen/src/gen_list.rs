@@ -353,7 +353,7 @@ fn list_drop_at() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_intersperse() {
     assert_evals_to!(
         indoc!(

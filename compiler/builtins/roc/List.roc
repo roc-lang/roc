@@ -754,6 +754,7 @@ findIndex = \list, matcher ->
 ##
 ## Some languages have a function called **`slice`** which works similarly to this.
 sublist : List elem, { start : Nat, len : Nat } -> List elem
+
 intersperse : List elem, elem -> List elem
 
 ## Splits the list into two lists, around the given index.
