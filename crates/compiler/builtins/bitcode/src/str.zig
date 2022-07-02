@@ -567,6 +567,17 @@ fn strToScalars(string: RocStr) callconv(.C) RocList {
     return answer;
 }
 
+test "strToScalars: empty string" {
+    const str = RocStr.fromSlice("");
+    defer RocStr.deinit(str);
+
+    const expected = RocList.empty();
+    const actual = strToScalars(str);
+    defer RocList.deinit(actual, u32);
+
+    try expect(RocList.eql(actual, expected));
+}
+
 test "strToScalars: One ASCII char" {
     const str = RocStr.fromSlice("R");
     defer RocStr.deinit(str);
