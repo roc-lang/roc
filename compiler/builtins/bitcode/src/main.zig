@@ -42,18 +42,11 @@ comptime {
     exportListFn(list.listMap4, "map4");
     exportListFn(list.listMapWithIndex, "map_with_index");
     exportListFn(list.listKeepIf, "keep_if");
-    exportListFn(list.listWalk, "walk");
-    exportListFn(list.listWalkUntil, "walkUntil");
-    exportListFn(list.listWalkBackwards, "walk_backwards");
     exportListFn(list.listKeepOks, "keep_oks");
     exportListFn(list.listKeepErrs, "keep_errs");
-    exportListFn(list.listContains, "contains");
-    exportListFn(list.listRepeat, "repeat");
     exportListFn(list.listAppend, "append");
     exportListFn(list.listPrepend, "prepend");
-    exportListFn(list.listSingle, "single");
     exportListFn(list.listWithCapacity, "with_capacity");
-    exportListFn(list.listReverse, "reverse");
     exportListFn(list.listSortWith, "sort_with");
     exportListFn(list.listConcat, "concat");
     exportListFn(list.listSublist, "sublist");
@@ -61,9 +54,6 @@ comptime {
     exportListFn(list.listReplace, "replace");
     exportListFn(list.listReplaceInPlace, "replace_in_place");
     exportListFn(list.listSwap, "swap");
-    exportListFn(list.listAny, "any");
-    exportListFn(list.listAll, "all");
-    exportListFn(list.listFindUnsafe, "find_unsafe");
     exportListFn(list.listIsUnique, "is_unique");
 }
 
