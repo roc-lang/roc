@@ -173,6 +173,11 @@ countGraphemes : Str -> Nat
 ## single [U32]. You'd need to use `Str.startsWithCodePt "🕊"` instead.
 startsWithCodePt : Str, U32 -> Bool
 
+## Return a [List] of the [unicode scalar values](https://unicode.org/glossary/#unicode_scalar_value)
+## in the given string.
+##
+## (Strings contain only scalar values, not [surrogate code points](https://unicode.org/glossary/#surrogate_code_point),
+## so this is equivalent to returning a list of the string's [code points](https://unicode.org/glossary/#code_point).)
 toScalars : Str -> List U32
 
 ## Return a [List] of the string's [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit).
