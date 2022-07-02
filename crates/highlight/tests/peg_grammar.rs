@@ -723,7 +723,7 @@ test1 =
     }
 
     fn example_path(sub_path: &str) -> String {
-        let examples_dir = "../examples/".to_string();
+        let examples_dir = "../../examples/".to_string();
 
         let file_path = examples_dir + sub_path;
 

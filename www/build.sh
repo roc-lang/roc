@@ -35,7 +35,7 @@ rustc --version
 # is set up to serve them.
 export ROC_DOCS_URL_ROOT=/builtins
 
-cargo run --bin roc-docs compiler/builtins/roc/*.roc
+cargo run --bin roc-docs crates/compiler/builtins/roc/*.roc
 mv generated-docs/*.* www/build # move all the .js, .css, etc. files to build/
 mv generated-docs/ www/build/builtins # move all the folders to build/builtins/
 

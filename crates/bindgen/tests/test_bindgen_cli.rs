@@ -34,7 +34,7 @@ mod bindgen_cli_run {
 
         let output = Command::new("cargo")
             .args(args)
-            .current_dir(root_dir().join("cli"))
+            .current_dir(root_dir().join("crates").join("cli"))
             .output()
             .unwrap_or_else(|err| {
                 panic!(

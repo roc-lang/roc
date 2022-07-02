@@ -48,6 +48,7 @@ pub fn fixtures_dir(dir_name: &str) -> PathBuf {
     let mut path = root_dir();
 
     // Descend into cli/tests/fixtures/{dir_name}
+    path.push("crates");
     path.push("bindgen");
     path.push("tests");
     path.push("fixtures");

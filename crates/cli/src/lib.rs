@@ -53,7 +53,7 @@ pub const ROC_DIR: &str = "ROC_DIR";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
-const VERSION: &str = include_str!("../../version.txt");
+const VERSION: &str = include_str!("../../../version.txt");
 
 pub fn build_app<'a>() -> Command<'a> {
     let flag_optimize = Arg::new(FLAG_OPTIMIZE)
