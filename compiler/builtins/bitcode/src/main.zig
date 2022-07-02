@@ -52,8 +52,7 @@ comptime {
     exportListFn(list.listAppend, "append");
     exportListFn(list.listPrepend, "prepend");
     exportListFn(list.listSingle, "single");
-    exportListFn(list.listJoin, "join");
-    exportListFn(list.listRange, "range");
+    exportListFn(list.listWithCapacity, "with_capacity");
     exportListFn(list.listReverse, "reverse");
     exportListFn(list.listSortWith, "sort_with");
     exportListFn(list.listConcat, "concat");

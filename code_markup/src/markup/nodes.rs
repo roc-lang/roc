@@ -9,7 +9,9 @@ use super::{
     mark_id_ast_id_map::MarkIdAstIdMap,
 };
 
-use crate::markup_error::{ExpectedTextNode, NestedNodeMissingChild, NestedNodeRequired};
+use crate::markup_error::{
+    ExpectedTextNodeSnafu, NestedNodeMissingChildSnafu, NestedNodeRequiredSnafu,
+};
 use itertools::Itertools;
 use roc_ast::{
     lang::{core::ast::ASTNodeId, env::Env},
@@ -134,14 +136,14 @@ impl MarkupNode {
                         Ok((child_index, closest_ast_child_index + 1))
                     }
                 } else {
-                    NestedNodeMissingChild {
+                    NestedNodeMissingChildSnafu {
                         node_id: mark_node_id,
                         children_ids: children_ids.clone(),
                     }
                     .fail()
                 }
             }
-            _ => NestedNodeRequired {
+            _ => NestedNodeRequiredSnafu {
                 node_type: self.node_type_as_string(),
             }
             .fail(),
@@ -171,7 +173,7 @@ impl MarkupNode {
     pub fn get_content_mut(&mut self) -> MarkResult<&mut String> {
         match self {
             MarkupNode::Text { content, .. } => Ok(content),
-            _ => ExpectedTextNode {
+            _ => ExpectedTextNodeSnafu {
                 function_name: "set_content".to_owned(),
                 node_type: self.node_type_as_string(),
             }
@@ -189,7 +191,7 @@ impl MarkupNode {
         if let MarkupNode::Nested { children_ids, .. } = self {
             children_ids.splice(index..index, vec![child_id]);
         } else {
-            NestedNodeRequired {
+            NestedNodeRequiredSnafu {
                 node_type: self.node_type_as_string(),
             }
             .fail()?;

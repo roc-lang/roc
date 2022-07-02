@@ -17,6 +17,7 @@ Many programs can however be compiled correctly. Check out [examples](examples) 
 
 - [Linux x86](getting_started/linux_x86.md)
 - [MacOS Apple Silicon](getting_started/macos_apple_silicon.md)
+- [MacOS x86](getting_started/macos_x86.md)
 - [Windows](getting_started/windows.md)
 - [Other](getting_started/other.md)
 

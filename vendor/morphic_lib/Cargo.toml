@@ -6,6 +6,6 @@ edition = "2018"
 
 [dependencies]
 thiserror = "1.0.30"
-sha2 = "0.9.8"
+sha2 = "0.10.2"
 smallvec = "1.7.0"
 typed-arena = "2.0.1"

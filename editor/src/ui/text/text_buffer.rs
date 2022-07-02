@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::ui::{
-    ui_error::{OutOfBounds, TextBufReadFailed, UIResult},
+    ui_error::{OutOfBoundsSnafu, TextBufReadFailedSnafu, UIResult},
     util::{path_to_string, reader_from_path},
 };
 use snafu::ensure;
@@ -25,7 +25,7 @@ impl TextBuffer {
             match line {
                 Ok(line_str) => lines.push(line_str),
                 Err(e) => {
-                    TextBufReadFailed {
+                    TextBufReadFailedSnafu {
                         path_str: path_to_string(path),
                         err_msg: e.to_string(),
                     }
@@ -64,7 +64,7 @@ impl TextBuffer {
     fn ensure_bounds(&self, line_nr: usize) -> UIResult<()> {
         ensure!(
             line_nr < self.nr_of_lines(),
-            OutOfBounds {
+            OutOfBoundsSnafu {
                 index: line_nr,
                 collection_name: "TextBuffer",
                 len: self.nr_of_lines(),
@@ -77,7 +77,7 @@ impl TextBuffer {
     fn ensure_bounds_txt_pos(&self, txt_pos: TextPos) -> UIResult<()> {
         ensure!(
             txt_pos.line < self.nr_of_lines(),
-            OutOfBounds {
+            OutOfBoundsSnafu {
                 index: txt_pos.line,
                 collection_name: "TextBuffer",
                 len: self.nr_of_lines(),
@@ -89,7 +89,7 @@ impl TextBuffer {
 
         ensure!(
             txt_pos.column <= line_len,
-            OutOfBounds {
+            OutOfBoundsSnafu {
                 index: txt_pos.column,
                 collection_name: format!("Line in TextBuffer: {}", line_ref),
                 len: line_len,

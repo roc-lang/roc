@@ -12,7 +12,7 @@ use crate::ui::text::caret_w_select::make_selection_rect;
 use crate::ui::text::caret_w_select::CaretWSelect;
 use crate::ui::text::selection::Selection;
 use crate::ui::tooltip::ToolTip;
-use crate::ui::ui_error::MissingGlyphDims;
+use crate::ui::ui_error::MissingGlyphDimsSnafu;
 use cgmath::Vector2;
 use roc_ast::mem_pool::pool::Pool;
 use snafu::OptionExt;
@@ -73,7 +73,9 @@ pub fn model_to_wgpu<'a>(
     txt_coords: Vector2<f32>,
     config: &Config,
 ) -> EdResult<RenderedWgpu> {
-    let glyph_dim_rect = ed_model.glyph_dim_rect_opt.context(MissingGlyphDims {})?;
+    let glyph_dim_rect = ed_model
+        .glyph_dim_rect_opt
+        .context(MissingGlyphDimsSnafu {})?;
 
     let mut all_rendered = RenderedWgpu::new();
 

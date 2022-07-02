@@ -1,6 +1,6 @@
 use snafu::OptionExt;
 use std::{collections::HashMap, slice::SliceIndex};
-use util_error::{IndexOfFailed, KeyNotFound, OutOfBounds, UtilResult};
+use util_error::{IndexOfFailedSnafu, KeyNotFoundSnafu, OutOfBoundsSnafu, UtilResult};
 
 pub mod util_error;
 
@@ -9,7 +9,7 @@ pub fn map_get<'a, K: ::std::fmt::Debug + std::hash::Hash + std::cmp::Eq, V>(
     hash_map: &'a HashMap<K, V>,
     key: &K,
 ) -> UtilResult<&'a V> {
-    let value = hash_map.get(key).context(KeyNotFound {
+    let value = hash_map.get(key).context(KeyNotFoundSnafu {
         key_str: format!("{:?}", key),
     })?;
 
@@ -24,7 +24,7 @@ pub fn index_of<T: ::std::fmt::Debug + std::cmp::Eq>(elt: T, slice: &[T]) -> Uti
             let elt_str = format!("{:?}", elt);
             let collection_str = format!("{:?}", slice);
 
-            IndexOfFailed {
+            IndexOfFailedSnafu {
                 elt_str,
                 collection_str,
             }
@@ -35,7 +35,7 @@ pub fn index_of<T: ::std::fmt::Debug + std::cmp::Eq>(elt: T, slice: &[T]) -> Uti
 
 // replaces slice method that return Option with one that return Result and proper Error
 pub fn slice_get<T>(index: usize, slice: &[T]) -> UtilResult<&<usize as SliceIndex<[T]>>::Output> {
-    let elt_ref = slice.get(index).context(OutOfBounds {
+    let elt_ref = slice.get(index).context(OutOfBoundsSnafu {
         index,
         collection_name: "Slice",
         len: slice.len(),
@@ -50,7 +50,7 @@ pub fn slice_get_mut<T>(
 ) -> UtilResult<&mut <usize as SliceIndex<[T]>>::Output> {
     let slice_len = slice.len();
 
-    let elt_ref = slice.get_mut(index).context(OutOfBounds {
+    let elt_ref = slice.get_mut(index).context(OutOfBoundsSnafu {
         index,
         collection_name: "Slice",
         len: slice_len,
@@ -86,7 +86,7 @@ pub fn first_last_index_of<T: ::std::fmt::Debug + std::cmp::Eq>(
         let elt_str = format!("{:?}", elt);
         let collection_str = format!("{:?}", slice);
 
-        IndexOfFailed {
+        IndexOfFailedSnafu {
             elt_str,
             collection_str,
         }
