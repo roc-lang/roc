@@ -109,36 +109,34 @@ appendHelp = \prefix, suffix ->
 ## https://stackoverflow.com/questions/2678551/when-should-space-be-encoded-to-plus-or-20/47188851#47188851
 percentEncode : Str -> Str
 percentEncode = \input ->
-    # TODO `Str.replaceUtf8 : Str, (U8 -> [Same, Replace Str]) -> Str` can let you translate UTF-8 bytes into strings.
-    #
     # TODO instead of starting with "", start with Str.withCapacity based on
     # some the length of the given str. (Maybe be optimistic and assume it's the same length,
     # then let it get doubled if we're wrong.)
-    #
-    # https://www.ietf.org/rfc/rfc3986.txt
-    List.replaceUtf8 input \byte ->
-        if
-            (byte >= 97 && byte <= 122) # lowercase ASCII
-            || (byte >= 65 && byte <= 90) # uppercase ASCII
-            || (byte >= 48 && byte <= 57) # digit
-        then
-            # This is the most common case: an unreserved character,
-            # which needs no encoding in a path
-            Same
-        else
-            when byte is
-                46 # '.'
-                | 95 # '_'
-                | 126 # '~'
-                | 150 -> # '-'
-                    # These special characters can all be unescaped in paths
-                    Same
+    Str.walkCodePts input "" \output, codePt, codePtStr ->
+        # Spec for percent-encoding: https://www.ietf.org/rfc/rfc3986.txt
+        Str.concat output
+            if
+                (codePt >= 97 && codePt <= 122) # lowercase ASCII
+                || (codePt >= 65 && codePt <= 90) # uppercase ASCII
+                || (codePt >= 48 && codePt <= 57) # digit
+            then
+                # This is the most common case: an unreserved character,
+                # which needs no encoding in a path
+                codePtStr
+            else
+                when codePt is
+                    46 # '.'
+                    | 95 # '_'
+                    | 126 # '~'
+                    | 150 -> # '-'
+                        # These special characters can all be unescaped in paths
+                        codePtStr
 
-                _ ->
-                    # This needs encoding in a path
-                    hex = Num.toHexUppercase byte
+                    _ ->
+                        # This needs encoding in a path
+                        hex = Num.toHexUppercase codePt
 
-                    Replace "%\(hex)"
+                        "%\(hex)"
 
 ## Adds a [Str] query parameter to the end of the [Url]. Both the key
 ## and the value are [percent-encoded](https://en.wikipedia.org/wiki/Percent-encoding).
