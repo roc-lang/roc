@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 procedure List.3 (List.84, List.85, List.86):
     let List.285 : {List I64, I64} = CallByName List.57 List.84 List.85 List.86;
     let List.284 : List I64 = StructAtIndex 0 List.285;
@@ -22,10 +23,36 @@ procedure List.6 (#Attr.2):
 procedure List.61 (#Attr.2, #Attr.3, #Attr.4):
     let List.290 : {List I64, I64} = lowlevel ListReplaceUnsafe #Attr.2 #Attr.3 #Attr.4;
     ret List.290;
+=======
+procedure List.3 (List.80, List.81, List.82):
+    let List.239 : {List I64, I64} = CallByName List.57 List.80 List.81 List.82;
+    let List.238 : List I64 = StructAtIndex 0 List.239;
+    inc List.238;
+    dec List.239;
+    ret List.238;
+
+procedure List.57 (List.77, List.78, List.79):
+    let List.245 : U64 = CallByName List.6 List.77;
+    let List.242 : Int1 = CallByName Num.22 List.78 List.245;
+    if List.242 then
+        let List.243 : {List I64, I64} = CallByName List.61 List.77 List.78 List.79;
+        ret List.243;
+    else
+        let List.241 : {List I64, I64} = Struct {List.77, List.79};
+        ret List.241;
+
+procedure List.6 (#Attr.2):
+    let List.246 : U64 = lowlevel ListLen #Attr.2;
+    ret List.246;
+
+procedure List.61 (#Attr.2, #Attr.3, #Attr.4):
+    let List.244 : {List I64, I64} = lowlevel ListReplaceUnsafe #Attr.2 #Attr.3 #Attr.4;
+    ret List.244;
+>>>>>>> 61fcac491 (Fix mono tests)
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.273 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.273;
+    let Num.188 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.188;
 
 procedure Test.2 (Test.3):
     let Test.6 : U64 = 0i64;

@@ -1,5 +1,6 @@
 procedure List.28 (#Attr.2, #Attr.3):
 <<<<<<< HEAD
+<<<<<<< HEAD
     let List.287 : List I64 = lowlevel ListSortWith { xs: `#Attr.#arg1` } #Attr.2 Num.46 #Attr.3;
 =======
 <<<<<<< HEAD:crates/compiler/test_mono/generated/list_sort_asc.txt
@@ -24,19 +25,29 @@ procedure List.54 (List.178):
     ret List.259;
 =======
     let List.216 : List I64 = lowlevel ListSortWith { xs: `#Attr.#arg1` } #Attr.2 Num.46 #Attr.3;
+=======
+    let List.241 : List I64 = lowlevel ListSortWith { xs: `#Attr.#arg1` } #Attr.2 Num.46 #Attr.3;
+>>>>>>> 61fcac491 (Fix mono tests)
     let Bool.9 : Int1 = lowlevel ListIsUnique #Attr.2;
     if Bool.9 then
-        ret List.216;
+        ret List.241;
     else
         decref #Attr.2;
-        ret List.216;
+        ret List.241;
 
+<<<<<<< HEAD
 procedure List.54 (List.142):
     let List.214 : {} = Struct {};
     let List.213 : List I64 = CallByName List.28 List.142 List.214;
     ret List.213;
 >>>>>>> a5fc399f4 (Rename multimorphic tests to capture niche):compiler/test_mono/generated/list_sort_asc.txt
 >>>>>>> 25bb3751b (Rename multimorphic tests to capture niche)
+=======
+procedure List.54 (List.163):
+    let List.239 : {} = Struct {};
+    let List.238 : List I64 = CallByName List.28 List.163 List.239;
+    ret List.238;
+>>>>>>> 61fcac491 (Fix mono tests)
 
 procedure Num.46 (#Attr.2, #Attr.3):
     let Num.188 : U8 = lowlevel NumCompare #Attr.2 #Attr.3;

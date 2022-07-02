@@ -1,5 +1,6 @@
 procedure List.4 (#Attr.2, #Attr.3):
 <<<<<<< HEAD
+<<<<<<< HEAD
     let List.284 : List I64 = lowlevel ListAppend #Attr.2 #Attr.3;
     ret List.284;
 =======
@@ -11,6 +12,10 @@ procedure List.4 (#Attr.2, #Attr.3):
     ret List.213;
 >>>>>>> a5fc399f4 (Rename multimorphic tests to capture niche):compiler/test_mono/generated/list_append_closure.txt
 >>>>>>> 25bb3751b (Rename multimorphic tests to capture niche)
+=======
+    let List.238 : List I64 = lowlevel ListAppend #Attr.2 #Attr.3;
+    ret List.238;
+>>>>>>> 61fcac491 (Fix mono tests)
 
 procedure Test.1 (Test.2):
     let Test.6 : I64 = 42i64;

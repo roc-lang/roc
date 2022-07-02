@@ -1,5 +1,6 @@
 procedure List.6 (#Attr.2):
 <<<<<<< HEAD
+<<<<<<< HEAD
     let List.284 : U64 = lowlevel ListLen #Attr.2;
     ret List.284;
 
@@ -23,6 +24,14 @@ procedure List.6 (#Attr.2):
     ret List.214;
 >>>>>>> a5fc399f4 (Rename multimorphic tests to capture niche):compiler/test_mono/generated/list_len.txt
 >>>>>>> 25bb3751b (Rename multimorphic tests to capture niche)
+=======
+    let List.238 : U64 = lowlevel ListLen #Attr.2;
+    ret List.238;
+
+procedure List.6 (#Attr.2):
+    let List.239 : U64 = lowlevel ListLen #Attr.2;
+    ret List.239;
+>>>>>>> 61fcac491 (Fix mono tests)
 
 procedure Num.19 (#Attr.2, #Attr.3):
     let Num.188 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;

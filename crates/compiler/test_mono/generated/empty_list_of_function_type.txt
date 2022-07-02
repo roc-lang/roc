@@ -1,4 +1,5 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
 procedure List.2 (List.75, List.76):
     let List.290 : U64 = CallByName List.6 List.75;
     let List.286 : Int1 = CallByName Num.22 List.76 List.290;
@@ -54,6 +55,27 @@ procedure List.60 (#Attr.2, #Attr.3):
     ret List.221;
 >>>>>>> a5fc399f4 (Rename multimorphic tests to capture niche):compiler/test_mono/generated/empty_list_of_function_type.txt
 >>>>>>> 25bb3751b (Rename multimorphic tests to capture niche)
+=======
+procedure List.2 (List.72, List.73):
+    let List.244 : U64 = CallByName List.6 List.72;
+    let List.240 : Int1 = CallByName Num.22 List.73 List.244;
+    if List.240 then
+        let List.242 : {} = CallByName List.60 List.72 List.73;
+        let List.241 : [C {}, C {}] = Ok List.242;
+        ret List.241;
+    else
+        let List.239 : {} = Struct {};
+        let List.238 : [C {}, C {}] = Err List.239;
+        ret List.238;
+
+procedure List.6 (#Attr.2):
+    let List.247 : U64 = lowlevel ListLen #Attr.2;
+    ret List.247;
+
+procedure List.60 (#Attr.2, #Attr.3):
+    let List.246 : {} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.246;
+>>>>>>> 61fcac491 (Fix mono tests)
 
 procedure Num.22 (#Attr.2, #Attr.3):
     let Num.188 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;

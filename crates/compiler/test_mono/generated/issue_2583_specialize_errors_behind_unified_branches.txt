@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 procedure List.2 (List.75, List.76):
     let List.299 : U64 = CallByName List.6 List.75;
     let List.295 : Int1 = CallByName Num.22 List.76 List.299;
@@ -32,24 +33,60 @@ procedure List.9 (List.202):
         let List.287 : Int1 = true;
         let List.286 : [C Int1, C I64] = Err List.287;
         ret List.286;
+=======
+procedure List.2 (List.72, List.73):
+    let List.253 : U64 = CallByName List.6 List.72;
+    let List.249 : Int1 = CallByName Num.22 List.73 List.253;
+    if List.249 then
+        let List.251 : I64 = CallByName List.60 List.72 List.73;
+        let List.250 : [C {}, C I64] = Ok List.251;
+        ret List.250;
+    else
+        let List.248 : {} = Struct {};
+        let List.247 : [C {}, C I64] = Err List.248;
+        ret List.247;
+
+procedure List.6 (#Attr.2):
+    let List.254 : U64 = lowlevel ListLen #Attr.2;
+    ret List.254;
+
+procedure List.60 (#Attr.2, #Attr.3):
+    let List.252 : I64 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.252;
+
+procedure List.9 (List.168):
+    let List.245 : U64 = 0i64;
+    let List.238 : [C {}, C I64] = CallByName List.2 List.168 List.245;
+    let List.242 : U8 = 1i64;
+    let List.243 : U8 = GetTagId List.238;
+    let List.244 : Int1 = lowlevel Eq List.242 List.243;
+    if List.244 then
+        let List.169 : I64 = UnionAtIndex (Id 1) (Index 0) List.238;
+        let List.239 : [C Int1, C I64] = Ok List.169;
+        ret List.239;
+    else
+        let List.241 : Int1 = true;
+        let List.240 : [C Int1, C I64] = Err List.241;
+        ret List.240;
+>>>>>>> 61fcac491 (Fix mono tests)
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.273 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.273;
+    let Num.188 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.188;
 
 procedure Str.27 (#Attr.2):
     let #Attr.3 : {I64, U8} = lowlevel StrToNum #Attr.2;
-    let Str.72 : U8 = StructAtIndex 1 #Attr.3;
-    let Str.73 : U8 = 0i64;
-    let Str.69 : Int1 = lowlevel NumGt Str.72 Str.73;
-    if Str.69 then
-        let Str.71 : Int1 = false;
-        let Str.70 : [C Int1, C I64] = Err Str.71;
-        ret Str.70;
+    let Str.42 : U8 = StructAtIndex 1 #Attr.3;
+    let Str.43 : U8 = 0i64;
+    let Str.39 : Int1 = lowlevel NumGt Str.42 Str.43;
+    if Str.39 then
+        let Str.41 : Int1 = false;
+        let Str.40 : [C Int1, C I64] = Err Str.41;
+        ret Str.40;
     else
-        let Str.68 : I64 = StructAtIndex 0 #Attr.3;
-        let Str.67 : [C Int1, C I64] = Ok Str.68;
-        ret Str.67;
+        let Str.38 : I64 = StructAtIndex 0 #Attr.3;
+        let Str.37 : [C Int1, C I64] = Ok Str.38;
+        ret Str.37;
 
 procedure Test.0 ():
     let Test.4 : Int1 = true;
