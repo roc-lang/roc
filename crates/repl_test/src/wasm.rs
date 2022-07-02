@@ -11,7 +11,7 @@ use wasmer::{
 };
 use wasmer_wasi::WasiState;
 
-const WASM_REPL_COMPILER_PATH: &str = "../target/wasm32-wasi/release/roc_repl_wasm.wasm";
+const WASM_REPL_COMPILER_PATH: &str = "../../target/wasm32-wasi/release/roc_repl_wasm.wasm";
 
 thread_local! {
     static REPL_STATE: RefCell<Option<ReplState>> = RefCell::new(None)
