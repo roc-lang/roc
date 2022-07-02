@@ -26,14 +26,6 @@ pub enum HigherOrder {
     ListKeepIf {
         xs: Symbol,
     },
-    ListWalk {
-        xs: Symbol,
-        state: Symbol,
-    },
-    ListWalkBackwards {
-        xs: Symbol,
-        state: Symbol,
-    },
     ListKeepOks {
         xs: Symbol,
     },
@@ -58,8 +50,6 @@ impl HigherOrder {
             HigherOrder::ListMap4 { .. } => 4,
             HigherOrder::ListMapWithIndex { .. } => 2,
             HigherOrder::ListKeepIf { .. } => 1,
-            HigherOrder::ListWalk { .. } => 2,
-            HigherOrder::ListWalkBackwards { .. } => 2,
             HigherOrder::ListKeepOks { .. } => 1,
             HigherOrder::ListKeepErrs { .. } => 1,
             HigherOrder::ListSortWith { .. } => 2,
@@ -82,7 +72,7 @@ impl HigherOrder {
             ListMap2 { .. } => 3,
             ListMap3 { .. } => 4,
             ListMap4 { .. } => 5,
-            ListWalk { .. } | ListWalkBackwards { .. } | DictWalk { .. } => 3,
+            DictWalk { .. } => 3,
         }
     }
 

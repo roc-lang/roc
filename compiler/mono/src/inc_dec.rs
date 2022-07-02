@@ -823,9 +823,7 @@ impl<'a> Context<'a> {
 
                 handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
             }
-            ListWalk { xs, state: _ }
-            | ListWalkBackwards { xs, state: _ }
-            | DictWalk { xs, state: _ } => {
+            DictWalk { xs, state: _ } => {
                 let ownerships = [
                     // borrow data structure based on second argument of the folded function
                     (xs, function_ps[1]),

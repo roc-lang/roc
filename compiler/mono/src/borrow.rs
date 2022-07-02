@@ -609,9 +609,7 @@ impl<'a> BorrowInfState<'a> {
                         // always own the input list
                         self.own_var(*xs);
                     }
-                    ListWalk { xs, state }
-                    | ListWalkBackwards { xs, state }
-                    | DictWalk { xs, state } => {
+                    DictWalk { xs, state } => {
                         // own the default value if the function wants to own it
                         if !function_ps[0].borrow {
                             self.own_var(*state);

@@ -2019,8 +2019,6 @@ pub fn call_higher_order_lowlevel<'a>(
 
         ListMapWithIndex { .. }
         | ListKeepIf { .. }
-        | ListWalk { .. }
-        | ListWalkBackwards { .. }
         | ListKeepOks { .. }
         | ListKeepErrs { .. }
         | ListSortWith { .. }

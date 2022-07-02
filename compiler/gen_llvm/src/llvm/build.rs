@@ -4881,44 +4881,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
         }};
     }
 
-    macro_rules! list_walk {
-        ($variant:expr, $xs:expr, $state:expr) => {{
-            let (list, list_layout) = load_symbol_and_layout(scope, &$xs);
-            let (default, default_layout) = load_symbol_and_layout(scope, &$state);
-
-            let (function, closure, closure_layout) = function_details!();
-
-            match list_layout {
-                Layout::Builtin(Builtin::List(element_layout)) => {
-                    let argument_layouts = &[*default_layout, **element_layout];
-
-                    let roc_function_call = roc_function_call(
-                        env,
-                        layout_ids,
-                        function,
-                        closure,
-                        closure_layout,
-                        function_owns_closure_data,
-                        argument_layouts,
-                        result_layout,
-                    );
-
-                    crate::llvm::build_list::list_walk_generic(
-                        env,
-                        layout_ids,
-                        roc_function_call,
-                        &result_layout,
-                        list,
-                        element_layout,
-                        default,
-                        default_layout,
-                        $variant,
-                    )
-                }
-                _ => unreachable!("invalid list layout"),
-            }
-        }};
-    }
     match op {
         ListMap { xs } => {
             // List.map : List before, (before -> after) -> List after
@@ -5222,12 +5184,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                     unreachable!("invalid list layouts:\n{:?}\n{:?}", other1, other2)
                 }
             }
-        }
-        ListWalk { xs, state } => {
-            list_walk!(crate::llvm::build_list::ListWalk::Walk, xs, state)
-        }
-        ListWalkBackwards { xs, state } => {
-            list_walk!(crate::llvm::build_list::ListWalk::WalkBackwards, xs, state)
         }
         ListSortWith { xs } => {
             // List.sortWith : List a, (a, a -> Ordering) -> List a
