@@ -372,10 +372,35 @@ contains = \list, needle ->
 ## Note that in other languages, `walk` is sometimes called `reduce`,
 ## `fold`, `foldLeft`, or `foldl`.
 walk : List elem, state, (state, elem -> state) -> state
+walk = \list, state, func ->
+    walkHelp list state func 0 (len list)
+
+## internal helper
+walkHelp : List elem, state, (state, elem -> state), Nat, Nat -> state
+walkHelp = \list, state, f, index, length ->
+    if index < length then
+        nextState = f state (getUnsafe list index)
+
+        walkHelp list nextState f (index + 1) length
+    else
+        state
 
 ## Note that in other languages, `walkBackwards` is sometimes called `reduceRight`,
 ## `fold`, `foldRight`, or `foldr`.
 walkBackwards : List elem, state, (state, elem -> state) -> state
+walkBackwards = \list, state, func ->
+    walkBackwardsHelp list state func (len list)
+
+## internal helper
+walkBackwardsHelp : List elem, state, (state, elem -> state), Nat -> state
+walkBackwardsHelp = \list, state, f, indexPlusOne ->
+    if indexPlusOne == 0 then
+        state
+    else
+        index = indexPlusOne - 1
+        nextState = f state (getUnsafe list index)
+
+        walkBackwardsHelp list nextState f index
 
 ## Same as [List.walk], except you can stop walking early.
 ##
@@ -387,7 +412,7 @@ walkBackwards : List elem, state, (state, elem -> state) -> state
 ## be outweighed if it results in skipping even a small number of elements.
 ##
 ## As such, it is typically better for performance to use this over [List.walk]
-## if returning `Done` earlier than the last element is expected to be common.
+## if returning `Break` earlier than the last element is expected to be common.
 walkUntil : List elem, state, (state, elem -> [Continue state, Break state]) -> state
 walkUntil = \list, initial, step ->
     when List.iterate list initial step is
@@ -763,7 +788,16 @@ findIndex = \list, matcher ->
 ##
 ## Some languages have a function called **`slice`** which works similarly to this.
 sublist : List elem, { start : Nat, len : Nat } -> List elem
+
+## Intersperses `sep` between the elements of `list`
+## >>> List.intersperse 9 [1, 2, 3]     # [1, 9, 2, 9, 3]
 intersperse : List elem, elem -> List elem
+intersperse = \list, sep ->
+    capacity = 2 * List.len list
+    init = List.withCapacity capacity
+    newList = List.walk list init (\acc, elem -> acc |> List.append elem |> List.append sep)
+
+    List.dropLast newList
 
 ## Splits the list into two lists, around the given index.
 ##

@@ -5048,9 +5048,6 @@ pub fn with_hole<'a>(
                     let xs = arg_symbols[0];
                     match_on_closure_argument!(ListSortWith, [xs])
                 }
-                ListWalk => walk!(ListWalk),
-                ListWalkUntil => walk!(ListWalkUntil),
-                ListWalkBackwards => walk!(ListWalkBackwards),
                 DictWalk => walk!(DictWalk),
                 ListMap2 => {
                     debug_assert_eq!(arg_symbols.len(), 3);
@@ -5078,11 +5075,6 @@ pub fn with_hole<'a>(
                     let ws = arg_symbols[3];
 
                     match_on_closure_argument!(ListMap4, [xs, ys, zs, ws])
-                }
-                ListFindUnsafe => {
-                    debug_assert_eq!(arg_symbols.len(), 2);
-                    let xs = arg_symbols[0];
-                    match_on_closure_argument!(ListFindUnsafe, [xs])
                 }
                 BoxExpr => {
                     debug_assert_eq!(arg_symbols.len(), 1);

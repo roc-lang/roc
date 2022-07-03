@@ -693,7 +693,7 @@ impl<'a> Context<'a> {
         let after_arguments = &arguments[op.function_index()..];
 
         match *op {
-            ListMap { xs } | ListAny { xs } | ListAll { xs } | ListFindUnsafe { xs } => {
+            ListMap { xs } => {
                 let ownerships = [(xs, function_ps[0])];
 
                 let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
@@ -820,10 +820,7 @@ impl<'a> Context<'a> {
 
                 handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
             }
-            ListWalk { xs, state: _ }
-            | ListWalkUntil { xs, state: _ }
-            | ListWalkBackwards { xs, state: _ }
-            | DictWalk { xs, state: _ } => {
+            DictWalk { xs, state: _ } => {
                 let ownerships = [
                     // borrow data structure based on second argument of the folded function
                     (xs, function_ps[1]),

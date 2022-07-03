@@ -733,53 +733,6 @@ fn call_spec(
                     add_loop(builder, block, state_type, init_state, loop_body)
                 }
 
-                ListWalk { xs, state } | ListWalkBackwards { xs, state } => {
-                    let list = env.symbols[xs];
-                    let state = env.symbols[state];
-
-                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
-                        let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
-
-                        let element = builder.add_bag_get(block, bag)?;
-
-                        let new_state = call_function!(builder, block, [state, element]);
-
-                        Ok(new_state)
-                    };
-
-                    let state_layout = argument_layouts[0];
-                    let state_type =
-                        layout_spec(builder, &state_layout, &WhenRecursive::Unreachable)?;
-                    let init_state = state;
-
-                    add_loop(builder, block, state_type, init_state, loop_body)
-                }
-                ListWalkUntil { xs, state } => {
-                    let list = env.symbols[xs];
-                    let state = env.symbols[state];
-
-                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
-                        let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
-
-                        let element = builder.add_bag_get(block, bag)?;
-
-                        let continue_or_stop = call_function!(builder, block, [state, element]);
-
-                        // just assume it is a continue
-                        let unwrapped = builder.add_unwrap_union(block, continue_or_stop, 0)?;
-                        let new_state = builder.add_get_tuple_field(block, unwrapped, 0)?;
-
-                        Ok(new_state)
-                    };
-
-                    let state_layout = argument_layouts[0];
-                    let state_type =
-                        layout_spec(builder, &state_layout, &WhenRecursive::Unreachable)?;
-                    let init_state = state;
-
-                    add_loop(builder, block, state_type, init_state, loop_body)
-                }
-
                 // List.mapWithIndex : List before, (before, Nat -> after) -> List after
                 ListMapWithIndex { xs } => {
                     let list = env.symbols[xs];
@@ -962,82 +915,6 @@ fn call_spec(
                     let init_state = new_list(builder, block, output_element_type)?;
 
                     add_loop(builder, block, state_type, init_state, loop_body)
-                }
-                ListAny { xs } => {
-                    let list = env.symbols[xs];
-
-                    let loop_body = |builder: &mut FuncDefBuilder, block, _state| {
-                        let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
-                        let element = builder.add_bag_get(block, bag)?;
-
-                        let new_state = call_function!(builder, block, [element]);
-
-                        Ok(new_state)
-                    };
-
-                    let state_layout = Layout::Builtin(Builtin::Bool);
-                    let state_type =
-                        layout_spec(builder, &state_layout, &WhenRecursive::Unreachable)?;
-
-                    let init_state = new_num(builder, block)?;
-
-                    add_loop(builder, block, state_type, init_state, loop_body)
-                }
-                ListAll { xs } => {
-                    let list = env.symbols[xs];
-
-                    let loop_body = |builder: &mut FuncDefBuilder, block, _state| {
-                        let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
-                        let element = builder.add_bag_get(block, bag)?;
-
-                        let new_state = call_function!(builder, block, [element]);
-
-                        Ok(new_state)
-                    };
-
-                    let state_layout = Layout::Builtin(Builtin::Bool);
-                    let state_type =
-                        layout_spec(builder, &state_layout, &WhenRecursive::Unreachable)?;
-
-                    let init_state = new_num(builder, block)?;
-
-                    add_loop(builder, block, state_type, init_state, loop_body)
-                }
-                ListFindUnsafe { xs } => {
-                    let list = env.symbols[xs];
-
-                    // ListFindUnsafe returns { value: v, found: Bool=Int1 }
-                    let output_layouts = vec![argument_layouts[0], Layout::Builtin(Builtin::Bool)];
-                    let output_layout = Layout::struct_no_name_order(&output_layouts);
-                    let output_type =
-                        layout_spec(builder, &output_layout, &WhenRecursive::Unreachable)?;
-
-                    let loop_body = |builder: &mut FuncDefBuilder, block, output| {
-                        let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
-                        let element = builder.add_bag_get(block, bag)?;
-                        let _is_found = call_function!(builder, block, [element]);
-
-                        // We may or may not use the element we got from the list in the output struct,
-                        // depending on whether we found the element to satisfy the "find" predicate.
-                        // If we did find the element, our output "changes" to be a record including that element.
-                        let found_branch = builder.add_block();
-                        let new_output =
-                            builder.add_unknown_with(block, &[element], output_type)?;
-
-                        let not_found_branch = builder.add_block();
-
-                        builder.add_choice(
-                            block,
-                            &[
-                                BlockExpr(found_branch, new_output),
-                                BlockExpr(not_found_branch, output),
-                            ],
-                        )
-                    };
-
-                    // Assume the output is initially { found: False, value: \empty }
-                    let output_state = builder.add_unknown_with(block, &[], output_type)?;
-                    add_loop(builder, block, output_type, output_state, loop_body)
                 }
             }
         }
