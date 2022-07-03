@@ -2,12 +2,18 @@ interface Url
     exposes [Url, fromStr]
     imports []
 
+## A [Uniform Resource Locator](https://en.wikipedia.org/wiki/URL).
+##
+## It could be an absolute address, such as `https://roc-lang.org/authors` or
+## a relative address, such as `/authors`. You can create one using [Url.fromStr].
 Url := Str
 
-## Create a [Url] without validating or percent-encoding anything.
+## Create a [Url] without validating or [percent-encoding](https://en.wikipedia.org/wiki/Percent-encoding)
+## anything.
 fromStr : Str -> Url
 fromStr = \str -> @Url str
 
+## Return a [Str] representation of this URL.
 toStr : Url -> Str
 toStr = \@Url str -> str
 
@@ -99,7 +105,8 @@ appendHelp = \prefix, suffix ->
             |> Str.append suffix
 
 ## Internal helper. This is intentionally unexposed so that you don't accidentally
-## double-encode things. If you want to percent-encode something, you can always do:
+## double-encode things. If you really want to percent-encode an arbitrary string,
+## you can always do:
 ##
 ##     Path.fromStr ""
 ##         |> Path.append myStrToEncode
