@@ -1677,7 +1677,7 @@ fn to_scalar_3_byte() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn to_scalar_4_byte() {
     // from https://design215.com/toolbox/utf8-4byte-characters.php
     assert_evals_to!(
@@ -1698,5 +1698,37 @@ fn to_scalar_4_byte() {
         ),
         RocList::from_slice(&[73728u32, 73729u32]),
         RocList<u32>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn str_split_first() {
+    // Str.splitFirst "foo/bar/baz" "/" == Ok { before: "foo", after: "bar/baz" }
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.splitFirst "foo/bar/baz" "/"
+            "#
+        ),
+        RocResult::ok((RocStr::from("bar/baz"), RocStr::from("foo"))),
+        RocResult<(RocStr, RocStr), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn str_split_last() {
+    // Str.splitFirst "foo/bar/baz" "/" == Ok { before: "foo", after: "bar/baz" }
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.splitLast"foo/bar/baz" "/"
+            "#
+        ),
+        RocResult::ok((RocStr::from("baz"), RocStr::from("foo/bar"))),
+        RocResult<(RocStr, RocStr), ()>
     );
 }

@@ -33,6 +33,8 @@ interface Str
             toU8,
             toI8,
             toScalars,
+            splitFirst,
+            splitLast,
         ]
     imports [Bool.{ Bool }, Result.{ Result }]
 
@@ -230,3 +232,94 @@ countBytes : Str -> Nat
 
 ## string slice that does not do bounds checking or utf-8 verification
 substringUnsafe : Str, Nat, Nat -> Str
+
+## Returns the string before the first occurrence of a delimiter, as well as the
+## rest of the string after that occurrence. If the delimiter is not found, returns `Err`.
+##
+##     Str.splitFirst "foo/bar/baz" "/" == Ok { before: "foo", after: "bar/baz" }
+splitFirst : Str, Str -> Result { before : Str, after : Str } [NotFound]*
+splitFirst = \haystack, needle ->
+    when firstMatch haystack needle is
+        Some index ->
+            remaining = Str.countBytes haystack - Str.countBytes needle - index
+
+            before = Str.substringUnsafe haystack 0 index
+            after = Str.substringUnsafe haystack (index + Str.countBytes needle) remaining
+
+            Ok { before, after }
+        None ->
+            Err NotFound
+
+firstMatch : Str, Str -> [Some Nat, None]
+firstMatch = \haystack, needle ->
+    haystackLength = Str.countBytes haystack
+    needleLength = Str.countBytes needle
+    lastPossible = Num.subSaturated haystackLength needleLength
+
+    firstMatchHelp haystack needle 0 lastPossible
+
+firstMatchHelp : Str, Str, Nat, Nat -> [Some Nat, None]
+firstMatchHelp = \haystack, needle, index, lastPossible ->
+    if index < lastPossible then
+        if matchesAt haystack index needle then
+            Some index
+        else
+            firstMatchHelp haystack needle (index + 1) lastPossible
+    else
+        None
+
+## Returns the string before the last occurrence of a delimiter, as well as the
+## rest of the string after that occurrence. If the delimiter is not found, returns `Err`.
+##
+##     Str.splitLast "foo/bar/baz" "/" == Ok { before: "foo/bar", after: "baz" }
+splitLast : Str, Str -> Result { before : Str, after : Str } [NotFound]*
+splitLast = \haystack, needle ->
+    when lastMatch haystack needle is
+        Some index ->
+            remaining = Str.countBytes haystack - Str.countBytes needle - index
+
+            before = Str.substringUnsafe haystack 0 index
+            after = Str.substringUnsafe haystack (index + Str.countBytes needle) remaining
+
+            Ok { before, after }
+        None ->
+            Err NotFound
+
+lastMatch : Str, Str -> [Some Nat, None]
+lastMatch = \haystack, needle ->
+    haystackLength = Str.countBytes haystack
+    needleLength = Str.countBytes needle
+    lastPossibleIndex = Num.subSaturated haystackLength (needleLength + 1)
+
+    lastMatchHelp haystack needle lastPossibleIndex
+
+lastMatchHelp : Str, Str, Nat -> [Some Nat, None]
+lastMatchHelp = \haystack, needle, index ->
+    if matchesAt haystack index needle then
+        Some index
+    else
+        when Num.subChecked index 1 is
+            Ok nextIndex ->
+                lastMatchHelp haystack needle nextIndex
+            Err _ ->
+                None
+
+min = \x, y -> if x < y then x else y
+
+matchesAt : Str, Nat, Str -> Bool
+matchesAt = \haystack, haystackIndex, needle ->
+    haystackLength = Str.countBytes haystack
+    needleLength = Str.countBytes needle
+    endIndex = min (haystackIndex + needleLength) haystackLength
+
+    matchesAtHelp haystack haystackIndex needle 0 endIndex
+
+matchesAtHelp : Str, Nat, Str, Nat, Nat -> Bool
+matchesAtHelp = \haystack, haystackIndex, needle, needleIndex, endIndex ->
+    if haystackIndex < endIndex then
+        if Str.getUnsafe haystack haystackIndex == Str.getUnsafe needle needleIndex then
+            matchesAtHelp haystack (haystackIndex + 1) needle (needleIndex + 1) endIndex
+        else
+            False
+    else
+        True

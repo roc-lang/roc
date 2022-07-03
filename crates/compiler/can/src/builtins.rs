@@ -1734,7 +1734,7 @@ fn str_count_bytes(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Str.substringUnsafe : Str, Nat, Nat -> Nat
 fn str_substring_unsafe(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    lowlevel_1(symbol, LowLevel::StrSubstringUnsafe, var_store)
+    lowlevel_3(symbol, LowLevel::StrSubstringUnsafe, var_store)
 }
 
 /// Str.fromUtf8 : List U8 -> Result Str [BadUtf8 { byteIndex : Nat, problem : Utf8Problem  } }]*

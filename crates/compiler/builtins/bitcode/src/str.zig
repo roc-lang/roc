@@ -1194,6 +1194,10 @@ pub fn substringUnsafe(string: RocStr, start: usize, length: usize) callconv(.C)
     return RocStr.fromSlice(slice);
 }
 
+pub fn getUnsafe(string: RocStr, index: usize) callconv(.C) u8 {
+    return string.getUnchecked(index);
+}
+
 test "substringUnsafe: start" {
     const str = RocStr.fromSlice("abcdef");
     defer str.deinit();

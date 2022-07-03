@@ -1193,6 +1193,8 @@ define_builtins! {
         35 STR_GET_UNSAFE: "getUnsafe"
         36 STR_COUNT_BYTES: "countBytes"
         37 STR_SUBSTRING_UNSAFE: "substringUnsafe"
+        38 STR_SPLIT_FIRST: "splitFirst"
+        39 STR_SPLIT_LAST: "splitLast"
     }
     5 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
