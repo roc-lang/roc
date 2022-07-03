@@ -1,99 +1,28 @@
-<<<<<<< HEAD
-<<<<<<< HEAD
-procedure List.2 (List.75, List.76):
-    let List.290 : U64 = CallByName List.6 List.75;
-    let List.286 : Int1 = CallByName Num.22 List.76 List.290;
-    if List.286 then
-        let List.288 : Str = CallByName List.60 List.75 List.76;
-        let List.287 : [C {}, C Str] = Ok List.288;
-        ret List.287;
-=======
-<<<<<<< HEAD:crates/compiler/test_mono/generated/list_map_closure_owns.txt
-procedure List.2 (List.73, List.74):
-    let List.265 : U64 = CallByName List.6 List.73;
-    let List.261 : Int1 = CallByName Num.22 List.74 List.265;
-    if List.261 then
-        let List.263 : Str = CallByName List.60 List.73 List.74;
-        let List.262 : [C {}, C Str] = Ok List.263;
-        ret List.262;
->>>>>>> 25bb3751b (Rename multimorphic tests to capture niche)
+procedure List.2 (List.74, List.75):
+    let List.272 : U64 = CallByName List.6 List.74;
+    let List.268 : Int1 = CallByName Num.22 List.75 List.272;
+    if List.268 then
+        let List.270 : Str = CallByName List.60 List.74 List.75;
+        let List.269 : [C {}, C Str] = Ok List.270;
+        ret List.269;
     else
-        let List.285 : {} = Struct {};
-        let List.284 : [C {}, C Str] = Err List.285;
-        ret List.284;
+        let List.267 : {} = Struct {};
+        let List.266 : [C {}, C Str] = Err List.267;
+        ret List.266;
 
 procedure List.5 (#Attr.2, #Attr.3):
     inc #Attr.2;
-    let List.292 : List Str = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.3 #Attr.3;
+    let List.274 : List Str = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.3 #Attr.3;
     decref #Attr.2;
-    ret List.292;
+    ret List.274;
 
 procedure List.6 (#Attr.2):
-    let List.294 : U64 = lowlevel ListLen #Attr.2;
-    ret List.294;
+    let List.276 : U64 = lowlevel ListLen #Attr.2;
+    ret List.276;
 
 procedure List.60 (#Attr.2, #Attr.3):
-<<<<<<< HEAD
-    let List.293 : Str = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret List.293;
-=======
-    let List.268 : Str = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret List.268;
-=======
-procedure List.2 (List.71, List.72):
-    let List.219 : U64 = CallByName List.6 List.71;
-    let List.215 : Int1 = CallByName Num.22 List.72 List.219;
-    if List.215 then
-        let List.217 : Str = CallByName List.60 List.71 List.72;
-        let List.216 : [C {}, C Str] = Ok List.217;
-        ret List.216;
-    else
-        let List.214 : {} = Struct {};
-        let List.213 : [C {}, C Str] = Err List.214;
-        ret List.213;
-
-procedure List.5 (#Attr.2, #Attr.3):
-    inc #Attr.2;
-    let List.221 : List Str = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.3 #Attr.3;
-    decref #Attr.2;
-    ret List.221;
-
-procedure List.6 (#Attr.2):
-    let List.223 : U64 = lowlevel ListLen #Attr.2;
-    ret List.223;
-
-procedure List.60 (#Attr.2, #Attr.3):
-    let List.222 : Str = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret List.222;
->>>>>>> a5fc399f4 (Rename multimorphic tests to capture niche):compiler/test_mono/generated/list_map_closure_owns.txt
->>>>>>> 25bb3751b (Rename multimorphic tests to capture niche)
-=======
-procedure List.2 (List.72, List.73):
-    let List.244 : U64 = CallByName List.6 List.72;
-    let List.240 : Int1 = CallByName Num.22 List.73 List.244;
-    if List.240 then
-        let List.242 : Str = CallByName List.60 List.72 List.73;
-        let List.241 : [C {}, C Str] = Ok List.242;
-        ret List.241;
-    else
-        let List.239 : {} = Struct {};
-        let List.238 : [C {}, C Str] = Err List.239;
-        ret List.238;
-
-procedure List.5 (#Attr.2, #Attr.3):
-    inc #Attr.2;
-    let List.246 : List Str = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.3 #Attr.3;
-    decref #Attr.2;
-    ret List.246;
-
-procedure List.6 (#Attr.2):
-    let List.248 : U64 = lowlevel ListLen #Attr.2;
-    ret List.248;
-
-procedure List.60 (#Attr.2, #Attr.3):
-    let List.247 : Str = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret List.247;
->>>>>>> 61fcac491 (Fix mono tests)
+    let List.275 : Str = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.275;
 
 procedure Num.22 (#Attr.2, #Attr.3):
     let Num.188 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
