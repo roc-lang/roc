@@ -3980,6 +3980,7 @@ dependencies = [
  "bumpalo",
  "distance",
  "indoc",
+ "insta",
  "pretty_assertions",
  "roc_builtins",
  "roc_can",
