@@ -3,11 +3,11 @@ procedure List.2 (List.74, List.75):
     let List.282 : Int1 = CallByName Num.22 List.75 List.286;
     if List.282 then
         let List.284 : I64 = CallByName List.60 List.74 List.75;
-        let List.283 : [C {}, C I64] = Ok List.284;
+        let List.283 : [C {}, C I64] = TagId(1) List.284;
         ret List.283;
     else
         let List.281 : {} = Struct {};
-        let List.280 : [C {}, C I64] = Err List.281;
+        let List.280 : [C {}, C I64] = TagId(0) List.281;
         ret List.280;
 
 procedure List.3 (List.82, List.83, List.84):

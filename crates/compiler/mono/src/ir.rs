@@ -53,14 +53,14 @@ pub fn pretty_print_ir_symbols() -> bool {
 // if it went up, maybe check that the change is really required
 
 roc_error_macros::assert_sizeof_wasm!(Literal, 24);
-roc_error_macros::assert_sizeof_wasm!(Expr, 40);
+roc_error_macros::assert_sizeof_wasm!(Expr, 48);
 roc_error_macros::assert_sizeof_wasm!(Stmt, 120);
 roc_error_macros::assert_sizeof_wasm!(ProcLayout, 40);
 roc_error_macros::assert_sizeof_wasm!(Call, 44);
 roc_error_macros::assert_sizeof_wasm!(CallType, 36);
 
 roc_error_macros::assert_sizeof_non_wasm!(Literal, 3 * 8);
-roc_error_macros::assert_sizeof_non_wasm!(Expr, 9 * 8);
+roc_error_macros::assert_sizeof_non_wasm!(Expr, 10 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(Stmt, 19 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(ProcLayout, 8 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(Call, 9 * 8);
@@ -1713,7 +1713,6 @@ pub enum Expr<'a> {
 
     Tag {
         tag_layout: UnionLayout<'a>,
-        tag_name: TagOrClosure,
         tag_id: TagIdIntType,
         arguments: &'a [Symbol],
     },
@@ -1839,17 +1838,12 @@ impl<'a> Expr<'a> {
             Call(call) => call.to_doc(alloc),
 
             Tag {
-                tag_name,
-                arguments,
-                ..
+                tag_id, arguments, ..
             } => {
-                let doc_tag = match tag_name {
-                    TagOrClosure::Tag(TagName(s)) => alloc.text(s.as_str()),
-                    TagOrClosure::Closure(s) => alloc
-                        .text("ClosureTag(")
-                        .append(symbol_to_doc(alloc, *s))
-                        .append(")"),
-                };
+                let doc_tag = alloc
+                    .text("TagId(")
+                    .append(alloc.text(tag_id.to_string()))
+                    .append(")");
 
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
 
@@ -5281,8 +5275,8 @@ where
         ClosureRepresentation::Union {
             tag_id,
             alphabetic_order_fields: field_layouts,
-            closure_name: tag_name,
             union_layout,
+            closure_name: _,
         } => {
             // captured variables are in symbol-alphabetic order, but now we want
             // them ordered by their alignment requirements
@@ -5306,7 +5300,6 @@ where
             let expr = Expr::Tag {
                 tag_id,
                 tag_layout: union_layout,
-                tag_name: tag_name.into(),
                 arguments: symbols,
             };
 
@@ -5502,7 +5495,6 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -5525,7 +5517,6 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -5550,7 +5541,6 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -5577,7 +5567,6 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -5595,7 +5584,6 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -6445,7 +6433,6 @@ fn substitute_in_expr<'a>(
 
         Tag {
             tag_layout,
-            tag_name,
             tag_id,
             arguments: args,
         } => {
@@ -6466,7 +6453,6 @@ fn substitute_in_expr<'a>(
 
                 Some(Tag {
                     tag_layout: *tag_layout,
-                    tag_name: tag_name.clone(),
                     tag_id: *tag_id,
                     arguments,
                 })

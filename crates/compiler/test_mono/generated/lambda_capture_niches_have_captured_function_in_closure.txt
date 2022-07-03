@@ -17,11 +17,11 @@ procedure Test.16 (Test.54):
     ret Test.56;
 
 procedure Test.2 (Test.7, Test.8):
-    let Test.9 : [C {} {}, C {} {}] = ClosureTag(Test.9) Test.7 Test.8;
+    let Test.9 : [C {} {}, C {} {}] = TagId(0) Test.7 Test.8;
     ret Test.9;
 
 procedure Test.2 (Test.7, Test.8):
-    let Test.9 : [C {} {}, C {} {}] = ClosureTag(Test.9) Test.7 Test.8;
+    let Test.9 : [C {} {}, C {} {}] = TagId(1) Test.7 Test.8;
     ret Test.9;
 
 procedure Test.3 (Test.17):

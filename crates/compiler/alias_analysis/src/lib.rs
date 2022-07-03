@@ -1232,7 +1232,6 @@ fn expr_spec<'a>(
         }
         | Tag {
             tag_layout,
-            tag_name: _,
             tag_id,
             arguments,
         } => {

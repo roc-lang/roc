@@ -3,11 +3,11 @@ procedure Num.40 (#Attr.2, #Attr.3):
     let Num.190 : Int1 = lowlevel NotEq #Attr.3 Num.193;
     if Num.190 then
         let Num.192 : I64 = lowlevel NumDivUnchecked #Attr.2 #Attr.3;
-        let Num.191 : [C {}, C I64] = Ok Num.192;
+        let Num.191 : [C {}, C I64] = TagId(1) Num.192;
         ret Num.191;
     else
         let Num.189 : {} = Struct {};
-        let Num.188 : [C {}, C I64] = Err Num.189;
+        let Num.188 : [C {}, C I64] = TagId(0) Num.189;
         ret Num.188;
 
 procedure Test.0 ():

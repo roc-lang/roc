@@ -3,11 +3,11 @@ procedure List.2 (List.74, List.75):
     let List.277 : Int1 = CallByName Num.22 List.75 List.281;
     if List.277 then
         let List.279 : I64 = CallByName List.60 List.74 List.75;
-        let List.278 : [C {}, C I64] = Ok List.279;
+        let List.278 : [C {}, C I64] = TagId(1) List.279;
         ret List.278;
     else
         let List.276 : {} = Struct {};
-        let List.275 : [C {}, C I64] = Err List.276;
+        let List.275 : [C {}, C I64] = TagId(0) List.276;
         ret List.275;
 
 procedure List.6 (#Attr.2):
@@ -26,11 +26,11 @@ procedure List.9 (List.188):
     let List.272 : Int1 = lowlevel Eq List.270 List.271;
     if List.272 then
         let List.189 : I64 = UnionAtIndex (Id 1) (Index 0) List.266;
-        let List.267 : [C Int1, C I64] = Ok List.189;
+        let List.267 : [C Int1, C I64] = TagId(1) List.189;
         ret List.267;
     else
         let List.269 : Int1 = true;
-        let List.268 : [C Int1, C I64] = Err List.269;
+        let List.268 : [C Int1, C I64] = TagId(0) List.269;
         ret List.268;
 
 procedure Num.22 (#Attr.2, #Attr.3):
@@ -44,11 +44,11 @@ procedure Str.27 (#Attr.2):
     let Str.39 : Int1 = lowlevel NumGt Str.42 Str.43;
     if Str.39 then
         let Str.41 : Int1 = false;
-        let Str.40 : [C Int1, C I64] = Err Str.41;
+        let Str.40 : [C Int1, C I64] = TagId(0) Str.41;
         ret Str.40;
     else
         let Str.38 : I64 = StructAtIndex 0 #Attr.3;
-        let Str.37 : [C Int1, C I64] = Ok Str.38;
+        let Str.37 : [C Int1, C I64] = TagId(1) Str.38;
         ret Str.37;
 
 procedure Test.0 ():

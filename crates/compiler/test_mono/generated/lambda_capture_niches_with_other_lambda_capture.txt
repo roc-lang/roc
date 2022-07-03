@@ -1,13 +1,13 @@
 procedure Test.1 (Test.5):
-    let Test.20 : [C U64, C {}, C Str] = ClosureTag(Test.6) Test.5;
+    let Test.20 : [C U64, C {}, C Str] = TagId(1) Test.5;
     ret Test.20;
 
 procedure Test.1 (Test.5):
-    let Test.32 : [C U64, C {}, C Str] = ClosureTag(Test.6) Test.5;
+    let Test.32 : [C U64, C {}, C Str] = TagId(0) Test.5;
     ret Test.32;
 
 procedure Test.2 (Test.7):
-    let Test.26 : [C U64, C {}, C Str] = ClosureTag(Test.8) Test.7;
+    let Test.26 : [C U64, C {}, C Str] = TagId(2) Test.7;
     ret Test.26;
 
 procedure Test.6 (Test.21, #Attr.12):
