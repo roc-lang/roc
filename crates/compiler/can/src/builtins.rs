@@ -81,6 +81,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_STARTS_WITH_SCALAR => str_starts_with_scalar,
         STR_ENDS_WITH => str_ends_with,
         STR_COUNT_GRAPHEMES => str_count_graphemes,
+        STR_COUNT_BYTES=> str_count_bytes,
         STR_FROM_UTF8 => str_from_utf8,
         STR_FROM_UTF8_RANGE => str_from_utf8_range,
         STR_TO_UTF8 => str_to_utf8,
@@ -1722,22 +1723,12 @@ fn str_ends_with(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Str.countGraphemes : Str -> Int
 fn str_count_graphemes(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let str_var = var_store.fresh();
-    let int_var = var_store.fresh();
+    lowlevel_1(symbol, LowLevel::StrCountGraphemes, var_store)
+}
 
-    let body = RunLowLevel {
-        op: LowLevel::StrCountGraphemes,
-        args: vec![(str_var, Var(Symbol::ARG_1))],
-        ret_var: int_var,
-    };
-
-    defn(
-        symbol,
-        vec![(str_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        int_var,
-    )
+/// Str.countBytes : Str -> Nat
+fn str_count_bytes(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::StrCountBytes, var_store)
 }
 
 /// Str.fromUtf8 : List U8 -> Result Str [BadUtf8 { byteIndex : Nat, problem : Utf8Problem  } }]*

@@ -146,6 +146,7 @@ comptime {
     exportStrFn(str.strSplitInPlaceC, "str_split_in_place");
     exportStrFn(str.countSegments, "count_segments");
     exportStrFn(str.countGraphemeClusters, "count_grapheme_clusters");
+    exportStrFn(str.countBytes, "count_bytes");
     exportStrFn(str.startsWith, "starts_with");
     exportStrFn(str.startsWithScalar, "starts_with_scalar");
     exportStrFn(str.endsWith, "ends_with");

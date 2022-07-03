@@ -1191,6 +1191,7 @@ define_builtins! {
         33 STR_TO_I8: "toI8"
         34 STR_TO_SCALARS: "toScalars"
         35 STR_GET_UNSAFE: "getUnsafe"
+        36 STR_COUNT_BYTES: "countBytes"
     }
     5 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias

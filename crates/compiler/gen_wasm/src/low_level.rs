@@ -248,6 +248,7 @@ impl<'a> LowLevelCall<'a> {
             StrCountGraphemes => {
                 self.load_args_and_call_zig(backend, bitcode::STR_COUNT_GRAPEHEME_CLUSTERS)
             }
+            StrCountBytes => self.load_args_and_call_zig(backend, bitcode::STR_COUNT_BYTES),
             StrToNum => {
                 let number_layout = match self.ret_layout {
                     Layout::Struct { field_layouts, .. } => field_layouts[0],

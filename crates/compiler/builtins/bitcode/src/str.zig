@@ -1184,6 +1184,10 @@ test "countGraphemeClusters: emojis, ut8, and ascii characters" {
     try expectEqual(count, 10);
 }
 
+pub fn countBytes(string: RocStr) callconv(.C) usize {
+    return string.len();
+}
+
 // Str.startsWith
 pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.C) bool {
     const bytes_len = string.len();

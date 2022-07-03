@@ -5334,11 +5334,18 @@ fn run_low_level<'a, 'ctx, 'env>(
             BasicValueEnum::IntValue(is_zero)
         }
         StrCountGraphemes => {
-            // Str.countGraphemes : Str -> Int
+            // Str.countGraphemes : Str -> Nat
             debug_assert_eq!(args.len(), 1);
 
             let string = load_symbol(scope, &args[0]);
             call_bitcode_fn(env, &[string], bitcode::STR_COUNT_GRAPEHEME_CLUSTERS)
+        }
+        StrCountBytes => {
+            // Str.countGraphemes : Str -> Nat
+            debug_assert_eq!(args.len(), 1);
+
+            let string = load_symbol(scope, &args[0]);
+            call_bitcode_fn(env, &[string], bitcode::STR_COUNT_BYTES)
         }
         StrTrim => {
             // Str.trim : Str -> Str
