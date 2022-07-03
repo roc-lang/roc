@@ -3624,3 +3624,22 @@ fn lambda_capture_niches_have_captured_function_in_closure() {
         (RocStr, RocStr)
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn recursive_call_capturing_function() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            a = \b ->
+                c = \d ->
+                    if d == 7 then d else c (d + b)
+                c 1
+
+            a 6
+            "#
+        ),
+        7,
+        i64
+    )
+}
