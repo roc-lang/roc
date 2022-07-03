@@ -97,7 +97,7 @@ fn function_s<'a, 'i>(
             Expr::Tag {
                 tag_layout,
                 tag_id,
-                tag_name,
+                tag_name: _,
                 arguments,
             } if may_reuse(*tag_layout, *tag_id, c) => {
                 // for now, always overwrite the tag ID just to be sure
@@ -109,7 +109,6 @@ fn function_s<'a, 'i>(
                     update_tag_id,
                     tag_layout: *tag_layout,
                     tag_id: *tag_id,
-                    tag_name: tag_name.clone(),
                     arguments,
                 };
                 let new_stmt = Let(*symbol, new_expr, *layout, continuation);

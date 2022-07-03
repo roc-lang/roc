@@ -53,14 +53,14 @@ pub fn pretty_print_ir_symbols() -> bool {
 // if it went up, maybe check that the change is really required
 
 roc_error_macros::assert_sizeof_wasm!(Literal, 24);
-roc_error_macros::assert_sizeof_wasm!(Expr, 48);
+roc_error_macros::assert_sizeof_wasm!(Expr, 40);
 roc_error_macros::assert_sizeof_wasm!(Stmt, 120);
 roc_error_macros::assert_sizeof_wasm!(ProcLayout, 40);
 roc_error_macros::assert_sizeof_wasm!(Call, 44);
 roc_error_macros::assert_sizeof_wasm!(CallType, 36);
 
 roc_error_macros::assert_sizeof_non_wasm!(Literal, 3 * 8);
-roc_error_macros::assert_sizeof_non_wasm!(Expr, 10 * 8);
+roc_error_macros::assert_sizeof_non_wasm!(Expr, 9 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(Stmt, 19 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(ProcLayout, 8 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(Call, 9 * 8);
@@ -1757,7 +1757,6 @@ pub enum Expr<'a> {
         update_mode: UpdateModeId,
         // normal Tag fields
         tag_layout: UnionLayout<'a>,
-        tag_name: TagOrClosure,
         tag_id: TagIdIntType,
         arguments: &'a [Symbol],
     },
@@ -1860,18 +1859,15 @@ impl<'a> Expr<'a> {
             }
             Reuse {
                 symbol,
-                tag_name,
+                tag_id,
                 arguments,
                 update_mode,
                 ..
             } => {
-                let doc_tag = match tag_name {
-                    TagOrClosure::Tag(TagName(s)) => alloc.text(s.as_str()),
-                    TagOrClosure::Closure(s) => alloc
-                        .text("ClosureTag(")
-                        .append(symbol_to_doc(alloc, *s))
-                        .append(")"),
-                };
+                let doc_tag = alloc
+                    .text("TagId(")
+                    .append(alloc.text(tag_id.to_string()))
+                    .append(")");
 
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
 
