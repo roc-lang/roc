@@ -157,9 +157,9 @@ param = \@Url urlStr, key, value ->
     # TODO use Str.reserve once it exists
     urlStr
         |> Str.append (if hasQuery (@Url urlStr) then "&" else "?")
-        |> Str.append key
+        |> Str.append (percentEncode key)
         |> Str.append "="
-        |> Str.append value
+        |> Str.append (percentEncode value)
         |> @Url
 
 ## Returns `True` if the URL has a `?` in it.
