@@ -3260,7 +3260,7 @@ fn issue_2322() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn box_and_unbox_string() {
     assert_evals_to!(
         indoc!(
@@ -3278,7 +3278,7 @@ fn box_and_unbox_string() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn box_and_unbox_num() {
     assert_evals_to!(
         indoc!(
@@ -3292,7 +3292,7 @@ fn box_and_unbox_num() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn box_and_unbox_record() {
     assert_evals_to!(
         indoc!(
@@ -3306,7 +3306,7 @@ fn box_and_unbox_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn box_and_unbox_tag_union() {
     assert_evals_to!(
         indoc!(
