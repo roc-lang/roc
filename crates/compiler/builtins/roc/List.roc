@@ -379,7 +379,6 @@ walk = \list, state, func ->
         Continue newState -> newState
         Break void -> List.unreachable void
 
-
 ## Note that in other languages, `walkBackwards` is sometimes called `reduceRight`,
 ## `fold`, `foldRight`, or `foldr`.
 walkBackwards : List elem, state, (state, elem -> state) -> state
@@ -820,4 +819,5 @@ iterHelp = \list, state, f, index, length ->
     else
         Continue state
 
+## useful for typechecking guaranteed-unreachable cases
 unreachable : [] -> a
