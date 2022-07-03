@@ -11,7 +11,7 @@ use roc_mono::low_level::HigherOrder;
 
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
 use crate::layout::{CallConv, StackMemoryFormat, WasmLayout};
-use crate::storage::{StackMemoryLocation, StoredValue, AddressValue};
+use crate::storage::{AddressValue, StackMemoryLocation, StoredValue};
 use crate::wasm_module::{Align, LocalId, ValueType};
 use crate::TARGET_INFO;
 
