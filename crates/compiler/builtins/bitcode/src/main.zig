@@ -155,6 +155,7 @@ comptime {
     exportStrFn(str.strNumberOfBytes, "number_of_bytes");
     exportStrFn(str.strFromFloatC, "from_float");
     exportStrFn(str.strEqual, "equal");
+    exportStrFn(str.substringUnsafe, "substring_unsafe");
     exportStrFn(str.strToUtf8C, "to_utf8");
     exportStrFn(str.fromUtf8C, "from_utf8");
     exportStrFn(str.fromUtf8RangeC, "from_utf8_range");

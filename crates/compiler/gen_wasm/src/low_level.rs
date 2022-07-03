@@ -277,6 +277,9 @@ impl<'a> LowLevelCall<'a> {
             StrToUtf8 => self.load_args_and_call_zig(backend, bitcode::STR_TO_UTF8),
             StrRepeat => self.load_args_and_call_zig(backend, bitcode::STR_REPEAT),
             StrTrim => self.load_args_and_call_zig(backend, bitcode::STR_TRIM),
+            StrSubstringUnsafe => {
+                self.load_args_and_call_zig(backend, bitcode::STR_SUBSTRING_UNSAFE)
+            }
 
             // List
             ListLen => match backend.storage.get(&self.arguments[0]) {

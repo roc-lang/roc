@@ -224,3 +224,9 @@ toI8 : Str -> Result I8 [InvalidNumStr]*
 
 ## Gets the byte at the given index, without performing a bounds check
 getUnsafe : Str, Nat -> U8
+
+## gives the number of string bytes
+countBytes : Str -> Nat
+
+## string slice that does not do bounds checking or utf-8 verification
+substringUnsafe : Str, Nat, Nat -> Str

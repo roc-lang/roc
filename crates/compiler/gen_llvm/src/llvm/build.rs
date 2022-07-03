@@ -5347,6 +5347,15 @@ fn run_low_level<'a, 'ctx, 'env>(
             let string = load_symbol(scope, &args[0]);
             call_bitcode_fn(env, &[string], bitcode::STR_COUNT_BYTES)
         }
+        StrSubstringUnsafe => {
+            // Str.substringUnsafe : Str, Nat, Nat -> Str
+            debug_assert_eq!(args.len(), 3);
+
+            let string = load_symbol(scope, &args[0]);
+            let start = load_symbol(scope, &args[1]);
+            let length = load_symbol(scope, &args[2]);
+            call_str_bitcode_fn(env, &[string, start, length], bitcode::STR_SUBSTRING_UNSAFE)
+        }
         StrTrim => {
             // Str.trim : Str -> Str
             debug_assert_eq!(args.len(), 1);

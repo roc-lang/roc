@@ -324,6 +324,7 @@ pub const STR_TO_INT: IntrinsicName = int_intrinsic!("roc_builtins.str.to_int");
 pub const STR_TO_FLOAT: IntrinsicName = float_intrinsic!("roc_builtins.str.to_float");
 pub const STR_TO_DECIMAL: &str = "roc_builtins.str.to_decimal";
 pub const STR_EQUAL: &str = "roc_builtins.str.equal";
+pub const STR_SUBSTRING_UNSAFE: &str = "roc_builtins.str.substring_unsafe";
 pub const STR_TO_UTF8: &str = "roc_builtins.str.to_utf8";
 pub const STR_FROM_UTF8: &str = "roc_builtins.str.from_utf8";
 pub const STR_FROM_UTF8_RANGE: &str = "roc_builtins.str.from_utf8_range";
