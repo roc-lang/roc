@@ -286,11 +286,11 @@ impl<'a> CodeGenHelp<'a> {
         &mut self,
         ident_ids: &mut IdentIds,
         ctx: &mut Context<'a>,
-        layout: Layout<'a>,
+        orig_layout: Layout<'a>,
     ) -> Symbol {
         use HelperOp::*;
 
-        let layout = self.replace_rec_ptr(ctx, layout);
+        let layout = self.replace_rec_ptr(ctx, orig_layout);
 
         let found = self
             .specializations
@@ -450,7 +450,9 @@ impl<'a> CodeGenHelp<'a> {
                 layout
             }
 
-            Layout::Boxed(inner) => self.replace_rec_ptr(ctx, *inner),
+            Layout::Boxed(inner) => {
+                Layout::Boxed(self.arena.alloc(self.replace_rec_ptr(ctx, *inner)))
+            }
 
             Layout::LambdaSet(lambda_set) => {
                 self.replace_rec_ptr(ctx, lambda_set.runtime_representation())
