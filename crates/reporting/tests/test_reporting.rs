@@ -22,7 +22,6 @@ mod test_reporting {
     };
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
     use roc_solve::solve;
-    use roc_test_utils::assert_multiline_str_eq;
     use roc_types::subs::Subs;
     use std::path::PathBuf;
 
@@ -333,28 +332,6 @@ mod test_reporting {
         }
     }
 
-    fn report_problem_as(src: &str, expected_rendering: &str) {
-        let mut buf: String = String::new();
-        let arena = Bump::new();
-
-        let callback = |doc: RocDocBuilder<'_>, buf: &mut String| {
-            doc.1
-                .render_raw(70, &mut roc_reporting::report::CiWrite::new(buf))
-                .expect("list_reports")
-        };
-
-        list_reports(&arena, src, &mut buf, callback);
-
-        // convenient to copy-paste the generated message
-        if buf != expected_rendering {
-            for line in buf.split('\n') {
-                println!("                {}", line);
-            }
-        }
-
-        assert_multiline_str_eq!(expected_rendering, buf.as_str());
-    }
-
     fn report_header_problem_as(src: &str, expected_rendering: &str) {
         let mut buf: String = String::new();
         let arena = Bump::new();
@@ -416,14 +393,16 @@ mod test_reporting {
     }
 
     macro_rules! test_report {
-        ($test_name:ident, $program:expr, @$output:literal) => {
-            #[test]
-            fn $test_name() {
-                __new_report_problem_as(std::stringify!($test_name), $program, |golden| {
-                    insta::assert_snapshot!(golden, @$output)
-                })
-            }
+        ($(#[$meta:meta])* $test_name:ident, $program:expr, @$output:literal) => {
+            test_report!($(#[$meta])* $test_name, $program, |golden| insta::assert_snapshot!(golden, @$output) );
         };
+        ($(#[$meta:meta])* $test_name: ident, $program:expr, $expecting:expr) => {
+            #[test]
+            $(#[$meta])*
+            fn $test_name() {
+                __new_report_problem_as(std::stringify!($test_name), $program, $expecting)
+            }
+        }
     }
 
     fn human_readable(str: &str) -> String {
@@ -439,364 +418,265 @@ mod test_reporting {
             .replace(ANSI_STYLE_CODES.underline, "<underline>")
     }
 
-    #[test]
-    fn value_not_exposed() {
-        report_problem_as(
-            indoc!(
-                r#"
-                List.isempty 1 2
-            "#
-            ),
-            indoc!(
-                r#"
-                ── NOT EXPOSED ─────────────────────────────────────────── /code/proj/Main.roc ─
+    test_report!(
+        value_not_exposed,
+        indoc!(
+            r#"
+            List.isempty 1 2
+        "#
+        ),
+        @r###"
+    ── NOT EXPOSED ─────────────────────────────────────────── /code/proj/Main.roc ─
 
-                The List module does not expose `isempty`:
+    The List module does not expose `isempty`:
 
-                1│  List.isempty 1 2
-                    ^^^^^^^^^^^^
+    4│      List.isempty 1 2
+            ^^^^^^^^^^^^
 
-                Did you mean one of these?
+    Did you mean one of these?
 
-                    List.isEmpty
-                    List.set
-                    List.iterate
-                    List.get
-                "#
-            ),
-        )
-    }
+        List.isEmpty
+        List.set
+        List.iterate
+        List.get
+    "###
+    );
 
-    #[test]
-    fn report_unused_def() {
-        report_problem_as(
-            indoc!(
-                r#"
-                x = 1
-                y = 2
+    test_report!(
+        report_unused_def,
+        indoc!(
+            r#"
+            x = 1
+            y = 2
 
-                x
-            "#
-            ),
-            indoc!(
-                r#"
-                ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+            x
+        "#
+        ),
+        @r###"
+    ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
 
-                `y` is not used anywhere in your code.
+    `y` is not used anywhere in your code.
 
-                2│  y = 2
-                    ^
+    5│      y = 2
+            ^
 
-                If you didn't intend on using `y` then remove it so future readers of
-                your code don't wonder why it is there.
-                "#
-            ),
-        )
-    }
+    If you didn't intend on using `y` then remove it so future readers of
+    your code don't wonder why it is there.
+    "###
+    );
 
-    #[test]
-    fn report_shadowing() {
-        report_problem_as(
-            indoc!(
-                r#"
-               i = 1
+    test_report!(
+        report_shadowing,
+        indoc!(
+            r#"
+           i = 1
 
-               s = \i ->
-                   i + 1
+           s = \i ->
+               i + 1
 
-               s i
-           "#
-            ),
-            indoc!(
-                r#"
-                ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
+           s i
+       "#
+        ),
+        @r###"
+    ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
 
-                The `i` name is first defined here:
+    The `i` name is first defined here:
 
-                1│  i = 1
-                    ^
+    4│      i = 1
+            ^
 
-                But then it's defined a second time here:
+    But then it's defined a second time here:
 
-                3│  s = \i ->
-                         ^
+    6│      s = \i ->
+                 ^
 
-                Since these variables have the same name, it's easy to use the wrong
-                one on accident. Give one of them a new name.
-                "#
-            ),
-        )
-    }
+    Since these variables have the same name, it's easy to use the wrong
+    one on accident. Give one of them a new name.
+    "###
+    );
 
-    #[test]
-    fn report_shadowing_in_annotation() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Booly : [Yes, No]
+    test_report!(
+        report_shadowing_in_annotation,
+        indoc!(
+            r#"
+            Booly : [Yes, No]
 
-                Booly : [Yes, No, Maybe]
+            Booly : [Yes, No, Maybe]
 
-                x : List Booly
-                x = []
+            x : List Booly
+            x = []
 
-                x
-           "#
-            ),
-            indoc!(
-                r#"
-                ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
+            x
+       "#
+        ),
+        @r###"
+    ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
 
-                The `Booly` name is first defined here:
+    The `Booly` name is first defined here:
 
-                1│  Booly : [Yes, No]
-                    ^^^^^^^^^^^^^^^^^
+    4│      Booly : [Yes, No]
+            ^^^^^^^^^^^^^^^^^
 
-                But then it's defined a second time here:
+    But then it's defined a second time here:
 
-                3│  Booly : [Yes, No, Maybe]
-                    ^^^^^^^^^^^^^^^^^^^^^^^^
+    6│      Booly : [Yes, No, Maybe]
+            ^^^^^^^^^^^^^^^^^^^^^^^^
 
-                Since these aliases have the same name, it's easy to use the wrong one
-                on accident. Give one of them a new name.
-                "#
-            ),
-        )
-    }
+    Since these aliases have the same name, it's easy to use the wrong one
+    on accident. Give one of them a new name.
+    "###
+    );
 
-    // #[test]
-    // fn report_multi_line_shadowing_in_annotation() {
-    //     report_problem_as(
-    //         indoc!(
-    //             r#"
-    //             Booly :
-    //                 [
-    //                     Yes,
-    //                     No
-    //                ]
-    //
-    //             Booly :
-    //                 [
-    //                     Yes,
-    //                     No,
-    //                     Maybe
-    //                ]
-    //
-    //             x =
-    //                 No
-    //
-    //             x
-    //        "#
-    //         ),
-    //         indoc!(
-    //             r#"
-    //             Booly is first defined here:
-    //
-    //             1│> Booly :
-    //             2│>    [
-    //             3│>        Yes,
-    //             4│>        No
-    //             5│>   ]
-    //
-    //             But then it's defined a second time here:
-    //
-    //             7 │> Booly :
-    //             8 │>    [
-    //             9 │>        Yes,
-    //             10│>        No,
-    //             11│>        Maybe
-    //             12│>   ]
-    //
-    //             Since these variables have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#
-    //         ),
-    //     )
-    // }
-
-    // #[test]
-    // fn report_unsupported_top_level_def() {
-    //     report_problem_as(
-    //         indoc!(
-    //             r#"
-    //             x = 1
-    //
-    //             5 = 2 + 1
-    //
-    //             x
-    //         "#
-    //         ),
-    //         indoc!(r#"     "#),
-    //     )
-    // }
-
-    #[test]
-    fn report_precedence_problem_single_line() {
-        report_problem_as(
-            indoc!(
-                r#"x = 1
-                y =
-                    if selectedId != thisId == adminsId then
-                        4
-
-                    else
-                        5
-
-                { x, y }
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                Using != and == together requires parentheses, to clarify how they
-                should be grouped.
-
-                3│      if selectedId != thisId == adminsId then
-                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn unrecognized_name() {
-        report_problem_as(
-            indoc!(
-                r#"
-                foo = { x: 1 == 1, y: 0x4 }
-
-                baz = 3
-
-                main : Str
-                main =
-                    when foo.y is
-                        4 -> bar baz "yay"
-                        _ -> "nay"
-
-                main
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
-
-                Nothing is named `bar` in this scope.
-
-                8│          4 -> bar baz "yay"
-                                 ^^^
-
-                Did you mean one of these?
-
-                    baz
-                    Str
-                    Err
-                    main
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn lowercase_primitive_tag_bool() {
-        report_problem_as(
-            indoc!(
-                r#"
-                if true then 1 else 2
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
-
-                Nothing is named `true` in this scope.
-
-                1│  if true then 1 else 2
-                       ^^^^
-
-                Did you mean one of these?
-
-                    True
-                    Str
-                    Err
-                    List
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn report_precedence_problem_multiline() {
-        report_problem_as(
-            indoc!(
-                r#"
-                if
-                    1
-                        == 2
-                        == 3
-                then
-                    2
+    test_report!(
+        report_precedence_problem_single_line,
+        indoc!(
+            r#"x = 1
+            y =
+                if selectedId != thisId == adminsId then
+                    4
 
                 else
-                    3
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+                    5
 
-                Using more than one == like this requires parentheses, to clarify how
-                things should be grouped.
+            { x, y }
+            "#
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-                2│>      1
-                3│>          == 2
-                4│>          == 3
-                "#
-            ),
-        )
-    }
+    Using != and == together requires parentheses, to clarify how they
+    should be grouped.
 
-    #[test]
-    fn unused_arg_and_unused_def() {
-        report_problem_as(
-            indoc!(
-                r#"
-                 y = 9
+    6│          if selectedId != thisId == adminsId then
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    "###
+    );
 
-                 box = \class, htmlChildren ->
-                     div [class] []
+    test_report!(
+        #[ignore = "Blocked on https://github.com/rtfeldman/roc/issues/3385"]
+        unrecognized_name,
+        indoc!(
+            r#"
+            foo = { x: 1 == 1, y: 0x4 }
 
-                 div = \_, _ -> 4
+            baz = 3
 
-                 box "wizard" []
-             "#
-            ),
-            indoc!(
-                r#"
-                 ── UNUSED ARGUMENT ─────────────────────────────────────── /code/proj/Main.roc ─
+            main : Str
+            main =
+                when foo.y is
+                    4 -> bar baz "yay"
+                    _ -> "nay"
 
-                 `box` doesn't use `htmlChildren`.
+            main
+            "#
+        ),
+        @r#"
+        ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-                 3│  box = \class, htmlChildren ->
-                                   ^^^^^^^^^^^^
+        Nothing is named `bar` in this scope.
 
-                 If you don't need `htmlChildren`, then you can just remove it. However,
-                 if you really do need `htmlChildren` as an argument of `box`, prefix it
-                 with an underscore, like this: "_`htmlChildren`". Adding an underscore
-                 at the start of a variable name is a way of saying that the variable
-                 is not used.
+        8│          4 -> bar baz "yay"
+                         ^^^
 
-                 ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+        Did you mean one of these?
 
-                 `y` is not used anywhere in your code.
+            baz
+            Str
+            Err
+            main
+        "#
+    );
 
-                 1│  y = 9
-                     ^
+    test_report!(
+        lowercase_primitive_tag_bool,
+        indoc!(
+            r#"
+            if true then 1 else 2
+            "#
+        ),
+        @r###"
+    ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-                 If you didn't intend on using `y` then remove it so future readers of
-                 your code don't wonder why it is there.
-                "#
-            ),
-        );
-    }
+    Nothing is named `true` in this scope.
+
+    4│      if true then 1 else 2
+               ^^^^
+
+    Did you mean one of these?
+
+        True
+        Str
+        Frac
+        Num
+    "###
+    );
+
+    test_report!(
+        report_precedence_problem_multiline,
+        indoc!(
+            r#"
+            if
+                1
+                    == 2
+                    == 3
+            then
+                2
+
+            else
+                3
+            "#
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    Using more than one == like this requires parentheses, to clarify how
+    things should be grouped.
+
+    5│>          1
+    6│>              == 2
+    7│>              == 3
+    "###
+    );
+
+    test_report!(
+        unused_arg_and_unused_def,
+        indoc!(
+            r#"
+             y = 9
+
+             box = \class, htmlChildren ->
+                 div [class] []
+
+             div = \_, _ -> 4
+
+             box "wizard" []
+         "#
+        ),
+        @r###"
+    ── UNUSED ARGUMENT ─────────────────────────────────────── /code/proj/Main.roc ─
+
+    `box` doesn't use `htmlChildren`.
+
+    6│      box = \class, htmlChildren ->
+                          ^^^^^^^^^^^^
+
+    If you don't need `htmlChildren`, then you can just remove it. However,
+    if you really do need `htmlChildren` as an argument of `box`, prefix it
+    with an underscore, like this: "_`htmlChildren`". Adding an underscore
+    at the start of a variable name is a way of saying that the variable
+    is not used.
+
+    ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+
+    `y` is not used anywhere in your code.
+
+    4│      y = 9
+            ^
+
+    If you didn't intend on using `y` then remove it so future readers of
+    your code don't wonder why it is there.
+    "###
+    );
 
     #[test]
     fn report_value_color() {
@@ -888,488 +768,390 @@ mod test_reporting {
         );
     }
 
-    // #[test]
-    // fn shadowing_type_alias() {
-    //     report_problem_as(
-    //         indoc!(
-    //             r#"
-    //                 foo : I64 as I64
-    //                 foo = 42
+    test_report!(
+        if_condition_not_bool,
+        indoc!(
+            r#"
+            if "foo" then 2 else 3
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    //                 foo
-    //                 "#
-    //         ),
-    //         indoc!(
-    //             r#"
-    //                 You cannot mix (!=) and (==) without parentheses
+    This `if` condition needs to be a Bool:
 
-    //                 3│     if selectedId != thisId == adminsId then
-    //                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    4│      if "foo" then 2 else 3
+               ^^^^^
 
-    //                 "#
-    //         ),
-    //     )
-    // }
+    Right now it’s a string of type:
 
-    // #[test]
-    // fn invalid_as_type_alias() {
-    //     report_problem_as(
-    //         indoc!(
-    //             r#"
-    //                 foo : I64 as a
-    //                 foo = 42
+        Str
 
-    //                 foo
-    //                 "#
-    //         ),
-    //         indoc!(
-    //             r#"
-    //                 You cannot mix (!=) and (==) without parentheses
+    But I need every `if` condition to evaluate to a Bool—either `True` or
+    `False`.
+    "###
+    );
 
-    //                 3│     if selectedId != thisId == adminsId then
-    //                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    test_report!(
+        when_if_guard,
+        indoc!(
+            r#"
+            when 1 is
+                2 if 1 -> 0x0
+                _ -> 0x1
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    //                 "#
-    //         ),
-    //     )
-    // }
+    This `if` guard condition needs to be a Bool:
 
-    #[test]
-    fn if_condition_not_bool() {
-        report_problem_as(
-            indoc!(
-                r#"
-                if "foo" then 2 else 3
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    4│       when 1 is
+    5│>          2 if 1 -> 0x0
+    6│           _ -> 0x1
 
-                This `if` condition needs to be a Bool:
+    Right now it’s a number of type:
 
-                1│  if "foo" then 2 else 3
+        Num a
+
+    But I need every `if` guard condition to evaluate to a Bool—either
+    `True` or `False`.
+    "###
+    );
+
+    test_report!(
+        if_2_branch_mismatch,
+        indoc!(
+            r#"
+            if True then 2 else "foo"
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `if` has an `else` branch with a different type from its `then` branch:
+
+    4│      if True then 2 else "foo"
+                                ^^^^^
+
+    The `else` branch is a string of type:
+
+        Str
+
+    but the `then` branch has the type:
+
+        Num a
+
+    All branches in an `if` must have the same type!
+    "###
+    );
+
+    test_report!(
+        if_3_branch_mismatch,
+        indoc!(
+            r#"
+             if True then 2 else if False then 2 else "foo"
+             "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 3rd branch of this `if` does not match all the previous branches:
+
+    4│      if True then 2 else if False then 2 else "foo"
+                                                     ^^^^^
+
+    The 3rd branch is a string of type:
+
+        Str
+
+    But all the previous branches have type:
+
+        Num a
+
+    All branches in an `if` must have the same type!
+    "###
+    );
+
+    test_report!(
+        when_branch_mismatch,
+        indoc!(
+            r#"
+            when 1 is
+                2 -> "foo"
+                3 -> {}
+                _ -> ""
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd branch of this `when` does not match all the previous branches:
+
+    4│       when 1 is
+    5│           2 -> "foo"
+    6│>          3 -> {}
+    7│           _ -> ""
+
+    The 2nd branch is a record of type:
+
+        {}
+
+    But all the previous branches have type:
+
+        Str
+
+    All branches of a `when` must have the same type!
+    "###
+    );
+
+    test_report!(
+        elem_in_list,
+        indoc!(
+            r#"
+            [1, 3, "foo"]
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This list contains elements with different types:
+
+    4│      [1, 3, "foo"]
+                   ^^^^^
+
+    Its 3rd element is a string of type:
+
+        Str
+
+    However, the preceding elements in the list all have the type:
+
+        Num a
+
+    Every element in a list must have the same type!
+    "###
+    );
+
+    test_report!(
+        unwrap_num_elem_in_list,
+        indoc!(
+            r#"
+            [1, 2.2, 0x3]
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This list contains elements with different types:
+
+    4│      [1, 2.2, 0x3]
+                     ^^^
+
+    Its 3rd element is an integer of type:
+
+        Int a
+
+    However, the preceding elements in the list all have the type:
+
+        Frac a
+
+    Every element in a list must have the same type!
+
+    Tip: You can convert between Int and Frac using functions like
+    `Num.toFrac` and `Num.round`.
+    "###
+    );
+
+    test_report!(
+        record_update_value,
+        indoc!(
+            r#"
+            x : { foo : {} }
+            x = { foo: {} }
+
+            { x & foo: "bar" }
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    I cannot update the `.foo` field like this:
+
+    7│      { x & foo: "bar" }
                        ^^^^^
 
-                Right now it’s a string of type:
-
-                    Str
-
-                But I need every `if` condition to evaluate to a Bool—either `True` or
-                `False`.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn when_if_guard() {
-        report_problem_as(
-            indoc!(
-                r#"
-                when 1 is
-                    2 if 1 -> 0x0
-                    _ -> 0x1
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                This `if` guard condition needs to be a Bool:
-
-                1│   when 1 is
-                2│>      2 if 1 -> 0x0
-                3│       _ -> 0x1
-
-                Right now it’s a number of type:
-
-                    Num a
-
-                But I need every `if` guard condition to evaluate to a Bool—either
-                `True` or `False`.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn if_2_branch_mismatch() {
-        report_problem_as(
-            indoc!(
-                r#"
-                if True then 2 else "foo"
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                This `if` has an `else` branch with a different type from its `then` branch:
-
-                1│  if True then 2 else "foo"
-                                        ^^^^^
-
-                The `else` branch is a string of type:
-
-                    Str
-
-                but the `then` branch has the type:
-
-                    Num a
-
-                All branches in an `if` must have the same type!
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn if_3_branch_mismatch() {
-        report_problem_as(
-            indoc!(
-                r#"
-                 if True then 2 else if False then 2 else "foo"
-                 "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The 3rd branch of this `if` does not match all the previous branches:
-
-                1│  if True then 2 else if False then 2 else "foo"
-                                                             ^^^^^
-
-                The 3rd branch is a string of type:
-
-                    Str
-
-                But all the previous branches have type:
-
-                    Num a
-
-                All branches in an `if` must have the same type!
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn when_branch_mismatch() {
-        report_problem_as(
-            indoc!(
-                r#"
-                when 1 is
-                    2 -> "foo"
-                    3 -> {}
-                    _ -> ""
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The 2nd branch of this `when` does not match all the previous branches:
-
-                1│   when 1 is
-                2│       2 -> "foo"
-                3│>      3 -> {}
-                4│       _ -> ""
-
-                The 2nd branch is a record of type:
-
-                    {}
-
-                But all the previous branches have type:
+    You are trying to update `.foo` to be a string of type:
 
-                    Str
+        Str
 
-                All branches of a `when` must have the same type!
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn elem_in_list() {
-        report_problem_as(
-            indoc!(
-                r#"
-                [1, 3, "foo"]
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                This list contains elements with different types:
-
-                1│  [1, 3, "foo"]
-                           ^^^^^
-
-                Its 3rd element is a string of type:
-
-                    Str
-
-                However, the preceding elements in the list all have the type:
-
-                    Num a
-
-                Every element in a list must have the same type!
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn unwrap_num_elem_in_list() {
-        report_problem_as(
-            indoc!(
-                r#"
-                [1, 2.2, 0x3]
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                This list contains elements with different types:
-
-                1│  [1, 2.2, 0x3]
-                             ^^^
-
-                Its 3rd element is an integer of type:
-
-                    Int a
-
-                However, the preceding elements in the list all have the type:
-
-                    Frac a
-
-                Every element in a list must have the same type!
-
-                Tip: You can convert between Int and Frac using functions like
-                `Num.toFrac` and `Num.round`.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn record_update_value() {
-        report_problem_as(
-            indoc!(
-                r#"
-                x : { foo : {} }
-                x = { foo: {} }
-
-                { x & foo: "bar" }
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                I cannot update the `.foo` field like this:
-
-                4│  { x & foo: "bar" }
-                               ^^^^^
-
-                You are trying to update `.foo` to be a string of type:
-
-                    Str
-
-                But it should be:
-
-                    {}
-
-                Record update syntax does not allow you to change the type of fields.
-                You can achieve that with record literal syntax.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn circular_type() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f = \g -> g g
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                I'm inferring a weird self-referential type for `g`:
-
-                1│  f = \g -> g g
-                         ^
-
-                Here is my best effort at writing down the type. You will see ∞ for
-                parts of the type that repeat something already printed out
-                infinitely.
-
-                    ∞ -> a
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn polymorphic_recursion() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f = \x -> f [x]
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                I'm inferring a weird self-referential type for `f`:
-
-                1│  f = \x -> f [x]
-                    ^
-
-                Here is my best effort at writing down the type. You will see ∞ for
-                parts of the type that repeat something already printed out
-                infinitely.
-
-                    List ∞ -> a
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn polymorphic_mutual_recursion() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f = \x -> g x
-                g = \x -> f [x]
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                I'm inferring a weird self-referential type for `f`:
-
-                1│  f = \x -> g x
-                    ^
-
-                Here is my best effort at writing down the type. You will see ∞ for
-                parts of the type that repeat something already printed out
-                infinitely.
-
-                    List ∞ -> a
-
-                ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                I'm inferring a weird self-referential type for `g`:
-
-                2│  g = \x -> f [x]
-                    ^
-
-                Here is my best effort at writing down the type. You will see ∞ for
-                parts of the type that repeat something already printed out
-                infinitely.
-
-                    List ∞ -> a
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn polymorphic_mutual_recursion_annotated() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : a -> List a
-                f = \x -> g x
-                g = \x -> f [x]
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                This expression is used in an unexpected way:
-
-                2│  f = \x -> g x
-                              ^^^
-
-                This `g` call produces:
-
-                    List List a
-
-                But you are trying to use it as:
-
-                    List a
-
-                Tip: The type annotation uses the type variable `a` to say that this
-                definition can produce any type of value. But in the body I see that
-                it will only produce a `List` value of a single specific type. Maybe
-                change the type annotation to be more specific? Maybe change the code
-                to be more general?
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn polymorphic_mutual_recursion_dually_annotated_lie() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : a -> List a
-                f = \x -> g x
-                g : b -> List b
-                g = \x -> f [x]
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                This expression is used in an unexpected way:
-
-                4│  g = \x -> f [x]
-                              ^^^^^
-
-                This `f` call produces:
-
-                    List List b
-
-                But you are trying to use it as:
-
-                    List b
-
-                Tip: The type annotation uses the type variable `b` to say that this
-                definition can produce any type of value. But in the body I see that
-                it will only produce a `List` value of a single specific type. Maybe
-                change the type annotation to be more specific? Maybe change the code
-                to be more general?
-                "#
-            ),
-        )
-    }
+    But it should be:
+
+        {}
+
+    Record update syntax does not allow you to change the type of fields.
+    You can achieve that with record literal syntax.
+    "###
+    );
+
+    test_report!(
+        circular_type,
+        indoc!(
+            r#"
+            f = \g -> g g
+
+            f
+            "#
+        ),
+        @r###"
+    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    I'm inferring a weird self-referential type for `g`:
+
+    4│      f = \g -> g g
+                 ^
+
+    Here is my best effort at writing down the type. You will see ∞ for
+    parts of the type that repeat something already printed out
+    infinitely.
+
+        ∞ -> a
+    "###
+    );
+
+    test_report!(
+        polymorphic_recursion,
+        indoc!(
+            r#"
+            f = \x -> f [x]
+
+            f
+            "#
+        ),
+        @r###"
+    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    I'm inferring a weird self-referential type for `f`:
+
+    4│      f = \x -> f [x]
+            ^
+
+    Here is my best effort at writing down the type. You will see ∞ for
+    parts of the type that repeat something already printed out
+    infinitely.
+
+        List ∞ -> a
+    "###
+    );
+
+    test_report!(
+        polymorphic_mutual_recursion,
+        indoc!(
+            r#"
+            f = \x -> g x
+            g = \x -> f [x]
+
+            f
+            "#
+        ),
+        @r###"
+    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    I'm inferring a weird self-referential type for `f`:
+
+    4│      f = \x -> g x
+            ^
+
+    Here is my best effort at writing down the type. You will see ∞ for
+    parts of the type that repeat something already printed out
+    infinitely.
+
+        List ∞ -> a
+
+    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    I'm inferring a weird self-referential type for `g`:
+
+    5│      g = \x -> f [x]
+            ^
+
+    Here is my best effort at writing down the type. You will see ∞ for
+    parts of the type that repeat something already printed out
+    infinitely.
+
+        List ∞ -> a
+    "###
+    );
+
+    test_report!(
+        polymorphic_mutual_recursion_annotated,
+        indoc!(
+            r#"
+            f : a -> List a
+            f = \x -> g x
+            g = \x -> f [x]
+
+            f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression is used in an unexpected way:
+
+    5│      f = \x -> g x
+                      ^^^
+
+    This `g` call produces:
+
+        List List a
+
+    But you are trying to use it as:
+
+        List a
+
+    Tip: The type annotation uses the type variable `a` to say that this
+    definition can produce any type of value. But in the body I see that
+    it will only produce a `List` value of a single specific type. Maybe
+    change the type annotation to be more specific? Maybe change the code
+    to be more general?
+    "###
+    );
+
+    test_report!(
+        polymorphic_mutual_recursion_dually_annotated_lie,
+        indoc!(
+            r#"
+            f : a -> List a
+            f = \x -> g x
+            g : b -> List b
+            g = \x -> f [x]
+
+            f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression is used in an unexpected way:
+
+    7│      g = \x -> f [x]
+                      ^^^^^
+
+    This `f` call produces:
+
+        List List b
+
+    But you are trying to use it as:
+
+        List b
+
+    Tip: The type annotation uses the type variable `b` to say that this
+    definition can produce any type of value. But in the body I see that
+    it will only produce a `List` value of a single specific type. Maybe
+    change the type annotation to be more specific? Maybe change the code
+    to be more general?
+    "###
+    );
 
     test_report!(
         polymorphic_recursion_inference_var,
@@ -1514,4503 +1296,3950 @@ mod test_reporting {
         "#
     );
 
-    #[test]
-    fn record_field_mismatch() {
-        report_problem_as(
-            indoc!(
-                r#"
-                bar = { bar : 0x3 }
+    test_report!(
+        record_field_mismatch,
+        indoc!(
+            r#"
+            bar = { bar : 0x3 }
 
-                f : { foo : Num.Int * } -> [Yes, No]
-                f = \_ -> Yes
+            f : { foo : Num.Int * } -> [Yes, No]
+            f = \_ -> Yes
 
-                f bar
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+            f bar
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                The 1st argument to `f` is not what I expect:
+    The 1st argument to `f` is not what I expect:
 
-                6│  f bar
-                      ^^^
+    9│      f bar
+              ^^^
 
-                This `bar` value is a:
+    This `bar` value is a:
 
-                    { bar : Int a }
+        { bar : Int a }
 
-                But `f` needs the 1st argument to be:
+    But `f` needs the 1st argument to be:
 
-                    { foo : Int * }
+        { foo : Int * }
 
-                Tip: Seems like a record field typo. Maybe `bar` should be `foo`?
+    Tip: Seems like a record field typo. Maybe `bar` should be `foo`?
 
-                Tip: Can more type annotations be added? Type annotations always help
-                me give more specific messages, and I think they could help a lot in
-                this case
-                "#
-            ),
-        )
-    }
+    Tip: Can more type annotations be added? Type annotations always help
+    me give more specific messages, and I think they could help a lot in
+    this case
+    "###
+    );
 
-    #[test]
-    fn tag_mismatch() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : [Red, Green] -> [Yes, No]
-                f = \_ -> Yes
+    test_report!(
+        tag_mismatch,
+        indoc!(
+            r#"
+            f : [Red, Green] -> [Yes, No]
+            f = \_ -> Yes
 
-                f Blue
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+            f Blue
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                The 1st argument to `f` is not what I expect:
+    The 1st argument to `f` is not what I expect:
 
-                4│  f Blue
+    7│      f Blue
+              ^^^^
+
+    This `Blue` tag has the type:
+
+        [Blue]a
+
+    But `f` needs the 1st argument to be:
+
+        [Green, Red]
+
+    Tip: Seems like a tag typo. Maybe `Blue` should be `Red`?
+
+    Tip: Can more type annotations be added? Type annotations always help
+    me give more specific messages, and I think they could help a lot in
+    this case
+    "###
+    );
+
+    test_report!(
+        tag_with_arguments_mismatch,
+        indoc!(
+            r#"
+            f : [Red (Num.Int *), Green Str] -> Str
+            f = \_ -> "yes"
+
+            f (Blue 3.14)
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 1st argument to `f` is not what I expect:
+
+    7│      f (Blue 3.14)
+               ^^^^^^^^^
+
+    This `Blue` tag application has the type:
+
+        [Blue (Frac a)]b
+
+    But `f` needs the 1st argument to be:
+
+        [Green Str, Red (Int *)]
+
+    Tip: Seems like a tag typo. Maybe `Blue` should be `Red`?
+
+    Tip: Can more type annotations be added? Type annotations always help
+    me give more specific messages, and I think they could help a lot in
+    this case
+    "###
+    );
+
+    test_report!(
+        from_annotation_if,
+        indoc!(
+            r#"
+            x : Num.Int *
+            x = if True then 3.14 else 4
+
+            x
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the `then` branch of this `if` expression:
+
+    4│      x : Num.Int *
+    5│      x = if True then 3.14 else 4
+                             ^^^^
+
+    The 1st branch is a frac of type:
+
+        Frac a
+
+    But the type annotation on `x` says it should be:
+
+        Int *
+
+    Tip: You can convert between Int and Frac using functions like
+    `Num.toFrac` and `Num.round`.
+    "###
+    );
+
+    test_report!(
+        from_annotation_when,
+        indoc!(
+            r#"
+            x : Num.Int *
+            x =
+                when True is
+                    _ -> 3.14
+
+            x
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `x` definition:
+
+    4│       x : Num.Int *
+    5│       x =
+    6│>          when True is
+    7│>              _ -> 3.14
+
+    This `when` expression produces:
+
+        Frac a
+
+    But the type annotation on `x` says it should be:
+
+        Int *
+
+    Tip: You can convert between Int and Frac using functions like
+    `Num.toFrac` and `Num.round`.
+    "###
+    );
+
+    test_report!(
+        from_annotation_function,
+        indoc!(
+            r#"
+            x : Num.Int * -> Num.Int *
+            x = \_ -> 3.14
+
+            x
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `x` definition:
+
+    4│      x : Num.Int * -> Num.Int *
+    5│      x = \_ -> 3.14
                       ^^^^
 
-                This `Blue` tag has the type:
-
-                    [Blue]a
+    The body is a frac of type:
+
+        Frac a
 
-                But `f` needs the 1st argument to be:
-
-                    [Green, Red]
-
-                Tip: Seems like a tag typo. Maybe `Blue` should be `Red`?
-
-                Tip: Can more type annotations be added? Type annotations always help
-                me give more specific messages, and I think they could help a lot in
-                this case
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn tag_with_arguments_mismatch() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : [Red (Num.Int *), Green Str] -> Str
-                f = \_ -> "yes"
+    But the type annotation on `x` says it should be:
 
-                f (Blue 3.14)
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        Int *
 
-                The 1st argument to `f` is not what I expect:
+    Tip: You can convert between Int and Frac using functions like
+    `Num.toFrac` and `Num.round`.
+    "###
+    );
 
-                4│  f (Blue 3.14)
-                       ^^^^^^^^^
-
-                This `Blue` tag application has the type:
+    test_report!(
+        fncall_value,
+        indoc!(
+            r#"
+            x : Num.I64
+            x = 42
+
+            x 3
+            "#
+        ),
+        @r###"
+    ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The `x` value is not a function, but it was given 1 argument:
 
-                    [Blue (Frac a)]b
-
-                But `f` needs the 1st argument to be:
-
-                    [Green Str, Red (Int *)]
-
-                Tip: Seems like a tag typo. Maybe `Blue` should be `Red`?
-
-                Tip: Can more type annotations be added? Type annotations always help
-                me give more specific messages, and I think they could help a lot in
-                this case
-                "#
-            ),
-        )
-    }
+    7│      x 3
+            ^
 
-    #[test]
-    fn from_annotation_if() {
-        report_problem_as(
-            indoc!(
-                r#"
-                x : Num.Int *
-                x = if True then 3.14 else 4
+    Are there any missing commas? Or missing parentheses?
+    "###
+    );
 
-                x
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    test_report!(
+        fncall_overapplied,
+        indoc!(
+            r#"
+            f : Num.I64 -> Num.I64
+            f = \_ -> 42
+
+            f 1 2
+            "#
+        ),
+        @r###"
+    ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The `f` function expects 1 argument, but it got 2 instead:
+
+    7│      f 1 2
+            ^
 
-                Something is off with the `then` branch of this `if` expression:
+    Are there any missing commas? Or missing parentheses?
+    "###
+    );
 
-                1│  x : Num.Int *
-                2│  x = if True then 3.14 else 4
-                                     ^^^^
+    test_report!(
+        fncall_underapplied,
+        indoc!(
+            r#"
+            f : Num.I64, Num.I64 -> Num.I64
+            f = \_, _ -> 42
 
-                The 1st branch is a frac of type:
-
-                    Frac a
-
-                But the type annotation on `x` says it should be:
-
-                    Int *
+            f 1
+            "#
+        ),
+        @r###"
+    ── TOO FEW ARGS ────────────────────────────────────────── /code/proj/Main.roc ─
 
-                Tip: You can convert between Int and Frac using functions like
-                `Num.toFrac` and `Num.round`.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn from_annotation_when() {
-        report_problem_as(
-            indoc!(
-                r#"
-                x : Num.Int *
-                x =
-                    when True is
-                        _ -> 3.14
-
-                x
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                Something is off with the body of the `x` definition:
-
-                1│   x : Num.Int *
-                2│   x =
-                3│>      when True is
-                4│>          _ -> 3.14
-
-                This `when` expression produces:
-
-                    Frac a
-
-                But the type annotation on `x` says it should be:
-
-                    Int *
-
-                Tip: You can convert between Int and Frac using functions like
-                `Num.toFrac` and `Num.round`.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn from_annotation_function() {
-        report_problem_as(
-            indoc!(
-                r#"
-                x : Num.Int * -> Num.Int *
-                x = \_ -> 3.14
-
-                x
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                Something is off with the body of the `x` definition:
-
-                1│  x : Num.Int * -> Num.Int *
-                2│  x = \_ -> 3.14
-                              ^^^^
-
-                The body is a frac of type:
-
-                    Frac a
-
-                But the type annotation on `x` says it should be:
-
-                    Int *
-
-                Tip: You can convert between Int and Frac using functions like
-                `Num.toFrac` and `Num.round`.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn fncall_value() {
-        report_problem_as(
-            indoc!(
-                r#"
-                x : Num.I64
-                x = 42
-
-                x 3
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The `x` value is not a function, but it was given 1 argument:
-
-                4│  x 3
-                    ^
-
-                Are there any missing commas? Or missing parentheses?
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn fncall_overapplied() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : Num.I64 -> Num.I64
-                f = \_ -> 42
-
-                f 1 2
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The `f` function expects 1 argument, but it got 2 instead:
-
-                4│  f 1 2
-                    ^
-
-                Are there any missing commas? Or missing parentheses?
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn fncall_underapplied() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : Num.I64, Num.I64 -> Num.I64
-                f = \_, _ -> 42
-
-                f 1
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TOO FEW ARGS ────────────────────────────────────────── /code/proj/Main.roc ─
-
-                The `f` function expects 2 arguments, but it got only 1:
-
-                4│  f 1
-                    ^
-
-                Roc does not allow functions to be partially applied. Use a closure to
-                make partial application explicit.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn pattern_when_condition() {
-        report_problem_as(
-            indoc!(
-                r#"
-                when 1 is
-                    {} -> 42
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The branches of this `when` expression don't match the condition:
-
-                1│>  when 1 is
-                2│       {} -> 42
-
-                The `when` condition is a number of type:
-
-                    Num a
-
-                But the branch patterns have type:
-
-                    {}a
-
-                The branches must be cases of the `when` condition's type!
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn pattern_when_pattern() {
-        report_problem_as(
-            indoc!(
-                r#"
-                when 1 is
-                    2 -> 3
-                    {} -> 42
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The 2nd pattern in this `when` does not match the previous ones:
-
-                3│      {} -> 42
-                        ^^
-
-                The 2nd pattern is trying to match record values of type:
-
-                    {}a
-
-                But all the previous branches match:
-
-                    Num a
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn pattern_guard_mismatch_alias() {
-        report_problem_as(
-            indoc!(
-                r#"
-                 when { foo: 1 } is
-                     { foo: True } -> 42
-                 "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The branches of this `when` expression don't match the condition:
-
-                1│>  when { foo: 1 } is
-                2│       { foo: True } -> 42
-
-                The `when` condition is a record of type:
-
-                    { foo : Num a }
-
-                But the branch patterns have type:
-
-                    { foo : [True] }
-
-                The branches must be cases of the `when` condition's type!
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn pattern_guard_mismatch() {
-        report_problem_as(
-            indoc!(
-                r#"
-                 when { foo: "" } is
-                     { foo: True } -> 42
-                 "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The branches of this `when` expression don't match the condition:
-
-                1│>  when { foo: "" } is
-                2│       { foo: True } -> 42
-
-                The `when` condition is a record of type:
-
-                    { foo : Str }
-
-                But the branch patterns have type:
-
-                    { foo : [True] }
-
-                The branches must be cases of the `when` condition's type!
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn pattern_guard_does_not_bind_label() {
-        // needs some improvement, but the principle works
-        report_problem_as(
-            indoc!(
-                r#"
-                 when { foo: 1 } is
-                     { foo: _ } -> foo
-                 "#
-            ),
-            indoc!(
-                r#"
-                ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
-
-                Nothing is named `foo` in this scope.
-
-                2│      { foo: _ } -> foo
-                                      ^^^
-
-                Did you mean one of these?
-
-                    Box
-                    Set
-                    Str
-                    Ok
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn pattern_guard_can_be_shadowed_above() {
-        report_problem_as(
-            indoc!(
-                r#"
-                foo = 3
-
-                when { foo: 1 } is
-                    { foo: 2 } -> foo
-                    _ -> foo
-                 "#
-            ),
-            // should give no error
-            "",
-        )
-    }
-
-    #[test]
-    fn pattern_guard_can_be_shadowed_below() {
-        report_problem_as(
-            indoc!(
-                r#"
-                when { foo: 1 } is
-                    { foo: 2 } ->
-                        foo = 3
-
-                        foo
-                    _ -> 3
-                 "#
-            ),
-            // should give no error
-            "",
-        )
-    }
-
-    #[test]
-    fn pattern_or_pattern_mismatch() {
-        report_problem_as(
-            indoc!(
-                r#"
-                when { foo: 1 } is
-                    {} | 1 -> 3
-                "#
-            ),
-            // Just putting this here. We should probably handle or-patterns better
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The 2nd pattern in this branch does not match the previous ones:
-
-                2│      {} | 1 -> 3
-                             ^
-
-                The 2nd pattern is trying to match numbers:
-
-                    Num a
-
-                But all the previous branches match:
-
-                    {}a
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn pattern_let_mismatch() {
-        report_problem_as(
-            indoc!(
-                r#"
-                (Foo x) = 42
-
-                x
-                "#
-            ),
-            // Maybe this should specifically say the pattern doesn't work?
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                This expression is used in an unexpected way:
-
-                1│  (Foo x) = 42
-                              ^^
-
-                It is a number of type:
-
-                    Num a
-
-                But you are trying to use it as:
-
-                    [Foo a]
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn from_annotation_complex_pattern() {
-        report_problem_as(
-            indoc!(
-                r#"
-                { x } : { x : Num.Int * }
-                { x } = { x: 4.0 }
-
-                x
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                Something is off with the body of this definition:
-
-                1│  { x } : { x : Num.Int * }
-                2│  { x } = { x: 4.0 }
-                            ^^^^^^^^^^
-
-                The body is a record of type:
-
-                    { x : Frac a }
-
-                But the type annotation says it should be:
-
-                    { x : Int * }
-
-                Tip: You can convert between Int and Frac using functions like
-                `Num.toFrac` and `Num.round`.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn malformed_int_pattern() {
-        report_problem_as(
-            indoc!(
-                r#"
-                when 1 is
-                    100A -> 3
-                    _ -> 4
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This integer pattern is malformed:
-
-                2│      100A -> 3
-                        ^^^^
-
-                Tip: Learn more about number literals at TODO
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn malformed_float_pattern() {
-        report_problem_as(
-            indoc!(
-                r#"
-                when 1 is
-                    2.X -> 3
-                    _ -> 4
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This float pattern is malformed:
-
-                2│      2.X -> 3
-                        ^^^
-
-                Tip: Learn more about number literals at TODO
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn malformed_hex_pattern() {
-        report_problem_as(
-            indoc!(
-                r#"
-                when 1 is
-                    0xZ -> 3
-                    _ -> 4
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This hex integer pattern is malformed:
-
-                2│      0xZ -> 3
-                        ^^^
-
-                Tip: Learn more about number literals at TODO
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn malformed_oct_pattern() {
-        report_problem_as(
-            indoc!(
-                r#"
-                when 1 is
-                    0o9 -> 3
-                    _ -> 4
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This octal integer pattern is malformed:
-
-                2│      0o9 -> 3
-                        ^^^
-
-                Tip: Learn more about number literals at TODO
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn malformed_bin_pattern() {
-        report_problem_as(
-            indoc!(
-                r#"
-                when 1 is
-                    0b4 -> 3
-                    _ -> 4
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This binary integer pattern is malformed:
-
-                2│      0b4 -> 3
-                        ^^^
-
-                Tip: Learn more about number literals at TODO
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn missing_fields() {
-        report_problem_as(
-            indoc!(
-                r#"
-                x : { a : Num.Int *, b : Num.Frac *, c : Str }
-                x = { b: 4.0 }
-
-                x
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                Something is off with the body of the `x` definition:
-
-                1│  x : { a : Num.Int *, b : Num.Frac *, c : Str }
-                2│  x = { b: 4.0 }
-                        ^^^^^^^^^^
-
-                The body is a record of type:
-
-                    { b : Frac a }
-
-                But the type annotation on `x` says it should be:
-
-                    { a : Int *, b : Frac *, c : Str }
-
-                Tip: Looks like the c and a fields are missing.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn bad_double_rigid() {
-        // this previously reported the message below, not sure which is better
-        //
-        //                Something is off with the body of the `f` definition:
-        //
-        //                1│ f : a, b -> a
-        //                2│ f = \x, y -> if True then x else y
-        //                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-        //
-        //                The body is an anonymous function of type:
-        //
-        //                    a, a -> a
-        //
-        //                But the type annotation on `f` says it should be:
-        //
-        //                    a, b -> a
-        report_problem_as(
-            indoc!(
-                r#"
-                f : a, b -> a
-                f = \x, y -> if True then x else y
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                Something is off with the `else` branch of this `if` expression:
-
-                1│  f : a, b -> a
-                2│  f = \x, y -> if True then x else y
-                                                     ^
-
-                This `y` value is a:
-
-                    b
-
-                But the type annotation on `f` says it should be:
-
-                    a
-
-                Tip: Your type annotation uses `b` and `a` as separate type variables.
-                Your code seems to be saying they are the same though. Maybe they
-                should be the same in your type annotation? Maybe your code uses them
-                in a weird way?
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn bad_rigid_function() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : Str -> msg
-                f = \_ -> Foo
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                Something is off with the body of the `f` definition:
-
-                1│  f : Str -> msg
-                2│  f = \_ -> Foo
+    The `f` function expects 2 arguments, but it got only 1:
+
+    7│      f 1
+            ^
+
+    Roc does not allow functions to be partially applied. Use a closure to
+    make partial application explicit.
+    "###
+    );
+
+    test_report!(
+        pattern_when_condition,
+        indoc!(
+            r#"
+            when 1 is
+                {} -> 42
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The branches of this `when` expression don't match the condition:
+
+    4│>      when 1 is
+    5│           {} -> 42
+
+    The `when` condition is a number of type:
+
+        Num a
+
+    But the branch patterns have type:
+
+        {}a
+
+    The branches must be cases of the `when` condition's type!
+    "###
+    );
+
+    test_report!(
+        pattern_when_pattern,
+        indoc!(
+            r#"
+            when 1 is
+                2 -> 3
+                {} -> 42
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd pattern in this `when` does not match the previous ones:
+
+    6│          {} -> 42
+                ^^
+
+    The 2nd pattern is trying to match record values of type:
+
+        {}a
+
+    But all the previous branches match:
+
+        Num a
+    "###
+    );
+
+    test_report!(
+        pattern_guard_mismatch_alias,
+        indoc!(
+            r#"
+             when { foo: 1 } is
+                 { foo: True } -> 42
+             "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The branches of this `when` expression don't match the condition:
+
+    4│>      when { foo: 1 } is
+    5│           { foo: True } -> 42
+
+    The `when` condition is a record of type:
+
+        { foo : Num a }
+
+    But the branch patterns have type:
+
+        { foo : [True] }
+
+    The branches must be cases of the `when` condition's type!
+    "###
+    );
+
+    test_report!(
+        pattern_guard_mismatch,
+        indoc!(
+            r#"
+             when { foo: "" } is
+                 { foo: True } -> 42
+             "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The branches of this `when` expression don't match the condition:
+
+    4│>      when { foo: "" } is
+    5│           { foo: True } -> 42
+
+    The `when` condition is a record of type:
+
+        { foo : Str }
+
+    But the branch patterns have type:
+
+        { foo : [True] }
+
+    The branches must be cases of the `when` condition's type!
+    "###
+    );
+
+    // needs some improvement, but the principle works
+    test_report!(
+        pattern_guard_does_not_bind_label,
+        indoc!(
+            r#"
+             when { foo: 1 } is
+                 { foo: _ } -> foo
+             "#
+        ),
+        @r###"
+    ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
+
+    Nothing is named `foo` in this scope.
+
+    5│          { foo: _ } -> foo
                               ^^^
 
-                This `Foo` tag has the type:
+    Did you mean one of these?
 
-                    [Foo]a
+        Box
+        Bool
+        U8
+        F64
+    "###
+    );
 
-                But the type annotation on `f` says it should be:
+    test_report! {
+        pattern_guard_can_be_shadowed_above,
+        indoc!(
+            r#"
+            foo = 3
 
-                    msg
-
-                Tip: The type annotation uses the type variable `msg` to say that this
-                definition can produce any type of value. But in the body I see that
-                it will only produce a tag value of a single specific type. Maybe
-                change the type annotation to be more specific? Maybe change the code
-                to be more general?
-                "#
-            ),
-        )
+            when { foo: 1 } is
+                { foo: 2 } -> foo
+                _ -> foo
+             "#
+        ),
+        @"" // should give no error
     }
 
-    #[test]
-    fn bad_rigid_value() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : msg
-                f = 0x3
+    test_report! {
+        pattern_guard_can_be_shadowed_below,
+        indoc!(
+            r#"
+            when { foo: 1 } is
+                { foo: 2 } ->
+                    foo = 3
 
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                Something is off with the body of the `f` definition:
-
-                1│  f : msg
-                2│  f = 0x3
-                        ^^^
-
-                The body is an integer of type:
-
-                    Int a
-
-                But the type annotation on `f` says it should be:
-
-                    msg
-
-                Tip: The type annotation uses the type variable `msg` to say that this
-                definition can produce any type of value. But in the body I see that
-                it will only produce a `Int` value of a single specific type. Maybe
-                change the type annotation to be more specific? Maybe change the code
-                to be more general?
-                "#
-            ),
-        )
+                    foo
+                _ -> 3
+             "#
+        ),
+        // should give no error
+        @""
     }
 
-    #[test]
-    fn typo_lowercase_ok() {
-        // TODO improve tag suggestions
-        report_problem_as(
-            indoc!(
-                r#"
-                f : Str -> [Ok Num.I64, InvalidFoo]
-                f = \_ -> ok 4
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
-
-                Nothing is named `ok` in this scope.
-
-                2│  f = \_ -> ok 4
-                              ^^
-
-                Did you mean one of these?
-
-                    Ok
-                    f
-                    Box
-                    Set
-               "#
-            ),
-        )
-    }
-
-    #[test]
-    fn typo_uppercase_ok() {
-        // these error messages seem pretty helpful
-        report_problem_as(
-            indoc!(
-                r#"
-                f : Str -> Num.I64
-                f = \_ ->
-                    ok = 3
-
-                    Ok
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
-
-                `ok` is not used anywhere in your code.
-
-                3│      ok = 3
-                        ^^
-
-                If you didn't intend on using `ok` then remove it so future readers of
-                your code don't wonder why it is there.
-
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                Something is off with the body of the `f` definition:
-
-                1│  f : Str -> Num.I64
-                2│  f = \_ ->
-                3│      ok = 3
-                4│
-                5│      Ok
-                        ^^
-
-                This `Ok` tag has the type:
-
-                    [Ok]a
-
-                But the type annotation on `f` says it should be:
-
-                    I64
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn circular_definition_self() {
-        // invalid recursion
-        report_problem_as(
-            indoc!(
-                r#"
-                f = f
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
-
-                The `f` value is defined directly in terms of itself, causing an
-                infinite loop.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn circular_definition() {
-        // invalid mutual recursion
-        report_problem_as(
-            indoc!(
-                r#"
-                foo = bar
-
-                bar = foo
-
-                foo
-                "#
-            ),
-            indoc!(
-                r#"
-                ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
-
-                The `foo` definition is causing a very tricky infinite loop:
-
-                1│  foo = bar
-                    ^^^
-
-                The `foo` value depends on itself through the following chain of
-                definitions:
-
-                    ┌─────┐
-                    │     foo
-                    │     ↓
-                    │     bar
-                    └─────┘
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn update_empty_record() {
-        report_problem_as(
-            indoc!(
-                r#"
-                x = {}
-
-                { x & foo: 3 }
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                This `x` record doesn’t have a `foo` field:
-
-                3│  { x & foo: 3 }
-                          ^^^^^^
-
-                In fact, `x` is a record with no fields at all!
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn update_record() {
-        report_problem_as(
-            indoc!(
-                r#"
-                x = { fo: 3, bar: 4 }
-
-                { x & foo: 3 }
-                "#
-            ),
-            // TODO also suggest fields with the correct type
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                This `x` record doesn’t have a `foo` field:
-
-                3│  { x & foo: 3 }
-                          ^^^^^^
-
-                There may be a typo. These `x` fields are the most similar:
-
-                    {
-                        fo : Num b,
-                        bar : Num a,
-                    }
-
-                Maybe `foo:` should be `fo:` instead?
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn update_record_ext() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : { fo: Num.I64 }ext -> Num.I64
-                f = \r ->
-                    r2 = { r & foo: r.fo }
-
-                    r2.fo
-
-                f
-                "#
-            ),
-            // TODO also suggest fields with the correct type
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                This `r` record doesn’t have a `foo` field:
-
-                3│      r2 = { r & foo: r.fo }
-                                   ^^^^^^^^^
-
-                There may be a typo. These `r` fields are the most similar:
-
-                    {
-                        fo : I64,
-                    }ext
-
-                Maybe `foo:` should be `fo:` instead?
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn update_record_snippet() {
-        report_problem_as(
-            indoc!(
-                r#"
-                x = { fo: 3, bar: 4, baz: 3, spam: 42, foobar: 3 }
-
-                { x & foo: 3 }
-                "#
-            ),
-            // TODO also suggest fields with the correct type
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                This `x` record doesn’t have a `foo` field:
-
-                3│  { x & foo: 3 }
-                          ^^^^^^
-
-                There may be a typo. These `x` fields are the most similar:
-
-                    {
-                        fo : Num c,
-                        foobar : Num d,
-                        bar : Num a,
-                        baz : Num b,
-                        …
-                    }
-
-                Maybe `foo:` should be `fo:` instead?
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn plus_on_str() {
-        report_problem_as(
-            indoc!(
-                r#"
-                0x4 + "foo"
-                "#
-            ),
-            // TODO also suggest fields with the correct type
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The 2nd argument to `add` is not what I expect:
-
-                1│  0x4 + "foo"
-                          ^^^^^
-
-                This argument is a string of type:
-
-                    Str
-
-                But `add` needs the 2nd argument to be:
-
-                    Int a
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn int_frac() {
-        report_problem_as(
-            indoc!(
-                r#"
-                0x4 + 3.14
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The 2nd argument to `add` is not what I expect:
-
-                1│  0x4 + 3.14
+    test_report!(
+        pattern_or_pattern_mismatch,
+        indoc!(
+            r#"
+            when { foo: 1 } is
+                {} | 1 -> 3
+            "#
+        ),
+        // Just putting this here. We should probably handle or-patterns better
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd pattern in this branch does not match the previous ones:
+
+    5│          {} | 1 -> 3
+                     ^
+
+    The 2nd pattern is trying to match numbers:
+
+        Num a
+
+    But all the previous branches match:
+
+        {}a
+    "###
+    );
+
+    test_report!(
+        pattern_let_mismatch,
+        indoc!(
+            r#"
+            (Foo x) = 42
+
+            x
+            "#
+        ),
+        // Maybe this should specifically say the pattern doesn't work?
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression is used in an unexpected way:
+
+    4│      (Foo x) = 42
+                      ^^
+
+    It is a number of type:
+
+        Num a
+
+    But you are trying to use it as:
+
+        [Foo a]
+    "###
+    );
+
+    test_report!(
+        from_annotation_complex_pattern,
+        indoc!(
+            r#"
+            { x } : { x : Num.Int * }
+            { x } = { x: 4.0 }
+
+            x
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of this definition:
+
+    4│      { x } : { x : Num.Int * }
+    5│      { x } = { x: 4.0 }
+                    ^^^^^^^^^^
+
+    The body is a record of type:
+
+        { x : Frac a }
+
+    But the type annotation says it should be:
+
+        { x : Int * }
+
+    Tip: You can convert between Int and Frac using functions like
+    `Num.toFrac` and `Num.round`.
+    "###
+    );
+
+    test_report!(
+        malformed_int_pattern,
+        indoc!(
+            r#"
+            when 1 is
+                100A -> 3
+                _ -> 4
+            "#
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This integer pattern is malformed:
+
+    5│          100A -> 3
+                ^^^^
+
+    Tip: Learn more about number literals at TODO
+    "###
+    );
+
+    test_report!(
+        malformed_float_pattern,
+        indoc!(
+            r#"
+            when 1 is
+                2.X -> 3
+                _ -> 4
+            "#
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This float pattern is malformed:
+
+    5│          2.X -> 3
+                ^^^
+
+    Tip: Learn more about number literals at TODO
+    "###
+    );
+
+    test_report!(
+        malformed_hex_pattern,
+        indoc!(
+            r#"
+            when 1 is
+                0xZ -> 3
+                _ -> 4
+            "#
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This hex integer pattern is malformed:
+
+    5│          0xZ -> 3
+                ^^^
+
+    Tip: Learn more about number literals at TODO
+    "###
+    );
+
+    test_report!(
+        malformed_oct_pattern,
+        indoc!(
+            r#"
+            when 1 is
+                0o9 -> 3
+                _ -> 4
+            "#
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This octal integer pattern is malformed:
+
+    5│          0o9 -> 3
+                ^^^
+
+    Tip: Learn more about number literals at TODO
+    "###
+    );
+
+    test_report!(
+        malformed_bin_pattern,
+        indoc!(
+            r#"
+            when 1 is
+                0b4 -> 3
+                _ -> 4
+            "#
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This binary integer pattern is malformed:
+
+    5│          0b4 -> 3
+                ^^^
+
+    Tip: Learn more about number literals at TODO
+    "###
+    );
+
+    test_report!(
+        missing_fields,
+        indoc!(
+            r#"
+            x : { a : Num.Int *, b : Num.Frac *, c : Str }
+            x = { b: 4.0 }
+
+            x
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `x` definition:
+
+    4│      x : { a : Num.Int *, b : Num.Frac *, c : Str }
+    5│      x = { b: 4.0 }
+                ^^^^^^^^^^
+
+    The body is a record of type:
+
+        { b : Frac a }
+
+    But the type annotation on `x` says it should be:
+
+        { a : Int *, b : Frac *, c : Str }
+
+    Tip: Looks like the c and a fields are missing.
+    "###
+    );
+
+    // this previously reported the message below, not sure which is better
+    //
+    //                Something is off with the body of the `f` definition:
+    //
+    //                1│ f : a, b -> a
+    //                2│ f = \x, y -> if True then x else y
+    //                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    //
+    //                The body is an anonymous function of type:
+    //
+    //                    a, a -> a
+    //
+    //                But the type annotation on `f` says it should be:
+    //
+    //                    a, b -> a
+    test_report!(
+        bad_double_rigid,
+        indoc!(
+            r#"
+            f : a, b -> a
+            f = \x, y -> if True then x else y
+
+            f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the `else` branch of this `if` expression:
+
+    4│      f : a, b -> a
+    5│      f = \x, y -> if True then x else y
+                                             ^
+
+    This `y` value is a:
+
+        b
+
+    But the type annotation on `f` says it should be:
+
+        a
+
+    Tip: Your type annotation uses `b` and `a` as separate type variables.
+    Your code seems to be saying they are the same though. Maybe they
+    should be the same in your type annotation? Maybe your code uses them
+    in a weird way?
+    "###
+    );
+
+    test_report!(
+        bad_rigid_function,
+        indoc!(
+            r#"
+            f : Str -> msg
+            f = \_ -> Foo
+
+            f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+    4│      f : Str -> msg
+    5│      f = \_ -> Foo
+                      ^^^
+
+    This `Foo` tag has the type:
+
+        [Foo]a
+
+    But the type annotation on `f` says it should be:
+
+        msg
+
+    Tip: The type annotation uses the type variable `msg` to say that this
+    definition can produce any type of value. But in the body I see that
+    it will only produce a tag value of a single specific type. Maybe
+    change the type annotation to be more specific? Maybe change the code
+    to be more general?
+    "###
+    );
+
+    test_report!(
+        bad_rigid_value,
+        indoc!(
+            r#"
+            f : msg
+            f = 0x3
+
+            f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+    4│      f : msg
+    5│      f = 0x3
+                ^^^
+
+    The body is an integer of type:
+
+        Int a
+
+    But the type annotation on `f` says it should be:
+
+        msg
+
+    Tip: The type annotation uses the type variable `msg` to say that this
+    definition can produce any type of value. But in the body I see that
+    it will only produce a `Int` value of a single specific type. Maybe
+    change the type annotation to be more specific? Maybe change the code
+    to be more general?
+    "###
+    );
+
+    // TODO improve tag suggestions
+    test_report!(
+        typo_lowercase_ok,
+        indoc!(
+            r#"
+            f : Str -> [Ok Num.I64, InvalidFoo]
+            f = \_ -> ok 4
+
+            f
+            "#
+        ),
+        @r###"
+    ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
+
+    Nothing is named `ok` in this scope.
+
+    5│      f = \_ -> ok 4
+                      ^^
+
+    Did you mean one of these?
+
+        Ok
+        U8
+        Box
+        f
+    "###
+    );
+
+    // these error messages seem pretty helpful
+    test_report!(
+        typo_uppercase_ok,
+        indoc!(
+            r#"
+            f : Str -> Num.I64
+            f = \_ ->
+                ok = 3
+
+                Ok
+
+            f
+            "#
+        ),
+        @r###"
+    ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+
+    `ok` is not used anywhere in your code.
+
+    6│          ok = 3
+                ^^
+
+    If you didn't intend on using `ok` then remove it so future readers of
+    your code don't wonder why it is there.
+
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+    4│      f : Str -> Num.I64
+    5│      f = \_ ->
+    6│          ok = 3
+    7│
+    8│          Ok
+                ^^
+
+    This `Ok` tag has the type:
+
+        [Ok]a
+
+    But the type annotation on `f` says it should be:
+
+        I64
+    "###
+    );
+
+    // invalid recursion
+    test_report!(
+        circular_definition_self,
+        indoc!(
+            r#"
+            f = f
+
+            f
+            "#
+        ),
+        @r#"
+        ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
+
+        The `f` value is defined directly in terms of itself, causing an
+        infinite loop.
+        "#
+    );
+
+    // invalid mutual recursion
+    test_report!(
+        circular_definition,
+        indoc!(
+            r#"
+            foo = bar
+
+            bar = foo
+
+            foo
+            "#
+        ),
+        @r###"
+    ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
+
+    The `foo` definition is causing a very tricky infinite loop:
+
+    4│      foo = bar
+            ^^^
+
+    The `foo` value depends on itself through the following chain of
+    definitions:
+
+        ┌─────┐
+        │     foo
+        │     ↓
+        │     bar
+        └─────┘
+    "###
+    );
+
+    test_report!(
+        update_empty_record,
+        indoc!(
+            r#"
+            x = {}
+
+            { x & foo: 3 }
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `x` record doesn’t have a `foo` field:
+
+    6│      { x & foo: 3 }
+                  ^^^^^^
+
+    In fact, `x` is a record with no fields at all!
+    "###
+    );
+
+    test_report!(
+        update_record,
+        indoc!(
+            r#"
+            x = { fo: 3, bar: 4 }
+
+            { x & foo: 3 }
+            "#
+        ),
+        // TODO also suggest fields with the correct type
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `x` record doesn’t have a `foo` field:
+
+    6│      { x & foo: 3 }
+                  ^^^^^^
+
+    There may be a typo. These `x` fields are the most similar:
+
+        {
+            fo : Num b,
+            bar : Num a,
+        }
+
+    Maybe `foo:` should be `fo:` instead?
+    "###
+    );
+
+    test_report!(
+        update_record_ext,
+        indoc!(
+            r#"
+            f : { fo: Num.I64 }ext -> Num.I64
+            f = \r ->
+                r2 = { r & foo: r.fo }
+
+                r2.fo
+
+            f
+            "#
+        ),
+        // TODO also suggest fields with the correct type
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `r` record doesn’t have a `foo` field:
+
+    6│          r2 = { r & foo: r.fo }
+                           ^^^^^^^^^
+
+    There may be a typo. These `r` fields are the most similar:
+
+        {
+            fo : I64,
+        }ext
+
+    Maybe `foo:` should be `fo:` instead?
+    "###
+    );
+
+    test_report!(
+        update_record_snippet,
+        indoc!(
+            r#"
+            x = { fo: 3, bar: 4, baz: 3, spam: 42, foobar: 3 }
+
+            { x & foo: 3 }
+            "#
+        ),
+        // TODO also suggest fields with the correct type
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `x` record doesn’t have a `foo` field:
+
+    6│      { x & foo: 3 }
+                  ^^^^^^
+
+    There may be a typo. These `x` fields are the most similar:
+
+        {
+            fo : Num c,
+            foobar : Num d,
+            bar : Num a,
+            baz : Num b,
+            …
+        }
+
+    Maybe `foo:` should be `fo:` instead?
+    "###
+    );
+
+    test_report!(
+        plus_on_str,
+        indoc!(
+            r#"
+            0x4 + "foo"
+            "#
+        ),
+        // TODO also suggest fields with the correct type
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd argument to `add` is not what I expect:
+
+    4│      0x4 + "foo"
+                  ^^^^^
+
+    This argument is a string of type:
+
+        Str
+
+    But `add` needs the 2nd argument to be:
+
+        Int a
+    "###
+    );
+
+    test_report!(
+        int_frac,
+        indoc!(
+            r#"
+            0x4 + 3.14
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd argument to `add` is not what I expect:
+
+    4│      0x4 + 3.14
+                  ^^^^
+
+    This argument is a frac of type:
+
+        Frac a
+
+    But `add` needs the 2nd argument to be:
+
+        Int a
+
+    Tip: You can convert between Int and Frac using functions like
+    `Num.toFrac` and `Num.round`.
+    "###
+    );
+
+    test_report!(
+        boolean_tag,
+        indoc!(
+            r#"
+            42 + True
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd argument to `add` is not what I expect:
+
+    4│      42 + True
+                 ^^^^
+
+    This `True` boolean has the type:
+
+        [True]a
+
+    But `add` needs the 2nd argument to be:
+
+        Num a
+    "###
+    );
+
+    test_report!(
+        tag_missing,
+        indoc!(
+            r#"
+            f : [A] -> [A, B]
+            f = \a -> a
+
+            f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+    4│      f : [A] -> [A, B]
+    5│      f = \a -> a
+                      ^
+
+    This `a` value is a:
+
+        [A]
+
+    But the type annotation on `f` says it should be:
+
+        [A, B]
+
+    Tip: Looks like a closed tag union does not have the `B` tag.
+
+    Tip: Closed tag unions can't grow, because that might change the size
+    in memory. Can you use an open tag union?
+    "###
+    );
+
+    test_report!(
+        tags_missing,
+        indoc!(
+            r#"
+            f : [A] -> [A, B, C]
+            f = \a -> a
+
+            f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+    4│      f : [A] -> [A, B, C]
+    5│      f = \a -> a
+                      ^
+
+    This `a` value is a:
+
+        [A]
+
+    But the type annotation on `f` says it should be:
+
+        [A, B, C]
+
+    Tip: Looks like a closed tag union does not have the `B` and `C` tags.
+
+    Tip: Closed tag unions can't grow, because that might change the size
+    in memory. Can you use an open tag union?
+    "###
+    );
+
+    test_report!(
+        patterns_fn_not_exhaustive,
+        indoc!(
+            r#"
+            Either : [Left {}, Right Str]
+
+            x : Either
+            x = Left {}
+
+            f : Either -> {}
+            f = \Left v -> v
+
+            f x
+            "#
+        ),
+        @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This pattern does not cover all the possibilities:
+
+    10│      f = \Left v -> v
+                  ^^^^^^
+
+    Other possibilities include:
+
+        Right _
+
+    I would have to crash if I saw one of those! So rather than pattern
+    matching in function arguments, put a `when` in the function body to
+    account for all possibilities.
+    "###
+    );
+
+    test_report!(
+        patterns_let_not_exhaustive,
+        indoc!(
+            r#"
+            x : [Left {}, Right Str]
+            x = Left {}
+
+
+            (Left y) = x
+
+            y
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression is used in an unexpected way:
+
+    8│      (Left y) = x
+                       ^
+
+    This `x` value is a:
+
+        [Left {}, Right Str]
+
+    But you are trying to use it as:
+
+        [Left a]
+
+    Tip: Looks like a closed tag union does not have the `Right` tag.
+
+    Tip: Closed tag unions can't grow, because that might change the size
+    in memory. Can you use an open tag union?
+    "###
+    );
+
+    test_report!(
+        patterns_when_not_exhaustive,
+        indoc!(
+            r#"
+            when 0x1 is
+                2 -> 0x3
+            "#
+        ),
+        @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    4│>      when 0x1 is
+    5│>          2 -> 0x3
+
+    Other possibilities include:
+
+        _
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        patterns_bool_not_exhaustive,
+        indoc!(
+            r#"
+            x : [Red, Green]
+            x = Green
+
+            when x is
+                Red -> 3
+            "#
+        ),
+        @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    7│>      when x is
+    8│>          Red -> 3
+
+    Other possibilities include:
+
+        Green
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        patterns_enum_not_exhaustive,
+        indoc!(
+            r#"
+            x : [Red, Green, Blue]
+            x = Red
+
+            when x is
+                Red -> 0
+                Green -> 1
+            "#
+        ),
+        @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    7│>      when x is
+    8│>          Red -> 0
+    9│>          Green -> 1
+
+    Other possibilities include:
+
+        Blue
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        patterns_remote_data_not_exhaustive,
+        indoc!(
+            r#"
+            RemoteData e a :  [NotAsked, Loading, Failure e, Success a]
+
+            x : RemoteData Num.I64 Str
+
+            when x is
+                NotAsked -> 3
+            "#
+        ),
+        @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    8│>      when x is
+    9│>          NotAsked -> 3
+
+    Other possibilities include:
+
+        Failure _
+        Loading
+        Success _
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        patterns_record_not_exhaustive,
+        indoc!(
+            r#"
+            x = { a: 3 }
+
+            when x is
+                { a: 4 } -> 4
+            "#
+        ),
+        // Tip: Looks like a record field guard is not exhaustive. Learn more about record pattern matches at TODO.
+        @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    6│>      when x is
+    7│>          { a: 4 } -> 4
+
+    Other possibilities include:
+
+        { a }
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        patterns_record_guard_not_exhaustive,
+        indoc!(
+            r#"
+            y : [Nothing, Just Num.I64]
+            y = Just 4
+            x = { a: y, b: 42}
+
+            when x is
+                { a: Nothing } -> 4
+                { a: Just 3 } -> 4
+            "#
+        ),
+        @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+     8│>      when x is
+     9│>          { a: Nothing } -> 4
+    10│>          { a: Just 3 } -> 4
+
+    Other possibilities include:
+
+        { a: Just _ }
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        patterns_nested_tag_not_exhaustive,
+        indoc!(
+            r#"
+            when Record Nothing 1 is
+                Record (Nothing) b -> b
+                Record (Just 3) b -> b
+            "#
+        ),
+        @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    4│>      when Record Nothing 1 is
+    5│>          Record (Nothing) b -> b
+    6│>          Record (Just 3) b -> b
+
+    Other possibilities include:
+
+        Record (Just _) _
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        patterns_int_redundant,
+        indoc!(
+            r#"
+            when 0x1 is
+                2 -> 3
+                2 -> 4
+                _ -> 5
+            "#
+        ),
+        @r###"
+    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd pattern is redundant:
+
+    4│       when 0x1 is
+    5│           2 -> 3
+    6│>          2 -> 4
+    7│           _ -> 5
+
+    Any value of this shape will be handled by a previous pattern, so this
+    one should be removed.
+    "###
+    );
+
+    test_report!(
+        unify_alias_other,
+        indoc!(
+            r#"
+            Foo a : { x : Num.Int a }
+
+            f : Foo a -> Num.Int a
+            f = \r -> r.x
+
+            f { y: 3.14 }
+            "#
+        ),
+        // de-aliases the alias to give a better error message
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 1st argument to `f` is not what I expect:
+
+    9│      f { y: 3.14 }
+              ^^^^^^^^^^^
+
+    This argument is a record of type:
+
+        { y : Frac a }
+
+    But `f` needs the 1st argument to be:
+
+        { x : Int a }
+
+    Tip: Seems like a record field typo. Maybe `y` should be `x`?
+
+    Tip: Can more type annotations be added? Type annotations always help
+    me give more specific messages, and I think they could help a lot in
+    this case
+    "###
+    );
+
+    test_report!(
+        #[ignore]
+        cyclic_alias,
+        indoc!(
+            r#"
+            Foo : { x : Bar }
+            Bar : { y : Foo }
+
+            f : Foo
+
+            f
+            "#
+        ),
+        // should not report Bar as unused!
+        @r###"
+    ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
+
+    The `Foo` alias is self-recursive in an invalid way:
+
+    4│      Foo : { x : Bar }
+            ^^^
+
+    Recursion in aliases is only allowed if recursion happens behind a
+    tagged union, at least one variant of which is not recursive.
+    "###
+    );
+
+    test_report!(
+        self_recursive_alias,
+        indoc!(
+            r#"
+            Foo : { x : Foo }
+
+            f : Foo
+            f = 3
+
+            f
+            "#
+        ),
+        // should not report Bar as unused!
+        @r###"
+    ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
+
+    The `Foo` alias is self-recursive in an invalid way:
+
+    4│      Foo : { x : Foo }
+            ^^^
+
+    Recursion in aliases is only allowed if recursion happens behind a
+    tagged union, at least one variant of which is not recursive.
+    "###
+    );
+
+    test_report!(
+        record_duplicate_field_same_type,
+        indoc!(
+            r#"
+            { x: 4, y: 3, x: 4 }
+            "#
+        ),
+        @r###"
+    ── DUPLICATE FIELD NAME ────────────────────────────────── /code/proj/Main.roc ─
+
+    This record defines the `.x` field twice!
+
+    4│      { x: 4, y: 3, x: 4 }
+              ^^^^        ^^^^
+
+    In the rest of the program, I will only use the latter definition:
+
+    4│      { x: 4, y: 3, x: 4 }
                           ^^^^
 
-                This argument is a frac of type:
-
-                    Frac a
-
-                But `add` needs the 2nd argument to be:
-
-                    Int a
-
-                Tip: You can convert between Int and Frac using functions like
-                `Num.toFrac` and `Num.round`.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn boolean_tag() {
-        report_problem_as(
-            indoc!(
-                r#"
-                42 + True
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The 2nd argument to `add` is not what I expect:
-
-                1│  42 + True
-                         ^^^^
-
-                This `True` boolean has the type:
-
-                    [True]a
-
-                But `add` needs the 2nd argument to be:
-
-                    Num a
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn tag_missing() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : [A] -> [A, B]
-                f = \a -> a
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                Something is off with the body of the `f` definition:
-
-                1│  f : [A] -> [A, B]
-                2│  f = \a -> a
-                              ^
-
-                This `a` value is a:
-
-                    [A]
-
-                But the type annotation on `f` says it should be:
-
-                    [A, B]
-
-                Tip: Looks like a closed tag union does not have the `B` tag.
-
-                Tip: Closed tag unions can't grow, because that might change the size
-                in memory. Can you use an open tag union?
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn tags_missing() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : [A] -> [A, B, C]
-                f = \a -> a
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                Something is off with the body of the `f` definition:
-
-                1│  f : [A] -> [A, B, C]
-                2│  f = \a -> a
-                              ^
-
-                This `a` value is a:
-
-                    [A]
-
-                But the type annotation on `f` says it should be:
-
-                    [A, B, C]
-
-                Tip: Looks like a closed tag union does not have the `B` and `C` tags.
-
-                Tip: Closed tag unions can't grow, because that might change the size
-                in memory. Can you use an open tag union?
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn patterns_fn_not_exhaustive() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Either : [Left {}, Right Str]
-
-                x : Either
-                x = Left {}
-
-                f : Either -> {}
-                f = \Left v -> v
-
-                f x
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This pattern does not cover all the possibilities:
-
-                7│  f = \Left v -> v
-                         ^^^^^^
-
-                Other possibilities include:
-
-                    Right _
-
-                I would have to crash if I saw one of those! So rather than pattern
-                matching in function arguments, put a `when` in the function body to
-                account for all possibilities.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn patterns_let_not_exhaustive() {
-        report_problem_as(
-            indoc!(
-                r#"
-                x : [Left {}, Right Str]
-                x = Left {}
-
-
-                (Left y) = x
-
-                y
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                This expression is used in an unexpected way:
-
-                5│  (Left y) = x
-                               ^
-
-                This `x` value is a:
-
-                    [Left {}, Right Str]
-
-                But you are trying to use it as:
-
-                    [Left a]
-
-                Tip: Looks like a closed tag union does not have the `Right` tag.
-
-                Tip: Closed tag unions can't grow, because that might change the size
-                in memory. Can you use an open tag union?
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn patterns_when_not_exhaustive() {
-        report_problem_as(
-            indoc!(
-                r#"
-                when 0x1 is
-                    2 -> 0x3
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This `when` does not cover all the possibilities:
-
-                1│>  when 0x1 is
-                2│>      2 -> 0x3
-
-                Other possibilities include:
-
-                    _
-
-                I would have to crash if I saw one of those! Add branches for them!
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn patterns_bool_not_exhaustive() {
-        report_problem_as(
-            indoc!(
-                r#"
-                x : [Red, Green]
-                x = Green
-
-                when x is
-                    Red -> 3
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This `when` does not cover all the possibilities:
-
-                4│>  when x is
-                5│>      Red -> 3
-
-                Other possibilities include:
-
-                    Green
-
-                I would have to crash if I saw one of those! Add branches for them!
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn patterns_enum_not_exhaustive() {
-        report_problem_as(
-            indoc!(
-                r#"
-                x : [Red, Green, Blue]
-                x = Red
-
-                when x is
-                    Red -> 0
-                    Green -> 1
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This `when` does not cover all the possibilities:
-
-                4│>  when x is
-                5│>      Red -> 0
-                6│>      Green -> 1
-
-                Other possibilities include:
-
-                    Blue
-
-                I would have to crash if I saw one of those! Add branches for them!
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn patterns_remote_data_not_exhaustive() {
-        report_problem_as(
-            indoc!(
-                r#"
-                RemoteData e a :  [NotAsked, Loading, Failure e, Success a]
-
-                x : RemoteData Num.I64 Str
-
-                when x is
-                    NotAsked -> 3
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This `when` does not cover all the possibilities:
-
-                5│>  when x is
-                6│>      NotAsked -> 3
-
-                Other possibilities include:
-
-                    Failure _
-                    Loading
-                    Success _
-
-                I would have to crash if I saw one of those! Add branches for them!
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn patterns_record_not_exhaustive() {
-        report_problem_as(
-            indoc!(
-                r#"
-                x = { a: 3 }
-
-                when x is
-                    { a: 4 } -> 4
-                "#
-            ),
-            // Tip: Looks like a record field guard is not exhaustive. Learn more about record pattern matches at TODO.
-            indoc!(
-                r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This `when` does not cover all the possibilities:
-
-                3│>  when x is
-                4│>      { a: 4 } -> 4
-
-                Other possibilities include:
-
-                    { a }
-
-                I would have to crash if I saw one of those! Add branches for them!
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn patterns_record_guard_not_exhaustive() {
-        report_problem_as(
-            indoc!(
-                r#"
-                y : [Nothing, Just Num.I64]
-                y = Just 4
-                x = { a: y, b: 42}
-
-                when x is
-                    { a: Nothing } -> 4
-                    { a: Just 3 } -> 4
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This `when` does not cover all the possibilities:
-
-                5│>  when x is
-                6│>      { a: Nothing } -> 4
-                7│>      { a: Just 3 } -> 4
-
-                Other possibilities include:
-
-                    { a: Just _ }
-
-                I would have to crash if I saw one of those! Add branches for them!
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn patterns_nested_tag_not_exhaustive() {
-        report_problem_as(
-            indoc!(
-                r#"
-                when Record Nothing 1 is
-                    Record (Nothing) b -> b
-                    Record (Just 3) b -> b
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This `when` does not cover all the possibilities:
-
-                1│>  when Record Nothing 1 is
-                2│>      Record (Nothing) b -> b
-                3│>      Record (Just 3) b -> b
-
-                Other possibilities include:
-
-                    Record (Just _) _
-
-                I would have to crash if I saw one of those! Add branches for them!
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn patterns_int_redundant() {
-        report_problem_as(
-            indoc!(
-                r#"
-                when 0x1 is
-                    2 -> 3
-                    2 -> 4
-                    _ -> 5
-                "#
-            ),
-            indoc!(
-                r#"
-                ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
-
-                The 2nd pattern is redundant:
-
-                1│   when 0x1 is
-                2│       2 -> 3
-                3│>      2 -> 4
-                4│       _ -> 5
-
-                Any value of this shape will be handled by a previous pattern, so this
-                one should be removed.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn unify_alias_other() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Foo a : { x : Num.Int a }
-
-                f : Foo a -> Num.Int a
-                f = \r -> r.x
-
-                f { y: 3.14 }
-                "#
-            ),
-            // de-aliases the alias to give a better error message
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The 1st argument to `f` is not what I expect:
-
-                6│  f { y: 3.14 }
-                      ^^^^^^^^^^^
-
-                This argument is a record of type:
-
-                    { y : Frac a }
-
-                But `f` needs the 1st argument to be:
-
-                    { x : Int a }
-
-                Tip: Seems like a record field typo. Maybe `y` should be `x`?
-
-                Tip: Can more type annotations be added? Type annotations always help
-                me give more specific messages, and I think they could help a lot in
-                this case
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    #[ignore]
-    fn cyclic_alias() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Foo : { x : Bar }
-                Bar : { y : Foo }
-
-                f : Foo
-
-                f
-                "#
-            ),
-            // should not report Bar as unused!
-            indoc!(
-                r#"
-                ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
-
-                The `Foo` alias is recursive in an invalid way:
-
-                1│  Foo : { x : Bar }
-                          ^^^^^^^^^^^
-
-                The `Foo` alias depends on itself through the following chain of
-                definitions:
-
-                    ┌─────┐
-                    │     Foo
-                    │     ↓
-                    │     Bar
-                    └─────┘
-
-                Recursion in aliases is only allowed if recursion happens behind a
-                tag.
-
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                `Bar` is not used anywhere in your code.
-
-                2│  Bar : { y : Foo }
-                    ^^^^^^^^^^^^^^^^^
-
-                If you didn't intend on using `Bar` then remove it so future readers of
-                your code don't wonder why it is there.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn self_recursive_alias() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Foo : { x : Foo }
-
-                f : Foo
-                f = 3
-
-                f
-                "#
-            ),
-            // should not report Bar as unused!
-            indoc!(
-                r#"
-                ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
-
-                The `Foo` alias is self-recursive in an invalid way:
-
-                1│  Foo : { x : Foo }
-                    ^^^
-
-                Recursion in aliases is only allowed if recursion happens behind a
-                tagged union, at least one variant of which is not recursive.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn record_duplicate_field_same_type() {
-        report_problem_as(
-            indoc!(
-                r#"
-                { x: 4, y: 3, x: 4 }
-                "#
-            ),
-            indoc!(
-                r#"
-                ── DUPLICATE FIELD NAME ────────────────────────────────── /code/proj/Main.roc ─
-
-                This record defines the `.x` field twice!
-
-                1│  { x: 4, y: 3, x: 4 }
-                      ^^^^        ^^^^
-
-                In the rest of the program, I will only use the latter definition:
-
-                1│  { x: 4, y: 3, x: 4 }
-                                  ^^^^
-
-                For clarity, remove the previous `.x` definitions from this record.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn record_duplicate_field_different_types() {
-        report_problem_as(
-            indoc!(
-                r#"
-                { x: 4, y: 3, x: "foo" }
-                "#
-            ),
-            indoc!(
-                r#"
-                ── DUPLICATE FIELD NAME ────────────────────────────────── /code/proj/Main.roc ─
-
-                This record defines the `.x` field twice!
-
-                1│  { x: 4, y: 3, x: "foo" }
-                      ^^^^        ^^^^^^^^
-
-                In the rest of the program, I will only use the latter definition:
-
-                1│  { x: 4, y: 3, x: "foo" }
-                                  ^^^^^^^^
-
-                For clarity, remove the previous `.x` definitions from this record.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn record_duplicate_field_multiline() {
-        report_problem_as(
-            indoc!(
-                r#"
-                {
+    For clarity, remove the previous `.x` definitions from this record.
+    "###
+    );
+
+    test_report!(
+        record_duplicate_field_different_types,
+        indoc!(
+            r#"
+            { x: 4, y: 3, x: "foo" }
+            "#
+        ),
+        @r###"
+    ── DUPLICATE FIELD NAME ────────────────────────────────── /code/proj/Main.roc ─
+
+    This record defines the `.x` field twice!
+
+    4│      { x: 4, y: 3, x: "foo" }
+              ^^^^        ^^^^^^^^
+
+    In the rest of the program, I will only use the latter definition:
+
+    4│      { x: 4, y: 3, x: "foo" }
+                          ^^^^^^^^
+
+    For clarity, remove the previous `.x` definitions from this record.
+    "###
+    );
+
+    test_report!(
+        record_duplicate_field_multiline,
+        indoc!(
+            r#"
+            {
+                x: 4,
+                y: 3,
+                x: "foo"
+            }
+            "#
+        ),
+        @r###"
+    ── DUPLICATE FIELD NAME ────────────────────────────────── /code/proj/Main.roc ─
+
+    This record defines the `.x` field twice!
+
+    4│       {
+    5│>          x: 4,
+    6│           y: 3,
+    7│>          x: "foo"
+    8│       }
+
+    In the rest of the program, I will only use the latter definition:
+
+    4│       {
+    5│           x: 4,
+    6│           y: 3,
+    7│>          x: "foo"
+    8│       }
+
+    For clarity, remove the previous `.x` definitions from this record.
+    "###
+    );
+
+    test_report!(
+        record_update_duplicate_field_multiline,
+        indoc!(
+            r#"
+            \r ->
+                { r &
                     x: 4,
                     y: 3,
                     x: "foo"
                 }
-                "#
-            ),
-            indoc!(
-                r#"
-                ── DUPLICATE FIELD NAME ────────────────────────────────── /code/proj/Main.roc ─
-
-                This record defines the `.x` field twice!
-
-                1│   {
-                2│>      x: 4,
-                3│       y: 3,
-                4│>      x: "foo"
-                5│   }
-
-                In the rest of the program, I will only use the latter definition:
-
-                1│   {
-                2│       x: 4,
-                3│       y: 3,
-                4│>      x: "foo"
-                5│   }
-
-                For clarity, remove the previous `.x` definitions from this record.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn record_update_duplicate_field_multiline() {
-        report_problem_as(
-            indoc!(
-                r#"
-                \r ->
-                    { r &
-                        x: 4,
-                        y: 3,
-                        x: "foo"
-                    }
-                "#
-            ),
-            indoc!(
-                r#"
-                ── DUPLICATE FIELD NAME ────────────────────────────────── /code/proj/Main.roc ─
-
-                This record defines the `.x` field twice!
-
-                2│       { r &
-                3│>          x: 4,
-                4│           y: 3,
-                5│>          x: "foo"
-                6│       }
-
-                In the rest of the program, I will only use the latter definition:
-
-                2│       { r &
-                3│           x: 4,
-                4│           y: 3,
-                5│>          x: "foo"
-                6│       }
-
-                For clarity, remove the previous `.x` definitions from this record.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn record_type_duplicate_field() {
-        report_problem_as(
-            indoc!(
-                r#"
-                a : { foo : Num.I64, bar : {}, foo : Str }
-                a = { bar: {}, foo: "foo" }
-
-                a
-                "#
-            ),
-            indoc!(
-                r#"
-                ── DUPLICATE FIELD NAME ────────────────────────────────── /code/proj/Main.roc ─
-
-                This record type defines the `.foo` field twice!
-
-                1│  a : { foo : Num.I64, bar : {}, foo : Str }
-                          ^^^^^^^^^^^^^            ^^^^^^^^^
-
-                In the rest of the program, I will only use the latter definition:
-
-                1│  a : { foo : Num.I64, bar : {}, foo : Str }
-                                                   ^^^^^^^^^
-
-                For clarity, remove the previous `.foo` definitions from this record
-                type.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn tag_union_duplicate_tag() {
-        report_problem_as(
-            indoc!(
-                r#"
-                a : [Foo Num.I64, Bar {}, Foo Str]
-                a = Foo "foo"
-
-                a
-                "#
-            ),
-            indoc!(
-                r#"
-                ── DUPLICATE TAG NAME ──────────────────────────────────── /code/proj/Main.roc ─
-
-                This tag union type defines the `Foo` tag twice!
-
-                1│  a : [Foo Num.I64, Bar {}, Foo Str]
-                         ^^^^^^^^^^^          ^^^^^^^
-
-                In the rest of the program, I will only use the latter definition:
-
-                1│  a : [Foo Num.I64, Bar {}, Foo Str]
-                                              ^^^^^^^
-
-                For clarity, remove the previous `Foo` definitions from this tag union
-                type.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn annotation_definition_mismatch() {
-        report_problem_as(
-            indoc!(
-                r#"
-                bar : Num.I64
-                foo = \x -> x
-
-                # NOTE: neither bar or foo are defined at this point
-                4
-                "#
-            ),
-            indoc!(
-                r#"
-                ── NAMING PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This annotation does not match the definition immediately following
-                it:
-
-                1│>  bar : Num.I64
-                2│>  foo = \x -> x
-
-                Is it a typo? If not, put either a newline or comment between them.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn annotation_newline_body_is_fine() {
-        report_problem_as(
-            indoc!(
-                r#"
-                bar : Num.I64
-
-                foo = \x -> x
-
-                foo bar
-                "#
-            ),
-            indoc!(""),
-        )
-    }
-
-    #[test]
-    fn invalid_alias_rigid_var_pattern() {
-        report_problem_as(
-            indoc!(
-                r#"
-                MyAlias 1 : Num.I64
-
-                4
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This pattern in the definition of `MyAlias` is not what I expect:
-
-                1│  MyAlias 1 : Num.I64
-                            ^
-
-                Only type variables like `a` or `value` can occur in this position.
-
-                ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
-
-                `MyAlias` is not used anywhere in your code.
-
-                1│  MyAlias 1 : Num.I64
-                    ^^^^^^^^^^^^^^^^^^^
-
-                If you didn't intend on using `MyAlias` then remove it so future readers
-                of your code don't wonder why it is there.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn invalid_opaque_rigid_var_pattern() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Age 1 := Num.I64
-
-                a : Age
-                a
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This pattern in the definition of `Age` is not what I expect:
-
-                1│  Age 1 := Num.I64
-                        ^
-
-                Only type variables like `a` or `value` can occur in this position.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn invalid_num() {
-        report_problem_as(
-            indoc!(
-                r#"
-                a : Num.Num Num.I64 Num.F64
-                a = 3
-
-                a
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TOO MANY TYPE ARGUMENTS ─────────────────────────────── /code/proj/Main.roc ─
-
-                The `Num` alias expects 1 type argument, but it got 2 instead:
-
-                1│  a : Num.Num Num.I64 Num.F64
-                        ^^^^^^^^^^^^^^^^^^^^^^^
-
-                Are there missing parentheses?
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn invalid_num_fn() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : Str -> Num.Num Num.I64 Num.F64
-                f = \_ -> 3
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TOO MANY TYPE ARGUMENTS ─────────────────────────────── /code/proj/Main.roc ─
-
-                The `Num` alias expects 1 type argument, but it got 2 instead:
-
-                1│  f : Str -> Num.Num Num.I64 Num.F64
-                               ^^^^^^^^^^^^^^^^^^^^^^^
-
-                Are there missing parentheses?
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn too_few_type_arguments() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Pair a b : [Pair a b]
-
-                x : Pair Num.I64
-                x = Pair 2 3
-
-                x
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TOO FEW TYPE ARGUMENTS ──────────────────────────────── /code/proj/Main.roc ─
-
-                The `Pair` alias expects 2 type arguments, but it got 1 instead:
-
-                3│  x : Pair Num.I64
-                        ^^^^^^^^^^^^
-
-                Are there missing parentheses?
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn too_many_type_arguments() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Pair a b : [Pair a b]
-
-                x : Pair Num.I64 Num.I64 Num.I64
-                x = 3
-
-                x
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TOO MANY TYPE ARGUMENTS ─────────────────────────────── /code/proj/Main.roc ─
-
-                The `Pair` alias expects 2 type arguments, but it got 3 instead:
-
-                3│  x : Pair Num.I64 Num.I64 Num.I64
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-                Are there missing parentheses?
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn phantom_type_variable() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Foo a : [Foo]
-
-                f : Foo Num.I64
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNUSED TYPE ALIAS PARAMETER ─────────────────────────── /code/proj/Main.roc ─
-
-                The `a` type parameter is not used in the `Foo` alias definition:
-
-                1│  Foo a : [Foo]
-                        ^
-
-                Roc does not allow unused type alias parameters!
-
-                Tip: If you want an unused type parameter (a so-called "phantom
-                type"), read the guide section on phantom values.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn elm_function_syntax() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f x y = x
-                "#
-            ),
-            indoc!(
-                r#"
-                ── ARGUMENTS BEFORE EQUALS ─────────────────────────────── /code/proj/Main.roc ─
-
-                I am partway through parsing a definition, but I got stuck here:
-
-                1│  f x y = x
-                      ^^^
-
-                Looks like you are trying to define a function. In roc, functions are
-                always written as a lambda, like increment = \n -> n + 1.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn two_different_cons() {
-        report_problem_as(
-            indoc!(
-                r#"
-                ConsList a : [Cons a (ConsList a), Nil]
-
-                x : ConsList {}
-                x = Cons {} (Cons "foo" Nil)
-
-                x
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                Something is off with the body of the `x` definition:
-
-                3│  x : ConsList {}
-                4│  x = Cons {} (Cons "foo" Nil)
-                        ^^^^^^^^^^^^^^^^^^^^^^^^
-
-                This `Cons` tag application has the type:
-
-                    [Cons {} [Cons Str [Cons {} a, Nil] as a, Nil], Nil]
-
-                But the type annotation on `x` says it should be:
-
-                    [Cons {} a, Nil] as a
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn mutually_recursive_types_with_type_error() {
-        report_problem_as(
-            indoc!(
-                r#"
-                AList a b : [ACons a (BList a b), ANil]
-                BList a b : [BCons a (AList a b), BNil]
-
-                x : AList Num.I64 Num.I64
-                x = ACons 0 (BCons 1 (ACons "foo" BNil ))
-
-                y : BList a a
-                y = BNil
-
-                { x, y }
-                "#
-            ),
-            // TODO render tag unions across multiple lines
-            // TODO do not show recursion var if the recursion var does not render on the surface of a type
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                Something is off with the body of the `x` definition:
-
-                4│  x : AList Num.I64 Num.I64
-                5│  x = ACons 0 (BCons 1 (ACons "foo" BNil ))
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-                This `ACons` tag application has the type:
-
-                    [ACons (Int Signed64) [BCons (Int Signed64) [ACons Str [BCons I64 [ACons I64 (BList I64 I64),
-                    ANil] as ∞, BNil], ANil], BNil], ANil]
-
-                But the type annotation on `x` says it should be:
-
-                    [ACons I64 (BList I64 I64), ANil] as a
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn integer_out_of_range() {
-        report_problem_as(
-            indoc!(
-                r#"
-                x = 170_141_183_460_469_231_731_687_303_715_884_105_728_000
-
-                y = -170_141_183_460_469_231_731_687_303_715_884_105_728_000
-
-                h = 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
-                l = -0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
-
-                minlit = -170_141_183_460_469_231_731_687_303_715_884_105_728
-                maxlit =  340_282_366_920_938_463_463_374_607_431_768_211_455
-
-                x + y + h + l + minlit + maxlit
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal is too big:
-
-                1│  x = 170_141_183_460_469_231_731_687_303_715_884_105_728_000
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-                The largest number representable in Roc is the maximum U128 value,
-                340_282_366_920_938_463_463_374_607_431_768_211_455.
-
-                Tip: Learn more about number literals at TODO
-
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal is too small:
-
-                3│  y = -170_141_183_460_469_231_731_687_303_715_884_105_728_000
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-                The smallest number representable in Roc is the minimum I128 value,
-                -170_141_183_460_469_231_731_687_303_715_884_105_728.
-
-                Tip: Learn more about number literals at TODO
-
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal is too big:
-
-                5│  h = 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-                The largest number representable in Roc is the maximum U128 value,
-                340_282_366_920_938_463_463_374_607_431_768_211_455.
-
-                Tip: Learn more about number literals at TODO
-
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal is too small:
-
-                6│  l = -0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-                The smallest number representable in Roc is the minimum I128 value,
-                -170_141_183_460_469_231_731_687_303_715_884_105_728.
-
-                Tip: Learn more about number literals at TODO
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn float_out_of_range() {
-        // have to deal with some whitespace issues because of the format! macro
-        report_problem_as(
-            indoc!(
-                r#"
-                overflow = 11.7976931348623157e308
-                underflow = -11.7976931348623157e308
-
-                overflow + underflow
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This float literal is too big:
-
-                1│  overflow = 11.7976931348623157e308
-                               ^^^^^^^^^^^^^^^^^^^^^^^
-
-                Roc uses signed 64-bit floating points, allowing values between
-                -1.7976931348623157e308 and 1.7976931348623157e308
-
-                Tip: Learn more about number literals at TODO
-
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This float literal is too small:
-
-                2│  underflow = -11.7976931348623157e308
-                                ^^^^^^^^^^^^^^^^^^^^^^^^
-
-                Roc uses signed 64-bit floating points, allowing values between
-                -1.7976931348623157e308 and 1.7976931348623157e308
-
-                Tip: Learn more about number literals at TODO
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn integer_malformed() {
-        // the generated messages here are incorrect. Waiting for a rust nightly feature to land,
-        // see https://github.com/rust-lang/rust/issues/22639
-        // this test is here to spot regressions in error reporting
-        report_problem_as(
-            indoc!(
-                r#"
-                dec = 100A
-
-                hex = 0xZZZ
-
-                oct = 0o9
-
-                bin = 0b2
-
-                dec + hex + oct + bin
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal contains an invalid digit:
-
-                1│  dec = 100A
-                          ^^^^
-
-                Integer literals can only contain the digits
-                0-9, or have an integer suffix.
-
-                Tip: Learn more about number literals at TODO
-
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This hex integer literal contains an invalid digit:
-
-                3│  hex = 0xZZZ
-                          ^^^^^
-
-                Hexadecimal (base-16) integer literals can only contain the digits
-                0-9, a-f and A-F, or have an integer suffix.
-
-                Tip: Learn more about number literals at TODO
-
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This octal integer literal contains an invalid digit:
-
-                5│  oct = 0o9
-                          ^^^
-
-                Octal (base-8) integer literals can only contain the digits
-                0-7, or have an integer suffix.
-
-                Tip: Learn more about number literals at TODO
-
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This binary integer literal contains an invalid digit:
-
-                7│  bin = 0b2
-                          ^^^
-
-                Binary (base-2) integer literals can only contain the digits
-                0 and 1, or have an integer suffix.
-
-                Tip: Learn more about number literals at TODO
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn integer_empty() {
-        report_problem_as(
-            indoc!(
-                r#"
-                dec = 20
-
-                hex = 0x
-
-                oct = 0o
-
-                bin = 0b
-
-                dec + hex + oct + bin
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This hex integer literal contains no digits:
-
-                3│  hex = 0x
-                          ^^
-
-                Hexadecimal (base-16) integer literals must contain at least one of
-                the digits 0-9, a-f and A-F, or have an integer suffix.
-
-                Tip: Learn more about number literals at TODO
-
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This octal integer literal contains no digits:
-
-                5│  oct = 0o
-                          ^^
-
-                Octal (base-8) integer literals must contain at least one of the
-                digits 0-7, or have an integer suffix.
-
-                Tip: Learn more about number literals at TODO
-
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This binary integer literal contains no digits:
-
-                7│  bin = 0b
-                          ^^
-
-                Binary (base-2) integer literals must contain at least one of the
-                digits 0 and 1, or have an integer suffix.
-
-                Tip: Learn more about number literals at TODO
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn float_malformed() {
-        report_problem_as(
-            indoc!(
-                r#"
-                x = 3.0A
-
-                x
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This float literal contains an invalid digit:
-
-                1│  x = 3.0A
-                        ^^^^
-
-                Floating point literals can only contain the digits 0-9, or use
-                scientific notation 10e4, or have a float suffix.
-
-                Tip: Learn more about number literals at TODO
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn invalid_record_update() {
-        report_problem_as(
-            indoc!(
-                r#"
-                foo = { bar: 3 }
-                updateNestedRecord = { foo.bar & x: 4 }
-
-                example = { age: 42 }
-
-                # these should work
-                y = { Test.example & age: 3 }
-                x = { example & age: 4 }
-
-                { updateNestedRecord, foo, x, y }
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This expression cannot be updated:
-
-                2│  updateNestedRecord = { foo.bar & x: 4 }
-                                           ^^^^^^^
-
-                Only variables can be updated with record update syntax.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn module_not_imported() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Foo.test
-                "#
-            ),
-            indoc!(
-                r#"
-                ── MODULE NOT IMPORTED ─────────────────────────────────── /code/proj/Main.roc ─
-
-                The `Foo` module is not imported:
-
-                1│  Foo.test
-                    ^^^^^^^^
-
-                Is there an import missing? Perhaps there is a typo. Did you mean one
-                of these?
-
-                    Box
-                    Bool
-                    Num
-                    Set
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn optional_record_default_type_error() {
-        report_problem_as(
-            indoc!(
-                r#"
-                \{ x, y ? True } -> x + y
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The 2nd argument to `add` is not what I expect:
-
-                1│  \{ x, y ? True } -> x + y
-                                            ^
-
-                This `y` value is a:
-
-                    [True]a
-
-                But `add` needs the 2nd argument to be:
-
-                    Num a
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn optional_record_default_with_signature() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : { x : Num.I64, y ? Num.I64 } -> Num.I64
-                f = \{ x, y ? "foo" } -> (\g, _ -> g) x y
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The 1st argument to `f` is weird:
-
-                2│  f = \{ x, y ? "foo" } -> (\g, _ -> g) x y
-                         ^^^^^^^^^^^^^^^^
-
-                The argument is a pattern that matches record values of type:
-
-                    { x : I64, y ? Str }
-
-                But the annotation on `f` says the 1st argument should be:
-
-                    { x : I64, y ? I64 }
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn optional_record_invalid_let_binding() {
-        report_problem_as(
-            indoc!(
-                r#"
-                \rec ->
-                    { x, y } : { x : Num.I64, y ? Str }
-                    { x, y } = rec
-
-                    { x, y }
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                Something is off with the body of this definition:
-
-                2│>      { x, y } : { x : Num.I64, y ? Str }
-                3│>      { x, y } = rec
-
-                The body is a value of type:
-
-                    { x : I64, y : Str }
-
-                But the type annotation says it should be:
-
-                    { x : I64, y ? Str }
-
-                Tip: To extract the `.y` field it must be non-optional, but the type
-                says this field is optional. Learn more about optional fields at TODO.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn optional_record_invalid_function() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : { x : Num.I64, y ? Num.I64 } -> Num.I64
-                f = \{ x, y } -> x + y
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The 1st argument to `f` is weird:
-
-                2│  f = \{ x, y } -> x + y
-                         ^^^^^^^^
-
-                The argument is a pattern that matches record values of type:
-
-                    { x : I64, y : I64 }
-
-                But the annotation on `f` says the 1st argument should be:
-
-                    { x : I64, y ? I64 }
-
-                Tip: To extract the `.y` field it must be non-optional, but the type
-                says this field is optional. Learn more about optional fields at TODO.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn optional_record_invalid_when() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : { x : Num.I64, y ? Num.I64 } -> Num.I64
-                f = \r ->
-                        when r is
-                            { x, y } -> x + y
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The branches of this `when` expression don't match the condition:
-
-                3│>          when r is
-                4│               { x, y } -> x + y
-
-                This `r` value is a:
-
-                    { x : I64, y ? I64 }
-
-                But the branch patterns have type:
-
-                    { x : I64, y : I64 }
-
-                The branches must be cases of the `when` condition's type!
-
-                Tip: To extract the `.y` field it must be non-optional, but the type
-                says this field is optional. Learn more about optional fields at TODO.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn optional_record_invalid_access() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : { x : Num.I64, y ? Num.I64 } -> Num.I64
-                f = \r -> r.y
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                This expression is used in an unexpected way:
-
-                2│  f = \r -> r.y
-                              ^^^
-
-                This `r` value is a:
-
-                    { x : I64, y ? I64 }
-
-                But you are trying to use it as:
-
-                    { x : I64, y : I64 }
-
-                Tip: To extract the `.y` field it must be non-optional, but the type
-                says this field is optional. Learn more about optional fields at TODO.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn optional_record_invalid_accessor() {
-        report_problem_as(
-            indoc!(
-                r#"
-                    f : { x : Num.I64, y ? Num.I64 } -> Num.I64
-                    f = \r -> .y r
-
-                    f
-                    "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The 1st argument to this function is not what I expect:
-
-                2│  f = \r -> .y r
-                                 ^
-
-                This `r` value is a:
-
-                    { x : I64, y ? I64 }
-
-                But this function needs the 1st argument to be:
-
-                    { x : I64, y : I64 }
-
-                Tip: To extract the `.y` field it must be non-optional, but the type
-                says this field is optional. Learn more about optional fields at TODO.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn guard_mismatch_with_annotation() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : { x : Num.I64, y : Num.I64 } -> Num.I64
-                f = \r ->
-                        when r is
-                            { x, y : "foo" } -> x + 0
-                            _ -> 0
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The branches of this `when` expression don't match the condition:
-
-                3│>          when r is
-                4│               { x, y : "foo" } -> x + 0
-                5│               _ -> 0
-
-                This `r` value is a:
-
-                    { x : I64, y : I64 }
-
-                But the branch patterns have type:
-
-                    { x : I64, y : Str }
-
-                The branches must be cases of the `when` condition's type!
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn optional_field_mismatch_with_annotation() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : { x : Num.I64, y ? Num.I64 } -> Num.I64
-                f = \r ->
-                        when r is
-                            { x, y ? "foo" } -> (\g, _ -> g) x y
-                            _ -> 0
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The branches of this `when` expression don't match the condition:
-
-                3│>          when r is
-                4│               { x, y ? "foo" } -> (\g, _ -> g) x y
-                5│               _ -> 0
-
-                This `r` value is a:
-
-                    { x : I64, y ? I64 }
-
-                But the branch patterns have type:
-
-                    { x : I64, y ? Str }
-
-                The branches must be cases of the `when` condition's type!
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn incorrect_optional_field() {
-        report_problem_as(
-            indoc!(
-                r#"
-                { x: 5, y ? 42 }
-                "#
-            ),
-            indoc!(
-                r#"
-                ── BAD OPTIONAL VALUE ──────────────────────────────────── /code/proj/Main.roc ─
-
-                This record uses an optional value for the `.y` field in an incorrect
-                context!
-
-                1│  { x: 5, y ? 42 }
-                            ^^^^^^
-
-                You can only use optional values in record destructuring, like:
-
-                    { answer ? 42, otherField } = myRecord
-                "#
-            ),
-        )
-    }
-    #[test]
-    fn first_wildcard_is_required() {
-        report_problem_as(
-            indoc!(
-                r#"
-                when Foo 1 2 3 is
-                    Foo _ 1 _ -> 1
-                    _ -> 2
-                "#
-            ),
-            "",
-        )
-    }
-
-    #[test]
-    fn second_wildcard_is_redundant() {
-        report_problem_as(
-            indoc!(
-                r#"
-                when Foo 1 2 3 is
-                    Foo _ 1 _ -> 1
-                    _ -> 2
-                    _ -> 3
-                "#
-            ),
-            indoc!(
-                r#"
-            ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
-
-            The 3rd pattern is redundant:
-
-            1│  when Foo 1 2 3 is
-            2│      Foo _ 1 _ -> 1
-            3│      _ -> 2
-            4│      _ -> 3
+            "#
+        ),
+        @r###"
+    ── DUPLICATE FIELD NAME ────────────────────────────────── /code/proj/Main.roc ─
+
+    This record defines the `.x` field twice!
+
+    5│           { r &
+    6│>              x: 4,
+    7│               y: 3,
+    8│>              x: "foo"
+    9│           }
+
+    In the rest of the program, I will only use the latter definition:
+
+    5│           { r &
+    6│               x: 4,
+    7│               y: 3,
+    8│>              x: "foo"
+    9│           }
+
+    For clarity, remove the previous `.x` definitions from this record.
+    "###
+    );
+
+    test_report!(
+        record_type_duplicate_field,
+        indoc!(
+            r#"
+            a : { foo : Num.I64, bar : {}, foo : Str }
+            a = { bar: {}, foo: "foo" }
+
+            a
+            "#
+        ),
+        @r###"
+    ── DUPLICATE FIELD NAME ────────────────────────────────── /code/proj/Main.roc ─
+
+    This record type defines the `.foo` field twice!
+
+    4│      a : { foo : Num.I64, bar : {}, foo : Str }
+                  ^^^^^^^^^^^^^            ^^^^^^^^^
+
+    In the rest of the program, I will only use the latter definition:
+
+    4│      a : { foo : Num.I64, bar : {}, foo : Str }
+                                           ^^^^^^^^^
+
+    For clarity, remove the previous `.foo` definitions from this record
+    type.
+    "###
+    );
+
+    test_report!(
+        tag_union_duplicate_tag,
+        indoc!(
+            r#"
+            a : [Foo Num.I64, Bar {}, Foo Str]
+            a = Foo "foo"
+
+            a
+            "#
+        ),
+        @r###"
+    ── DUPLICATE TAG NAME ──────────────────────────────────── /code/proj/Main.roc ─
+
+    This tag union type defines the `Foo` tag twice!
+
+    4│      a : [Foo Num.I64, Bar {}, Foo Str]
+                 ^^^^^^^^^^^          ^^^^^^^
+
+    In the rest of the program, I will only use the latter definition:
+
+    4│      a : [Foo Num.I64, Bar {}, Foo Str]
+                                      ^^^^^^^
+
+    For clarity, remove the previous `Foo` definitions from this tag union
+    type.
+    "###
+    );
+
+    test_report!(
+        annotation_definition_mismatch,
+        indoc!(
+            r#"
+            bar : Num.I64
+            foo = \x -> x
+
+            # NOTE: neither bar or foo are defined at this point
+            4
+            "#
+        ),
+        @r###"
+    ── NAMING PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This annotation does not match the definition immediately following
+    it:
+
+    4│>      bar : Num.I64
+    5│>      foo = \x -> x
+
+    Is it a typo? If not, put either a newline or comment between them.
+    "###
+    );
+
+    test_report!(
+        annotation_newline_body_is_fine,
+        indoc!(
+            r#"
+            bar : Num.I64
+
+            foo = \x -> x
+
+            foo bar
+            "#
+        ),
+        @""
+    );
+
+    test_report!(
+        invalid_alias_rigid_var_pattern,
+        indoc!(
+            r#"
+            MyAlias 1 : Num.I64
+
+            4
+            "#
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This pattern in the definition of `MyAlias` is not what I expect:
+
+    4│      MyAlias 1 : Num.I64
                     ^
 
-            Any value of this shape will be handled by a previous pattern, so this
-            one should be removed.
+    Only type variables like `a` or `value` can occur in this position.
+
+    ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+
+    `MyAlias` is not used anywhere in your code.
+
+    4│      MyAlias 1 : Num.I64
+            ^^^^^^^^^^^^^^^^^^^
+
+    If you didn't intend on using `MyAlias` then remove it so future readers
+    of your code don't wonder why it is there.
+    "###
+    );
+
+    test_report!(
+        invalid_opaque_rigid_var_pattern,
+        indoc!(
+            r#"
+            Age 1 := Num.I64
+
+            a : Age
+            a
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn alias_using_alias() {
-        report_problem_as(
-            indoc!(
-                r#"
-                # The color of a node. Leaves are considered Black.
-                NodeColor : [Red, Black]
+    This pattern in the definition of `Age` is not what I expect:
 
-                RBTree k v : [Node NodeColor k v (RBTree k v) (RBTree k v), Empty]
+    4│      Age 1 := Num.I64
+                ^
 
-                # Create an empty dictionary.
-                empty : RBTree k v
-                empty =
-                    Empty
+    Only type variables like `a` or `value` can occur in this position.
+    "###
+    );
 
-                empty
-                "#
-            ),
-            "",
-        )
-    }
+    test_report!(
+        invalid_num,
+        indoc!(
+            r#"
+            a : Num.Num Num.I64 Num.F64
+            a = 3
 
-    #[test]
-    fn unused_argument() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f = \foo -> 1
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-            ── UNUSED ARGUMENT ─────────────────────────────────────── /code/proj/Main.roc ─
-
-            `f` doesn't use `foo`.
-
-            1│  f = \foo -> 1
-                     ^^^
-
-            If you don't need `foo`, then you can just remove it. However, if you
-            really do need `foo` as an argument of `f`, prefix it with an underscore,
-            like this: "_`foo`". Adding an underscore at the start of a variable
-            name is a way of saying that the variable is not used.
+            a
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── TOO MANY TYPE ARGUMENTS ─────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn qualified_tag() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Foo.Bar
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    The `Num` alias expects 1 type argument, but it got 2 instead:
 
-                I am trying to parse a qualified name here:
+    4│      a : Num.Num Num.I64 Num.F64
+                ^^^^^^^^^^^^^^^^^^^^^^^
 
-                1│  Foo.Bar
-                           ^
+    Are there missing parentheses?
+    "###
+    );
 
-                This looks like a qualified tag name to me, but tags cannot be
-                qualified! Maybe you wanted a qualified name, something like
-                Json.Decode.string?
+    test_report!(
+        invalid_num_fn,
+        indoc!(
+            r#"
+            f : Str -> Num.Num Num.I64 Num.F64
+            f = \_ -> 3
+
+            f
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── TOO MANY TYPE ARGUMENTS ─────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn module_ident_ends_with_dot() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Foo.Bar.
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    The `Num` alias expects 1 type argument, but it got 2 instead:
 
-                I am trying to parse a qualified name here:
+    4│      f : Str -> Num.Num Num.I64 Num.F64
+                       ^^^^^^^^^^^^^^^^^^^^^^^
 
-                1│  Foo.Bar.
-                            ^
+    Are there missing parentheses?
+    "###
+    );
 
-                I was expecting to see an identifier next, like height. A complete
-                qualified name looks something like Json.Decode.string.
+    test_report!(
+        too_few_type_arguments,
+        indoc!(
+            r#"
+            Pair a b : [Pair a b]
+
+            x : Pair Num.I64
+            x = Pair 2 3
+
+            x
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── TOO FEW TYPE ARGUMENTS ──────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn record_access_ends_with_dot() {
-        report_problem_as(
-            indoc!(
-                r#"
-                foo.bar.
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    The `Pair` alias expects 2 type arguments, but it got 1 instead:
 
-                I trying to parse a record field access here:
+    6│      x : Pair Num.I64
+                ^^^^^^^^^^^^
 
-                1│  foo.bar.
-                            ^
+    Are there missing parentheses?
+    "###
+    );
 
-                So I expect to see a lowercase letter next, like .name or .height.
+    test_report!(
+        too_many_type_arguments,
+        indoc!(
+            r#"
+            Pair a b : [Pair a b]
+
+            x : Pair Num.I64 Num.I64 Num.I64
+            x = 3
+
+            x
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── TOO MANY TYPE ARGUMENTS ─────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn type_annotation_double_colon() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f :: I64
-                f = 42
+    The `Pair` alias expects 2 type arguments, but it got 3 instead:
 
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNKNOWN OPERATOR ────────────────────────────────────── /code/proj/Main.roc ─
+    6│      x : Pair Num.I64 Num.I64 Num.I64
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                This looks like an operator, but it's not one I recognize!
+    Are there missing parentheses?
+    "###
+    );
 
-                1│  f :: I64
-                      ^^
+    test_report!(
+        phantom_type_variable,
+        indoc!(
+            r#"
+            Foo a : [Foo]
 
-                I have no specific suggestion for this operator, see TODO for the full
-                list of operators in Roc.
+            f : Foo Num.I64
+
+            f
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── UNUSED TYPE ALIAS PARAMETER ─────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn double_equals_in_def() {
-        // NOTE: VERY BAD ERROR MESSAGE
-        //
-        // looks like `x y` are considered argument to the add, even though they are
-        // on a lower indentation level
-        report_problem_as(
-            indoc!(
-                r#"
-                x = 3
-                y =
-                    x == 5
-                    Num.add 1 2
+    The `a` type parameter is not used in the `Foo` alias definition:
 
-                { x,  y }
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+    4│      Foo a : [Foo]
+                ^
 
-                This value is not a function, but it was given 3 arguments:
+    Roc does not allow unused type alias parameters!
 
-                3│      x == 5
-                             ^
+    Tip: If you want an unused type parameter (a so-called "phantom
+    type"), read the guide section on phantom values.
+    "###
+    );
 
-                Are there any missing commas? Or missing parentheses?
+    test_report!(
+        elm_function_syntax,
+        indoc!(
+            r#"
+            f x y = x
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── ARGUMENTS BEFORE EQUALS ────────────────── tmp/elm_function_syntax/Test.roc ─
 
-    #[test]
-    fn tag_union_open() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : [
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED TAG UNION TYPE ───────────────────────────── /code/proj/Main.roc ─
+    I am partway through parsing a definition, but I got stuck here:
 
-                I just started parsing a tag union type, but I got stuck here:
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      f x y = x
+              ^^^
 
-                1│  f : [
-                         ^
+    Looks like you are trying to define a function. In roc, functions are
+    always written as a lambda, like increment = \n -> n + 1.
+    "###
+    );
 
-                Tag unions look like [Many I64, None], so I was expecting to see a tag
-                name next.
+    test_report!(
+        two_different_cons,
+        indoc!(
+            r#"
+            ConsList a : [Cons a (ConsList a), Nil]
+
+            x : ConsList {}
+            x = Cons {} (Cons "foo" Nil)
+
+            x
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn tag_union_end() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : [Yes,
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED TAG UNION TYPE ───────────────────────────── /code/proj/Main.roc ─
+    Something is off with the body of the `x` definition:
 
-                I am partway through parsing a tag union type, but I got stuck here:
+    6│      x : ConsList {}
+    7│      x = Cons {} (Cons "foo" Nil)
+                ^^^^^^^^^^^^^^^^^^^^^^^^
 
-                1│  f : [Yes,
-                             ^
+    This `Cons` tag application has the type:
 
-                I was expecting to see a closing square bracket before this, so try
-                adding a ] and see if that helps?
+        [Cons {} [Cons Str [Cons {} a, Nil] as a, Nil], Nil]
+
+    But the type annotation on `x` says it should be:
+
+        [Cons {} a, Nil] as a
+    "###
+    );
+
+    test_report!(
+        mutually_recursive_types_with_type_error,
+        indoc!(
+            r#"
+            AList a b : [ACons a (BList a b), ANil]
+            BList a b : [BCons a (AList a b), BNil]
+
+            x : AList Num.I64 Num.I64
+            x = ACons 0 (BCons 1 (ACons "foo" BNil ))
+
+            y : BList a a
+            y = BNil
+
+            { x, y }
             "#
-            ),
-        )
-    }
+        ),
+        // TODO render tag unions across multiple lines
+        // TODO do not show recursion var if the recursion var does not render on the surface of a type
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn tag_union_lowercase_tag_name() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : [lowercase]
-                "#
-            ),
-            indoc!(
-                r#"
-                ── WEIRD TAG NAME ──────────────────────────────────────── /code/proj/Main.roc ─
+    Something is off with the body of the `x` definition:
 
-                I am partway through parsing a tag union type, but I got stuck here:
+    7│      x : AList Num.I64 Num.I64
+    8│      x = ACons 0 (BCons 1 (ACons "foo" BNil ))
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                1│  f : [lowercase]
-                         ^
+    This `ACons` tag application has the type:
 
-                I was expecting to see a tag name.
+        [ACons (Int Signed64) [BCons (Int Signed64) [ACons Str [BCons I64 [ACons I64 (BList I64 I64),
+        ANil] as ∞, BNil], ANil], BNil], ANil]
 
-                Hint: Tag names start with an uppercase letter, like Err or Green.
+    But the type annotation on `x` says it should be:
+
+        [ACons I64 (BList I64 I64), ANil] as a
+    "###
+    );
+
+    test_report!(
+        integer_out_of_range,
+        indoc!(
+            r#"
+            x = 170_141_183_460_469_231_731_687_303_715_884_105_728_000
+
+            y = -170_141_183_460_469_231_731_687_303_715_884_105_728_000
+
+            h = 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
+            l = -0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
+
+            minlit = -170_141_183_460_469_231_731_687_303_715_884_105_728
+            maxlit =  340_282_366_920_938_463_463_374_607_431_768_211_455
+
+            x + y + h + l + minlit + maxlit
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn tag_union_second_lowercase_tag_name() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : [Good, bad]
-                "#
-            ),
-            indoc!(
-                r#"
-                ── WEIRD TAG NAME ──────────────────────────────────────── /code/proj/Main.roc ─
+    This integer literal is too big:
 
-                I am partway through parsing a tag union type, but I got stuck here:
+    4│      x = 170_141_183_460_469_231_731_687_303_715_884_105_728_000
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                1│  f : [Good, bad]
-                               ^
+    The largest number representable in Roc is the maximum U128 value,
+    340_282_366_920_938_463_463_374_607_431_768_211_455.
 
-                I was expecting to see a tag name.
+    Tip: Learn more about number literals at TODO
 
-                Hint: Tag names start with an uppercase letter, like Err or Green.
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This integer literal is too small:
+
+    6│      y = -170_141_183_460_469_231_731_687_303_715_884_105_728_000
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    The smallest number representable in Roc is the minimum I128 value,
+    -170_141_183_460_469_231_731_687_303_715_884_105_728.
+
+    Tip: Learn more about number literals at TODO
+
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This integer literal is too big:
+
+    8│      h = 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    The largest number representable in Roc is the maximum U128 value,
+    340_282_366_920_938_463_463_374_607_431_768_211_455.
+
+    Tip: Learn more about number literals at TODO
+
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This integer literal is too small:
+
+    9│      l = -0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    The smallest number representable in Roc is the minimum I128 value,
+    -170_141_183_460_469_231_731_687_303_715_884_105_728.
+
+    Tip: Learn more about number literals at TODO
+    "###
+    );
+
+    // have to deal with some whitespace issues because of the format! macro
+    test_report!(
+        float_out_of_range,
+        indoc!(
+            r#"
+            overflow = 11.7976931348623157e308
+            underflow = -11.7976931348623157e308
+
+            overflow + underflow
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn record_type_open() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : {
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED RECORD TYPE ──────────────────────────────── /code/proj/Main.roc ─
+    This float literal is too big:
 
-                I just started parsing a record type, but I got stuck here:
+    4│      overflow = 11.7976931348623157e308
+                       ^^^^^^^^^^^^^^^^^^^^^^^
 
-                1│  f : {
-                         ^
+    Roc uses signed 64-bit floating points, allowing values between
+    -1.7976931348623157e308 and 1.7976931348623157e308
 
-                Record types look like { name : String, age : Int }, so I was
-                expecting to see a field name next.
+    Tip: Learn more about number literals at TODO
+
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This float literal is too small:
+
+    5│      underflow = -11.7976931348623157e308
+                        ^^^^^^^^^^^^^^^^^^^^^^^^
+
+    Roc uses signed 64-bit floating points, allowing values between
+    -1.7976931348623157e308 and 1.7976931348623157e308
+
+    Tip: Learn more about number literals at TODO
+    "###
+    );
+
+    // the generated messages here are incorrect. Waiting for a rust nightly feature to land,
+    // see https://github.com/rust-lang/rust/issues/22639
+    // this test is here to spot regressions in error reporting
+    test_report!(
+        integer_malformed,
+        indoc!(
+            r#"
+            dec = 100A
+
+            hex = 0xZZZ
+
+            oct = 0o9
+
+            bin = 0b2
+
+            dec + hex + oct + bin
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn record_type_open_indent() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : {
-                foo : I64,
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED RECORD TYPE ──────────────────────────────── /code/proj/Main.roc ─
+    This integer literal contains an invalid digit:
 
-                I am partway through parsing a record type, but I got stuck here:
+    4│      dec = 100A
+                  ^^^^
 
-                1│  f : {
-                         ^
+    Integer literals can only contain the digits
+    0-9, or have an integer suffix.
 
-                I was expecting to see a closing curly brace before this, so try
-                adding a } and see if that helps?
+    Tip: Learn more about number literals at TODO
 
-                Note: I may be confused by indentation
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This hex integer literal contains an invalid digit:
+
+    6│      hex = 0xZZZ
+                  ^^^^^
+
+    Hexadecimal (base-16) integer literals can only contain the digits
+    0-9, a-f and A-F, or have an integer suffix.
+
+    Tip: Learn more about number literals at TODO
+
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This octal integer literal contains an invalid digit:
+
+    8│      oct = 0o9
+                  ^^^
+
+    Octal (base-8) integer literals can only contain the digits
+    0-7, or have an integer suffix.
+
+    Tip: Learn more about number literals at TODO
+
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This binary integer literal contains an invalid digit:
+
+    10│      bin = 0b2
+                   ^^^
+
+    Binary (base-2) integer literals can only contain the digits
+    0 and 1, or have an integer suffix.
+
+    Tip: Learn more about number literals at TODO
+    "###
+    );
+
+    test_report!(
+        integer_empty,
+        indoc!(
+            r#"
+            dec = 20
+
+            hex = 0x
+
+            oct = 0o
+
+            bin = 0b
+
+            dec + hex + oct + bin
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn record_type_end() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : { a: Int,
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED RECORD TYPE ──────────────────────────────── /code/proj/Main.roc ─
+    This hex integer literal contains no digits:
 
-                I am partway through parsing a record type, but I got stuck here:
+    6│      hex = 0x
+                  ^^
 
-                1│  f : { a: Int,
-                                 ^
+    Hexadecimal (base-16) integer literals must contain at least one of
+    the digits 0-9, a-f and A-F, or have an integer suffix.
 
-                I was expecting to see a closing curly brace before this, so try
-                adding a } and see if that helps?
+    Tip: Learn more about number literals at TODO
+
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This octal integer literal contains no digits:
+
+    8│      oct = 0o
+                  ^^
+
+    Octal (base-8) integer literals must contain at least one of the
+    digits 0-7, or have an integer suffix.
+
+    Tip: Learn more about number literals at TODO
+
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This binary integer literal contains no digits:
+
+    10│      bin = 0b
+                   ^^
+
+    Binary (base-2) integer literals must contain at least one of the
+    digits 0 and 1, or have an integer suffix.
+
+    Tip: Learn more about number literals at TODO
+    "###
+    );
+
+    test_report!(
+        float_malformed,
+        indoc!(
+            r#"
+            x = 3.0A
+
+            x
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn record_type_keyword_field_name() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : { if : I64 }
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED RECORD TYPE ──────────────────────────────── /code/proj/Main.roc ─
+    This float literal contains an invalid digit:
 
-                I just started parsing a record type, but I got stuck on this field
-                name:
+    4│      x = 3.0A
+                ^^^^
 
-                1│  f : { if : I64 }
-                          ^^
+    Floating point literals can only contain the digits 0-9, or use
+    scientific notation 10e4, or have a float suffix.
 
-                Looks like you are trying to use `if` as a field name, but that is a
-                reserved word. Try using a different name!
+    Tip: Learn more about number literals at TODO
+    "###
+    );
+
+    test_report!(
+        invalid_record_update,
+        indoc!(
+            r#"
+            foo = { bar: 3 }
+            updateNestedRecord = { foo.bar & x: 4 }
+
+            example = { age: 42 }
+
+            # these should work
+            y = { Test.example & age: 3 }
+            x = { example & age: 4 }
+
+            { updateNestedRecord, foo, x, y }
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn record_type_missing_comma() {
-        // a case where the message cannot be as good as elm's
-        report_problem_as(
-            indoc!(
-                r#"
-                f : { foo  bar }
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED RECORD TYPE ──────────────────────────────── /code/proj/Main.roc ─
+    This expression cannot be updated:
 
-                I am partway through parsing a record type, but I got stuck here:
+    5│      updateNestedRecord = { foo.bar & x: 4 }
+                                   ^^^^^^^
 
-                1│  f : { foo  bar }
-                               ^
+    Only variables can be updated with record update syntax.
 
-                I was expecting to see a colon, question mark, comma or closing curly
-                brace.
+    ── MODULE NOT IMPORTED ─────────────────────────────────── /code/proj/Main.roc ─
+
+    The `Test` module is not imported:
+
+    10│      y = { Test.example & age: 3 }
+                   ^^^^^^^^^^^^
+
+    Is there an import missing? Perhaps there is a typo. Did you mean one
+    of these?
+
+        List
+        Set
+        Dict
+        Result
+
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression cannot be updated:
+
+    10│      y = { Test.example & age: 3 }
+                   ^^^^^^^^^^^^
+
+    Only variables can be updated with record update syntax.
+    "###
+    );
+
+    test_report!(
+        module_not_imported,
+        indoc!(
+            r#"
+            Foo.test
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── MODULE NOT IMPORTED ─────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn record_type_tab() {
-        // a case where the message cannot be as good as elm's
-        report_problem_as(
-            "f : { foo \t }",
-            indoc!(
-                r#"
-                ── TAB CHARACTER ───────────────────────────────────────── /code/proj/Main.roc ─
+    The `Foo` module is not imported:
 
-                I encountered a tab character
+    4│      Foo.test
+            ^^^^^^^^
 
-                1│  f : { foo 	 }
-                              ^
+    Is there an import missing? Perhaps there is a typo. Did you mean one
+    of these?
 
-                Tab characters are not allowed.
+        Box
+        Bool
+        Num
+        Set
+    "###
+    );
+
+    test_report!(
+        optional_record_default_type_error,
+        indoc!(
+            r#"
+            \{ x, y ? True } -> x + y
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn comment_with_tab() {
-        report_problem_as(
-            "# comment with a \t\n4",
-            indoc!(
-                "
-                ── TAB CHARACTER ───────────────────────────────────────── /code/proj/Main.roc ─
+    The 2nd argument to `add` is not what I expect:
 
-                I encountered a tab character
-
-                1│  # comment with a \t
-                                     ^
-
-                Tab characters are not allowed.
-            "
-            ),
-        )
-    }
-
-    #[test]
-    fn type_in_parens_start() {
-        // TODO bad error message
-        report_problem_as(
-            indoc!(
-                r#"
-                f : (
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED TYPE ─────────────────────────────────────── /code/proj/Main.roc ─
-
-                I just started parsing a type, but I got stuck here:
-
-                1│  f : (
-                         ^
-
-                I am expecting a type next, like Bool or List a.
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn type_in_parens_end() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : ( I64
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED PARENTHESES ──────────────────────────────── /code/proj/Main.roc ─
-
-                I am partway through parsing a type in parentheses, but I got stuck
-                here:
-
-                1│  f : ( I64
-                             ^
-
-                I was expecting to see a parenthesis before this, so try adding a )
-                and see if that helps?
-
-                Note: I may be confused by indentation
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn type_apply_double_dot() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : Foo..Bar
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                I am confused by this type name:
-
-                1│  f : Foo..Bar
-                        ^^^^^^^^
-
-                Type names start with an uppercase letter, and can optionally be
-                qualified by a module name, like Bool or Http.Request.Request.
-            "#
-            ),
-        )
-
-        //                ── DOUBLE DOT ──────────────────────────────────────────────────────────────────
-        //
-        //                I encountered two dots in a row:
-        //
-        //                1│  f : Foo..Bar
-        //                            ^
-        //
-        //                Try removing one of them.
-    }
-
-    #[test]
-    fn type_apply_trailing_dot() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : Foo.Bar.
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                I am confused by this type name:
-
-                1│  f : Foo.Bar.
-                        ^^^^^^^^
-
-                Type names start with an uppercase letter, and can optionally be
-                qualified by a module name, like Bool or Http.Request.Request.
-            "#
-            ),
-        )
-
-        //                ── TRAILING DOT ────────────────────────────────────────────────────────────────
-        //
-        //                I encountered a dot with nothing after it:
-        //
-        //                1│  f : Foo.Bar.
-        //                                ^
-        //
-        //                Dots are used to refer to a type in a qualified way, like
-        //                Num.I64 or List.List a. Try adding a type name next.
-    }
-
-    #[test]
-    fn type_apply_stray_dot() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : .
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED TYPE ─────────────────────────────────────── /code/proj/Main.roc ─
-
-                I just started parsing a type, but I got stuck here:
-
-                1│  f : .
-                        ^
-
-                I am expecting a type next, like Bool or List a.
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn type_apply_start_with_number() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : Foo.1
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                I am confused by this type name:
-
-                1│  f : Foo.1
-                        ^^^^^
-
-                Type names start with an uppercase letter, and can optionally be
-                qualified by a module name, like Bool or Http.Request.Request.
-            "#
-            ),
-        )
-
-        //                ── WEIRD QUALIFIED NAME ────────────────────────────────────────────────────────
-        //
-        //                I encountered a number at the start of a qualified name segment:
-        //
-        //                1│  f : Foo.1
-        //                            ^
-        //
-        //                All parts of a qualified type name must start with an uppercase
-        //                letter, like Num.I64 or List.List a.
-    }
-
-    #[test]
-    fn type_apply_start_with_lowercase() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : Foo.foo
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                I am confused by this type name:
-
-                1│  f : Foo.foo
-                        ^^^^^^^
-
-                Type names start with an uppercase letter, and can optionally be
-                qualified by a module name, like Bool or Http.Request.Request.
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn def_missing_final_expression() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : Foo.foo
-                "#
-            ),
-            indoc!(
-                r#"
-                ── MISSING FINAL EXPRESSION ────────────────────────────── /code/proj/Main.roc ─
-
-                I am partway through parsing a definition's final expression, but I
-                got stuck here:
-
-                1│  f : Foo.foo
-                               ^
-
-                This definition is missing a final expression. A nested definition
-                must be followed by either another definition, or an expression
-
-                    x = 4
-                    y = 2
-
-                    x + y
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn type_inline_alias() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : I64 as
-                f = 0
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED INLINE ALIAS ─────────────────────────────── /code/proj/Main.roc ─
-
-                I just started parsing an inline type alias, but I got stuck here:
-
-                1│  f : I64 as
-                              ^
-
-                Note: I may be confused by indentation
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn type_double_comma() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : I64,,I64 -> I64
-                f = 0
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── DOUBLE COMMA ────────────────────────────────────────── /code/proj/Main.roc ─
-
-                I just started parsing a function argument type, but I encountered two
-                commas in a row:
-
-                1│  f : I64,,I64 -> I64
-                            ^
-
-                Try removing one of them.
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn type_argument_no_arrow() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : I64, I64
-                f = 0
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED TYPE ─────────────────────────────────────── /code/proj/Main.roc ─
-
-                I am partway through parsing a type, but I got stuck here:
-
-                1│  f : I64, I64
-                                ^
-
-                Note: I may be confused by indentation
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn type_argument_arrow_then_nothing() {
-        // TODO could do better by pointing out we're parsing a function type
-        report_problem_as(
-            indoc!(
-                r#"
-                f : I64, I64 ->
-                f = 0
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED TYPE ─────────────────────────────────────── /code/proj/Main.roc ─
-
-                I just started parsing a type, but I got stuck here:
-
-                1│  f : I64, I64 ->
-                                   ^
-
-                Note: I may be confused by indentation
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn dict_type_formatting() {
-        // TODO could do better by pointing out we're parsing a function type
-        report_problem_as(
-            indoc!(
-                r#"
-                myDict : Dict Num.I64 Str
-                myDict = Dict.insert Dict.empty "foo" 42
-
-                myDict
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                Something is off with the body of the `myDict` definition:
-
-                1│  myDict : Dict Num.I64 Str
-                2│  myDict = Dict.insert Dict.empty "foo" 42
-                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-                This `insert` call produces:
-
-                    Dict Str (Num a)
-
-                But the type annotation on `myDict` says it should be:
-
-                    Dict I64 Str
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn alias_type_diff() {
-        report_problem_as(
-            indoc!(
-                r#"
-                HSet a : Set a
-
-                foo : Str -> HSet {}
-
-                myDict : HSet Str
-                myDict = foo "bar"
-
-                myDict
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                Something is off with the body of the `myDict` definition:
-
-                5│  myDict : HSet Str
-                6│  myDict = foo "bar"
-                             ^^^^^^^^^
-
-                This `foo` call produces:
-
-                    HSet {}
-
-                But the type annotation on `myDict` says it should be:
-
-                    HSet Str
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn if_guard_without_condition() {
-        // this should get better with time
-        report_problem_as(
-            indoc!(
-                r#"
-                when Just 4 is
-                    Just if ->
-                        4
-
-                    _ ->
-                        2
-                "#
-            ),
-            indoc!(
-                r#"
-                ── IF GUARD NO CONDITION ───────────────────────────────── /code/proj/Main.roc ─
-
-                I just started parsing an if guard, but there is no guard condition:
-
-                1│  when Just 4 is
-                2│      Just if ->
-                                ^
-
-                Try adding an expression before the arrow!
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn empty_or_pattern() {
-        report_problem_as(
-            indoc!(
-                r#"
-                when Just 4 is
-                    Just 4 | ->
-                        4
-
-                    _ ->
-                        2
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED PATTERN ──────────────────────────────────── /code/proj/Main.roc ─
-
-                I just started parsing a pattern, but I got stuck here:
-
-                2│      Just 4 | ->
-                                 ^
-
-                Note: I may be confused by indentation
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn pattern_binds_keyword() {
-        // TODO check if "what_is_next" is a keyword
-        report_problem_as(
-            indoc!(
-                r#"
-                when Just 4 is
-                    Just when ->
-                        4
-
-                    _ ->
-                        2
-                "#
-            ),
-            indoc!(
-                r#"
-                ── MISSING EXPRESSION ──────────────────────────────────── /code/proj/Main.roc ─
-
-                I am partway through parsing a definition, but I got stuck here:
-
-                1│  when Just 4 is
-                2│      Just when ->
-                             ^
-
-                I was expecting to see an expression like 42 or "hello".
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn when_missing_arrow() {
-        // this should get better with time
-        report_problem_as(
-            indoc!(
-                r#"
-                when 5 is
-                    1 -> 2
-                    _
-                "#
-            ),
-            indoc!(
-                r#"
-                ── MISSING ARROW ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                I am partway through parsing a `when` expression, but got stuck here:
-
-                2│      1 -> 2
-                3│      _
-                         ^
-
-                I was expecting to see an arrow next.
-
-                Note: Sometimes I get confused by indentation, so try to make your `when`
-                look something like this:
-
-                    when List.first plants is
-                      Ok n ->
-                        n
-
-                      Err _ ->
-                        200
-
-                Notice the indentation. All patterns are aligned, and each branch is
-                indented a bit more than the corresponding pattern. That is important!
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn lambda_double_comma() {
-        report_problem_as(
-            indoc!(
-                r#"
-                \a,,b -> 1
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED ARGUMENT LIST ────────────────────────────── /code/proj/Main.roc ─
-
-                I am partway through parsing a function argument list, but I got stuck
-                at this comma:
-
-                1│  \a,,b -> 1
-                       ^
-
-                I was expecting an argument pattern before this, so try adding an
-                argument before the comma and see if that helps?
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn lambda_leading_comma() {
-        report_problem_as(
-            indoc!(
-                r#"
-                \,b -> 1
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED ARGUMENT LIST ────────────────────────────── /code/proj/Main.roc ─
-
-                I am partway through parsing a function argument list, but I got stuck
-                at this comma:
-
-                1│  \,b -> 1
-                     ^
-
-                I was expecting an argument pattern before this, so try adding an
-                argument before the comma and see if that helps?
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn when_outdented_branch() {
-        // this should get better with time
-        report_problem_as(
-            indoc!(
-                r#"
-                when 4 is
-                    5 -> 2
-                 2 -> 2
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                I got stuck here:
-
-                1│  when 4 is
-                2│      5 -> 2
-                              ^
-
-                Whatever I am running into is confusing me a lot! Normally I can give
-                fairly specific hints, but something is really tripping me up this
-                time.
-                "#
-            ),
-            // TODO this formerly gave
-            //
-            //                ── UNFINISHED WHEN ─────────────────────────────────────────────────────────────
-            //
-            //                I was partway through parsing a `when` expression, but I got stuck here:
-            //
-            //                3│    _ -> 2
-            //                        ^
-            //
-            //                I suspect this is a pattern that is not indented enough? (by 2 spaces)
-            //
-            // but that requires parsing the next pattern blindly, irrespective of indentation. Can
-            // we find an efficient solution that doesn't require parsing an extra pattern for
-            // every `when`, i.e. we want a good error message for the test case above, but for
-            // a valid `when`, we don't want to do extra work, e.g. here
-            //
-            //  x
-            //      when x is
-            //          n -> n
-            //
-            //  4
-            //
-            // We don't want to parse the `4` and say it's an outdented pattern!
-        )
-    }
-
-    #[test]
-    fn when_over_indented_underscore() {
-        report_problem_as(
-            indoc!(
-                r#"
-                when 4 is
-                    5 -> 2
-                     _ -> 2
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                I got stuck here:
-
-                1│  when 4 is
-                2│      5 -> 2
-                              ^
-
-                Whatever I am running into is confusing me a lot! Normally I can give
-                fairly specific hints, but something is really tripping me up this
-                time.
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn when_over_indented_int() {
-        report_problem_as(
-            indoc!(
-                r#"
-                when 4 is
-                    5 -> Num.neg
-                     2 -> 2
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNEXPECTED ARROW ────────────────────────────────────── /code/proj/Main.roc ─
-
-                I am parsing a `when` expression right now, but this arrow is confusing
-                me:
-
-                3│       2 -> 2
-                           ^^
-
-                It makes sense to see arrows around here, so I suspect it is something
-                earlier.Maybe this pattern is indented a bit farther from the previous
-                patterns?
-
-                Note: Here is an example of a valid `when` expression for reference.
-
-                    when List.first plants is
-                      Ok n ->
-                        n
-
-                      Err _ ->
-                        200
-
-                Notice the indentation. All patterns are aligned, and each branch is
-                indented a bit more than the corresponding pattern. That is important!
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn if_outdented_then() {
-        // TODO I think we can do better here
-        report_problem_as(
-            indoc!(
-                r#"
-                x =
-                    if 5 == 5
-                then 2 else 3
-
-                x
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED IF ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                I was partway through parsing an `if` expression, but I got stuck here:
-
-                2│      if 5 == 5
-                                 ^
-
-                I was expecting to see the `then` keyword next.
-            "#
-            ),
-        )
-    }
-
-    #[test]
-    fn if_missing_else() {
-        // this should get better with time
-        report_problem_as(
-            indoc!(
-                r#"
-                if 5 == 5 then 2
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED IF ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                I was partway through parsing an `if` expression, but I got stuck here:
-
-                1│  if 5 == 5 then 2
+    4│      \{ x, y ? True } -> x + y
                                     ^
 
-                I was expecting to see the `else` keyword next.
-            "#
-            ),
-        )
-    }
+    This `y` value is a:
 
-    #[test]
-    fn list_double_comma() {
-        report_problem_as(
-            indoc!(
-                r#"
-                [1, 2, , 3]
+        [True]a
+
+    But `add` needs the 2nd argument to be:
+
+        Num a
+    "###
+    );
+
+    test_report!(
+        optional_record_default_with_signature,
+        indoc!(
+            r#"
+            f : { x : Num.I64, y ? Num.I64 } -> Num.I64
+            f = \{ x, y ? "foo" } -> (\g, _ -> g) x y
+
+            f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 1st argument to `f` is weird:
+
+    5│      f = \{ x, y ? "foo" } -> (\g, _ -> g) x y
+                 ^^^^^^^^^^^^^^^^
+
+    The argument is a pattern that matches record values of type:
+
+        { x : I64, y ? Str }
+
+    But the annotation on `f` says the 1st argument should be:
+
+        { x : I64, y ? I64 }
+    "###
+    );
+
+    test_report!(
+        optional_record_invalid_let_binding,
+        indoc!(
+            r#"
+            \rec ->
+                { x, y } : { x : Num.I64, y ? Str }
+                { x, y } = rec
+
+                { x, y }
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of this definition:
+
+    5│>          { x, y } : { x : Num.I64, y ? Str }
+    6│>          { x, y } = rec
+
+    The body is a value of type:
+
+        { x : I64, y : Str }
+
+    But the type annotation says it should be:
+
+        { x : I64, y ? Str }
+
+    Tip: To extract the `.y` field it must be non-optional, but the type
+    says this field is optional. Learn more about optional fields at TODO.
+    "###
+    );
+
+    test_report!(
+        optional_record_invalid_function,
+        indoc!(
+            r#"
+            f : { x : Num.I64, y ? Num.I64 } -> Num.I64
+            f = \{ x, y } -> x + y
+
+            f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 1st argument to `f` is weird:
+
+    5│      f = \{ x, y } -> x + y
+                 ^^^^^^^^
+
+    The argument is a pattern that matches record values of type:
+
+        { x : I64, y : I64 }
+
+    But the annotation on `f` says the 1st argument should be:
+
+        { x : I64, y ? I64 }
+
+    Tip: To extract the `.y` field it must be non-optional, but the type
+    says this field is optional. Learn more about optional fields at TODO.
+    "###
+    );
+
+    test_report!(
+        optional_record_invalid_when,
+        indoc!(
+            r#"
+            f : { x : Num.I64, y ? Num.I64 } -> Num.I64
+            f = \r ->
+                    when r is
+                        { x, y } -> x + y
+
+            f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The branches of this `when` expression don't match the condition:
+
+    6│>              when r is
+    7│                   { x, y } -> x + y
+
+    This `r` value is a:
+
+        { x : I64, y ? I64 }
+
+    But the branch patterns have type:
+
+        { x : I64, y : I64 }
+
+    The branches must be cases of the `when` condition's type!
+
+    Tip: To extract the `.y` field it must be non-optional, but the type
+    says this field is optional. Learn more about optional fields at TODO.
+    "###
+    );
+
+    test_report!(
+        optional_record_invalid_access,
+        indoc!(
+            r#"
+            f : { x : Num.I64, y ? Num.I64 } -> Num.I64
+            f = \r -> r.y
+
+            f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression is used in an unexpected way:
+
+    5│      f = \r -> r.y
+                      ^^^
+
+    This `r` value is a:
+
+        { x : I64, y ? I64 }
+
+    But you are trying to use it as:
+
+        { x : I64, y : I64 }
+
+    Tip: To extract the `.y` field it must be non-optional, but the type
+    says this field is optional. Learn more about optional fields at TODO.
+    "###
+    );
+
+    test_report!(
+        optional_record_invalid_accessor,
+        indoc!(
+            r#"
+                f : { x : Num.I64, y ? Num.I64 } -> Num.I64
+                f = \r -> .y r
+
+                f
                 "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED LIST ─────────────────────────────────────── /code/proj/Main.roc ─
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                I am partway through started parsing a list, but I got stuck here:
+    The 1st argument to this function is not what I expect:
 
-                1│  [1, 2, , 3]
-                           ^
+    5│      f = \r -> .y r
+                         ^
 
-                I was expecting to see a list entry before this comma, so try adding a
-                list entry and see if that helps?
+    This `r` value is a:
+
+        { x : I64, y ? I64 }
+
+    But this function needs the 1st argument to be:
+
+        { x : I64, y : I64 }
+
+    Tip: To extract the `.y` field it must be non-optional, but the type
+    says this field is optional. Learn more about optional fields at TODO.
+    "###
+    );
+
+    test_report!(
+        guard_mismatch_with_annotation,
+        indoc!(
+            r#"
+            f : { x : Num.I64, y : Num.I64 } -> Num.I64
+            f = \r ->
+                    when r is
+                        { x, y : "foo" } -> x + 0
+                        _ -> 0
+
+            f
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn list_without_end() {
-        report_problem_as(
-            indoc!(
-                r#"
-                [1, 2,
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED LIST ─────────────────────────────────────── /code/proj/Main.roc ─
+    The branches of this `when` expression don't match the condition:
 
-                I am partway through started parsing a list, but I got stuck here:
+    6│>              when r is
+    7│                   { x, y : "foo" } -> x + 0
+    8│                   _ -> 0
 
-                1│  [1, 2,
-                          ^
+    This `r` value is a:
 
-                I was expecting to see a closing square bracket before this, so try
-                adding a ] and see if that helps?
+        { x : I64, y : I64 }
 
-                Note: When I get stuck like this, it usually means that there is a
-                missing parenthesis or bracket somewhere earlier. It could also be a
-                stray keyword or operator.
+    But the branch patterns have type:
+
+        { x : I64, y : Str }
+
+    The branches must be cases of the `when` condition's type!
+    "###
+    );
+
+    test_report!(
+        optional_field_mismatch_with_annotation,
+        indoc!(
+            r#"
+            f : { x : Num.I64, y ? Num.I64 } -> Num.I64
+            f = \r ->
+                    when r is
+                        { x, y ? "foo" } -> (\g, _ -> g) x y
+                        _ -> 0
+
+            f
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn number_double_dot() {
-        report_problem_as(
-            indoc!(
-                r#"
-                1.1.1
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    The branches of this `when` expression don't match the condition:
 
-                This float literal contains an invalid digit:
+    6│>              when r is
+    7│                   { x, y ? "foo" } -> (\g, _ -> g) x y
+    8│                   _ -> 0
 
-                1│  1.1.1
-                    ^^^^^
+    This `r` value is a:
 
-                Floating point literals can only contain the digits 0-9, or use
-                scientific notation 10e4, or have a float suffix.
+        { x : I64, y ? I64 }
 
-                Tip: Learn more about number literals at TODO
+    But the branch patterns have type:
+
+        { x : I64, y ? Str }
+
+    The branches must be cases of the `when` condition's type!
+    "###
+    );
+
+    test_report!(
+        incorrect_optional_field,
+        indoc!(
+            r#"
+            { x: 5, y ? 42 }
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── BAD OPTIONAL VALUE ──────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn unicode_not_hex() {
-        report_problem_as(
-            r#""abc\u(zzzz)def""#,
-            indoc!(
-                r#"
-                ── WEIRD CODE POINT ────────────────────────────────────── /code/proj/Main.roc ─
+    This record uses an optional value for the `.y` field in an incorrect
+    context!
 
-                I am partway through parsing a unicode code point, but I got stuck
-                here:
+    4│      { x: 5, y ? 42 }
+                    ^^^^^^
 
-                1│  "abc\u(zzzz)def"
-                           ^
+    You can only use optional values in record destructuring, like:
 
-                I was expecting a hexadecimal number, like \u(1100) or \u(00FF).
+        { answer ? 42, otherField } = myRecord
+    "###
+    );
 
-                Learn more about working with unicode in roc at TODO
+    test_report!(
+        first_wildcard_is_required,
+        indoc!(
+            r#"
+            when Foo 1 2 3 is
+                Foo _ 1 _ -> 1
+                _ -> 2
             "#
-            ),
-        )
-    }
+        ),
+        @""
+    );
 
-    #[test]
-    fn interpolate_not_identifier() {
-        report_problem_as(
-            r#""abc\(32)def""#,
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This string interpolation is invalid:
-
-                1│  "abc\(32)def"
-                          ^^
-
-                I was expecting an identifier, like \u(message) or
-                \u(LoremIpsum.text).
-
-                Learn more about string interpolation at TODO
+    test_report!(
+        second_wildcard_is_redundant,
+        indoc!(
+            r#"
+            when Foo 1 2 3 is
+                Foo _ 1 _ -> 1
+                _ -> 2
+                _ -> 3
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn unicode_too_large() {
-        report_problem_as(
-            r#""abc\u(110000)def""#,
-            indoc!(
-                r#"
-                ── INVALID UNICODE ─────────────────────────────────────── /code/proj/Main.roc ─
+    The 3rd pattern is redundant:
 
-                This unicode code point is invalid:
+    4│      when Foo 1 2 3 is
+    5│          Foo _ 1 _ -> 1
+    6│          _ -> 2
+    7│          _ -> 3
+                ^
 
-                1│  "abc\u(110000)def"
-                           ^^^^^^
+    Any value of this shape will be handled by a previous pattern, so this
+    one should be removed.
+    "###
+    );
 
-                Learn more about working with unicode in roc at TODO
+    test_report!(
+        alias_using_alias,
+        indoc!(
+            r#"
+            # The color of a node. Leaves are considered Black.
+            NodeColor : [Red, Black]
+
+            RBTree k v : [Node NodeColor k v (RBTree k v) (RBTree k v), Empty]
+
+            # Create an empty dictionary.
+            empty : RBTree k v
+            empty =
+                Empty
+
+            empty
             "#
-            ),
-        )
-    }
+        ),
+        @""
+    );
 
-    #[test]
-    fn weird_escape() {
-        report_problem_as(
-            r#""abc\qdef""#,
-            indoc!(
-                r#"
-                ── WEIRD ESCAPE ────────────────────────────────────────── /code/proj/Main.roc ─
+    test_report!(
+        unused_argument,
+        indoc!(
+            r#"
+            f = \foo -> 1
 
-                I was partway through parsing a  string literal, but I got stuck here:
-
-                1│  "abc\qdef"
-                        ^^
-
-                This is not an escape sequence I recognize. After a backslash, I am
-                looking for one of these:
-
-                    - A newline: \n
-                    - A caret return: \r
-                    - A tab: \t
-                    - An escaped quote: \"
-                    - An escaped backslash: \\
-                    - A unicode code point: \u(00FF)
-                    - An interpolated string: \(myVariable)
+            f
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── UNUSED ARGUMENT ─────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn single_no_end() {
-        report_problem_as(
-            r#""there is no end"#,
-            indoc!(
-                r#"
-                ── ENDLESS STRING ──────────────────────────────────────── /code/proj/Main.roc ─
+    `f` doesn't use `foo`.
 
-                I cannot find the end of this string:
+    4│      f = \foo -> 1
+                 ^^^
 
-                1│  "there is no end
+    If you don't need `foo`, then you can just remove it. However, if you
+    really do need `foo` as an argument of `f`, prefix it with an underscore,
+    like this: "_`foo`". Adding an underscore at the start of a variable
+    name is a way of saying that the variable is not used.
+    "###
+    );
+
+    test_report!(
+        qualified_tag,
+        indoc!(
+            r#"
+            Foo.Bar
+            "#
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    I am trying to parse a qualified name here:
+
+    4│      Foo.Bar
+                   ^
+
+    This looks like a qualified tag name to me, but tags cannot be
+    qualified! Maybe you wanted a qualified name, something like
+    Json.Decode.string?
+    "###
+    );
+
+    test_report!(
+        module_ident_ends_with_dot,
+        indoc!(
+            r#"
+            Foo.Bar.
+            "#
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    I am trying to parse a qualified name here:
+
+    4│      Foo.Bar.
+                    ^
+
+    I was expecting to see an identifier next, like height. A complete
+    qualified name looks something like Json.Decode.string.
+    "###
+    );
+
+    test_report!(
+        record_access_ends_with_dot,
+        indoc!(
+            r#"
+            foo.bar.
+            "#
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    I trying to parse a record field access here:
+
+    4│      foo.bar.
+                    ^
+
+    So I expect to see a lowercase letter next, like .name or .height.
+    "###
+    );
+
+    test_report!(
+        type_annotation_double_colon,
+        indoc!(
+            r#"
+            f :: I64
+            f = 42
+
+            f
+            "#
+        ),
+        @r###"
+    ── UNKNOWN OPERATOR ──────────────── tmp/type_annotation_double_colon/Test.roc ─
+
+    This looks like an operator, but it's not one I recognize!
+
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      f :: I64
+              ^^
+
+    I have no specific suggestion for this operator, see TODO for the full
+    list of operators in Roc.
+    "###
+    );
+
+    // NOTE: VERY BAD ERROR MESSAGE
+    //
+    // looks like `x y` are considered argument to the add, even though they are
+    // on a lower indentation level
+    test_report!(
+        double_equals_in_def,
+        indoc!(
+            r#"
+            x = 3
+            y =
+                x == 5
+                Num.add 1 2
+
+            { x,  y }
+            "#
+        ),
+        @r###"
+    ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This value is not a function, but it was given 3 arguments:
+
+    6│          x == 5
                      ^
 
-                You could change it to something like "to be or not to be" or even
-                just "".
+    Are there any missing commas? Or missing parentheses?
+    "###
+    );
+
+    test_report!(
+        tag_union_open,
+        indoc!(
+            r#"
+            f : [
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── UNFINISHED TAG UNION TYPE ───────────────────── tmp/tag_union_open/Test.roc ─
 
-    #[test]
-    fn multi_no_end() {
-        report_problem_as(
-            r#""""there is no end"#,
-            indoc!(
-                r#"
-                ── ENDLESS STRING ──────────────────────────────────────── /code/proj/Main.roc ─
+    I am partway through parsing a tag union type, but I got stuck here:
 
-                I cannot find the end of this block string:
+    4│      f : [
+                 ^
 
-                1│  """there is no end
+    I was expecting to see a closing square bracket before this, so try
+    adding a ] and see if that helps?
+
+    Note: I may be confused by indentation
+    "###
+    );
+
+    test_report!(
+        tag_union_end,
+        indoc!(
+            r#"
+            f : [Yes,
+            "#
+        ),
+        @r###"
+    ── UNFINISHED TAG UNION TYPE ────────────────────── tmp/tag_union_end/Test.roc ─
+
+    I am partway through parsing a tag union type, but I got stuck here:
+
+    4│      f : [Yes,
+    5│
+    6│
+        ^
+
+    I was expecting to see a closing square bracket before this, so try
+    adding a ] and see if that helps?
+    "###
+    );
+
+    test_report!(
+        tag_union_lowercase_tag_name,
+        indoc!(
+            r#"
+            f : [lowercase]
+            "#
+        ),
+        @r###"
+    ── WEIRD TAG NAME ────────────────── tmp/tag_union_lowercase_tag_name/Test.roc ─
+
+    I am partway through parsing a tag union type, but I got stuck here:
+
+    4│      f : [lowercase]
+                 ^
+
+    I was expecting to see a tag name.
+
+    Hint: Tag names start with an uppercase letter, like Err or Green.
+    "###
+    );
+
+    test_report!(
+        tag_union_second_lowercase_tag_name,
+        indoc!(
+            r#"
+            f : [Good, bad]
+            "#
+        ),
+        @r###"
+    ── WEIRD TAG NAME ─────────── tmp/tag_union_second_lowercase_tag_name/Test.roc ─
+
+    I am partway through parsing a tag union type, but I got stuck here:
+
+    4│      f : [Good, bad]
                        ^
 
-                You could change it to something like """to be or not to be""" or even
-                just """""".
+    I was expecting to see a tag name.
+
+    Hint: Tag names start with an uppercase letter, like Err or Green.
+    "###
+    );
+
+    test_report!(
+        record_type_open,
+        indoc!(
+            r#"
+            f : {
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── UNFINISHED RECORD TYPE ────────────────────── tmp/record_type_open/Test.roc ─
 
-    #[test]
+    I am partway through parsing a record type, but I got stuck here:
+
+    4│      f : {
+                 ^
+
+    I was expecting to see a closing curly brace before this, so try
+    adding a } and see if that helps?
+
+    Note: I may be confused by indentation
+    "###
+    );
+
+    test_report!(
+        record_type_open_indent,
+        indoc!(
+            r#"
+            f : {
+            foo : I64,
+            "#
+        ),
+        @r###"
+    ── UNFINISHED RECORD TYPE ─────────────── tmp/record_type_open_indent/Test.roc ─
+
+    I am partway through parsing a record type, but I got stuck here:
+
+    4│      f : {
+                 ^
+
+    I was expecting to see a closing curly brace before this, so try
+    adding a } and see if that helps?
+
+    Note: I may be confused by indentation
+    "###
+    );
+
+    test_report!(
+        record_type_end,
+        indoc!(
+            r#"
+            f : { a: Int,
+            "#
+        ),
+        @r###"
+    ── UNFINISHED RECORD TYPE ─────────────────────── tmp/record_type_end/Test.roc ─
+
+    I am partway through parsing a record type, but I got stuck here:
+
+    4│      f : { a: Int,
+    5│
+    6│
+        ^
+
+    I was expecting to see a closing curly brace before this, so try
+    adding a } and see if that helps?
+    "###
+    );
+
+    test_report!(
+        record_type_keyword_field_name,
+        indoc!(
+            r#"
+            f : { if : I64 }
+            "#
+        ),
+        @r###"
+    ── UNFINISHED RECORD TYPE ──────── tmp/record_type_keyword_field_name/Test.roc ─
+
+    I just started parsing a record type, but I got stuck on this field
+    name:
+
+    4│      f : { if : I64 }
+                  ^^
+
+    Looks like you are trying to use `if` as a field name, but that is a
+    reserved word. Try using a different name!
+    "###
+    );
+
+    // a case where the message cannot be as good as elm's
+    test_report!(
+        record_type_missing_comma,
+        indoc!(
+            r#"
+            f : { foo  bar }
+            "#
+        ),
+        @r###"
+    ── UNFINISHED RECORD TYPE ───────────── tmp/record_type_missing_comma/Test.roc ─
+
+    I am partway through parsing a record type, but I got stuck here:
+
+    4│      f : { foo  bar }
+                       ^
+
+    I was expecting to see a colon, question mark, comma or closing curly
+    brace.
+    "###
+    );
+
+    // a case where the message cannot be as good as elm's
+    test_report!(
+        record_type_tab,
+        "f : { foo \t }",
+        @r###"
+    ── TAB CHARACTER ──────────────────────────────── tmp/record_type_tab/Test.roc ─
+
+    I encountered a tab character
+
+    4│      f : { foo 	 }
+                      ^
+
+    Tab characters are not allowed.
+    "###
+    );
+
+    test_report!(
+        comment_with_tab,
+        "# comment with a \t\n4",
+        @r###"
+    ── TAB CHARACTER ─────────────────────────────── tmp/comment_with_tab/Test.roc ─
+
+    I encountered a tab character
+
+    4│      # comment with a 	
+                             ^
+
+    Tab characters are not allowed.
+    "###
+    );
+
+    // TODO bad error message
+    test_report!(
+        type_in_parens_start,
+        indoc!(
+            r#"
+            f : (
+            "#
+        ),
+        @r###"
+    ── UNFINISHED PARENTHESES ────────────────── tmp/type_in_parens_start/Test.roc ─
+
+    I just started parsing a type in parentheses, but I got stuck here:
+
+    4│      f : (
+                 ^
+
+    Tag unions look like [Many I64, None], so I was expecting to see a tag
+    name next.
+
+    Note: I may be confused by indentation
+    "###
+    );
+
+    test_report!(
+        type_in_parens_end,
+        indoc!(
+            r#"
+            f : ( I64
+            "#
+        ),
+        @r###"
+    ── UNFINISHED PARENTHESES ──────────────────── tmp/type_in_parens_end/Test.roc ─
+
+    I am partway through parsing a type in parentheses, but I got stuck
+    here:
+
+    4│      f : ( I64
+                     ^
+
+    I was expecting to see a parenthesis before this, so try adding a )
+    and see if that helps?
+
+    Note: I may be confused by indentation
+    "###
+    );
+
+    test_report!(
+        type_apply_double_dot,
+        indoc!(
+            r#"
+            f : Foo..Bar
+
+            f
+            "#
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    I am confused by this type name:
+
+    4│      f : Foo..Bar
+                ^^^^^^^^
+
+    Type names start with an uppercase letter, and can optionally be
+    qualified by a module name, like Bool or Http.Request.Request.
+    "###
+    );
+    //                ── DOUBLE DOT ──────────────────────────────────────────────────────────────────
+    //
+    //                I encountered two dots in a row:
+    //
+    //                1│  f : Foo..Bar
+    //                            ^
+    //
+    //                Try removing one of them.
+
+    test_report!(
+        type_apply_trailing_dot,
+        indoc!(
+            r#"
+            f : Foo.Bar.
+
+            f
+            "#
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    I am confused by this type name:
+
+    4│      f : Foo.Bar.
+                ^^^^^^^^
+
+    Type names start with an uppercase letter, and can optionally be
+    qualified by a module name, like Bool or Http.Request.Request.
+    "###
+    );
+    //                ── TRAILING DOT ────────────────────────────────────────────────────────────────
+    //
+    //                I encountered a dot with nothing after it:
+    //
+    //                1│  f : Foo.Bar.
+    //                                ^
+    //
+    //                Dots are used to refer to a type in a qualified way, like
+    //                Num.I64 or List.List a. Try adding a type name next.
+
+    test_report!(
+        type_apply_stray_dot,
+        indoc!(
+            r#"
+            f : .
+            "#
+        ),
+        @r###"
+    ── UNFINISHED TYPE ───────────────────────── tmp/type_apply_stray_dot/Test.roc ─
+
+    I just started parsing a type, but I got stuck here:
+
+    4│      f : .
+                ^
+
+    I am expecting a type next, like Bool or List a.
+    "###
+    );
+
+    test_report!(
+        type_apply_start_with_number,
+        indoc!(
+            r#"
+            f : Foo.1
+
+            f
+            "#
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    I am confused by this type name:
+
+    4│      f : Foo.1
+                ^^^^^
+
+    Type names start with an uppercase letter, and can optionally be
+    qualified by a module name, like Bool or Http.Request.Request.
+    "###
+    );
+    //                ── WEIRD QUALIFIED NAME ────────────────────────────────────────────────────────
+    //
+    //                I encountered a number at the start of a qualified name segment:
+    //
+    //                1│  f : Foo.1
+    //                            ^
+    //
+    //                All parts of a qualified type name must start with an uppercase
+    //                letter, like Num.I64 or List.List a.
+
+    test_report!(
+        type_apply_start_with_lowercase,
+        indoc!(
+            r#"
+            f : Foo.foo
+
+            f
+            "#
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    I am confused by this type name:
+
+    4│      f : Foo.foo
+                ^^^^^^^
+
+    Type names start with an uppercase letter, and can optionally be
+    qualified by a module name, like Bool or Http.Request.Request.
+    "###
+    );
+
+    test_report!(
+        def_missing_final_expression,
+        indoc!(
+            r#"
+            f : Foo.foo
+            "#
+        ),
+        @r###"
+    ── MISSING FINAL EXPRESSION ──────── tmp/def_missing_final_expression/Test.roc ─
+
+    I am partway through parsing a definition, but I got stuck here:
+
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      f : Foo.foo
+                       ^
+
+    This definition is missing a final expression. A nested definition
+    must be followed by either another definition, or an expression
+
+        x = 4
+        y = 2
+
+        x + y
+    "###
+    );
+
+    test_report!(
+        type_inline_alias,
+        indoc!(
+            r#"
+            f : I64 as
+            f = 0
+
+            f
+            "#
+        ),
+        @r###"
+    ── UNFINISHED INLINE ALIAS ──────────────────── tmp/type_inline_alias/Test.roc ─
+
+    I just started parsing an inline type alias, but I got stuck here:
+
+    4│      f : I64 as
+                      ^
+
+    Note: I may be confused by indentation
+    "###
+    );
+
+    test_report!(
+        type_double_comma,
+        indoc!(
+            r#"
+            f : I64,,I64 -> I64
+            f = 0
+
+            f
+            "#
+        ),
+        @r###"
+    ── DOUBLE COMMA ─────────────────────────────── tmp/type_double_comma/Test.roc ─
+
+    I just started parsing a function argument type, but I encountered two
+    commas in a row:
+
+    4│      f : I64,,I64 -> I64
+                    ^
+
+    Try removing one of them.
+    "###
+    );
+
+    test_report!(
+        type_argument_no_arrow,
+        indoc!(
+            r#"
+            f : I64, I64
+            f = 0
+
+            f
+            "#
+        ),
+        @r###"
+    ── UNFINISHED TYPE ─────────────────────── tmp/type_argument_no_arrow/Test.roc ─
+
+    I am partway through parsing a type, but I got stuck here:
+
+    4│      f : I64, I64
+                        ^
+
+    Note: I may be confused by indentation
+    "###
+    );
+
+    // TODO could do better by pointing out we're parsing a function type
+    test_report!(
+        type_argument_arrow_then_nothing,
+        indoc!(
+            r#"
+            f : I64, I64 ->
+            f = 0
+
+            f
+            "#
+        ),
+        @r###"
+    ── UNFINISHED TYPE ───────────── tmp/type_argument_arrow_then_nothing/Test.roc ─
+
+    I just started parsing a type, but I got stuck here:
+
+    4│      f : I64, I64 ->
+                           ^
+
+    Note: I may be confused by indentation
+    "###
+    );
+
+    // TODO could do better by pointing out we're parsing a function type
+    test_report!(
+        dict_type_formatting,
+        indoc!(
+            r#"
+            myDict : Dict Num.I64 Str
+            myDict = Dict.insert Dict.empty "foo" 42
+
+            myDict
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `myDict` definition:
+
+    4│      myDict : Dict Num.I64 Str
+    5│      myDict = Dict.insert Dict.empty "foo" 42
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    This `insert` call produces:
+
+        Dict Str (Num a)
+
+    But the type annotation on `myDict` says it should be:
+
+        Dict I64 Str
+    "###
+    );
+
+    test_report!(
+        alias_type_diff,
+        indoc!(
+            r#"
+            HSet a : Set a
+
+            foo : Str -> HSet {}
+
+            myDict : HSet Str
+            myDict = foo "bar"
+
+            myDict
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `myDict` definition:
+
+    8│      myDict : HSet Str
+    9│      myDict = foo "bar"
+                     ^^^^^^^^^
+
+    This `foo` call produces:
+
+        HSet {}
+
+    But the type annotation on `myDict` says it should be:
+
+        HSet Str
+    "###
+    );
+
+    // this should get better with time
+    test_report!(
+        if_guard_without_condition,
+        indoc!(
+            r#"
+            when Just 4 is
+                Just if ->
+                    4
+
+                _ ->
+                    2
+            "#
+        ),
+        @r###"
+    ── IF GUARD NO CONDITION ───────────── tmp/if_guard_without_condition/Test.roc ─
+
+    I just started parsing an if guard, but there is no guard condition:
+
+    4│      when Just 4 is
+    5│          Just if ->
+                        ^
+
+    Try adding an expression before the arrow!
+    "###
+    );
+
+    test_report!(
+        empty_or_pattern,
+        indoc!(
+            r#"
+            when Just 4 is
+                Just 4 | ->
+                    4
+
+                _ ->
+                    2
+            "#
+        ),
+        @r###"
+    ── UNFINISHED PATTERN ────────────────────────── tmp/empty_or_pattern/Test.roc ─
+
+    I just started parsing a pattern, but I got stuck here:
+
+    5│          Just 4 | ->
+                         ^
+
+    Note: I may be confused by indentation
+    "###
+    );
+
+    // TODO check if "what_is_next" is a keyword
+    test_report!(
+        pattern_binds_keyword,
+        indoc!(
+            r#"
+            when Just 4 is
+                Just when ->
+                    4
+
+                _ ->
+                    2
+            "#
+        ),
+        @r###"
+    ── MISSING EXPRESSION ───────────────────── tmp/pattern_binds_keyword/Test.roc ─
+
+    I am partway through parsing a definition, but I got stuck here:
+
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      when Just 4 is
+    5│          Just when ->
+                     ^
+
+    I was expecting to see an expression like 42 or "hello".
+    "###
+    );
+
+    // this should get better with time
+    test_report!(
+        when_missing_arrow,
+        indoc!(
+            r#"
+            when 5 is
+                1 -> 2
+                _
+            "#
+        ),
+        @r###"
+    ── UNFINISHED WHEN ─────────────────────────── tmp/when_missing_arrow/Test.roc ─
+
+    I was partway through parsing a `when` expression, but I got stuck here:
+
+    6│          _
+                 ^
+
+    I was expecting to see a pattern next
+
+    Note: Here is an example of a valid `when` expression for reference.
+
+        when List.first plants is
+          Ok n ->
+            n
+
+          Err _ ->
+            200
+
+    Notice the indentation. All patterns are aligned, and each branch is
+    indented a bit more than the corresponding pattern. That is important!
+    "###
+    );
+
+    test_report!(
+        lambda_double_comma,
+        indoc!(
+            r#"
+            \a,,b -> 1
+            "#
+        ),
+        @r###"
+    ── UNFINISHED ARGUMENT LIST ───────────────── tmp/lambda_double_comma/Test.roc ─
+
+    I am partway through parsing a function argument list, but I got stuck
+    at this comma:
+
+    4│      \a,,b -> 1
+               ^
+
+    I was expecting an argument pattern before this, so try adding an
+    argument before the comma and see if that helps?
+    "###
+    );
+
+    test_report!(
+        lambda_leading_comma,
+        indoc!(
+            r#"
+            \,b -> 1
+            "#
+        ),
+        @r###"
+    ── UNFINISHED ARGUMENT LIST ──────────────── tmp/lambda_leading_comma/Test.roc ─
+
+    I am partway through parsing a function argument list, but I got stuck
+    at this comma:
+
+    4│      \,b -> 1
+             ^
+
+    I was expecting an argument pattern before this, so try adding an
+    argument before the comma and see if that helps?
+    "###
+    );
+
+    // this should get better with time
+    // TODO this formerly gave
+    //
+    //                ── UNFINISHED WHEN ─────────────────────────────────────────────────────────────
+    //
+    //                I was partway through parsing a `when` expression, but I got stuck here:
+    //
+    //                3│    _ -> 2
+    //                        ^
+    //
+    //                I suspect this is a pattern that is not indented enough? (by 2 spaces)
+    //
+    // but that requires parsing the next pattern blindly, irrespective of indentation. Can
+    // we find an efficient solution that doesn't require parsing an extra pattern for
+    // every `when`, i.e. we want a good error message for the test case above, but for
+    // a valid `when`, we don't want to do extra work, e.g. here
+    //
+    //  x
+    //      when x is
+    //          n -> n
+    //
+    //  4
+    //
+    // We don't want to parse the `4` and say it's an outdented pattern!
+    test_report!(
+        when_outdented_branch,
+        indoc!(
+            r#"
+            when 4 is
+                5 -> 2
+             2 -> 2
+            "#
+        ),
+        @r###"
+    ── NOT END OF FILE ──────────────────────── tmp/when_outdented_branch/Test.roc ─
+
+    I expected to reach the end of the file, but got stuck here:
+
+    6│       2 -> 2
+             ^
+    "###
+    );
+
+    test_report!(
+        when_over_indented_underscore,
+        indoc!(
+            r#"
+            when 4 is
+                5 -> 2
+                 _ -> 2
+            "#
+        ),
+        @r###"
+    ── NOT END OF FILE ──────────────── tmp/when_over_indented_underscore/Test.roc ─
+
+    I expected to reach the end of the file, but got stuck here:
+
+    6│           _ -> 2
+                 ^
+    "###
+    );
+
+    test_report!(
+        when_over_indented_int,
+        indoc!(
+            r#"
+            when 4 is
+                5 -> Num.neg
+                 2 -> 2
+            "#
+        ),
+        @r###"
+    ── UNEXPECTED ARROW ────────────────────── tmp/when_over_indented_int/Test.roc ─
+
+    I am parsing a `when` expression right now, but this arrow is confusing
+    me:
+
+    6│           2 -> 2
+                   ^^
+
+    It makes sense to see arrows around here, so I suspect it is something
+    earlier.Maybe this pattern is indented a bit farther from the previous
+    patterns?
+
+    Note: Here is an example of a valid `when` expression for reference.
+
+        when List.first plants is
+          Ok n ->
+            n
+
+          Err _ ->
+            200
+
+    Notice the indentation. All patterns are aligned, and each branch is
+    indented a bit more than the corresponding pattern. That is important!
+    "###
+    );
+
+    // TODO I think we can do better here
+    test_report!(
+        if_outdented_then,
+        indoc!(
+            r#"
+            x =
+                if 5 == 5
+            then 2 else 3
+
+            x
+            "#
+        ),
+        @r###"
+    ── UNFINISHED IF ────────────────────────────── tmp/if_outdented_then/Test.roc ─
+
+    I was partway through parsing an `if` expression, but I got stuck here:
+
+    5│          if 5 == 5
+                         ^
+
+    I was expecting to see the `then` keyword next.
+    "###
+    );
+
+    // this should get better with time
+    test_report!(
+        if_missing_else,
+        indoc!(
+            r#"
+            if 5 == 5 then 2
+            "#
+        ),
+        @r###"
+    ── UNFINISHED IF ──────────────────────────────── tmp/if_missing_else/Test.roc ─
+
+    I was partway through parsing an `if` expression, but I got stuck here:
+
+    4│      if 5 == 5 then 2
+                            ^
+
+    I was expecting to see the `else` keyword next.
+    "###
+    );
+
+    test_report!(
+        list_double_comma,
+        indoc!(
+            r#"
+            [1, 2, , 3]
+            "#
+        ),
+        @r###"
+    ── UNFINISHED LIST ──────────────────────────── tmp/list_double_comma/Test.roc ─
+
+    I am partway through started parsing a list, but I got stuck here:
+
+    4│      [1, 2, , 3]
+                   ^
+
+    I was expecting to see a list entry before this comma, so try adding a
+    list entry and see if that helps?
+    "###
+    );
+
+    test_report!(
+        list_without_end,
+        indoc!(
+            r#"
+            [1, 2,
+            "#
+        ),
+        @r###"
+    ── UNFINISHED LIST ───────────────────────────── tmp/list_without_end/Test.roc ─
+
+    I am partway through started parsing a list, but I got stuck here:
+
+    4│      [1, 2,
+    5│
+    6│
+        ^
+
+    I was expecting to see a closing square bracket before this, so try
+    adding a ] and see if that helps?
+
+    Note: When I get stuck like this, it usually means that there is a
+    missing parenthesis or bracket somewhere earlier. It could also be a
+    stray keyword or operator.
+    "###
+    );
+
+    test_report!(
+        number_double_dot,
+        indoc!(
+            r#"
+            1.1.1
+            "#
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This float literal contains an invalid digit:
+
+    4│      1.1.1
+            ^^^^^
+
+    Floating point literals can only contain the digits 0-9, or use
+    scientific notation 10e4, or have a float suffix.
+
+    Tip: Learn more about number literals at TODO
+    "###
+    );
+
+    test_report!(
+        unicode_not_hex,
+        r#""abc\u(zzzz)def""#,
+        @r###"
+    ── WEIRD CODE POINT ───────────────────────────── tmp/unicode_not_hex/Test.roc ─
+
+    I am partway through parsing a unicode code point, but I got stuck
+    here:
+
+    4│      "abc\u(zzzz)def"
+                   ^
+
+    I was expecting a hexadecimal number, like \u(1100) or \u(00FF).
+
+    Learn more about working with unicode in roc at TODO
+    "###
+    );
+
+    test_report!(
+        interpolate_not_identifier,
+        r#""abc\(32)def""#,
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This string interpolation is invalid:
+
+    4│      "abc\(32)def"
+                  ^^
+
+    I was expecting an identifier, like \u(message) or
+    \u(LoremIpsum.text).
+
+    Learn more about string interpolation at TODO
+    "###
+    );
+
+    test_report!(
+        unicode_too_large,
+        r#""abc\u(110000)def""#,
+        @r###"
+    ── INVALID UNICODE ─────────────────────────────────────── /code/proj/Main.roc ─
+
+    This unicode code point is invalid:
+
+    4│      "abc\u(110000)def"
+                   ^^^^^^
+
+    Learn more about working with unicode in roc at TODO
+    "###
+    );
+
+    test_report!(
+        weird_escape,
+        r#""abc\qdef""#,
+        @r###"
+    ── WEIRD ESCAPE ──────────────────────────────────── tmp/weird_escape/Test.roc ─
+
+    I was partway through parsing a  string literal, but I got stuck here:
+
+    4│      "abc\qdef"
+                ^^
+
+    This is not an escape sequence I recognize. After a backslash, I am
+    looking for one of these:
+
+        - A newline: \n
+        - A caret return: \r
+        - A tab: \t
+        - An escaped quote: \"
+        - An escaped backslash: \\
+        - A unicode code point: \u(00FF)
+        - An interpolated string: \(myVariable)
+    "###
+    );
+
+    test_report!(
+        single_no_end,
+        r#""there is no end"#,
+        @r###"
+    ── ENDLESS STRING ───────────────────────────────── tmp/single_no_end/Test.roc ─
+
+    I cannot find the end of this string:
+
+    4│      "there is no end
+             ^
+
+    You could change it to something like "to be or not to be" or even
+    just "".
+    "###
+    );
+
+    test_report!(
+        multi_no_end,
+        r#""""there is no end"#,
+        @r###"
+    ── ENDLESS STRING ────────────────────────────────── tmp/multi_no_end/Test.roc ─
+
+    I cannot find the end of this block string:
+
+    4│      """there is no end
+               ^
+
+    You could change it to something like """to be or not to be""" or even
+    just """""".
+    "###
+    );
+
     // https://github.com/rtfeldman/roc/issues/1714
-    fn interpolate_concat_is_transparent_1714() {
-        report_problem_as(
+    test_report!(
+    interpolate_concat_is_transparent_1714,
             indoc!(
                 r#"
-                greeting = "Privet"
+            greeting = "Privet"
 
-                if True then 1 else "\(greeting), World!"
-                "#,
+            if True then 1 else "\(greeting), World!"
+            "#,
             ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+            @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                This `if` has an `else` branch with a different type from its `then` branch:
+    This `if` has an `else` branch with a different type from its `then` branch:
 
-                3│  if True then 1 else "\(greeting), World!"
-                                        ^^^^^^^^^^^^^^^^^^^^^
+    6│      if True then 1 else "\(greeting), World!"
+                                ^^^^^^^^^^^^^^^^^^^^^
 
-                The `else` branch is a string of type:
+    The `else` branch is a string of type:
 
-                    Str
+        Str
 
-                but the `then` branch has the type:
+    but the `then` branch has the type:
 
-                    Num a
+        Num a
 
-                All branches in an `if` must have the same type!
-                "#
-            ),
-        )
-    }
+    All branches in an `if` must have the same type!
+    "###
+        );
 
     macro_rules! comparison_binop_transparency_tests {
         ($($op:expr, $name:ident),* $(,)?) => {
             $(
-            #[test]
-            fn $name() {
-                report_problem_as(
-                    &format!(r#"if True then "abc" else 1 {} 2"#, $op),
-                    &format!(
+            test_report!(
+                $name,
+                &format!(r#"if True then "abc" else 1 {} 2"#, $op),
+                |golden| assert_eq!(golden, format!(
 r#"── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
 This `if` has an `else` branch with a different type from its `then` branch:
 
-1│  if True then "abc" else 1 {} 2
-                            ^^{}^^
+4│      if True then "abc" else 1 {} 2
+                                ^^{}^^
 
 This comparison produces:
 
@@ -6022,10 +5251,9 @@ but the `then` branch has the type:
 
 All branches in an `if` must have the same type!
 "#,
-                        $op, "^".repeat($op.len())
-                    ),
-                )
-            }
+                    $op, "^".repeat($op.len())
+                ))
+            );
             )*
         }
     }
@@ -6039,349 +5267,321 @@ All branches in an `if` must have the same type!
         ">=", geq_binop_is_transparent,
     }
 
-    #[test]
-    fn keyword_record_field_access() {
-        report_problem_as(
-            indoc!(
-                r#"
-                foo = {}
+    test_report!(
+        keyword_record_field_access,
+        indoc!(
+            r#"
+            foo = {}
 
-                foo.if
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                This `foo` record doesn’t have a `if` field:
-
-                3│  foo.if
-                    ^^^^^^
-
-                In fact, `foo` is a record with no fields at all!
+            foo.if
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn keyword_qualified_import() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Num.if
-                "#
-            ),
-            indoc!(
-                r#"
-                ── NOT EXPOSED ─────────────────────────────────────────── /code/proj/Main.roc ─
+    This `foo` record doesn’t have a `if` field:
 
-                The Num module does not expose `if`:
+    6│      foo.if
+            ^^^^^^
 
-                1│  Num.if
-                    ^^^^^^
+    In fact, `foo` is a record with no fields at all!
+    "###
+    );
 
-                Did you mean one of these?
-
-                    Num.sin
-                    Num.div
-                    Num.abs
-                    Num.neg
+    test_report!(
+        keyword_qualified_import,
+        indoc!(
+            r#"
+            Num.if
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── NOT EXPOSED ─────────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn stray_dot_expr() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Num.add . 23
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    The Num module does not expose `if`:
 
-                I trying to parse a record field access here:
+    4│      Num.if
+            ^^^^^^
 
-                1│  Num.add . 23
-                             ^
+    Did you mean one of these?
 
-                So I expect to see a lowercase letter next, like .name or .height.
+        Num.sin
+        Num.div
+        Num.abs
+        Num.neg
+    "###
+    );
+
+    test_report!(
+        stray_dot_expr,
+        indoc!(
+            r#"
+            Num.add . 23
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn opaque_ref_field_access() {
-        report_problem_as(
-            indoc!(
-                r#"
-                @UUID.bar
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    I trying to parse a record field access here:
 
-                I am very confused by this field access:
+    4│      Num.add . 23
+                     ^
 
-                1│  @UUID.bar
-                         ^^^^
+    So I expect to see a lowercase letter next, like .name or .height.
+    "###
+    );
 
-                It looks like a record field access on an opaque reference.
+    test_report!(
+        opaque_ref_field_access,
+        indoc!(
+            r#"
+            @UUID.bar
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn weird_accessor() {
-        report_problem_as(
-            indoc!(
-                r#"
-                .foo.bar
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    I am very confused by this field access:
 
-                I am very confused by this field access
+    4│      @UUID.bar
+                 ^^^^
 
-                1│  .foo.bar
-                    ^^^^^^^^
+    It looks like a record field access on an opaque reference.
+    "###
+    );
 
-                It looks like a field access on an accessor. I parse.client.name as
-                (.client).name. Maybe use an anonymous function like
-                (\r -> r.client.name) instead?
+    test_report!(
+        weird_accessor,
+        indoc!(
+            r#"
+            .foo.bar
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn part_starts_with_number() {
-        report_problem_as(
-            indoc!(
-                r#"
-                foo.100
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    I am very confused by this field access
 
-                I trying to parse a record field access here:
+    4│      .foo.bar
+            ^^^^^^^^
 
-                1│  foo.100
-                        ^
+    It looks like a field access on an accessor. I parse.client.name as
+    (.client).name. Maybe use an anonymous function like
+    (\r -> r.client.name) instead?
+    "###
+    );
 
-                So I expect to see a lowercase letter next, like .name or .height.
+    test_report!(
+        part_starts_with_number,
+        indoc!(
+            r#"
+            foo.100
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn closure_underscore_ident() {
-        report_problem_as(
-            indoc!(
-                r#"
-                \the_answer -> 100
-                "#
-            ),
-            indoc!(
-                r#"
-                ── NAMING PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    I trying to parse a record field access here:
 
-                I am trying to parse an identifier here:
+    4│      foo.100
+                ^
 
-                1│  \the_answer -> 100
-                        ^
+    So I expect to see a lowercase letter next, like .name or .height.
+    "###
+    );
 
-                Underscores are not allowed in identifiers. Use camelCase instead!
+    test_report!(
+        closure_underscore_ident,
+        indoc!(
+            r#"
+            \the_answer -> 100
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── NAMING PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    #[ignore]
-    fn double_binop() {
-        report_problem_as(
-            indoc!(
-                r#"
-                key >= 97 && <= 122
-                "#
-            ),
-            indoc!(
-                r#"
-                "#
-            ),
-        )
-    }
+    I am trying to parse an identifier here:
 
-    #[test]
-    #[ignore]
-    fn case_of() {
-        report_problem_as(
-            indoc!(
-                r#"
-                case 1 of
-                    1 -> True
-                    _ -> False
-                "#
-            ),
-            indoc!(
-                r#"
-                "#
-            ),
-        )
-    }
+    4│      \the_answer -> 100
+                ^
 
-    #[test]
-    fn argument_without_space() {
-        report_problem_as(
-            indoc!(
-                r#"
-                ["foo", bar("")]
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
+    Underscores are not allowed in identifiers. Use camelCase instead!
+    "###
+    );
 
-                Nothing is named `bar` in this scope.
-
-                1│  ["foo", bar("")]
-                            ^^^
-
-                Did you mean one of these?
-
-                    Str
-                    Err
-                    Box
-                    Set
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn invalid_operator() {
-        report_problem_as(
-            indoc!(
-                r#"
-                main =
-                    5 ** 3
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNKNOWN OPERATOR ────────────────────────────────────── /code/proj/Main.roc ─
-
-                This looks like an operator, but it's not one I recognize!
-
-                1│  main =
-                2│      5 ** 3
-                          ^^
-
-                I have no specific suggestion for this operator, see TODO for the full
-                list of operators in Roc.
+    test_report!(
+        #[ignore]
+        double_binop,
+        indoc!(
+            r#"
+            key >= 97 && <= 122
             "#
-            ),
-        )
-    }
+        ),
+        @r#"
+        "#
+    );
 
-    #[test]
-    fn double_plus() {
-        report_problem_as(
-            indoc!(
-                r#"
-                main =
-                    [] ++ []
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNKNOWN OPERATOR ────────────────────────────────────── /code/proj/Main.roc ─
-
-                This looks like an operator, but it's not one I recognize!
-
-                1│  main =
-                2│      [] ++ []
-                           ^^
-
-                To concatenate two lists or strings, try using List.concat or
-                Str.concat instead.
+    test_report!(
+        #[ignore]
+        case_of,
+        indoc!(
+            r#"
+            case 1 of
+                1 -> True
+                _ -> False
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── UNKNOWN OPERATOR ───────────────────────────────────── tmp/case_of/Test.roc ─
 
-    #[test]
-    fn inline_hastype() {
-        report_problem_as(
-            indoc!(
-                r#"
-                main =
-                    (\x -> x) : I64
+    This looks like an operator, but it's not one I recognize!
 
-                    3
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNKNOWN OPERATOR ────────────────────────────────────── /code/proj/Main.roc ─
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      case 1 of
+    5│          1 -> True
+                  ^^
 
-                This looks like an operator, but it's not one I recognize!
+    The arrow -> is only used to define cases in a `when`.
 
-                1│  main =
-                2│      (\x -> x) : I64
-                                  ^
+        when color is
+            Red -> "stop!"
+            Green -> "go!"
+    "###
+    );
 
-                The has-type operator : can only occur in a definition's type
-                signature, like
-
-                    increment : I64 -> I64
-                    increment = \x -> x + 1
+    test_report!(
+        argument_without_space,
+        indoc!(
+            r#"
+            ["foo", bar("")]
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn wild_case_arrow() {
-        // this is still bad, but changing the order and progress of other parsers should improve it
-        // down the line
-        report_problem_as(
-            indoc!(
-                r#"
-                main = 5 -> 3
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNKNOWN OPERATOR ────────────────────────────────────── /code/proj/Main.roc ─
+    Nothing is named `bar` in this scope.
 
-                This looks like an operator, but it's not one I recognize!
+    4│      ["foo", bar("")]
+                    ^^^
 
-                1│  main = 5 -> 3
-                             ^^
+    Did you mean one of these?
 
-                The arrow -> is only used to define cases in a `when`.
+        Nat
+        Str
+        Err
+        U8
+    "###
+    );
 
-                    when color is
-                        Red -> "stop!"
-                        Green -> "go!"
+    test_report!(
+        invalid_operator,
+        indoc!(
+            r#"
+            main =
+                5 ** 3
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── UNKNOWN OPERATOR ──────────────────────────── tmp/invalid_operator/Test.roc ─
+
+    This looks like an operator, but it's not one I recognize!
+
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      main =
+    5│          5 ** 3
+                  ^^
+
+    I have no specific suggestion for this operator, see TODO for the full
+    list of operators in Roc.
+    "###
+    );
+
+    test_report!(
+        double_plus,
+        indoc!(
+            r#"
+            main =
+                [] ++ []
+            "#
+        ),
+        @r###"
+    ── UNKNOWN OPERATOR ───────────────────────────────── tmp/double_plus/Test.roc ─
+
+    This looks like an operator, but it's not one I recognize!
+
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      main =
+    5│          [] ++ []
+                   ^^
+
+    To concatenate two lists or strings, try using List.concat or
+    Str.concat instead.
+    "###
+    );
+
+    test_report!(
+        inline_hastype,
+        indoc!(
+            r#"
+            main =
+                (\x -> x) : I64
+
+                3
+            "#
+        ),
+        @r###"
+    ── UNKNOWN OPERATOR ────────────────────────────── tmp/inline_hastype/Test.roc ─
+
+    This looks like an operator, but it's not one I recognize!
+
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      main =
+    5│          (\x -> x) : I64
+                          ^
+
+    The has-type operator : can only occur in a definition's type
+    signature, like
+
+        increment : I64 -> I64
+        increment = \x -> x + 1
+    "###
+    );
+
+    // this is still bad, but changing the order and progress of other parsers should improve it
+    // down the line
+    test_report!(
+        wild_case_arrow,
+        indoc!(
+            r#"
+            main = 5 -> 3
+            "#
+        ),
+        @r###"
+    ── UNKNOWN OPERATOR ───────────────────────────── tmp/wild_case_arrow/Test.roc ─
+
+    This looks like an operator, but it's not one I recognize!
+
+    1│  app "test" provides [main] to "./platform"
+    2│
+    3│  main =
+    4│      main = 5 -> 3
+                     ^^
+
+    The arrow -> is only used to define cases in a `when`.
+
+        when color is
+            Red -> "stop!"
+            Green -> "go!"
+    "###
+    );
 
     #[test]
     fn provides_to_identifier() {
@@ -6556,1040 +5756,956 @@ All branches in an `if` must have the same type!
         )
     }
 
-    #[test]
-    fn apply_unary_negative() {
-        report_problem_as(
-            indoc!(
-                r#"
-                foo = 3
+    test_report!(
+        apply_unary_negative,
+        indoc!(
+            r#"
+            foo = 3
 
-                -foo 1 2
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                This value is not a function, but it was given 2 arguments:
-
-                3│  -foo 1 2
-                    ^^^^
-
-                Are there any missing commas? Or missing parentheses?
+            -foo 1 2
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn apply_unary_not() {
-        report_problem_as(
-            indoc!(
-                r#"
-                foo = True
+    This value is not a function, but it was given 2 arguments:
 
-                !foo 1 2
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
+    6│      -foo 1 2
+            ^^^^
 
-                This value is not a function, but it was given 2 arguments:
+    Are there any missing commas? Or missing parentheses?
+    "###
+    );
 
-                3│  !foo 1 2
-                    ^^^^
+    test_report!(
+        apply_unary_not,
+        indoc!(
+            r#"
+            foo = True
 
-                Are there any missing commas? Or missing parentheses?
+            !foo 1 2
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn applied_tag_function() {
-        report_problem_as(
-            indoc!(
-                r#"
-                x : List [Foo Str]
-                x = List.map [1, 2] Foo
+    This value is not a function, but it was given 2 arguments:
 
-                x
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    6│      !foo 1 2
+            ^^^^
 
-                Something is off with the body of the `x` definition:
+    Are there any missing commas? Or missing parentheses?
+    "###
+    );
 
-                1│  x : List [Foo Str]
-                2│  x = List.map [1, 2] Foo
-                        ^^^^^^^^^^^^^^^^^^^
+    test_report!(
+        applied_tag_function,
+        indoc!(
+            r#"
+            x : List [Foo Str]
+            x = List.map [1, 2] Foo
 
-                This `map` call produces:
-
-                    List [Foo Num a]
-
-                But the type annotation on `x` says it should be:
-
-                    List [Foo Str]
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn pattern_in_parens_open() {
-        report_problem_as(
-            indoc!(
-                r#"
-                \( a
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED PARENTHESES ──────────────────────────────── /code/proj/Main.roc ─
-
-                I am partway through parsing a pattern in parentheses, but I got stuck
-                here:
-
-                1│  \( a
-                        ^
-
-                I was expecting to see a closing parenthesis before this, so try
-                adding a ) and see if that helps?
+            x
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn pattern_in_parens_end_comma() {
-        report_problem_as(
-            indoc!(
-                r#"
-                \( a,
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED PARENTHESES ──────────────────────────────── /code/proj/Main.roc ─
+    Something is off with the body of the `x` definition:
 
-                I am partway through parsing a pattern in parentheses, but I got stuck
-                here:
+    4│      x : List [Foo Str]
+    5│      x = List.map [1, 2] Foo
+                ^^^^^^^^^^^^^^^^^^^
 
-                1│  \( a,
-                        ^
+    This `map` call produces:
 
-                I was expecting to see a closing parenthesis before this, so try
-                adding a ) and see if that helps?
+        List [Foo Num a]
+
+    But the type annotation on `x` says it should be:
+
+        List [Foo Str]
+    "###
+    );
+
+    test_report!(
+        pattern_in_parens_open,
+        indoc!(
+            r#"
+            \( a
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── UNFINISHED PARENTHESES ──────────────── tmp/pattern_in_parens_open/Test.roc ─
 
-    #[test]
-    fn pattern_in_parens_end() {
-        report_problem_as(
-            indoc!(
-                r#"
-                \( a
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED PARENTHESES ──────────────────────────────── /code/proj/Main.roc ─
+    I am partway through parsing a pattern in parentheses, but I got stuck
+    here:
 
-                I am partway through parsing a pattern in parentheses, but I got stuck
-                here:
+    4│      \( a
+                ^
 
-                1│  \( a
-                        ^
+    I was expecting to see a closing parenthesis before this, so try
+    adding a ) and see if that helps?
 
-                I was expecting to see a closing parenthesis before this, so try
-                adding a ) and see if that helps?
+    Note: I may be confused by indentation
+    "###
+    );
+
+    test_report!(
+        pattern_in_parens_end_comma,
+        indoc!(
+            r#"
+            \( a,
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── UNFINISHED PARENTHESES ─────────── tmp/pattern_in_parens_end_comma/Test.roc ─
 
-    #[test]
-    fn pattern_in_parens_indent_end() {
-        report_problem_as(
-            indoc!(
-                r#"
-                x = \( a
-                )
-                "#
-            ),
-            indoc!(
-                r#"
-                ── NEED MORE INDENTATION ───────────────────────────────── /code/proj/Main.roc ─
+    I am partway through parsing a pattern in parentheses, but I got stuck
+    here:
 
-                I am partway through parsing a pattern in parentheses, but I got stuck
-                here:
+    4│      \( a,
+                ^
 
-                1│  x = \( a
-                2│  )
-                    ^
+    I was expecting to see a closing parenthesis before this, so try
+    adding a ) and see if that helps?
+    "###
+    );
 
-                I need this parenthesis to be indented more. Try adding more spaces
-                before it!
+    test_report!(
+        pattern_in_parens_end,
+        indoc!(
+            r#"
+            \( a
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── UNFINISHED PARENTHESES ───────────────── tmp/pattern_in_parens_end/Test.roc ─
 
-    #[test]
-    fn pattern_in_parens_indent_open() {
-        report_problem_as(
-            indoc!(
-                r#"
-                \(
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED PATTERN ──────────────────────────────────── /code/proj/Main.roc ─
+    I am partway through parsing a pattern in parentheses, but I got stuck
+    here:
 
-                I just started parsing a pattern, but I got stuck here:
+    4│      \( a
+                ^
 
-                1│  \(
-                      ^
+    I was expecting to see a closing parenthesis before this, so try
+    adding a ) and see if that helps?
 
-                Note: I may be confused by indentation
+    Note: I may be confused by indentation
+    "###
+    );
+
+    test_report!(
+        pattern_in_parens_indent_end,
+        indoc!(
+            r#"
+            x = \( a
+            )
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── NEED MORE INDENTATION ─────────── tmp/pattern_in_parens_indent_end/Test.roc ─
 
-    #[test]
-    fn outdented_in_parens() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Box : (
-                    Str
-                )
+    I am partway through parsing a pattern in parentheses, but I got stuck
+    here:
 
-                4
-                "#
-            ),
-            indoc!(
-                r#"
-                ── NEED MORE INDENTATION ───────────────────────────────── /code/proj/Main.roc ─
+    4│      x = \( a
+    5│      )
+            ^
 
-                I am partway through parsing a type in parentheses, but I got stuck
-                here:
+    I need this parenthesis to be indented more. Try adding more spaces
+    before it!
+    "###
+    );
 
-                1│  Box : (
-                2│      Str
-                3│  )
-                    ^
-
-                I need this parenthesis to be indented more. Try adding more spaces
-                before it!
+    test_report!(
+        pattern_in_parens_indent_open,
+        indoc!(
+            r#"
+            \(
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── UNFINISHED PARENTHESES ───────── tmp/pattern_in_parens_indent_open/Test.roc ─
 
-    #[test]
-    fn backpassing_type_error() {
-        report_problem_as(
-            indoc!(
-                r#"
-                x <- List.map ["a", "b"]
+    I just started parsing a pattern in parentheses, but I got stuck here:
 
-                x + 1
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    4│      \(
+              ^
 
-                The 2nd argument to `map` is not what I expect:
+    Record pattern look like { name, age: currentAge }, so I was expecting
+    to see a field name next.
 
-                1│>  x <- List.map ["a", "b"]
-                2│>
-                3│>  x + 1
+    Note: I may be confused by indentation
+    "###
+    );
 
-                This argument is an anonymous function of type:
+    test_report!(
+        outdented_in_parens,
+        indoc!(
+            r#"
+            Box : (
+                Str
+            )
 
-                    Num a -> Num a
-
-                But `map` needs the 2nd argument to be:
-
-                    Str -> Num a
+            4
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── NEED MORE INDENTATION ──────────────────── tmp/outdented_in_parens/Test.roc ─
 
-    #[test]
-    fn underscore_let() {
-        report_problem_as(
-            indoc!(
-                r#"
-                _ = 3
+    I am partway through parsing a type in parentheses, but I got stuck
+    here:
 
-                4
-                "#
-            ),
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    4│      Box : (
+    5│          Str
+    6│      )
+            ^
 
-                Underscore patterns are not allowed in definitions
+    I need this parenthesis to be indented more. Try adding more spaces
+    before it!
+    "###
+    );
 
-                1│  _ = 3
-                    ^
+    test_report!(
+        backpassing_type_error,
+        indoc!(
+            r#"
+            x <- List.map ["a", "b"]
+
+            x + 1
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn expect_expr_type_error() {
-        report_problem_as(
-            indoc!(
-                r#"
-                expect "foobar"
+    The 2nd argument to `map` is not what I expect:
 
-                4
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    4│>      x <- List.map ["a", "b"]
+    5│>
+    6│>      x + 1
 
-                This `expect` condition needs to be a Bool:
+    This argument is an anonymous function of type:
 
-                1│  expect "foobar"
-                           ^^^^^^^^
+        Num a -> Num a
 
-                Right now it’s a string of type:
+    But `map` needs the 2nd argument to be:
 
-                    Str
+        Str -> Num a
+    "###
+    );
 
-                But I need every `expect` condition to evaluate to a Bool—either `True`
-                or `False`.
+    test_report!(
+        underscore_let,
+        indoc!(
+            r#"
+            _ = 3
+
+            4
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn num_too_general_wildcard() {
-        report_problem_as(
-            indoc!(
-                r#"
-                mult : Num.Num *, Num.F64 -> Num.F64
-                mult = \a, b -> a * b
+    Underscore patterns are not allowed in definitions
 
-                mult 0 0
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    4│      _ = 3
+            ^
+    "###
+    );
 
-                The 2nd argument to `mul` is not what I expect:
+    test_report!(
+        expect_expr_type_error,
+        indoc!(
+            r#"
+            expect "foobar"
 
-                2│  mult = \a, b -> a * b
-                                        ^
-
-                This `b` value is a:
-
-                    F64
-
-                But `mul` needs the 2nd argument to be:
-
-                    Num *
-
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                Something is off with the body of the `mult` definition:
-
-                1│  mult : Num.Num *, Num.F64 -> Num.F64
-                2│  mult = \a, b -> a * b
-                                    ^^^^^
-
-                This `mul` call produces:
-
-                    Num *
-
-                But the type annotation on `mult` says it should be:
-
-                    F64
+            4
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn num_too_general_named() {
-        report_problem_as(
-            indoc!(
-                r#"
-                mult : Num.Num a, Num.F64 -> Num.F64
-                mult = \a, b -> a * b
+    This `expect` condition needs to be a Bool:
 
-                mult 0 0
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    4│      expect "foobar"
+                   ^^^^^^^^
 
-                The 2nd argument to `mul` is not what I expect:
+    Right now it’s a string of type:
 
-                2│  mult = \a, b -> a * b
-                                        ^
+        Str
 
-                This `b` value is a:
+    But I need every `expect` condition to evaluate to a Bool—either `True`
+    or `False`.
+    "###
+    );
 
-                    F64
+    test_report!(
+        num_too_general_wildcard,
+        indoc!(
+            r#"
+            mult : Num.Num *, Num.F64 -> Num.F64
+            mult = \a, b -> a * b
 
-                But `mul` needs the 2nd argument to be:
-
-                    Num a
-
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                Something is off with the body of the `mult` definition:
-
-                1│  mult : Num.Num a, Num.F64 -> Num.F64
-                2│  mult = \a, b -> a * b
-                                    ^^^^^
-
-                This `mul` call produces:
-
-                    Num a
-
-                But the type annotation on `mult` says it should be:
-
-                    F64
+            mult 0 0
             "#
-            ),
-        )
-    }
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn inference_var_not_enough_in_alias() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Result a b : [Ok a, Err b]
+    The 2nd argument to `mul` is not what I expect:
 
-                canIGo : _ -> Result _
-                canIGo = \color ->
-                    when color is
-                        "green" -> Ok "go!"
-                        "yellow" -> Err (SlowIt "whoa, let's slow down!")
-                        "red" -> Err (StopIt "absolutely not")
-                        _ -> Err (UnknownColor "this is a weird stoplight")
-                canIGo
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TOO FEW TYPE ARGUMENTS ──────────────────────────────── /code/proj/Main.roc ─
-
-                The `Result` alias expects 2 type arguments, but it got 1 instead:
-
-                3│  canIGo : _ -> Result _
-                                  ^^^^^^^^
-
-                Are there missing parentheses?
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn inference_var_too_many_in_alias() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Result a b : [Ok a, Err b]
-
-                canIGo : _ -> Result _ _ _
-                canIGo = \color ->
-                    when color is
-                        "green" -> Ok "go!"
-                        "yellow" -> Err (SlowIt "whoa, let's slow down!")
-                        "red" -> Err (StopIt "absolutely not")
-                        _ -> Err (UnknownColor "this is a weird stoplight")
-                canIGo
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TOO MANY TYPE ARGUMENTS ─────────────────────────────── /code/proj/Main.roc ─
-
-                The `Result` alias expects 2 type arguments, but it got 3 instead:
-
-                3│  canIGo : _ -> Result _ _ _
-                                  ^^^^^^^^^^^^
-
-                Are there missing parentheses?
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn inference_var_conflict_in_rigid_links() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : a -> (_ -> b)
-                f = \x -> \y -> if x == y then x else y
-                f
-                "#
-            ),
-            // TODO: We should tell the user that we inferred `_` as `a`
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                Something is off with the body of the `f` definition:
-
-                1│  f : a -> (_ -> b)
-                2│  f = \x -> \y -> if x == y then x else y
-                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-                The body is an anonymous function of type:
-
-                    a -> a
-
-                But the type annotation on `f` says it should be:
-
-                    a -> b
-
-                Tip: Your type annotation uses `a` and `b` as separate type variables.
-                Your code seems to be saying they are the same though. Maybe they
-                should be the same in your type annotation? Maybe your code uses them
-                in a weird way?
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn error_wildcards_are_related() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : * -> *
-                f = \x -> x
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                Something is off with the body of the `f` definition:
-
-                1│  f : * -> *
-                2│  f = \x -> x
-                              ^
-
-                The type annotation on `f` says this `x` value should have the type:
-
-                    *
-
-                However, the type of this `x` value is connected to another type in a
-                way that isn't reflected in this annotation.
-
-                Tip: Any connection between types must use a named type variable, not
-                a `*`! Maybe the annotation  on `f` should have a named type variable in
-                place of the `*`?
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn error_nested_wildcards_are_related() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : a, b, * -> {x: a, y: b, z: *}
-                f = \x, y, z -> {x, y, z}
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                Something is off with the body of the `f` definition:
-
-                1│  f : a, b, * -> {x: a, y: b, z: *}
-                2│  f = \x, y, z -> {x, y, z}
-                                    ^^^^^^^^^
-
-                The type annotation on `f` says the body is a record should have the
-                type:
-
-                    { x : a, y : b, z : * }
-
-                However, the type of the body is a record is connected to another type
-                in a way that isn't reflected in this annotation.
-
-                Tip: Any connection between types must use a named type variable, not
-                a `*`! Maybe the annotation  on `f` should have a named type variable in
-                place of the `*`?
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn error_wildcards_are_related_in_nested_defs() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : a, b, * -> *
-                f = \_, _, x2 ->
-                    inner : * -> *
-                    inner = \y -> y
-                    inner x2
-
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                Something is off with the body of the `inner` definition:
-
-                3│      inner : * -> *
-                4│      inner = \y -> y
-                                      ^
-
-                The type annotation on `inner` says this `y` value should have the type:
-
-                    *
-
-                However, the type of this `y` value is connected to another type in a
-                way that isn't reflected in this annotation.
-
-                Tip: Any connection between types must use a named type variable, not
-                a `*`! Maybe the annotation  on `inner` should have a named type variable
-                in place of the `*`?
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn error_inline_alias_not_an_alias() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : List elem -> [Nil, Cons elem a] as a
-                "#
-            ),
-            indoc!(
-                r#"
-                ── NOT AN INLINE ALIAS ─────────────────────────────────── /code/proj/Main.roc ─
-
-                The inline type after this `as` is not a type alias:
-
-                1│  f : List elem -> [Nil, Cons elem a] as a
-                                                           ^
-
-                Inline alias types must start with an uppercase identifier and be
-                followed by zero or more type arguments, like Point or List a.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn error_inline_alias_qualified() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : List elem -> [Nil, Cons elem a] as Module.LinkedList a
-                "#
-            ),
-            indoc!(
-                r#"
-                ── QUALIFIED ALIAS NAME ────────────────────────────────── /code/proj/Main.roc ─
-
-                This type alias has a qualified name:
-
-                1│  f : List elem -> [Nil, Cons elem a] as Module.LinkedList a
-                                                           ^
-
-                An alias introduces a new name to the current scope, so it must be
-                unqualified.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn error_inline_alias_argument_uppercase() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : List elem -> [Nil, Cons elem a] as LinkedList U
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE ARGUMENT NOT LOWERCASE ─────────────────────────── /code/proj/Main.roc ─
-
-                This alias type argument is not lowercase:
-
-                1│  f : List elem -> [Nil, Cons elem a] as LinkedList U
-                                                                      ^
-
-                All type arguments must be lowercase.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn mismatched_single_tag_arg() {
-        report_problem_as(
-            indoc!(
-                r#"
-                isEmpty =
-                    \email ->
-                        Email str = email
-                        Str.isEmpty str
-
-                isEmpty (Name "boo")
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The 1st argument to `isEmpty` is not what I expect:
-
-                6│  isEmpty (Name "boo")
-                             ^^^^^^^^^^
-
-                This `Name` tag application has the type:
-
-                    [Name Str]a
-
-                But `isEmpty` needs the 1st argument to be:
-
-                    [Email Str]
-
-                Tip: Seems like a tag typo. Maybe `Name` should be `Email`?
-
-                Tip: Can more type annotations be added? Type annotations always help
-                me give more specific messages, and I think they could help a lot in
-                this case
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn issue_2326() {
-        report_problem_as(
-            indoc!(
-                r#"
-                C a b : a -> D a b
-                D a b : { a, b }
-
-                f : C a Num.Nat -> D a Num.Nat
-                f = \c -> c 6
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The 1st argument to `c` is not what I expect:
-
-                5│  f = \c -> c 6
+    5│      mult = \a, b -> a * b
                                 ^
 
-                This argument is a number of type:
+    This `b` value is a:
 
-                    Num a
+        F64
 
-                But `c` needs the 1st argument to be:
+    But `mul` needs the 2nd argument to be:
 
-                    a
+        Num *
 
-                Tip: The type annotation uses the type variable `a` to say that this
-                definition can produce any type of value. But in the body I see that
-                it will only produce a `Num` value of a single specific type. Maybe
-                change the type annotation to be more specific? Maybe change the code
-                to be more general?
-                "#
-            ),
-        )
-    }
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn issue_2380_annotations_only() {
-        report_problem_as(
-            indoc!(
-                r#"
-                F : F
-                a : F
-                a
-                "#
-            ),
-            indoc!(
-                r#"
-                ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
+    Something is off with the body of the `mult` definition:
 
-                The `F` alias is self-recursive in an invalid way:
+    4│      mult : Num.Num *, Num.F64 -> Num.F64
+    5│      mult = \a, b -> a * b
+                            ^^^^^
 
-                1│  F : F
-                    ^
+    This `mul` call produces:
 
-                Recursion in aliases is only allowed if recursion happens behind a
-                tagged union, at least one variant of which is not recursive.
-                "#
-            ),
-        )
-    }
+        Num *
 
-    #[test]
-    fn issue_2380_typed_body() {
-        report_problem_as(
-            indoc!(
-                r#"
-                F : F
-                a : F
-                a = 1
-                a
-                "#
-            ),
-            indoc!(
-                r#"
-                ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
+    But the type annotation on `mult` says it should be:
 
-                The `F` alias is self-recursive in an invalid way:
+        F64
+    "###
+    );
 
-                1│  F : F
-                    ^
+    test_report!(
+        num_too_general_named,
+        indoc!(
+            r#"
+            mult : Num.Num a, Num.F64 -> Num.F64
+            mult = \a, b -> a * b
 
-                Recursion in aliases is only allowed if recursion happens behind a
-                tagged union, at least one variant of which is not recursive.
-                "#
-            ),
-        )
-    }
+            mult 0 0
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn issue_2380_alias_with_vars() {
-        report_problem_as(
-            indoc!(
-                r#"
-                F a b : F a b
-                a : F Str Str
-                a
-                "#
-            ),
-            indoc!(
-                r#"
-                ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
+    The 2nd argument to `mul` is not what I expect:
 
-                The `F` alias is self-recursive in an invalid way:
+    5│      mult = \a, b -> a * b
+                                ^
 
-                1│  F a b : F a b
-                    ^
+    This `b` value is a:
 
-                Recursion in aliases is only allowed if recursion happens behind a
-                tagged union, at least one variant of which is not recursive.
-                "#
-            ),
-        )
-    }
+        F64
 
-    #[test]
-    fn issue_2167_record_field_optional_and_required_mismatch() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Job : [Job { inputs : List Str }]
-                job : { inputs ? List Str } -> Job
-                job = \{ inputs } ->
-                    Job { inputs }
+    But `mul` needs the 2nd argument to be:
 
-                job { inputs: ["build", "test"] }
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        Num a
 
-                The 1st argument to `job` is weird:
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                3│  job = \{ inputs } ->
-                           ^^^^^^^^^^
+    Something is off with the body of the `mult` definition:
 
-                The argument is a pattern that matches record values of type:
+    4│      mult : Num.Num a, Num.F64 -> Num.F64
+    5│      mult = \a, b -> a * b
+                            ^^^^^
 
-                    { inputs : List Str }
+    This `mul` call produces:
 
-                But the annotation on `job` says the 1st argument should be:
+        Num a
 
-                    { inputs ? List Str }
+    But the type annotation on `mult` says it should be:
 
-                Tip: To extract the `.inputs` field it must be non-optional, but the
-                type says this field is optional. Learn more about optional fields at
-                TODO.
-                "#
-            ),
-        )
-    }
+        F64
+    "###
+    );
 
-    #[test]
-    fn unify_recursive_with_nonrecursive() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Job : [Job { inputs : List Job }]
+    test_report!(
+        inference_var_not_enough_in_alias,
+        indoc!(
+            r#"
+            Result a b : [Ok a, Err b]
 
-                job : { inputs : List Str } -> Job
-                job = \{ inputs } ->
-                    Job { inputs }
+            canIGo : _ -> Result _
+            canIGo = \color ->
+                when color is
+                    "green" -> Ok "go!"
+                    "yellow" -> Err (SlowIt "whoa, let's slow down!")
+                    "red" -> Err (StopIt "absolutely not")
+                    _ -> Err (UnknownColor "this is a weird stoplight")
+            canIGo
+            "#
+        ),
+        @r###"
+    ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
 
-                job { inputs: ["build", "test"] }
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    The `Result` name is first defined here:
 
-                Something is off with the body of the `job` definition:
+    1│  app "test" provides [main] to "./platform"
+      
 
-                3│  job : { inputs : List Str } -> Job
-                4│  job = \{ inputs } ->
-                5│      Job { inputs }
-                        ^^^^^^^^^^^^^^
+    But then it's defined a second time here:
 
-                This `Job` tag application has the type:
+    4│      Result a b : [Ok a, Err b]
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                    [Job { inputs : List Str }]
+    Since these aliases have the same name, it's easy to use the wrong one
+    on accident. Give one of them a new name.
 
-                But the type annotation on `job` says it should be:
+    ── TOO FEW TYPE ARGUMENTS ──────────────────────────────── /code/proj/Main.roc ─
 
-                    [Job { inputs : List a }] as a
-                "#
-            ),
-        )
-    }
+    The `Result` alias expects 2 type arguments, but it got 1 instead:
 
-    #[test]
-    fn nested_datatype() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Nested a : [Chain a (Nested (List a)), Term]
+    6│      canIGo : _ -> Result _
+                          ^^^^^^^^
 
-                s : Nested Str
+    Are there missing parentheses?
+    "###
+    );
 
-                s
-                "#
-            ),
-            indoc!(
-                r#"
-                ── NESTED DATATYPE ─────────────────────────────────────── /code/proj/Main.roc ─
+    test_report!(
+        inference_var_too_many_in_alias,
+        indoc!(
+            r#"
+            Result a b : [Ok a, Err b]
 
-                `Nested` is a nested datatype. Here is one recursive usage of it:
+            canIGo : _ -> Result _ _ _
+            canIGo = \color ->
+                when color is
+                    "green" -> Ok "go!"
+                    "yellow" -> Err (SlowIt "whoa, let's slow down!")
+                    "red" -> Err (StopIt "absolutely not")
+                    _ -> Err (UnknownColor "this is a weird stoplight")
+            canIGo
+            "#
+        ),
+        @r###"
+    ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
 
-                1│  Nested a : [Chain a (Nested (List a)), Term]
-                                         ^^^^^^^^^^^^^^^
+    The `Result` name is first defined here:
 
-                But recursive usages of `Nested` must match its definition:
+    1│  app "test" provides [main] to "./platform"
+      
 
-                1│  Nested a : [Chain a (Nested (List a)), Term]
-                    ^^^^^^^^
+    But then it's defined a second time here:
 
-                Nested datatypes are not supported in Roc.
+    4│      Result a b : [Ok a, Err b]
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                Hint: Consider rewriting the definition of `Nested` to use the recursive type with the same arguments.
-                "#
-            ),
-        )
-    }
+    Since these aliases have the same name, it's easy to use the wrong one
+    on accident. Give one of them a new name.
 
-    #[test]
-    fn nested_datatype_inline() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : {} -> [Chain a (Nested (List a)), Term] as Nested a
+    ── TOO MANY TYPE ARGUMENTS ─────────────────────────────── /code/proj/Main.roc ─
 
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── NESTED DATATYPE ─────────────────────────────────────── /code/proj/Main.roc ─
+    The `Result` alias expects 2 type arguments, but it got 3 instead:
 
-                `Nested` is a nested datatype. Here is one recursive usage of it:
+    6│      canIGo : _ -> Result _ _ _
+                          ^^^^^^^^^^^^
 
-                1│  f : {} -> [Chain a (Nested (List a)), Term] as Nested a
-                                        ^^^^^^^^^^^^^^^
+    Are there missing parentheses?
+    "###
+    );
 
-                But recursive usages of `Nested` must match its definition:
+    test_report!(
+        inference_var_conflict_in_rigid_links,
+        indoc!(
+            r#"
+            f : a -> (_ -> b)
+            f = \x -> \y -> if x == y then x else y
+            f
+            "#
+        ),
+        // TODO: We should tell the user that we inferred `_` as `a`
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                1│  f : {} -> [Chain a (Nested (List a)), Term] as Nested a
-                                                                   ^^^^^^^^
+    Something is off with the body of the `f` definition:
 
-                Nested datatypes are not supported in Roc.
+    4│      f : a -> (_ -> b)
+    5│      f = \x -> \y -> if x == y then x else y
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                Hint: Consider rewriting the definition of `Nested` to use the recursive type with the same arguments.
-                "#
-            ),
-        )
-    }
+    The body is an anonymous function of type:
+
+        a -> a
+
+    But the type annotation on `f` says it should be:
+
+        a -> b
+
+    Tip: Your type annotation uses `a` and `b` as separate type variables.
+    Your code seems to be saying they are the same though. Maybe they
+    should be the same in your type annotation? Maybe your code uses them
+    in a weird way?
+    "###
+    );
+
+    test_report!(
+        error_wildcards_are_related,
+        indoc!(
+            r#"
+            f : * -> *
+            f = \x -> x
+
+            f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+    4│      f : * -> *
+    5│      f = \x -> x
+                      ^
+
+    The type annotation on `f` says this `x` value should have the type:
+
+        *
+
+    However, the type of this `x` value is connected to another type in a
+    way that isn't reflected in this annotation.
+
+    Tip: Any connection between types must use a named type variable, not
+    a `*`! Maybe the annotation  on `f` should have a named type variable in
+    place of the `*`?
+    "###
+    );
+
+    test_report!(
+        error_nested_wildcards_are_related,
+        indoc!(
+            r#"
+            f : a, b, * -> {x: a, y: b, z: *}
+            f = \x, y, z -> {x, y, z}
+
+            f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `f` definition:
+
+    4│      f : a, b, * -> {x: a, y: b, z: *}
+    5│      f = \x, y, z -> {x, y, z}
+                            ^^^^^^^^^
+
+    The type annotation on `f` says the body is a record should have the
+    type:
+
+        { x : a, y : b, z : * }
+
+    However, the type of the body is a record is connected to another type
+    in a way that isn't reflected in this annotation.
+
+    Tip: Any connection between types must use a named type variable, not
+    a `*`! Maybe the annotation  on `f` should have a named type variable in
+    place of the `*`?
+    "###
+    );
+
+    test_report!(
+        error_wildcards_are_related_in_nested_defs,
+        indoc!(
+            r#"
+            f : a, b, * -> *
+            f = \_, _, x2 ->
+                inner : * -> *
+                inner = \y -> y
+                inner x2
+
+            f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `inner` definition:
+
+    6│          inner : * -> *
+    7│          inner = \y -> y
+                              ^
+
+    The type annotation on `inner` says this `y` value should have the type:
+
+        *
+
+    However, the type of this `y` value is connected to another type in a
+    way that isn't reflected in this annotation.
+
+    Tip: Any connection between types must use a named type variable, not
+    a `*`! Maybe the annotation  on `inner` should have a named type variable
+    in place of the `*`?
+    "###
+    );
+
+    test_report!(
+        error_inline_alias_not_an_alias,
+        indoc!(
+            r#"
+            f : List elem -> [Nil, Cons elem a] as a
+            "#
+        ),
+        @r###"
+    ── NOT AN INLINE ALIAS ────────── tmp/error_inline_alias_not_an_alias/Test.roc ─
+
+    The inline type after this `as` is not a type alias:
+
+    4│      f : List elem -> [Nil, Cons elem a] as a
+                                                   ^
+
+    Inline alias types must start with an uppercase identifier and be
+    followed by zero or more type arguments, like Point or List a.
+    "###
+    );
+
+    test_report!(
+        error_inline_alias_qualified,
+        indoc!(
+            r#"
+            f : List elem -> [Nil, Cons elem a] as Module.LinkedList a
+            "#
+        ),
+        @r###"
+    ── QUALIFIED ALIAS NAME ──────────── tmp/error_inline_alias_qualified/Test.roc ─
+
+    This type alias has a qualified name:
+
+    4│      f : List elem -> [Nil, Cons elem a] as Module.LinkedList a
+                                                   ^
+
+    An alias introduces a new name to the current scope, so it must be
+    unqualified.
+    "###
+    );
+
+    test_report!(
+        error_inline_alias_argument_uppercase,
+        indoc!(
+            r#"
+            f : List elem -> [Nil, Cons elem a] as LinkedList U
+            "#
+        ),
+        @r###"
+    ── TYPE ARGUMENT NOT LOWERCASE ─ ...r_inline_alias_argument_uppercase/Test.roc ─
+
+    This alias type argument is not lowercase:
+
+    4│      f : List elem -> [Nil, Cons elem a] as LinkedList U
+                                                              ^
+
+    All type arguments must be lowercase.
+    "###
+    );
+
+    test_report!(
+        mismatched_single_tag_arg,
+        indoc!(
+            r#"
+            isEmpty =
+                \email ->
+                    Email str = email
+                    Str.isEmpty str
+
+            isEmpty (Name "boo")
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 1st argument to `isEmpty` is not what I expect:
+
+    9│      isEmpty (Name "boo")
+                     ^^^^^^^^^^
+
+    This `Name` tag application has the type:
+
+        [Name Str]a
+
+    But `isEmpty` needs the 1st argument to be:
+
+        [Email Str]
+
+    Tip: Seems like a tag typo. Maybe `Name` should be `Email`?
+
+    Tip: Can more type annotations be added? Type annotations always help
+    me give more specific messages, and I think they could help a lot in
+    this case
+    "###
+    );
+
+    test_report!(
+        issue_2326,
+        indoc!(
+            r#"
+            C a b : a -> D a b
+            D a b : { a, b }
+
+            f : C a Num.Nat -> D a Num.Nat
+            f = \c -> c 6
+            f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 1st argument to `c` is not what I expect:
+
+    8│      f = \c -> c 6
+                        ^
+
+    This argument is a number of type:
+
+        Num a
+
+    But `c` needs the 1st argument to be:
+
+        a
+
+    Tip: The type annotation uses the type variable `a` to say that this
+    definition can produce any type of value. But in the body I see that
+    it will only produce a `Num` value of a single specific type. Maybe
+    change the type annotation to be more specific? Maybe change the code
+    to be more general?
+    "###
+    );
+
+    test_report!(
+        issue_2380_annotations_only,
+        indoc!(
+            r#"
+            F : F
+            a : F
+            a
+            "#
+        ),
+        @r###"
+    ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
+
+    The `F` alias is self-recursive in an invalid way:
+
+    4│      F : F
+            ^
+
+    Recursion in aliases is only allowed if recursion happens behind a
+    tagged union, at least one variant of which is not recursive.
+    "###
+    );
+
+    test_report!(
+        issue_2380_typed_body,
+        indoc!(
+            r#"
+            F : F
+            a : F
+            a = 1
+            a
+            "#
+        ),
+        @r###"
+    ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
+
+    The `F` alias is self-recursive in an invalid way:
+
+    4│      F : F
+            ^
+
+    Recursion in aliases is only allowed if recursion happens behind a
+    tagged union, at least one variant of which is not recursive.
+    "###
+    );
+
+    test_report!(
+        issue_2380_alias_with_vars,
+        indoc!(
+            r#"
+            F a b : F a b
+            a : F Str Str
+            a
+            "#
+        ),
+        @r###"
+    ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
+
+    The `F` alias is self-recursive in an invalid way:
+
+    4│      F a b : F a b
+            ^
+
+    Recursion in aliases is only allowed if recursion happens behind a
+    tagged union, at least one variant of which is not recursive.
+    "###
+    );
+
+    test_report!(
+        issue_2167_record_field_optional_and_required_mismatch,
+        indoc!(
+            r#"
+            Job : [Job { inputs : List Str }]
+            job : { inputs ? List Str } -> Job
+            job = \{ inputs } ->
+                Job { inputs }
+
+            job { inputs: ["build", "test"] }
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 1st argument to `job` is weird:
+
+    6│      job = \{ inputs } ->
+                   ^^^^^^^^^^
+
+    The argument is a pattern that matches record values of type:
+
+        { inputs : List Str }
+
+    But the annotation on `job` says the 1st argument should be:
+
+        { inputs ? List Str }
+
+    Tip: To extract the `.inputs` field it must be non-optional, but the
+    type says this field is optional. Learn more about optional fields at
+    TODO.
+    "###
+    );
+
+    test_report!(
+        unify_recursive_with_nonrecursive,
+        indoc!(
+            r#"
+            Job : [Job { inputs : List Job }]
+
+            job : { inputs : List Str } -> Job
+            job = \{ inputs } ->
+                Job { inputs }
+
+            job { inputs: ["build", "test"] }
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `job` definition:
+
+    6│      job : { inputs : List Str } -> Job
+    7│      job = \{ inputs } ->
+    8│          Job { inputs }
+                ^^^^^^^^^^^^^^
+
+    This `Job` tag application has the type:
+
+        [Job { inputs : List Str }]
+
+    But the type annotation on `job` says it should be:
+
+        [Job { inputs : List a }] as a
+    "###
+    );
+
+    test_report!(
+        nested_datatype,
+        indoc!(
+            r#"
+            Nested a : [Chain a (Nested (List a)), Term]
+
+            s : Nested Str
+
+            s
+            "#
+        ),
+        @r###"
+    ── NESTED DATATYPE ─────────────────────────────────────── /code/proj/Main.roc ─
+
+    `Nested` is a nested datatype. Here is one recursive usage of it:
+
+    4│      Nested a : [Chain a (Nested (List a)), Term]
+                                 ^^^^^^^^^^^^^^^
+
+    But recursive usages of `Nested` must match its definition:
+
+    4│      Nested a : [Chain a (Nested (List a)), Term]
+            ^^^^^^^^
+
+    Nested datatypes are not supported in Roc.
+
+    Hint: Consider rewriting the definition of `Nested` to use the recursive type with the same arguments.
+    "###
+    );
+
+    test_report!(
+        nested_datatype_inline,
+        indoc!(
+            r#"
+            f : {} -> [Chain a (Nested (List a)), Term] as Nested a
+
+            f
+            "#
+        ),
+        @r###"
+    ── NESTED DATATYPE ─────────────────────────────────────── /code/proj/Main.roc ─
+
+    `Nested` is a nested datatype. Here is one recursive usage of it:
+
+    4│      f : {} -> [Chain a (Nested (List a)), Term] as Nested a
+                                ^^^^^^^^^^^^^^^
+
+    But recursive usages of `Nested` must match its definition:
+
+    4│      f : {} -> [Chain a (Nested (List a)), Term] as Nested a
+                                                           ^^^^^^^^
+
+    Nested datatypes are not supported in Roc.
+
+    Hint: Consider rewriting the definition of `Nested` to use the recursive type with the same arguments.
+    "###
+    );
 
     macro_rules! mismatched_suffix_tests {
         ($($number:expr, $suffix:expr, $name:ident)*) => {$(
-            #[test]
-            fn $name() {
-                let number = $number.to_string();
-                let mut typ = $suffix.to_string();
-                typ.get_mut(0..1).unwrap().make_ascii_uppercase();
-                let bad_type = if $suffix == "u8" { "I8" } else { "U8" };
-                let carets = "^".repeat(number.len() + $suffix.len());
-                let kind = match $suffix {
-                    "dec"|"f32"|"f64" => "a frac",
-                    _ => "an integer",
-                };
+            test_report!(
+                $name,
+                &{
+                    let number = $number.to_string();
+                    let mut typ = $suffix.to_string();
+                    typ.get_mut(0..1).unwrap().make_ascii_uppercase();
+                    let bad_type = if $suffix == "u8" { "I8" } else { "U8" };
 
-                report_problem_as(
-                    &format!(indoc!(
+                    format!(indoc!(
                         r#"
                         use : Num.{} -> Num.U8
                         use {}{}
                         "#
-                    ), bad_type, number, $suffix),
-                    &format!(indoc!(
+                    ), bad_type, number, $suffix)
+                },
+                |golden| {
+                    let number = $number.to_string();
+                    let mut typ = $suffix.to_string();
+                    typ.get_mut(0..1).unwrap().make_ascii_uppercase();
+                    let bad_type = if $suffix == "u8" { "I8" } else { "U8" };
+                    let carets = "^".repeat(number.len() + $suffix.len());
+                    let kind = match $suffix {
+                        "dec"|"f32"|"f64" => "a frac",
+                        _ => "an integer",
+                    };
+
+                    let real = format!(indoc!(
                         r#"
                         ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
                         The 1st argument to `use` is not what I expect:
 
-                        2│  use {}{}
-                                {}
+                        5│      use {}{}
+                                    {}
 
                         This argument is {} of type:
 
@@ -7599,9 +6715,11 @@ All branches in an `if` must have the same type!
 
                             {}
                         "#
-                    ), number, $suffix, carets, kind, typ, bad_type),
-                )
-            }
+                    ), number, $suffix, carets, kind, typ, bad_type);
+
+                    assert_eq!(golden, real);
+                }
+            );
         )*}
     }
 
@@ -7624,31 +6742,38 @@ All branches in an `if` must have the same type!
 
     macro_rules! mismatched_suffix_tests_in_pattern {
         ($($number:expr, $suffix:expr, $name:ident)*) => {$(
-            #[test]
-            fn $name() {
-                let number = $number.to_string();
-                let mut typ = $suffix.to_string();
-                typ.get_mut(0..1).unwrap().make_ascii_uppercase();
-                let bad_suffix = if $suffix == "u8" { "i8" } else { "u8" };
-                let bad_type = if $suffix == "u8" { "I8" } else { "U8" };
+            test_report!(
+                $name,
+                &{
+                    let number = $number.to_string();
+                    let mut typ = $suffix.to_string();
+                    typ.get_mut(0..1).unwrap().make_ascii_uppercase();
+                    let bad_suffix = if $suffix == "u8" { "i8" } else { "u8" };
 
-                report_problem_as(
-                    &format!(indoc!(
+                    format!(indoc!(
                         r#"
                         when {}{} is
                             {}{} -> 1
                             _ -> 1
                         "#
-                    ), number, bad_suffix, number, $suffix),
-                    &format!(indoc!(
+                    ), number, bad_suffix, number, $suffix)
+                },
+                |golden| {
+                    let number = $number.to_string();
+                    let mut typ = $suffix.to_string();
+                    typ.get_mut(0..1).unwrap().make_ascii_uppercase();
+                    let bad_suffix = if $suffix == "u8" { "i8" } else { "u8" };
+                    let bad_type = if $suffix == "u8" { "I8" } else { "U8" };
+
+                    let real = format!(indoc!(
                         r#"
                         ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
                         The branches of this `when` expression don't match the condition:
 
-                        1│>  when {}{} is
-                        2│       {}{} -> 1
-                        3│       _ -> 1
+                        4│>      when {}{} is
+                        5│           {}{} -> 1
+                        6│           _ -> 1
 
                         The `when` condition is an integer of type:
 
@@ -7660,9 +6785,11 @@ All branches in an `if` must have the same type!
 
                         The branches must be cases of the `when` condition's type!
                         "#
-                    ), number, bad_suffix, number, $suffix, bad_type, typ),
-                )
-            }
+                    ), number, bad_suffix, number, $suffix, bad_type, typ);
+
+                    assert_eq!(golden, real);
+                }
+            );
         )*}
     }
 
@@ -7683,1326 +6810,1152 @@ All branches in an `if` must have the same type!
         1, "f64",  mismatched_suffix_f64_pattern
     }
 
-    #[test]
-    fn bad_numeric_literal_suffix() {
-        report_problem_as(
-            indoc!(
-                r#"
-                1u256
-                "#
-            ),
-            // TODO: link to number suffixes
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal contains an invalid digit:
-
-                1│  1u256
-                    ^^^^^
-
-                Integer literals can only contain the digits
-                0-9, or have an integer suffix.
-
-                Tip: Learn more about number literals at TODO
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn numer_literal_multi_suffix() {
-        report_problem_as(
-            indoc!(
-                r#"
-                1u8u8
-                "#
-            ),
-            // TODO: link to number suffixes
-            indoc!(
-                r#"
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal contains an invalid digit:
-
-                1│  1u8u8
-                    ^^^^^
-
-                Integer literals can only contain the digits
-                0-9, or have an integer suffix.
-
-                Tip: Learn more about number literals at TODO
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn int_literal_has_float_suffix() {
-        report_problem_as(
-            indoc!(
-                r#"
-                0b1f32
-                "#
-            ),
-            indoc!(
-                r#"
-                ── CONFLICTING NUMBER SUFFIX ───────────────────────────── /code/proj/Main.roc ─
-
-                This number literal is an integer, but it has a float suffix:
-
-                1│  0b1f32
-                    ^^^^^^
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn float_literal_has_int_suffix() {
-        report_problem_as(
-            indoc!(
-                r#"
-                1.0u8
-                "#
-            ),
-            indoc!(
-                r#"
-                ── CONFLICTING NUMBER SUFFIX ───────────────────────────── /code/proj/Main.roc ─
-
-                This number literal is a float, but it has an integer suffix:
-
-                1│  1.0u8
-                    ^^^^^
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn u8_overflow() {
-        report_problem_as(
-            "256u8",
-            indoc!(
-                r#"
-                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal overflows the type indicated by its suffix:
-
-                1│  256u8
-                    ^^^^^
-
-                Tip: The suffix indicates this integer is a U8, whose maximum value is
-                255.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn negative_u8() {
-        report_problem_as(
-            "-1u8",
-            indoc!(
-                r#"
-                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal underflows the type indicated by its suffix:
-
-                1│  -1u8
-                    ^^^^
-
-                Tip: The suffix indicates this integer is a U8, whose minimum value is
-                0.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn u16_overflow() {
-        report_problem_as(
-            "65536u16",
-            indoc!(
-                r#"
-                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal overflows the type indicated by its suffix:
-
-                1│  65536u16
-                    ^^^^^^^^
-
-                Tip: The suffix indicates this integer is a U16, whose maximum value
-                is 65535.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn negative_u16() {
-        report_problem_as(
-            "-1u16",
-            indoc!(
-                r#"
-                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal underflows the type indicated by its suffix:
-
-                1│  -1u16
-                    ^^^^^
-
-                Tip: The suffix indicates this integer is a U16, whose minimum value
-                is 0.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn u32_overflow() {
-        report_problem_as(
-            "4_294_967_296u32",
-            indoc!(
-                r#"
-                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal overflows the type indicated by its suffix:
-
-                1│  4_294_967_296u32
-                    ^^^^^^^^^^^^^^^^
-
-                Tip: The suffix indicates this integer is a U32, whose maximum value
-                is 4_294_967_295.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn negative_u32() {
-        report_problem_as(
-            "-1u32",
-            indoc!(
-                r#"
-                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal underflows the type indicated by its suffix:
-
-                1│  -1u32
-                    ^^^^^
-
-                Tip: The suffix indicates this integer is a U32, whose minimum value
-                is 0.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn u64_overflow() {
-        report_problem_as(
-            "18_446_744_073_709_551_616u64",
-            indoc!(
-                r#"
-                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal overflows the type indicated by its suffix:
-
-                1│  18_446_744_073_709_551_616u64
-                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-                Tip: The suffix indicates this integer is a U64, whose maximum value
-                is 18_446_744_073_709_551_615.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn negative_u64() {
-        report_problem_as(
-            "-1u64",
-            indoc!(
-                r#"
-                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal underflows the type indicated by its suffix:
-
-                1│  -1u64
-                    ^^^^^
-
-                Tip: The suffix indicates this integer is a U64, whose minimum value
-                is 0.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn negative_u128() {
-        report_problem_as(
-            "-1u128",
-            indoc!(
-                r#"
-                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal underflows the type indicated by its suffix:
-
-                1│  -1u128
-                    ^^^^^^
-
-                Tip: The suffix indicates this integer is a U128, whose minimum value
-                is 0.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn i8_overflow() {
-        report_problem_as(
-            "128i8",
-            indoc!(
-                r#"
-                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal overflows the type indicated by its suffix:
-
-                1│  128i8
-                    ^^^^^
-
-                Tip: The suffix indicates this integer is a I8, whose maximum value is
-                127.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn i8_underflow() {
-        report_problem_as(
-            "-129i8",
-            indoc!(
-                r#"
-                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal underflows the type indicated by its suffix:
-
-                1│  -129i8
-                    ^^^^^^
-
-                Tip: The suffix indicates this integer is a I8, whose minimum value is
-                -128.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn i16_overflow() {
-        report_problem_as(
-            "32768i16",
-            indoc!(
-                r#"
-                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal overflows the type indicated by its suffix:
-
-                1│  32768i16
-                    ^^^^^^^^
-
-                Tip: The suffix indicates this integer is a I16, whose maximum value
-                is 32767.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn i16_underflow() {
-        report_problem_as(
-            "-32769i16",
-            indoc!(
-                r#"
-                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal underflows the type indicated by its suffix:
-
-                1│  -32769i16
-                    ^^^^^^^^^
-
-                Tip: The suffix indicates this integer is a I16, whose minimum value
-                is -32768.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn i32_overflow() {
-        report_problem_as(
-            "2_147_483_648i32",
-            indoc!(
-                r#"
-                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal overflows the type indicated by its suffix:
-
-                1│  2_147_483_648i32
-                    ^^^^^^^^^^^^^^^^
-
-                Tip: The suffix indicates this integer is a I32, whose maximum value
-                is 2_147_483_647.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn i32_underflow() {
-        report_problem_as(
-            "-2_147_483_649i32",
-            indoc!(
-                r#"
-                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal underflows the type indicated by its suffix:
-
-                1│  -2_147_483_649i32
-                    ^^^^^^^^^^^^^^^^^
-
-                Tip: The suffix indicates this integer is a I32, whose minimum value
-                is -2_147_483_648.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn i64_overflow() {
-        report_problem_as(
-            "9_223_372_036_854_775_808i64",
-            indoc!(
-                r#"
-                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal overflows the type indicated by its suffix:
-
-                1│  9_223_372_036_854_775_808i64
-                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-                Tip: The suffix indicates this integer is a I64, whose maximum value
-                is 9_223_372_036_854_775_807.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn i64_underflow() {
-        report_problem_as(
-            "-9_223_372_036_854_775_809i64",
-            indoc!(
-                r#"
-                ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal underflows the type indicated by its suffix:
-
-                1│  -9_223_372_036_854_775_809i64
-                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-                Tip: The suffix indicates this integer is a I64, whose minimum value
-                is -9_223_372_036_854_775_808.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn i128_overflow() {
-        report_problem_as(
-            "170_141_183_460_469_231_731_687_303_715_884_105_728i128",
-            indoc!(
-                r#"
-                ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
-
-                This integer literal overflows the type indicated by its suffix:
-
-                1│  170_141_183_460_469_231_731_687_303_715_884_105_728i128
-                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-                Tip: The suffix indicates this integer is a I128, whose maximum value
-                is 170_141_183_460_469_231_731_687_303_715_884_105_727.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn list_get_negative_number() {
-        report_problem_as(
-            indoc!(
-                r#"
-                 List.get [1,2,3] -1
-                 "#
-            ),
-            // TODO: this error message could be improved, e.g. something like "This argument can
-            // be used as ... because of its literal value"
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The 2nd argument to `get` is not what I expect:
-
-                1│  List.get [1,2,3] -1
-                                     ^^
-
-                This argument is a number of type:
-
-                    I8, I16, I32, I64, I128, F32, F64, or Dec
-
-                But `get` needs the 2nd argument to be:
-
-                    Nat
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn list_get_negative_number_indirect() {
-        report_problem_as(
-            indoc!(
-                r#"
-                 a = -9_223_372_036_854
-                 List.get [1,2,3] a
-                 "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The 2nd argument to `get` is not what I expect:
-
-                2│  List.get [1,2,3] a
-                                     ^
-
-                This `a` value is a:
-
-                    I64, I128, F32, F64, or Dec
-
-                But `get` needs the 2nd argument to be:
-
-                    Nat
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn list_get_negative_number_double_indirect() {
-        report_problem_as(
-            indoc!(
-                r#"
-                 a = -9_223_372_036_854
-                 b = a
-                 List.get [1,2,3] b
-                 "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The 2nd argument to `get` is not what I expect:
-
-                3│  List.get [1,2,3] b
-                                     ^
-
-                This `b` value is a:
-
-                    I64, I128, F32, F64, or Dec
-
-                But `get` needs the 2nd argument to be:
-
-                    Nat
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn compare_unsigned_to_signed() {
-        report_problem_as(
-            indoc!(
-                r#"
-                when -1 is
-                   1u8 -> 1
-                   _ -> 1
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                The branches of this `when` expression don't match the condition:
-
-                1│>  when -1 is
-                2│      1u8 -> 1
-                3│      _ -> 1
-
-                The `when` condition is a number of type:
-
-                    I8, I16, I32, I64, I128, F32, F64, or Dec
-
-                But the branch patterns have type:
-
-                    U8
-
-                The branches must be cases of the `when` condition's type!
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn recursive_type_alias_is_newtype() {
-        report_problem_as(
-            indoc!(
-                r#"
-                R a : [Only (R a)]
-
-                v : R Str
-                v
-                "#
-            ),
-            indoc!(
-                r#"
-                ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
-
-                The `R` alias is self-recursive in an invalid way:
-
-                1│  R a : [Only (R a)]
-                    ^
-
-                Recursion in aliases is only allowed if recursion happens behind a
-                tagged union, at least one variant of which is not recursive.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn recursive_type_alias_is_newtype_deep() {
-        report_problem_as(
-            indoc!(
-                r#"
-                R a : [Only { very: [Deep (R a)] }]
-
-                v : R Str
-                v
-                "#
-            ),
-            indoc!(
-                r#"
-                ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
-
-                The `R` alias is self-recursive in an invalid way:
-
-                1│  R a : [Only { very: [Deep (R a)] }]
-                    ^
-
-                Recursion in aliases is only allowed if recursion happens behind a
-                tagged union, at least one variant of which is not recursive.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn recursive_type_alias_is_newtype_mutual() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Foo a : [Thing (Bar a)]
-                Bar a : [Stuff (Foo a)]
-
-                v : Bar Str
-                v
-                "#
-            ),
-            indoc!(
-                r#"
-                ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
-
-                The `Foo` alias is recursive in an invalid way:
-
-                1│  Foo a : [Thing (Bar a)]
-                    ^^^
-
-                The `Foo` alias depends on itself through the following chain of
-                definitions:
-
-                    ┌─────┐
-                    │     Foo
-                    │     ↓
-                    │     Bar
-                    └─────┘
-
-                Recursion in aliases is only allowed if recursion happens behind a
-                tagged union, at least one variant of which is not recursive.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn issue_2458() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Result a b : [Ok a, Err b]
-
-                Foo a : [Blah (Result (Bar a) [])]
-                Bar a : Foo a
-
-                v : Bar Str
-                v
-                "#
-            ),
-            "",
-        )
-    }
-
-    #[test]
-    fn opaque_type_not_in_scope() {
-        report_problem_as(
-            indoc!(
-                r#"
-                @Age 21
-                "#
-            ),
-            indoc!(
-                r#"
-                ── OPAQUE TYPE NOT DEFINED ─────────────────────────────── /code/proj/Main.roc ─
-
-                The opaque type Age referenced here is not defined:
-
-                1│  @Age 21
-                    ^^^^
-
-                Note: It looks like there are no opaque types declared in this scope yet!
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn opaque_reference_not_opaque_type() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Age : Num.U8
-
-                @Age 21
-                "#
-            ),
-            indoc!(
-                r#"
-                ── OPAQUE TYPE NOT DEFINED ─────────────────────────────── /code/proj/Main.roc ─
-
-                The opaque type Age referenced here is not defined:
-
-                3│  @Age 21
-                    ^^^^
-
-                Note: There is an alias of the same name:
-
-                1│  Age : Num.U8
-                    ^^^
-
-                Note: It looks like there are no opaque types declared in this scope yet!
-
-                ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
-
-                `Age` is not used anywhere in your code.
-
-                1│  Age : Num.U8
-                    ^^^^^^^^^^^^
-
-                If you didn't intend on using `Age` then remove it so future readers of
-                your code don't wonder why it is there.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn qualified_opaque_reference() {
-        report_problem_as(
-            indoc!(
-                r#"
-                OtherModule.@Age 21
-                "#
-            ),
-            // TODO: get rid of the first error. Consider parsing OtherModule.@Age to completion
-            // and checking it during can. The reason the error appears is because it is parsed as
-            // Apply(Error(OtherModule), [@Age, 21])
-            indoc!(
-                r#"
-                ── OPAQUE TYPE NOT APPLIED ─────────────────────────────── /code/proj/Main.roc ─
-
-                This opaque type is not applied to an argument:
-
-                1│  OtherModule.@Age 21
-                                ^^^^
-
-                Note: Opaque types always wrap exactly one argument!
-
-                ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-                I am trying to parse a qualified name here:
-
-                1│  OtherModule.@Age 21
-                                ^
-
-                I was expecting to see an identifier next, like height. A complete
-                qualified name looks something like Json.Decode.string.
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn opaque_used_outside_declaration_scope() {
-        report_problem_as(
-            indoc!(
-                r#"
-                age =
-                    Age := Num.U8
-                    21u8
-
-                @Age age
-                "#
-            ),
-            // TODO(opaques): there is a potential for a better error message here, if the usage of
-            // `@Age` can be linked to the declaration of `Age` inside `age`, and a suggestion to
-            // raise that declaration to the outer scope.
-            indoc!(
-                r#"
-                ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
-
-                `Age` is not used anywhere in your code.
-
-                2│      Age := Num.U8
-                        ^^^^^^^^^^^^^
-
-                If you didn't intend on using `Age` then remove it so future readers of
-                your code don't wonder why it is there.
-
-                ── OPAQUE TYPE NOT DEFINED ─────────────────────────────── /code/proj/Main.roc ─
-
-                The opaque type Age referenced here is not defined:
-
-                5│  @Age age
-                    ^^^^
-
-                Note: It looks like there are no opaque types declared in this scope yet!
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn unimported_modules_reported() {
-        report_problem_as(
-            indoc!(
-                r#"
-                main : Task.Task {} []
-                main = "whatever man you don't even know my type"
-                main
-                "#
-            ),
-            indoc!(
-                r#"
-                ── MODULE NOT IMPORTED ─────────────────────────────────── /code/proj/Main.roc ─
-
-                The `Task` module is not imported:
-
-                1│  main : Task.Task {} []
-                           ^^^^^^^^^^^^^^^
-
-                Is there an import missing? Perhaps there is a typo. Did you mean one
-                of these?
-
-                    Test
-                    List
-                    Num
-                    Box
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn opaque_mismatch_check() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Age := Num.U8
-
-                n : Age
-                n = @Age ""
-
-                n
-                "#
-            ),
-            // TODO(opaques): error could be improved by saying that the opaque definition demands
-            // that the argument be a U8, and linking to the definitin!
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-                This expression is used in an unexpected way:
-
-                4│  n = @Age ""
+    test_report!(
+        bad_numeric_literal_suffix,
+        indoc!(
+            r#"
+            1u256
+            "#
+        ),
+        // TODO: link to number suffixes
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This integer literal contains an invalid digit:
+
+    4│      1u256
+            ^^^^^
+
+    Integer literals can only contain the digits
+    0-9, or have an integer suffix.
+
+    Tip: Learn more about number literals at TODO
+    "###
+    );
+
+    test_report!(
+        numer_literal_multi_suffix,
+        indoc!(
+            r#"
+            1u8u8
+            "#
+        ),
+        // TODO: link to number suffixes
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This integer literal contains an invalid digit:
+
+    4│      1u8u8
+            ^^^^^
+
+    Integer literals can only contain the digits
+    0-9, or have an integer suffix.
+
+    Tip: Learn more about number literals at TODO
+    "###
+    );
+
+    test_report!(
+        int_literal_has_float_suffix,
+        indoc!(
+            r#"
+            0b1f32
+            "#
+        ),
+        @r###"
+    ── CONFLICTING NUMBER SUFFIX ───────────────────────────── /code/proj/Main.roc ─
+
+    This number literal is an integer, but it has a float suffix:
+
+    4│      0b1f32
+            ^^^^^^
+    "###
+    );
+
+    test_report!(
+        float_literal_has_int_suffix,
+        indoc!(
+            r#"
+            1.0u8
+            "#
+        ),
+        @r###"
+    ── CONFLICTING NUMBER SUFFIX ───────────────────────────── /code/proj/Main.roc ─
+
+    This number literal is a float, but it has an integer suffix:
+
+    4│      1.0u8
+            ^^^^^
+    "###
+    );
+
+    test_report!(
+        u8_overflow,
+        "256u8",
+        @r###"
+    ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
+
+    This integer literal overflows the type indicated by its suffix:
+
+    4│      256u8
+            ^^^^^
+
+    Tip: The suffix indicates this integer is a U8, whose maximum value is
+    255.
+    "###
+    );
+
+    test_report!(
+        negative_u8,
+        "-1u8",
+        @r###"
+    ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
+
+    This integer literal underflows the type indicated by its suffix:
+
+    4│      -1u8
+            ^^^^
+
+    Tip: The suffix indicates this integer is a U8, whose minimum value is
+    0.
+    "###
+    );
+
+    test_report!(
+        u16_overflow,
+        "65536u16",
+        @r###"
+    ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
+
+    This integer literal overflows the type indicated by its suffix:
+
+    4│      65536u16
+            ^^^^^^^^
+
+    Tip: The suffix indicates this integer is a U16, whose maximum value
+    is 65535.
+    "###
+    );
+
+    test_report!(
+        negative_u16,
+        "-1u16",
+        @r###"
+    ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
+
+    This integer literal underflows the type indicated by its suffix:
+
+    4│      -1u16
+            ^^^^^
+
+    Tip: The suffix indicates this integer is a U16, whose minimum value
+    is 0.
+    "###
+    );
+
+    test_report!(
+        u32_overflow,
+        "4_294_967_296u32",
+        @r###"
+    ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
+
+    This integer literal overflows the type indicated by its suffix:
+
+    4│      4_294_967_296u32
+            ^^^^^^^^^^^^^^^^
+
+    Tip: The suffix indicates this integer is a U32, whose maximum value
+    is 4_294_967_295.
+    "###
+    );
+
+    test_report!(
+        negative_u32,
+        "-1u32",
+        @r###"
+    ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
+
+    This integer literal underflows the type indicated by its suffix:
+
+    4│      -1u32
+            ^^^^^
+
+    Tip: The suffix indicates this integer is a U32, whose minimum value
+    is 0.
+    "###
+    );
+
+    test_report!(
+        u64_overflow,
+        "18_446_744_073_709_551_616u64",
+        @r###"
+    ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
+
+    This integer literal overflows the type indicated by its suffix:
+
+    4│      18_446_744_073_709_551_616u64
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    Tip: The suffix indicates this integer is a U64, whose maximum value
+    is 18_446_744_073_709_551_615.
+    "###
+    );
+
+    test_report!(
+        negative_u64,
+        "-1u64",
+        @r###"
+    ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
+
+    This integer literal underflows the type indicated by its suffix:
+
+    4│      -1u64
+            ^^^^^
+
+    Tip: The suffix indicates this integer is a U64, whose minimum value
+    is 0.
+    "###
+    );
+
+    test_report!(
+        negative_u128,
+        "-1u128",
+        @r###"
+    ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
+
+    This integer literal underflows the type indicated by its suffix:
+
+    4│      -1u128
+            ^^^^^^
+
+    Tip: The suffix indicates this integer is a U128, whose minimum value
+    is 0.
+    "###
+    );
+
+    test_report!(
+        i8_overflow,
+        "128i8",
+        @r###"
+    ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
+
+    This integer literal overflows the type indicated by its suffix:
+
+    4│      128i8
+            ^^^^^
+
+    Tip: The suffix indicates this integer is a I8, whose maximum value is
+    127.
+    "###
+    );
+
+    test_report!(
+        i8_underflow,
+        "-129i8",
+        @r###"
+    ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
+
+    This integer literal underflows the type indicated by its suffix:
+
+    4│      -129i8
+            ^^^^^^
+
+    Tip: The suffix indicates this integer is a I8, whose minimum value is
+    -128.
+    "###
+    );
+
+    test_report!(
+        i16_overflow,
+        "32768i16",
+        @r###"
+    ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
+
+    This integer literal overflows the type indicated by its suffix:
+
+    4│      32768i16
+            ^^^^^^^^
+
+    Tip: The suffix indicates this integer is a I16, whose maximum value
+    is 32767.
+    "###
+    );
+
+    test_report!(
+        i16_underflow,
+        "-32769i16",
+        @r###"
+    ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
+
+    This integer literal underflows the type indicated by its suffix:
+
+    4│      -32769i16
+            ^^^^^^^^^
+
+    Tip: The suffix indicates this integer is a I16, whose minimum value
+    is -32768.
+    "###
+    );
+
+    test_report!(
+        i32_overflow,
+        "2_147_483_648i32",
+        @r###"
+    ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
+
+    This integer literal overflows the type indicated by its suffix:
+
+    4│      2_147_483_648i32
+            ^^^^^^^^^^^^^^^^
+
+    Tip: The suffix indicates this integer is a I32, whose maximum value
+    is 2_147_483_647.
+    "###
+    );
+
+    test_report!(
+        i32_underflow,
+        "-2_147_483_649i32",
+        @r###"
+    ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
+
+    This integer literal underflows the type indicated by its suffix:
+
+    4│      -2_147_483_649i32
+            ^^^^^^^^^^^^^^^^^
+
+    Tip: The suffix indicates this integer is a I32, whose minimum value
+    is -2_147_483_648.
+    "###
+    );
+
+    test_report!(
+        i64_overflow,
+        "9_223_372_036_854_775_808i64",
+        @r###"
+    ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
+
+    This integer literal overflows the type indicated by its suffix:
+
+    4│      9_223_372_036_854_775_808i64
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    Tip: The suffix indicates this integer is a I64, whose maximum value
+    is 9_223_372_036_854_775_807.
+    "###
+    );
+
+    test_report!(
+        i64_underflow,
+        "-9_223_372_036_854_775_809i64",
+        @r###"
+    ── NUMBER UNDERFLOWS SUFFIX ────────────────────────────── /code/proj/Main.roc ─
+
+    This integer literal underflows the type indicated by its suffix:
+
+    4│      -9_223_372_036_854_775_809i64
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    Tip: The suffix indicates this integer is a I64, whose minimum value
+    is -9_223_372_036_854_775_808.
+    "###
+    );
+
+    test_report!(
+        i128_overflow,
+        "170_141_183_460_469_231_731_687_303_715_884_105_728i128",
+        @r###"
+    ── NUMBER OVERFLOWS SUFFIX ─────────────────────────────── /code/proj/Main.roc ─
+
+    This integer literal overflows the type indicated by its suffix:
+
+    4│      170_141_183_460_469_231_731_687_303_715_884_105_728i128
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    Tip: The suffix indicates this integer is a I128, whose maximum value
+    is 170_141_183_460_469_231_731_687_303_715_884_105_727.
+    "###
+    );
+
+    test_report!(
+        list_get_negative_number,
+        indoc!(
+            r#"
+             List.get [1,2,3] -1
+             "#
+        ),
+        // TODO: this error message could be improved, e.g. something like "This argument can
+        // be used as ... because of its literal value"
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd argument to `get` is not what I expect:
+
+    4│      List.get [1,2,3] -1
                              ^^
 
-                This argument to an opaque type has type:
+    This argument is a number of type:
 
-                    Str
+        I8, I16, I32, I64, I128, F32, F64, or Dec
 
-                But you are trying to use it as:
+    But `get` needs the 2nd argument to be:
 
-                    U8
-                "#
-            ),
-        )
-    }
+        Nat
+    "###
+    );
 
-    #[test]
-    fn opaque_mismatch_infer() {
-        report_problem_as(
-            indoc!(
-                r#"
-                F n := n
+    test_report!(
+        list_get_negative_number_indirect,
+        indoc!(
+            r#"
+             a = -9_223_372_036_854
+             List.get [1,2,3] a
+             "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                if True
-                then @F ""
-                else @F {}
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    The 2nd argument to `get` is not what I expect:
 
-                This expression is used in an unexpected way:
+    5│      List.get [1,2,3] a
+                             ^
 
-                5│  else @F {}
-                            ^^
+    This `a` value is a:
 
-                This argument to an opaque type has type:
+        I64, I128, F32, F64, or Dec
 
-                    {}
+    But `get` needs the 2nd argument to be:
 
-                But you are trying to use it as:
+        Nat
+    "###
+    );
 
-                    Str
-                "#
-            ),
-        )
-    }
+    test_report!(
+        list_get_negative_number_double_indirect,
+        indoc!(
+            r#"
+             a = -9_223_372_036_854
+             b = a
+             List.get [1,2,3] b
+             "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn opaque_creation_is_not_wrapped() {
-        report_problem_as(
-            indoc!(
-                r#"
-                F n := n
+    The 2nd argument to `get` is not what I expect:
 
-                v : F Str
-                v = ""
+    6│      List.get [1,2,3] b
+                             ^
 
-                v
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    This `b` value is a:
 
-                Something is off with the body of the `v` definition:
+        I64, I128, F32, F64, or Dec
 
-                3│  v : F Str
-                4│  v = ""
-                        ^^
+    But `get` needs the 2nd argument to be:
 
-                The body is a string of type:
+        Nat
+    "###
+    );
 
-                    Str
+    test_report!(
+        compare_unsigned_to_signed,
+        indoc!(
+            r#"
+            when -1 is
+               1u8 -> 1
+               _ -> 1
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                But the type annotation on `v` says it should be:
+    The branches of this `when` expression don't match the condition:
 
-                    F Str
+    4│>      when -1 is
+    5│          1u8 -> 1
+    6│          _ -> 1
 
-                Tip: Type comparisons between an opaque type are only ever equal if
-                both types are the same opaque type. Did you mean to create an opaque
-                type by wrapping it? If I have an opaque type Age := U32 I can create
-                an instance of this opaque type by doing @Age 23.
-                "#
-            ),
-        )
-    }
+    The `when` condition is a number of type:
 
-    #[test]
-    fn opaque_mismatch_pattern_check() {
-        report_problem_as(
-            indoc!(
-                r#"
+        I8, I16, I32, I64, I128, F32, F64, or Dec
+
+    But the branch patterns have type:
+
+        U8
+
+    The branches must be cases of the `when` condition's type!
+    "###
+    );
+
+    test_report!(
+        recursive_type_alias_is_newtype,
+        indoc!(
+            r#"
+            R a : [Only (R a)]
+
+            v : R Str
+            v
+            "#
+        ),
+        @r###"
+    ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
+
+    The `R` alias is self-recursive in an invalid way:
+
+    4│      R a : [Only (R a)]
+            ^
+
+    Recursion in aliases is only allowed if recursion happens behind a
+    tagged union, at least one variant of which is not recursive.
+    "###
+    );
+
+    test_report!(
+        recursive_type_alias_is_newtype_deep,
+        indoc!(
+            r#"
+            R a : [Only { very: [Deep (R a)] }]
+
+            v : R Str
+            v
+            "#
+        ),
+        @r###"
+    ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
+
+    The `R` alias is self-recursive in an invalid way:
+
+    4│      R a : [Only { very: [Deep (R a)] }]
+            ^
+
+    Recursion in aliases is only allowed if recursion happens behind a
+    tagged union, at least one variant of which is not recursive.
+    "###
+    );
+
+    test_report!(
+        recursive_type_alias_is_newtype_mutual,
+        indoc!(
+            r#"
+            Foo a : [Thing (Bar a)]
+            Bar a : [Stuff (Foo a)]
+
+            v : Bar Str
+            v
+            "#
+        ),
+        @r###"
+    ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
+
+    The `Foo` alias is recursive in an invalid way:
+
+    4│      Foo a : [Thing (Bar a)]
+            ^^^
+
+    The `Foo` alias depends on itself through the following chain of
+    definitions:
+
+        ┌─────┐
+        │     Foo
+        │     ↓
+        │     Bar
+        └─────┘
+
+    Recursion in aliases is only allowed if recursion happens behind a
+    tagged union, at least one variant of which is not recursive.
+    "###
+    );
+
+    test_report!(
+        issue_2458,
+        indoc!(
+            r#"
+            Result a b : [Ok a, Err b]
+
+            Foo a : [Blah (Result (Bar a) [])]
+            Bar a : Foo a
+
+            v : Bar Str
+            v
+            "#
+        ),
+        @r###"
+    ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    The `Result` name is first defined here:
+
+    1│  app "test" provides [main] to "./platform"
+      
+
+    But then it's defined a second time here:
+
+    4│      Result a b : [Ok a, Err b]
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    Since these aliases have the same name, it's easy to use the wrong one
+    on accident. Give one of them a new name.
+    "###
+    );
+
+    test_report!(
+        opaque_type_not_in_scope,
+        indoc!(
+            r#"
+            @Age 21
+            "#
+        ),
+        @r###"
+    ── OPAQUE TYPE NOT DEFINED ─────────────────────────────── /code/proj/Main.roc ─
+
+    The opaque type Age referenced here is not defined:
+
+    4│      @Age 21
+            ^^^^
+
+    Note: It looks like there are no opaque types declared in this scope yet!
+    "###
+    );
+
+    test_report!(
+        opaque_reference_not_opaque_type,
+        indoc!(
+            r#"
+            Age : Num.U8
+
+            @Age 21
+            "#
+        ),
+        @r###"
+    ── OPAQUE TYPE NOT DEFINED ─────────────────────────────── /code/proj/Main.roc ─
+
+    The opaque type Age referenced here is not defined:
+
+    6│      @Age 21
+            ^^^^
+
+    Note: There is an alias of the same name:
+
+    4│      Age : Num.U8
+            ^^^
+
+    Note: It looks like there are no opaque types declared in this scope yet!
+
+    ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+
+    `Age` is not used anywhere in your code.
+
+    4│      Age : Num.U8
+            ^^^^^^^^^^^^
+
+    If you didn't intend on using `Age` then remove it so future readers of
+    your code don't wonder why it is there.
+    "###
+    );
+
+    test_report!(
+        qualified_opaque_reference,
+        indoc!(
+            r#"
+            OtherModule.@Age 21
+            "#
+        ),
+        // TODO: get rid of the first error. Consider parsing OtherModule.@Age to completion
+        // and checking it during can. The reason the error appears is because it is parsed as
+        // Apply(Error(OtherModule), [@Age, 21])
+        @r###"
+    ── OPAQUE TYPE NOT APPLIED ─────────────────────────────── /code/proj/Main.roc ─
+
+    This opaque type is not applied to an argument:
+
+    4│      OtherModule.@Age 21
+                        ^^^^
+
+    Note: Opaque types always wrap exactly one argument!
+
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    I am trying to parse a qualified name here:
+
+    4│      OtherModule.@Age 21
+                        ^
+
+    I was expecting to see an identifier next, like height. A complete
+    qualified name looks something like Json.Decode.string.
+    "###
+    );
+
+    test_report!(
+        opaque_used_outside_declaration_scope,
+        indoc!(
+            r#"
+            age =
                 Age := Num.U8
+                21u8
 
-                f : Age -> Num.U8
-                f = \Age n -> n
+            @Age age
+            "#
+        ),
+        // TODO(opaques): there is a potential for a better error message here, if the usage of
+        // `@Age` can be linked to the declaration of `Age` inside `age`, and a suggestion to
+        // raise that declaration to the outer scope.
+        @r###"
+    ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
 
-                f
-                "#
-            ),
-            // TODO(opaques): error could be improved by saying that the user-provided pattern
-            // probably wants to change "Age" to "@Age"!
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    `Age` is not used anywhere in your code.
 
-                The 1st argument to `f` is weird:
+    5│          Age := Num.U8
+                ^^^^^^^^^^^^^
 
-                4│  f = \Age n -> n
-                         ^^^^^
+    If you didn't intend on using `Age` then remove it so future readers of
+    your code don't wonder why it is there.
 
-                The argument is a pattern that matches a `Age` tag of type:
+    ── OPAQUE TYPE NOT DEFINED ─────────────────────────────── /code/proj/Main.roc ─
 
-                    [Age a]
+    The opaque type Age referenced here is not defined:
 
-                But the annotation on `f` says the 1st argument should be:
+    8│      @Age age
+            ^^^^
 
-                    Age
+    Note: It looks like there are no opaque types declared in this scope yet!
+    "###
+    );
 
-                Tip: Type comparisons between an opaque type are only ever equal if
-                both types are the same opaque type. Did you mean to create an opaque
-                type by wrapping it? If I have an opaque type Age := U32 I can create
-                an instance of this opaque type by doing @Age 23.
-                "#
-            ),
-        )
-    }
+    test_report!(
+        #[ignore = "Blocked on https://github.com/rtfeldman/roc/issues/3385"]
+        unimported_modules_reported,
+        indoc!(
+            r#"
+            main : Task.Task {} []
+            main = "whatever man you don't even know my type"
+            main
+            "#
+        ),
+        @r#"
+        ── MODULE NOT IMPORTED ─────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn opaque_mismatch_pattern_infer() {
-        report_problem_as(
-            indoc!(
-                r#"
-                F n := n
+        The `Task` module is not imported:
 
-                \x ->
-                    when x is
-                        @F A -> ""
-                        @F {} -> ""
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        1│  main : Task.Task {} []
+                   ^^^^^^^^^^^^^^^
 
-                The 2nd pattern in this `when` does not match the previous ones:
+        Is there an import missing? Perhaps there is a typo. Did you mean one
+        of these?
 
-                6│          @F {} -> ""
-                            ^^^^^
+            Test
+            List
+            Num
+            Box
+        "#
+    );
 
-                The 2nd pattern is trying to matchF unwrappings of type:
+    test_report!(
+        opaque_mismatch_check,
+        indoc!(
+            r#"
+            Age := Num.U8
 
-                    F {}a
+            n : Age
+            n = @Age ""
 
-                But all the previous branches match:
+            n
+            "#
+        ),
+        // TODO(opaques): error could be improved by saying that the opaque definition demands
+        // that the argument be a U8, and linking to the definitin!
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                    F [A]a
-                "#
-            ),
-        )
-    }
+    This expression is used in an unexpected way:
 
-    #[test]
-    fn opaque_pattern_match_not_exhaustive_tag() {
-        report_problem_as(
-            indoc!(
-                r#"
-                F n := n
+    7│      n = @Age ""
+                     ^^
 
-                v : F [A, B, C]
+    This argument to an opaque type has type:
 
-                when v is
-                    @F A -> ""
-                    @F B -> ""
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        Str
 
-                The branches of this `when` expression don't match the condition:
+    But you are trying to use it as:
 
-                5│>  when v is
-                6│       @F A -> ""
-                7│       @F B -> ""
+        U8
+    "###
+    );
 
-                This `v` value is a:
+    test_report!(
+        opaque_mismatch_infer,
+        indoc!(
+            r#"
+            F n := n
 
-                    F [A, B, C]
+            if True
+            then @F ""
+            else @F {}
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                But the branch patterns have type:
+    This expression is used in an unexpected way:
 
-                    F [A, B]
+    8│      else @F {}
+                    ^^
 
-                The branches must be cases of the `when` condition's type!
+    This argument to an opaque type has type:
 
-                Tip: Looks like the branches are missing coverage of the `C` tag.
+        {}
 
-                Tip: Maybe you need to add a catch-all branch, like `_`?
-                "#
-            ),
-        )
-    }
+    But you are trying to use it as:
 
-    #[test]
-    fn opaque_pattern_match_not_exhaustive_int() {
-        report_problem_as(
-            indoc!(
-                r#"
-                F n := n
+        Str
+    "###
+    );
 
-                v : F Num.U8
+    test_report!(
+        opaque_creation_is_not_wrapped,
+        indoc!(
+            r#"
+            F n := n
 
-                when v is
-                    @F 1 -> ""
-                    @F 2 -> ""
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+            v : F Str
+            v = ""
 
-                This `when` does not cover all the possibilities:
+            v
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                5│>  when v is
-                6│>      @F 1 -> ""
-                7│>      @F 2 -> ""
+    Something is off with the body of the `v` definition:
 
-                Other possibilities include:
+    6│      v : F Str
+    7│      v = ""
+                ^^
 
-                    @F _
+    The body is a string of type:
 
-                I would have to crash if I saw one of those! Add branches for them!
-                "#
-            ),
-        )
-    }
+        Str
 
-    #[test]
-    fn let_polymorphism_with_scoped_type_variables() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : a -> a
-                f = \x ->
-                    y : a -> a
-                    y = \z -> z
+    But the type annotation on `v` says it should be:
 
-                    n = y 1u8
-                    x1 = y x
-                    (\_ -> x1) n
+        F Str
 
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    Tip: Type comparisons between an opaque type are only ever equal if
+    both types are the same opaque type. Did you mean to create an opaque
+    type by wrapping it? If I have an opaque type Age := U32 I can create
+    an instance of this opaque type by doing @Age 23.
+    "###
+    );
 
-                The 1st argument to `y` is not what I expect:
+    test_report!(
+        opaque_mismatch_pattern_check,
+        indoc!(
+            r#"
+            Age := Num.U8
 
-                6│      n = y 1u8
-                              ^^^
+            f : Age -> Num.U8
+            f = \Age n -> n
 
-                This argument is an integer of type:
+            f
+            "#
+        ),
+        // TODO(opaques): error could be improved by saying that the user-provided pattern
+        // probably wants to change "Age" to "@Age"!
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                    U8
+    The 1st argument to `f` is weird:
 
-                But `y` needs the 1st argument to be:
+    7│      f = \Age n -> n
+                 ^^^^^
 
-                    a
+    The argument is a pattern that matches a `Age` tag of type:
 
-                Tip: The type annotation uses the type variable `a` to say that this
-                definition can produce any type of value. But in the body I see that
-                it will only produce a `U8` value of a single specific type. Maybe
-                change the type annotation to be more specific? Maybe change the code
-                to be more general?
-                "#
-            ),
-        )
-    }
+        [Age a]
 
-    #[test]
-    fn non_exhaustive_with_guard() {
-        report_problem_as(
-            indoc!(
-                r#"
-                x : [A]
+    But the annotation on `f` says the 1st argument should be:
+
+        Age
+
+    Tip: Type comparisons between an opaque type are only ever equal if
+    both types are the same opaque type. Did you mean to create an opaque
+    type by wrapping it? If I have an opaque type Age := U32 I can create
+    an instance of this opaque type by doing @Age 23.
+    "###
+    );
+
+    test_report!(
+        opaque_mismatch_pattern_infer,
+        indoc!(
+            r#"
+            F n := n
+
+            \x ->
                 when x is
-                    A if True -> ""
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+                    @F A -> ""
+                    @F {} -> ""
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                This `when` does not cover all the possibilities:
+    The 2nd pattern in this `when` does not match the previous ones:
 
-                2│>  when x is
-                3│>      A if True -> ""
+    9│              @F {} -> ""
+                    ^^^^^
 
-                Other possibilities include:
+    The 2nd pattern is trying to matchF unwrappings of type:
 
-                    A    (note the lack of an if clause)
+        F {}a
 
-                I would have to crash if I saw one of those! Add branches for them!
-                "#
-            ),
-        )
-    }
+    But all the previous branches match:
 
-    #[test]
-    fn invalid_record_extension_type() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : { x : Num.Nat }[]
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── INVALID_EXTENSION_TYPE ──────────────────────────────── /code/proj/Main.roc ─
+        F [A]a
+    "###
+    );
 
-                This record extension type is invalid:
+    test_report!(
+        opaque_pattern_match_not_exhaustive_tag,
+        indoc!(
+            r#"
+            F n := n
 
-                1│  f : { x : Num.Nat }[]
-                                       ^^
+            v : F [A, B, C]
 
-                Note: A record extension variable can only contain a type variable or
-                another record.
-                "#
-            ),
-        )
-    }
+            when v is
+                @F A -> ""
+                @F B -> ""
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    #[test]
-    fn invalid_tag_extension_type() {
-        report_problem_as(
-            indoc!(
-                r#"
-                f : [A]Str
-                f
-                "#
-            ),
-            indoc!(
-                r#"
-                ── INVALID_EXTENSION_TYPE ──────────────────────────────── /code/proj/Main.roc ─
+    The branches of this `when` expression don't match the condition:
 
-                This tag union extension type is invalid:
+     8│>      when v is
+     9│           @F A -> ""
+    10│           @F B -> ""
 
-                1│  f : [A]Str
-                           ^^^
+    This `v` value is a:
 
-                Note: A tag union extension variable can only contain a type variable
-                or another tag union.
-                "#
-            ),
-        )
-    }
+        F [A, B, C]
 
-    #[test]
-    fn unknown_type() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Type : [Constructor UnknownType]
+    But the branch patterns have type:
 
-                insertHelper : UnknownType, Type -> Type
-                insertHelper = \h, m ->
-                    when m is
-                        Constructor _ -> Constructor h
+        F [A, B]
 
-                insertHelper
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
+    The branches must be cases of the `when` condition's type!
 
-                Nothing is named `UnknownType` in this scope.
+    Tip: Looks like the branches are missing coverage of the `C` tag.
 
-                1│  Type : [Constructor UnknownType]
-                                        ^^^^^^^^^^^
+    Tip: Maybe you need to add a catch-all branch, like `_`?
+    "###
+    );
 
-                Did you mean one of these?
+    test_report!(
+        opaque_pattern_match_not_exhaustive_int,
+        indoc!(
+            r#"
+            F n := n
 
-                    Type
-                    True
-                    Box
-                    Ok
+            v : F Num.U8
 
-                ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
+            when v is
+                @F 1 -> ""
+                @F 2 -> ""
+            "#
+        ),
+        @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
 
-                Nothing is named `UnknownType` in this scope.
+    This `when` does not cover all the possibilities:
 
-                3│  insertHelper : UnknownType, Type -> Type
-                                   ^^^^^^^^^^^
+     8│>      when v is
+     9│>          @F 1 -> ""
+    10│>          @F 2 -> ""
 
-                Did you mean one of these?
+    Other possibilities include:
 
-                    Type
-                    True
-                    insertHelper
-                    Box
-                "#
-            ),
-        )
-    }
+        @F _
 
-    #[test]
-    fn ability_first_demand_not_indented_enough() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Eq has
-                eq : a, a -> U64 | a has Eq
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
 
-                1
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED ABILITY ──────────────────────────────────── /code/proj/Main.roc ─
+    test_report!(
+        let_polymorphism_with_scoped_type_variables,
+        indoc!(
+            r#"
+            f : a -> a
+            f = \x ->
+                y : a -> a
+                y = \z -> z
 
-                I was partway through parsing an ability definition, but I got stuck
-                here:
+                n = y 1u8
+                x1 = y x
+                (\_ -> x1) n
 
-                1│  Eq has
-                2│  eq : a, a -> U64 | a has Eq
-                    ^
+            f
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                I suspect this line is not indented enough (by 1 spaces)
-                "#
-            ),
-        )
-    }
+    The 1st argument to `y` is not what I expect:
+
+    9│          n = y 1u8
+                      ^^^
+
+    This argument is an integer of type:
+
+        U8
+
+    But `y` needs the 1st argument to be:
+
+        a
+
+    Tip: The type annotation uses the type variable `a` to say that this
+    definition can produce any type of value. But in the body I see that
+    it will only produce a `U8` value of a single specific type. Maybe
+    change the type annotation to be more specific? Maybe change the code
+    to be more general?
+    "###
+    );
+
+    test_report!(
+        non_exhaustive_with_guard,
+        indoc!(
+            r#"
+            x : [A]
+            when x is
+                A if True -> ""
+            "#
+        ),
+        @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    5│>      when x is
+    6│>          A if True -> ""
+
+    Other possibilities include:
+
+        A    (note the lack of an if clause)
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        invalid_record_extension_type,
+        indoc!(
+            r#"
+            f : { x : Num.Nat }[]
+            f
+            "#
+        ),
+        @r###"
+    ── INVALID_EXTENSION_TYPE ──────────────────────────────── /code/proj/Main.roc ─
+
+    This record extension type is invalid:
+
+    4│      f : { x : Num.Nat }[]
+                               ^^
+
+    Note: A record extension variable can only contain a type variable or
+    another record.
+    "###
+    );
+
+    test_report!(
+        invalid_tag_extension_type,
+        indoc!(
+            r#"
+            f : [A]Str
+            f
+            "#
+        ),
+        @r###"
+    ── INVALID_EXTENSION_TYPE ──────────────────────────────── /code/proj/Main.roc ─
+
+    This tag union extension type is invalid:
+
+    4│      f : [A]Str
+                   ^^^
+
+    Note: A tag union extension variable can only contain a type variable
+    or another tag union.
+    "###
+    );
+
+    test_report!(
+        unknown_type,
+        indoc!(
+            r#"
+            Type : [Constructor UnknownType]
+
+            insertHelper : UnknownType, Type -> Type
+            insertHelper = \h, m ->
+                when m is
+                    Constructor _ -> Constructor h
+
+            insertHelper
+            "#
+        ),
+        @r###"
+    ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
+
+    Nothing is named `UnknownType` in this scope.
+
+    4│      Type : [Constructor UnknownType]
+                                ^^^^^^^^^^^
+
+    Did you mean one of these?
+
+        Type
+        Unsigned8
+        Unsigned32
+        Unsigned16
+
+    ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
+
+    Nothing is named `UnknownType` in this scope.
+
+    6│      insertHelper : UnknownType, Type -> Type
+                           ^^^^^^^^^^^
+
+    Did you mean one of these?
+
+        Type
+        Unsigned8
+        Unsigned32
+        Unsigned16
+    "###
+    );
+
+    test_report!(
+        ability_first_demand_not_indented_enough,
+        indoc!(
+            r#"
+            Eq has
+            eq : a, a -> U64 | a has Eq
+
+            1
+            "#
+        ),
+        @r###"
+    ── UNFINISHED ABILITY ── tmp/ability_first_demand_not_indented_enough/Test.roc ─
+
+    I was partway through parsing an ability definition, but I got stuck
+    here:
+
+    4│      Eq has
+    5│      eq : a, a -> U64 | a has Eq
+            ^
+
+    I suspect this line is not indented enough (by 1 spaces)
+    "###
+    );
 
     test_report!(
         ability_demands_not_indented_with_first,
@@ -9051,165 +8004,141 @@ All branches in an `if` must have the same type!
         next."#
     );
 
-    #[test]
-    fn ability_non_signature_expression() {
-        report_problem_as(
-            indoc!(
-                r#"
-                Eq has
-                    123
+    test_report!(
+        ability_non_signature_expression,
+        indoc!(
+            r#"
+            Eq has
+                123
 
-                1
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNFINISHED ABILITY ──────────────────────────────────── /code/proj/Main.roc ─
+            1
+            "#
+        ),
+        @r###"
+    ── UNFINISHED ABILITY ────────── tmp/ability_non_signature_expression/Test.roc ─
 
-                I was partway through parsing an ability definition, but I got stuck
-                here:
+    I was partway through parsing an ability definition, but I got stuck
+    here:
 
-                1│  Eq has
-                2│      123
+    4│      Eq has
+    5│          123
+                ^
+
+    I was expecting to see a value signature next.
+    "###
+    );
+
+    test_report!(
+        wildcard_in_alias,
+        indoc!(
+            r#"
+            I : Num.Int *
+            a : I
+            a
+            "#
+        ),
+        @r###"
+    ── UNBOUND TYPE VARIABLE ───────────────────────────────── /code/proj/Main.roc ─
+
+    The definition of `I` has an unbound type variable:
+
+    4│      I : Num.Int *
                         ^
 
-                I was expecting to see a value signature next.
-                "#
-            ),
-        )
-    }
+    Tip: Type variables must be bound before the `:`. Perhaps you intended
+    to add a type parameter to this type?
+    "###
+    );
 
-    #[test]
-    fn wildcard_in_alias() {
-        report_problem_as(
-            indoc!(
-                r#"
-                I : Num.Int *
-                a : I
-                a
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNBOUND TYPE VARIABLE ───────────────────────────────── /code/proj/Main.roc ─
+    test_report!(
+        wildcard_in_opaque,
+        indoc!(
+            r#"
+            I := Num.Int *
+            a : I
+            a
+            "#
+        ),
+        @r###"
+    ── UNBOUND TYPE VARIABLE ───────────────────────────────── /code/proj/Main.roc ─
 
-                The definition of `I` has an unbound type variable:
+    The definition of `I` has an unbound type variable:
 
-                1│  I : Num.Int *
-                                ^
+    4│      I := Num.Int *
+                         ^
 
-                Tip: Type variables must be bound before the `:`. Perhaps you intended
-                to add a type parameter to this type?
-                "#
-            ),
-        )
-    }
+    Tip: Type variables must be bound before the `:=`. Perhaps you intended
+    to add a type parameter to this type?
+    "###
+    );
 
-    #[test]
-    fn wildcard_in_opaque() {
-        report_problem_as(
-            indoc!(
-                r#"
-                I := Num.Int *
-                a : I
-                a
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNBOUND TYPE VARIABLE ───────────────────────────────── /code/proj/Main.roc ─
+    test_report!(
+        multiple_wildcards_in_alias,
+        indoc!(
+            r#"
+            I : [A (Num.Int *), B (Num.Int *)]
+            a : I
+            a
+            "#
+        ),
+        @r###"
+    ── UNBOUND TYPE VARIABLE ───────────────────────────────── /code/proj/Main.roc ─
 
-                The definition of `I` has an unbound type variable:
+    The definition of `I` has 2 unbound type variables.
 
-                1│  I := Num.Int *
-                                 ^
+    Here is one occurrence:
 
-                Tip: Type variables must be bound before the `:=`. Perhaps you intended
-                to add a type parameter to this type?
-                "#
-            ),
-        )
-    }
+    4│      I : [A (Num.Int *), B (Num.Int *)]
+                            ^
 
-    #[test]
-    fn multiple_wildcards_in_alias() {
-        report_problem_as(
-            indoc!(
-                r#"
-                I : [A (Num.Int *), B (Num.Int *)]
-                a : I
-                a
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNBOUND TYPE VARIABLE ───────────────────────────────── /code/proj/Main.roc ─
+    Tip: Type variables must be bound before the `:`. Perhaps you intended
+    to add a type parameter to this type?
+    "###
+    );
 
-                The definition of `I` has 2 unbound type variables.
+    test_report!(
+        inference_var_in_alias,
+        indoc!(
+            r#"
+            I : Num.Int _
+            a : I
+            a
+            "#
+        ),
+        @r###"
+    ── UNBOUND TYPE VARIABLE ───────────────────────────────── /code/proj/Main.roc ─
 
-                Here is one occurrence:
+    The definition of `I` has an unbound type variable:
 
-                1│  I : [A (Num.Int *), B (Num.Int *)]
-                                    ^
+    4│      I : Num.Int _
+                        ^
 
-                Tip: Type variables must be bound before the `:`. Perhaps you intended
-                to add a type parameter to this type?
-                "#
-            ),
-        )
-    }
+    Tip: Type variables must be bound before the `:`. Perhaps you intended
+    to add a type parameter to this type?
+    "###
+    );
 
-    #[test]
-    fn inference_var_in_alias() {
-        report_problem_as(
-            indoc!(
-                r#"
-                I : Num.Int _
-                a : I
-                a
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNBOUND TYPE VARIABLE ───────────────────────────────── /code/proj/Main.roc ─
+    test_report!(
+        unbound_var_in_alias,
+        indoc!(
+            r#"
+            I : Num.Int a
+            a : I
+            a
+            "#
+        ),
+        @r###"
+    ── UNBOUND TYPE VARIABLE ───────────────────────────────── /code/proj/Main.roc ─
 
-                The definition of `I` has an unbound type variable:
+    The definition of `I` has an unbound type variable:
 
-                1│  I : Num.Int _
-                                ^
+    4│      I : Num.Int a
+                        ^
 
-                Tip: Type variables must be bound before the `:`. Perhaps you intended
-                to add a type parameter to this type?
-                "#
-            ),
-        )
-    }
-
-    #[test]
-    fn unbound_var_in_alias() {
-        report_problem_as(
-            indoc!(
-                r#"
-                I : Num.Int a
-                a : I
-                a
-                "#
-            ),
-            indoc!(
-                r#"
-                ── UNBOUND TYPE VARIABLE ───────────────────────────────── /code/proj/Main.roc ─
-
-                The definition of `I` has an unbound type variable:
-
-                1│  I : Num.Int a
-                                ^
-
-                Tip: Type variables must be bound before the `:`. Perhaps you intended
-                to add a type parameter to this type?
-                "#
-            ),
-        )
-    }
+    Tip: Type variables must be bound before the `:`. Perhaps you intended
+    to add a type parameter to this type?
+    "###
+    );
 
     test_report!(
         ability_bad_type_parameter,
@@ -9838,24 +8767,22 @@ All branches in an `if` must have the same type!
         "#
     );
 
-    #[test]
-    fn always_function() {
-        // from https://github.com/rtfeldman/roc/commit/1372737f5e53ee5bb96d7e1b9593985e5537023a
-        // There was a bug where this reported UnusedArgument("val")
-        // since it was used only in the returned function only.
-        //
-        // we want this to not give any warnings/errors!
-        report_problem_as(
-            indoc!(
-                r#"
-                always = \val -> \_ -> val
+    // from https://github.com/rtfeldman/roc/commit/1372737f5e53ee5bb96d7e1b9593985e5537023a
+    // There was a bug where this reported UnusedArgument("val")
+    // since it was used only in the returned function only.
+    //
+    // we want this to not give any warnings/errors!
+    test_report!(
+        always_function,
+        indoc!(
+            r#"
+            always = \val -> \_ -> val
 
-                always
-                "#
-            ),
-            "",
-        )
-    }
+            always
+            "#
+        ),
+        @""
+    );
 
     test_report!(
         imports_missing_comma,
