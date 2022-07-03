@@ -169,6 +169,42 @@ param = \@Url urlStr, key, value ->
         |> Str.append (percentEncode value)
         |> @Url
 
+## Replaces the URL's current [fragment](https://en.wikipedia.org/wiki/URL#Syntax)
+## with the given one.
+##
+##     Url.fromStr "https://example.com#stuff"
+##         |> Url.withFragment "things" # https://example.com#things
+##
+## If the URL didn't have a fragment, this adds one.
+##
+##     Url.fromStr "https://example.com"
+##         |> Url.withFragment "things" # https://example.com#things
+##
+## Passing a fragment of `#` means the returned URL will not have a fragment.
+##
+##     Url.fromStr "https://example.com#stuff"
+##         |> Url.withFragment "" # https://example.com
+##
+withFramgent : Url, Str -> Url
+withFragment = \@Url urlStr, fragment ->
+    when Str.splitLast urlStr "#" is
+        Ok { before } ->
+            if Str.isEmpty fragment then
+                # If the given fragment is empty, remove the URL's fragment
+                before
+            else
+                # Replace the URL's old fragment with this one, discarding `after`
+                "\(before)#\(fragment)"
+
+        Err NotFound ->
+            if Str.isEmpty fragment then
+                # If the given fragment is empty, leave the URL as having no fragment
+                urlStr
+            else
+                # The URL didn't have a fragment, so give it this one
+                "\(urlStr)#\(fragment)"
+
+
 ## Returns `True` if the URL has a `?` in it.
 hasQuery : Url -> Bool
 hasQuery = \@Url urlStr ->
@@ -176,3 +212,11 @@ hasQuery = \@Url urlStr ->
     # with SIMD iteration if the string is small enough to fit in a SIMD register.
     Str.toUtf8 urlStr
         |> List.contains '?'
+
+## Returns `True` if the URL has a `#` in it.
+hasFragment : Url -> Bool
+hasFragment = \@Url urlStr ->
+    # TODO use Str.contains once it exists. It should have a "fast path"
+    # with SIMD iteration if the string is small enough to fit in a SIMD register.
+    Str.toUtf8 urlStr
+        |> List.contains '#'
