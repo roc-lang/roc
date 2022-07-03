@@ -17,6 +17,7 @@ async function roc_web_platform_run(wasm_filename, callback) {
         }
         exit_code = code;
       },
+      fd_write: (x) => { console.error(`fd_write not supported: ${x}`); }
     },
     env: {
       js_display_roc_string,
