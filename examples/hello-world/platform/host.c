@@ -1,15 +1,54 @@
 #include <errno.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-void* roc_alloc(size_t size, unsigned int alignment) { return malloc(size); }
+void roc_panic(void *ptr, unsigned int alignment);
 
-void* roc_realloc(void* ptr, size_t new_size, size_t old_size,
-                  unsigned int alignment) {
-  return realloc(ptr, new_size);
+void *roc_alloc(size_t size, unsigned int alignment) {
+  if (size > PTRDIFF_MAX) {
+    char msg[100];
+    sprintf(msg, "Attempted to malloc a too large amount of memory (%llu > PTRDIFF_MAX)",
+            (unsigned long long)size);
+    roc_panic(msg, alignment);
+  }
+
+  void *result = malloc(size);
+
+  if (result == NULL && errno == ENOMEM) {
+    char msg[100];
+    sprintf(msg, "Memory allocation failed. Could not allocate %llu bytes",
+            (unsigned long long)size);
+
+    roc_panic(msg, alignment);
+  }
+
+  return result;
+}
+
+void *roc_realloc(void *ptr, size_t new_size, size_t old_size, unsigned int alignment) {
+  if (new_size > PTRDIFF_MAX) {
+    char msg[100];
+    sprintf(msg,
+            "Attempted to realloc a too large amount of memory (%llu > "
+            "PTRDIFF_MAX)",
+            (unsigned long long)new_size);
+    roc_panic(msg, alignment);
+  }
+
+  void *result = realloc(ptr, new_size);
+
+  if (result == NULL && errno == ENOMEM) {
+    char msg[100];
+    sprintf(msg, "Memory reallocation failed. Could not allocate %llu bytes",
+            (unsigned long long)new_size);
+    roc_panic(msg, alignment);
+  }
+
+  return result;
 }
 
 void roc_dealloc(void* ptr, unsigned int alignment) { free(ptr); }
