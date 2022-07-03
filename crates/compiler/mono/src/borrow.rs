@@ -552,7 +552,7 @@ impl<'a> BorrowInfState<'a> {
                 };
 
                 match op {
-                    ListMap { xs } | ListAny { xs } | ListAll { xs } | ListFindUnsafe { xs } => {
+                    ListMap { xs } => {
                         // own the list if the function wants to own the element
                         if !function_ps[0].borrow {
                             self.own_var(*xs);
@@ -606,10 +606,7 @@ impl<'a> BorrowInfState<'a> {
                         // always own the input list
                         self.own_var(*xs);
                     }
-                    ListWalk { xs, state }
-                    | ListWalkUntil { xs, state }
-                    | ListWalkBackwards { xs, state }
-                    | DictWalk { xs, state } => {
+                    DictWalk { xs, state } => {
                         // own the default value if the function wants to own it
                         if !function_ps[0].borrow {
                             self.own_var(*state);
@@ -891,7 +888,9 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
     // - other refcounted arguments are Borrowed
     match op {
         Unreachable => arena.alloc_slice_copy(&[irrelevant]),
-        ListLen | StrIsEmpty | StrCountGraphemes => arena.alloc_slice_copy(&[borrowed]),
+        ListLen | StrIsEmpty | StrToScalars | StrCountGraphemes => {
+            arena.alloc_slice_copy(&[borrowed])
+        }
         ListWithCapacity => arena.alloc_slice_copy(&[irrelevant]),
         ListReplaceUnsafe => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
         ListGetUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),
@@ -908,11 +907,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListMap2 => arena.alloc_slice_copy(&[owned, owned, function, closure_data]),
         ListMap3 => arena.alloc_slice_copy(&[owned, owned, owned, function, closure_data]),
         ListMap4 => arena.alloc_slice_copy(&[owned, owned, owned, owned, function, closure_data]),
-        ListWalk | ListWalkUntil | ListWalkBackwards => {
-            arena.alloc_slice_copy(&[owned, owned, function, closure_data])
-        }
         ListSortWith => arena.alloc_slice_copy(&[owned, function, closure_data]),
-        ListFindUnsafe => arena.alloc_slice_copy(&[owned, function, closure_data]),
 
         // TODO when we have lists with capacity (if ever)
         // List.append should own its first argument
@@ -938,7 +933,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         NumBytesToU16 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         NumBytesToU32 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrStartsWith | StrEndsWith => arena.alloc_slice_copy(&[owned, borrowed]),
-        StrStartsWithCodePt => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+        StrStartsWithScalar => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrFromUtf8 => arena.alloc_slice_copy(&[owned]),
         StrFromUtf8Range => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrToUtf8 => arena.alloc_slice_copy(&[owned]),

@@ -8,10 +8,10 @@ use crate::llvm::build_dict::{
 };
 use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
-    self, allocate_list, empty_polymorphic_list, list_all, list_any, list_append, list_concat,
-    list_drop_at, list_find_unsafe, list_get_unsafe, list_len, list_map, list_map2, list_map3,
-    list_map4, list_map_with_index, list_prepend, list_replace_unsafe, list_sort_with,
-    list_sublist, list_swap, list_symbol_to_c_abi, list_to_c_abi, list_with_capacity,
+    self, allocate_list, empty_polymorphic_list, list_append, list_concat, list_drop_at,
+    list_get_unsafe, list_len, list_map, list_map2, list_map3, list_map4, list_map_with_index,
+    list_prepend, list_replace_unsafe, list_sort_with, list_sublist, list_swap,
+    list_symbol_to_c_abi, list_to_c_abi, list_with_capacity,
 };
 use crate::llvm::build_str::{
     str_from_float, str_from_int, str_from_utf8, str_from_utf8_range, str_split,
@@ -4881,44 +4881,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
         }};
     }
 
-    macro_rules! list_walk {
-        ($variant:expr, $xs:expr, $state:expr) => {{
-            let (list, list_layout) = load_symbol_and_layout(scope, &$xs);
-            let (default, default_layout) = load_symbol_and_layout(scope, &$state);
-
-            let (function, closure, closure_layout) = function_details!();
-
-            match list_layout {
-                Layout::Builtin(Builtin::List(element_layout)) => {
-                    let argument_layouts = &[*default_layout, **element_layout];
-
-                    let roc_function_call = roc_function_call(
-                        env,
-                        layout_ids,
-                        function,
-                        closure,
-                        closure_layout,
-                        function_owns_closure_data,
-                        argument_layouts,
-                        result_layout,
-                    );
-
-                    crate::llvm::build_list::list_walk_generic(
-                        env,
-                        layout_ids,
-                        roc_function_call,
-                        &result_layout,
-                        list,
-                        element_layout,
-                        default,
-                        default_layout,
-                        $variant,
-                    )
-                }
-                _ => unreachable!("invalid list layout"),
-            }
-        }};
-    }
     match op {
         ListMap { xs } => {
             // List.map : List before, (before -> after) -> List after
@@ -5119,15 +5081,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!("invalid list layout"),
             }
         }
-        ListWalk { xs, state } => {
-            list_walk!(crate::llvm::build_list::ListWalk::Walk, xs, state)
-        }
-        ListWalkUntil { xs, state } => {
-            list_walk!(crate::llvm::build_list::ListWalk::WalkUntil, xs, state)
-        }
-        ListWalkBackwards { xs, state } => {
-            list_walk!(crate::llvm::build_list::ListWalk::WalkBackwards, xs, state)
-        }
         ListSortWith { xs } => {
             // List.sortWith : List a, (a, a -> Ordering) -> List a
             let (list, list_layout) = load_symbol_and_layout(scope, xs);
@@ -5163,78 +5116,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         list,
                         element_layout,
                     )
-                }
-                _ => unreachable!("invalid list layout"),
-            }
-        }
-        ListAny { xs } => {
-            let (list, list_layout) = load_symbol_and_layout(scope, xs);
-            let (function, closure, closure_layout) = function_details!();
-
-            match list_layout {
-                Layout::Builtin(Builtin::List(element_layout)) => {
-                    let argument_layouts = &[**element_layout];
-
-                    let roc_function_call = roc_function_call(
-                        env,
-                        layout_ids,
-                        function,
-                        closure,
-                        closure_layout,
-                        function_owns_closure_data,
-                        argument_layouts,
-                        Layout::Builtin(Builtin::Bool),
-                    );
-
-                    list_any(env, roc_function_call, list, element_layout)
-                }
-                _ => unreachable!("invalid list layout"),
-            }
-        }
-        ListAll { xs } => {
-            let (list, list_layout) = load_symbol_and_layout(scope, xs);
-            let (function, closure, closure_layout) = function_details!();
-
-            match list_layout {
-                Layout::Builtin(Builtin::List(element_layout)) => {
-                    let argument_layouts = &[**element_layout];
-
-                    let roc_function_call = roc_function_call(
-                        env,
-                        layout_ids,
-                        function,
-                        closure,
-                        closure_layout,
-                        function_owns_closure_data,
-                        argument_layouts,
-                        Layout::Builtin(Builtin::Bool),
-                    );
-
-                    list_all(env, roc_function_call, list, element_layout)
-                }
-                _ => unreachable!("invalid list layout"),
-            }
-        }
-        ListFindUnsafe { xs } => {
-            let (list, list_layout) = load_symbol_and_layout(scope, xs);
-
-            let (function, closure, closure_layout) = function_details!();
-
-            match list_layout {
-                Layout::Builtin(Builtin::List(element_layout)) => {
-                    let argument_layouts = &[**element_layout];
-                    let roc_function_call = roc_function_call(
-                        env,
-                        layout_ids,
-                        function,
-                        closure,
-                        closure_layout,
-                        function_owns_closure_data,
-                        argument_layouts,
-                        Layout::Builtin(Builtin::Bool),
-                    );
-
-                    list_find_unsafe(env, layout_ids, roc_function_call, list, element_layout)
                 }
                 _ => unreachable!("invalid list layout"),
             }
@@ -5310,6 +5191,14 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             call_str_bitcode_fn(env, &[list.into(), string], bitcode::STR_JOIN_WITH)
         }
+        StrToScalars => {
+            // Str.toScalars : Str -> List U32
+            debug_assert_eq!(args.len(), 1);
+
+            let string = load_symbol(scope, &args[0]);
+
+            call_list_bitcode_fn(env, &[string], bitcode::STR_TO_SCALARS)
+        }
         StrStartsWith => {
             // Str.startsWith : Str, Str -> Bool
             debug_assert_eq!(args.len(), 2);
@@ -5319,14 +5208,14 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             call_bitcode_fn(env, &[string, prefix], bitcode::STR_STARTS_WITH)
         }
-        StrStartsWithCodePt => {
-            // Str.startsWithCodePt : Str, U32 -> Bool
+        StrStartsWithScalar => {
+            // Str.startsWithScalar : Str, U32 -> Bool
             debug_assert_eq!(args.len(), 2);
 
             let string = load_symbol(scope, &args[0]);
             let prefix = load_symbol(scope, &args[1]);
 
-            call_bitcode_fn(env, &[string, prefix], bitcode::STR_STARTS_WITH_CODE_PT)
+            call_bitcode_fn(env, &[string, prefix], bitcode::STR_STARTS_WITH_SCALAR)
         }
         StrEndsWith => {
             // Str.startsWith : Str, Str -> Bool
@@ -6056,8 +5945,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             set
         }
 
-        ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListWalk | ListWalkUntil
-        | ListWalkBackwards | ListSortWith | ListFindUnsafe | DictWalk => {
+        ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListSortWith | DictWalk => {
             unreachable!("these are higher order, and are handled elsewhere")
         }
 

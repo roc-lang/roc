@@ -9,7 +9,7 @@ pub enum LowLevel {
     StrJoinWith,
     StrIsEmpty,
     StrStartsWith,
-    StrStartsWithCodePt,
+    StrStartsWithScalar,
     StrEndsWith,
     StrSplit,
     StrCountGraphemes,
@@ -23,6 +23,7 @@ pub enum LowLevel {
     StrTrimLeft,
     StrTrimRight,
     StrToNum,
+    StrToScalars,
     ListLen,
     ListWithCapacity,
     ListGetUnsafe,
@@ -35,14 +36,10 @@ pub enum LowLevel {
     ListMap3,
     ListMap4,
     ListMapWithIndex,
-    ListWalk,
-    ListWalkUntil,
-    ListWalkBackwards,
     ListSortWith,
     ListSublist,
     ListDropAt,
     ListSwap,
-    ListFindUnsafe,
     ListIsUnique,
     DictSize,
     DictEmpty,
@@ -124,17 +121,7 @@ pub enum LowLevel {
 
 macro_rules! higher_order {
     () => {
-        ListMap
-            | ListMap2
-            | ListMap3
-            | ListMap4
-            | ListMapWithIndex
-            | ListWalk
-            | ListWalkUntil
-            | ListWalkBackwards
-            | ListSortWith
-            | ListFindUnsafe
-            | DictWalk
+        ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListSortWith | DictWalk
     };
 }
 
@@ -156,11 +143,7 @@ impl LowLevel {
             ListMap3 => 3,
             ListMap4 => 4,
             ListMapWithIndex => 1,
-            ListWalk => 2,
-            ListWalkUntil => 2,
-            ListWalkBackwards => 2,
             ListSortWith => 1,
-            ListFindUnsafe => 1,
             DictWalk => 2,
             _ => unreachable!(),
         }
@@ -185,10 +168,11 @@ impl LowLevelWrapperType {
 
         match symbol {
             Symbol::STR_CONCAT => CanBeReplacedBy(StrConcat),
+            Symbol::STR_TO_SCALARS => CanBeReplacedBy(StrToScalars),
             Symbol::STR_JOIN_WITH => CanBeReplacedBy(StrJoinWith),
             Symbol::STR_IS_EMPTY => CanBeReplacedBy(StrIsEmpty),
             Symbol::STR_STARTS_WITH => CanBeReplacedBy(StrStartsWith),
-            Symbol::STR_STARTS_WITH_CODE_PT => CanBeReplacedBy(StrStartsWithCodePt),
+            Symbol::STR_STARTS_WITH_SCALAR => CanBeReplacedBy(StrStartsWithScalar),
             Symbol::STR_ENDS_WITH => CanBeReplacedBy(StrEndsWith),
             Symbol::STR_SPLIT => CanBeReplacedBy(StrSplit),
             Symbol::STR_COUNT_GRAPHEMES => CanBeReplacedBy(StrCountGraphemes),
@@ -224,9 +208,6 @@ impl LowLevelWrapperType {
             Symbol::LIST_MAP3 => WrapperIsRequired,
             Symbol::LIST_MAP4 => WrapperIsRequired,
             Symbol::LIST_MAP_WITH_INDEX => WrapperIsRequired,
-            Symbol::LIST_WALK => WrapperIsRequired,
-            Symbol::LIST_WALK_UNTIL => WrapperIsRequired,
-            Symbol::LIST_WALK_BACKWARDS => WrapperIsRequired,
             Symbol::LIST_SORT_WITH => WrapperIsRequired,
             Symbol::LIST_SUBLIST => WrapperIsRequired,
             Symbol::LIST_DROP_AT => CanBeReplacedBy(ListDropAt),

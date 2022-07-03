@@ -1,15 +1,15 @@
 interface Str
     exposes
         [
-            concat,
             Utf8Problem,
             Utf8ByteProblem,
+            concat,
             isEmpty,
             joinWith,
             split,
             repeat,
             countGraphemes,
-            startsWithCodePt,
+            startsWithScalar,
             toUtf8,
             fromUtf8,
             fromUtf8Range,
@@ -32,6 +32,7 @@ interface Str
             toI16,
             toU8,
             toI8,
+            toScalars,
         ]
     imports [Bool.{ Bool }, Result.{ Result }]
 
@@ -164,13 +165,20 @@ countGraphemes : Str -> Nat
 ##
 ## **Performance Note:** This runs slightly faster than [Str.startsWith], so
 ## if you want to check whether a string begins with something that's representable
-## in a single code point, you can use (for example) `Str.startsWithCodePt '鹏'`
-## instead of `Str.startsWithCodePt "鹏"`. ('鹏' evaluates to the [U32]
+## in a single code point, you can use (for example) `Str.startsWithScalar '鹏'`
+## instead of `Str.startsWithScalar "鹏"`. ('鹏' evaluates to the [U32]
 ## value `40527`.) This will not work for graphemes which take up multiple code
-## points, however; `Str.startsWithCodePt '👩‍👩‍👦‍👦'` would be a compiler error
+## points, however; `Str.startsWithScalar '👩‍👩‍👦‍👦'` would be a compiler error
 ## because 👩‍👩‍👦‍👦 takes up multiple code points and cannot be represented as a
-## single [U32]. You'd need to use `Str.startsWithCodePt "🕊"` instead.
-startsWithCodePt : Str, U32 -> Bool
+## single [U32]. You'd need to use `Str.startsWithScalar "🕊"` instead.
+startsWithScalar : Str, U32 -> Bool
+
+## Return a [List] of the [unicode scalar values](https://unicode.org/glossary/#unicode_scalar_value)
+## in the given string.
+##
+## (Strings contain only scalar values, not [surrogate code points](https://unicode.org/glossary/#surrogate_code_point),
+## so this is equivalent to returning a list of the string's [code points](https://unicode.org/glossary/#code_point).)
+toScalars : Str -> List U32
 
 ## Return a [List] of the string's [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit).
 ## (To split the string into a [List] of smaller [Str] values instead of [U8] values,

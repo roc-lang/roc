@@ -3,6 +3,7 @@ const utils = @import("utils.zig");
 const RocResult = utils.RocResult;
 const UpdateMode = utils.UpdateMode;
 const mem = std.mem;
+const math = std.math;
 
 const EqFn = fn (?[*]u8, ?[*]u8) callconv(.C) bool;
 const CompareFn = fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) u8;
@@ -28,6 +29,57 @@ pub const RocList = extern struct {
 
     pub fn empty() RocList {
         return RocList{ .bytes = null, .length = 0, .capacity = 0 };
+    }
+
+    pub fn eql(self: RocList, other: RocList) bool {
+        if (self.len() != other.len()) {
+            return false;
+        }
+
+        // Their lengths are the same, and one is empty; they're both empty!
+        if (self.isEmpty()) {
+            return true;
+        }
+
+        var index: usize = 0;
+        const self_bytes = self.bytes orelse unreachable;
+        const other_bytes = other.bytes orelse unreachable;
+
+        while (index < self.len()) {
+            if (self_bytes[index] != other_bytes[index]) {
+                return false;
+            }
+
+            index += 1;
+        }
+
+        return true;
+    }
+
+    pub fn fromSlice(comptime T: type, slice: []const T) RocList {
+        if (slice.len == 0) {
+            return RocList.empty();
+        }
+
+        var list = allocate(@alignOf(T), slice.len, @sizeOf(T));
+
+        if (slice.len > 0) {
+            const dest = list.bytes orelse unreachable;
+            const src = @ptrCast([*]const u8, slice.ptr);
+            const num_bytes = slice.len * @sizeOf(T);
+
+            @memcpy(dest, src, num_bytes);
+        }
+
+        return list;
+    }
+
+    pub fn deinit(self: RocList, comptime T: type) void {
+        utils.decref(self.bytes, self.len(), @alignOf(T));
+    }
+
+    pub fn elements(self: RocList, comptime T: type) ?[*]T {
+        return @ptrCast(?[*]T, @alignCast(@alignOf(T), self.bytes));
     }
 
     pub fn isUnique(self: RocList) bool {
@@ -144,44 +196,6 @@ const Caller1 = fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 const Caller2 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 const Caller3 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 const Caller4 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
-
-pub fn listReverse(list: RocList, alignment: u32, element_width: usize, update_mode: UpdateMode) callconv(.C) RocList {
-    if (list.bytes) |source_ptr| {
-        const size = list.len();
-
-        var i: usize = 0;
-        const end: usize = size - 1;
-
-        if (update_mode == .InPlace or list.isUnique()) {
-
-            // Working from the front and back so
-            // we only need to go ~(n / 2) iterations.
-            // If the length is an odd number the middle
-            // element stays in the same place anyways.
-            while (i < (end - i)) : (i += 1) {
-                swapElements(source_ptr, element_width, i, end - i);
-            }
-
-            return list;
-        } else {
-            const output = RocList.allocate(alignment, size, element_width);
-
-            const target_ptr = output.bytes orelse unreachable;
-
-            while (i < size) : (i += 1) {
-                const last_position = end - i;
-
-                @memcpy(target_ptr + (i * element_width), source_ptr + (last_position * element_width), element_width);
-            }
-
-            utils.decref(list.bytes, size * element_width, alignment);
-
-            return output;
-        }
-    } else {
-        return RocList.empty();
-    }
-}
 
 pub fn listMap(
     list: RocList,
@@ -420,214 +434,6 @@ pub fn listMap4(
     } else {
         return RocList.empty();
     }
-}
-
-pub fn listWalk(
-    list: RocList,
-    caller: Caller2,
-    data: Opaque,
-    inc_n_data: IncN,
-    data_is_owned: bool,
-    accum: Opaque,
-    alignment: u32,
-    element_width: usize,
-    accum_width: usize,
-    output: Opaque,
-) callconv(.C) void {
-    if (accum_width == 0) {
-        return;
-    }
-
-    if (list.isEmpty()) {
-        @memcpy(output orelse unreachable, accum orelse unreachable, accum_width);
-        return;
-    }
-
-    if (data_is_owned) {
-        inc_n_data(data, list.len());
-    }
-
-    // TODO handle alloc failing!
-    const bytes_ptr: [*]u8 = utils.alloc(accum_width, alignment) orelse unreachable;
-    var b1 = output orelse unreachable;
-    var b2 = bytes_ptr;
-
-    @memcpy(b2, accum orelse unreachable, accum_width);
-
-    if (list.bytes) |source_ptr| {
-        var i: usize = 0;
-        const size = list.len();
-        while (i < size) : (i += 1) {
-            const element = source_ptr + i * element_width;
-            caller(data, b2, element, b1);
-
-            std.mem.swap([*]u8, &b1, &b2);
-        }
-    }
-
-    @memcpy(output orelse unreachable, b2, accum_width);
-    utils.dealloc(bytes_ptr, alignment);
-}
-
-pub fn listWalkBackwards(
-    list: RocList,
-    caller: Caller2,
-    data: Opaque,
-    inc_n_data: IncN,
-    data_is_owned: bool,
-    accum: Opaque,
-    alignment: u32,
-    element_width: usize,
-    accum_width: usize,
-    output: Opaque,
-) callconv(.C) void {
-    if (accum_width == 0) {
-        return;
-    }
-
-    if (list.isEmpty()) {
-        @memcpy(output orelse unreachable, accum orelse unreachable, accum_width);
-        return;
-    }
-
-    if (data_is_owned) {
-        inc_n_data(data, list.len());
-    }
-
-    // TODO handle alloc failing!
-    const bytes_ptr: [*]u8 = utils.alloc(accum_width, alignment) orelse unreachable;
-    var b1 = output orelse unreachable;
-    var b2 = bytes_ptr;
-
-    @memcpy(b2, accum orelse unreachable, accum_width);
-
-    if (list.bytes) |source_ptr| {
-        const size = list.len();
-        var i: usize = size;
-        while (i > 0) {
-            i -= 1;
-            const element = source_ptr + i * element_width;
-            caller(data, b2, element, b1);
-
-            std.mem.swap([*]u8, &b1, &b2);
-        }
-    }
-
-    @memcpy(output orelse unreachable, b2, accum_width);
-    utils.dealloc(bytes_ptr, alignment);
-}
-
-pub fn listWalkUntil(
-    list: RocList,
-    caller: Caller2,
-    data: Opaque,
-    inc_n_data: IncN,
-    data_is_owned: bool,
-    accum: Opaque,
-    alignment: u32,
-    element_width: usize,
-    continue_stop_width: usize,
-    accum_width: usize,
-    has_tag_id: HasTagId,
-    dec: Dec,
-    output: Opaque,
-) callconv(.C) void {
-    // [Continue a, Stop a]
-
-    if (accum_width == 0) {
-        return;
-    }
-
-    if (list.isEmpty()) {
-        @memcpy(output orelse unreachable, accum orelse unreachable, accum_width);
-        return;
-    }
-
-    // TODO handle alloc failing!
-    const bytes_ptr: [*]u8 = utils.alloc(continue_stop_width, alignment) orelse unreachable;
-
-    // NOTE: assumes data bytes are the first bytes in a tag
-    @memcpy(bytes_ptr, accum orelse unreachable, accum_width);
-
-    if (list.bytes) |source_ptr| {
-        var i: usize = 0;
-        const size = list.len();
-        while (i < size) : (i += 1) {
-            const element = source_ptr + i * element_width;
-
-            if (data_is_owned) {
-                inc_n_data(data, 1);
-            }
-
-            caller(data, bytes_ptr, element, bytes_ptr);
-
-            // [Continue ..., Stop]
-            const tag_id = has_tag_id(0, bytes_ptr);
-
-            if (!tag_id.matched) {
-                // decrement refcount of the remaining items
-                i += 1;
-                while (i < size) : (i += 1) {
-                    dec(source_ptr + i * element_width);
-                }
-                break;
-            }
-        }
-    }
-
-    @memcpy(output orelse unreachable, bytes_ptr, accum_width);
-    utils.dealloc(bytes_ptr, alignment);
-}
-
-// List.contains : List k, k -> Bool
-pub fn listContains(list: RocList, key: Opaque, key_width: usize, is_eq: EqFn) callconv(.C) bool {
-    if (list.bytes) |source_ptr| {
-        const size = list.len();
-        var i: usize = 0;
-        while (i < size) : (i += 1) {
-            const element = source_ptr + i * key_width;
-            if (is_eq(element, key)) {
-                return true;
-            }
-        }
-    }
-
-    return false;
-}
-
-pub fn listRepeat(count: usize, alignment: u32, element: Opaque, element_width: usize, inc_n_element: IncN) callconv(.C) RocList {
-    if (count == 0) {
-        return RocList.empty();
-    }
-
-    var output = RocList.allocate(alignment, count, element_width);
-
-    if (output.bytes) |target_ptr| {
-        // increment the element's RC N times
-        inc_n_element(element, count);
-
-        var i: usize = 0;
-        const source = element orelse unreachable;
-        while (i < count) : (i += 1) {
-            @memcpy(target_ptr + i * element_width, source, element_width);
-        }
-
-        return output;
-    } else {
-        unreachable;
-    }
-}
-
-pub fn listSingle(alignment: u32, element: Opaque, element_width: usize) callconv(.C) RocList {
-    var output = RocList.allocate(alignment, 1, element_width);
-
-    if (output.bytes) |target| {
-        if (element) |source| {
-            @memcpy(target, source, element_width);
-        }
-    }
-
-    return output;
 }
 
 pub fn listWithCapacity(capacity: usize, alignment: u32, element_width: usize) callconv(.C) RocList {
@@ -882,66 +688,6 @@ pub fn listSortWith(
     return list;
 }
 
-pub fn listAny(
-    list: RocList,
-    caller: Caller1,
-    data: Opaque,
-    inc_n_data: IncN,
-    data_is_owned: bool,
-    element_width: usize,
-) callconv(.C) bool {
-    if (list.bytes) |source_ptr| {
-        const size = list.len();
-
-        if (data_is_owned) {
-            inc_n_data(data, size);
-        }
-
-        var i: usize = 0;
-        var satisfied = false;
-        while (i < size) : (i += 1) {
-            const element = source_ptr + i * element_width;
-            caller(data, element, @ptrCast(?[*]u8, &satisfied));
-
-            if (satisfied) {
-                return satisfied;
-            }
-        }
-    }
-
-    return false;
-}
-
-pub fn listAll(
-    list: RocList,
-    caller: Caller1,
-    data: Opaque,
-    inc_n_data: IncN,
-    data_is_owned: bool,
-    element_width: usize,
-) callconv(.C) bool {
-    if (list.bytes) |source_ptr| {
-        const size = list.len();
-
-        if (data_is_owned) {
-            inc_n_data(data, size);
-        }
-
-        var i: usize = 0;
-        while (i < size) : (i += 1) {
-            var satisfied = false;
-            const element = source_ptr + i * element_width;
-            caller(data, element, @ptrCast(?[*]u8, &satisfied));
-
-            if (!satisfied) {
-                return false;
-            }
-        }
-        return true;
-    }
-    return true;
-}
-
 // SWAP ELEMENTS
 
 inline fn swapHelp(width: usize, temporary: [*]u8, ptr1: [*]u8, ptr2: [*]u8) void {
@@ -1073,41 +819,6 @@ inline fn listReplaceInPlaceHelp(
     @memcpy(element_at_index, element orelse undefined, element_width);
 
     return list;
-}
-
-pub fn listFindUnsafe(
-    list: RocList,
-    caller: Caller1,
-    data: Opaque,
-    inc_n_data: IncN,
-    data_is_owned: bool,
-    element_width: usize,
-    inc: Inc,
-    dec: Dec,
-) callconv(.C) extern struct { value: Opaque, found: bool } {
-    if (list.bytes) |source_ptr| {
-        const size = list.len();
-        if (data_is_owned) {
-            inc_n_data(data, size);
-        }
-
-        var i: usize = 0;
-        while (i < size) : (i += 1) {
-            var theOne = false;
-            const element = source_ptr + (i * element_width);
-            inc(element);
-            caller(data, element, @ptrCast(?[*]u8, &theOne));
-
-            if (theOne) {
-                return .{ .value = element, .found = true };
-            } else {
-                dec(element);
-            }
-        }
-        return .{ .value = null, .found = false };
-    } else {
-        return .{ .value = null, .found = false };
-    }
 }
 
 pub fn listIsUnique(

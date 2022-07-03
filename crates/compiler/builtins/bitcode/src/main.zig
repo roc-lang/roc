@@ -41,16 +41,9 @@ comptime {
     exportListFn(list.listMap3, "map3");
     exportListFn(list.listMap4, "map4");
     exportListFn(list.listMapWithIndex, "map_with_index");
-    exportListFn(list.listWalk, "walk");
-    exportListFn(list.listWalkUntil, "walkUntil");
-    exportListFn(list.listWalkBackwards, "walk_backwards");
-    exportListFn(list.listContains, "contains");
-    exportListFn(list.listRepeat, "repeat");
     exportListFn(list.listAppend, "append");
     exportListFn(list.listPrepend, "prepend");
-    exportListFn(list.listSingle, "single");
     exportListFn(list.listWithCapacity, "with_capacity");
-    exportListFn(list.listReverse, "reverse");
     exportListFn(list.listSortWith, "sort_with");
     exportListFn(list.listConcat, "concat");
     exportListFn(list.listSublist, "sublist");
@@ -58,9 +51,6 @@ comptime {
     exportListFn(list.listReplace, "replace");
     exportListFn(list.listReplaceInPlace, "replace_in_place");
     exportListFn(list.listSwap, "swap");
-    exportListFn(list.listAny, "any");
-    exportListFn(list.listAll, "all");
-    exportListFn(list.listFindUnsafe, "find_unsafe");
     exportListFn(list.listIsUnique, "is_unique");
 }
 
@@ -152,11 +142,12 @@ comptime {
 const str = @import("str.zig");
 comptime {
     exportStrFn(str.init, "init");
+    exportStrFn(str.strToScalarsC, "to_scalars");
     exportStrFn(str.strSplitInPlaceC, "str_split_in_place");
     exportStrFn(str.countSegments, "count_segments");
     exportStrFn(str.countGraphemeClusters, "count_grapheme_clusters");
     exportStrFn(str.startsWith, "starts_with");
-    exportStrFn(str.startsWithCodePt, "starts_with_code_point");
+    exportStrFn(str.startsWithScalar, "starts_with_scalar");
     exportStrFn(str.endsWith, "ends_with");
     exportStrFn(str.strConcatC, "concat");
     exportStrFn(str.strJoinWithC, "joinWith");

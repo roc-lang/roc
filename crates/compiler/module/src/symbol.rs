@@ -1168,7 +1168,7 @@ define_builtins! {
         10 STR_UT8_PROBLEM: "Utf8Problem" // the Utf8Problem type alias
         11 STR_UT8_BYTE_PROBLEM: "Utf8ByteProblem" // the Utf8ByteProblem type alias
         12 STR_TO_UTF8: "toUtf8"
-        13 STR_STARTS_WITH_CODE_PT: "startsWithCodePt"
+        13 STR_STARTS_WITH_SCALAR: "startsWithScalar"
         14 STR_ALIAS_ANALYSIS_STATIC: "#aliasAnalysisStatic" // string with the static lifetime
         15 STR_FROM_UTF8_RANGE: "fromUtf8Range"
         16 STR_REPEAT: "repeat"
@@ -1189,6 +1189,7 @@ define_builtins! {
         31 STR_TO_I16: "toI16"
         32 STR_TO_U8: "toU8"
         33 STR_TO_I8: "toI8"
+        34 STR_TO_SCALARS: "toScalars"
     }
     5 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias

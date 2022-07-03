@@ -3,11 +3,12 @@ use roc_std::{RocDec, RocList, RocOrder, RocStr};
 pub trait Wasm32Sized: Sized {
     const SIZE_OF_WASM: usize;
     const ALIGN_OF_WASM: usize;
-    const ACTUAL_WIDTH: usize = if (Self::SIZE_OF_WASM % Self::ALIGN_OF_WASM) == 0 {
-        Self::SIZE_OF_WASM
-    } else {
-        Self::SIZE_OF_WASM + (Self::ALIGN_OF_WASM - (Self::SIZE_OF_WASM % Self::ALIGN_OF_WASM))
-    };
+    const ACTUAL_WIDTH: usize =
+        if (Self::ALIGN_OF_WASM == 0) || (Self::SIZE_OF_WASM % Self::ALIGN_OF_WASM) == 0 {
+            Self::SIZE_OF_WASM
+        } else {
+            Self::SIZE_OF_WASM + (Self::ALIGN_OF_WASM - (Self::SIZE_OF_WASM % Self::ALIGN_OF_WASM))
+        };
 }
 
 macro_rules! wasm32_sized_primitive {

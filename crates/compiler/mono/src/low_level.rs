@@ -23,28 +23,7 @@ pub enum HigherOrder {
     ListMapWithIndex {
         xs: Symbol,
     },
-    ListWalk {
-        xs: Symbol,
-        state: Symbol,
-    },
-    ListWalkUntil {
-        xs: Symbol,
-        state: Symbol,
-    },
-    ListWalkBackwards {
-        xs: Symbol,
-        state: Symbol,
-    },
     ListSortWith {
-        xs: Symbol,
-    },
-    ListAny {
-        xs: Symbol,
-    },
-    ListAll {
-        xs: Symbol,
-    },
-    ListFindUnsafe {
         xs: Symbol,
     },
     DictWalk {
@@ -61,14 +40,8 @@ impl HigherOrder {
             HigherOrder::ListMap3 { .. } => 3,
             HigherOrder::ListMap4 { .. } => 4,
             HigherOrder::ListMapWithIndex { .. } => 2,
-            HigherOrder::ListWalk { .. } => 2,
-            HigherOrder::ListWalkUntil { .. } => 2,
-            HigherOrder::ListWalkBackwards { .. } => 2,
             HigherOrder::ListSortWith { .. } => 2,
-            HigherOrder::ListFindUnsafe { .. } => 1,
             HigherOrder::DictWalk { .. } => 2,
-            HigherOrder::ListAny { .. } => 1,
-            HigherOrder::ListAll { .. } => 1,
         }
     }
 
@@ -78,18 +51,11 @@ impl HigherOrder {
         use HigherOrder::*;
 
         match self {
-            ListMap { .. }
-            | ListMapWithIndex { .. }
-            | ListSortWith { .. }
-            | ListAny { .. }
-            | ListAll { .. }
-            | ListFindUnsafe { .. } => 2,
+            ListMap { .. } | ListMapWithIndex { .. } | ListSortWith { .. } => 2,
             ListMap2 { .. } => 3,
             ListMap3 { .. } => 4,
             ListMap4 { .. } => 5,
-            ListWalk { .. } | ListWalkUntil { .. } | ListWalkBackwards { .. } | DictWalk { .. } => {
-                3
-            }
+            DictWalk { .. } => 3,
         }
     }
 
@@ -105,7 +71,7 @@ enum FirstOrder {
     StrJoinWith,
     StrIsEmpty,
     StrStartsWith,
-    StrStartsWithCodePt,
+    StrStartsWithScalar,
     StrEndsWith,
     StrSplit,
     StrCountGraphemes,
