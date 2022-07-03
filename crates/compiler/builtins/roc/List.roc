@@ -581,7 +581,7 @@ range = \start, end ->
         GT -> []
         EQ -> [start]
         LT ->
-            length = Num.intCast (start - end)
+            length = Num.intCast (end - start)
 
             rangeHelp (List.withCapacity length) start end
 
