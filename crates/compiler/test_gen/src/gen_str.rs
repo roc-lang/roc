@@ -1677,7 +1677,7 @@ fn to_scalar_3_byte() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm"))]
 fn to_scalar_4_byte() {
     // from https://design215.com/toolbox/utf8-4byte-characters.php
     assert_evals_to!(
@@ -1702,26 +1702,24 @@ fn to_scalar_4_byte() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_split_first() {
-    // Str.splitFirst "foo/bar/baz" "/" == Ok { before: "foo", after: "bar/baz" }
-
     assert_evals_to!(
         indoc!(
             r#"
             Str.splitFirst "foo/bar/baz" "/"
             "#
         ),
+        // the result is a { before, after } record, and because of
+        // alphabetic ordering the fields here are flipped
         RocResult::ok((RocStr::from("bar/baz"), RocStr::from("foo"))),
         RocResult<(RocStr, RocStr), ()>
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_split_last() {
-    // Str.splitFirst "foo/bar/baz" "/" == Ok { before: "foo", after: "bar/baz" }
-
     assert_evals_to!(
         indoc!(
             r#"
@@ -1730,5 +1728,19 @@ fn str_split_last() {
         ),
         RocResult::ok((RocStr::from("baz"), RocStr::from("foo/bar"))),
         RocResult<(RocStr, RocStr), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_walk_utf8_with_index() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.walkUtf8WithIndex "abcd" [] (\list, byte, index -> List.append list (Pair index byte))
+            "#
+        ),
+        RocList::from_slice(&[(0, b'a'), (1, b'b'), (2, b'c'), (3, b'd')]),
+        RocList<(u64, u8)>
     );
 }

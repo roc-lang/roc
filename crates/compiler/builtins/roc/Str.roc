@@ -35,6 +35,7 @@ interface Str
             toScalars,
             splitFirst,
             splitLast,
+            walkUtf8WithIndex,
         ]
     imports [Bool.{ Bool }, Result.{ Result }]
 
@@ -323,3 +324,19 @@ matchesAtHelp = \haystack, haystackIndex, needle, needleIndex, endIndex ->
             False
     else
         True
+
+## Walks over the string's UTF-8 bytes, calling a function which updates a state using each
+## UTF-8 `U8` byte as well as the index of that byte within the string.
+walkUtf8WithIndex : Str, state, (state, U8, Nat -> state) -> state
+walkUtf8WithIndex = \string, state, step ->
+    walkUtf8WithIndexHelp string state step 0 (Str.countBytes string)
+
+walkUtf8WithIndexHelp : Str, state, (state, U8, Nat -> state), Nat, Nat -> state
+walkUtf8WithIndexHelp = \string, state, step, index, length ->
+    if index < length then
+        byte = Str.getUnsafe string index
+        newState = step state byte index
+
+        walkUtf8WithIndexHelp string newState step (index + 1) length
+    else
+        state
