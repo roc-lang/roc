@@ -953,9 +953,9 @@ impl<'a> WasmBackend<'a> {
                 index,
             } => self.expr_union_at_index(*structure, *tag_id, union_layout, *index, sym),
 
-            Expr::ExprBox { .. } | Expr::ExprUnbox { .. } => {
-                todo!("Expression `{}`", expr.to_pretty(100))
-            }
+            Expr::ExprBox { symbol: arg_sym } => self.expr_box(sym, *arg_sym, layout, storage),
+
+            Expr::ExprUnbox { symbol: arg_sym } => self.expr_unbox(sym, *arg_sym, storage),
 
             Expr::Reuse {
                 tag_layout,
@@ -1714,6 +1714,59 @@ impl<'a> WasmBackend<'a> {
         let from_offset = tag_offset + field_offset;
         self.storage
             .copy_value_from_memory(&mut self.code_builder, symbol, from_ptr, from_offset);
+    }
+
+    /*******************************************************************
+     * Box
+     *******************************************************************/
+
+    fn expr_box(
+        &mut self,
+        ret_sym: Symbol,
+        arg_sym: Symbol,
+        layout: &Layout<'a>,
+        storage: &StoredValue,
+    ) {
+        // create a local variable for the heap pointer
+        let ptr_local_id = match self.storage.ensure_value_has_local(
+            &mut self.code_builder,
+            ret_sym,
+            storage.clone(),
+        ) {
+            StoredValue::Local { local_id, .. } => local_id,
+            _ => internal_error!("A heap pointer will always be an i32"),
+        };
+
+        // allocate heap memory and load its data address onto the value stack
+        let arg_layout = match layout {
+            Layout::Boxed(arg) => *arg,
+            _ => internal_error!("ExprBox should always produce a Boxed layout"),
+        };
+        let (size, alignment) = arg_layout.stack_size_and_alignment(TARGET_INFO);
+        self.allocate_with_refcount(Some(size), alignment, 1);
+
+        // store the pointer value from the value stack into the local variable
+        self.code_builder.set_local(ptr_local_id);
+
+        // copy the argument to the pointer address
+        self.storage
+            .copy_value_to_memory(&mut self.code_builder, ptr_local_id, 0, arg_sym);
+    }
+
+    fn expr_unbox(&mut self, ret_sym: Symbol, arg_sym: Symbol, storage: &StoredValue) {
+        // ensure we have a local variable for the argument (an i32 heap pointer)
+        let ptr_local_id = match self.storage.ensure_value_has_local(
+            &mut self.code_builder,
+            arg_sym,
+            storage.clone(),
+        ) {
+            StoredValue::Local { local_id, .. } => local_id,
+            _ => internal_error!("A heap pointer will always be an i32"),
+        };
+
+        // Copy the value
+        self.storage
+            .copy_value_from_memory(&mut self.code_builder, ret_sym, ptr_local_id, 0);
     }
 
     /*******************************************************************
