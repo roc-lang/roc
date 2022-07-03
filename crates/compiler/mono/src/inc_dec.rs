@@ -564,12 +564,13 @@ impl<'a> Context<'a> {
                 arg_layouts,
                 ..
             } => {
-                let top_level = ProcLayout::new(self.arena, arg_layouts, **ret_layout);
+                let top_level =
+                    ProcLayout::new(self.arena, arg_layouts, name.captures_niche(), **ret_layout);
 
                 // get the borrow signature
                 let ps = self
                     .param_map
-                    .get_symbol(*name, top_level)
+                    .get_symbol(name.name(), top_level)
                     .expect("function is defined");
 
                 let v = Expr::Call(crate::ir::Call {
@@ -614,11 +615,12 @@ impl<'a> Context<'a> {
         let function_layout = ProcLayout {
             arguments: passed_function.argument_layouts,
             result: passed_function.return_layout,
+            captures_niche: passed_function.name.captures_niche(),
         };
 
         let function_ps = match self
             .param_map
-            .get_symbol(passed_function.name, function_layout)
+            .get_symbol(passed_function.name.name(), function_layout)
         {
             Some(function_ps) => function_ps,
             None => unreachable!(),
@@ -1406,7 +1408,7 @@ fn visit_proc<'a, 'i>(
     proc: &mut Proc<'a>,
     layout: ProcLayout<'a>,
 ) {
-    let params = match param_map.get_symbol(proc.name, layout) {
+    let params = match param_map.get_symbol(proc.name.name(), layout) {
         Some(slice) => slice,
         None => Vec::from_iter_in(
             proc.args.iter().cloned().map(|(layout, symbol)| Param {

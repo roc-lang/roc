@@ -62,7 +62,9 @@ use roc_mono::ir::{
     BranchInfo, CallType, EntryPoint, HigherOrderLowLevel, JoinPointId, ListLiteralElement,
     ModifyRc, OptLevel, ProcLayout,
 };
-use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, TagIdIntType, UnionLayout};
+use roc_mono::layout::{
+    Builtin, CapturesNiche, LambdaName, LambdaSet, Layout, LayoutIds, TagIdIntType, UnionLayout,
+};
 use roc_std::RocDec;
 use roc_target::{PtrWidth, TargetInfo};
 use std::convert::{TryFrom, TryInto};
@@ -715,7 +717,12 @@ fn promote_to_main_function<'a, 'ctx, 'env>(
     top_level: ProcLayout<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
     let it = top_level.arguments.iter().copied();
-    let bytes = roc_alias_analysis::func_name_bytes_help(symbol, it, &top_level.result);
+    let bytes = roc_alias_analysis::func_name_bytes_help(
+        symbol,
+        it,
+        CapturesNiche::no_niche(),
+        &top_level.result,
+    );
     let func_name = FuncName(&bytes);
     let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
 
@@ -727,7 +734,14 @@ fn promote_to_main_function<'a, 'ctx, 'env>(
     );
 
     // NOTE fake layout; it is only used for debug prints
-    let roc_main_fn = function_value_by_func_spec(env, *func_spec, symbol, &[], &Layout::UNIT);
+    let roc_main_fn = function_value_by_func_spec(
+        env,
+        *func_spec,
+        symbol,
+        &[],
+        CapturesNiche::no_niche(),
+        &Layout::UNIT,
+    );
 
     let main_fn_name = "$Test.main";
 
@@ -3296,6 +3310,7 @@ fn expose_function_to_host<'a, 'ctx, 'env>(
     symbol: Symbol,
     roc_function: FunctionValue<'ctx>,
     arguments: &'a [Layout<'a>],
+    captures_niche: CapturesNiche<'a>,
     return_layout: Layout<'a>,
     layout_ids: &mut LayoutIds<'a>,
 ) {
@@ -3304,6 +3319,7 @@ fn expose_function_to_host<'a, 'ctx, 'env>(
     let proc_layout = ProcLayout {
         arguments,
         result: return_layout,
+        captures_niche,
     };
 
     let c_function_name: String = layout_ids
@@ -4185,7 +4201,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
 
             // only have top-level thunks for this proc's module in scope
             // this retain is not needed for correctness, but will cause less confusion when debugging
-            let home = proc.name.module_id();
+            let home = proc.name.name().module_id();
             current_scope.retain_top_level_thunks_for_module(home);
 
             build_proc(
@@ -4301,6 +4317,7 @@ fn build_proc_header<'a, 'ctx, 'env>(
             symbol,
             fn_val,
             arguments.into_bump_slice(),
+            proc.name.captures_niche(),
             proc.ret_layout,
             layout_ids,
         );
@@ -4530,8 +4547,12 @@ pub fn build_proc<'a, 'ctx, 'env>(
                         // * roc__mainForHost_1_Update_result_size() -> i64
 
                         let it = top_level.arguments.iter().copied();
-                        let bytes =
-                            roc_alias_analysis::func_name_bytes_help(symbol, it, &top_level.result);
+                        let bytes = roc_alias_analysis::func_name_bytes_help(
+                            symbol,
+                            it,
+                            CapturesNiche::no_niche(),
+                            &top_level.result,
+                        );
                         let func_name = FuncName(&bytes);
                         let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
 
@@ -4548,6 +4569,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
                                     *func_spec,
                                     symbol,
                                     top_level.arguments,
+                                    CapturesNiche::no_niche(),
                                     &top_level.result,
                                 )
                             }
@@ -4559,7 +4581,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
                             }
                         };
 
-                        let ident_string = proc.name.as_str(&env.interns);
+                        let ident_string = proc.name.name().as_str(&env.interns);
                         let fn_name: String = format!("{}_1", ident_string);
 
                         build_closure_caller(
@@ -4624,17 +4646,19 @@ fn function_value_by_func_spec<'a, 'ctx, 'env>(
     func_spec: FuncSpec,
     symbol: Symbol,
     arguments: &[Layout<'a>],
+    captures_niche: CapturesNiche<'a>,
     result: &Layout<'a>,
 ) -> FunctionValue<'ctx> {
     let fn_name = func_spec_name(env.arena, &env.interns, symbol, func_spec);
     let fn_name = fn_name.as_str();
 
-    function_value_by_name_help(env, arguments, result, symbol, fn_name)
+    function_value_by_name_help(env, arguments, captures_niche, result, symbol, fn_name)
 }
 
 fn function_value_by_name_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     arguments: &[Layout<'a>],
+    _captures_niche: CapturesNiche<'a>,
     result: &Layout<'a>,
     symbol: Symbol,
     fn_name: &str,
@@ -4675,12 +4699,18 @@ fn roc_call_with_args<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     argument_layouts: &[Layout<'a>],
     result_layout: &Layout<'a>,
-    symbol: Symbol,
+    name: LambdaName<'a>,
     func_spec: FuncSpec,
     arguments: &[BasicValueEnum<'ctx>],
 ) -> BasicValueEnum<'ctx> {
-    let fn_val =
-        function_value_by_func_spec(env, func_spec, symbol, argument_layouts, result_layout);
+    let fn_val = function_value_by_func_spec(
+        env,
+        func_spec,
+        name.name(),
+        argument_layouts,
+        name.captures_niche(),
+        result_layout,
+    );
 
     call_roc_function(env, fn_val, result_layout, arguments)
 }
@@ -4869,8 +4899,9 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
             let function = function_value_by_func_spec(
                 env,
                 func_spec,
-                function_name,
+                function_name.name(),
                 argument_layouts,
+                function_name.captures_niche(),
                 return_layout,
             );
 

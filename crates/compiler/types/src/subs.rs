@@ -1872,6 +1872,10 @@ impl Subs {
         self.utable.unioned(left, right)
     }
 
+    pub fn equivalent_without_compacting(&self, left: Variable, right: Variable) -> bool {
+        self.utable.unioned_without_compacting(left, right)
+    }
+
     pub fn redundant(&self, var: Variable) -> bool {
         self.utable.is_redirect(var)
     }
@@ -2646,11 +2650,25 @@ impl<L> UnionLabels<L>
 where
     L: Label + Ord,
 {
-    pub fn is_sorted_no_duplicates(&self, subs: &Subs) -> bool {
+    /// Checks if the union of labels is sorted by label, without duplicates.
+    pub fn is_sorted(&self, subs: &Subs) -> bool {
         let mut iter = self.iter_from_subs(subs).peekable();
         while let Some((before, _)) = iter.next() {
             if let Some((after, _)) = iter.peek() {
                 if before >= after {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Checks if the union of labels is sorted by label, without duplicates.
+    pub fn is_sorted_allow_duplicates(&self, subs: &Subs) -> bool {
+        let mut iter = self.iter_from_subs(subs).peekable();
+        while let Some((before, _)) = iter.next() {
+            if let Some((after, _)) = iter.peek() {
+                if before > after {
                     return false;
                 }
             }

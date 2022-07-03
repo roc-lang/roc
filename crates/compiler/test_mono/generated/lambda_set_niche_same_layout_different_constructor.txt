@@ -1,0 +1,26 @@
+procedure Test.1 (Test.4):
+    let Test.5 : {Str} = Struct {Test.4};
+    ret Test.5;
+
+procedure Test.5 (Test.12, #Attr.12):
+    let Test.4 : Str = StructAtIndex 0 #Attr.12;
+    inc Test.4;
+    dec #Attr.12;
+    let Test.14 : Str = "";
+    ret Test.14;
+
+procedure Test.0 ():
+    let Test.2 : Int1 = true;
+    joinpoint Test.9 Test.3:
+        ret Test.3;
+    in
+    let Test.19 : Int1 = true;
+    let Test.20 : Int1 = lowlevel Eq Test.19 Test.2;
+    if Test.20 then
+        let Test.15 : Str = "";
+        let Test.10 : {Str} = CallByName Test.1 Test.15;
+        jump Test.9 Test.10;
+    else
+        let Test.18 : Str = "";
+        let Test.16 : {Str} = CallByName Test.1 Test.18;
+        jump Test.9 Test.16;
