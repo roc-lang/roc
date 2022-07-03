@@ -2,7 +2,7 @@
 
 use crate::layout::{
     Builtin, CapturesNiche, ClosureRepresentation, LambdaName, LambdaSet, Layout, LayoutCache,
-    LayoutProblem, RawFunctionLayout, TagIdIntType, TagOrClosure, UnionLayout, WrappedVariant,
+    LayoutProblem, RawFunctionLayout, TagIdIntType, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
@@ -5505,7 +5505,7 @@ fn convert_tag_union<'a>(
                     tag_name: wrapped_tag_name,
                     ..
                 } => {
-                    debug_assert_eq!(TagOrClosure::Tag(tag_name.clone()), wrapped_tag_name);
+                    debug_assert_eq!(wrapped_tag_name.expect_tag(), tag_name);
 
                     field_symbols = {
                         let mut temp = Vec::with_capacity_in(field_symbols_temp.len(), arena);
