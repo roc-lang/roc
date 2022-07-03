@@ -1188,6 +1188,48 @@ pub fn countBytes(string: RocStr) callconv(.C) usize {
     return string.len();
 }
 
+pub fn substringUnsafe(string: RocStr, start: usize, length: usize) callconv(.C) RocStr {
+    const slice = string.asSlice()[start .. start + length];
+
+    return RocStr.fromSlice(slice);
+}
+
+test "substringUnsafe: start" {
+    const str = RocStr.fromSlice("abcdef");
+    defer str.deinit();
+
+    const expected = RocStr.fromSlice("abc");
+    defer expected.deinit();
+
+    const actual = substringUnsafe(str, 0, 3);
+
+    try expect(RocStr.eq(actual, expected));
+}
+
+test "substringUnsafe: middle" {
+    const str = RocStr.fromSlice("abcdef");
+    defer str.deinit();
+
+    const expected = RocStr.fromSlice("bcd");
+    defer expected.deinit();
+
+    const actual = substringUnsafe(str, 1, 3);
+
+    try expect(RocStr.eq(actual, expected));
+}
+
+test "substringUnsafe: end" {
+    const str = RocStr.fromSlice("a string so long it is heap-allocated");
+    defer str.deinit();
+
+    const expected = RocStr.fromSlice("heap-allocated");
+    defer expected.deinit();
+
+    const actual = substringUnsafe(str, 23, 37 - 23);
+
+    try expect(RocStr.eq(actual, expected));
+}
+
 // Str.startsWith
 pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.C) bool {
     const bytes_len = string.len();
