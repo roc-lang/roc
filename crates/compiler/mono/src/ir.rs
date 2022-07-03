@@ -7648,24 +7648,6 @@ fn call_by_name_help<'a>(
             assigned,
             hole,
         )
-
-        // let field_symbols = field_symbols.into_bump_slice();
-
-        // dbg!((proc_name, argument_layouts));
-        // let call = self::Call {
-        //     call_type: CallType::ByName {
-        //         name: proc_name,
-        //         ret_layout,
-        //         arg_layouts: argument_layouts,
-        //         specialization_id: env.next_call_specialization_id(),
-        //     },
-        //     arguments: field_symbols,
-        // };
-
-        // let result = build_call(env, call, assigned, *ret_layout, hole);
-
-        // let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
-        // assign_to_symbols(env, procs, layout_cache, iter, result)
     } else if env.is_imported_symbol(proc_name.name()) {
         add_needed_external(procs, env, original_fn_var, proc_name);
 
