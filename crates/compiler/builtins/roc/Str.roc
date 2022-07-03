@@ -229,7 +229,7 @@ toI8 : Str -> Result I8 [InvalidNumStr]*
 getUnsafe : Str, Nat -> U8
 
 ## gives the number of string bytes
-countBytes : Str -> Nat
+countUtf8Bytes : Str -> Nat
 
 ## string slice that does not do bounds checking or utf-8 verification
 substringUnsafe : Str, Nat, Nat -> Str
@@ -242,10 +242,10 @@ splitFirst : Str, Str -> Result { before : Str, after : Str } [NotFound]*
 splitFirst = \haystack, needle ->
     when firstMatch haystack needle is
         Some index ->
-            remaining = Str.countBytes haystack - Str.countBytes needle - index
+            remaining = Str.countUtf8Bytes haystack - Str.countUtf8Bytes needle - index
 
             before = Str.substringUnsafe haystack 0 index
-            after = Str.substringUnsafe haystack (index + Str.countBytes needle) remaining
+            after = Str.substringUnsafe haystack (index + Str.countUtf8Bytes needle) remaining
 
             Ok { before, after }
         None ->
@@ -253,8 +253,8 @@ splitFirst = \haystack, needle ->
 
 firstMatch : Str, Str -> [Some Nat, None]
 firstMatch = \haystack, needle ->
-    haystackLength = Str.countBytes haystack
-    needleLength = Str.countBytes needle
+    haystackLength = Str.countUtf8Bytes haystack
+    needleLength = Str.countUtf8Bytes needle
     lastPossible = Num.subSaturated haystackLength needleLength
 
     firstMatchHelp haystack needle 0 lastPossible
@@ -277,10 +277,10 @@ splitLast : Str, Str -> Result { before : Str, after : Str } [NotFound]*
 splitLast = \haystack, needle ->
     when lastMatch haystack needle is
         Some index ->
-            remaining = Str.countBytes haystack - Str.countBytes needle - index
+            remaining = Str.countUtf8Bytes haystack - Str.countUtf8Bytes needle - index
 
             before = Str.substringUnsafe haystack 0 index
-            after = Str.substringUnsafe haystack (index + Str.countBytes needle) remaining
+            after = Str.substringUnsafe haystack (index + Str.countUtf8Bytes needle) remaining
 
             Ok { before, after }
         None ->
@@ -288,8 +288,8 @@ splitLast = \haystack, needle ->
 
 lastMatch : Str, Str -> [Some Nat, None]
 lastMatch = \haystack, needle ->
-    haystackLength = Str.countBytes haystack
-    needleLength = Str.countBytes needle
+    haystackLength = Str.countUtf8Bytes haystack
+    needleLength = Str.countUtf8Bytes needle
     lastPossibleIndex = Num.subSaturated haystackLength (needleLength + 1)
 
     lastMatchHelp haystack needle lastPossibleIndex
@@ -309,8 +309,8 @@ min = \x, y -> if x < y then x else y
 
 matchesAt : Str, Nat, Str -> Bool
 matchesAt = \haystack, haystackIndex, needle ->
-    haystackLength = Str.countBytes haystack
-    needleLength = Str.countBytes needle
+    haystackLength = Str.countUtf8Bytes haystack
+    needleLength = Str.countUtf8Bytes needle
     endIndex = min (haystackIndex + needleLength) haystackLength
 
     matchesAtHelp haystack haystackIndex needle 0 endIndex
@@ -329,7 +329,7 @@ matchesAtHelp = \haystack, haystackIndex, needle, needleIndex, endIndex ->
 ## UTF-8 `U8` byte as well as the index of that byte within the string.
 walkUtf8WithIndex : Str, state, (state, U8, Nat -> state) -> state
 walkUtf8WithIndex = \string, state, step ->
-    walkUtf8WithIndexHelp string state step 0 (Str.countBytes string)
+    walkUtf8WithIndexHelp string state step 0 (Str.countUtf8Bytes string)
 
 walkUtf8WithIndexHelp : Str, state, (state, U8, Nat -> state), Nat, Nat -> state
 walkUtf8WithIndexHelp = \string, state, step, index, length ->

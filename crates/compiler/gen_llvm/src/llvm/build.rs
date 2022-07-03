@@ -5340,12 +5340,12 @@ fn run_low_level<'a, 'ctx, 'env>(
             let string = load_symbol(scope, &args[0]);
             call_bitcode_fn(env, &[string], bitcode::STR_COUNT_GRAPEHEME_CLUSTERS)
         }
-        StrCountBytes => {
+        StrCountUtf8Bytes => {
             // Str.countGraphemes : Str -> Nat
             debug_assert_eq!(args.len(), 1);
 
             let string = load_symbol(scope, &args[0]);
-            call_bitcode_fn(env, &[string], bitcode::STR_COUNT_BYTES)
+            call_bitcode_fn(env, &[string], bitcode::STR_COUNT_UTF8_BYTES)
         }
         StrSubstringUnsafe => {
             // Str.substringUnsafe : Str, Nat, Nat -> Str

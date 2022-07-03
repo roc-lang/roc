@@ -81,7 +81,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_STARTS_WITH_SCALAR => str_starts_with_scalar,
         STR_ENDS_WITH => str_ends_with,
         STR_COUNT_GRAPHEMES => str_count_graphemes,
-        STR_COUNT_BYTES=> str_count_bytes,
+        STR_COUNT_UTF8_BYTES => str_count_bytes,
         STR_SUBSTRING_UNSAFE => str_substring_unsafe,
         STR_FROM_UTF8 => str_from_utf8,
         STR_FROM_UTF8_RANGE => str_from_utf8_range,
@@ -1727,9 +1727,9 @@ fn str_count_graphemes(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::StrCountGraphemes, var_store)
 }
 
-/// Str.countBytes : Str -> Nat
+/// Str.countUtf8Bytes : Str -> Nat
 fn str_count_bytes(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    lowlevel_1(symbol, LowLevel::StrCountBytes, var_store)
+    lowlevel_1(symbol, LowLevel::StrCountUtf8Bytes, var_store)
 }
 
 /// Str.substringUnsafe : Str, Nat, Nat -> Nat

@@ -1191,7 +1191,7 @@ define_builtins! {
         33 STR_TO_I8: "toI8"
         34 STR_TO_SCALARS: "toScalars"
         35 STR_GET_UNSAFE: "getUnsafe"
-        36 STR_COUNT_BYTES: "countBytes"
+        36 STR_COUNT_UTF8_BYTES: "countUtf8Bytes"
         37 STR_SUBSTRING_UNSAFE: "substringUnsafe"
         38 STR_SPLIT_FIRST: "splitFirst"
         39 STR_SPLIT_LAST: "splitLast"

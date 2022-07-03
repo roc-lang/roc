@@ -1184,7 +1184,7 @@ test "countGraphemeClusters: emojis, ut8, and ascii characters" {
     try expectEqual(count, 10);
 }
 
-pub fn countBytes(string: RocStr) callconv(.C) usize {
+pub fn countUtf8Bytes(string: RocStr) callconv(.C) usize {
     return string.len();
 }
 

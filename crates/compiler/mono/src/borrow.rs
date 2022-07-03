@@ -887,7 +887,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
     // - arguments that we may want to update destructively must be Owned
     // - other refcounted arguments are Borrowed
     match op {
-        ListLen | StrIsEmpty | StrToScalars | StrCountGraphemes | StrCountBytes => {
+        ListLen | StrIsEmpty | StrToScalars | StrCountGraphemes | StrCountUtf8Bytes => {
             arena.alloc_slice_copy(&[borrowed])
         }
         ListWithCapacity => arena.alloc_slice_copy(&[irrelevant]),
