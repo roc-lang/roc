@@ -14,9 +14,7 @@ use roc_mono::ir::{
     BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, Param, Proc, ProcLayout,
     SelfRecursive, Stmt,
 };
-use roc_mono::layout::{
-    Builtin, Layout, LayoutId, LayoutIds, TagIdIntType, TagOrClosure, UnionLayout,
-};
+use roc_mono::layout::{Builtin, Layout, LayoutId, LayoutIds, TagIdIntType, UnionLayout};
 
 mod generic64;
 mod object_builder;
@@ -915,18 +913,9 @@ trait Backend<'a> {
                         }
                     }
                     Expr::Reuse {
-                        symbol,
-                        arguments,
-                        tag_name,
-                        ..
+                        symbol, arguments, ..
                     } => {
                         self.set_last_seen(*symbol, stmt);
-                        match tag_name {
-                            TagOrClosure::Closure(sym) => {
-                                self.set_last_seen(*sym, stmt);
-                            }
-                            TagOrClosure::Tag(_) => {}
-                        }
                         for sym in *arguments {
                             self.set_last_seen(*sym, stmt);
                         }

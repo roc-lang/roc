@@ -1,8 +1,8 @@
 procedure Test.0 ():
-    let Test.21 : [<rnu><null>, C *self] = Z ;
-    let Test.20 : [<rnu><null>, C *self] = S Test.21;
-    let Test.19 : [<rnu><null>, C *self] = S Test.20;
-    let Test.3 : [<rnu><null>, C *self] = S Test.19;
+    let Test.21 : [<rnu><null>, C *self] = TagId(1) ;
+    let Test.20 : [<rnu><null>, C *self] = TagId(0) Test.21;
+    let Test.19 : [<rnu><null>, C *self] = TagId(0) Test.20;
+    let Test.3 : [<rnu><null>, C *self] = TagId(0) Test.19;
     let Test.16 : Int1 = 0i64;
     let Test.17 : Int1 = GetTagId Test.3;
     let Test.18 : Int1 = lowlevel Eq Test.16 Test.17;

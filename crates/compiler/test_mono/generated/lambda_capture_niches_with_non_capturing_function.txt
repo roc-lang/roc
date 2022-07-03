@@ -1,9 +1,9 @@
 procedure Test.1 (Test.5):
-    let Test.19 : [C , C U64, C {}] = ClosureTag(Test.6) Test.5;
+    let Test.19 : [C , C U64, C {}] = TagId(2) Test.5;
     ret Test.19;
 
 procedure Test.1 (Test.5):
-    let Test.27 : [C , C U64, C {}] = ClosureTag(Test.6) Test.5;
+    let Test.27 : [C , C U64, C {}] = TagId(1) Test.5;
     ret Test.27;
 
 procedure Test.2 (Test.8):
@@ -49,7 +49,7 @@ procedure Test.0 ():
             jump Test.16 Test.17;
     
         case 1:
-            let Test.2 : [C , C U64, C {}] = ClosureTag(Test.2) ;
+            let Test.2 : [C , C U64, C {}] = TagId(0) ;
             jump Test.16 Test.2;
     
         default:

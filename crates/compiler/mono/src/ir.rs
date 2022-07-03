@@ -2,7 +2,7 @@
 
 use crate::layout::{
     Builtin, CapturesNiche, ClosureRepresentation, LambdaName, LambdaSet, Layout, LayoutCache,
-    LayoutProblem, RawFunctionLayout, TagIdIntType, TagOrClosure, UnionLayout, WrappedVariant,
+    LayoutProblem, RawFunctionLayout, TagIdIntType, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
@@ -1713,7 +1713,6 @@ pub enum Expr<'a> {
 
     Tag {
         tag_layout: UnionLayout<'a>,
-        tag_name: TagOrClosure,
         tag_id: TagIdIntType,
         arguments: &'a [Symbol],
     },
@@ -1757,7 +1756,6 @@ pub enum Expr<'a> {
         update_mode: UpdateModeId,
         // normal Tag fields
         tag_layout: UnionLayout<'a>,
-        tag_name: TagOrClosure,
         tag_id: TagIdIntType,
         arguments: &'a [Symbol],
     },
@@ -1840,17 +1838,12 @@ impl<'a> Expr<'a> {
             Call(call) => call.to_doc(alloc),
 
             Tag {
-                tag_name,
-                arguments,
-                ..
+                tag_id, arguments, ..
             } => {
-                let doc_tag = match tag_name {
-                    TagOrClosure::Tag(TagName(s)) => alloc.text(s.as_str()),
-                    TagOrClosure::Closure(s) => alloc
-                        .text("ClosureTag(")
-                        .append(symbol_to_doc(alloc, *s))
-                        .append(")"),
-                };
+                let doc_tag = alloc
+                    .text("TagId(")
+                    .append(alloc.text(tag_id.to_string()))
+                    .append(")");
 
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
 
@@ -1860,18 +1853,15 @@ impl<'a> Expr<'a> {
             }
             Reuse {
                 symbol,
-                tag_name,
+                tag_id,
                 arguments,
                 update_mode,
                 ..
             } => {
-                let doc_tag = match tag_name {
-                    TagOrClosure::Tag(TagName(s)) => alloc.text(s.as_str()),
-                    TagOrClosure::Closure(s) => alloc
-                        .text("ClosureTag(")
-                        .append(symbol_to_doc(alloc, *s))
-                        .append(")"),
-                };
+                let doc_tag = alloc
+                    .text("TagId(")
+                    .append(alloc.text(tag_id.to_string()))
+                    .append(")");
 
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
 
@@ -5285,8 +5275,8 @@ where
         ClosureRepresentation::Union {
             tag_id,
             alphabetic_order_fields: field_layouts,
-            closure_name: tag_name,
             union_layout,
+            closure_name: _,
         } => {
             // captured variables are in symbol-alphabetic order, but now we want
             // them ordered by their alignment requirements
@@ -5310,7 +5300,6 @@ where
             let expr = Expr::Tag {
                 tag_id,
                 tag_layout: union_layout,
-                tag_name: tag_name.into(),
                 arguments: symbols,
             };
 
@@ -5506,7 +5495,6 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -5517,7 +5505,7 @@ fn convert_tag_union<'a>(
                     tag_name: wrapped_tag_name,
                     ..
                 } => {
-                    debug_assert_eq!(TagOrClosure::Tag(tag_name.clone()), wrapped_tag_name);
+                    debug_assert_eq!(wrapped_tag_name.expect_tag(), tag_name);
 
                     field_symbols = {
                         let mut temp = Vec::with_capacity_in(field_symbols_temp.len(), arena);
@@ -5529,7 +5517,6 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -5554,7 +5541,6 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -5581,7 +5567,6 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -5599,7 +5584,6 @@ fn convert_tag_union<'a>(
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
-                        tag_name: tag_name.into(),
                         tag_id: tag_id as _,
                         arguments: field_symbols,
                     };
@@ -6449,7 +6433,6 @@ fn substitute_in_expr<'a>(
 
         Tag {
             tag_layout,
-            tag_name,
             tag_id,
             arguments: args,
         } => {
@@ -6470,7 +6453,6 @@ fn substitute_in_expr<'a>(
 
                 Some(Tag {
                     tag_layout: *tag_layout,
-                    tag_name: tag_name.clone(),
                     tag_id: *tag_id,
                     arguments,
                 })

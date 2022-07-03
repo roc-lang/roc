@@ -1226,14 +1226,12 @@ fn expr_spec<'a>(
         Call(call) => call_spec(builder, env, block, layout, call),
         Reuse {
             tag_layout,
-            tag_name: _,
             tag_id,
             arguments,
             ..
         }
         | Tag {
             tag_layout,
-            tag_name: _,
             tag_id,
             arguments,
         } => {

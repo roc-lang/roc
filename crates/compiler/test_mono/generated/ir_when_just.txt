@@ -4,7 +4,7 @@ procedure Num.19 (#Attr.2, #Attr.3):
 
 procedure Test.0 ():
     let Test.10 : I64 = 41i64;
-    let Test.1 : [C I64, C ] = Just Test.10;
+    let Test.1 : [C I64, C ] = TagId(0) Test.10;
     let Test.7 : U8 = 0i64;
     let Test.8 : U8 = GetTagId Test.1;
     let Test.9 : Int1 = lowlevel Eq Test.7 Test.8;
