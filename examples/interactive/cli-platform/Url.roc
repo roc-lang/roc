@@ -49,6 +49,7 @@ append = \@Url urlStr, suffixUnencoded ->
                 |> Str.append "?"
                 |> Str.append after
                 |> @Url
+
         Err NotFound ->
             # There wasn't a query, but there might still be a fragment
             when Str.splitFirst urlStr "#" is
@@ -72,6 +73,7 @@ appendHelp = \prefix, suffix ->
                 Ok { after } ->
                     # TODO `expect before == ""`
                     Str.append prefix after
+
                 Err NotFound ->
                     # This should never happen, because we already verified
                     # that the suffix startsWith "/"
@@ -80,22 +82,21 @@ appendHelp = \prefix, suffix ->
         else
             # prefix ends with "/" but suffix doesn't start with one, so just append.
             Str.append prefix suffix
+    else if Str.startsWith suffix "/" then
+        # Suffix starts with "/" but prefix doesn't end with one, so just append them.
+        Str.append prefix suffix
+    else if Str.isEmpty prefix then
+        # Prefix is empty; return suffix.
+        suffix
+    else if Str.isEmpty suffix then
+        # Suffix is empty; return prefix.
+        prefix
     else
-        if Str.startsWith suffix "/" then
-            # Suffix starts with "/" but prefix doesn't end with one, so just append them.
-            Str.append prefix suffix
-        else if Str.isEmpty prefix then
-            # Prefix is empty; return suffix.
-            suffix
-        else if Str.isEmpty suffix then
-            # Suffix is empty; return prefix.
-            prefix
-        else
-            # Neither is empty, but neither has a "/", so add one in between.
-            # TODO use Str.reserve once it exists
-            prefix
-                |> Str.append "/"
-                |> Str.append suffix
+        # Neither is empty, but neither has a "/", so add one in between.
+        # TODO use Str.reserve once it exists
+        prefix
+            |> Str.append "/"
+            |> Str.append suffix
 
 ## Internal helper. This is intentionally unexposed so that you don't accidentally
 ## double-encode things. If you want to percent-encode something, you can always do:
@@ -112,31 +113,31 @@ percentEncode = \input ->
     # TODO instead of starting with "", start with Str.withCapacity based on
     # some the length of the given str. (Maybe be optimistic and assume it's the same length,
     # then let it get doubled if we're wrong.)
-    Str.walkCodePts input "" \output, codePt, codePtStr ->
+    Str.walkScalars input "" \output, scalar ->
         # Spec for percent-encoding: https://www.ietf.org/rfc/rfc3986.txt
-        Str.concat output
-            if
-                (codePt >= 97 && codePt <= 122) # lowercase ASCII
-                || (codePt >= 65 && codePt <= 90) # uppercase ASCII
-                || (codePt >= 48 && codePt <= 57) # digit
-            then
-                # This is the most common case: an unreserved character,
-                # which needs no encoding in a path
-                codePtStr
-            else
-                when codePt is
-                    46 # '.'
-                    | 95 # '_'
-                    | 126 # '~'
-                    | 150 -> # '-'
-                        # These special characters can all be unescaped in paths
-                        codePtStr
+        if
+            (scalar >= 97 && scalar <= 122) # lowercase ASCII
+            || (scalar >= 65 && scalar <= 90) # uppercase ASCII
+            || (scalar >= 48 && scalar <= 57) # digit
+        then
+            # This is the most common case: an unreserved character,
+            # which needs no encoding in a path
+            Str.appendScalar str scalar
+                |> Result.withDefault "" # this will never fail
+        else
+            when scalar is
+                46 # '.'
+                | 95 # '_'
+                | 126 # '~'
+                | 150 -> # '-'
+                    # These special characters can all be unescaped in paths
+                    Str.appendScalar str scalar
+                        |> Result.withDefault "" # this will never fail
+                _ ->
+                    # This needs encoding in a path
+                    hex = Num.toHexUppercase scalar
 
-                    _ ->
-                        # This needs encoding in a path
-                        hex = Num.toHexUppercase codePt
-
-                        "%\(hex)"
+                    Str.append str "%\(hex)"
 
 ## Adds a [Str] query parameter to the end of the [Url]. Both the key
 ## and the value are [percent-encoded](https://en.wikipedia.org/wiki/Percent-encoding).
