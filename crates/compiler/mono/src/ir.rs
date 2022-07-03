@@ -7724,52 +7724,21 @@ fn call_by_name_help<'a>(
                     proc_name,
                 );
 
-                let has_captures = argument_layouts.len() != top_level_layout.arguments.len();
-                let closure_argument = env.unique_symbol();
-
-                if has_captures {
-                    field_symbols.push(closure_argument);
-                }
-
                 let field_symbols = field_symbols.into_bump_slice();
 
-                let call = self::Call {
-                    call_type: CallType::ByName {
-                        name: proc_name,
-                        ret_layout,
-                        arg_layouts: top_level_layout.arguments,
-                        specialization_id: env.next_call_specialization_id(),
-                    },
-                    arguments: field_symbols,
-                };
-
-                let result = build_call(env, call, assigned, *ret_layout, hole);
-
-                // NOTE: the zip omits the closure symbol, if it exists,
-                // because loc_args then is shorter than field_symbols
-                debug_assert!([0, 1].contains(&(field_symbols.len() - loc_args.len())));
-                let iter = loc_args.into_iter().zip(field_symbols.iter()).rev();
-                let result = assign_to_symbols(env, procs, layout_cache, iter, result);
-
-                if has_captures {
-                    let partial_proc = procs.partial_procs.get_symbol(proc_name.name()).unwrap();
-
-                    let captured = match partial_proc.captured_symbols {
-                        CapturedSymbols::None => &[],
-                        CapturedSymbols::Captured(slice) => slice,
-                    };
-
-                    construct_closure_data(
-                        env,
-                        lambda_set,
-                        proc_name,
-                        captured.iter(),
-                        closure_argument,
-                        env.arena.alloc(result),
-                    )
-                } else {
-                    result
-                }
+                call_specialized_proc(
+                    env,
+                    procs,
+                    proc_name,
+                    lambda_set,
+                    RawFunctionLayout::Function(argument_layouts, lambda_set, ret_layout),
+                    top_level_layout,
+                    field_symbols,
+                    loc_args,
+                    layout_cache,
+                    assigned,
+                    hole,
+                )
             }
             PendingSpecializations::Making => {
                 let opt_partial_proc = procs.partial_procs.symbol_to_id(proc_name.name());
@@ -7795,10 +7764,11 @@ fn call_by_name_help<'a>(
                             partial_proc,
                         ) {
                             Ok((proc, layout)) => {
+                                let proc_name = proc.name;
                                 let function_layout = ProcLayout::from_raw(
                                     env.arena,
                                     layout,
-                                    proc.name.captures_niche(),
+                                    proc_name.captures_niche(),
                                 );
                                 procs.specialized.insert_specialized(
                                     proc_name.name(),
@@ -7828,6 +7798,7 @@ fn call_by_name_help<'a>(
                                     attempted_layout,
                                 );
 
+                                let proc_name = proc.name;
                                 let function_layout = ProcLayout::from_raw(
                                     env.arena,
                                     attempted_layout,
