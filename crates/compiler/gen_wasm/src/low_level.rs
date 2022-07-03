@@ -11,7 +11,7 @@ use roc_mono::low_level::HigherOrder;
 
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
 use crate::layout::{CallConv, StackMemoryFormat, WasmLayout};
-use crate::storage::{StackMemoryLocation, StoredValue};
+use crate::storage::{StackMemoryLocation, StoredValue, AddressValue};
 use crate::wasm_module::{Align, LocalId, ValueType};
 use crate::TARGET_INFO;
 
@@ -315,14 +315,12 @@ impl<'a> LowLevelCall<'a> {
 
                 // Target element heap pointer
                 backend.code_builder.i32_add(); // base + index*size
-                let elem_heap_ptr = backend.storage.create_anonymous_local(ValueType::I32);
-                backend.code_builder.set_local(elem_heap_ptr);
 
                 // Copy to stack
                 backend.storage.copy_value_from_memory(
                     &mut backend.code_builder,
                     self.ret_symbol,
-                    elem_heap_ptr,
+                    AddressValue::Loaded,
                     0,
                 );
 

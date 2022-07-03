@@ -17,7 +17,7 @@ use roc_std::RocDec;
 
 use crate::layout::{CallConv, ReturnMethod, WasmLayout};
 use crate::low_level::{call_higher_order_lowlevel, LowLevelCall};
-use crate::storage::{Storage, StoredValue, StoredVarKind};
+use crate::storage::{AddressValue, Storage, StoredValue, StoredVarKind};
 use crate::wasm_module::linking::{DataSymbol, WasmObjectSymbol};
 use crate::wasm_module::sections::{
     ConstExpr, DataMode, DataSegment, Export, Global, GlobalType, Import, ImportDesc, Limits,
@@ -928,7 +928,7 @@ impl<'a> WasmBackend<'a> {
                 index,
                 field_layouts,
                 structure,
-            } => self.expr_struct_at_index(sym, storage, *index, field_layouts, *structure),
+            } => self.expr_struct_at_index(sym, *index, field_layouts, *structure),
 
             Expr::Array { elems, elem_layout } => self.expr_array(sym, storage, elem_layout, elems),
 
@@ -955,7 +955,7 @@ impl<'a> WasmBackend<'a> {
 
             Expr::ExprBox { symbol: arg_sym } => self.expr_box(sym, *arg_sym, layout, storage),
 
-            Expr::ExprUnbox { symbol: arg_sym } => self.expr_unbox(sym, *arg_sym, storage),
+            Expr::ExprUnbox { symbol: arg_sym } => self.expr_unbox(sym, *arg_sym),
 
             Expr::Reuse {
                 tag_layout,
@@ -1353,16 +1353,15 @@ impl<'a> WasmBackend<'a> {
     fn expr_struct_at_index(
         &mut self,
         sym: Symbol,
-        storage: &StoredValue,
         index: u64,
         field_layouts: &'a [Layout<'a>],
         structure: Symbol,
     ) {
-        self.storage
-            .ensure_value_has_local(&mut self.code_builder, sym, storage.to_owned());
-        let (local_id, mut offset) = match self.storage.get(&structure) {
+        let (from_addr_val, mut offset) = match self.storage.get(&structure) {
             StoredValue::StackMemory { location, .. } => {
-                location.local_and_offset(self.storage.stack_frame_pointer)
+                let (local_id, offset) =
+                    location.local_and_offset(self.storage.stack_frame_pointer);
+                (AddressValue::NotLoaded(local_id), offset)
             }
 
             StoredValue::Local {
@@ -1371,18 +1370,20 @@ impl<'a> WasmBackend<'a> {
                 ..
             } => {
                 debug_assert!(matches!(value_type, ValueType::I32));
-                (*local_id, 0)
+                (AddressValue::NotLoaded(*local_id), 0)
             }
 
             StoredValue::VirtualMachineStack { .. } => {
-                internal_error!("ensure_value_has_local didn't work")
+                self.storage
+                    .load_symbols(&mut self.code_builder, &[structure]);
+                (AddressValue::Loaded, 0)
             }
         };
         for field in field_layouts.iter().take(index as usize) {
             offset += field.stack_size(TARGET_INFO);
         }
         self.storage
-            .copy_value_from_memory(&mut self.code_builder, sym, local_id, offset);
+            .copy_value_from_memory(&mut self.code_builder, sym, from_addr_val, offset);
     }
 
     /*******************************************************************
@@ -1700,20 +1701,22 @@ impl<'a> WasmBackend<'a> {
 
         let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(TARGET_INFO);
 
-        let from_ptr = if stores_tag_id_in_pointer {
-            let ptr = self.storage.create_anonymous_local(ValueType::I32);
+        let from_addr_val = if stores_tag_id_in_pointer {
             self.code_builder.get_local(tag_local_id);
             self.code_builder.i32_const(-4); // 11111111...1100
             self.code_builder.i32_and();
-            self.code_builder.set_local(ptr);
-            ptr
+            AddressValue::Loaded
         } else {
-            tag_local_id
+            AddressValue::NotLoaded(tag_local_id)
         };
 
         let from_offset = tag_offset + field_offset;
-        self.storage
-            .copy_value_from_memory(&mut self.code_builder, symbol, from_ptr, from_offset);
+        self.storage.copy_value_from_memory(
+            &mut self.code_builder,
+            symbol,
+            from_addr_val,
+            from_offset,
+        );
     }
 
     /*******************************************************************
@@ -1753,20 +1756,28 @@ impl<'a> WasmBackend<'a> {
             .copy_value_to_memory(&mut self.code_builder, ptr_local_id, 0, arg_sym);
     }
 
-    fn expr_unbox(&mut self, ret_sym: Symbol, arg_sym: Symbol, storage: &StoredValue) {
-        // ensure we have a local variable for the argument (an i32 heap pointer)
-        let ptr_local_id = match self.storage.ensure_value_has_local(
-            &mut self.code_builder,
-            arg_sym,
-            storage.clone(),
-        ) {
-            StoredValue::Local { local_id, .. } => local_id,
-            _ => internal_error!("A heap pointer will always be an i32"),
+    fn expr_unbox(&mut self, ret_sym: Symbol, arg_sym: Symbol) {
+        let (from_addr_val, from_offset) = match self.storage.get(&arg_sym) {
+            StoredValue::VirtualMachineStack { .. } => {
+                self.storage
+                    .load_symbols(&mut self.code_builder, &[arg_sym]);
+                (AddressValue::Loaded, 0)
+            }
+            StoredValue::Local { local_id, .. } => (AddressValue::NotLoaded(*local_id), 0),
+            StoredValue::StackMemory { location, .. } => {
+                let (local_id, offset) =
+                    location.local_and_offset(self.storage.stack_frame_pointer);
+                (AddressValue::NotLoaded(local_id), offset)
+            }
         };
 
         // Copy the value
-        self.storage
-            .copy_value_from_memory(&mut self.code_builder, ret_sym, ptr_local_id, 0);
+        self.storage.copy_value_from_memory(
+            &mut self.code_builder,
+            ret_sym,
+            from_addr_val,
+            from_offset,
+        );
     }
 
     /*******************************************************************
