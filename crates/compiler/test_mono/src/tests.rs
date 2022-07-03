@@ -1682,3 +1682,18 @@ fn choose_u128_layout() {
         "#
     )
 }
+
+#[mono_test]
+fn recursive_call_capturing_function() {
+    indoc!(
+        r#"
+        a = \b ->
+            c : U32 -> U32
+            c = \d ->
+                if True then d else c (d+b)
+            c 0
+
+        a 6
+        "#
+    )
+}
