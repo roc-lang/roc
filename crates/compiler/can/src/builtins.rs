@@ -74,6 +74,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_CONCAT => str_concat,
         STR_JOIN_WITH => str_join_with,
         STR_TO_SCALARS => str_to_scalars,
+        STR_GET_UNSAFE => str_get_unsafe,
         STR_SPLIT => str_split,
         STR_IS_EMPTY => str_is_empty,
         STR_STARTS_WITH => str_starts_with,
@@ -1669,67 +1670,24 @@ fn str_concat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
+/// List.getUnsafe : Str, Nat -> U8
+fn str_get_unsafe(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::StrGetUnsafe, var_store)
+}
+
 /// Str.toScalars : Str -> List U32
 fn str_to_scalars(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let str_var = var_store.fresh();
-    let list_u32_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::StrToScalars,
-        args: vec![(str_var, Var(Symbol::ARG_1))],
-        ret_var: list_u32_var,
-    };
-
-    defn(
-        symbol,
-        vec![(str_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        list_u32_var,
-    )
+    lowlevel_1(symbol, LowLevel::StrToScalars, var_store)
 }
 
 /// Str.joinWith : List Str, Str -> Str
 fn str_join_with(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let list_str_var = var_store.fresh();
-    let str_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::StrJoinWith,
-        args: vec![
-            (list_str_var, Var(Symbol::ARG_1)),
-            (str_var, Var(Symbol::ARG_2)),
-        ],
-        ret_var: str_var,
-    };
-
-    defn(
-        symbol,
-        vec![(list_str_var, Symbol::ARG_1), (str_var, Symbol::ARG_2)],
-        var_store,
-        body,
-        str_var,
-    )
+    lowlevel_2(symbol, LowLevel::StrJoinWith, var_store)
 }
 
 /// Str.isEmpty : Str -> Bool
 fn str_is_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let str_var = var_store.fresh();
-    let bool_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::StrIsEmpty,
-        args: vec![(str_var, Var(Symbol::ARG_1))],
-        ret_var: bool_var,
-    };
-
-    defn(
-        symbol,
-        vec![(str_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        bool_var,
-    )
+    lowlevel_1(symbol, LowLevel::StrIsEmpty, var_store)
 }
 
 /// Str.startsWith : Str, Str -> Bool

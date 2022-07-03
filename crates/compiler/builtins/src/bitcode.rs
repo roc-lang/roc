@@ -330,6 +330,7 @@ pub const STR_REPEAT: &str = "roc_builtins.str.repeat";
 pub const STR_TRIM: &str = "roc_builtins.str.trim";
 pub const STR_TRIM_LEFT: &str = "roc_builtins.str.trim_left";
 pub const STR_TRIM_RIGHT: &str = "roc_builtins.str.trim_right";
+pub const STR_GET_UNSAFE: &str = "roc_builtins.str.get_unsafe";
 
 pub const DICT_HASH: &str = "roc_builtins.dict.hash";
 pub const DICT_HASH_STR: &str = "roc_builtins.dict.hash_str";

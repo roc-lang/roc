@@ -24,6 +24,7 @@ pub enum LowLevel {
     StrTrimRight,
     StrToNum,
     StrToScalars,
+    StrGetUnsafe,
     ListLen,
     ListWithCapacity,
     ListGetUnsafe,
@@ -167,6 +168,7 @@ impl LowLevelWrapperType {
 
         match symbol {
             Symbol::STR_CONCAT => CanBeReplacedBy(StrConcat),
+            Symbol::STR_GET_UNSAFE => CanBeReplacedBy(StrGetUnsafe),
             Symbol::STR_TO_SCALARS => CanBeReplacedBy(StrToScalars),
             Symbol::STR_JOIN_WITH => CanBeReplacedBy(StrJoinWith),
             Symbol::STR_IS_EMPTY => CanBeReplacedBy(StrIsEmpty),

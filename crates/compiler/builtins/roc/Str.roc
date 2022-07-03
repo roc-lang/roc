@@ -221,3 +221,6 @@ toU16 : Str -> Result U16 [InvalidNumStr]*
 toI16 : Str -> Result I16 [InvalidNumStr]*
 toU8 : Str -> Result U8 [InvalidNumStr]*
 toI8 : Str -> Result I8 [InvalidNumStr]*
+
+## Gets the byte at the given index, without performing a bounds check
+getUnsafe : Str, Nat -> U8

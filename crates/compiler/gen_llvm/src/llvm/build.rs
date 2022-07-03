@@ -5468,8 +5468,17 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             list_prepend(env, original_wrapper, elem, elem_layout)
         }
+        StrGetUnsafe => {
+            // List.getUnsafe : List elem, Nat -> elem
+            debug_assert_eq!(args.len(), 2);
+
+            let wrapper_struct = load_symbol(scope, &args[0]);
+            let elem_index = load_symbol(scope, &args[1]);
+
+            call_bitcode_fn(env, &[wrapper_struct, elem_index], bitcode::STR_GET_UNSAFE)
+        }
         ListGetUnsafe => {
-            // List.get : List elem, Nat -> [Ok elem, OutOfBounds]*
+            // List.getUnsafe : List elem, Nat -> elem
             debug_assert_eq!(args.len(), 2);
 
             let (wrapper_struct, list_layout) = load_symbol_and_layout(scope, &args[0]);
