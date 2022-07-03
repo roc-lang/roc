@@ -16,7 +16,7 @@ global.fetch = (filename) =>
 const { roc_web_platform_run } = require("./host");
 
 roc_web_platform_run("./rocLovesWebAssembly.wasm", (string_from_roc) => {
-  const expected = "Hello, World!\n";
+  const expected = "Roc <3 Web Assembly!\n";
   if (string_from_roc !== expected) {
     console.error(`Expected "${expected}", but got "${string_from_roc}"`);
     process.exit(1);
