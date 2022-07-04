@@ -1,4 +1,4 @@
-use crate::subs::Variable;
+use crate::subs::{Content, GetSubsSlice, Subs, Variable};
 use roc_module::symbol::Symbol;
 
 /// A bound placed on a number because of its literal value.
@@ -11,36 +11,120 @@ pub enum NumericRange {
     NumAtLeastEitherSign(IntLitWidth),
 }
 
+#[derive(Debug)]
+pub enum MatchResult {
+    /// When the range < content, for example <U8, I8> < Int *
+    RangeInContent,
+    /// When the content < range, for example I8 < <U8, I8>
+    ContentInRange,
+    /// Ranges don't intersect
+    NoIntersection,
+    /// The content is not comparable
+    DifferentContent,
+}
+
+fn from_content_in_range(result: bool) -> MatchResult {
+    if result {
+        MatchResult::ContentInRange
+    } else {
+        MatchResult::NoIntersection
+    }
+}
+
 impl NumericRange {
-    pub fn contains_symbol(&self, symbol: Symbol) -> Option<bool> {
-        let contains = match symbol {
-            Symbol::NUM_I8 => self.contains_int_width(IntLitWidth::I8),
-            Symbol::NUM_U8 => self.contains_int_width(IntLitWidth::U8),
-            Symbol::NUM_I16 => self.contains_int_width(IntLitWidth::I16),
-            Symbol::NUM_U16 => self.contains_int_width(IntLitWidth::U16),
-            Symbol::NUM_I32 => self.contains_int_width(IntLitWidth::I32),
-            Symbol::NUM_U32 => self.contains_int_width(IntLitWidth::U32),
-            Symbol::NUM_I64 => self.contains_int_width(IntLitWidth::I64),
-            Symbol::NUM_NAT => self.contains_int_width(IntLitWidth::Nat),
-            Symbol::NUM_U64 => self.contains_int_width(IntLitWidth::U64),
-            Symbol::NUM_I128 => self.contains_int_width(IntLitWidth::I128),
-            Symbol::NUM_U128 => self.contains_int_width(IntLitWidth::U128),
+    pub fn match_content(&self, subs: &Subs, content: &Content) -> MatchResult {
+        use Content::*;
+        match content {
+            RangedNumber(other_range) => match self.intersection(other_range) {
+                Some(r) => {
+                    if r == *other_range {
+                        MatchResult::ContentInRange
+                    } else {
+                        MatchResult::RangeInContent
+                    }
+                }
+                None => MatchResult::NoIntersection,
+            },
+            Alias(symbol, args, real_var, _) => match *symbol {
+                Symbol::NUM_I8 | Symbol::NUM_SIGNED8 => {
+                    from_content_in_range(self.contains_int_width(IntLitWidth::I8))
+                }
+                Symbol::NUM_U8 | Symbol::NUM_UNSIGNED8 => {
+                    from_content_in_range(self.contains_int_width(IntLitWidth::U8))
+                }
+                Symbol::NUM_I16 | Symbol::NUM_SIGNED16 => {
+                    from_content_in_range(self.contains_int_width(IntLitWidth::I16))
+                }
+                Symbol::NUM_U16 | Symbol::NUM_UNSIGNED16 => {
+                    from_content_in_range(self.contains_int_width(IntLitWidth::U16))
+                }
+                Symbol::NUM_I32 | Symbol::NUM_SIGNED32 => {
+                    from_content_in_range(self.contains_int_width(IntLitWidth::I32))
+                }
+                Symbol::NUM_U32 | Symbol::NUM_UNSIGNED32 => {
+                    from_content_in_range(self.contains_int_width(IntLitWidth::U32))
+                }
+                Symbol::NUM_I64 | Symbol::NUM_SIGNED64 => {
+                    from_content_in_range(self.contains_int_width(IntLitWidth::I64))
+                }
+                Symbol::NUM_NAT | Symbol::NUM_NATURAL => {
+                    from_content_in_range(self.contains_int_width(IntLitWidth::Nat))
+                }
+                Symbol::NUM_U64 | Symbol::NUM_UNSIGNED64 => {
+                    from_content_in_range(self.contains_int_width(IntLitWidth::U64))
+                }
+                Symbol::NUM_I128 | Symbol::NUM_SIGNED128 => {
+                    from_content_in_range(self.contains_int_width(IntLitWidth::I128))
+                }
+                Symbol::NUM_U128 | Symbol::NUM_UNSIGNED128 => {
+                    from_content_in_range(self.contains_int_width(IntLitWidth::U128))
+                }
 
-            Symbol::NUM_DEC => self.contains_float_width(FloatWidth::Dec),
-            Symbol::NUM_F32 => self.contains_float_width(FloatWidth::F32),
-            Symbol::NUM_F64 => self.contains_float_width(FloatWidth::F64),
+                Symbol::NUM_DEC => {
+                    from_content_in_range(self.contains_float_width(FloatWidth::Dec))
+                }
+                Symbol::NUM_F32 => {
+                    from_content_in_range(self.contains_float_width(FloatWidth::F32))
+                }
+                Symbol::NUM_F64 => {
+                    from_content_in_range(self.contains_float_width(FloatWidth::F64))
+                }
+                Symbol::NUM_FRAC | Symbol::NUM_FLOATINGPOINT => {
+                    match self {
+                        NumericRange::IntAtLeastSigned(_)
+                        | NumericRange::IntAtLeastEitherSign(_) => MatchResult::DifferentContent,
+                        NumericRange::NumAtLeastSigned(_)
+                        | NumericRange::NumAtLeastEitherSign(_) => MatchResult::ContentInRange,
+                    }
+                }
+                Symbol::NUM_NUM => {
+                    debug_assert_eq!(args.len(), 1);
+                    match subs.get_content_without_compacting(
+                        subs.get_subs_slice(args.all_variables())[0],
+                    ) {
+                        FlexVar(_) | RigidVar(_) => MatchResult::RangeInContent,
+                        _ => {
+                            self.match_content(subs, subs.get_content_without_compacting(*real_var))
+                        }
+                    }
+                }
+                Symbol::NUM_INT | Symbol::NUM_INTEGER => {
+                    debug_assert_eq!(args.len(), 1);
+                    match subs.get_content_without_compacting(
+                        subs.get_subs_slice(args.all_variables())[0],
+                    ) {
+                        FlexVar(_) | RigidVar(_) => MatchResult::RangeInContent,
+                        _ => {
+                            self.match_content(subs, subs.get_content_without_compacting(*real_var))
+                        }
+                    }
+                }
 
-            Symbol::NUM_NUM | Symbol::NUM_INT | Symbol::NUM_FRAC => {
-                // these satisfy any range that they are given
-                true
-            }
+                _ => MatchResult::DifferentContent,
+            },
 
-            _ => {
-                return None;
-            }
-        };
-
-        Some(contains)
+            _ => MatchResult::DifferentContent,
+        }
     }
 
     fn contains_float_width(&self, _width: FloatWidth) -> bool {
@@ -83,26 +167,31 @@ impl NumericRange {
     pub fn intersection(&self, other: &Self) -> Option<Self> {
         use NumericRange::*;
         let (left, right) = (self.width(), other.width());
-        let constructor: fn(IntLitWidth) -> NumericRange = match (self, other) {
+        let (constructor, is_negative): (fn(IntLitWidth) -> NumericRange, _) = match (self, other) {
             // Matching against a signed int, the intersection must also be a signed int
-            (IntAtLeastSigned(_), _) | (_, IntAtLeastSigned(_)) => IntAtLeastSigned,
+            (IntAtLeastSigned(_), _) | (_, IntAtLeastSigned(_)) => (IntAtLeastSigned, true),
             // It's a signed number, but also an int, so the intersection must be a signed int
             (NumAtLeastSigned(_), IntAtLeastEitherSign(_))
-            | (IntAtLeastEitherSign(_), NumAtLeastSigned(_)) => IntAtLeastSigned,
+            | (IntAtLeastEitherSign(_), NumAtLeastSigned(_)) => (IntAtLeastSigned, true),
             //  It's a signed number
             (NumAtLeastSigned(_), NumAtLeastSigned(_) | NumAtLeastEitherSign(_))
-            | (NumAtLeastEitherSign(_), NumAtLeastSigned(_)) => NumAtLeastSigned,
+            | (NumAtLeastEitherSign(_), NumAtLeastSigned(_)) => (NumAtLeastSigned, true),
             // Otherwise we must be an int, signed or unsigned
             (IntAtLeastEitherSign(_), IntAtLeastEitherSign(_) | NumAtLeastEitherSign(_))
-            | (NumAtLeastEitherSign(_), IntAtLeastEitherSign(_)) => IntAtLeastEitherSign,
+            | (NumAtLeastEitherSign(_), IntAtLeastEitherSign(_)) => (IntAtLeastEitherSign, false),
             // Otherwise we must be a num, signed or unsigned
-            (NumAtLeastEitherSign(_), NumAtLeastEitherSign(_)) => NumAtLeastEitherSign,
+            (NumAtLeastEitherSign(_), NumAtLeastEitherSign(_)) => (NumAtLeastEitherSign, false),
         };
 
-        // One is a superset of the other if it's a superset on both sides
-        if left.is_superset(&right, true) && left.is_superset(&right, false) {
+        // If the intersection must be signed but one of the lower bounds isn't signed, then there
+        // is no intersection.
+        if is_negative && (!left.is_signed() || !right.is_signed()) {
+            None
+        }
+        // Otherwise, find the greatest lower bound depending on the signed-ness.
+        else if left.is_superset(&right, is_negative) {
             Some(constructor(left))
-        } else if right.is_superset(&left, true) && right.is_superset(&left, false) {
+        } else if right.is_superset(&left, is_negative) {
             Some(constructor(right))
         } else {
             None
@@ -115,29 +204,36 @@ impl NumericRange {
         match self {
             IntAtLeastSigned(width) => {
                 let target = int_lit_width_to_variable(*width);
-                let start = SIGNED_VARIABLES.iter().position(|v| *v == target).unwrap();
-                let end = SIGNED_VARIABLES.len() - 3;
+                let start = SIGNED_INT_VARIABLES
+                    .iter()
+                    .position(|v| *v == target)
+                    .unwrap();
 
-                &SIGNED_VARIABLES[start..end]
+                &SIGNED_INT_VARIABLES[start..]
             }
             IntAtLeastEitherSign(width) => {
                 let target = int_lit_width_to_variable(*width);
-                let start = ALL_VARIABLES.iter().position(|v| *v == target).unwrap();
-                let end = ALL_VARIABLES.len() - 3;
+                let start = ALL_INT_VARIABLES.iter().position(|v| *v == target).unwrap();
 
-                &ALL_VARIABLES[start..end]
+                &ALL_INT_VARIABLES[start..]
             }
             NumAtLeastSigned(width) => {
                 let target = int_lit_width_to_variable(*width);
-                let start = SIGNED_VARIABLES.iter().position(|v| *v == target).unwrap();
+                let start = SIGNED_INT_OR_FLOAT_VARIABLES
+                    .iter()
+                    .position(|v| *v == target)
+                    .unwrap();
 
-                &SIGNED_VARIABLES[start..]
+                &SIGNED_INT_OR_FLOAT_VARIABLES[start..]
             }
             NumAtLeastEitherSign(width) => {
                 let target = int_lit_width_to_variable(*width);
-                let start = ALL_VARIABLES.iter().position(|v| *v == target).unwrap();
+                let start = ALL_INT_OR_FLOAT_VARIABLES
+                    .iter()
+                    .position(|v| *v == target)
+                    .unwrap();
 
-                &ALL_VARIABLES[start..]
+                &ALL_INT_OR_FLOAT_VARIABLES[start..]
             }
         }
     }
@@ -194,6 +290,10 @@ impl IntLitWidth {
             F64 => (Signed, 53),
             Dec => (Signed, 128),
         }
+    }
+
+    fn is_signed(&self) -> bool {
+        return self.signedness_and_width().0 == IntSignedness::Signed;
     }
 
     pub fn type_str(&self) -> &'static str {
@@ -371,7 +471,7 @@ pub const fn float_width_to_variable(w: FloatWidth) -> Variable {
     }
 }
 
-const ALL_VARIABLES: &[Variable] = &[
+const ALL_INT_OR_FLOAT_VARIABLES: &[Variable] = &[
     Variable::I8,
     Variable::U8,
     Variable::I16,
@@ -388,7 +488,7 @@ const ALL_VARIABLES: &[Variable] = &[
     Variable::U128,
 ];
 
-const SIGNED_VARIABLES: &[Variable] = &[
+const SIGNED_INT_OR_FLOAT_VARIABLES: &[Variable] = &[
     Variable::I8,
     Variable::I16,
     Variable::F32,
@@ -397,4 +497,26 @@ const SIGNED_VARIABLES: &[Variable] = &[
     Variable::I64,
     Variable::I128,
     Variable::DEC,
+];
+
+const ALL_INT_VARIABLES: &[Variable] = &[
+    Variable::I8,
+    Variable::U8,
+    Variable::I16,
+    Variable::U16,
+    Variable::I32,
+    Variable::U32,
+    Variable::I64,
+    Variable::NAT, // FIXME: Nat's order here depends on the platform
+    Variable::U64,
+    Variable::I128,
+    Variable::U128,
+];
+
+const SIGNED_INT_VARIABLES: &[Variable] = &[
+    Variable::I8,
+    Variable::I16,
+    Variable::I32,
+    Variable::I64,
+    Variable::I128,
 ];

@@ -475,7 +475,7 @@ fn unify_context<M: MetaCollector>(subs: &mut Subs, pool: &mut Pool, ctx: Contex
             unify_opaque(subs, pool, &ctx, *symbol, *args, *real_var)
         }
         LambdaSet(lset) => unify_lambda_set(subs, pool, &ctx, *lset, &ctx.second_desc.content),
-        &RangedNumber(typ, range_vars) => unify_ranged_number(subs, pool, &ctx, typ, range_vars),
+        &RangedNumber(range_vars) => unify_ranged_number(subs, &ctx, range_vars),
         Error => {
             // Error propagates. Whatever we're comparing it to doesn't matter!
             merge(subs, &ctx, Error)
@@ -500,9 +500,7 @@ fn not_in_range_mismatch<M: MetaCollector>() -> Outcome<M> {
 #[inline(always)]
 fn unify_ranged_number<M: MetaCollector>(
     subs: &mut Subs,
-    pool: &mut Pool,
     ctx: &Context,
-    real_var: Variable,
     range_vars: NumericRange,
 ) -> Outcome<M> {
     let other_content = &ctx.second_desc.content;
@@ -510,71 +508,38 @@ fn unify_ranged_number<M: MetaCollector>(
     match other_content {
         FlexVar(_) => {
             // Ranged number wins
-            merge(subs, ctx, RangedNumber(real_var, range_vars))
+            merge(subs, ctx, RangedNumber(range_vars))
         }
         RecursionVar { .. }
         | RigidVar(..)
         | Alias(..)
         | Structure(..)
         | RigidAbleVar(..)
-        | FlexAbleVar(..) => {
-            let outcome = unify_pool(subs, pool, real_var, ctx.second, ctx.mode);
-            if !outcome.mismatches.is_empty() {
-                return outcome;
-            }
-            let outcome = check_valid_range(subs, ctx.second, range_vars);
-            if !outcome.mismatches.is_empty() {
-                return outcome;
-            }
-            let real_var = subs.fresh(subs.get_without_compacting(real_var));
-            merge(subs, ctx, RangedNumber(real_var, range_vars))
-        }
-        &RangedNumber(other_real_var, other_range_vars) => {
-            let outcome = unify_pool(subs, pool, real_var, other_real_var, ctx.mode);
-            if !outcome.mismatches.is_empty() {
-                return outcome;
-            }
-            match range_vars.intersection(&other_range_vars) {
-                Some(range) => merge(subs, ctx, RangedNumber(real_var, range)),
-                None => not_in_range_mismatch(),
-            }
-        }
+        | FlexAbleVar(..) => check_and_merge_valid_range(subs, ctx, ctx.second, range_vars),
+        &RangedNumber(other_range_vars) => match range_vars.intersection(&other_range_vars) {
+            Some(range) => merge(subs, ctx, RangedNumber(range)),
+            None => not_in_range_mismatch(),
+        },
         LambdaSet(..) => mismatch!(),
         Error => merge(subs, ctx, Error),
     }
 }
 
-fn check_valid_range<M: MetaCollector>(
+fn check_and_merge_valid_range<M: MetaCollector>(
     subs: &mut Subs,
+    ctx: &Context,
     var: Variable,
     range: NumericRange,
 ) -> Outcome<M> {
-    let content = subs.get_content_without_compacting(var);
+    use roc_types::num::MatchResult;
+    let content = *subs.get_content_without_compacting(var);
 
-    match content {
-        &Content::Alias(symbol, _, actual, _) => {
-            match range.contains_symbol(symbol) {
-                None => {
-                    // symbol not recognized; go into the alias
-                    return check_valid_range(subs, actual, range);
-                }
-                Some(false) => {
-                    return not_in_range_mismatch();
-                }
-                Some(true) => { /* fall through */ }
-            }
-        }
-
-        Content::RangedNumber(_, _) => {
-            // these ranges always intersect, we need more information before we can say more
-        }
-
-        _ => {
-            // anything else is definitely a type error, and will be reported elsewhere
-        }
+    match range.match_content(subs, &content) {
+        MatchResult::RangeInContent => merge(subs, ctx, RangedNumber(range)),
+        MatchResult::ContentInRange => merge(subs, ctx, content),
+        MatchResult::NoIntersection => not_in_range_mismatch(),
+        MatchResult::DifferentContent => mismatch!(),
     }
-
-    Outcome::default()
 }
 
 #[inline(always)]
@@ -668,13 +633,8 @@ fn unify_alias<M: MetaCollector>(
             }
         }
         Structure(_) => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
-        RangedNumber(other_real_var, other_range_vars) => {
-            let outcome = unify_pool(subs, pool, real_var, *other_real_var, ctx.mode);
-            if outcome.mismatches.is_empty() {
-                check_valid_range(subs, real_var, *other_range_vars)
-            } else {
-                outcome
-            }
+        RangedNumber(other_range_vars) => {
+            check_and_merge_valid_range(subs, ctx, ctx.first, *other_range_vars)
         }
         LambdaSet(..) => mismatch!("cannot unify alias {:?} with lambda set {:?}: lambda sets should never be directly behind an alias!", ctx.first, other_content),
         Error => merge(subs, ctx, Error),
@@ -731,15 +691,11 @@ fn unify_opaque<M: MetaCollector>(
                 mismatch!("{:?}", symbol)
             }
         }
-        RangedNumber(other_real_var, other_range_vars) => {
+        RangedNumber(other_range_vars) => {
             // This opaque might be a number, check if it unifies with the target ranged number var.
-            let outcome = unify_pool(subs, pool, ctx.first, *other_real_var, ctx.mode);
-            if outcome.mismatches.is_empty() {
-                check_valid_range(subs, ctx.first, *other_range_vars)
-            } else {
-                outcome
-            }
+            check_and_merge_valid_range(subs, ctx, ctx.first, *other_range_vars)
         }
+        Error => merge(subs, ctx, Error),
         // _other has an underscore because it's unused in --release builds
         _other => {
             // The type on the left is an opaque, but the one on the right is not!
@@ -874,13 +830,8 @@ fn unify_structure<M: MetaCollector>(
                 // other
             )
         }
-        RangedNumber(other_real_var, other_range_vars) => {
-            let outcome = unify_pool(subs, pool, ctx.first, *other_real_var, ctx.mode);
-            if outcome.mismatches.is_empty() {
-                check_valid_range(subs, ctx.first, *other_range_vars)
-            } else {
-                outcome
-            }
+        RangedNumber(other_range_vars) => {
+            check_and_merge_valid_range(subs, ctx, ctx.first, *other_range_vars)
         }
         Error => merge(subs, ctx, Error),
     }

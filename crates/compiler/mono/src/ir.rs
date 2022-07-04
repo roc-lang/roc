@@ -17,7 +17,7 @@ use roc_debug_flags::{
     ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
 };
 use roc_derive_key::GlobalDerivedSymbols;
-use roc_error_macros::todo_abilities;
+use roc_error_macros::{internal_error, todo_abilities};
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
@@ -3742,41 +3742,15 @@ pub fn with_hole<'a>(
             hole,
         ),
 
-        Num(var, num_str, num, _bound) => {
-            // first figure out what kind of number this is
-            match num_argument_to_int_or_float(env.subs, env.target_info, var, false) {
-                IntOrFloat::Int(precision) => Stmt::Let(
-                    assigned,
-                    Expr::Literal(match num {
-                        IntValue::I128(n) => Literal::Int(n),
-                        IntValue::U128(n) => Literal::U128(n),
-                    }),
-                    Layout::int_width(precision),
-                    hole,
-                ),
-                IntOrFloat::Float(precision) => Stmt::Let(
-                    assigned,
-                    Expr::Literal(match num {
-                        IntValue::I128(n) => Literal::Float(i128::from_ne_bytes(n) as f64),
-                        IntValue::U128(n) => Literal::Float(u128::from_ne_bytes(n) as f64),
-                    }),
-                    Layout::float_width(precision),
-                    hole,
-                ),
-                IntOrFloat::DecimalFloatType => {
-                    let dec = match RocDec::from_str(&num_str) {
-                            Some(d) => d,
-                            None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", num_str),
-                        };
-                    Stmt::Let(
-                        assigned,
-                        Expr::Literal(Literal::Decimal(dec.to_ne_bytes())),
-                        Layout::Builtin(Builtin::Decimal),
-                        hole,
-                    )
-                }
-            }
-        }
+        Num(_, num_str, num, _bound) => assign_num_literal(
+            env,
+            layout_cache,
+            assigned,
+            variable,
+            &num_str,
+            IntOrFloatValue::Int(num),
+            hole,
+        ),
         LetNonRec(def, cont) => from_can_let(
             env,
             procs,
@@ -8967,6 +8941,56 @@ pub enum IntOrFloat {
     Int(IntWidth),
     Float(FloatWidth),
     DecimalFloatType,
+}
+
+enum IntOrFloatValue {
+    Int(IntValue),
+    Float(f64),
+}
+
+fn assign_num_literal<'a>(
+    env: &mut Env<'a, '_>,
+    layout_cache: &mut LayoutCache<'a>,
+    assigned: Symbol,
+    variable: Variable,
+    num_str: &str,
+    num_value: IntOrFloatValue,
+    hole: &'a Stmt<'a>,
+) -> Stmt<'a> {
+    let layout = layout_cache
+        .from_var(env.arena, variable, &env.subs)
+        .unwrap();
+    let literal = match layout {
+        Layout::Builtin(Builtin::Int(_)) => match num_value {
+            IntOrFloatValue::Int(IntValue::I128(n)) => Literal::Int(n),
+            IntOrFloatValue::Int(IntValue::U128(n)) => Literal::U128(n),
+            IntOrFloatValue::Float(..) => {
+                internal_error!("Float value where int was expected, should have been a type error")
+            }
+        },
+        Layout::Builtin(Builtin::Float(_)) => match num_value {
+            IntOrFloatValue::Float(n) => Literal::Float(n),
+            IntOrFloatValue::Int(..) => {
+                internal_error!("Int value where float was expected, should have been a type error")
+            }
+        },
+        Layout::Builtin(Builtin::Decimal) => {
+            let dec = match RocDec::from_str(&num_str) {
+                Some(d) => d,
+                None => internal_error!(
+                    "Invalid decimal for float literal = {}. This should be a type error!",
+                    num_str
+                ),
+            };
+            Literal::Decimal(dec.to_ne_bytes())
+        }
+        layout => internal_error!(
+            "Found a non-num layout where a number was expected: {:?}",
+            layout
+        ),
+    };
+
+    Stmt::Let(assigned, Expr::Literal(literal), layout, hole)
 }
 
 /// Given the `a` in `Num a`, determines whether it's an int or a float

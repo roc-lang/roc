@@ -261,7 +261,7 @@ pub enum Type {
     /// Applying a type to some arguments (e.g. Dict.Dict String Int)
     Apply(Symbol, Vec<Type>, Region),
     Variable(Variable),
-    RangedNumber(Box<Type>, NumericRange),
+    RangedNumber(NumericRange),
     /// A type error, which will code gen to a runtime error
     Erroneous(Problem),
 }
@@ -349,7 +349,7 @@ impl Clone for Type {
             }
             Self::Apply(arg0, arg1, arg2) => Self::Apply(*arg0, arg1.clone(), *arg2),
             Self::Variable(arg0) => Self::Variable(*arg0),
-            Self::RangedNumber(arg0, arg1) => Self::RangedNumber(arg0.clone(), *arg1),
+            Self::RangedNumber(arg1) => Self::RangedNumber(*arg1),
             Self::Erroneous(arg0) => Self::Erroneous(arg0.clone()),
         }
     }
@@ -652,8 +652,8 @@ impl fmt::Debug for Type {
 
                 write!(f, " as <{:?}>", rec)
             }
-            Type::RangedNumber(typ, range_vars) => {
-                write!(f, "Ranged({:?}, {:?})", typ, range_vars)
+            Type::RangedNumber(range_vars) => {
+                write!(f, "Ranged({:?})", range_vars)
             }
             Type::UnspecializedLambdaSet(uls) => {
                 write!(f, "{:?}", uls)
@@ -794,9 +794,7 @@ impl Type {
                 Apply(_, args, _) => {
                     stack.extend(args);
                 }
-                RangedNumber(typ, _) => {
-                    stack.push(typ);
-                }
+                RangedNumber(_) => {}
                 UnspecializedLambdaSet(Uls(v, _, _)) => {
                     debug_assert!(
                         substitutions.get(v).is_none(),
@@ -911,9 +909,7 @@ impl Type {
                 Apply(_, args, _) => {
                     stack.extend(args);
                 }
-                RangedNumber(typ, _) => {
-                    stack.push(typ);
-                }
+                RangedNumber(_) => {}
                 UnspecializedLambdaSet(Uls(v, _, _)) => {
                     debug_assert!(
                         substitutions.get(v).is_none(),
@@ -1016,7 +1012,7 @@ impl Type {
                 }
                 Ok(())
             }
-            RangedNumber(typ, _) => typ.substitute_alias(rep_symbol, rep_args, actual),
+            RangedNumber(_) => Ok(()),
             UnspecializedLambdaSet(..) => Ok(()),
             EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => Ok(()),
         }
@@ -1073,7 +1069,7 @@ impl Type {
             }
             Apply(symbol, _, _) if *symbol == rep_symbol => true,
             Apply(_, args, _) => args.iter().any(|arg| arg.contains_symbol(rep_symbol)),
-            RangedNumber(typ, _) => typ.contains_symbol(rep_symbol),
+            RangedNumber(_) => false,
             UnspecializedLambdaSet(Uls(_, sym, _)) => *sym == rep_symbol,
             EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => false,
         }
@@ -1124,7 +1120,7 @@ impl Type {
             } => actual_type.contains_variable(rep_variable),
             HostExposedAlias { actual, .. } => actual.contains_variable(rep_variable),
             Apply(_, args, _) => args.iter().any(|arg| arg.contains_variable(rep_variable)),
-            RangedNumber(typ, _) => typ.contains_variable(rep_variable),
+            RangedNumber(_) => false,
             EmptyRec | EmptyTagUnion | Erroneous(_) => false,
         }
     }
@@ -1387,9 +1383,7 @@ impl Type {
                     }
                 }
             }
-            RangedNumber(typ, _) => {
-                typ.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
-            }
+            RangedNumber(_) => {}
             UnspecializedLambdaSet(..) => {}
             EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
         }
@@ -1525,9 +1519,7 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
             Erroneous(Problem::CyclicAlias(alias, _, _)) => {
                 output.push(*alias);
             }
-            RangedNumber(typ, _) => {
-                stack.push(typ);
-            }
+            RangedNumber(_) => {}
             UnspecializedLambdaSet(Uls(_, _sym, _)) => {
                 // ignore the member symbol because unspecialized lambda sets are internal-only
             }
@@ -1647,9 +1639,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             }
             variables_help(actual, accum);
         }
-        RangedNumber(typ, _) => {
-            variables_help(typ, accum);
-        }
+        RangedNumber(_) => {}
         Apply(_, args, _) => {
             for x in args {
                 variables_help(x, accum);
@@ -1790,9 +1780,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             }
             variables_help_detailed(actual, accum);
         }
-        RangedNumber(typ, _) => {
-            variables_help_detailed(typ, accum);
-        }
+        RangedNumber(_) => {}
         Apply(_, args, _) => {
             for x in args {
                 variables_help_detailed(x, accum);
@@ -2089,7 +2077,7 @@ pub enum ErrorType {
     RecursiveTagUnion(Box<ErrorType>, SendMap<TagName, Vec<ErrorType>>, TypeExt),
     Function(Vec<ErrorType>, Box<ErrorType>, Box<ErrorType>),
     Alias(Symbol, Vec<ErrorType>, Box<ErrorType>, AliasKind),
-    Range(Box<ErrorType>, Vec<ErrorType>),
+    Range(Vec<ErrorType>),
     Error,
 }
 
@@ -2145,8 +2133,7 @@ impl ErrorType {
                 });
                 t.add_names(taken);
             }
-            Range(typ, ts) => {
-                typ.add_names(taken);
+            Range(ts) => {
                 ts.iter().for_each(|t| {
                     t.add_names(taken);
                 });
@@ -2472,8 +2459,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
 
             write_debug_error_type_help(*rec, buf, Parens::Unnecessary);
         }
-        Range(typ, types) => {
-            write_debug_error_type_help(*typ, buf, parens);
+        Range(types) => {
             buf.push('<');
 
             let mut it = types.into_iter().peekable();
@@ -2825,9 +2811,7 @@ fn instantiate_lambda_sets_as_unspecialized(
                 stack.extend(args.iter_mut().rev());
             }
             Type::Variable(_) => {}
-            Type::RangedNumber(t, _) => {
-                stack.push(t);
-            }
+            Type::RangedNumber(_) => {}
             Type::Erroneous(_) => {}
         }
     }

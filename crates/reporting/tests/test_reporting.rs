@@ -3301,12 +3301,12 @@ mod test_reporting {
 
     This `ACons` tag application has the type:
 
-        [ACons (Int Signed64) [BCons (Int Signed64) [ACons Str [BCons (Int Signed64) [ACons (Int Signed64) (BList (Int Signed64) I64),
+        [ACons (Int Signed64) [BCons (Int Signed64) [ACons Str [BCons I64 [ACons I64 (BList I64 I64),
         ANil] as ∞, BNil], ANil], BNil], ANil]
 
     But the type annotation on `x` says it should be:
 
-        [ACons (Int Signed64) (BList (Int Signed64) I64), ANil] as a
+        [ACons I64 (BList I64 I64), ANil] as a
     "###
     );
 
@@ -3375,6 +3375,21 @@ mod test_reporting {
     -170_141_183_460_469_231_731_687_303_715_884_105_728.
 
     Tip: Learn more about number literals at TODO
+
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd argument to `add` is not what I expect:
+
+    14│      x + y + h + l + minlit + maxlit
+                                      ^^^^^^
+
+    This `maxlit` value is a:
+
+        U128
+
+    But `add` needs the 2nd argument to be:
+
+        I128 or Dec
     "###
     );
 

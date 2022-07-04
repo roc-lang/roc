@@ -1520,6 +1520,7 @@ fn type_comparison<'b>(
         lines.push(alloc.concat(context_hints));
     }
 
+    dbg!(&comparison.problems);
     lines.extend(problems_to_tip(
         alloc,
         comparison.problems,
@@ -2347,13 +2348,12 @@ fn to_doc_help<'b>(
             )
         }
 
-        Range(typ, range_types) => {
-            let typ = to_doc_help(ctx, alloc, parens, *typ);
+        Range(range_types) => {
             let range_types = range_types
                 .into_iter()
                 .map(|arg| to_doc_help(ctx, alloc, Parens::Unnecessary, arg))
                 .collect();
-            report_text::range(alloc, typ, range_types)
+            report_text::range(alloc, range_types)
         }
     }
 }
@@ -2407,6 +2407,27 @@ fn error_type_to_doc<'b>(
     type_with_able_vars(alloc, typ, able_vars)
 }
 
+fn compact_builtin_aliases(typ: ErrorType) -> ErrorType {
+    use ErrorType::*;
+    match typ {
+        Alias(Symbol::NUM_NUM, mut args, real, kind) => {
+            debug_assert!(args.len() == 1);
+            let type_arg = args.remove(0);
+
+            match type_arg {
+                Alias(Symbol::NUM_FLOATINGPOINT, inner_args, real, _) => {
+                    Alias(Symbol::NUM_FRAC, inner_args, real, AliasKind::Structural)
+                }
+                Alias(Symbol::NUM_INTEGER, inner_args, real, _) => {
+                    Alias(Symbol::NUM_INT, inner_args, real, AliasKind::Structural)
+                }
+                _ => Alias(Symbol::NUM_NUM, vec![type_arg], real, kind),
+            }
+        }
+        typ => typ,
+    }
+}
+
 fn to_diff<'b>(
     alloc: &'b RocDocAllocator<'b>,
     parens: Parens,
@@ -2414,6 +2435,11 @@ fn to_diff<'b>(
     type2: ErrorType,
 ) -> Diff<RocDocBuilder<'b>> {
     use ErrorType::*;
+
+    let (type1, type2) = (
+        compact_builtin_aliases(type1),
+        compact_builtin_aliases(type2),
+    );
 
     // TODO remove clone
     match (type1.clone(), type2.clone()) {
@@ -3318,7 +3344,6 @@ mod report_text {
 
     pub fn range<'b>(
         alloc: &'b RocDocAllocator<'b>,
-        _encompassing_type: RocDocBuilder<'b>,
         ranged_types: Vec<RocDocBuilder<'b>>,
     ) -> RocDocBuilder<'b> {
         let mut doc = Vec::with_capacity(ranged_types.len() * 2);

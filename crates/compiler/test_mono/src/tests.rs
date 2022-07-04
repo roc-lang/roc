@@ -1652,3 +1652,12 @@ fn lambda_set_niche_same_layout_different_constructor() {
         "#
     )
 }
+
+#[mono_test]
+fn choose_u64_layout() {
+    indoc!(
+        r#"
+        9999999999999999999 + 1
+        "#
+    )
+}

@@ -1572,7 +1572,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    Foo "happy" 2020
+                    Foo "happy" 12
                 "#
             ),
             "[Foo Str (Num *)]*",
@@ -2531,7 +2531,7 @@ mod solve_expr {
                     { numIdentity, x : numIdentity 42, y }
                 "#
             ),
-            "{ numIdentity : Num a -> Num a, x : Num b, y : Float * }",
+            "{ numIdentity : Num a -> Num a, x : Num *, y : Float * }",
         );
     }
 
@@ -3951,7 +3951,7 @@ mod solve_expr {
                     negatePoint { x: 1, y: 2.1, z: 0x3 }
                 "#
             ),
-            "{ x : Num a, y : Float *, z : Int * }",
+            "{ x : Num *, y : Float *, z : Int * }",
         );
     }
 
@@ -3968,7 +3968,7 @@ mod solve_expr {
                     { a, b }
                 "#
             ),
-            "{ a : { x : Num a, y : Float *, z : c }, b : { blah : Str, x : Num b, y : Float *, z : d } }",
+            "{ a : { x : Num *, y : Float *, z : c }, b : { blah : Str, x : Num *, y : Float *, z : a } }",
         );
     }
 

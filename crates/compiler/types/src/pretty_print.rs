@@ -1,3 +1,4 @@
+use crate::num::IntLitWidth;
 use crate::subs::{
     self, AliasVariables, Content, FlatType, GetSubsSlice, Label, Subs, SubsIndex, UnionLabels,
     UnionTags, UnsortedUnionLabels, Variable,
@@ -381,16 +382,21 @@ fn find_names_needed(
                 );
             }
         }
-        &RangedNumber(typ, _) => {
-            find_names_needed(
-                typ,
-                subs,
-                roots,
-                root_appearances,
-                names_taken,
-                find_under_alias,
-            );
-        }
+        RangedNumber(range) => match range {
+            crate::num::NumericRange::NumAtLeastEitherSign(IntLitWidth::I8)
+            | crate::num::NumericRange::IntAtLeastEitherSign(IntLitWidth::I8) => {
+                subs.set_content(variable, FlexVar(None));
+                find_names_needed(
+                    variable,
+                    subs,
+                    roots,
+                    root_appearances,
+                    names_taken,
+                    find_under_alias,
+                )
+            }
+            _ => {}
+        },
         Error | Structure(Erroneous(_)) | Structure(EmptyRecord) | Structure(EmptyTagUnion) => {
             // Errors and empty records don't need names.
         }
@@ -783,14 +789,23 @@ fn write_content<'a>(
 
             buf.push(']');
         }
-        RangedNumber(typ, _range_vars) => write_content(
-            env,
-            ctx,
-            subs.get_content_without_compacting(*typ),
-            subs,
-            buf,
-            parens,
-        ),
+        RangedNumber(range) => {
+            buf.push_str("Range(");
+            for (i, &var) in range.variable_slice().iter().enumerate() {
+                if i > 0 {
+                    buf.push_str(", ");
+                }
+                write_content(
+                    env,
+                    ctx,
+                    subs.get_content_without_compacting(var),
+                    subs,
+                    buf,
+                    Parens::Unnecessary,
+                );
+            }
+            buf.push_str(")");
+        }
         Error => buf.push_str("<type mismatch>"),
     }
 }
