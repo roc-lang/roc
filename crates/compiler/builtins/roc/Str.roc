@@ -9,6 +9,7 @@ interface Str
             split,
             repeat,
             countGraphemes,
+            countUtf8Bytes,
             startsWithScalar,
             toUtf8,
             fromUtf8,
