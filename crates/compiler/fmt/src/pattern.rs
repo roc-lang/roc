@@ -162,6 +162,10 @@ impl<'a> Formattable for Pattern<'a> {
 
             // Space
             SpaceBefore(sub_pattern, spaces) => {
+                if has_inline_comment(spaces.iter()) {
+                    buf.spaces(1);
+                }
+
                 if !sub_pattern.is_multiline() {
                     fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent)
                 } else {
@@ -172,6 +176,11 @@ impl<'a> Formattable for Pattern<'a> {
             }
             SpaceAfter(sub_pattern, spaces) => {
                 sub_pattern.format_with_options(buf, parens, newlines, indent);
+
+                if has_inline_comment(spaces.iter()) {
+                    buf.spaces(1);
+                }
+
                 if !sub_pattern.is_multiline() {
                     fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent)
                 } else {
@@ -195,4 +204,10 @@ impl<'a> Formattable for Pattern<'a> {
             }
         }
     }
+}
+
+fn has_inline_comment<'a, I: IntoIterator<Item = &'a CommentOrNewline<'a>>>(spaces: I) -> bool {
+    spaces
+        .into_iter()
+        .any(|space| matches!(space, CommentOrNewline::LineComment(_)))
 }
