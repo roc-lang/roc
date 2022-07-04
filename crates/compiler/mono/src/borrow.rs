@@ -561,13 +561,6 @@ impl<'a> BorrowInfState<'a> {
                             self.own_var(*xs);
                         }
                     }
-                    ListMapWithIndex { xs } => {
-                        // List.mapWithIndex : List before, (before, Nat -> after) -> List after
-                        // own the list if the function wants to own the element (before, index 0)
-                        if !function_ps[0].borrow {
-                            self.own_var(*xs);
-                        }
-                    }
                     ListMap2 { xs, ys } => {
                         // own the lists if the function wants to own the element
                         if !function_ps[0].borrow {

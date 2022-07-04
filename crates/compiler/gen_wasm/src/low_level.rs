@@ -2072,7 +2072,7 @@ pub fn call_higher_order_lowlevel<'a>(
             *owns_captured_environment,
         ),
 
-        ListMapWithIndex { .. } | ListSortWith { .. } | DictWalk { .. } => todo!("{:?}", op),
+        ListSortWith { .. } | DictWalk { .. } => todo!("{:?}", op),
     }
 }
 
