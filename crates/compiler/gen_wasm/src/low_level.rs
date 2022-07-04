@@ -265,29 +265,20 @@ impl<'a> LowLevelCall<'a> {
                 Low-level op returns a struct with all the data for both Ok and Err.
                 Roc AST wrapper converts this to a tag union, with app-dependent tag IDs.
 
-                fromUtf8C(arg: RocList, update_mode: UpdateMode, output: *FromUtf8Result) callconv(.C) void
+                fromUtf8C(output: *FromUtf8Result, arg: RocList, update_mode: UpdateMode) callconv(.C) void
+                    output: *FromUtf8Result   i32
                     arg: RocList              i64, i32
                     update_mode: UpdateMode   i32
-                    output: *FromUtf8Result   i32
                 */
-
-                let (ret_ptr, ret_offset) = match &self.ret_storage {
-                    StoredValue::StackMemory { location, .. } => {
-                        location.local_and_offset(backend.storage.stack_frame_pointer)
-                    }
-                    _ => internal_error!("Low-level op StrFromUtf8 should return a struct"),
-                };
-
-                // Return pointer is the last arg rather than the first, so we can't use the usual helper.
-                backend
-                    .storage
-                    .load_symbol_zig(&mut backend.code_builder, self.arguments[0]);
+                backend.storage.load_symbols_for_call(
+                    backend.env.arena,
+                    &mut backend.code_builder,
+                    self.arguments,
+                    self.ret_symbol,
+                    &WasmLayout::new(&self.ret_layout),
+                    CallConv::Zig,
+                );
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
-                backend.code_builder.get_local(ret_ptr);
-                if ret_offset != 0 {
-                    backend.code_builder.i32_const(ret_offset as i32);
-                    backend.code_builder.i32_add();
-                }
                 backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8, 4, false);
             }
             StrTrimLeft => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_LEFT),

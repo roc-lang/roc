@@ -1552,7 +1552,7 @@ const CountAndStart = extern struct {
     start: usize,
 };
 
-pub fn fromUtf8C(arg: RocList, update_mode: UpdateMode, output: *FromUtf8Result) callconv(.C) void {
+pub fn fromUtf8C(output: *FromUtf8Result, arg: RocList, update_mode: UpdateMode) callconv(.C) void {
     output.* = fromUtf8(arg, update_mode);
 }
 
