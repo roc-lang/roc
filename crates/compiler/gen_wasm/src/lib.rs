@@ -184,7 +184,8 @@ pub fn build_app_module<'a>(
     }
 
     let (module, called_preload_fns) = backend.finalize();
-    let main_function_index = maybe_main_fn_index.unwrap();
+    let main_function_index =
+        maybe_main_fn_index.expect("The app must expose at least one value to the host");
 
     (module, called_preload_fns, main_function_index)
 }

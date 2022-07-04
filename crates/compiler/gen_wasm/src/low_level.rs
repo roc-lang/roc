@@ -235,15 +235,7 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args_and_call_zig(backend, bitcode::STR_STARTS_WITH_SCALAR)
             }
             StrEndsWith => self.load_args_and_call_zig(backend, bitcode::STR_ENDS_WITH),
-            StrSplit => {
-                // LLVM implementation (build_str.rs) does the following
-                // 1. Call bitcode::STR_COUNT_SEGMENTS
-                // 2. Allocate a `List Str`
-                // 3. Call bitcode::STR_STR_SPLIT_IN_PLACE
-                // 4. Write the elements and length of the List
-                // To do this here, we need full access to WasmBackend, or we could make a Zig wrapper
-                todo!("{:?}", self.lowlevel);
-            }
+            StrSplit => self.load_args_and_call_zig(backend, bitcode::STR_STR_SPLIT),
             StrCountGraphemes => {
                 self.load_args_and_call_zig(backend, bitcode::STR_COUNT_GRAPEHEME_CLUSTERS)
             }

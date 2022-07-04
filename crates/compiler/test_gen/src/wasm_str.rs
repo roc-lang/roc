@@ -14,257 +14,255 @@ use crate::helpers::wasm::assert_evals_to;
 use indoc::indoc;
 use roc_std::{RocList, RocStr};
 
-// #[test]
-// fn str_split_empty_delimiter() {
-//     assert_evals_to!(
-//         indoc!(
-//             r#"
-//                     List.len (Str.split "hello" "")
-//                 "#
-//         ),
-//         1,
-//         i64
-//     );
+#[test]
+fn str_split_empty_delimiter() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                List.len (Str.split "hello" "")
+            "#
+        ),
+        1,
+        usize
+    );
+}
 
-//     assert_evals_to!(
-//         indoc!(
-//             r#"
-//                     when List.first (Str.split "JJJ" "") is
-//                         Ok str ->
-//                             Str.countGraphemes str
+// This test produces an app that exposes nothing to the host!
+#[test]
+#[ignore]
+fn str_split_empty_delimiter_broken() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when List.first (Str.split "JJJ" "") is
+                    Ok str ->
+                        Str.countGraphemes str
 
-//                         _ ->
-//                             -1
+                    _ ->
+                        -1
 
-//                 "#
-//         ),
-//         3,
-//         i64
-//     );
-// }
+            "#
+        ),
+        3,
+        usize
+    );
+}
 
-// #[test]
-// fn str_split_bigger_delimiter_small_str() {
-//     assert_evals_to!(
-//         indoc!(
-//             r#"
-//                     List.len (Str.split "hello" "JJJJ there")
-//                 "#
-//         ),
-//         1,
-//         i64
-//     );
+#[test]
+fn str_split_bigger_delimiter_small_str() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                List.len (Str.split "hello" "JJJJ there")
+            "#
+        ),
+        1,
+        usize
+    );
+}
 
-//     assert_evals_to!(
-//         indoc!(
-//             r#"
-//                     when List.first (Str.split "JJJ" "JJJJ there") is
-//                         Ok str ->
-//                             Str.countGraphemes str
+// This test produces an app that exposes nothing to the host!
+#[test]
+#[ignore]
+fn str_split_bigger_delimiter_small_str_broken() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when List.first (Str.split "JJJ" "JJJJ there") is
+                    Ok str ->
+                        Str.countGraphemes str
 
-//                         _ ->
-//                             -1
+                    _ ->
+                        -1
 
-//                 "#
-//         ),
-//         3,
-//         i64
-//     );
-// }
+            "#
+        ),
+        3,
+        usize
+    );
+}
 
-// #[test]
-// fn str_split_str_concat_repeated() {
-//     assert_evals_to!(
-//         indoc!(
-//             r#"
-//                     when List.first (Str.split "JJJJJ" "JJJJ there") is
-//                         Ok str ->
-//                             str
-//                                 |> Str.concat str
-//                                 |> Str.concat str
-//                                 |> Str.concat str
-//                                 |> Str.concat str
+#[test]
+fn str_split_str_concat_repeated() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when List.first (Str.split "JJJJJ" "JJJJ there") is
+                    Ok str ->
+                        str
+                            |> Str.concat str
+                            |> Str.concat str
+                            |> Str.concat str
+                            |> Str.concat str
 
-//                         _ ->
-//                             "Not Str!"
+                    _ ->
+                        "Not Str!"
 
-//                 "#
-//         ),
-//         RocStr::from_slice_unchecked(b"JJJJJJJJJJJJJJJJJJJJJJJJJ"),
-//         RocStr
-//     );
-// }
+            "#
+        ),
+        RocStr::from("JJJJJJJJJJJJJJJJJJJJJJJJJ"),
+        RocStr
+    );
+}
 
-// #[test]
-// fn str_split_small_str_bigger_delimiter() {
-//     assert_evals_to!(
-//         indoc!(
-//             r#"
-//                     when
-//                         List.first
-//                             (Str.split "JJJ" "0123456789abcdefghi")
-//                     is
-//                         Ok str -> str
-//                         _ -> ""
-//                 "#
-//         ),
-//         RocStr::from_slice_unchecked(b"JJJ"),
-//         RocStr
-//     );
-// }
+#[test]
+fn str_split_small_str_bigger_delimiter() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when
+                    List.first
+                        (Str.split "JJJ" "0123456789abcdefghi")
+                is
+                    Ok str -> str
+                    _ -> ""
+            "#
+        ),
+        RocStr::from("JJJ"),
+        RocStr
+    );
+}
 
-// #[test]
-// fn str_split_big_str_small_delimiter() {
-//     assert_evals_to!(
-//         indoc!(
-//             r#"
-//                     Str.split "01234567789abcdefghi?01234567789abcdefghi" "?"
-//                 "#
-//         ),
-//         RocList::from_slice(&[
-//             RocStr::from_slice_unchecked(b"01234567789abcdefghi"),
-//             RocStr::from_slice_unchecked(b"01234567789abcdefghi")
-//        ]),
-//         RocList<RocStr>
-//     );
+#[test]
+fn str_split_big_str_small_delimiter() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Str.split "01234567789abcdefghi?01234567789abcdefghi" "?"
+            "#
+        ),
+        RocList::from_slice(&[
+            RocStr::from("01234567789abcdefghi"),
+            RocStr::from("01234567789abcdefghi")
+        ]),
+        RocList<RocStr>
+    );
 
-//     assert_evals_to!(
-//         indoc!(
-//             r#"
-//                     Str.split "01234567789abcdefghi 3ch 01234567789abcdefghi" "3ch"
-//                 "#
-//         ),
-//         RocList::from_slice(&[
-//             RocStr::from_slice_unchecked(b"01234567789abcdefghi "),
-//             RocStr::from_slice_unchecked(b" 01234567789abcdefghi")
-//        ]),
-//         RocList<RocStr>
-//     );
-// }
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Str.split "01234567789abcdefghi 3ch 01234567789abcdefghi" "3ch"
+            "#
+        ),
+        RocList::from_slice(&[
+            RocStr::from("01234567789abcdefghi "),
+            RocStr::from(" 01234567789abcdefghi")
+        ]),
+        RocList<RocStr>
+    );
+}
 
-// #[test]
-// fn str_split_small_str_small_delimiter() {
-//     assert_evals_to!(
-//         indoc!(
-//             r#"
-//                     Str.split "J!J!J" "!"
-//                 "#
-//         ),
-//         RocList::from_slice(&[
-//             RocStr::from_slice_unchecked(b"J"),
-//             RocStr::from_slice_unchecked(b"J"),
-//             RocStr::from_slice_unchecked(b"J")
-//        ]),
-//         RocList<RocStr>
-//     );
-// }
+#[test]
+fn str_split_small_str_small_delimiter() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Str.split "J!J!J" "!"
+            "#
+        ),
+        RocList::from_slice(&[RocStr::from("J"), RocStr::from("J"), RocStr::from("J")]),
+        RocList<RocStr>
+    );
+}
 
-// #[test]
-// fn str_split_bigger_delimiter_big_strs() {
-//     assert_evals_to!(
-//         indoc!(
-//             r#"
-//                     Str.split
-//                         "string to split is shorter"
-//                         "than the delimiter which happens to be very very long"
-//                 "#
-//         ),
-//         RocList::from_slice(&[RocStr::from_slice_unchecked(b"string to split is shorter")]),
-//         RocList<RocStr>
-//     );
-// }
+#[test]
+fn str_split_bigger_delimiter_big_strs() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                Str.split
+                    "string to split is shorter"
+                    "than the delimiter which happens to be very very long"
+            "#
+        ),
+        RocList::from_slice(&[RocStr::from("string to split is shorter")]),
+        RocList<RocStr>
+    );
+}
 
-// #[test]
-// fn str_split_empty_strs() {
-//     assert_evals_to!(
-//         indoc!(
-//             r#"
-//                     Str.split "" ""
-//                 "#
-//         ),
-//         RocList::from_slice(&[RocStr::from_slice_unchecked(b"")]),
-//         RocList<RocStr>
-//     );
-// }
+#[test]
+fn str_split_empty_strs() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    Str.split "" ""
+                "#
+        ),
+        RocList::from_slice(&[RocStr::from("")]),
+        RocList<RocStr>
+    );
+}
 
-// #[test]
-// fn str_split_minimal_example() {
-//     assert_evals_to!(
-//         indoc!(
-//             r#"
-//                     Str.split "a," ","
-//                 "#
-//         ),
-//         RocList::from_slice(&[RocStr::from_slice_unchecked(b"a"), RocStr::from_slice_unchecked(b"")]),
-//         RocList<RocStr>
-//     )
-// }
+#[test]
+fn str_split_minimal_example() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    Str.split "a," ","
+                "#
+        ),
+        RocList::from_slice(&[RocStr::from("a"), RocStr::from("")]),
+        RocList<RocStr>
+    )
+}
 
-// #[test]
-// fn str_split_small_str_big_delimiter() {
-//     assert_evals_to!(
-//         indoc!(
-//             r#"
-//                     Str.split
-//                         "1---- ---- ---- ---- ----2---- ---- ---- ---- ----"
-//                         "---- ---- ---- ---- ----"
-//                         |> List.len
-//                 "#
-//         ),
-//         3,
-//         i64
-//     );
+#[test]
+fn str_split_small_str_big_delimiter() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    Str.split
+                        "1---- ---- ---- ---- ----2---- ---- ---- ---- ----"
+                        "---- ---- ---- ---- ----"
+                        |> List.len
+                "#
+        ),
+        3,
+        usize
+    );
 
-//     assert_evals_to!(
-//         indoc!(
-//             r#"
-//                     Str.split
-//                         "1---- ---- ---- ---- ----2---- ---- ---- ---- ----"
-//                         "---- ---- ---- ---- ----"
-//                 "#
-//         ),
-//         RocList::from_slice(&[
-//             RocStr::from_slice_unchecked(b"1"),
-//             RocStr::from_slice_unchecked(b"2"),
-//             RocStr::from_slice_unchecked(b"")
-//        ]),
-//         RocList<RocStr>
-//     );
-// }
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    Str.split
+                        "1---- ---- ---- ---- ----2---- ---- ---- ---- ----"
+                        "---- ---- ---- ---- ----"
+                "#
+        ),
+        RocList::from_slice(&[RocStr::from("1"), RocStr::from("2"), RocStr::from("")]),
+        RocList<RocStr>
+    );
+}
 
-// #[test]
-// fn str_split_small_str_20_char_delimiter() {
-//     assert_evals_to!(
-//         indoc!(
-//             r#"
-//                     Str.split
-//                         "3|-- -- -- -- -- -- |4|-- -- -- -- -- -- |"
-//                         "|-- -- -- -- -- -- |"
-//                 "#
-//         ),
-//         RocList::from_slice(&[
-//             RocStr::from_slice_unchecked(b"3"),
-//             RocStr::from_slice_unchecked(b"4"),
-//             RocStr::from_slice_unchecked(b"")
-//        ]),
-//         RocList<RocStr>
-//     );
-// }
+#[test]
+fn str_split_small_str_20_char_delimiter() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    Str.split
+                        "3|-- -- -- -- -- -- |4|-- -- -- -- -- -- |"
+                        "|-- -- -- -- -- -- |"
+                "#
+        ),
+        RocList::from_slice(&[RocStr::from("3"), RocStr::from("4"), RocStr::from("")]),
+        RocList<RocStr>
+    );
+}
 
-// #[test]
-// fn str_concat_big_to_big() {
-//     assert_evals_to!(
-//             indoc!(
-//                 r#"
-//                     Str.concat
-//                         "First string that is fairly long. Longer strings make for different errors. "
-//                         "Second string that is also fairly long. Two long strings test things that might not appear with short strings."
-//                 "#
-//             ),
-//             RocStr::from_slice_unchecked(b"First string that is fairly long. Longer strings make for different errors. Second string that is also fairly long. Two long strings test things that might not appear with short strings."),
-//             RocStr
-//         );
-// }
+#[test]
+fn str_concat_big_to_big() {
+    assert_evals_to!(
+            indoc!(
+                r#"
+                    Str.concat
+                        "First string that is fairly long. Longer strings make for different errors. "
+                        "Second string that is also fairly long. Two long strings test things that might not appear with short strings."
+                "#
+            ),
+            RocStr::from("First string that is fairly long. Longer strings make for different errors. Second string that is also fairly long. Two long strings test things that might not appear with short strings."),
+            RocStr
+        );
+}
 
 #[test]
 #[cfg(any(feature = "gen-wasm"))]
@@ -498,7 +496,7 @@ fn str_starts_with_false_small_str() {
 //                         Err _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice_unchecked("a".as_bytes()),
+//         roc_std::RocStr::from("a"),
 //         roc_std::RocStr
 //     );
 // }
@@ -513,7 +511,7 @@ fn str_starts_with_false_small_str() {
 //                         Err _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice_unchecked("abc~".as_bytes()),
+//         roc_std::RocStr::from("abc~"),
 //         roc_std::RocStr
 //     );
 // }
@@ -528,7 +526,7 @@ fn str_starts_with_false_small_str() {
 //                         Err _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice_unchecked("∆".as_bytes()),
+//         roc_std::RocStr::from("∆"),
 //         roc_std::RocStr
 //     );
 // }
@@ -543,7 +541,7 @@ fn str_starts_with_false_small_str() {
 //                         Err _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice_unchecked("∆œ¬".as_bytes()),
+//         roc_std::RocStr::from("∆œ¬"),
 //         roc_std::RocStr
 //     );
 // }
@@ -558,7 +556,7 @@ fn str_starts_with_false_small_str() {
 //                         Err _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice_unchecked("💖".as_bytes()),
+//         roc_std::RocStr::from("💖"),
 //         roc_std::RocStr
 //     );
 // }
@@ -573,7 +571,7 @@ fn str_starts_with_false_small_str() {
 //                         Err _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice_unchecked("💖🤠🚀".as_bytes()),
+//         roc_std::RocStr::from("💖🤠🚀"),
 //         roc_std::RocStr
 //     );
 // }
@@ -588,7 +586,7 @@ fn str_starts_with_false_small_str() {
 //                         Err _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice_unchecked("💖b∆".as_bytes()),
+//         roc_std::RocStr::from("💖b∆"),
 //         roc_std::RocStr
 //     );
 // }
@@ -607,7 +605,7 @@ fn str_starts_with_false_small_str() {
 //                         _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice_unchecked("a".as_bytes()),
+//         roc_std::RocStr::from("a"),
 //         roc_std::RocStr
 //     );
 // }
@@ -626,7 +624,7 @@ fn str_starts_with_false_small_str() {
 //                         _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice_unchecked("a".as_bytes()),
+//         roc_std::RocStr::from("a"),
 //         roc_std::RocStr
 //     );
 // }
@@ -645,7 +643,7 @@ fn str_starts_with_false_small_str() {
 //                         _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice_unchecked("a".as_bytes()),
+//         roc_std::RocStr::from("a"),
 //         roc_std::RocStr
 //     );
 // }
@@ -664,7 +662,7 @@ fn str_starts_with_false_small_str() {
 //                         _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice_unchecked("a".as_bytes()),
+//         roc_std::RocStr::from("a"),
 //         roc_std::RocStr
 //     );
 // }
@@ -683,7 +681,7 @@ fn str_starts_with_false_small_str() {
 //                         _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice_unchecked("a".as_bytes()),
+//         roc_std::RocStr::from("a"),
 //         roc_std::RocStr
 //     );
 // }
@@ -702,7 +700,7 @@ fn str_starts_with_false_small_str() {
 //                         _ -> ""
 //                 "#
 //         ),
-//         roc_std::RocStr::from_slice_unchecked("a".as_bytes()),
+//         roc_std::RocStr::from("a"),
 //         roc_std::RocStr
 //     );
 // }
@@ -744,7 +742,7 @@ fn str_equality() {
 //                 printExpr expr
 //                 "#
 //         ),
-//         RocStr::from_slice_unchecked(b"Add (Add (Val 3) (Val 1)) (Add (Val 1) (Var 1))"),
+//         RocStr::from("Add (Add (Val 3) (Val 1)) (Add (Val 1) (Var 1))"),
 //         RocStr
 //     );
 // }

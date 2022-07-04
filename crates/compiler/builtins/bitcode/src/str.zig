@@ -744,6 +744,21 @@ fn strFromFloatHelp(comptime T: type, float: T) RocStr {
 }
 
 // Str.split
+
+// For dev backends
+pub fn strSplit(string: RocStr, delimiter: RocStr) callconv(.C) RocList {
+    const segment_count = countSegments(string, delimiter);
+    const list = RocList.allocate(@alignOf(RocStr), segment_count, @sizeOf(RocStr));
+
+    if (list.bytes) |bytes| {
+        const strings = @ptrCast([*]RocStr, @alignCast(@alignOf(RocStr), bytes));
+        strSplitInPlace(strings, string, delimiter);
+    }
+
+    return list;
+}
+
+// For LLVM backend
 pub fn strSplitInPlaceC(opt_array: ?[*]RocStr, string: RocStr, delimiter: RocStr) callconv(.C) void {
     if (opt_array) |array| {
         return @call(.{ .modifier = always_inline }, strSplitInPlace, .{ array, string, delimiter });
