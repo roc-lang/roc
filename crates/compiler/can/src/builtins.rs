@@ -1803,7 +1803,7 @@ fn str_from_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
     //  Ok arg_2.str
     // else
     //  # problem
-    //  Err (BadUtf8 { byteIndex: arg_2.byteIndex, problem : arg_2.problem })
+    //  Err (BadUtf8 arg_2.problem arg_2.byteIndex)
 
     let def = crate::def::Def {
         loc_pattern: no_region(Pattern::Identifier(Symbol::ARG_2)),
