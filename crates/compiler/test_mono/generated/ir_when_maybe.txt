@@ -1,6 +1,6 @@
 procedure Test.0 ():
     let Test.9 : I64 = 3i64;
-    let Test.3 : [C I64, C ] = Just Test.9;
+    let Test.3 : [C I64, C ] = TagId(0) Test.9;
     let Test.6 : U8 = 0i64;
     let Test.7 : U8 = GetTagId Test.3;
     let Test.8 : Int1 = lowlevel Eq Test.6 Test.7;

@@ -699,25 +699,44 @@ fn fmt_when<'a, 'buf>(
     buf.push_str("is");
     buf.newline();
 
-    let mut it = branches.iter().peekable();
-    while let Some(branch) = it.next() {
+    let mut it = branches.iter().enumerate().peekable();
+
+    while let Some((branch_index, branch)) = it.next() {
         let expr = &branch.value;
         let patterns = &branch.patterns;
         let is_multiline_expr = expr.is_multiline();
         let is_multiline_patterns = is_when_patterns_multiline(branch);
 
         for (index, pattern) in patterns.iter().enumerate() {
-            if index != 0 {
+            if index == 0 {
+                match &pattern.value {
+                    Pattern::SpaceBefore(sub_pattern, spaces) if branch_index == 0 => {
+                        // Never include extra newlines before the first branch.
+                        // Instead, write the comments and that's it.
+                        fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent + INDENT);
+
+                        fmt_pattern(buf, sub_pattern, indent + INDENT, Parens::NotNeeded);
+                    }
+                    other => {
+                        fmt_pattern(buf, other, indent + INDENT, Parens::NotNeeded);
+                    }
+                }
+            } else {
                 if is_multiline_patterns {
-                    buf.newline();
-                    buf.indent(indent + INDENT);
+                    buf.ensure_ends_in_newline();
+                    // Indent an extra level for the `|`;
+                    // otherwise it'll be at the start of the line,
+                    // and will be incorrectly parsed as a pattern
+                    buf.indent(indent + INDENT + INDENT);
+                    buf.push('|');
+                } else {
+                    buf.push_str(" |");
                 }
 
-                buf.push_str(" |");
                 buf.spaces(1);
-            }
 
-            fmt_pattern(buf, &pattern.value, indent + INDENT, Parens::NotNeeded);
+                fmt_pattern(buf, &pattern.value, indent + INDENT, Parens::NotNeeded);
+            }
         }
 
         if let Some(guard_expr) = &branch.guard {

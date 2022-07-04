@@ -12,7 +12,7 @@ use roc_mono::ir::{
     Call, CallType, Expr, HigherOrderLowLevel, HostExposedLayouts, ListLiteralElement, Literal,
     ModifyRc, OptLevel, Proc, Stmt,
 };
-use roc_mono::layout::{Builtin, Layout, RawFunctionLayout, UnionLayout};
+use roc_mono::layout::{Builtin, CapturesNiche, Layout, RawFunctionLayout, UnionLayout};
 
 // just using one module for now
 pub const MOD_APP: ModName = ModName(b"UserApp");
@@ -23,7 +23,13 @@ pub const STATIC_LIST_NAME: ConstName = ConstName(b"THIS IS A STATIC LIST");
 const ENTRY_POINT_NAME: &[u8] = b"mainForHost";
 
 pub fn func_name_bytes(proc: &Proc) -> [u8; SIZE] {
-    func_name_bytes_help(proc.name, proc.args.iter().map(|x| x.0), &proc.ret_layout)
+    let bytes = func_name_bytes_help(
+        proc.name.name(),
+        proc.args.iter().map(|x| x.0),
+        proc.name.captures_niche(),
+        &proc.ret_layout,
+    );
+    bytes
 }
 
 #[inline(always)]
@@ -64,6 +70,7 @@ impl TagUnionId {
 pub fn func_name_bytes_help<'a, I>(
     symbol: Symbol,
     argument_layouts: I,
+    captures_niche: CapturesNiche<'a>,
     return_layout: &Layout<'a>,
 ) -> [u8; SIZE]
 where
@@ -81,6 +88,8 @@ where
         for layout in argument_layouts {
             layout.hash(&mut hasher);
         }
+
+        captures_niche.hash(&mut hasher);
 
         return_layout.hash(&mut hasher);
 
@@ -173,13 +182,22 @@ where
                     match layout {
                         RawFunctionLayout::Function(_, _, _) => {
                             let it = top_level.arguments.iter().copied();
-                            let bytes = func_name_bytes_help(*symbol, it, &top_level.result);
+                            let bytes = func_name_bytes_help(
+                                *symbol,
+                                it,
+                                CapturesNiche::no_niche(),
+                                &top_level.result,
+                            );
 
                             host_exposed_functions.push((bytes, top_level.arguments));
                         }
                         RawFunctionLayout::ZeroArgumentThunk(_) => {
-                            let bytes =
-                                func_name_bytes_help(*symbol, [Layout::UNIT], &top_level.result);
+                            let bytes = func_name_bytes_help(
+                                *symbol,
+                                [Layout::UNIT],
+                                CapturesNiche::no_niche(),
+                                &top_level.result,
+                            );
 
                             host_exposed_functions.push((bytes, top_level.arguments));
                         }
@@ -207,6 +225,7 @@ where
         let roc_main_bytes = func_name_bytes_help(
             entry_point.symbol,
             entry_point.layout.arguments.iter().copied(),
+            CapturesNiche::no_niche(),
             &entry_point.layout.result,
         );
         let roc_main = FuncName(&roc_main_bytes);
@@ -631,7 +650,7 @@ fn call_spec(
 
     match &call.call_type {
         ByName {
-            name: symbol,
+            name,
             ret_layout,
             arg_layouts,
             specialization_id,
@@ -640,8 +659,9 @@ fn call_spec(
             let spec_var = CalleeSpecVar(&array);
 
             let arg_value_id = build_tuple_value(builder, env, block, call.arguments)?;
-            let it = arg_layouts.iter().copied();
-            let bytes = func_name_bytes_help(*symbol, it, ret_layout);
+            let args_it = arg_layouts.iter().copied();
+            let captures_niche = name.captures_niche();
+            let bytes = func_name_bytes_help(name.name(), args_it, captures_niche, ret_layout);
             let name = FuncName(&bytes);
             let module = MOD_APP;
             builder.add_call(block, spec_var, module, name, arg_value_id)
@@ -684,9 +704,14 @@ fn call_spec(
             let mode = update_mode.to_bytes();
             let update_mode_var = UpdateModeVar(&mode);
 
-            let it = passed_function.argument_layouts.iter().copied();
-            let bytes =
-                func_name_bytes_help(passed_function.name, it, &passed_function.return_layout);
+            let args_it = passed_function.argument_layouts.iter().copied();
+            let captures_niche = passed_function.name.captures_niche();
+            let bytes = func_name_bytes_help(
+                passed_function.name.name(),
+                args_it,
+                captures_niche,
+                &passed_function.return_layout,
+            );
             let name = FuncName(&bytes);
             let module = MOD_APP;
 
@@ -1201,14 +1226,12 @@ fn expr_spec<'a>(
         Call(call) => call_spec(builder, env, block, layout, call),
         Reuse {
             tag_layout,
-            tag_name: _,
             tag_id,
             arguments,
             ..
         }
         | Tag {
             tag_layout,
-            tag_name: _,
             tag_id,
             arguments,
         } => {

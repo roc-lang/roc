@@ -966,6 +966,174 @@ fn extract_specialization_lambda_set<M: MetaCollector>(
     outcome
 }
 
+#[derive(Debug)]
+struct Sides {
+    left: Vec<(Symbol, VariableSubsSlice)>,
+    right: Vec<(Symbol, VariableSubsSlice)>,
+}
+
+impl Default for Sides {
+    fn default() -> Self {
+        Self {
+            left: Vec::with_capacity(1),
+            right: Vec::with_capacity(1),
+        }
+    }
+}
+
+struct SeparatedUnionLambdas {
+    only_in_left: Vec<(Symbol, VariableSubsSlice)>,
+    only_in_right: Vec<(Symbol, VariableSubsSlice)>,
+    joined: Vec<(Symbol, VariableSubsSlice)>,
+}
+
+fn separate_union_lambdas(
+    subs: &mut Subs,
+    pool: &mut Pool,
+    fields1: UnionLambdas,
+    fields2: UnionLambdas,
+) -> SeparatedUnionLambdas {
+    debug_assert!(
+        fields1.is_sorted_allow_duplicates(subs),
+        "not sorted: {:?}",
+        fields1.iter_from_subs(subs).collect::<Vec<_>>()
+    );
+    debug_assert!(
+        fields2.is_sorted_allow_duplicates(subs),
+        "not sorted: {:?}",
+        fields2.iter_from_subs(subs).collect::<Vec<_>>()
+    );
+
+    // lambda names -> (the captures for that lambda on the left side, the captures for that lambda on the right side)
+    // e.g. [[F1 U8], [F1 U64], [F2 a]] ~ [[F1 Str], [F2 Str]] becomes
+    //   F1 -> { left: [ [U8], [U64] ], right: [ [Str] ] }
+    //   F2 -> { left: [ [a] ],         right: [ [Str] ] }
+    let mut buckets: VecMap<Symbol, Sides> = VecMap::with_capacity(fields1.len() + fields2.len());
+
+    let (mut fields_left, mut fields_right) = (
+        fields1.iter_all().into_iter().peekable(),
+        fields2.iter_all().into_iter().peekable(),
+    );
+
+    loop {
+        use std::cmp::Ordering;
+
+        let ord = match (fields_left.peek(), fields_right.peek()) {
+            (Some((l, _)), Some((r, _))) => Some((subs[*l]).cmp(&subs[*r])),
+            (Some(_), None) => Some(Ordering::Less),
+            (None, Some(_)) => Some(Ordering::Greater),
+            (None, None) => None,
+        };
+
+        match ord {
+            Some(Ordering::Less) => {
+                let (sym, vars) = fields_left.next().unwrap();
+                let bucket = buckets.get_or_insert(subs[sym], Sides::default);
+                bucket.left.push((subs[sym], subs[vars]));
+            }
+            Some(Ordering::Greater) => {
+                let (sym, vars) = fields_right.next().unwrap();
+                let bucket = buckets.get_or_insert(subs[sym], Sides::default);
+                bucket.right.push((subs[sym], subs[vars]));
+            }
+            Some(Ordering::Equal) => {
+                let (sym, left_vars) = fields_left.next().unwrap();
+                let (_sym, right_vars) = fields_right.next().unwrap();
+                debug_assert_eq!(subs[sym], subs[_sym]);
+
+                let bucket = buckets.get_or_insert(subs[sym], Sides::default);
+                bucket.left.push((subs[sym], subs[left_vars]));
+                bucket.right.push((subs[sym], subs[right_vars]));
+            }
+            None => break,
+        }
+    }
+
+    let mut only_in_left = Vec::with_capacity(fields1.len());
+    let mut only_in_right = Vec::with_capacity(fields2.len());
+    let mut joined = Vec::with_capacity(fields1.len() + fields2.len());
+    for (lambda_name, Sides { left, mut right }) in buckets {
+        match (left.as_slice(), right.as_slice()) {
+            (&[], &[]) => internal_error!("somehow both are empty but there's an entry?"),
+            (&[], _) => only_in_right.extend(right),
+            (_, &[]) => only_in_left.extend(left),
+            (_, _) => {
+                'next_left: for (_, left_slice) in left {
+                    // Does the current slice on the left unify with a slice on the right?
+                    //
+                    // If yes, we unify then and the unified result to `joined`.
+                    //
+                    // Otherwise if no such slice on the right is found, then the slice on the `left` has no slice,
+                    // either on the left or right, it unifies with (since the left was constructed
+                    // inductively via the same procedure).
+                    //
+                    // At the end each slice in the left and right has been explored, so
+                    // - `joined` contains all the slices that can unify
+                    // - left contains unique captures slices that will unify with no other slice
+                    // - right contains unique captures slices that will unify with no other slice
+                    //
+                    // Note also if a slice l on the left and a slice r on the right unify, there
+                    // is no other r' != r on the right such that l ~ r', and respectively there is
+                    // no other l' != l on the left such that l' ~ r. Otherwise, it must be that l ~ l'
+                    // (resp. r ~ r'), but then l = l' (resp. r = r'), and they would have become the same
+                    // slice in a previous call to `separate_union_lambdas`.
+                    'try_next_right: for (right_index, (_, right_slice)) in right.iter().enumerate()
+                    {
+                        if left_slice.len() != right_slice.len() {
+                            continue 'try_next_right;
+                        }
+
+                        let snapshot = subs.snapshot();
+                        for (var1, var2) in (left_slice.into_iter()).zip(right_slice.into_iter()) {
+                            let (var1, var2) = (subs[var1], subs[var2]);
+
+                            // Lambda sets are effectively tags under another name, and their usage can also result
+                            // in the arguments of a lambda name being recursive. It very well may happen that
+                            // during unification, a lambda set previously marked as not recursive becomes
+                            // recursive. See the docs of [LambdaSet] for one example, or https://github.com/rtfeldman/roc/pull/2307.
+                            //
+                            // Like with tag unions, if it has, we'll always pass through this branch. So, take
+                            // this opportunity to promote the lambda set to recursive if need be.
+                            maybe_mark_union_recursive(subs, var1);
+                            maybe_mark_union_recursive(subs, var2);
+
+                            let outcome =
+                                unify_pool::<NoCollector>(subs, pool, var1, var2, Mode::EQ);
+
+                            if !outcome.mismatches.is_empty() {
+                                subs.rollback_to(snapshot);
+                                continue 'try_next_right;
+                            }
+                        }
+
+                        // All the variables unified, so we can join the left + right.
+                        // The variables are unified in left and right slice, so just reuse the left slice.
+                        joined.push((lambda_name, left_slice));
+                        // Remove the right slice, it unifies with the left so this is its unique
+                        // unification.
+                        // Remove in-place so that the order is preserved.
+                        right.remove(right_index);
+                        continue 'next_left;
+                    }
+
+                    // No slice on the right unified with the left, so the slice on the left is on
+                    // its own.
+                    only_in_left.push((lambda_name, left_slice));
+                }
+
+                // Possible that there are items left over in the right, they are on their own.
+                only_in_right.extend(right);
+            }
+        }
+    }
+
+    SeparatedUnionLambdas {
+        only_in_left,
+        only_in_right,
+        joined,
+    }
+}
+
 fn unify_lambda_set_help<M: MetaCollector>(
     subs: &mut Subs,
     pool: &mut Pool,
@@ -994,109 +1162,68 @@ fn unify_lambda_set_help<M: MetaCollector>(
         "Recursion var is present, but it doesn't have a recursive content!"
     );
 
-    let Separate {
-        only_in_1,
-        only_in_2,
-        in_both,
-    } = separate_union_lambdas(subs, solved1, solved2);
+    let SeparatedUnionLambdas {
+        only_in_left,
+        only_in_right,
+        joined,
+    } = separate_union_lambdas(subs, pool, solved1, solved2);
 
-    let num_shared = in_both.len();
+    let all_lambdas = joined
+        .into_iter()
+        .map(|(name, slice)| (name, subs.get_subs_slice(slice).to_vec()));
 
-    let mut joined_lambdas = vec![];
-    for (tag_name, (vars1, vars2)) in in_both {
-        let mut matching_vars = vec![];
+    let all_lambdas = merge_sorted_preserving_duplicates(
+        all_lambdas,
+        only_in_left.into_iter().map(|(name, subs_slice)| {
+            let vec = subs.get_subs_slice(subs_slice).to_vec();
+            (name, vec)
+        }),
+    );
+    let all_lambdas = merge_sorted_preserving_duplicates(
+        all_lambdas,
+        only_in_right.into_iter().map(|(name, subs_slice)| {
+            let vec = subs.get_subs_slice(subs_slice).to_vec();
+            (name, vec)
+        }),
+    );
 
-        if vars1.len() != vars2.len() {
-            continue; // this is a type mismatch; not adding the tag will trigger it below.
+    let recursion_var = match (rec1.into_variable(), rec2.into_variable()) {
+        // Prefer left when it's available.
+        (Some(rec), _) | (_, Some(rec)) => OptVariable::from(rec),
+        (None, None) => OptVariable::NONE,
+    };
+
+    // Combine the unspecialized lambda sets as needed. Note that we don't need to update the
+    // bookkeeping of variable -> lambda set to be resolved, because if we had v1 -> lset1, and
+    // now lset1 ~ lset2, then afterward either lset1 still resolves to itself or re-points to
+    // lset2. In either case the merged unspecialized lambda sets will be there.
+    let merged_unspecialized = match (uls1.is_empty(), uls2.is_empty()) {
+        (true, true) => SubsSlice::default(),
+        (false, true) => uls1,
+        (true, false) => uls2,
+        (false, false) => {
+            let mut all_uls = (subs.get_subs_slice(uls1).iter())
+                .chain(subs.get_subs_slice(uls2))
+                .map(|&Uls(var, sym, region)| {
+                    // Take the root key to deduplicate
+                    Uls(subs.get_root_key_without_compacting(var), sym, region)
+                })
+                .collect::<Vec<_>>();
+            all_uls.sort();
+            all_uls.dedup();
+
+            SubsSlice::extend_new(&mut subs.unspecialized_lambda_sets, all_uls)
         }
+    };
 
-        let num_vars = vars1.len();
-        for (var1, var2) in (vars1.into_iter()).zip(vars2.into_iter()) {
-            let (var1, var2) = (subs[var1], subs[var2]);
+    let new_solved = UnionLabels::insert_into_subs(subs, all_lambdas);
+    let new_lambda_set = Content::LambdaSet(LambdaSet {
+        solved: new_solved,
+        recursion_var,
+        unspecialized: merged_unspecialized,
+    });
 
-            // Lambda sets are effectively tags under another name, and their usage can also result
-            // in the arguments of a lambda name being recursive. It very well may happen that
-            // during unification, a lambda set previously marked as not recursive becomes
-            // recursive. See the docs of [LambdaSet] for one example, or https://github.com/rtfeldman/roc/pull/2307.
-            //
-            // Like with tag unions, if it has, we'll always pass through this branch. So, take
-            // this opportunity to promote the lambda set to recursive if need be.
-            maybe_mark_union_recursive(subs, var1);
-            maybe_mark_union_recursive(subs, var2);
-
-            let outcome = unify_pool::<M>(subs, pool, var1, var2, ctx.mode);
-
-            if outcome.mismatches.is_empty() {
-                matching_vars.push(var1);
-            }
-        }
-
-        if matching_vars.len() == num_vars {
-            joined_lambdas.push((tag_name, matching_vars));
-        }
-    }
-
-    if joined_lambdas.len() == num_shared {
-        let all_lambdas = joined_lambdas;
-        let all_lambdas = merge_sorted(
-            all_lambdas,
-            only_in_1.into_iter().map(|(name, subs_slice)| {
-                let vec = subs.get_subs_slice(subs_slice).to_vec();
-                (name, vec)
-            }),
-        );
-        let all_lambdas = merge_sorted(
-            all_lambdas,
-            only_in_2.into_iter().map(|(name, subs_slice)| {
-                let vec = subs.get_subs_slice(subs_slice).to_vec();
-                (name, vec)
-            }),
-        );
-
-        let recursion_var = match (rec1.into_variable(), rec2.into_variable()) {
-            // Prefer left when it's available.
-            (Some(rec), _) | (_, Some(rec)) => OptVariable::from(rec),
-            (None, None) => OptVariable::NONE,
-        };
-
-        // Combine the unspecialized lambda sets as needed. Note that we don't need to update the
-        // bookkeeping of variable -> lambda set to be resolved, because if we had v1 -> lset1, and
-        // now lset1 ~ lset2, then afterward either lset1 still resolves to itself or re-points to
-        // lset2. In either case the merged unspecialized lambda sets will be there.
-        let merged_unspecialized = match (uls1.is_empty(), uls2.is_empty()) {
-            (true, true) => SubsSlice::default(),
-            (false, true) => uls1,
-            (true, false) => uls2,
-            (false, false) => {
-                let mut all_uls = (subs.get_subs_slice(uls1).iter())
-                    .chain(subs.get_subs_slice(uls2))
-                    .map(|&Uls(var, sym, region)| {
-                        // Take the root key to deduplicate
-                        Uls(subs.get_root_key_without_compacting(var), sym, region)
-                    })
-                    .collect::<Vec<_>>();
-                all_uls.sort();
-                all_uls.dedup();
-
-                SubsSlice::extend_new(&mut subs.unspecialized_lambda_sets, all_uls)
-            }
-        };
-
-        let new_solved = UnionLabels::insert_into_subs(subs, all_lambdas);
-        let new_lambda_set = Content::LambdaSet(LambdaSet {
-            solved: new_solved,
-            recursion_var,
-            unspecialized: merged_unspecialized,
-        });
-
-        merge(subs, ctx, new_lambda_set)
-    } else {
-        mismatch!(
-            "Problem with lambda sets: there should be {:?} matching lambda, but only found {:?}",
-            num_shared,
-            &joined_lambdas
-        )
-    }
+    merge(subs, ctx, new_lambda_set)
 }
 
 /// Ensures that a non-recursive tag union, when unified with a recursion var to become a recursive
@@ -1396,7 +1523,7 @@ struct Separate<K, V> {
     in_both: Vec<(K, (V, V))>,
 }
 
-fn merge_sorted<K, V, I1, I2>(input1: I1, input2: I2) -> Vec<(K, V)>
+fn merge_sorted_help<K, V, I1, I2>(input1: I1, input2: I2, preserve_duplicates: bool) -> Vec<(K, V)>
 where
     K: Ord,
     I1: IntoIterator<Item = (K, V)>,
@@ -1426,8 +1553,11 @@ where
             }
             Some(Ordering::Equal) => {
                 let (k, v) = it1.next().unwrap();
-                let (_, _) = it2.next().unwrap();
+                let (k2, v2) = it2.next().unwrap();
                 result.push((k, v));
+                if preserve_duplicates {
+                    result.push((k2, v2));
+                }
             }
             Some(Ordering::Greater) => {
                 result.push(it2.next().unwrap());
@@ -1437,6 +1567,24 @@ where
     }
 
     result
+}
+
+fn merge_sorted<K, V, I1, I2>(input1: I1, input2: I2) -> Vec<(K, V)>
+where
+    K: Ord,
+    I1: IntoIterator<Item = (K, V)>,
+    I2: IntoIterator<Item = (K, V)>,
+{
+    merge_sorted_help(input1, input2, false)
+}
+
+fn merge_sorted_preserving_duplicates<K, V, I1, I2>(input1: I1, input2: I2) -> Vec<(K, V)>
+where
+    K: Ord,
+    I1: IntoIterator<Item = (K, V)>,
+    I2: IntoIterator<Item = (K, V)>,
+{
+    merge_sorted_help(input1, input2, true)
 }
 
 fn separate<K, V, I1, I2>(input1: I1, input2: I2) -> Separate<K, V>
@@ -1499,19 +1647,6 @@ fn separate_union_tags(
     let (it2, new_ext2) = fields2.sorted_slices_iterator_and_ext(subs, ext2);
 
     (separate(it1, it2), new_ext1, new_ext2)
-}
-
-fn separate_union_lambdas(
-    subs: &Subs,
-    fields1: UnionLambdas,
-    fields2: UnionLambdas,
-) -> Separate<Symbol, VariableSubsSlice> {
-    debug_assert!(fields1.is_sorted_no_duplicates(subs));
-    debug_assert!(fields2.is_sorted_no_duplicates(subs));
-    let it1 = fields1.iter_all().map(|(s, vars)| (subs[s], subs[vars]));
-    let it2 = fields2.iter_all().map(|(s, vars)| (subs[s], subs[vars]));
-
-    separate(it1, it2)
 }
 
 #[derive(Debug, Copy, Clone)]

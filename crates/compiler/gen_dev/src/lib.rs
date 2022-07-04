@@ -14,9 +14,7 @@ use roc_mono::ir::{
     BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, Param, Proc, ProcLayout,
     SelfRecursive, Stmt,
 };
-use roc_mono::layout::{
-    Builtin, Layout, LayoutId, LayoutIds, TagIdIntType, TagOrClosure, UnionLayout,
-};
+use roc_mono::layout::{Builtin, Layout, LayoutId, LayoutIds, TagIdIntType, UnionLayout};
 
 mod generic64;
 mod object_builder;
@@ -106,8 +104,8 @@ trait Backend<'a> {
         proc: Proc<'a>,
         layout_ids: &mut LayoutIds<'a>,
     ) -> (Vec<u8>, Vec<Relocation>, Vec<'a, (Symbol, String)>) {
-        let layout_id = layout_ids.get(proc.name, &proc.ret_layout);
-        let proc_name = self.symbol_to_string(proc.name, layout_id);
+        let layout_id = layout_ids.get(proc.name.name(), &proc.ret_layout);
+        let proc_name = self.symbol_to_string(proc.name.name(), layout_id);
         self.reset(proc_name, proc.is_self_recursive);
         self.load_args(proc.args, &proc.ret_layout);
         for (layout, sym) in proc.args {
@@ -263,7 +261,7 @@ trait Backend<'a> {
                         ..
                     } => {
                         if let LowLevelWrapperType::CanBeReplacedBy(lowlevel) =
-                            LowLevelWrapperType::from_symbol(*func_sym)
+                            LowLevelWrapperType::from_symbol(func_sym.name())
                         {
                             self.build_run_low_level(
                                 sym,
@@ -272,14 +270,20 @@ trait Backend<'a> {
                                 arg_layouts,
                                 ret_layout,
                             )
-                        } else if self.defined_in_app_module(*func_sym) {
-                            let layout_id = LayoutIds::default().get(*func_sym, layout);
-                            let fn_name = self.symbol_to_string(*func_sym, layout_id);
+                        } else if self.defined_in_app_module(func_sym.name()) {
+                            let layout_id = LayoutIds::default().get(func_sym.name(), layout);
+                            let fn_name = self.symbol_to_string(func_sym.name(), layout_id);
                             // Now that the arguments are needed, load them if they are literals.
                             self.load_literal_symbols(arguments);
                             self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
                         } else {
-                            self.build_builtin(sym, *func_sym, arguments, arg_layouts, ret_layout)
+                            self.build_builtin(
+                                sym,
+                                func_sym.name(),
+                                arguments,
+                                arg_layouts,
+                                ret_layout,
+                            )
                         }
                     }
 
@@ -909,18 +913,9 @@ trait Backend<'a> {
                         }
                     }
                     Expr::Reuse {
-                        symbol,
-                        arguments,
-                        tag_name,
-                        ..
+                        symbol, arguments, ..
                     } => {
                         self.set_last_seen(*symbol, stmt);
-                        match tag_name {
-                            TagOrClosure::Closure(sym) => {
-                                self.set_last_seen(*sym, stmt);
-                            }
-                            TagOrClosure::Tag(_) => {}
-                        }
                         for sym in *arguments {
                             self.set_last_seen(*sym, stmt);
                         }

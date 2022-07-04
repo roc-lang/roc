@@ -672,3 +672,25 @@ fn compare_nullable_recursive_union_same_content() {
         bool
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn boxed_eq_int() {
+    assert_evals_to!("Box.box 1 == Box.box 1", true, bool);
+    assert_evals_to!("Box.box 2 == Box.box 1", false, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn boxed_eq_str() {
+    assert_evals_to!(
+        "Box.box \"Hello, world\" == Box.box \"Hello, world\"",
+        true,
+        bool
+    );
+    assert_evals_to!(
+        "Box.box \"Hello, world\" == Box.box \"Hello, stranger\"",
+        false,
+        bool
+    );
+}

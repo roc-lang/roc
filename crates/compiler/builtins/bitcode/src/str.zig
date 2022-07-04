@@ -744,6 +744,21 @@ fn strFromFloatHelp(comptime T: type, float: T) RocStr {
 }
 
 // Str.split
+
+// For dev backends
+pub fn strSplit(string: RocStr, delimiter: RocStr) callconv(.C) RocList {
+    const segment_count = countSegments(string, delimiter);
+    const list = RocList.allocate(@alignOf(RocStr), segment_count, @sizeOf(RocStr));
+
+    if (list.bytes) |bytes| {
+        const strings = @ptrCast([*]RocStr, @alignCast(@alignOf(RocStr), bytes));
+        strSplitInPlace(strings, string, delimiter);
+    }
+
+    return list;
+}
+
+// For LLVM backend
 pub fn strSplitInPlaceC(opt_array: ?[*]RocStr, string: RocStr, delimiter: RocStr) callconv(.C) void {
     if (opt_array) |array| {
         return @call(.{ .modifier = always_inline }, strSplitInPlace, .{ array, string, delimiter });
@@ -1537,7 +1552,7 @@ const CountAndStart = extern struct {
     start: usize,
 };
 
-pub fn fromUtf8C(arg: RocList, update_mode: UpdateMode, output: *FromUtf8Result) callconv(.C) void {
+pub fn fromUtf8C(output: *FromUtf8Result, arg: RocList, update_mode: UpdateMode) callconv(.C) void {
     output.* = fromUtf8(arg, update_mode);
 }
 
@@ -1592,7 +1607,7 @@ inline fn fromUtf8(arg: RocList, update_mode: UpdateMode) FromUtf8Result {
     }
 }
 
-pub fn fromUtf8RangeC(arg: RocList, countAndStart: CountAndStart, output: *FromUtf8Result) callconv(.C) void {
+pub fn fromUtf8RangeC(output: *FromUtf8Result, arg: RocList, countAndStart: CountAndStart) callconv(.C) void {
     output.* = @call(.{ .modifier = always_inline }, fromUtf8Range, .{ arg, countAndStart });
 }
 

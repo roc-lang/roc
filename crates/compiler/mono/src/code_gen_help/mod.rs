@@ -8,7 +8,7 @@ use crate::ir::{
     Call, CallSpecId, CallType, Expr, HostExposedLayouts, JoinPointId, ModifyRc, Proc, ProcLayout,
     SelfRecursive, Stmt, UpdateModeId,
 };
-use crate::layout::{Builtin, Layout, UnionLayout};
+use crate::layout::{Builtin, CapturesNiche, LambdaName, Layout, UnionLayout};
 
 mod equality;
 mod refcount;
@@ -170,7 +170,7 @@ impl<'a> CodeGenHelp<'a> {
         let arg_layouts = self.arena.alloc([layout]);
         let expr = Expr::Call(Call {
             call_type: CallType::ByName {
-                name: proc_name,
+                name: LambdaName::no_niche(proc_name),
                 ret_layout,
                 arg_layouts,
                 specialization_id: CallSpecId::BACKEND_DUMMY,
@@ -262,7 +262,7 @@ impl<'a> CodeGenHelp<'a> {
 
             Some(Expr::Call(Call {
                 call_type: CallType::ByName {
-                    name: proc_name,
+                    name: LambdaName::no_niche(proc_name),
                     ret_layout,
                     arg_layouts,
                     specialization_id: CallSpecId::BACKEND_DUMMY,
@@ -286,11 +286,11 @@ impl<'a> CodeGenHelp<'a> {
         &mut self,
         ident_ids: &mut IdentIds,
         ctx: &mut Context<'a>,
-        layout: Layout<'a>,
+        orig_layout: Layout<'a>,
     ) -> Symbol {
         use HelperOp::*;
 
-        let layout = self.replace_rec_ptr(ctx, layout);
+        let layout = self.replace_rec_ptr(ctx, orig_layout);
 
         let found = self
             .specializations
@@ -343,7 +343,7 @@ impl<'a> CodeGenHelp<'a> {
         };
 
         self.specializations[spec_index].proc = Some(Proc {
-            name: proc_symbol,
+            name: LambdaName::no_niche(proc_symbol),
             args,
             body,
             closure_data_layout: None,
@@ -375,19 +375,23 @@ impl<'a> CodeGenHelp<'a> {
             HelperOp::Inc => ProcLayout {
                 arguments: self.arena.alloc([*layout, self.layout_isize]),
                 result: LAYOUT_UNIT,
+                captures_niche: CapturesNiche::no_niche(),
             },
             HelperOp::Dec => ProcLayout {
                 arguments: self.arena.alloc([*layout]),
                 result: LAYOUT_UNIT,
+                captures_niche: CapturesNiche::no_niche(),
             },
             HelperOp::Reset => ProcLayout {
                 arguments: self.arena.alloc([*layout]),
                 result: *layout,
+                captures_niche: CapturesNiche::no_niche(),
             },
             HelperOp::DecRef(_) => unreachable!("No generated Proc for DecRef"),
             HelperOp::Eq => ProcLayout {
                 arguments: self.arena.alloc([*layout, *layout]),
                 result: LAYOUT_BOOL,
+                captures_niche: CapturesNiche::no_niche(),
             },
         };
 
@@ -450,7 +454,9 @@ impl<'a> CodeGenHelp<'a> {
                 layout
             }
 
-            Layout::Boxed(inner) => self.replace_rec_ptr(ctx, *inner),
+            Layout::Boxed(inner) => {
+                Layout::Boxed(self.arena.alloc(self.replace_rec_ptr(ctx, *inner)))
+            }
 
             Layout::LambdaSet(lambda_set) => {
                 self.replace_rec_ptr(ctx, lambda_set.runtime_representation())

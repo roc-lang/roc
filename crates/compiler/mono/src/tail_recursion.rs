@@ -1,7 +1,7 @@
 #![allow(clippy::manual_map)]
 
 use crate::ir::{CallType, Expr, JoinPointId, Param, Stmt};
-use crate::layout::Layout;
+use crate::layout::{LambdaName, Layout};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_module::symbol::Symbol;
@@ -31,7 +31,7 @@ use roc_module::symbol::Symbol;
 pub fn make_tail_recursive<'a>(
     arena: &'a Bump,
     id: JoinPointId,
-    needle: Symbol,
+    needle: LambdaName,
     stmt: Stmt<'a>,
     args: &'a [(Layout<'a>, Symbol, Symbol)],
     ret_layout: Layout,
@@ -71,7 +71,7 @@ fn insert_jumps<'a>(
     arena: &'a Bump,
     stmt: &'a Stmt<'a>,
     goal_id: JoinPointId,
-    needle: Symbol,
+    needle: LambdaName,
     needle_arguments: &'a [(Layout<'a>, Symbol, Symbol)],
     needle_result: Layout,
 ) -> Option<&'a Stmt<'a>> {
@@ -80,7 +80,7 @@ fn insert_jumps<'a>(
     // to insert a tail-call, it must not just be a call to the function itself, but it must also
     // have the same layout. In particular when lambda sets get involved, a self-recursive call may
     // have a different type and should not be converted to a jump!
-    let is_equal_function = |function_name: Symbol, arguments: &[_], result| {
+    let is_equal_function = |function_name: LambdaName, arguments: &[_], result| {
         let it = needle_arguments.iter().map(|t| &t.0);
         needle == function_name && it.eq(arguments.iter()) && needle_result == result
     };

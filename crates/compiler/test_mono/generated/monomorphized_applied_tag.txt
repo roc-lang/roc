@@ -15,6 +15,6 @@ procedure Test.2 (Test.4):
 
 procedure Test.0 ():
     let Test.13 : Str = "A";
-    let Test.1 : [C Str, C Str] = A Test.13;
+    let Test.1 : [C Str, C Str] = TagId(0) Test.13;
     let Test.7 : Str = CallByName Test.2 Test.1;
     ret Test.7;

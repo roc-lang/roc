@@ -1374,12 +1374,14 @@ fn build_box_eq_help<'a, 'ctx, 'env>(
     box1.set_name(Symbol::ARG_1.as_str(&env.interns));
     box2.set_name(Symbol::ARG_2.as_str(&env.interns));
 
+    let entry = ctx.append_basic_block(parent, "entry");
+    env.builder.position_at_end(entry);
+
     let return_true = ctx.append_basic_block(parent, "return_true");
     env.builder.position_at_end(return_true);
     env.builder
         .build_return(Some(&env.context.bool_type().const_all_ones()));
 
-    let entry = ctx.append_basic_block(parent, "entry");
     env.builder.position_at_end(entry);
 
     let ptr_equal = env.builder.build_int_compare(
@@ -1402,8 +1404,8 @@ fn build_box_eq_help<'a, 'ctx, 'env>(
     let box1 = box1.into_pointer_value();
     let box2 = box2.into_pointer_value();
 
-    let value1 = env.builder.build_load(box1, "load_box1");
-    let value2 = env.builder.build_load(box2, "load_box2");
+    let value1 = load_roc_value(env, *inner_layout, box1, "load_box1");
+    let value2 = load_roc_value(env, *inner_layout, box2, "load_box2");
 
     let is_equal = build_eq(
         env,

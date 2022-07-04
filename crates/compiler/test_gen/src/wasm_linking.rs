@@ -18,7 +18,7 @@ use roc_mono::ir::{
     Call, CallType, Expr, HostExposedLayouts, Literal, Proc, ProcLayout, SelfRecursive, Stmt,
     UpdateModeId,
 };
-use roc_mono::layout::{Builtin, Layout};
+use roc_mono::layout::{Builtin, CapturesNiche, LambdaName, Layout};
 
 const LINKING_TEST_HOST_WASM: &str = "build/wasm_linking_test_host.wasm";
 const LINKING_TEST_HOST_NATIVE: &str = "build/wasm_linking_test_host";
@@ -110,7 +110,7 @@ fn build_app_mono<'a>(
     );
 
     let proc = Proc {
-        name: app_proc,
+        name: LambdaName::no_niche(app_proc),
         args: &[],
         body,
         closure_data_layout: None,
@@ -123,6 +123,7 @@ fn build_app_mono<'a>(
     let proc_layout = ProcLayout {
         arguments: &[],
         result: int_layout,
+        captures_niche: CapturesNiche::no_niche(),
     };
 
     let mut app = MutMap::default();

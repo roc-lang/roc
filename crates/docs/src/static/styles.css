@@ -30,6 +30,7 @@
   --nav-link-hover-color: #000000;
   --type-signature-color: var(--purple-5);
   --type-signature-bg-color: var(--purple-1);
+  --module-entry-border-color: var(--gray-3);
 }
 
 a {
@@ -75,6 +76,8 @@ a {
   color: var(--type-signature-color);
   background-color: var(--type-signature-bg-color);
   width: fit-content;
+  margin-top: 0;
+  margin-bottom: 24px;
   padding: 8px 16px;
   border-radius: 8px;
 }
@@ -156,6 +159,17 @@ main {
   padding: 48px;
 
   min-width: 0; /* necessary for text-overflow: ellipsis to work in descendants */
+}
+
+section {
+  border: 1px solid var(--module-entry-border-color);
+  border-radius: 8px;
+  padding: 32px;
+  margin: 32px 0;
+}
+
+section > *:last-child {
+  margin-bottom: 0;
 }
 
 #sidebar-nav {
@@ -447,6 +461,7 @@ pre {
     --top-bar-fg: #eeeeee;
     --type-signature-color: var(--grey-1);
     --type-signature-bg-color: var(--purple-4);
+    --module-entry-border-color: var(--purple-7);
   }
 
   html {

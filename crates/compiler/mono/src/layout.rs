@@ -8,7 +8,6 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_target::{PtrWidth, TargetInfo};
-use roc_types::pretty_print::ResolvedLambdaSet;
 use roc_types::subs::{
     self, Content, FlatType, Label, RecordFields, Subs, UnionTags, UnsortedUnionLabels, Variable,
 };
@@ -226,7 +225,7 @@ impl<'a> RawFunctionLayout<'a> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FieldOrderHash(u64);
 
 impl FieldOrderHash {
@@ -248,7 +247,7 @@ impl FieldOrderHash {
 }
 
 /// Types for code gen must be monomorphic. No type variables allowed!
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Layout<'a> {
     Builtin(Builtin<'a>),
     Struct {
@@ -270,7 +269,7 @@ pub enum Layout<'a> {
     RecursivePointer,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum UnionLayout<'a> {
     /// A non-recursive tag union
     /// e.g. `Result a e : [Ok a, Err e]`
@@ -693,7 +692,74 @@ impl std::fmt::Debug for LambdaSet<'_> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+/// Sometimes we can end up with lambdas of the same name and different captures in the same
+/// lambda set, like `fun` having lambda set `[[thunk U64, thunk U8]]` due to the following program:
+///
+/// ```roc
+/// capture : _ -> ({} -> Str)
+/// capture = \val ->
+///     thunk = \{} -> Num.toStr val
+///     thunk
+///
+/// fun = \x ->
+///     when x is
+///         True -> capture 123u64
+///         False -> capture 18u8
+/// ```
+///
+/// By recording the captures layouts this lambda expects in its identifier, we can distinguish
+/// between such differences when constructing closure capture data.
+///
+/// See also https://github.com/rtfeldman/roc/issues/3336.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct CapturesNiche<'a>(&'a [Layout<'a>]);
+
+impl CapturesNiche<'_> {
+    pub fn no_niche() -> Self {
+        Self(&[])
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct LambdaName<'a> {
+    name: Symbol,
+    captures_niche: CapturesNiche<'a>,
+}
+
+impl<'a> LambdaName<'a> {
+    #[inline(always)]
+    pub fn name(&self) -> Symbol {
+        self.name
+    }
+
+    #[inline(always)]
+    pub fn captures_niche(&self) -> CapturesNiche<'a> {
+        self.captures_niche
+    }
+
+    #[inline(always)]
+    pub fn no_captures(&self) -> bool {
+        self.captures_niche.0.is_empty()
+    }
+
+    #[inline(always)]
+    pub fn no_niche(name: Symbol) -> Self {
+        Self {
+            name,
+            captures_niche: CapturesNiche::no_niche(),
+        }
+    }
+
+    #[inline(always)]
+    pub fn replace_name(&self, name: Symbol) -> Self {
+        Self {
+            name,
+            captures_niche: self.captures_niche,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LambdaSet<'a> {
     /// collection of function names and their closure arguments
     pub set: &'a [(Symbol, &'a [Layout<'a>])],
@@ -741,23 +807,57 @@ impl<'a> LambdaSet<'a> {
         }
     }
 
-    pub fn member_does_not_need_closure_argument(&self, function_symbol: Symbol) -> bool {
-        match self.layout_for_member(function_symbol) {
-            ClosureRepresentation::Union {
-                alphabetic_order_fields,
-                ..
-            } => alphabetic_order_fields.is_empty(),
-            ClosureRepresentation::AlphabeticOrderStruct(fields) => fields.is_empty(),
-            ClosureRepresentation::Other(_) => false,
+    pub fn iter_set(&self) -> impl ExactSizeIterator<Item = LambdaName<'a>> {
+        self.set.iter().map(|(name, captures_layouts)| LambdaName {
+            name: *name,
+            captures_niche: CapturesNiche(captures_layouts),
+        })
+    }
+
+    pub fn layout_for_member_with_lambda_name(
+        &self,
+        lambda_name: LambdaName,
+    ) -> ClosureRepresentation<'a> {
+        debug_assert!(self.contains(lambda_name.name));
+
+        let comparator = |other_name: Symbol, other_captures_layouts: &[Layout]| {
+            other_name == lambda_name.name
+                && other_captures_layouts
+                    .iter()
+                    .eq(lambda_name.captures_niche.0)
+        };
+
+        self.layout_for_member(comparator)
+    }
+
+    /// Finds an alias name for a possible-multimorphic lambda variant in the lambda set.
+    pub fn find_lambda_name(
+        &self,
+        function_symbol: Symbol,
+        captures_layouts: &[Layout],
+    ) -> LambdaName<'a> {
+        debug_assert!(self.contains(function_symbol), "function symbol not in set");
+
+        let comparator = |other_name: Symbol, other_captures_layouts: &[Layout]| {
+            other_name == function_symbol && other_captures_layouts.iter().eq(captures_layouts)
+        };
+
+        let (name, layouts) = self
+            .set
+            .iter()
+            .find(|(name, layouts)| comparator(*name, layouts))
+            .expect("no lambda set found");
+
+        LambdaName {
+            name: *name,
+            captures_niche: CapturesNiche(layouts),
         }
     }
 
-    pub fn layout_for_member(&self, function_symbol: Symbol) -> ClosureRepresentation<'a> {
-        debug_assert!(
-            self.set.iter().any(|(s, _)| *s == function_symbol),
-            "function symbol not in set"
-        );
-
+    fn layout_for_member<F>(&self, comparator: F) -> ClosureRepresentation<'a>
+    where
+        F: Fn(Symbol, &[Layout]) -> bool,
+    {
         match self.representation {
             Layout::Union(union) => {
                 // here we rely on the fact that a union in a closure would be stored in a one-element record.
@@ -766,17 +866,19 @@ impl<'a> LambdaSet<'a> {
                     UnionLayout::NonRecursive(_) => {
                         // get the fields from the set, where they are sorted in alphabetic order
                         // (and not yet sorted by their alignment)
-                        let (index, (_, fields)) = self
+                        let (index, (name, fields)) = self
                             .set
                             .iter()
                             .enumerate()
-                            .find(|(_, (s, _))| *s == function_symbol)
+                            .find(|(_, (s, layouts))| comparator(*s, layouts))
                             .unwrap();
+
+                        let closure_name = *name;
 
                         ClosureRepresentation::Union {
                             tag_id: index as TagIdIntType,
                             alphabetic_order_fields: fields,
-                            closure_name: function_symbol,
+                            closure_name,
                             union_layout: *union,
                         }
                     }
@@ -793,12 +895,14 @@ impl<'a> LambdaSet<'a> {
                 }
             }
             Layout::Struct { .. } => {
+                debug_assert_eq!(self.set.len(), 1);
+
                 // get the fields from the set, where they are sorted in alphabetic order
                 // (and not yet sorted by their alignment)
                 let (_, fields) = self
                     .set
                     .iter()
-                    .find(|(s, _)| *s == function_symbol)
+                    .find(|(s, layouts)| comparator(*s, layouts))
                     .unwrap();
 
                 ClosureRepresentation::AlphabeticOrderStruct(fields)
@@ -846,32 +950,86 @@ impl<'a> LambdaSet<'a> {
         closure_var: Variable,
         target_info: TargetInfo,
     ) -> Result<Self, LayoutProblem> {
-        match roc_types::pretty_print::resolve_lambda_set(subs, closure_var) {
+        match resolve_lambda_set(subs, closure_var) {
             ResolvedLambdaSet::Set(mut lambdas) => {
                 // sort the tags; make sure ordering stays intact!
-                lambdas.sort();
+                lambdas.sort_by_key(|(sym, _)| *sym);
 
-                let mut set = Vec::with_capacity_in(lambdas.len(), arena);
+                let mut set: Vec<(Symbol, &[Layout])> = Vec::with_capacity_in(lambdas.len(), arena);
+                let mut set_with_variables: std::vec::Vec<(Symbol, std::vec::Vec<Variable>)> =
+                    std::vec::Vec::with_capacity(lambdas.len());
 
-                let mut env = Env {
-                    arena,
-                    subs,
-                    seen: Vec::new_in(arena),
-                    target_info,
-                };
+                let mut last_function_symbol = None;
+                let mut lambdas_it = lambdas.iter().peekable();
 
-                for (function_symbol, variables) in lambdas.iter() {
+                let mut has_duplicate_lambda_names = false;
+                while let Some((function_symbol, variables)) = lambdas_it.next() {
                     let mut arguments = Vec::with_capacity_in(variables.len(), arena);
+
+                    let mut env = Env {
+                        arena,
+                        subs,
+                        seen: Vec::new_in(arena),
+                        target_info,
+                    };
 
                     for var in variables {
                         arguments.push(Layout::from_var(&mut env, *var)?);
                     }
 
-                    set.push((*function_symbol, arguments.into_bump_slice()));
+                    let arguments = arguments.into_bump_slice();
+
+                    let is_multimorphic = match (last_function_symbol, lambdas_it.peek()) {
+                        (None, None) => false,
+                        (Some(sym), None) | (None, Some((sym, _))) => function_symbol == sym,
+                        (Some(sym1), Some((sym2, _))) => {
+                            function_symbol == sym1 || function_symbol == sym2
+                        }
+                    };
+
+                    has_duplicate_lambda_names = has_duplicate_lambda_names || is_multimorphic;
+
+                    set.push((*function_symbol, arguments));
+                    set_with_variables.push((*function_symbol, variables.to_vec()));
+
+                    last_function_symbol = Some(function_symbol);
                 }
 
-                let representation =
-                    arena.alloc(Self::make_representation(arena, subs, lambdas, target_info));
+                let (set, set_with_variables) = if has_duplicate_lambda_names {
+                    // If we have a lambda set with duplicate names, then we sort first by name,
+                    // and break ties by sorting on the layout. We need to do this again since the
+                    // first sort would not have sorted on the layout.
+
+                    // TODO: be more efficient, we can compute the permutation once and then apply
+                    // it to both vectors.
+                    let mut joined = set
+                        .into_iter()
+                        .zip(set_with_variables.into_iter())
+                        .collect::<std::vec::Vec<_>>();
+                    joined.sort_by(|(lam_and_captures1, _), (lam_and_captures2, _)| {
+                        lam_and_captures1.cmp(lam_and_captures2)
+                    });
+                    // Remove duplicate lambda captures layouts unification can't see as
+                    // duplicates, for example [[Thunk {a: Str}, Thunk [A Str]]], each of which are
+                    // newtypes over the lambda layout `Thunk Str`.
+                    joined.dedup_by_key(|((name, captures), _)| (*name, *captures));
+
+                    let (set, set_with_variables): (std::vec::Vec<_>, std::vec::Vec<_>) =
+                        joined.into_iter().unzip();
+
+                    let set = Vec::from_iter_in(set, arena);
+
+                    (set, set_with_variables)
+                } else {
+                    (set, set_with_variables)
+                };
+
+                let representation = arena.alloc(Self::make_representation(
+                    arena,
+                    subs,
+                    set_with_variables,
+                    target_info,
+                ));
 
                 Ok(LambdaSet {
                     set: set.into_bump_slice(),
@@ -951,7 +1109,41 @@ impl<'a> LambdaSet<'a> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum ResolvedLambdaSet {
+    Set(std::vec::Vec<(Symbol, std::vec::Vec<Variable>)>),
+    /// TODO: figure out if this can happen in a correct program, or is the result of a bug in our
+    /// compiler. See https://github.com/rtfeldman/roc/issues/3163.
+    Unbound,
+}
+
+fn resolve_lambda_set(subs: &Subs, mut var: Variable) -> ResolvedLambdaSet {
+    let mut set = vec![];
+    loop {
+        match subs.get_content_without_compacting(var) {
+            Content::LambdaSet(subs::LambdaSet {
+                solved,
+                recursion_var: _,
+                unspecialized,
+            }) => {
+                debug_assert!(
+                    unspecialized.is_empty(),
+                    "unspecialized lambda sets left over during resolution: {:?}",
+                    roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(var), subs),
+                );
+                roc_types::pretty_print::push_union(subs, solved, &mut set);
+                return ResolvedLambdaSet::Set(set);
+            }
+            Content::RecursionVar { structure, .. } => {
+                var = *structure;
+            }
+            Content::FlexVar(_) => return ResolvedLambdaSet::Unbound,
+
+            c => internal_error!("called with a non-lambda set {:?}", c),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Builtin<'a> {
     Int(IntWidth),
     Float(FloatWidth),

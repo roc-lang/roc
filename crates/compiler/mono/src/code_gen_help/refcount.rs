@@ -129,7 +129,9 @@ pub fn refcount_generic<'a>(
         Layout::RecursivePointer => unreachable!(
             "We should never call a refcounting helper on a RecursivePointer layout directly"
         ),
-        Layout::Boxed(_) => rc_todo(),
+        Layout::Boxed(inner_layout) => {
+            refcount_boxed(root, ident_ids, ctx, &layout, inner_layout, structure)
+        }
     }
 }
 
@@ -343,7 +345,7 @@ pub fn is_rc_implemented_yet(layout: &Layout) -> bool {
             is_rc_implemented_yet(&lambda_set.runtime_representation())
         }
         Layout::RecursivePointer => true,
-        Layout::Boxed(_) => false,
+        Layout::Boxed(_) => true,
     }
 }
 
@@ -1464,4 +1466,67 @@ fn refcount_tag_fields<'a>(
     }
 
     stmt
+}
+
+fn refcount_boxed<'a>(
+    root: &mut CodeGenHelp<'a>,
+    ident_ids: &mut IdentIds,
+    ctx: &mut Context<'a>,
+    layout: &Layout,
+    inner_layout: &'a Layout,
+    outer: Symbol,
+) -> Stmt<'a> {
+    let arena = root.arena;
+
+    //
+    // modify refcount of the inner and outer structures
+    // RC on inner first, to avoid use-after-free for Dec
+    // We're defining statements in reverse, so define outer first
+    //
+
+    let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
+    let alignment = layout.alignment_bytes(root.target_info);
+    let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
+    let modify_outer = modify_refcount(
+        root,
+        ident_ids,
+        ctx,
+        rc_ptr,
+        alignment,
+        arena.alloc(ret_stmt),
+    );
+
+    let get_rc_and_modify_outer = rc_ptr_from_data_ptr(
+        root,
+        ident_ids,
+        outer,
+        rc_ptr,
+        false,
+        arena.alloc(modify_outer),
+    );
+
+    if inner_layout.is_refcounted() && !ctx.op.is_decref() {
+        let inner = root.create_symbol(ident_ids, "inner");
+        let inner_expr = Expr::ExprUnbox { symbol: outer };
+
+        let mod_inner_unit = root.create_symbol(ident_ids, "mod_inner_unit");
+        let mod_inner_args = refcount_args(root, ctx, inner);
+        let mod_inner_expr = root
+            .call_specialized_op(ident_ids, ctx, *inner_layout, mod_inner_args)
+            .unwrap();
+
+        Stmt::Let(
+            inner,
+            inner_expr,
+            *inner_layout,
+            arena.alloc(Stmt::Let(
+                mod_inner_unit,
+                mod_inner_expr,
+                LAYOUT_UNIT,
+                arena.alloc(get_rc_and_modify_outer),
+            )),
+        )
+    } else {
+        get_rc_and_modify_outer
+    }
 }

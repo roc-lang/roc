@@ -323,6 +323,10 @@ impl UnificationTable {
         self.root_key(a) == self.root_key(b)
     }
 
+    pub fn unioned_without_compacting(&self, a: Variable, b: Variable) -> bool {
+        self.root_key_without_compacting(a) == self.root_key_without_compacting(b)
+    }
+
     // custom very specific helpers
     #[inline(always)]
     pub fn get_rank_set_mark(&mut self, key: Variable, mark: Mark) -> Rank {

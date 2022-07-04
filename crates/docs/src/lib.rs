@@ -191,6 +191,8 @@ fn render_module_documentation(
         if should_render_entry {
             match entry {
                 DocEntry::DocDef(doc_def) => {
+                    buf.push_str("<section>");
+
                     let mut href = String::new();
                     href.push('#');
                     href.push_str(doc_def.name.as_str());
@@ -239,6 +241,8 @@ fn render_module_documentation(
                             .as_str(),
                         );
                     }
+
+                    buf.push_str("</section>");
                 }
                 DocEntry::DetachedDoc(docs) => {
                     let markdown = markdown_to_html(

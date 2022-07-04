@@ -3374,6 +3374,18 @@ mod test_fmt {
     }
 
     #[test]
+    fn when_with_integer_comments() {
+        expr_formats_same(indoc!(
+            r#"
+                when 0 is
+                    1 # comment
+                        | 2 -> "a"
+                    _ -> "b"
+            "#
+        ));
+    }
+
+    #[test]
     fn nested_when() {
         expr_formats_same(indoc!(
             r#"
@@ -3465,18 +3477,18 @@ mod test_fmt {
                 r#"
             when b is
                 1
-                 | 2
-                 | 3 ->
+                    | 2
+                    | 3 ->
                     4
                 5 | 6 | 7 ->
                     8
                 9
-                 | 10 -> 11
+                    | 10 -> 11
                 12 | 13 ->
                     when c is
                         14 | 15 -> 16
                         17
-                         | 18 -> 19
+                            | 18 -> 19
                 20 -> 21
                 "#
             ),
@@ -3498,7 +3510,7 @@ mod test_fmt {
             when b is
                 3 -> 4
                 9
-                 | 8 -> 9
+                    | 8 -> 9
             "#
             ),
         );

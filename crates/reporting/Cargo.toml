@@ -31,3 +31,4 @@ roc_target = { path = "../compiler/roc_target" }
 roc_test_utils = { path = "../test_utils" }
 pretty_assertions = "1.0.0"
 indoc = "1.0.3"
+insta = "1.15.0"

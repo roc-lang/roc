@@ -1,6 +1,6 @@
 procedure Test.1 (Test.5):
     let Test.19 : I64 = 2i64;
-    let Test.2 : [C I64, C I64] = Ok Test.19;
+    let Test.2 : [C I64, C I64] = TagId(1) Test.19;
     joinpoint Test.9 Test.3:
         ret Test.3;
     in

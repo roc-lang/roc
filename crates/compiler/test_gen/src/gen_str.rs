@@ -25,7 +25,7 @@ fn str_split_empty_delimiter() {
                 "#
         ),
         1,
-        i64
+        usize
     );
 
     assert_evals_to!(
@@ -41,7 +41,7 @@ fn str_split_empty_delimiter() {
                 "#
         ),
         3,
-        i64
+        usize
     );
 }
 
@@ -55,7 +55,7 @@ fn str_split_bigger_delimiter_small_str() {
                 "#
         ),
         1,
-        i64
+        usize
     );
 
     assert_evals_to!(
@@ -71,7 +71,7 @@ fn str_split_bigger_delimiter_small_str() {
                 "#
         ),
         3,
-        i64
+        usize
     );
 }
 
@@ -210,7 +210,7 @@ fn str_split_small_str_big_delimiter() {
                 "#
         ),
         3,
-        i64
+        usize
     );
 
     assert_evals_to!(

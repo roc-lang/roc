@@ -1525,3 +1525,130 @@ fn tail_call_with_different_layout() {
         "#
     )
 }
+
+#[mono_test]
+fn lambda_capture_niche_u8_vs_u64() {
+    indoc!(
+        r#"
+        capture : _ -> ({} -> Str)
+        capture = \val ->
+            \{} ->
+                Num.toStr val
+
+        x : [True, False]
+        x = True
+
+        fun =
+            when x is
+                True -> capture 123u64
+                False -> capture 18u8
+
+        fun {}
+        "#
+    )
+}
+
+#[mono_test]
+fn lambda_capture_niches_with_other_lambda_capture() {
+    indoc!(
+        r#"
+        capture : a -> ({} -> Str)
+        capture = \val ->
+            \{} ->
+                when val is
+                    _ -> ""
+
+        capture2 = \val -> \{} -> "\(val)"
+
+        x : [A, B, C]
+        x = A
+
+        fun =
+            when x is
+                A -> capture {}
+                B -> capture2 "foo"
+                C -> capture 1u64
+
+        fun {}
+        "#
+    )
+}
+
+#[mono_test]
+fn lambda_capture_niches_with_non_capturing_function() {
+    indoc!(
+        r#"
+        capture : a -> ({} -> Str)
+        capture = \val ->
+            \{} ->
+                when val is
+                    _ -> ""
+
+        triv = \{} -> ""
+
+        x : [A, B, C]
+        x = A
+
+        fun =
+            when x is
+                A -> capture {}
+                B -> triv
+                C -> capture 1u64
+
+        fun {}
+        "#
+    )
+}
+
+#[mono_test]
+fn lambda_capture_niches_have_captured_function_in_closure() {
+    indoc!(
+        r#"
+        Lazy a : {} -> a
+
+        after : Lazy a, (a -> Lazy b) -> Lazy b
+        after = \effect, map ->
+            thunk = \{} ->
+                when map (effect {}) is
+                    b -> b {}
+            thunk
+
+        f = \_ -> \_ -> ""
+        g = \{ s1 } -> \_ -> s1
+
+        x : [True, False]
+        x = True
+
+        fun =
+            when x is
+                True -> after (\{} -> "") f
+                False -> after (\{} -> {s1: "s1"}) g
+
+        fun {}
+        "#
+    )
+}
+
+#[mono_test]
+fn lambda_set_niche_same_layout_different_constructor() {
+    indoc!(
+        r#"
+        capture : a -> ({} -> Str)
+        capture = \val ->
+            thunk =
+                \{} ->
+                    when val is
+                        _ -> ""
+            thunk
+
+        x : [True, False]
+        x = True
+
+        fun =
+            when x is
+                True -> capture {a: ""}
+                False -> capture (A "")
+        fun
+        "#
+    )
+}

@@ -33,7 +33,7 @@ use roc_mono::ir::{
     CapturedSymbols, EntryPoint, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs,
     ProcsBase, UpdateModeIds,
 };
-use roc_mono::layout::{Layout, LayoutCache, LayoutProblem};
+use roc_mono::layout::{CapturesNiche, LambdaName, Layout, LayoutCache, LayoutProblem};
 use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
 use roc_parse::header::{HeaderFor, ModuleNameEnum, PackageName};
@@ -132,7 +132,7 @@ struct ModuleCache<'a> {
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
     late_specializations: MutMap<ModuleId, LateSpecializationsModule<'a>>,
-    external_specializations_requested: MutMap<ModuleId, Vec<ExternalSpecializations>>,
+    external_specializations_requested: MutMap<ModuleId, Vec<ExternalSpecializations<'a>>>,
 
     /// Various information
     imports: MutMap<ModuleId, MutSet<ModuleId>>,
@@ -715,7 +715,7 @@ enum Msg<'a> {
         module_id: ModuleId,
         ident_ids: IdentIds,
         layout_cache: LayoutCache<'a>,
-        external_specializations_requested: BumpMap<ModuleId, ExternalSpecializations>,
+        external_specializations_requested: BumpMap<ModuleId, ExternalSpecializations<'a>>,
         procs_base: ProcsBase<'a>,
         procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
         update_mode_ids: UpdateModeIds,
@@ -1007,7 +1007,7 @@ enum BuildTask<'a> {
         subs: Subs,
         procs_base: ProcsBase<'a>,
         layout_cache: LayoutCache<'a>,
-        specializations_we_must_make: Vec<ExternalSpecializations>,
+        specializations_we_must_make: Vec<ExternalSpecializations<'a>>,
         module_timing: ModuleTiming,
         world_abilities: WorldAbilities,
         derived_symbols: GlobalDerivedSymbols,
@@ -2592,9 +2592,11 @@ fn finish_specialization(
         .into_inner()
         .into_module_ids();
 
+    let all_ident_ids = state.constrained_ident_ids;
+
     let interns = Interns {
         module_ids,
-        all_ident_ids: state.constrained_ident_ids,
+        all_ident_ids,
     };
 
     let State {
@@ -2660,6 +2662,7 @@ fn finish_specialization(
                     layout: roc_mono::ir::ProcLayout {
                         arguments: &[],
                         result: Layout::struct_no_name_order(&[]),
+                        captures_niche: CapturesNiche::no_niche(),
                     },
                     symbol,
                 }
@@ -4407,7 +4410,7 @@ fn make_specializations<'a>(
     mut subs: Subs,
     procs_base: ProcsBase<'a>,
     mut layout_cache: LayoutCache<'a>,
-    specializations_we_must_make: Vec<ExternalSpecializations>,
+    specializations_we_must_make: Vec<ExternalSpecializations<'a>>,
     mut module_timing: ModuleTiming,
     target_info: TargetInfo,
     world_abilities: WorldAbilities,
@@ -4571,7 +4574,7 @@ fn build_pending_specializations<'a>(
 
                     procs_base.host_specializations.insert_host_exposed(
                         mono_env.subs,
-                        symbol,
+                        LambdaName::no_niche(symbol),
                         annotation,
                         expr_var,
                     );
@@ -4631,7 +4634,7 @@ fn build_pending_specializations<'a>(
 
                     procs_base.host_specializations.insert_host_exposed(
                         mono_env.subs,
-                        symbol,
+                        LambdaName::no_niche(symbol),
                         annotation,
                         expr_var,
                     );
@@ -4709,7 +4712,7 @@ fn build_pending_specializations<'a>(
 
                     procs_base.host_specializations.insert_host_exposed(
                         mono_env.subs,
-                        symbol,
+                        LambdaName::no_niche(symbol),
                         annotation,
                         expr_var,
                     );
@@ -4769,7 +4772,7 @@ fn build_pending_specializations<'a>(
 
                     procs_base.host_specializations.insert_host_exposed(
                         mono_env.subs,
-                        symbol,
+                        LambdaName::no_niche(symbol),
                         annotation,
                         expr_var,
                     );
