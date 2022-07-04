@@ -3,12 +3,12 @@
 To run this website, first compile either of these identical apps:
 
 ```bash
-# Option A: Compile examples/platform-switching/web-assembly-platform/rocLovesWeb.roc
-cargo run -- build --target=wasm32 examples/platform-switching/web-assembly-platform/rocLovesWeb.roc
+# Option A: Compile examples/platform-switching/web-assembly-platform/rocLovesWebAssembly.roc
+cargo run -- build --target=wasm32 examples/platform-switching/web-assembly-platform/rocLovesWebAssembly.roc
 
 # Option B: Compile examples/platform-switching/main.roc with `pf: "web-assembly-platform/main.roc"` and move the result
 cargo run -- build --target=wasm32 examples/platform-switching/main.roc
-(cd examples/platform-switching && mv rocLovesPlatforms.wasm web-assembly-platform/rocLovesWeb.wasm)
+(cd examples/platform-switching && mv rocLovesPlatforms.wasm web-assembly-platform/rocLovesWebAssembly.wasm)
 ```
 
 Then `cd` into the website directory

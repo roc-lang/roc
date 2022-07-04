@@ -419,7 +419,12 @@ pub struct Env<'a> {
 }
 
 impl<'a> Env<'a> {
-    pub fn new(arena: &'a Bump, subs: &'a Subs, interns: &'a Interns, target: TargetInfo) -> Self {
+    pub fn new(
+        arena: &'a Bump,
+        subs: &'a Subs,
+        interns: &'a mut Interns,
+        target: TargetInfo,
+    ) -> Self {
         Env {
             arena,
             subs,

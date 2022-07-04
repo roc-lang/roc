@@ -76,6 +76,13 @@ impl StoredValue {
     }
 }
 
+pub enum AddressValue {
+    /// The address value has been loaded to the VM stack
+    Loaded,
+    /// The address value is in a local variable
+    NotLoaded(LocalId),
+}
+
 /// Helper structure for WasmBackend, to keep track of how values are stored,
 /// including the VM stack, local variables, and linear memory
 #[derive(Debug)]
@@ -610,7 +617,7 @@ impl<'a> Storage<'a> {
         &mut self,
         code_builder: &mut CodeBuilder,
         to_symbol: Symbol,
-        from_ptr: LocalId,
+        from_addr: AddressValue,
         from_offset: u32,
     ) -> u32 {
         let to_storage = self.get(&to_symbol).to_owned();
@@ -624,6 +631,16 @@ impl<'a> Storage<'a> {
                 if self.stack_frame_pointer.is_none() {
                     self.stack_frame_pointer = Some(self.get_next_local_id());
                 }
+
+                let from_ptr = match from_addr {
+                    AddressValue::NotLoaded(ptr) => ptr,
+                    AddressValue::Loaded => {
+                        // The `from` address is on the VM stack but we want it in a local for copying
+                        let tmp_local = self.create_anonymous_local(PTR_TYPE);
+                        code_builder.set_local(tmp_local);
+                        tmp_local
+                    }
+                };
 
                 let (to_ptr, to_offset) = location.local_and_offset(self.stack_frame_pointer);
                 copy_memory(
@@ -648,7 +665,10 @@ impl<'a> Storage<'a> {
             } => {
                 use crate::wasm_module::Align::*;
 
-                code_builder.get_local(from_ptr);
+                if let AddressValue::NotLoaded(from_ptr) = from_addr {
+                    code_builder.get_local(from_ptr);
+                }
+
                 match (value_type, size) {
                     (ValueType::I64, 8) => code_builder.i64_load(Bytes8, from_offset),
                     (ValueType::I32, 4) => code_builder.i32_load(Bytes4, from_offset),

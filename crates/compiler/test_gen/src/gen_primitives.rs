@@ -3260,7 +3260,7 @@ fn issue_2322() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn box_and_unbox_string() {
     assert_evals_to!(
         indoc!(
@@ -3278,7 +3278,7 @@ fn box_and_unbox_string() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn box_and_unbox_num() {
     assert_evals_to!(
         indoc!(
@@ -3292,7 +3292,7 @@ fn box_and_unbox_num() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn box_and_unbox_record() {
     assert_evals_to!(
         indoc!(
@@ -3306,7 +3306,7 @@ fn box_and_unbox_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn box_and_unbox_tag_union() {
     assert_evals_to!(
         indoc!(
@@ -3496,5 +3496,131 @@ fn polymorphic_lambda_captures_polymorphic_value() {
         ),
         2,
         u64
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn lambda_capture_niche_u64_vs_u8_capture() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            capture : _ -> ({} -> Str)
+            capture = \val ->
+                \{} ->
+                    Num.toStr val
+
+            x : [True, False]
+            x = True
+
+            fun =
+                when x is
+                    True -> capture 123u64
+                    False -> capture 18u8
+
+            fun {}
+            "#
+        ),
+        RocStr::from("123"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn lambda_capture_niches_with_other_lambda_capture() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            capture : _ -> ({} -> Str)
+            capture = \val ->
+                \{} ->
+                    Num.toStr val
+
+            capture2 = \val -> \{} -> val
+
+            f = \x ->
+                g =
+                    when x is
+                        A -> capture 11u8
+                        B -> capture2 "lisa"
+                        C -> capture 187128u64
+                g {}
+
+            {a: f A, b: f B, c: f C}
+            "#
+        ),
+        (
+            RocStr::from("11"),
+            RocStr::from("lisa"),
+            RocStr::from("187128")
+        ),
+        (RocStr, RocStr, RocStr)
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn lambda_capture_niches_with_non_capturing_function() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            capture : _ -> ({} -> Str)
+            capture = \val ->
+                \{} ->
+                    Num.toStr val
+
+            triv = \{} -> "triv"
+
+            f = \x ->
+                g =
+                    when x is
+                        A -> capture 11u8
+                        B -> triv
+                        C -> capture 187128u64
+                g {}
+
+            {a: f A, b: f B, c: f C}
+            "#
+        ),
+        (
+            RocStr::from("11"),
+            RocStr::from("triv"),
+            RocStr::from("187128")
+        ),
+        (RocStr, RocStr, RocStr)
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn lambda_capture_niches_have_captured_function_in_closure() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Lazy a : {} -> a
+
+            after : Lazy a, (a -> Lazy b) -> Lazy b
+            after = \effect, map ->
+                thunk = \{} ->
+                    when map (effect {}) is
+                        b -> b {}
+                thunk
+
+            f = \_ -> \_ -> "fun f"
+            g = \{ s1 } -> \_ -> s1
+
+            fun = \x ->
+                h = 
+                    when x is
+                        True -> after (\{} -> "") f
+                        False -> after (\{} -> {s1: "s1"}) g
+                h {}
+
+            {a: fun False, b: fun True}
+            "#
+        ),
+        (RocStr::from("s1"), RocStr::from("fun f")),
+        (RocStr, RocStr)
     )
 }

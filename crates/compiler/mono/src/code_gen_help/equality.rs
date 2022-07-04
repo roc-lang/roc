@@ -530,12 +530,43 @@ fn eq_tag_fields<'a>(
 }
 
 fn eq_boxed<'a>(
-    _root: &mut CodeGenHelp<'a>,
-    _ident_ids: &mut IdentIds,
-    _ctx: &mut Context<'a>,
-    _inner_layout: &'a Layout<'a>,
+    root: &mut CodeGenHelp<'a>,
+    ident_ids: &mut IdentIds,
+    ctx: &mut Context<'a>,
+    inner_layout: &'a Layout<'a>,
 ) -> Stmt<'a> {
-    todo!()
+    let a = root.create_symbol(ident_ids, "a");
+    let b = root.create_symbol(ident_ids, "b");
+    let result = root.create_symbol(ident_ids, "result");
+
+    let a_expr = Expr::ExprUnbox { symbol: ARG_1 };
+    let b_expr = Expr::ExprUnbox { symbol: ARG_2 };
+    let eq_call_expr = root
+        .call_specialized_op(ident_ids, ctx, *inner_layout, root.arena.alloc([a, b]))
+        .unwrap();
+
+    Stmt::Let(
+        a,
+        a_expr,
+        *inner_layout,
+        root.arena.alloc(
+            //
+            Stmt::Let(
+                b,
+                b_expr,
+                *inner_layout,
+                root.arena.alloc(
+                    //
+                    Stmt::Let(
+                        result,
+                        eq_call_expr,
+                        LAYOUT_BOOL,
+                        root.arena.alloc(Stmt::Ret(result)),
+                    ),
+                ),
+            ),
+        ),
+    )
 }
 
 /// List equality

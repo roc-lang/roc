@@ -1,0 +1,54 @@
+procedure Num.94 (#Attr.2):
+    let Num.188 : Str = lowlevel NumToStr #Attr.2;
+    ret Num.188;
+
+procedure Num.94 (#Attr.2):
+    let Num.189 : Str = lowlevel NumToStr #Attr.2;
+    ret Num.189;
+
+procedure Test.1 (Test.4):
+    let Test.16 : [C U8, C U64] = TagId(1) Test.4;
+    ret Test.16;
+
+procedure Test.1 (Test.4):
+    let Test.22 : [C U8, C U64] = TagId(0) Test.4;
+    ret Test.22;
+
+procedure Test.5 (Test.17, #Attr.12):
+    let Test.4 : U64 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
+    let Test.19 : Str = CallByName Num.94 Test.4;
+    ret Test.19;
+
+procedure Test.5 (Test.17, #Attr.12):
+    let Test.4 : U8 = UnionAtIndex (Id 0) (Index 0) #Attr.12;
+    let Test.25 : Str = CallByName Num.94 Test.4;
+    ret Test.25;
+
+procedure Test.0 ():
+    let Test.2 : Int1 = true;
+    joinpoint Test.13 Test.3:
+        let Test.8 : {} = Struct {};
+        let Test.9 : U8 = GetTagId Test.3;
+        joinpoint Test.10 Test.7:
+            ret Test.7;
+        in
+        switch Test.9:
+            case 0:
+                let Test.11 : Str = CallByName Test.5 Test.8 Test.3;
+                jump Test.10 Test.11;
+        
+            default:
+                let Test.12 : Str = CallByName Test.5 Test.8 Test.3;
+                jump Test.10 Test.12;
+        
+    in
+    let Test.26 : Int1 = true;
+    let Test.27 : Int1 = lowlevel Eq Test.26 Test.2;
+    if Test.27 then
+        let Test.15 : U64 = 123i64;
+        let Test.14 : [C U8, C U64] = CallByName Test.1 Test.15;
+        jump Test.13 Test.14;
+    else
+        let Test.21 : U8 = 18i64;
+        let Test.20 : [C U8, C U64] = CallByName Test.1 Test.21;
+        jump Test.13 Test.20;

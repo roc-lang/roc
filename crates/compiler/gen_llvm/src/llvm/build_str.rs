@@ -168,10 +168,10 @@ pub fn str_from_utf8_range<'a, 'ctx, 'env>(
     call_void_bitcode_fn(
         env,
         &[
+            result_ptr.into(),
             list_symbol_to_c_abi(env, scope, list).into(),
             count,
             start,
-            result_ptr.into(),
         ],
         bitcode::STR_FROM_UTF8_RANGE,
     );
@@ -194,9 +194,9 @@ pub fn str_from_utf8<'a, 'ctx, 'env>(
     call_void_bitcode_fn(
         env,
         &[
+            result_ptr.into(),
             list_symbol_to_c_abi(env, scope, list).into(),
             pass_update_mode(env, update_mode),
-            result_ptr.into(),
         ],
         bitcode::STR_FROM_UTF8,
     );

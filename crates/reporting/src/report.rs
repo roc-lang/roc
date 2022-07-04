@@ -650,7 +650,7 @@ impl<'a> RocDocAllocator<'a> {
             let line_number = line_number_string;
             let this_line_number_length = line_number.len();
 
-            let line = self.src_lines[i as usize];
+            let line: &str = self.src_lines.get(i as usize).unwrap_or(&"");
 
             let rest_of_line = if !line.trim().is_empty() {
                 self.text(line)

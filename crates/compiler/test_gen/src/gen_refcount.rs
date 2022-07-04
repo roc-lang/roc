@@ -431,3 +431,46 @@ fn union_linked_list_long_dec() {
         &[Deallocated; 1_000]
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn boxed_str_inc() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                s = Str.concat "A long enough string " "to be heap-allocated"
+                b = Box.box s
+
+                Tuple b b
+            "#
+        ),
+        (Pointer, Pointer),
+        &[
+            Live(2), // s
+            Live(2), // b
+        ]
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-wasm"))]
+fn boxed_str_dec() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+                s = Str.concat "A long enough string " "to be heap-allocated"
+                b = Box.box s
+
+                if False then
+                    ReturnTheBox b
+                else
+                    DeallocateEverything
+            "#
+        ),
+        (i32, i32),
+        &[
+            Deallocated, // s
+            Deallocated, // b
+        ]
+    );
+}

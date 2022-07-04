@@ -57,6 +57,7 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
         ProcLayout {
             arguments: [],
             result,
+            captures_niche: _,
         } => {
             // this is a thunk
             jit_to_ast_help(&env, app, main_fn_name, &result, content)
