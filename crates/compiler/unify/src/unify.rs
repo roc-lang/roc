@@ -488,6 +488,15 @@ fn unify_context<M: MetaCollector>(subs: &mut Subs, pool: &mut Pool, ctx: Contex
     result
 }
 
+fn not_in_range_mismatch<M: MetaCollector>() -> Outcome<M> {
+    Outcome {
+        mismatches: vec![Mismatch::TypeNotInRange],
+        must_implement_ability: Default::default(),
+        lambda_sets_to_specialize: Default::default(),
+        extra_metadata: Default::default(),
+    }
+}
+
 #[inline(always)]
 fn unify_ranged_number<M: MetaCollector>(
     subs: &mut Subs,
@@ -498,7 +507,7 @@ fn unify_ranged_number<M: MetaCollector>(
 ) -> Outcome<M> {
     let other_content = &ctx.second_desc.content;
 
-    let outcome = match other_content {
+    match other_content {
         FlexVar(_) => {
             // Ranged number wins
             merge(subs, ctx, RangedNumber(real_var, range_vars))
@@ -508,25 +517,31 @@ fn unify_ranged_number<M: MetaCollector>(
         | Alias(..)
         | Structure(..)
         | RigidAbleVar(..)
-        | FlexAbleVar(..) => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
+        | FlexAbleVar(..) => {
+            let outcome = unify_pool(subs, pool, real_var, ctx.second, ctx.mode);
+            if !outcome.mismatches.is_empty() {
+                return outcome;
+            }
+            let outcome = check_valid_range(subs, ctx.second, range_vars);
+            if !outcome.mismatches.is_empty() {
+                return outcome;
+            }
+            let real_var = subs.fresh(subs.get_without_compacting(real_var));
+            merge(subs, ctx, RangedNumber(real_var, range_vars))
+        }
         &RangedNumber(other_real_var, other_range_vars) => {
             let outcome = unify_pool(subs, pool, real_var, other_real_var, ctx.mode);
-            if outcome.mismatches.is_empty() {
-                check_valid_range(subs, ctx.first, other_range_vars)
-            } else {
-                outcome
+            if !outcome.mismatches.is_empty() {
+                return outcome;
             }
-            // TODO: We should probably check that "range_vars" and "other_range_vars" intersect
+            match range_vars.intersection(&other_range_vars) {
+                Some(range) => merge(subs, ctx, RangedNumber(real_var, range)),
+                None => not_in_range_mismatch(),
+            }
         }
         LambdaSet(..) => mismatch!(),
         Error => merge(subs, ctx, Error),
-    };
-
-    if !outcome.mismatches.is_empty() {
-        return outcome;
     }
-
-    check_valid_range(subs, ctx.second, range_vars)
 }
 
 fn check_valid_range<M: MetaCollector>(
@@ -544,14 +559,7 @@ fn check_valid_range<M: MetaCollector>(
                     return check_valid_range(subs, actual, range);
                 }
                 Some(false) => {
-                    let outcome = Outcome {
-                        mismatches: vec![Mismatch::TypeNotInRange],
-                        must_implement_ability: Default::default(),
-                        lambda_sets_to_specialize: Default::default(),
-                        extra_metadata: Default::default(),
-                    };
-
-                    return outcome;
+                    return not_in_range_mismatch();
                 }
                 Some(true) => { /* fall through */ }
             }

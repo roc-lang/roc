@@ -3301,12 +3301,12 @@ mod test_reporting {
 
     This `ACons` tag application has the type:
 
-        [ACons (Int Signed64) [BCons (Int Signed64) [ACons Str [BCons I64 [ACons I64 (BList I64 I64),
+        [ACons (Int Signed64) [BCons (Int Signed64) [ACons Str [BCons (Int Signed64) [ACons (Int Signed64) (BList (Int Signed64) I64),
         ANil] as ∞, BNil], ANil], BNil], ANil]
 
     But the type annotation on `x` says it should be:
 
-        [ACons I64 (BList I64 I64), ANil] as a
+        [ACons (Int Signed64) (BList (Int Signed64) I64), ANil] as a
     "###
     );
 
@@ -9435,5 +9435,30 @@ All branches in an `if` must have the same type!
         ),
         @r###"
         "###
+    );
+
+    test_report!(
+        int_literals_cannot_fit_in_same_type,
+        indoc!(
+            r#"
+            0x80000000000000000000000000000000 == -0x80000000000000000000000000000000
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd argument to `isEq` is not what I expect:
+
+    4│      0x80000000000000000000000000000000 == -0x80000000000000000000000000000000
+                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    This argument is an integer of type:
+
+        I128
+
+    But `isEq` needs the 2nd argument to be:
+
+        U128
+    "###
     );
 }

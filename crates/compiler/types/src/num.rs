@@ -68,6 +68,47 @@ impl NumericRange {
         width.signedness_and_width().1 >= at_least_width.signedness_and_width().1
     }
 
+    fn width(&self) -> IntWidth {
+        use NumericRange::*;
+        match self {
+            IntAtLeastSigned(w)
+            | IntAtLeastEitherSign(w)
+            | NumAtLeastSigned(w)
+            | NumAtLeastEitherSign(w) => *w,
+        }
+    }
+
+    /// Returns the intersection of `self` and `other`, i.e. the greatest lower bound of both, or
+    /// `None` if there is no common lower bound.
+    pub fn intersection(&self, other: &Self) -> Option<Self> {
+        use NumericRange::*;
+        let (left, right) = (self.width(), other.width());
+        let constructor: fn(IntWidth) -> NumericRange = match (self, other) {
+            // Matching against a signed int, the intersection must also be a signed int
+            (IntAtLeastSigned(_), _) | (_, IntAtLeastSigned(_)) => IntAtLeastSigned,
+            // It's a signed number, but also an int, so the intersection must be a signed int
+            (NumAtLeastSigned(_), IntAtLeastEitherSign(_))
+            | (IntAtLeastEitherSign(_), NumAtLeastSigned(_)) => IntAtLeastSigned,
+            //  It's a signed number
+            (NumAtLeastSigned(_), NumAtLeastSigned(_) | NumAtLeastEitherSign(_))
+            | (NumAtLeastEitherSign(_), NumAtLeastSigned(_)) => NumAtLeastSigned,
+            // Otherwise we must be an int, signed or unsigned
+            (IntAtLeastEitherSign(_), IntAtLeastEitherSign(_) | NumAtLeastEitherSign(_))
+            | (NumAtLeastEitherSign(_), IntAtLeastEitherSign(_)) => IntAtLeastEitherSign,
+            // Otherwise we must be a num, signed or unsigned
+            (NumAtLeastEitherSign(_), NumAtLeastEitherSign(_)) => NumAtLeastEitherSign,
+        };
+
+        // One is a superset of the other if it's a superset on both sides
+        if left.is_superset(&right, true) && left.is_superset(&right, false) {
+            Some(constructor(left))
+        } else if right.is_superset(&left, true) && right.is_superset(&left, false) {
+            Some(constructor(right))
+        } else {
+            None
+        }
+    }
+
     pub fn variable_slice(&self) -> &'static [Variable] {
         use NumericRange::*;
 
