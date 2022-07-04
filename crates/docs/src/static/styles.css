@@ -168,11 +168,6 @@ section {
   margin: 32px 0;
 }
 
-section p,
-section pre {
-  margin: 0 0 12px;
-}
-
 section > *:last-child {
   margin-bottom: 0;
 }
@@ -228,7 +223,7 @@ section > *:last-child {
 
 p {
     overflow-wrap: break-word;
-    margin: 24px 0;
+    margin: 0 0 12px;
 }
 
 footer {
@@ -359,7 +354,7 @@ code a:visited, a:visited code {
 }
 
 pre {
-  margin: 36px 0;
+  margin: 0 0 12px;
   padding: 8px 16px;
   box-sizing: border-box;
   border-radius: 8px;
