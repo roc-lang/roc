@@ -1,6 +1,7 @@
 interface Url
     exposes [
         Url,
+        append,
         fromStr,
         toStr,
         appendParam,
@@ -61,20 +62,36 @@ append = \@Url urlStr, suffixUnencoded ->
 
     when Str.splitFirst urlStr "?" is
         Ok { before, after } ->
-            # TODO use Str.reserve once it exists
-            appendHelp before suffix
-                |> Str.append "?"
-                |> Str.append after
+            bytes =
+                Str.countUtf8Bytes before
+                    + 1 # for "/"
+                    + Str.countUtf8Bytes suffix
+                    + 1 # for "?"
+                    + Str.countUtf8Bytes after
+
+            before
+                |> Str.reserve bytes
+                |> appendHelp suffix
+                |> Str.concat "?"
+                |> Str.concat after
                 |> @Url
 
         Err NotFound ->
             # There wasn't a query, but there might still be a fragment
             when Str.splitFirst urlStr "#" is
                 Ok { before, after } ->
-                    # TODO use Str.reserve once it exists
-                    appendHelp before suffix
-                        |> Str.append "#"
-                        |> Str.append after
+                    bytes =
+                        Str.countUtf8Bytes before
+                            + 1 # for "/"
+                            + Str.countUtf8Bytes suffix
+                            + 1 # for "#"
+                            + Str.countUtf8Bytes after
+
+                    before
+                        |> Str.reserve bytes
+                        |> appendHelp suffix
+                        |> Str.concat "#"
+                        |> Str.concat after
                         |> @Url
                 Err NotFound ->
                     # No query and no fragment, so just append it
@@ -89,19 +106,19 @@ appendHelp = \prefix, suffix ->
             when Str.splitFirst suffix "/" is
                 Ok { after } ->
                     # TODO `expect before == ""`
-                    Str.append prefix after
+                    Str.concat prefix after
 
                 Err NotFound ->
                     # This should never happen, because we already verified
                     # that the suffix startsWith "/"
                     # TODO `expect False` here with a comment
-                    Str.append prefix suffix
+                    Str.concat prefix suffix
         else
             # prefix ends with "/" but suffix doesn't start with one, so just append.
-            Str.append prefix suffix
+            Str.concat prefix suffix
     else if Str.startsWith suffix "/" then
         # Suffix starts with "/" but prefix doesn't end with one, so just append them.
-        Str.append prefix suffix
+        Str.concat prefix suffix
     else if Str.isEmpty prefix then
         # Prefix is empty; return suffix.
         suffix
@@ -110,10 +127,9 @@ appendHelp = \prefix, suffix ->
         prefix
     else
         # Neither is empty, but neither has a "/", so add one in between.
-        # TODO use Str.reserve once it exists
         prefix
-            |> Str.append "/"
-            |> Str.append suffix
+            |> Str.concat "/"
+            |> Str.concat suffix
 
 ## Internal helper. This is intentionally unexposed so that you don't accidentally
 ## double-encode things. If you really want to percent-encode an arbitrary string,
@@ -140,7 +156,7 @@ percentEncode = \input ->
         then
             # This is the most common case: an unreserved character,
             # which needs no encoding in a path
-            Str.appendScalar str scalar
+            Str.appendScalar output scalar
                 |> Result.withDefault "" # this will never fail
         else
             when scalar is
@@ -149,13 +165,16 @@ percentEncode = \input ->
                 | 126 # '~'
                 | 150 -> # '-'
                     # These special characters can all be unescaped in paths
-                    Str.appendScalar str scalar
+                    Str.appendScalar output scalar
                         |> Result.withDefault "" # this will never fail
                 _ ->
                     # This needs encoding in a path
-                    hex = Num.toHexUppercase scalar
+                    hex = toHexUppercase scalar
 
-                    Str.append str "%\(hex)"
+                    Str.concat output "%\(hex)"
+
+toHexUppercase : Num * -> Str
+toHexUppercase = \_ -> "TODO implement num to hex"
 
 ## Adds a [Str] query parameter to the end of the [Url]. Both the key
 ## and the value are [percent-encoded](https://en.wikipedia.org/wiki/Percent-encoding).
@@ -182,12 +201,23 @@ appendParam = \@Url urlStr, key, value ->
             Err NotFound ->
                 { withoutFragment: urlStr, afterQuery: "" }
 
-    # TODO use Str.reserve once it exists
+    encodedKey = percentEncode key
+    encodedValue = percentEncode value
+    bytes =
+        Str.countUtf8Bytes withoutFragment
+            + 1 # for "?" or "&"
+            + Str.countUtf8Bytes encodedKey
+            + 1 # for "="
+            + Str.countUtf8Bytes encodedValue
+            + Str.countUtf8Bytes afterQuery
+
     withoutFragment
-        |> Str.append (if hasQuery (@Url withoutFragment) then "&" else "?")
-        |> Str.append (percentEncode key)
-        |> Str.append "="
-        |> Str.append (percentEncode value)
+        |> Str.reserve bytes
+        |> Str.concat (if hasQuery (@Url withoutFragment) then "&" else "?")
+        |> Str.concat encodedKey
+        |> Str.concat "="
+        |> Str.concat encodedValue
+        |> Str.concat afterQuery
         |> @Url
 
 withQuery : Url, Str -> Url
@@ -274,24 +304,24 @@ fragment = \@Url urlStr ->
 ##     Url.fromStr "https://example.com#stuff"
 ##         |> Url.withFragment "" # https://example.com
 ##
-withFramgent : Url, Str -> Url
-withFragment = \@Url urlStr, fragment ->
+withFragment : Url, Str -> Url
+withFragment = \@Url urlStr, fragmentStr ->
     when Str.splitLast urlStr "#" is
         Ok { before } ->
-            if Str.isEmpty fragment then
+            if Str.isEmpty fragmentStr then
                 # If the given fragment is empty, remove the URL's fragment
-                before
+                @Url before
             else
                 # Replace the URL's old fragment with this one, discarding `after`
-                "\(before)#\(fragment)"
+                @Url "\(before)#\(fragmentStr)"
 
         Err NotFound ->
-            if Str.isEmpty fragment then
+            if Str.isEmpty fragmentStr then
                 # If the given fragment is empty, leave the URL as having no fragment
-                urlStr
+                @Url urlStr
             else
                 # The URL didn't have a fragment, so give it this one
-                "\(urlStr)#\(fragment)"
+                @Url "\(urlStr)#\(fragmentStr)"
 
 ## Returns `True` if the URL has a `#` in it.
 hasFragment : Url -> Bool
