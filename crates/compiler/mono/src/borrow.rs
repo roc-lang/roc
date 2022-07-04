@@ -906,7 +906,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         StrToNum => arena.alloc_slice_copy(&[borrowed]),
         ListPrepend => arena.alloc_slice_copy(&[owned, owned]),
         StrJoinWith => arena.alloc_slice_copy(&[borrowed, borrowed]),
-        ListMap | ListMapWithIndex => arena.alloc_slice_copy(&[owned, function, closure_data]),
+        ListMap => arena.alloc_slice_copy(&[owned, function, closure_data]),
         ListMap2 => arena.alloc_slice_copy(&[owned, owned, function, closure_data]),
         ListMap3 => arena.alloc_slice_copy(&[owned, owned, owned, function, closure_data]),
         ListMap4 => arena.alloc_slice_copy(&[owned, owned, owned, owned, function, closure_data]),

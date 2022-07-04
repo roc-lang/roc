@@ -35,7 +35,6 @@ pub enum LowLevel {
     ListMap2,
     ListMap3,
     ListMap4,
-    ListMapWithIndex,
     ListSortWith,
     ListSublist,
     ListDropAt,
@@ -120,7 +119,7 @@ pub enum LowLevel {
 
 macro_rules! higher_order {
     () => {
-        ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListSortWith | DictWalk
+        ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith | DictWalk
     };
 }
 
@@ -141,7 +140,6 @@ impl LowLevel {
             ListMap2 => 2,
             ListMap3 => 3,
             ListMap4 => 4,
-            ListMapWithIndex => 1,
             ListSortWith => 1,
             DictWalk => 2,
             _ => unreachable!(),
@@ -206,7 +204,6 @@ impl LowLevelWrapperType {
             Symbol::LIST_MAP2 => WrapperIsRequired,
             Symbol::LIST_MAP3 => WrapperIsRequired,
             Symbol::LIST_MAP4 => WrapperIsRequired,
-            Symbol::LIST_MAP_WITH_INDEX => WrapperIsRequired,
             Symbol::LIST_SORT_WITH => WrapperIsRequired,
             Symbol::LIST_SUBLIST => WrapperIsRequired,
             Symbol::LIST_DROP_AT => CanBeReplacedBy(ListDropAt),

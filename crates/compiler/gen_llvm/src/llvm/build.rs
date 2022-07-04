@@ -5976,7 +5976,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             set
         }
 
-        ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListSortWith | DictWalk => {
+        ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith | DictWalk => {
             unreachable!("these are higher order, and are handled elsewhere")
         }
 
