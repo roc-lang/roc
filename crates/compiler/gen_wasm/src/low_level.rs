@@ -235,15 +235,7 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args_and_call_zig(backend, bitcode::STR_STARTS_WITH_SCALAR)
             }
             StrEndsWith => self.load_args_and_call_zig(backend, bitcode::STR_ENDS_WITH),
-            StrSplit => {
-                // LLVM implementation (build_str.rs) does the following
-                // 1. Call bitcode::STR_COUNT_SEGMENTS
-                // 2. Allocate a `List Str`
-                // 3. Call bitcode::STR_STR_SPLIT_IN_PLACE
-                // 4. Write the elements and length of the List
-                // To do this here, we need full access to WasmBackend, or we could make a Zig wrapper
-                todo!("{:?}", self.lowlevel);
-            }
+            StrSplit => self.load_args_and_call_zig(backend, bitcode::STR_STR_SPLIT),
             StrCountGraphemes => {
                 self.load_args_and_call_zig(backend, bitcode::STR_COUNT_GRAPEHEME_CLUSTERS)
             }
@@ -268,10 +260,30 @@ impl<'a> LowLevelCall<'a> {
             }
             StrFromInt => self.num_to_str(backend),
             StrFromFloat => self.num_to_str(backend),
-            StrFromUtf8 => self.load_args_and_call_zig(backend, bitcode::STR_FROM_UTF8),
+            StrFromUtf8 => {
+                /*
+                Low-level op returns a struct with all the data for both Ok and Err.
+                Roc AST wrapper converts this to a tag union, with app-dependent tag IDs.
+
+                fromUtf8C(output: *FromUtf8Result, arg: RocList, update_mode: UpdateMode) callconv(.C) void
+                    output: *FromUtf8Result   i32
+                    arg: RocList              i64, i32
+                    update_mode: UpdateMode   i32
+                */
+                backend.storage.load_symbols_for_call(
+                    backend.env.arena,
+                    &mut backend.code_builder,
+                    self.arguments,
+                    self.ret_symbol,
+                    &WasmLayout::new(&self.ret_layout),
+                    CallConv::Zig,
+                );
+                backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
+                backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8, 4, false);
+            }
+            StrFromUtf8Range => self.load_args_and_call_zig(backend, bitcode::STR_FROM_UTF8_RANGE),
             StrTrimLeft => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_LEFT),
             StrTrimRight => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_RIGHT),
-            StrFromUtf8Range => self.load_args_and_call_zig(backend, bitcode::STR_FROM_UTF8_RANGE),
             StrToUtf8 => self.load_args_and_call_zig(backend, bitcode::STR_TO_UTF8),
             StrRepeat => self.load_args_and_call_zig(backend, bitcode::STR_REPEAT),
             StrTrim => self.load_args_and_call_zig(backend, bitcode::STR_TRIM),
