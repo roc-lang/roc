@@ -1,5 +1,16 @@
 interface Url
-    exposes [Url, fromStr]
+    exposes [
+        Url,
+        fromStr,
+        toStr,
+        appendParam,
+        hasQuery,
+        hasFragment,
+        query,
+        fragment,
+        withQuery,
+        withFragment,
+    ]
     imports []
 
 ## A [Uniform Resource Locator](https://en.wikipedia.org/wiki/URL).
@@ -159,15 +170,88 @@ percentEncode = \input ->
 ##         |> Url.param "café" "du Soleil"
 ##         |> Url.param "email" "someone@example.com"
 ##     # https://example.com?caf%C3%A9=du%20Soleil&email=someone%40example.com
-param : Url, Str, Str -> Url
-param = \@Url urlStr, key, value ->
+appendParam : Url, Str, Str -> Url
+appendParam = \@Url urlStr, key, value ->
+    { withoutFragment, afterQuery } = when Str.splitLast urlStr "#" is
+        Ok { before, after } ->
+            # The fragment is almost certainly going to be a small string,
+            # so this interpolation should happen on the stack.
+            { withoutFragment: before, afterQuery: "#\(after)" }
+
+        Err NotFound ->
+            { withoutFragment: urlStr, afterQuery: "" }
+
     # TODO use Str.reserve once it exists
-    urlStr
-        |> Str.append (if hasQuery (@Url urlStr) then "&" else "?")
+    withoutFragment
+        |> Str.append (if hasQuery (@Url withoutFragment) then "&" else "?")
         |> Str.append (percentEncode key)
         |> Str.append "="
         |> Str.append (percentEncode value)
         |> @Url
+
+withQuery : Url, Str -> Url
+withQuery = \@Url urlStr, queryStr ->
+    { withoutFragment, afterQuery } = when Str.splitLast urlStr "#" is
+        Ok { before, after } ->
+            # The fragment is almost certainly going to be a small string,
+            # so this interpolation should happen on the stack.
+            { withoutFragment: before, afterQuery: "#\(after)" }
+
+        Err NotFound ->
+            { withoutFragment: urlStr, afterQuery: "" }
+
+    beforeQuery = when Str.splitLast withoutFragment "?" is
+        Ok { before } -> before
+        Err NotFound -> withoutFragment
+
+    @Url if Str.isEmpty queryStr then
+        # TODO use Str.reserve once it exists
+        Str.concat beforeQuery afterQuery
+    else
+        # TODO use Str.reserve once it exists
+        beforeQuery
+            |> Str.concat "?"
+            |> Str.concat queryStr
+            |> Str.concat afterQuery
+
+## Returns the URL's [query](https://en.wikipedia.org/wiki/URL#Syntax)—the part after
+## the `?`, if it has one, but before any `#`.
+##
+##     Url.fromStr "https://example.com?key1=val1&key2=val2&key3=val3#stuff"
+##         Url.query # "key1=val1&key2=val2&key3=val3"
+##
+## Returns `""` if the URL has no query.
+##
+##     Url.fromStr "https://example.com#stuff"
+##         Url.query # ""
+query : Url -> Str
+query = \@Url urlStr ->
+    withoutFragment = when Str.splitLast urlStr "#" is
+        Ok { before } -> before
+        Err NotFound -> urlStr
+
+    when Str.splitLast withoutFragment "?" is
+        Ok { after } -> after
+        Err NotFound -> ""
+
+## Returns `True` if the URL has a `?` in it.
+hasQuery : Url -> Bool
+hasQuery = \@Url urlStr ->
+    # TODO use Str.contains once it exists. It should have a "fast path"
+    # with SIMD iteration if the string is small enough to fit in a SIMD register.
+    Str.toUtf8 urlStr
+        |> List.contains '?'
+
+## Returns the URL's [fragment](https://en.wikipedia.org/wiki/URL#Syntax)—the part after
+## the `#`, if it has one. Returns `""` if the URL has no fragment.
+##
+##     Url.fromStr "https://example.com#stuff"
+##         Url.fragment # "stuff"
+fragment : Url -> Str
+fragment = \@Url urlStr ->
+    when Str.splitLast urlStr "#" is
+        Ok { after } -> after
+        Err NotFound -> ""
 
 ## Replaces the URL's current [fragment](https://en.wikipedia.org/wiki/URL#Syntax)
 ## with the given one.
@@ -203,15 +287,6 @@ withFragment = \@Url urlStr, fragment ->
             else
                 # The URL didn't have a fragment, so give it this one
                 "\(urlStr)#\(fragment)"
-
-
-## Returns `True` if the URL has a `?` in it.
-hasQuery : Url -> Bool
-hasQuery = \@Url urlStr ->
-    # TODO use Str.contains once it exists. It should have a "fast path"
-    # with SIMD iteration if the string is small enough to fit in a SIMD register.
-    Str.toUtf8 urlStr
-        |> List.contains '?'
 
 ## Returns `True` if the URL has a `#` in it.
 hasFragment : Url -> Bool
