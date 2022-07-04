@@ -1905,7 +1905,7 @@ fn str_from_utf8_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
     // if arg_3.a then
     //  Ok arg_3.str
     // else
-    //  Err (BadUtf8 { byteIndex: arg_3.byteIndex, problem : arg_3.problem })
+    //  Err (BadUtf8 arg_3.problem arg_3.byteIndex)
 
     let def = crate::def::Def {
         loc_pattern: no_region(Pattern::Identifier(Symbol::ARG_3)),

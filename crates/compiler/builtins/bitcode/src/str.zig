@@ -1607,7 +1607,7 @@ inline fn fromUtf8(arg: RocList, update_mode: UpdateMode) FromUtf8Result {
     }
 }
 
-pub fn fromUtf8RangeC(arg: RocList, countAndStart: CountAndStart, output: *FromUtf8Result) callconv(.C) void {
+pub fn fromUtf8RangeC(output: *FromUtf8Result, arg: RocList, countAndStart: CountAndStart) callconv(.C) void {
     output.* = @call(.{ .modifier = always_inline }, fromUtf8Range, .{ arg, countAndStart });
 }
 
