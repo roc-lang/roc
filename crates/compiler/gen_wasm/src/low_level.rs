@@ -1715,7 +1715,8 @@ impl<'a> LowLevelCall<'a> {
             Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::List(_))
             | Layout::Struct { .. }
             | Layout::Union(_)
-            | Layout::LambdaSet(_) => {
+            | Layout::LambdaSet(_)
+            | Layout::Boxed(_) => {
                 // Don't want Zig calling convention here, we're calling internal Roc functions
                 backend
                     .storage
@@ -1732,8 +1733,6 @@ impl<'a> LowLevelCall<'a> {
                     backend.code_builder.i32_eqz();
                 }
             }
-
-            Layout::Boxed(_) => todo!(),
 
             Layout::RecursivePointer => {
                 internal_error!(

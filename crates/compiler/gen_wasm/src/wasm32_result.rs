@@ -76,7 +76,7 @@ pub fn insert_wrapper_for_layout<'a>(
             bool::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         }
         Layout::Union(UnionLayout::NonRecursive(_)) => stack_data_structure(),
-        Layout::Union(_) => {
+        Layout::Union(_) | Layout::Boxed(_) => {
             i32::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         }
         _ => stack_data_structure(),
