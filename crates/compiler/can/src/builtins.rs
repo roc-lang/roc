@@ -84,6 +84,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_COUNT_UTF8_BYTES => str_count_bytes,
         STR_SUBSTRING_UNSAFE => str_substring_unsafe,
         STR_RESERVE => str_reserve,
+        STR_APPEND_SCALAR_UNSAFE => str_append_scalar_unsafe,
         STR_FROM_UTF8 => str_from_utf8,
         STR_FROM_UTF8_RANGE => str_from_utf8_range,
         STR_TO_UTF8 => str_to_utf8,
@@ -1741,6 +1742,11 @@ fn str_substring_unsafe(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// Str.reserve : Str, Nat -> Str
 fn str_reserve(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::StrReserve, var_store)
+}
+
+/// Str.appendScalarUnsafe : Str, U32 -> Str
+fn str_append_scalar_unsafe(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::StrAppendScalar, var_store)
 }
 
 /// Str.fromUtf8 : List U8 -> Result Str [BadUtf8 { byteIndex : Nat, problem : Utf8Problem  } }]*

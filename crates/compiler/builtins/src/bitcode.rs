@@ -334,6 +334,7 @@ pub const STR_TRIM_LEFT: &str = "roc_builtins.str.trim_left";
 pub const STR_TRIM_RIGHT: &str = "roc_builtins.str.trim_right";
 pub const STR_GET_UNSAFE: &str = "roc_builtins.str.get_unsafe";
 pub const STR_RESERVE: &str = "roc_builtins.str.reserve";
+pub const STR_APPEND_SCALAR: &str = "roc_builtins.str.append_scalar";
 
 pub const DICT_HASH: &str = "roc_builtins.dict.hash";
 pub const DICT_HASH_STR: &str = "roc_builtins.dict.hash_str";

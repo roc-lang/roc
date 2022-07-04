@@ -1744,3 +1744,17 @@ fn str_walk_utf8_with_index() {
         RocList<(u64, u8)>
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_append_scalar() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.appendScalar "abcd" 'A'
+            "#
+        ),
+        RocStr::from("abcdA"),
+        RocStr
+    );
+}

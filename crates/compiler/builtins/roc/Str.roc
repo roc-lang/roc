@@ -37,7 +37,8 @@ interface Str
             splitFirst,
             splitLast,
             walkUtf8WithIndex,
-            reserve
+            reserve,
+            appendScalar,
         ]
     imports [Bool.{ Bool }, Result.{ Result }]
 
@@ -345,3 +346,17 @@ walkUtf8WithIndexHelp = \string, state, step, index, length ->
 
 ## Make sure at least some number of bytes fit in this string without reallocating
 reserve : Str, Nat -> Str
+
+## is UB when the scalar is invalid
+appendScalarUnsafe : Str, U32 -> Str
+
+appendScalar : Str, U32 -> Result Str [InvalidScalar]*
+appendScalar = \string, scalar ->
+    if isValidScalar scalar then
+        Ok (appendScalarUnsafe string scalar)
+    else
+        Err InvalidScalar
+
+isValidScalar : U32 -> Bool
+isValidScalar = \scalar ->
+    scalar <= 0xD7FF || (scalar >= 0xE000 && scalar <= 0x10FFFF)
