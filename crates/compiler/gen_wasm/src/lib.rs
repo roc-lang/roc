@@ -270,6 +270,6 @@ pub const DEBUG_SETTINGS: WasmDebugSettings = WasmDebugSettings {
     let_stmt_ir: false && cfg!(debug_assertions),
     instructions: false && cfg!(debug_assertions),
     storage_map: false && cfg!(debug_assertions),
-    keep_test_binary: true && cfg!(debug_assertions),
+    keep_test_binary: false && cfg!(debug_assertions),
     skip_dead_code_elim: false && cfg!(debug_assertions),
 };
