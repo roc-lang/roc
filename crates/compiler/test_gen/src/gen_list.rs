@@ -2567,7 +2567,7 @@ fn list_keep_errs() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_map_with_index() {
     assert_evals_to!(
         "List.mapWithIndex [0,0,0] (\\x, index -> Num.intCast index + x)",
