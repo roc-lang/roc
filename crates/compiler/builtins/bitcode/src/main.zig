@@ -159,6 +159,7 @@ comptime {
     exportStrFn(str.substringUnsafe, "substring_unsafe");
     exportStrFn(str.getUnsafe, "get_unsafe");
     exportStrFn(str.reserve, "reserve");
+    exportStrFn(str.getScalarUnsafe, "get_scalar_unsafe");
     exportStrFn(str.appendScalar, "append_scalar");
     exportStrFn(str.strToUtf8C, "to_utf8");
     exportStrFn(str.fromUtf8C, "from_utf8");

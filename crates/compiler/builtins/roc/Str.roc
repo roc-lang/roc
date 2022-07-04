@@ -39,6 +39,8 @@ interface Str
             walkUtf8WithIndex,
             reserve,
             appendScalar,
+            walkScalars,
+            walkScalarsUntil,
         ]
     imports [Bool.{ Bool }, Result.{ Result }]
 
@@ -360,3 +362,36 @@ appendScalar = \string, scalar ->
 isValidScalar : U32 -> Bool
 isValidScalar = \scalar ->
     scalar <= 0xD7FF || (scalar >= 0xE000 && scalar <= 0x10FFFF)
+
+getScalarUnsafe : Str, Nat -> { scalar : U32, bytesParsed : Nat }
+
+walkScalars : Str, state, (state, U32 -> state) -> state
+walkScalars = \string, init, step ->
+    walkScalarsHelp string init step 0 (Str.countUtf8Bytes string)
+
+walkScalarsHelp : Str, state, (state, U32 -> state), Nat, Nat -> state
+walkScalarsHelp = \string, state, step, index, length ->
+    if index < length then
+        { scalar, bytesParsed } = getScalarUnsafe string index
+        newState = step state scalar
+
+        walkScalarsHelp string newState step (index + bytesParsed) length
+    else
+        state
+
+walkScalarsUntil : Str, state, (state, U32 -> [Break state, Continue state]) -> state
+walkScalarsUntil = \string, init, step ->
+    walkScalarsUntilHelp string init step 0 (Str.countUtf8Bytes string)
+
+walkScalarsUntilHelp : Str, state, (state, U32 -> [Break state, Continue state]), Nat, Nat -> state
+walkScalarsUntilHelp = \string, state, step, index, length ->
+    if index < length then
+        { scalar, bytesParsed } = getScalarUnsafe string index
+
+        when step state scalar is
+            Continue newState ->
+                walkScalarsHelp string newState step (index + bytesParsed) length
+            Done newState ->
+                newState
+    else
+        state

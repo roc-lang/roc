@@ -40,7 +40,7 @@ macro_rules! from_wasm_memory_primitive {
 }
 
 from_wasm_memory_primitive!(
-    u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, f32, f64, bool, RocDec, RocOrder,
+    u8, i8, u16, i16, u32, i32, char, u64, i64, u128, i128, f32, f64, bool, RocDec, RocOrder,
 );
 
 impl FromWasmerMemory for () {

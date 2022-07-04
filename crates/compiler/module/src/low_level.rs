@@ -29,6 +29,7 @@ pub enum LowLevel {
     StrSubstringUnsafe,
     StrReserve,
     StrAppendScalar,
+    StrGetScalarUnsafe,
     ListLen,
     ListWithCapacity,
     ListGetUnsafe,

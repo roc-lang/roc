@@ -5371,6 +5371,14 @@ fn run_low_level<'a, 'ctx, 'env>(
             let string = load_symbol(scope, &args[0]);
             call_bitcode_fn(env, &[string], bitcode::STR_COUNT_GRAPEHEME_CLUSTERS)
         }
+        StrGetScalarUnsafe => {
+            // Str.getScalarUnsafe : Str, Nat -> { bytesParsed : Nat, scalar : U32 }
+            debug_assert_eq!(args.len(), 2);
+
+            let string = load_symbol(scope, &args[0]);
+            let index = load_symbol(scope, &args[1]);
+            call_bitcode_fn(env, &[string, index], bitcode::STR_GET_SCALAR_UNSAFE)
+        }
         StrCountUtf8Bytes => {
             // Str.countGraphemes : Str -> Nat
             debug_assert_eq!(args.len(), 1);

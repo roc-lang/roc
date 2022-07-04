@@ -2469,3 +2469,23 @@ pub fn reserve(string: RocStr, capacity: usize) callconv(.C) RocStr {
         return string;
     }
 }
+
+pub fn getScalarUnsafe(string: RocStr, index: usize) callconv(.C) extern struct { bytesParsed: usize, scalar: u32 } {
+    const slice = string.asSlice();
+    const bytesParsed = @intCast(usize, std.unicode.utf8ByteSequenceLength(slice[index]) catch unreachable);
+    const scalar = std.unicode.utf8Decode(slice[index .. index + bytesParsed]) catch unreachable;
+
+    return .{ .bytesParsed = bytesParsed, .scalar = @intCast(u32, scalar) };
+}
+
+test "getScalarUnsafe" {
+    const data_bytes = "A";
+    var data = RocStr.init(data_bytes, data_bytes.len);
+
+    const result = getScalarUnsafe(data, 0);
+
+    const expected = try std.unicode.utf8Decode("A");
+
+    try expectEqual(result.scalar, @intCast(u32, expected));
+    try expectEqual(result.bytesParsed, 1);
+}

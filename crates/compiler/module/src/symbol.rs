@@ -1199,6 +1199,9 @@ define_builtins! {
         41 STR_RESERVE: "reserve"
         42 STR_APPEND_SCALAR_UNSAFE: "appendScalarUnsafe"
         43 STR_APPEND_SCALAR: "appendScalar"
+        44 STR_GET_SCALAR_UNSAFE: "getScalarUnsafe"
+        45 STR_WALK_SCALARS: "walkScalars"
+        46 STR_WALK_SCALARS_UNTIL: "walkScalarsUntil"
     }
     5 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias

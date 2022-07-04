@@ -1758,3 +1758,17 @@ fn str_append_scalar() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_walk_scalars() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.walkScalars "abcd" [] List.append
+            "#
+        ),
+        RocList::from_slice(&['a', 'b', 'c', 'd']),
+        RocList<char>
+    );
+}
