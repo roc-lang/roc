@@ -3530,3 +3530,48 @@ fn round_to_u32() {
         u32
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn promote_u64_number_layout() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            9999999999999999999 + 1
+            "#
+        ),
+        10000000000000000000,
+        u64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn promote_i128_number_layout() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            {
+                a: 18446744073709551616 + 1,
+                b: -9223372036854775809 + 1,
+            }
+            "#
+        ),
+        (18446744073709551617, -9223372036854775808),
+        (i128, i128)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn promote_u128_number_layout() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            170141183460469231731687303715884105728 + 1
+            "#
+        ),
+        170141183460469231731687303715884105729,
+        u128
+    );
+}

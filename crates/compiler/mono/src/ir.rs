@@ -8186,17 +8186,17 @@ fn from_can_pattern_help<'a>(
         Underscore => Ok(Pattern::Underscore),
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
         AbilityMemberSpecialization { ident, .. } => Ok(Pattern::Identifier(*ident)),
-        IntLiteral(_, precision_var, int_str, int, _bound) => Ok(make_num_literal_pattern(
+        IntLiteral(var, _, int_str, int, _bound) => Ok(make_num_literal_pattern(
             env,
             layout_cache,
-            *precision_var,
+            *var,
             int_str,
             IntOrFloatValue::Int(*int),
         )),
-        FloatLiteral(_, precision_var, float_str, float, _bound) => Ok(make_num_literal_pattern(
+        FloatLiteral(var, _, float_str, float, _bound) => Ok(make_num_literal_pattern(
             env,
             layout_cache,
-            *precision_var,
+            *var,
             float_str,
             IntOrFloatValue::Float(*float),
         )),
@@ -8882,9 +8882,10 @@ fn make_num_literal<'a>(
         },
         Layout::Builtin(Builtin::Float(width)) => match num_value {
             IntOrFloatValue::Float(n) => NumLiteral::Float(n, width),
-            IntOrFloatValue::Int(..) => {
-                internal_error!("Int value where float was expected, should have been a type error")
-            }
+            IntOrFloatValue::Int(int_value) => match int_value {
+                IntValue::I128(n) => NumLiteral::Float(i128::from_ne_bytes(n) as f64, width),
+                IntValue::U128(n) => NumLiteral::Float(u128::from_ne_bytes(n) as f64, width),
+            },
         },
         Layout::Builtin(Builtin::Decimal) => {
             let dec = match RocDec::from_str(&num_str) {
@@ -8927,6 +8928,10 @@ fn make_num_literal_pattern<'a>(
     num_str: &str,
     num_value: IntOrFloatValue,
 ) -> Pattern<'a> {
+    dbg!(roc_types::subs::SubsFmtContent(
+        env.subs.get_content_without_compacting(variable),
+        &env.subs
+    ));
     let layout = layout_cache
         .from_var(env.arena, variable, &env.subs)
         .unwrap();

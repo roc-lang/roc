@@ -510,12 +510,13 @@ fn unify_ranged_number<M: MetaCollector>(
             // Ranged number wins
             merge(subs, ctx, RangedNumber(range_vars))
         }
-        RecursionVar { .. }
-        | RigidVar(..)
-        | Alias(..)
-        | Structure(..)
-        | RigidAbleVar(..)
-        | FlexAbleVar(..) => check_and_merge_valid_range(subs, ctx, ctx.second, range_vars),
+        RigidVar(name) => {
+            // Int a vs Int <range>, the rigid wins
+            merge(subs, ctx, RigidVar(*name))
+        }
+        RecursionVar { .. } | Alias(..) | Structure(..) | RigidAbleVar(..) | FlexAbleVar(..) => {
+            check_and_merge_valid_range(subs, ctx, ctx.second, range_vars)
+        }
         &RangedNumber(other_range_vars) => match range_vars.intersection(&other_range_vars) {
             Some(range) => merge(subs, ctx, RangedNumber(range)),
             None => not_in_range_mismatch(),
@@ -2206,13 +2207,16 @@ fn unify_rigid<M: MetaCollector>(
                 "Rigid {:?} with FlexAble {:?}", ctx.first, other
             )
         }
+        RangedNumber(..) => {
+            // Int a vs Int <range>, the rigid wins
+            merge(subs, ctx, RigidVar(*name))
+        }
 
         RigidVar(_)
         | RigidAbleVar(..)
         | RecursionVar { .. }
         | Structure(_)
         | Alias(..)
-        | RangedNumber(..)
         | LambdaSet(..) => {
             // Type mismatch! Rigid can only unify with flex, even if the
             // rigid names are the same.
