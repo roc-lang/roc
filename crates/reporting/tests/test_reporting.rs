@@ -7197,7 +7197,7 @@ All branches in an `if` must have the same type!
 
     This argument is a number of type:
 
-        I8, I16, I32, I64, I128, F32, F64, or Dec
+        I8, I16, F32, I32, F64, I64, I128, or Dec
 
     But `get` needs the 2nd argument to be:
 
@@ -7223,7 +7223,7 @@ All branches in an `if` must have the same type!
 
     This `a` value is a:
 
-        I64, I128, F32, F64, or Dec
+        F64, I64, I128, or Dec
 
     But `get` needs the 2nd argument to be:
 
@@ -7250,7 +7250,7 @@ All branches in an `if` must have the same type!
 
     This `b` value is a:
 
-        I64, I128, F32, F64, or Dec
+        F64, I64, I128, or Dec
 
     But `get` needs the 2nd argument to be:
 
@@ -7278,7 +7278,7 @@ All branches in an `if` must have the same type!
 
     The `when` condition is a number of type:
 
-        I8, I16, I32, I64, I128, F32, F64, or Dec
+        I8, I16, F32, I32, F64, I64, I128, or Dec
 
     But the branch patterns have type:
 
@@ -9455,6 +9455,31 @@ All branches in an `if` must have the same type!
     This argument is an integer of type:
 
         I128
+
+    But `isEq` needs the 2nd argument to be:
+
+        U128
+    "###
+    );
+
+    test_report!(
+        num_literals_cannot_fit_in_same_type,
+        indoc!(
+            r#"
+            170141183460469231731687303715884105728 == -170141183460469231731687303715884105728
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd argument to `isEq` is not what I expect:
+
+    4│      170141183460469231731687303715884105728 == -170141183460469231731687303715884105728
+                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    This argument is a number of type:
+
+        I128 or Dec
 
     But `isEq` needs the 2nd argument to be:
 

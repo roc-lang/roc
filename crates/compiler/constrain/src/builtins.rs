@@ -1,7 +1,7 @@
 use arrayvec::ArrayVec;
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::expected::Expected::{self, *};
-use roc_can::num::{FloatBound, FloatWidth, IntBound, IntWidth, NumBound, SignDemand};
+use roc_can::num::{FloatBound, FloatWidth, IntBound, IntLitWidth, NumBound, SignDemand};
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::num::NumericRange;
@@ -23,7 +23,7 @@ pub fn add_numeric_bound_constr(
     let range = bound.numeric_bound();
     let total_num_type = num_type;
 
-    use roc_types::num::{float_width_to_variable, int_width_to_variable};
+    use roc_types::num::{float_width_to_variable, int_lit_width_to_variable};
 
     match range {
         NumericBound::None => {
@@ -41,7 +41,7 @@ pub fn add_numeric_bound_constr(
             total_num_type
         }
         NumericBound::IntExact(width) => {
-            let actual_type = Variable(int_width_to_variable(width));
+            let actual_type = Variable(int_lit_width_to_variable(width));
             let expected = Expected::ForReason(Reason::NumericLiteralSuffix, actual_type, region);
             let because_suffix =
                 constraints.equal_types(total_num_type.clone(), expected, category, region);
@@ -330,6 +330,6 @@ impl TypedNumericBound for NumBound {
 pub enum NumericBound {
     None,
     FloatExact(FloatWidth),
-    IntExact(IntWidth),
+    IntExact(IntLitWidth),
     Range(NumericRange),
 }

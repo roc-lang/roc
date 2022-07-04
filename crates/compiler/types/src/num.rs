@@ -5,26 +5,26 @@ use roc_module::symbol::Symbol;
 /// e.g. `-5` cannot be unsigned, and 300 does not fit in a U8
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NumericRange {
-    IntAtLeastSigned(IntWidth),
-    IntAtLeastEitherSign(IntWidth),
-    NumAtLeastSigned(IntWidth),
-    NumAtLeastEitherSign(IntWidth),
+    IntAtLeastSigned(IntLitWidth),
+    IntAtLeastEitherSign(IntLitWidth),
+    NumAtLeastSigned(IntLitWidth),
+    NumAtLeastEitherSign(IntLitWidth),
 }
 
 impl NumericRange {
     pub fn contains_symbol(&self, symbol: Symbol) -> Option<bool> {
         let contains = match symbol {
-            Symbol::NUM_I8 => self.contains_int_width(IntWidth::I8),
-            Symbol::NUM_U8 => self.contains_int_width(IntWidth::U8),
-            Symbol::NUM_I16 => self.contains_int_width(IntWidth::I16),
-            Symbol::NUM_U16 => self.contains_int_width(IntWidth::U16),
-            Symbol::NUM_I32 => self.contains_int_width(IntWidth::I32),
-            Symbol::NUM_U32 => self.contains_int_width(IntWidth::U32),
-            Symbol::NUM_I64 => self.contains_int_width(IntWidth::I64),
-            Symbol::NUM_NAT => self.contains_int_width(IntWidth::Nat),
-            Symbol::NUM_U64 => self.contains_int_width(IntWidth::U64),
-            Symbol::NUM_I128 => self.contains_int_width(IntWidth::I128),
-            Symbol::NUM_U128 => self.contains_int_width(IntWidth::U128),
+            Symbol::NUM_I8 => self.contains_int_width(IntLitWidth::I8),
+            Symbol::NUM_U8 => self.contains_int_width(IntLitWidth::U8),
+            Symbol::NUM_I16 => self.contains_int_width(IntLitWidth::I16),
+            Symbol::NUM_U16 => self.contains_int_width(IntLitWidth::U16),
+            Symbol::NUM_I32 => self.contains_int_width(IntLitWidth::I32),
+            Symbol::NUM_U32 => self.contains_int_width(IntLitWidth::U32),
+            Symbol::NUM_I64 => self.contains_int_width(IntLitWidth::I64),
+            Symbol::NUM_NAT => self.contains_int_width(IntLitWidth::Nat),
+            Symbol::NUM_U64 => self.contains_int_width(IntLitWidth::U64),
+            Symbol::NUM_I128 => self.contains_int_width(IntLitWidth::I128),
+            Symbol::NUM_U128 => self.contains_int_width(IntLitWidth::U128),
 
             Symbol::NUM_DEC => self.contains_float_width(FloatWidth::Dec),
             Symbol::NUM_F32 => self.contains_float_width(FloatWidth::F32),
@@ -48,7 +48,7 @@ impl NumericRange {
         true
     }
 
-    fn contains_int_width(&self, width: IntWidth) -> bool {
+    fn contains_int_width(&self, width: IntLitWidth) -> bool {
         use NumericRange::*;
 
         let (range_signedness, at_least_width) = match self {
@@ -68,7 +68,7 @@ impl NumericRange {
         width.signedness_and_width().1 >= at_least_width.signedness_and_width().1
     }
 
-    fn width(&self) -> IntWidth {
+    fn width(&self) -> IntLitWidth {
         use NumericRange::*;
         match self {
             IntAtLeastSigned(w)
@@ -83,7 +83,7 @@ impl NumericRange {
     pub fn intersection(&self, other: &Self) -> Option<Self> {
         use NumericRange::*;
         let (left, right) = (self.width(), other.width());
-        let constructor: fn(IntWidth) -> NumericRange = match (self, other) {
+        let constructor: fn(IntLitWidth) -> NumericRange = match (self, other) {
             // Matching against a signed int, the intersection must also be a signed int
             (IntAtLeastSigned(_), _) | (_, IntAtLeastSigned(_)) => IntAtLeastSigned,
             // It's a signed number, but also an int, so the intersection must be a signed int
@@ -114,27 +114,27 @@ impl NumericRange {
 
         match self {
             IntAtLeastSigned(width) => {
-                let target = int_width_to_variable(*width);
+                let target = int_lit_width_to_variable(*width);
                 let start = SIGNED_VARIABLES.iter().position(|v| *v == target).unwrap();
                 let end = SIGNED_VARIABLES.len() - 3;
 
                 &SIGNED_VARIABLES[start..end]
             }
             IntAtLeastEitherSign(width) => {
-                let target = int_width_to_variable(*width);
+                let target = int_lit_width_to_variable(*width);
                 let start = ALL_VARIABLES.iter().position(|v| *v == target).unwrap();
                 let end = ALL_VARIABLES.len() - 3;
 
                 &ALL_VARIABLES[start..end]
             }
             NumAtLeastSigned(width) => {
-                let target = int_width_to_variable(*width);
+                let target = int_lit_width_to_variable(*width);
                 let start = SIGNED_VARIABLES.iter().position(|v| *v == target).unwrap();
 
                 &SIGNED_VARIABLES[start..]
             }
             NumAtLeastEitherSign(width) => {
-                let target = int_width_to_variable(*width);
+                let target = int_lit_width_to_variable(*width);
                 let start = ALL_VARIABLES.iter().position(|v| *v == target).unwrap();
 
                 &ALL_VARIABLES[start..]
@@ -150,7 +150,7 @@ enum IntSignedness {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum IntWidth {
+pub enum IntLitWidth {
     U8,
     U16,
     U32,
@@ -162,13 +162,21 @@ pub enum IntWidth {
     I64,
     I128,
     Nat,
+    // An int literal can be promoted to an f32/f64/Dec if appropriate. The respective widths for
+    // integers that can be stored in these float types without losing precision are:
+    //   f32: +/- 2^24
+    //   f64: +/- 2^53
+    //   dec: Int128::MAX/Int128::MIN
+    F32,
+    F64,
+    Dec,
 }
 
-impl IntWidth {
+impl IntLitWidth {
     /// Returns the `IntSignedness` and bit width of a variant.
     fn signedness_and_width(&self) -> (IntSignedness, u32) {
+        use IntLitWidth::*;
         use IntSignedness::*;
-        use IntWidth::*;
         match self {
             U8 => (Unsigned, 8),
             U16 => (Unsigned, 16),
@@ -180,13 +188,16 @@ impl IntWidth {
             I32 => (Signed, 32),
             I64 => (Signed, 64),
             I128 => (Signed, 128),
-            // TODO: this is platform specific!
+            // TODO: Nat is platform specific!
             Nat => (Unsigned, 64),
+            F32 => (Signed, 24),
+            F64 => (Signed, 53),
+            Dec => (Signed, 128),
         }
     }
 
     pub fn type_str(&self) -> &'static str {
-        use IntWidth::*;
+        use IntLitWidth::*;
         match self {
             U8 => "U8",
             U16 => "U16",
@@ -199,11 +210,14 @@ impl IntWidth {
             I64 => "I64",
             I128 => "I128",
             Nat => "Nat",
+            F32 => "F32",
+            F64 => "F64",
+            Dec => "Dec",
         }
     }
 
     pub fn max_value(&self) -> u128 {
-        use IntWidth::*;
+        use IntLitWidth::*;
         match self {
             U8 => u8::MAX as u128,
             U16 => u16::MAX as u128,
@@ -217,11 +231,17 @@ impl IntWidth {
             I128 => i128::MAX as u128,
             // TODO: this is platform specific!
             Nat => u64::MAX as u128,
+            // Max int value without losing precision: 2^24
+            F32 => 16_777_216,
+            // Max int value without losing precision: 2^53
+            F64 => 9_007_199_254_740_992,
+            // Max int value without losing precision: I128::MAX
+            Dec => i128::MAX as u128,
         }
     }
 
     pub fn min_value(&self) -> i128 {
-        use IntWidth::*;
+        use IntLitWidth::*;
         match self {
             U8 | U16 | U32 | U64 | U128 | Nat => 0,
             I8 => i8::MIN as i128,
@@ -229,6 +249,12 @@ impl IntWidth {
             I32 => i32::MIN as i128,
             I64 => i64::MIN as i128,
             I128 => i128::MIN,
+            // Min int value without losing precision: -2^24
+            F32 => -16_777_216,
+            // Min int value without losing precision: -2^53
+            F64 => -9_007_199_254_740_992,
+            // Min int value without losing precision: I128::MIN
+            Dec => i128::MIN,
         }
     }
 
@@ -294,9 +320,12 @@ pub enum IntBound {
     /// There is no bound on the width.
     None,
     /// Must have an exact width.
-    Exact(IntWidth),
+    Exact(IntLitWidth),
     /// Must have a certain sign and a minimum width.
-    AtLeast { sign: SignDemand, width: IntWidth },
+    AtLeast {
+        sign: SignDemand,
+        width: IntLitWidth,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -311,23 +340,26 @@ pub enum NumBound {
     /// Must be an integer of a certain size, or any float.
     AtLeastIntOrFloat {
         sign: SignDemand,
-        width: IntWidth,
+        width: IntLitWidth,
     },
 }
 
-pub const fn int_width_to_variable(w: IntWidth) -> Variable {
+pub const fn int_lit_width_to_variable(w: IntLitWidth) -> Variable {
     match w {
-        IntWidth::U8 => Variable::U8,
-        IntWidth::U16 => Variable::U16,
-        IntWidth::U32 => Variable::U32,
-        IntWidth::U64 => Variable::U64,
-        IntWidth::U128 => Variable::U128,
-        IntWidth::I8 => Variable::I8,
-        IntWidth::I16 => Variable::I16,
-        IntWidth::I32 => Variable::I32,
-        IntWidth::I64 => Variable::I64,
-        IntWidth::I128 => Variable::I128,
-        IntWidth::Nat => Variable::NAT,
+        IntLitWidth::U8 => Variable::U8,
+        IntLitWidth::U16 => Variable::U16,
+        IntLitWidth::U32 => Variable::U32,
+        IntLitWidth::U64 => Variable::U64,
+        IntLitWidth::U128 => Variable::U128,
+        IntLitWidth::I8 => Variable::I8,
+        IntLitWidth::I16 => Variable::I16,
+        IntLitWidth::I32 => Variable::I32,
+        IntLitWidth::I64 => Variable::I64,
+        IntLitWidth::I128 => Variable::I128,
+        IntLitWidth::Nat => Variable::NAT,
+        IntLitWidth::F32 => Variable::F32,
+        IntLitWidth::F64 => Variable::F64,
+        IntLitWidth::Dec => Variable::DEC,
     }
 }
 
@@ -344,25 +376,25 @@ const ALL_VARIABLES: &[Variable] = &[
     Variable::U8,
     Variable::I16,
     Variable::U16,
+    Variable::F32,
     Variable::I32,
     Variable::U32,
+    Variable::F64,
     Variable::I64,
-    Variable::NAT, // FIXME: Nat's order here depends on the platfor,
+    Variable::NAT, // FIXME: Nat's order here depends on the platform
     Variable::U64,
     Variable::I128,
-    Variable::U128,
-    Variable::F32,
-    Variable::F64,
     Variable::DEC,
+    Variable::U128,
 ];
 
 const SIGNED_VARIABLES: &[Variable] = &[
     Variable::I8,
     Variable::I16,
+    Variable::F32,
     Variable::I32,
+    Variable::F64,
     Variable::I64,
     Variable::I128,
-    Variable::F32,
-    Variable::F64,
     Variable::DEC,
 ];
