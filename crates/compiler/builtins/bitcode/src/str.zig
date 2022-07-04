@@ -112,7 +112,7 @@ pub const RocStr = extern struct {
 
     pub fn eq(self: RocStr, other: RocStr) bool {
         // If they are byte-for-byte equal, they're definitely equal!
-        if (self.str_bytes == other.str_bytes and self.str_len == other.str_len) {
+        if (self.str_bytes == other.str_bytes and self.str_len == other.str_len and self.str_capacity == other.str_capacity) {
             return true;
         }
 
@@ -173,10 +173,10 @@ pub const RocStr = extern struct {
         const element_width = 1;
 
         if (self.str_bytes) |source_ptr| {
-            if (self.isUnique()) {
+            if (self.isUnique() and !self.isSmallStr()) {
                 const new_source = utils.unsafeReallocate(source_ptr, RocStr.alignment, self.len(), new_length, element_width);
 
-                return RocStr{ .str_bytes = new_source, .str_len = new_length };
+                return RocStr{ .str_bytes = new_source, .str_len = new_length, .str_capacity = new_length };
             }
         }
 
@@ -313,6 +313,10 @@ pub const RocStr = extern struct {
 
     pub fn asSlice(self: RocStr) []u8 {
         return self.asU8ptr()[0..self.len()];
+    }
+
+    pub fn asSliceWithCapacity(self: RocStr) []u8 {
+        return self.asU8ptr()[0..self.capacity()];
     }
 
     pub fn asU8ptr(self: RocStr) [*]u8 {
@@ -2369,4 +2373,76 @@ test "capacity: big string" {
     defer data.deinit();
 
     try expectEqual(data.capacity(), data_bytes.len);
+}
+
+pub fn appendScalar(string: RocStr, scalar_u32: u32) callconv(.C) RocStr {
+    const scalar = @intCast(u21, scalar_u32);
+    const width = std.unicode.utf8CodepointSequenceLength(scalar) catch unreachable;
+
+    var output = string.reallocate(string.len() + width);
+    var slice = output.asSliceWithCapacity();
+
+    _ = std.unicode.utf8Encode(scalar, slice[string.len() .. string.len() + width]) catch unreachable;
+
+    return output;
+}
+
+test "appendScalar: small A" {
+    const A: []const u8 = "A";
+
+    const data_bytes = "hello";
+    var data = RocStr.init(data_bytes, data_bytes.len);
+
+    const actual = appendScalar(data, A[0]);
+    defer actual.deinit();
+
+    const expected_bytes = "helloA";
+    const expected = RocStr.init(expected_bytes, expected_bytes.len);
+    defer expected.deinit();
+
+    try expect(actual.eq(expected));
+}
+
+test "appendScalar: small 😀" {
+    const data_bytes = "hello";
+    var data = RocStr.init(data_bytes, data_bytes.len);
+
+    const actual = appendScalar(data, 0x1F600);
+    defer actual.deinit();
+
+    const expected_bytes = "hello😀";
+    const expected = RocStr.init(expected_bytes, expected_bytes.len);
+    defer expected.deinit();
+
+    try expect(actual.eq(expected));
+}
+
+test "appendScalar: big A" {
+    const A: []const u8 = "A";
+
+    const data_bytes = "a string so large that it must be heap-allocated";
+    var data = RocStr.init(data_bytes, data_bytes.len);
+
+    const actual = appendScalar(data, A[0]);
+    defer actual.deinit();
+
+    const expected_bytes = "a string so large that it must be heap-allocatedA";
+    const expected = RocStr.init(expected_bytes, expected_bytes.len);
+    defer expected.deinit();
+
+    try expect(actual.eq(expected));
+}
+
+test "appendScalar: big 😀" {
+    const data_bytes = "a string so large that it must be heap-allocated";
+    var data = RocStr.init(data_bytes, data_bytes.len);
+
+    const actual = appendScalar(data, 0x1F600);
+    defer actual.deinit();
+
+    const expected_bytes = "a string so large that it must be heap-allocated😀";
+    const expected = RocStr.init(expected_bytes, expected_bytes.len);
+    defer expected.deinit();
+
+    try expect(actual.eq(expected));
 }
