@@ -354,7 +354,6 @@ pub const LIST_MAP: &str = "roc_builtins.list.map";
 pub const LIST_MAP2: &str = "roc_builtins.list.map2";
 pub const LIST_MAP3: &str = "roc_builtins.list.map3";
 pub const LIST_MAP4: &str = "roc_builtins.list.map4";
-pub const LIST_MAP_WITH_INDEX: &str = "roc_builtins.list.map_with_index";
 pub const LIST_APPEND: &str = "roc_builtins.list.append";
 pub const LIST_PREPEND: &str = "roc_builtins.list.prepend";
 pub const LIST_SUBLIST: &str = "roc_builtins.list.sublist";
