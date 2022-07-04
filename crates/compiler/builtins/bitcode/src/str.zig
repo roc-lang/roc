@@ -228,7 +228,11 @@ pub const RocStr = extern struct {
     }
 
     pub fn capacity(self: RocStr) usize {
-        return self.str_capacity ^ MASK;
+        if (self.isSmallStr()) {
+            return SMALL_STR_MAX_LENGTH;
+        } else {
+            return self.str_capacity;
+        }
     }
 
     // This does a small string check, but no bounds checking whatsoever!
@@ -2349,4 +2353,20 @@ test "ReverseUtf8View: empty" {
     while (iter.nextCodepoint()) |_| {
         try expect(false);
     }
+}
+
+test "capacity: small string" {
+    const data_bytes = "foobar";
+    var data = RocStr.init(data_bytes, data_bytes.len);
+    defer data.deinit();
+
+    try expectEqual(data.capacity(), SMALL_STR_MAX_LENGTH);
+}
+
+test "capacity: big string" {
+    const data_bytes = "a string so large that it must be heap-allocated";
+    var data = RocStr.init(data_bytes, data_bytes.len);
+    defer data.deinit();
+
+    try expectEqual(data.capacity(), data_bytes.len);
 }
