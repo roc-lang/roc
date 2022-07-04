@@ -8928,10 +8928,6 @@ fn make_num_literal_pattern<'a>(
     num_str: &str,
     num_value: IntOrFloatValue,
 ) -> Pattern<'a> {
-    dbg!(roc_types::subs::SubsFmtContent(
-        env.subs.get_content_without_compacting(variable),
-        &env.subs
-    ));
     let layout = layout_cache
         .from_var(env.arena, variable, &env.subs)
         .unwrap();
