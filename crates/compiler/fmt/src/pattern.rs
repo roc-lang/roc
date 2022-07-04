@@ -1,7 +1,7 @@
 use crate::annotation::{Formattable, Newlines, Parens};
 use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt};
 use crate::Buf;
-use roc_parse::ast::{Base, Pattern};
+use roc_parse::ast::{Base, CommentOrNewline, Pattern};
 
 pub fn fmt_pattern<'a, 'buf>(
     buf: &mut Buf<'buf>,
@@ -167,11 +167,16 @@ impl<'a> Formattable for Pattern<'a> {
                 } else {
                     fmt_spaces(buf, spaces.iter(), indent);
                 }
+
                 sub_pattern.format_with_options(buf, parens, newlines, indent);
             }
             SpaceAfter(sub_pattern, spaces) => {
                 sub_pattern.format_with_options(buf, parens, newlines, indent);
-                // if only_comments {
+
+                if starts_with_inline_comment(spaces.iter()) {
+                    buf.spaces(1);
+                }
+
                 if !sub_pattern.is_multiline() {
                     fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent)
                 } else {
@@ -195,4 +200,13 @@ impl<'a> Formattable for Pattern<'a> {
             }
         }
     }
+}
+
+fn starts_with_inline_comment<'a, I: IntoIterator<Item = &'a CommentOrNewline<'a>>>(
+    spaces: I,
+) -> bool {
+    matches!(
+        spaces.into_iter().next(),
+        Some(CommentOrNewline::LineComment(_))
+    )
 }
