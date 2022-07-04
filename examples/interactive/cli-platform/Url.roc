@@ -172,14 +172,15 @@ percentEncode = \input ->
 ##     # https://example.com?caf%C3%A9=du%20Soleil&email=someone%40example.com
 appendParam : Url, Str, Str -> Url
 appendParam = \@Url urlStr, key, value ->
-    { withoutFragment, afterQuery } = when Str.splitLast urlStr "#" is
-        Ok { before, after } ->
-            # The fragment is almost certainly going to be a small string,
-            # so this interpolation should happen on the stack.
-            { withoutFragment: before, afterQuery: "#\(after)" }
+    { withoutFragment, afterQuery } =
+        when Str.splitLast urlStr "#" is
+            Ok { before, after } ->
+                # The fragment is almost certainly going to be a small string,
+                # so this interpolation should happen on the stack.
+                { withoutFragment: before, afterQuery: "#\(after)" }
 
-        Err NotFound ->
-            { withoutFragment: urlStr, afterQuery: "" }
+            Err NotFound ->
+                { withoutFragment: urlStr, afterQuery: "" }
 
     # TODO use Str.reserve once it exists
     withoutFragment
@@ -191,28 +192,31 @@ appendParam = \@Url urlStr, key, value ->
 
 withQuery : Url, Str -> Url
 withQuery = \@Url urlStr, queryStr ->
-    { withoutFragment, afterQuery } = when Str.splitLast urlStr "#" is
-        Ok { before, after } ->
-            # The fragment is almost certainly going to be a small string,
-            # so this interpolation should happen on the stack.
-            { withoutFragment: before, afterQuery: "#\(after)" }
+    { withoutFragment, afterQuery } =
+        when Str.splitLast urlStr "#" is
+            Ok { before, after } ->
+                # The fragment is almost certainly going to be a small string,
+                # so this interpolation should happen on the stack.
+                { withoutFragment: before, afterQuery: "#\(after)" }
 
-        Err NotFound ->
-            { withoutFragment: urlStr, afterQuery: "" }
+            Err NotFound ->
+                { withoutFragment: urlStr, afterQuery: "" }
 
-    beforeQuery = when Str.splitLast withoutFragment "?" is
-        Ok { before } -> before
-        Err NotFound -> withoutFragment
+    beforeQuery =
+        when Str.splitLast withoutFragment "?" is
+            Ok { before } -> before
+            Err NotFound -> withoutFragment
 
-    @Url if Str.isEmpty queryStr then
+    if Str.isEmpty queryStr then
         # TODO use Str.reserve once it exists
-        Str.concat beforeQuery afterQuery
+        @Url (Str.concat beforeQuery afterQuery)
     else
         # TODO use Str.reserve once it exists
         beforeQuery
             |> Str.concat "?"
             |> Str.concat queryStr
             |> Str.concat afterQuery
+            |> @Url
 
 ## Returns the URL's [query](https://en.wikipedia.org/wiki/URL#Syntax)—the part after
 ## the `?`, if it has one, but before any `#`.
@@ -226,9 +230,10 @@ withQuery = \@Url urlStr, queryStr ->
 ##         Url.query # ""
 query : Url -> Str
 query = \@Url urlStr ->
-    withoutFragment = when Str.splitLast urlStr "#" is
-        Ok { before } -> before
-        Err NotFound -> urlStr
+    withoutFragment =
+        when Str.splitLast urlStr "#" is
+            Ok { before } -> before
+            Err NotFound -> urlStr
 
     when Str.splitLast withoutFragment "?" is
         Ok { after } -> after
@@ -240,7 +245,7 @@ hasQuery = \@Url urlStr ->
     # TODO use Str.contains once it exists. It should have a "fast path"
     # with SIMD iteration if the string is small enough to fit in a SIMD register.
     Str.toUtf8 urlStr
-        |> List.contains '?'
+        |> List.contains (Num.toU8 '?')
 
 ## Returns the URL's [fragment](https://en.wikipedia.org/wiki/URL#Syntax)—the part after
 ## the `#`, if it has one. Returns `""` if the URL has no fragment.
@@ -294,4 +299,4 @@ hasFragment = \@Url urlStr ->
     # TODO use Str.contains once it exists. It should have a "fast path"
     # with SIMD iteration if the string is small enough to fit in a SIMD register.
     Str.toUtf8 urlStr
-        |> List.contains '#'
+        |> List.contains (Num.toU8 '#')
