@@ -168,6 +168,11 @@ section {
   margin: 32px 0;
 }
 
+section p,
+section pre {
+  margin: 0 0 12px;
+}
+
 section > *:last-child {
   margin-bottom: 0;
 }
