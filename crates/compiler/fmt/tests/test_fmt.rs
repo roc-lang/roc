@@ -3374,6 +3374,18 @@ mod test_fmt {
     }
 
     #[test]
+    fn when_with_integer_comments() {
+        expr_formats_same(indoc!(
+            r#"
+                when 0 is
+                    1 # comment
+                    | 2 -> "a"
+                    _ -> "b"
+            "#
+        ));
+    }
+
+    #[test]
     fn nested_when() {
         expr_formats_same(indoc!(
             r#"
