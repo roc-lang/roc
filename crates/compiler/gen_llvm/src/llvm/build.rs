@@ -5356,6 +5356,14 @@ fn run_low_level<'a, 'ctx, 'env>(
             let length = load_symbol(scope, &args[2]);
             call_str_bitcode_fn(env, &[string, start, length], bitcode::STR_SUBSTRING_UNSAFE)
         }
+        StrReserve => {
+            // Str.reserve : Str, Nat -> Str
+            debug_assert_eq!(args.len(), 2);
+
+            let string = load_symbol(scope, &args[0]);
+            let capacity = load_symbol(scope, &args[1]);
+            call_str_bitcode_fn(env, &[string, capacity], bitcode::STR_RESERVE)
+        }
         StrTrim => {
             // Str.trim : Str -> Str
             debug_assert_eq!(args.len(), 1);

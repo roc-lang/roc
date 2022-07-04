@@ -2446,3 +2446,11 @@ test "appendScalar: big 😀" {
 
     try expect(actual.eq(expected));
 }
+
+pub fn reserve(string: RocStr, capacity: usize) callconv(.C) RocStr {
+    if (capacity > string.capacity()) {
+        return string.reallocate(capacity);
+    } else {
+        return string;
+    }
+}

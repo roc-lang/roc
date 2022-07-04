@@ -1196,6 +1196,7 @@ define_builtins! {
         38 STR_SPLIT_FIRST: "splitFirst"
         39 STR_SPLIT_LAST: "splitLast"
         40 STR_WALK_UTF8_WITH_INDEX: "walkUtf8WithIndex"
+        41 STR_RESERVE: "reserve"
     }
     5 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias

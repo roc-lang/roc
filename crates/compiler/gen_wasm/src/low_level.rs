@@ -277,6 +277,7 @@ impl<'a> LowLevelCall<'a> {
             StrTrimRight => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_RIGHT),
             StrFromUtf8Range => self.load_args_and_call_zig(backend, bitcode::STR_FROM_UTF8_RANGE),
             StrToUtf8 => self.load_args_and_call_zig(backend, bitcode::STR_TO_UTF8),
+            StrReserve => self.load_args_and_call_zig(backend, bitcode::STR_RESERVE),
             StrRepeat => self.load_args_and_call_zig(backend, bitcode::STR_REPEAT),
             StrTrim => self.load_args_and_call_zig(backend, bitcode::STR_TRIM),
             StrSubstringUnsafe => {

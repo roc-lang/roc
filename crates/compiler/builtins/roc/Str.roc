@@ -37,6 +37,7 @@ interface Str
             splitFirst,
             splitLast,
             walkUtf8WithIndex,
+            reserve
         ]
     imports [Bool.{ Bool }, Result.{ Result }]
 
@@ -341,3 +342,6 @@ walkUtf8WithIndexHelp = \string, state, step, index, length ->
         walkUtf8WithIndexHelp string newState step (index + 1) length
     else
         state
+
+## Make sure at least some number of bytes fit in this string without reallocating
+reserve : Str, Nat -> Str
