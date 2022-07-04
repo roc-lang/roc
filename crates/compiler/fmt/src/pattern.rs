@@ -205,8 +205,8 @@ impl<'a> Formattable for Pattern<'a> {
 fn starts_with_inline_comment<'a, I: IntoIterator<Item = &'a CommentOrNewline<'a>>>(
     spaces: I,
 ) -> bool {
-    match spaces.into_iter().next() {
-        Some(space) => matches!(space, CommentOrNewline::LineComment(_)),
-        None => false,
-    }
+    matches!(
+        spaces.into_iter().next(),
+        Some(CommentOrNewline::LineComment(_))
+    )
 }
