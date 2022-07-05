@@ -753,29 +753,19 @@ fn strFromFloatHelp(comptime T: type, float: T) RocStr {
 
 // Str.split
 
-// For dev backends
 pub fn strSplit(string: RocStr, delimiter: RocStr) callconv(.C) RocList {
     const segment_count = countSegments(string, delimiter);
     const list = RocList.allocate(@alignOf(RocStr), segment_count, @sizeOf(RocStr));
 
     if (list.bytes) |bytes| {
         const strings = @ptrCast([*]RocStr, @alignCast(@alignOf(RocStr), bytes));
-        strSplitInPlace(strings, string, delimiter);
+        strSplitHelp(strings, string, delimiter);
     }
 
     return list;
 }
 
-// For LLVM backend
-pub fn strSplitInPlaceC(opt_array: ?[*]RocStr, string: RocStr, delimiter: RocStr) callconv(.C) void {
-    if (opt_array) |array| {
-        return @call(.{ .modifier = always_inline }, strSplitInPlace, .{ array, string, delimiter });
-    } else {
-        return;
-    }
-}
-
-fn strSplitInPlace(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
+fn strSplitHelp(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
     var ret_array_index: usize = 0;
     var slice_start_index: usize = 0;
     var str_index: usize = 0;
@@ -820,7 +810,7 @@ fn strSplitInPlace(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
     array[ret_array_index] = RocStr.init(str_bytes + slice_start_index, str_len - slice_start_index);
 }
 
-test "strSplitInPlace: empty delimiter" {
+test "strSplitHelp: empty delimiter" {
     // Str.split "abc" "" == ["abc"]
     const str_arr = "abc";
     const str = RocStr.init(str_arr, str_arr.len);
@@ -831,7 +821,7 @@ test "strSplitInPlace: empty delimiter" {
     var array: [1]RocStr = undefined;
     const array_ptr: [*]RocStr = &array;
 
-    strSplitInPlace(array_ptr, str, delimiter);
+    strSplitHelp(array_ptr, str, delimiter);
 
     var expected = [1]RocStr{
         str,
@@ -854,7 +844,7 @@ test "strSplitInPlace: empty delimiter" {
     try expect(array[0].eq(expected[0]));
 }
 
-test "strSplitInPlace: no delimiter" {
+test "strSplitHelp: no delimiter" {
     // Str.split "abc" "!" == ["abc"]
     const str_arr = "abc";
     const str = RocStr.init(str_arr, str_arr.len);
@@ -865,7 +855,7 @@ test "strSplitInPlace: no delimiter" {
     var array: [1]RocStr = undefined;
     const array_ptr: [*]RocStr = &array;
 
-    strSplitInPlace(array_ptr, str, delimiter);
+    strSplitHelp(array_ptr, str, delimiter);
 
     var expected = [1]RocStr{
         str,
@@ -888,7 +878,7 @@ test "strSplitInPlace: no delimiter" {
     try expect(array[0].eq(expected[0]));
 }
 
-test "strSplitInPlace: empty end" {
+test "strSplitHelp: empty end" {
     const str_arr = "1---- ---- ---- ---- ----2---- ---- ---- ---- ----";
     const str = RocStr.init(str_arr, str_arr.len);
 
@@ -903,7 +893,7 @@ test "strSplitInPlace: empty end" {
     };
     const array_ptr: [*]RocStr = &array;
 
-    strSplitInPlace(array_ptr, str, delimiter);
+    strSplitHelp(array_ptr, str, delimiter);
 
     const one = RocStr.init("1", 1);
     const two = RocStr.init("2", 1);
@@ -931,7 +921,7 @@ test "strSplitInPlace: empty end" {
     try expect(array[2].eq(expected[2]));
 }
 
-test "strSplitInPlace: delimiter on sides" {
+test "strSplitHelp: delimiter on sides" {
     const str_arr = "tttghittt";
     const str = RocStr.init(str_arr, str_arr.len);
 
@@ -945,7 +935,7 @@ test "strSplitInPlace: delimiter on sides" {
         undefined,
     };
     const array_ptr: [*]RocStr = &array;
-    strSplitInPlace(array_ptr, str, delimiter);
+    strSplitHelp(array_ptr, str, delimiter);
 
     const ghi_arr = "ghi";
     const ghi = RocStr.init(ghi_arr, ghi_arr.len);
@@ -973,7 +963,7 @@ test "strSplitInPlace: delimiter on sides" {
     try expect(array[2].eq(expected[2]));
 }
 
-test "strSplitInPlace: three pieces" {
+test "strSplitHelp: three pieces" {
     // Str.split "a!b!c" "!" == ["a", "b", "c"]
     const str_arr = "a!b!c";
     const str = RocStr.init(str_arr, str_arr.len);
@@ -985,7 +975,7 @@ test "strSplitInPlace: three pieces" {
     var array: [array_len]RocStr = undefined;
     const array_ptr: [*]RocStr = &array;
 
-    strSplitInPlace(array_ptr, str, delimiter);
+    strSplitHelp(array_ptr, str, delimiter);
 
     const a = RocStr.init("a", 1);
     const b = RocStr.init("b", 1);

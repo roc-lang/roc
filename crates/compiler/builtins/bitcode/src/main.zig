@@ -143,7 +143,6 @@ comptime {
     exportStrFn(str.init, "init");
     exportStrFn(str.strToScalarsC, "to_scalars");
     exportStrFn(str.strSplit, "str_split");
-    exportStrFn(str.strSplitInPlaceC, "str_split_in_place");
     exportStrFn(str.countSegments, "count_segments");
     exportStrFn(str.countGraphemeClusters, "count_grapheme_clusters");
     exportStrFn(str.countUtf8Bytes, "count_utf8_bytes");
