@@ -34,6 +34,7 @@ fn init_compiler() -> Instance {
         Ok(bytes) => bytes,
         Err(e) => panic!("{}", format_compiler_load_error(e)),
     };
+    println!("loaded Roc compiler bytes");
 
     let store = Store::default();
 
@@ -61,8 +62,14 @@ fn init_compiler() -> Instance {
     // "Chain" the import objects together. Wasmer will look up the REPL object first, then the WASI object
     let import_object = wasi_import_obj.chain_front(repl_import_obj);
 
+    println!("Instantiating Roc compiler");
+
     // Make a fully-linked instance with its own block of memory
-    Instance::new(&wasmer_module, &import_object).unwrap()
+    let inst = Instance::new(&wasmer_module, &import_object).unwrap();
+
+    println!("Instantiated Roc compiler");
+
+    inst
 }
 
 struct ReplState {
@@ -233,6 +240,7 @@ fn dummy_system_time_now() -> f64 {
 }
 
 fn run(src: &'static str) -> (bool, String) {
+    println!("run");
     REPL_STATE.with(|rs| {
         *rs.borrow_mut().deref_mut() = Some(ReplState {
             src,
@@ -266,7 +274,9 @@ fn run(src: &'static str) -> (bool, String) {
 #[allow(dead_code)]
 pub fn expect_success(input: &'static str, expected: &str) {
     let (ok, output) = run(input);
-    assert_eq!(ok, true);
+    if !ok {
+        panic!("\n{}\n", output);
+    }
     assert_eq!(output, expected);
 }
 
