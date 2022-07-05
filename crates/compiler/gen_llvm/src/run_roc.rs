@@ -12,6 +12,16 @@ pub struct RocCallResult<T> {
     value: MaybeUninit<T>,
 }
 
+impl<T: Default> Default for RocCallResult<T> {
+    fn default() -> Self {
+        Self {
+            tag: 0,
+            error_msg: std::ptr::null_mut(),
+            value: MaybeUninit::new(Default::default()),
+        }
+    }
+}
+
 impl<T: Sized> From<RocCallResult<T>> for Result<T, String> {
     fn from(call_result: RocCallResult<T>) -> Self {
         match call_result.tag {
@@ -28,6 +38,29 @@ impl<T: Sized> From<RocCallResult<T>> for Result<T, String> {
             }),
         }
     }
+}
+
+#[macro_export]
+macro_rules! run_roc_dylib {
+    ($lib:expr, $main_fn_name:expr, $argument_type:ty, $return_type:ty, $errors:expr) => {{
+        use inkwell::context::Context;
+        use roc_builtins::bitcode;
+        use roc_gen_llvm::run_roc::RocCallResult;
+        use std::mem::MaybeUninit;
+
+        // NOTE: return value is not first argument currently (may/should change in the future)
+        type Main = unsafe extern "C" fn($argument_type, *mut RocCallResult<$return_type>);
+
+        unsafe {
+            let main: libloading::Symbol<Main> = $lib
+                .get($main_fn_name.as_bytes())
+                .ok()
+                .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
+                .expect("errored");
+
+            main
+        }
+    }};
 }
 
 #[macro_export]
