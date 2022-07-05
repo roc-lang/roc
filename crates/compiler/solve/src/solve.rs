@@ -9,7 +9,6 @@ use roc_can::constraint::{Constraints, Cycle, LetConstraint, OpportunisticResolv
 use roc_can::expected::{Expected, PExpected};
 use roc_can::expr::PendingDerives;
 use roc_collections::all::MutMap;
-use roc_collections::VecSet;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
@@ -31,8 +30,8 @@ use roc_types::types::{
     OptAbleVar, PatternCategory, Reason, TypeExtension, Uls,
 };
 use roc_unify::unify::{
-    unify, unify_introduced_ability_specialization, Mode, Obligated, SpecializationLsetCollector,
-    Unified::*,
+    unify, unify_introduced_ability_specialization, Mode, MustImplementConstraints, Obligated,
+    SpecializationLsetCollector, Unified::*,
 };
 
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
@@ -507,7 +506,7 @@ pub trait Phase {
     where
         F: FnMut(&AbilitiesStore) -> T;
 
-    fn copy_lambda_set_var_to_home_subs(
+    fn copy_lambda_set_ambient_function_to_home_subs(
         &self,
         external_lambda_set_var: Variable,
         external_module_id: ModuleId,
@@ -529,7 +528,7 @@ impl Phase for SolvePhase<'_> {
         f(self.abilities_store)
     }
 
-    fn copy_lambda_set_var_to_home_subs(
+    fn copy_lambda_set_ambient_function_to_home_subs(
         &self,
         external_lambda_set_var: Variable,
         _external_module_id: ModuleId,
@@ -538,11 +537,10 @@ impl Phase for SolvePhase<'_> {
         // During solving we're only aware of our module's abilities store, the var must
         // be in our module store. Even if the specialization lambda set comes from another
         // module, we should have taken care to import it before starting solving in this module.
-        debug_assert!(matches!(
-            home_subs.get_content_without_compacting(external_lambda_set_var),
-            Content::LambdaSet(..)
-        ));
-        external_lambda_set_var
+        let LambdaSet {
+            ambient_function, ..
+        } = home_subs.get_lambda_set(external_lambda_set_var);
+        ambient_function
     }
 }
 
@@ -623,10 +621,7 @@ fn run_in_place(
     // Now that the module has been solved, we can run through and check all
     // types claimed to implement abilities. This will also tell us what derives
     // are legal, which we need to register.
-    let (obligation_problems, _derived) = deferred_obligations.check_all(subs, abilities_store);
-    problems.extend(obligation_problems);
-
-    compact_lambda_sets_of_vars(
+    let new_must_implement = compact_lambda_sets_of_vars(
         subs,
         &arena,
         &mut pools,
@@ -634,6 +629,11 @@ fn run_in_place(
         &SolvePhase { abilities_store },
         &derived_symbols,
     );
+
+    deferred_obligations.add(new_must_implement, AbilityImplError::IncompleteAbility);
+
+    let (obligation_problems, _derived) = deferred_obligations.check_all(subs, abilities_store);
+    problems.extend(obligation_problems);
 
     state.env
 }
@@ -1758,6 +1758,18 @@ fn check_ability_specialization(
     }
 }
 
+/// Gets the unique unspecialized lambda resolving to concrete type `c_a` in a list of
+/// unspecialized lambda sets.
+fn unique_unspecialized_lambda(subs: &Subs, c_a: Variable, uls: &[Uls]) -> Option<Uls> {
+    let mut iter_concrete = uls
+        .iter()
+        .filter(|Uls(var, _, _)| subs.equivalent_without_compacting(*var, c_a));
+    let uls = iter_concrete.next()?;
+    debug_assert!(iter_concrete.next().is_none(), "multiple concrete");
+    Some(*uls)
+}
+
+#[must_use]
 pub fn compact_lambda_sets_of_vars<P: Phase>(
     subs: &mut Subs,
     arena: &Bump,
@@ -1765,201 +1777,275 @@ pub fn compact_lambda_sets_of_vars<P: Phase>(
     uls_of_var: UlsOfVar,
     phase: &P,
     derived_symbols: &GlobalDerivedSymbols,
-) {
-    let mut seen = VecSet::default();
-    for (_, lambda_sets) in uls_of_var.drain() {
-        for lset in lambda_sets {
-            let root_lset = subs.get_root_key_without_compacting(lset);
-            if seen.contains(&root_lset) {
-                continue;
+) -> MustImplementConstraints {
+    // let mut seen = VecSet::default();
+    let mut must_implement = MustImplementConstraints::default();
+
+    let mut uls_of_var_queue = VecDeque::with_capacity(uls_of_var.len());
+    uls_of_var_queue.extend(uls_of_var.drain());
+
+    // Suppose a type variable `a` with `uls_of_var` mapping `uls_a = {l1, ... ln}` has been instantiated to a concrete type `C_a`.
+    while let Some((c_a, uls_a)) = uls_of_var_queue.pop_front() {
+        let c_a = subs.get_root_key_without_compacting(c_a);
+        // 1. Let each `l` in `uls_a` be of form `[concrete_lambdas + ... + C:f:r + ...]`.
+        //    NB: There may be multiple unspecialized lambdas of form `C:f:r, C:f1:r1, ..., C:fn:rn` in `l`.
+        //    In this case, let `t1, ... tm` be the other unspecialized lambdas not of form `C:_:_`,
+        //    that is, none of which are now specialized to the type `C`. Then, deconstruct
+        //    `l` such that `l' = [concrete_lambdas + t1 + ... + tm + C:f:r` and `l1 = [[] + C:f1:r1], ..., ln = [[] + C:fn:rn]`.
+        //    Replace `l` with `l', l1, ..., ln` in `uls_a`, flattened.
+        //    TODO: the flattening step described above
+        let mut uls_a = uls_a.into_vec();
+        // We can remove all the lambda sets that don't have any unspecialized lambdas.
+        uls_a.retain(|lambda_set| {
+            let unspec = subs.get_subs_slice(subs.get_lambda_set(*lambda_set).unspecialized);
+            unique_unspecialized_lambda(subs, c_a, unspec).is_some()
+        });
+        // 2. Now, each `l` in `uls_a` has a unique unspecialized lambda of form `C:f:r`.
+        //    Sort `uls_a` primarily by `f` (arbitrary order), and secondarily by `r` in descending order.
+        uls_a.sort_by(|v1, v2| {
+            let unspec_1 = subs.get_subs_slice(subs.get_lambda_set(*v1).unspecialized);
+            let unspec_2 = subs.get_subs_slice(subs.get_lambda_set(*v2).unspecialized);
+
+            let Uls(_, f1, r1) = unique_unspecialized_lambda(subs, c_a, unspec_1).unwrap();
+            let Uls(_, f2, r2) = unique_unspecialized_lambda(subs, c_a, unspec_2).unwrap();
+
+            match f1.cmp(&f2) {
+                std::cmp::Ordering::Equal => {
+                    // Order by descending order of region.
+                    r2.cmp(&r1)
+                }
+                ord => ord,
             }
+        });
+        // 3. For each `l` in `uls_a` with unique unspecialized lambda `C:f:r`:
+        //    1. Let `t_f1` be the directly ambient function of the lambda set containing `C:f:r`. Remove `C:f:r` from `t_f1`'s lambda set.
+        //       - For example, `(b' -[[] + Fo:f:2]-> {})` if `C:f:r=Fo:f:2`. Removing `Fo:f:2`, we get `(b' -[[]]-> {})`.
+        //    2. Let `t_f2` be the directly ambient function of the specialization lambda set resolved by `C:f:r`.
+        //       - For example, `(b -[[] + b:g:1]-> {})` if `C:f:r=Fo:f:2`, running on example from above.
+        //    3. Unify `t_f1 ~ t_f2`.
+        for l in uls_a {
+            // let root_lset = subs.get_root_key_without_compacting(l);
+            // if seen.contains(&root_lset) {
+            //     continue;
+            // }
 
-            compact_lambda_set(subs, arena, pools, root_lset, phase, derived_symbols);
+            let (new_must_implement, new_uls_of_var) =
+                compact_lambda_set(subs, arena, pools, c_a, l, phase, derived_symbols);
 
-            seen.insert(root_lset);
+            must_implement.extend(new_must_implement);
+            uls_of_var_queue.extend(new_uls_of_var.drain());
+
+            // seen.insert(root_lset);
         }
     }
+
+    must_implement
 }
 
+#[must_use]
 fn compact_lambda_set<P: Phase>(
     subs: &mut Subs,
     arena: &Bump,
     pools: &mut Pools,
+    resolved_concrete: Variable,
     this_lambda_set: Variable,
     phase: &P,
     derived_symbols: &GlobalDerivedSymbols,
-) {
+) -> (MustImplementConstraints, UlsOfVar) {
+    // 3. For each `l` in `uls_a` with unique unspecialized lambda `C:f:r`:
+    //    1. Let `t_f1` be the directly ambient function of the lambda set containing `C:f:r`. Remove `C:f:r` from `t_f1`'s lambda set.
+    //       - For example, `(b' -[[] + Fo:f:2]-> {})` if `C:f:r=Fo:f:2`. Removing `Fo:f:2`, we get `(b' -[[]]-> {})`.
+    //    2. Let `t_f2` be the directly ambient function of the specialization lambda set resolved by `C:f:r`.
+    //       - For example, `(b -[[] + b:g:1]-> {})` if `C:f:r=Fo:f:2`, from the algorithm's running example.
+    //    3. Unify `t_f1 ~ t_f2`.
     let LambdaSet {
         solved,
         recursion_var,
         unspecialized,
-        ambient_function,
+        ambient_function: t_f1,
     } = subs.get_lambda_set(this_lambda_set);
     let target_rank = subs.get_rank(this_lambda_set);
 
-    if unspecialized.is_empty() {
-        return;
-    }
+    debug_assert!(!unspecialized.is_empty());
 
-    let mut new_unspecialized = vec![];
-    let mut specialized_to_unify_with = Vec::with_capacity(1);
-    for uls_index in unspecialized.into_iter() {
-        let uls @ Uls(var, member, region) = subs[uls_index];
+    let unspecialized = subs.get_subs_slice(unspecialized);
 
-        use Content::*;
-        let opaque = match subs.get_content_without_compacting(var) {
-            FlexAbleVar(_, _) => {
-                /* not specialized yet */
-                new_unspecialized.push(uls);
-                continue;
-            }
-            Structure(_) | Alias(_, _, _, AliasKind::Structural) => {
-                // This is a structural type, find the name of the derived ability function it
-                // should use.
-                match Derived::encoding(subs, var) {
-                    Ok(derived) => {
-                        let specialization_symbol = match derived {
-                            Derived::Immediate(symbol) => symbol,
-                            Derived::Key(derive_key) => {
-                                let mut derived_symbols = derived_symbols.lock().unwrap();
-                                derived_symbols.get_or_insert(derive_key)
-                            }
-                        };
+    // 1. jLet `t_f1` be the directly ambient function of the lambda set containing `C:f:r`.
+    let Uls(c, f, r) = unique_unspecialized_lambda(subs, resolved_concrete, unspecialized).unwrap();
 
-                        let specialization_symbol_slice = UnionLabels::insert_into_subs(
-                            subs,
-                            vec![(specialization_symbol, vec![])],
-                        );
-                        // TODO: This is WRONG, fix it!
-                        let ambient_function = subs.fresh_unnamed_flex_var();
-                        let lambda_set_for_derived = subs.fresh(Descriptor {
-                            content: LambdaSet(subs::LambdaSet {
-                                solved: specialization_symbol_slice,
-                                recursion_var: OptVariable::NONE,
-                                unspecialized: SubsSlice::default(),
-                                ambient_function,
-                            }),
-                            rank: target_rank,
-                            mark: Mark::NONE,
-                            copy: OptVariable::NONE,
-                        });
+    debug_assert!(subs.equivalent_without_compacting(c, resolved_concrete));
 
-                        specialized_to_unify_with.push(lambda_set_for_derived);
-                        continue;
-                    }
-                    Err(DeriveError::UnboundVar) => {
-                        // not specialized yet
-                        new_unspecialized.push(uls);
-                        continue;
-                    }
-                    Err(DeriveError::Underivable) => {
-                        // we should have reported an error for this; drop the lambda set.
-                        continue;
-                    }
-                };
-            }
-            Alias(opaque, _, _, AliasKind::Opaque) => opaque,
-            Error => {
-                /* skip */
-                continue;
-            }
-            RigidVar(..)
-            | RigidAbleVar(..)
-            | FlexVar(..)
-            | RecursionVar { .. }
-            | LambdaSet(..)
-            | RangedNumber(_) => {
-                internal_error!("unexpected")
-            }
-        };
-
-        enum Spec {
-            Some(Variable),
-            Skip,
-        }
-
-        let opaque_home = opaque.module_id();
-        let specialized_lambda_set =
-            phase.with_module_abilities_store(opaque_home, |abilities_store| {
-                let opt_specialization = abilities_store.get_specialization(member, *opaque);
-                match (P::IS_LATE, opt_specialization) {
-                    (false, None) => {
-                        // doesn't specialize, we'll have reported an error for this
-                        Spec::Skip
-                    }
-                    (true, None) => {
-                        internal_error!(
-                            "expected to know a specialization for {:?}#{:?}, but it wasn't found",
-                            opaque,
-                            member,
-                        );
-                    }
-                    (_, Some(specialization)) => {
-                        let specialized_lambda_set = *specialization
-                            .specialization_lambda_sets
-                            .get(&region)
-                            .unwrap_or_else(|| {
-                                internal_error!(
-                                    "lambda set region ({:?}, {}) not resolved",
-                                    member,
-                                    region
-                                )
-                            });
-                        Spec::Some(specialized_lambda_set)
-                    }
-                }
-            });
-
-        let specialized_lambda_set = match specialized_lambda_set {
-            Spec::Some(lset) => phase.copy_lambda_set_var_to_home_subs(lset, opaque_home, subs),
-            Spec::Skip => continue,
-        };
-
-        // Ensure the specialization lambda set is already compacted.
-        if subs.get_root_key(specialized_lambda_set) != subs.get_root_key(this_lambda_set) {
-            compact_lambda_set(
-                subs,
-                arena,
-                pools,
-                specialized_lambda_set,
-                phase,
-                derived_symbols,
-            );
-        }
-
-        // Ensure the specialization lambda set we'll unify with is not a generalized one, but one
-        // at the rank of the lambda set being compacted.
-        let copy_specialized_lambda_set =
-            deep_copy_var_in(subs, target_rank, pools, specialized_lambda_set, arena);
-
-        specialized_to_unify_with.push(copy_specialized_lambda_set);
-    }
-
-    let new_unspecialized_slice =
-        SubsSlice::extend_new(&mut subs.unspecialized_lambda_sets, new_unspecialized);
-    let partial_compacted_lambda_set = Content::LambdaSet(LambdaSet {
+    // 1b. Remove `C:f:r` from `t_f1`'s lambda set.
+    let new_unspecialized: Vec<_> = unspecialized
+        .iter()
+        .filter(|Uls(v, _, _)| !subs.equivalent_without_compacting(*v, resolved_concrete))
+        .copied()
+        .collect();
+    debug_assert_eq!(new_unspecialized.len(), unspecialized.len() - 1);
+    let t_f1_lambda_set_without_concrete = LambdaSet {
         solved,
         recursion_var,
-        unspecialized: new_unspecialized_slice,
-        ambient_function,
-    });
-    subs.set_content(this_lambda_set, partial_compacted_lambda_set);
+        unspecialized: SubsSlice::extend_new(
+            &mut subs.unspecialized_lambda_sets,
+            new_unspecialized,
+        ),
+        ambient_function: t_f1,
+    };
+    subs.set_content(
+        this_lambda_set,
+        Content::LambdaSet(t_f1_lambda_set_without_concrete),
+    );
 
-    for other_specialized in specialized_to_unify_with.into_iter() {
-        let (vars, must_implement_ability, lambda_sets_to_specialize, _meta) =
-            unify(subs, this_lambda_set, other_specialized, Mode::EQ)
-                .expect_success("lambda sets don't unify");
+    enum Spec {
+        // 2. Let `t_f2` be the directly ambient function of the specialization lambda set resolved by `C:f:r`.
+        Some { t_f2: Variable },
+        // The specialized lambda set should actually just be dropped, not resolved and unified.
+        Drop,
+        // NotYetSpecialized,
+    }
 
-        introduce(subs, target_rank, pools, &vars);
+    let spec = match subs.get_content_without_compacting(c) {
+        Content::Structure(_) | Content::Alias(_, _, _, AliasKind::Structural) => {
+            // This is a structural type, find the name of the derived ability function it
+            // should use.
+            match Derived::encoding(subs, c) {
+                Ok(derived) => {
+                    let specialization_symbol = match derived {
+                        Derived::Immediate(symbol) => symbol,
+                        Derived::Key(derive_key) => {
+                            let mut derived_symbols = derived_symbols.lock().unwrap();
+                            derived_symbols.get_or_insert(derive_key)
+                        }
+                    };
 
-        debug_assert!(
-            must_implement_ability.is_empty(),
-            "didn't expect abilities instantiated in this position"
-        );
-        debug_assert!(
-            lambda_sets_to_specialize.is_empty(),
-            "didn't expect more lambda sets in this position"
-        );
+                    let specialization_symbol_slice =
+                        UnionLabels::insert_into_subs(subs, vec![(specialization_symbol, vec![])]);
+                    // TODO: This is WRONG, fix it!
+                    let ambient_function = subs.fresh_unnamed_flex_var();
+                    let _lambda_set_for_derived = subs.fresh(Descriptor {
+                        content: Content::LambdaSet(subs::LambdaSet {
+                            solved: specialization_symbol_slice,
+                            recursion_var: OptVariable::NONE,
+                            unspecialized: SubsSlice::default(),
+                            ambient_function,
+                        }),
+                        rank: target_rank,
+                        mark: Mark::NONE,
+                        copy: OptVariable::NONE,
+                    });
+
+                    Spec::Some {
+                        t_f2: ambient_function,
+                    }
+                }
+                Err(DeriveError::UnboundVar) => {
+                    // not specialized yet
+                    todo!()
+                    // Spec::NotYetSpecialized
+                }
+                Err(DeriveError::Underivable) => {
+                    // we should have reported an error for this; drop the lambda set.
+                    Spec::Drop
+                }
+            }
+        }
+        Content::Alias(opaque, _, _, AliasKind::Opaque) => {
+            let opaque_home = opaque.module_id();
+            let opt_lambda_set =
+                phase.with_module_abilities_store(opaque_home, |abilities_store| {
+                    let opt_specialization = abilities_store.get_specialization(f, *opaque);
+                    match (P::IS_LATE, opt_specialization) {
+                        (false, None) => {
+                            // doesn't specialize, we'll have reported an error for this
+                            None
+                        }
+                        (true, None) => {
+                            internal_error!(
+                            "expected to know a specialization for {:?}#{:?}, but it wasn't found",
+                            opaque,
+                            f,
+                        );
+                        }
+                        (_, Some(specialization)) => {
+                            let specialized_lambda_set = *specialization
+                                .specialization_lambda_sets
+                                .get(&r)
+                                .unwrap_or_else(|| {
+                                    internal_error!(
+                                        "lambda set region ({:?}, {}) not resolved",
+                                        f,
+                                        r
+                                    )
+                                });
+                            Some(specialized_lambda_set)
+                        }
+                    }
+                });
+            match opt_lambda_set {
+                Some(lambda_set_var) => {
+                    // Get the ambient function type
+                    let spec_ambient_function = phase
+                        .copy_lambda_set_ambient_function_to_home_subs(
+                            lambda_set_var,
+                            opaque_home,
+                            subs,
+                        );
+
+                    Spec::Some {
+                        t_f2: spec_ambient_function,
+                    }
+                }
+                None => Spec::Drop,
+            }
+        }
+
+        Content::Error => Spec::Drop,
+
+        Content::FlexAbleVar(..)
+        | Content::RigidAbleVar(..)
+        | Content::FlexVar(..)
+        | Content::RigidVar(..)
+        | Content::RecursionVar { .. }
+        | Content::LambdaSet(..)
+        | Content::RangedNumber(..) => {
+            internal_error!("unexpected")
+        }
+    };
+
+    match spec {
+        // Spec::NotYetSpecialized => {
+        //     // Do nothing; no compaction ready yet.
+        // }
+        Spec::Some { t_f2 } => {
+            // Ensure the specialization lambda set is already compacted.
+            // if subs.get_root_key(specialized_lambda_set) != subs.get_root_key(this_lambda_set) {
+            //     compact_lambda_set(
+            //         subs,
+            //         arena,
+            //         pools,
+            //         specialized_lambda_set,
+            //         phase,
+            //         derived_symbols,
+            //     );
+            // }
+
+            // Ensure the specialized ambient function we'll unify with is not a generalized one, but one
+            // at the rank of the lambda set being compacted.
+            let t_f2 = deep_copy_var_in(subs, target_rank, pools, t_f2, arena);
+
+            // 3. Unify `t_f1 ~ t_f2`.
+            let (vars, new_must_implement_ability, new_lambda_sets_to_specialize, _meta) =
+                unify(subs, t_f1, t_f2, Mode::EQ).expect_success("ambient functions don't unify");
+
+            introduce(subs, target_rank, pools, &vars);
+
+            (new_must_implement_ability, new_lambda_sets_to_specialize)
+        }
+        Spec::Drop => {
+            // Do nothing other than to remove the concrete lambda to drop from the lambda set,
+            // which we already did in 1b above.
+            (Default::default(), Default::default())
+        }
     }
 }
 
@@ -2019,6 +2105,7 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
 }
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::ops::ControlFlow;
 std::thread_local! {
     /// Scratchpad arena so we don't need to allocate a new one all the time
@@ -2178,7 +2265,10 @@ impl AmbientFunctionPolicy {
     fn link_to_alias_lambda_set_var(&self, subs: &mut Subs, var: Variable) {
         let ambient_function = match self {
             AmbientFunctionPolicy::Function(var) => *var,
-            _ => internal_error!("Not a function, can't link the var"),
+            _ => {
+                // Might be linked at a deeper point in time, ignore for now
+                return;
+            }
         };
         let content = subs.get_content_without_compacting(var);
         let new_content = match content {

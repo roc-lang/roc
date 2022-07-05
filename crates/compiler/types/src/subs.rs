@@ -340,10 +340,10 @@ impl UlsOfVar {
     }
 
     /// NOTE: this does not follow unification links.
-    pub fn drain(self) -> impl Iterator<Item = (Variable, impl Iterator<Item = Variable>)> {
+    pub fn drain(self) -> impl Iterator<Item = (Variable, VecSet<Variable>)> {
         self.0
             .into_iter()
-            .map(|(v, set): (Variable, VecSet<Variable>)| (v, set.into_iter()))
+            .map(|(v, set): (Variable, VecSet<Variable>)| (v, set))
     }
 
     pub fn len(&self) -> usize {
@@ -3979,6 +3979,10 @@ impl StorageSubs {
     pub fn as_inner_mut(&mut self) -> &mut Subs {
         &mut self.subs
     }
+    pub fn as_inner(&self) -> &Subs {
+        &self.subs
+    }
+
     pub fn as_inner(&self) -> &Subs {
         &self.subs
     }

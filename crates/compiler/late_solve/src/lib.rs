@@ -9,7 +9,7 @@ use roc_collections::MutMap;
 use roc_derive_key::GlobalDerivedSymbols;
 use roc_module::symbol::ModuleId;
 use roc_solve::solve::{compact_lambda_sets_of_vars, Phase, Pools};
-use roc_types::subs::Content;
+use roc_types::subs::{Content, LambdaSet};
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, Variable};
 use roc_unify::unify::{unify as unify_unify, Mode, Unified};
 
@@ -91,7 +91,7 @@ impl Phase for LatePhase<'_> {
     }
 
     #[inline(always)]
-    fn copy_lambda_set_var_to_home_subs(
+    fn copy_lambda_set_ambient_function_to_home_subs(
         &self,
         external_lambda_set_var: Variable,
         external_module_id: ModuleId,
@@ -99,11 +99,12 @@ impl Phase for LatePhase<'_> {
     ) -> Variable {
         match (external_module_id == self.home, self.abilities) {
             (true, _) | (false, AbilitiesView::Module(_)) => {
-                debug_assert!(matches!(
-                    target_subs.get_content_without_compacting(external_lambda_set_var),
-                    Content::LambdaSet(..)
-                ));
-                external_lambda_set_var
+                // The lambda set (and hence its ambient function) should be available in the
+                // current subs.
+                let LambdaSet {
+                    ambient_function, ..
+                } = target_subs.get_lambda_set(external_lambda_set_var);
+                ambient_function
             }
             (false, AbilitiesView::World(wa)) => {
                 let mut world = wa.world.write().unwrap();
@@ -113,6 +114,15 @@ impl Phase for LatePhase<'_> {
                     .stored_specialization_lambda_set_vars
                     .get(&external_lambda_set_var)
                     .unwrap();
+                let LambdaSet {
+                    ambient_function, ..
+                } = module_types
+                    .storage_subs
+                    .as_inner()
+                    .get_lambda_set(storage_lambda_set_var);
+
+                todo!("I don't think the ambient function is in the storage subs properly yet");
+
                 let copied = module_types
                     .storage_subs
                     .export_variable_to(target_subs, storage_lambda_set_var);
