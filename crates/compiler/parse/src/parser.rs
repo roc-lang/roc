@@ -1451,7 +1451,7 @@ macro_rules! word1_check_indent {
     ($word:expr, $word_problem:expr, $min_indent:expr, $indent_problem:expr) => {
         and!(
             word1($word, $word_problem),
-            crate::parser::check_indent($min_indent, $indent_problem)
+            $crate::parser::check_indent($min_indent, $indent_problem)
         )
     };
 }

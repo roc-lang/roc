@@ -3,7 +3,7 @@ use indexmap::IndexMap;
 use roc_mono::layout::UnionLayout;
 use roc_target::{Architecture, TargetInfo};
 use std::convert::TryInto;
-use std::fmt::Display;
+use std::fmt::{Display, Write};
 
 pub static TEMPLATE: &[u8] = include_bytes!("../templates/template.rs");
 pub static HEADER: &[u8] = include_bytes!("../templates/header.rs");
@@ -95,24 +95,32 @@ pub fn emit(types_and_targets: &[(Types, TargetInfo)]) -> String {
                 1 => {
                     let arch = arch_to_str(targets.get(0).unwrap().architecture);
 
-                    buf.push_str(&format!("#[cfg(target_arch = \"{arch}\")]"));
+                    write!(buf, "#[cfg(target_arch = \"{arch}\")]").unwrap();
                 }
                 _ => {
                     // We should never have a decl recorded with 0 targets!
                     debug_assert_ne!(targets.len(), 0);
 
-                    let alternatives = targets
-                        .iter()
-                        .map(|target_info| {
-                            format!(
-                                "{indent}{INDENT}target_arch = \"{}\"",
-                                arch_to_str(target_info.architecture)
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join(",\n");
+                    let mut it = targets.iter().peekable();
 
-                    buf.push_str(&format!("#[cfg(any(\n{alternatives}\n{indent}))]"));
+                    writeln!(buf, "#[cfg(any(").unwrap();
+
+                    while let Some(target_info) = it.next() {
+                        write!(
+                            buf,
+                            "{indent}{INDENT}target_arch = \"{}\"",
+                            arch_to_str(target_info.architecture)
+                        )
+                        .unwrap();
+
+                        if it.peek().is_some() {
+                            buf.push_str(",\n");
+                        } else {
+                            buf.push('\n');
+                        }
+                    }
+
+                    write!(buf, "{indent}))]").unwrap();
                 }
             }
 
@@ -365,16 +373,18 @@ pub struct {name} {{
             if let Some(payload_id) = opt_payload_id {
                 let payload_type = types.get_type(*payload_id);
 
-                buf.push_str(&format!("{INDENT}{tag_name}: "));
+                write!(buf, "{INDENT}{tag_name}: ").unwrap();
 
                 if payload_type.has_pointer(types) {
                     // types with pointers need ManuallyDrop
                     // because rust unions don't (and can't)
                     // know how to drop them automatically!
-                    buf.push_str(&format!(
-                        "core::mem::ManuallyDrop<{}>,\n",
+                    writeln!(
+                        buf,
+                        "core::mem::ManuallyDrop<{}>,",
                         type_name(*payload_id, types)
-                    ));
+                    )
+                    .unwrap();
                 } else {
                     buf.push_str(&type_name(*payload_id, types));
                     buf.push_str(",\n");
@@ -392,9 +402,7 @@ pub struct {name} {{
             // (Do this even if theoretically shouldn't be necessary, since
             // there's no runtime cost and it more explicitly syncs the
             // union's size with what we think it should be.)
-            buf.push_str(&format!(
-                "{INDENT}_sizer: [u8; {size_rounded_to_alignment}],\n"
-            ));
+            writeln!(buf, "{INDENT}_sizer: [u8; {size_rounded_to_alignment}],").unwrap();
         }
 
         buf.push('}');
@@ -1154,9 +1162,7 @@ fn write_impl_tags<
 
         write_indents(indentations + 1, buf);
 
-        buf.push_str(&format!(
-            "{discriminant_name}::{tag_name} => {branch_str}\n"
-        ));
+        writeln!(buf, "{discriminant_name}::{tag_name} => {branch_str}").unwrap();
     }
 
     write_indents(indentations, buf);
@@ -1192,18 +1198,18 @@ fn add_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str> + Display>(
     );
 
     for (index, tag_name) in tags.enumerate() {
-        buf.push_str(&format!("{INDENT}{tag_name} = {index},\n"));
+        writeln!(buf, "{INDENT}{tag_name} = {index},").unwrap();
 
         write_indents(3, &mut debug_buf);
 
-        debug_buf.push_str(&format!(
-            "Self::{tag_name} => f.write_str(\"{name}::{tag_name}\"),\n"
-        ));
+        writeln!(
+            debug_buf,
+            "Self::{tag_name} => f.write_str(\"{name}::{tag_name}\"),"
+        )
+        .unwrap();
     }
 
-    buf.push_str(&format!(
-        "}}\n\n{debug_buf}{INDENT}{INDENT}}}\n{INDENT}}}\n}}"
-    ));
+    write!(buf, "}}\n\n{debug_buf}{INDENT}{INDENT}}}\n{INDENT}}}\n}}").unwrap();
 
     add_decl(impls, None, target_info, buf);
 }
@@ -1237,7 +1243,7 @@ fn add_struct<S: Display>(
             format!("{label}")
         };
 
-        buf.push_str(&format!("{INDENT}pub {label}: {type_str},\n",));
+        writeln!(buf, "{INDENT}pub {label}: {type_str},",).unwrap();
     }
 
     buf.push('}');

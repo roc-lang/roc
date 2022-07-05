@@ -367,30 +367,6 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
     )
 }
 
-/// List.mapWithIndex : List before, (before, Nat -> after) -> List after
-pub fn list_map_with_index<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    roc_function_call: RocFunctionCall<'ctx>,
-    list: BasicValueEnum<'ctx>,
-    element_layout: &Layout<'a>,
-    return_layout: &Layout<'a>,
-) -> BasicValueEnum<'ctx> {
-    call_list_bitcode_fn(
-        env,
-        &[
-            list_to_c_abi(env, list).into(),
-            roc_function_call.caller.into(),
-            pass_as_opaque(env, roc_function_call.data),
-            roc_function_call.inc_n_data.into(),
-            roc_function_call.data_is_owned.into(),
-            env.alignment_intvalue(element_layout),
-            layout_width(env, element_layout),
-            layout_width(env, return_layout),
-        ],
-        bitcode::LIST_MAP_WITH_INDEX,
-    )
-}
-
 /// List.map : List before, (before -> after) -> List after
 pub fn list_map<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,

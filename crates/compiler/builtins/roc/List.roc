@@ -564,6 +564,23 @@ map4 : List a, List b, List c, List d, (a, b, c, d -> e) -> List e
 ## This works like [List.map], except it also passes the index
 ## of the element to the conversion function.
 mapWithIndex : List a, (a, Nat -> b) -> List b
+mapWithIndex = \src, func ->
+    length = len src
+    dest = withCapacity length
+
+    mapWithIndexHelp src dest func 0 length
+
+# Internal helper
+mapWithIndexHelp : List a, List b, (a, Nat -> b), Nat, Nat -> List b
+mapWithIndexHelp = \src, dest, func, index, length ->
+    if index < length then
+        elem = getUnsafe src index
+        mappedElem = func elem index
+        newDest = append dest mappedElem
+
+        mapWithIndexHelp src newDest func (index + 1) length
+    else
+        dest
 
 ## Returns a list of all the integers between one and another,
 ## including both of the given numbers.

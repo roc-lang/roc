@@ -748,17 +748,6 @@ impl<'a> Context<'a> {
 
                 handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
             }
-            ListMapWithIndex { xs } => {
-                let ownerships = [(xs, function_ps[0])];
-
-                let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
-
-                let b = handle_ownerships_post!(b, ownerships);
-
-                let v = create_call!(function_ps.get(2));
-
-                handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
-            }
             ListSortWith { xs } => {
                 // NOTE: we may apply the function to the same argument multiple times.
                 // for that to be valid, the function must borrow its argument. This is not

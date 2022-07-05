@@ -1,4 +1,5 @@
 use crate::markup::{mark_id_ast_id_map::MarkIdAstIdMap, nodes::MarkupNode};
+use std::fmt::Write;
 
 pub type MarkNodeId = usize;
 
@@ -54,14 +55,16 @@ impl SlowPool {
                 child_str = format!("children: {:?}", node_children);
             }
 
-            ret_str.push_str(&format!(
+            write!(
+                ret_str,
                 "{}: {} ({}) ast_id {:?} {}",
                 mark_node_id,
                 node.node_type_as_string(),
                 node.get_content(),
                 ast_node_id.parse::<usize>().unwrap(),
                 child_str
-            ));
+            )
+            .unwrap();
         }
 
         ret_str

@@ -19,6 +19,7 @@ use roc_ast::{
 };
 use roc_utils::{index_of, slice_get};
 use std::fmt;
+use std::fmt::Write;
 
 #[derive(Debug)]
 pub enum MarkupNode {
@@ -376,7 +377,7 @@ pub fn tree_as_string(root_node_id: MarkNodeId, mark_node_pool: &SlowPool) -> St
 
     let node = mark_node_pool.get(root_node_id);
 
-    full_string.push_str(&format!("{} mn_id {}\n", node, root_node_id));
+    writeln!(full_string, "{} mn_id {}\n", node, root_node_id).unwrap();
 
     tree_as_string_helper(node, 1, &mut full_string, mark_node_pool);
 
@@ -390,16 +391,16 @@ fn tree_as_string_helper(
     mark_node_pool: &SlowPool,
 ) {
     for child_id in node.get_children_ids() {
+        let child = mark_node_pool.get(child_id);
+        let child_str = format!("{}", mark_node_pool.get(child_id)).replace('\n', "\\n");
+
         let mut full_str = std::iter::repeat("|--- ")
             .take(level)
             .collect::<Vec<&str>>()
             .join("")
             .to_owned();
 
-        let child = mark_node_pool.get(child_id);
-        let child_str = format!("{}", mark_node_pool.get(child_id)).replace('\n', "\\n");
-
-        full_str.push_str(&format!("{} mn_id {}\n", child_str, child_id));
+        writeln!(full_str, "{} mn_id {}", child_str, child_id).unwrap();
 
         tree_string.push_str(&full_str);
 

@@ -14,11 +14,15 @@ use target_lexicon::Triple;
 use tempfile::Builder;
 
 fn report_timing(buf: &mut String, label: &str, duration: Duration) {
-    buf.push_str(&format!(
-        "        {:9.3} ms   {}\n",
+    use std::fmt::Write;
+
+    writeln!(
+        buf,
+        "        {:9.3} ms   {}",
         duration.as_secs_f64() * 1000.0,
         label,
-    ));
+    )
+    .unwrap()
 }
 
 pub struct BuiltFile {

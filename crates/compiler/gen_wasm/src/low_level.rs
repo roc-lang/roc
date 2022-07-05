@@ -218,6 +218,7 @@ impl<'a> LowLevelCall<'a> {
             // Str
             StrConcat => self.load_args_and_call_zig(backend, bitcode::STR_CONCAT),
             StrToScalars => self.load_args_and_call_zig(backend, bitcode::STR_TO_SCALARS),
+            StrGetUnsafe => self.load_args_and_call_zig(backend, bitcode::STR_GET_UNSAFE),
             StrJoinWith => self.load_args_and_call_zig(backend, bitcode::STR_JOIN_WITH),
             StrIsEmpty => match backend.storage.get(&self.arguments[0]) {
                 StoredValue::StackMemory { location, .. } => {
@@ -238,6 +239,9 @@ impl<'a> LowLevelCall<'a> {
             StrSplit => self.load_args_and_call_zig(backend, bitcode::STR_STR_SPLIT),
             StrCountGraphemes => {
                 self.load_args_and_call_zig(backend, bitcode::STR_COUNT_GRAPEHEME_CLUSTERS)
+            }
+            StrCountUtf8Bytes => {
+                self.load_args_and_call_zig(backend, bitcode::STR_COUNT_UTF8_BYTES)
             }
             StrToNum => {
                 let number_layout = match self.ret_layout {
@@ -285,8 +289,16 @@ impl<'a> LowLevelCall<'a> {
             StrTrimLeft => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_LEFT),
             StrTrimRight => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_RIGHT),
             StrToUtf8 => self.load_args_and_call_zig(backend, bitcode::STR_TO_UTF8),
+            StrReserve => self.load_args_and_call_zig(backend, bitcode::STR_RESERVE),
             StrRepeat => self.load_args_and_call_zig(backend, bitcode::STR_REPEAT),
+            StrAppendScalar => self.load_args_and_call_zig(backend, bitcode::STR_APPEND_SCALAR),
             StrTrim => self.load_args_and_call_zig(backend, bitcode::STR_TRIM),
+            StrGetScalarUnsafe => {
+                self.load_args_and_call_zig(backend, bitcode::STR_GET_SCALAR_UNSAFE)
+            }
+            StrSubstringUnsafe => {
+                self.load_args_and_call_zig(backend, bitcode::STR_SUBSTRING_UNSAFE)
+            }
 
             // List
             ListLen => match backend.storage.get(&self.arguments[0]) {
@@ -301,8 +313,7 @@ impl<'a> LowLevelCall<'a> {
 
             ListIsUnique => self.load_args_and_call_zig(backend, bitcode::LIST_IS_UNIQUE),
 
-            ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListSortWith
-            | DictWalk => {
+            ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith | DictWalk => {
                 internal_error!("HigherOrder lowlevels should not be handled here")
             }
 
@@ -2083,7 +2094,7 @@ pub fn call_higher_order_lowlevel<'a>(
             *owns_captured_environment,
         ),
 
-        ListMapWithIndex { .. } | ListSortWith { .. } | DictWalk { .. } => todo!("{:?}", op),
+        ListSortWith { .. } | DictWalk { .. } => todo!("{:?}", op),
     }
 }
 

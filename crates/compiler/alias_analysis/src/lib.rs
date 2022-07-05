@@ -758,34 +758,6 @@ fn call_spec(
                     add_loop(builder, block, state_type, init_state, loop_body)
                 }
 
-                // List.mapWithIndex : List before, (before, Nat -> after) -> List after
-                ListMapWithIndex { xs } => {
-                    let list = env.symbols[xs];
-
-                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
-                        let input_bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
-
-                        let element = builder.add_bag_get(block, input_bag)?;
-                        let index = builder.add_make_tuple(block, &[])?;
-
-                        // before, Nat -> after
-                        let new_element = call_function!(builder, block, [element, index]);
-
-                        list_append(builder, block, update_mode_var, state, new_element)
-                    };
-
-                    let output_element_type =
-                        layout_spec(builder, return_layout, &WhenRecursive::Unreachable)?;
-
-                    let state_layout = Layout::Builtin(Builtin::List(return_layout));
-                    let state_type =
-                        layout_spec(builder, &state_layout, &WhenRecursive::Unreachable)?;
-
-                    let init_state = new_list(builder, block, output_element_type)?;
-
-                    add_loop(builder, block, state_type, init_state, loop_body)
-                }
-
                 ListMap { xs } => {
                     let list = env.symbols[xs];
 

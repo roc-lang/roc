@@ -106,7 +106,7 @@ impl<'a> From<&'a str> for ModuleName {
     }
 }
 
-impl<'a> From<IdentStr> for ModuleName {
+impl From<IdentStr> for ModuleName {
     fn from(string: IdentStr) -> Self {
         Self(string.as_str().into())
     }
@@ -152,7 +152,7 @@ impl<'a> From<&'a str> for ForeignSymbol {
     }
 }
 
-impl<'a> From<String> for ForeignSymbol {
+impl From<String> for ForeignSymbol {
     fn from(string: String) -> Self {
         Self(string.into())
     }
@@ -174,7 +174,7 @@ impl<'a> From<&'a str> for Uppercase {
     }
 }
 
-impl<'a> From<String> for Uppercase {
+impl From<String> for Uppercase {
     fn from(string: String) -> Self {
         Self(string.into())
     }
@@ -198,7 +198,7 @@ impl<'a> From<&'a Lowercase> for &'a str {
     }
 }
 
-impl<'a> From<String> for Lowercase {
+impl From<String> for Lowercase {
     fn from(string: String) -> Self {
         Self(string.into())
     }

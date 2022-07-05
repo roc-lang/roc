@@ -14,7 +14,10 @@
 
       sidebar.querySelectorAll(".sidebar-entry").forEach((entry) => {
         let entryName = entry.querySelector('.sidebar-module-link').textContent;
-        if (currentModuleName === entryName) return;
+        if (currentModuleName === entryName) {
+          entry.firstChild.classList.add("active");
+          return;
+        };
         entry.querySelectorAll(".sidebar-sub-entries a").forEach((subEntry) => subEntry.classList.add("hidden"));
       })
     } else {

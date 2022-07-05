@@ -561,13 +561,6 @@ impl<'a> BorrowInfState<'a> {
                             self.own_var(*xs);
                         }
                     }
-                    ListMapWithIndex { xs } => {
-                        // List.mapWithIndex : List before, (before, Nat -> after) -> List after
-                        // own the list if the function wants to own the element (before, index 0)
-                        if !function_ps[0].borrow {
-                            self.own_var(*xs);
-                        }
-                    }
                     ListMap2 { xs, ys } => {
                         // own the lists if the function wants to own the element
                         if !function_ps[0].borrow {
@@ -892,14 +885,18 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
     // - other refcounted arguments are Borrowed
     match op {
         Unreachable => arena.alloc_slice_copy(&[irrelevant]),
-        ListLen | StrIsEmpty | StrToScalars | StrCountGraphemes => {
+        ListLen | StrIsEmpty | StrToScalars | StrCountGraphemes | StrCountUtf8Bytes => {
             arena.alloc_slice_copy(&[borrowed])
         }
         ListWithCapacity => arena.alloc_slice_copy(&[irrelevant]),
         ListReplaceUnsafe => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
-        ListGetUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+        StrGetUnsafe | ListGetUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         ListConcat => arena.alloc_slice_copy(&[owned, owned]),
         StrConcat => arena.alloc_slice_copy(&[owned, borrowed]),
+        StrSubstringUnsafe => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
+        StrReserve => arena.alloc_slice_copy(&[owned, irrelevant]),
+        StrAppendScalar => arena.alloc_slice_copy(&[owned, irrelevant]),
+        StrGetScalarUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrTrim => arena.alloc_slice_copy(&[owned]),
         StrTrimLeft => arena.alloc_slice_copy(&[owned]),
         StrTrimRight => arena.alloc_slice_copy(&[owned]),
@@ -907,7 +904,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         StrToNum => arena.alloc_slice_copy(&[borrowed]),
         ListPrepend => arena.alloc_slice_copy(&[owned, owned]),
         StrJoinWith => arena.alloc_slice_copy(&[borrowed, borrowed]),
-        ListMap | ListMapWithIndex => arena.alloc_slice_copy(&[owned, function, closure_data]),
+        ListMap => arena.alloc_slice_copy(&[owned, function, closure_data]),
         ListMap2 => arena.alloc_slice_copy(&[owned, owned, function, closure_data]),
         ListMap3 => arena.alloc_slice_copy(&[owned, owned, owned, function, closure_data]),
         ListMap4 => arena.alloc_slice_copy(&[owned, owned, owned, owned, function, closure_data]),
