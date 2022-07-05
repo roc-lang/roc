@@ -778,8 +778,20 @@ impl<'a> fmt::Debug for SubsFmtContent<'a> {
 
 fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt::Result {
     match this {
-        Content::FlexVar(name) => write!(f, "Flex({:?})", name),
-        Content::FlexAbleVar(name, symbol) => write!(f, "FlexAble({:?}, {:?})", name, symbol),
+        Content::FlexVar(name) => {
+            let name = match name {
+                Some(index) => subs[*index].as_str(),
+                None => "_",
+            };
+            write!(f, "Flex({})", name)
+        }
+        Content::FlexAbleVar(name, symbol) => {
+            let name = match name {
+                Some(index) => subs[*index].as_str(),
+                None => "_",
+            };
+            write!(f, "FlexAble({}, {:?})", name, symbol)
+        }
         Content::RigidVar(name) => write!(f, "Rigid({:?})", name),
         Content::RigidAbleVar(name, symbol) => write!(f, "RigidAble({:?}, {:?})", name, symbol),
         Content::RecursionVar {

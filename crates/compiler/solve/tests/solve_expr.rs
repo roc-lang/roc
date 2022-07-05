@@ -7200,10 +7200,57 @@ mod solve_expr {
             &[
                 "Fo#f(10) : Fo -[[f(10)]]-> (b -[[] + b:g(8):1]-> {}) | b has G",
                 "Go#g(11) : Go -[[g(11)]]-> {}",
-                // TODO this is wrong: should be let-generalized?
+                // TODO SERIOUS: Let generalization is broken here, and this is NOT correct!!
+                // Two problems:
+                //   - 1. `{}` always has its rank adjusted to the toplevel, which forces the rest
+                //        of the type to the toplevel, but that is NOT correct here!
+                //   - 2. During solving lambda set compaction cannot happen until an entire module
+                //        is solved, which forces resolved-but-not-yet-compacted lambdas in
+                //        unspecialized lambda sets to pull the rank into a lower, non-generalized
+                //        rank. Special-casing for that is a TERRIBLE HACK that interferes very
+                //        poorly with (1)
+                //
+                // We are BLOCKED on https://github.com/rtfeldman/roc/issues/3207 to make this work
+                // correctly!
+                // See also https://github.com/rtfeldman/roc/pull/3175, a separate, but similar problem.
                 "h : Go -[[g(11)]]-> {}",
                 "Fo#f(10) : Fo -[[f(10)]]-> (Go -[[g(11)]]-> {})",
                 "h : Go -[[g(11)]]-> {}",
+            ],
+        );
+    }
+
+    #[test]
+    fn polymorphic_lambda_set_specialization_with_let_generalization_unapplied() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                F has f : a -> (b -> {}) | a has F, b has G
+                G has g : b -> {} | b has G
+
+                Fo := {}
+                f = \@Fo {} -> g
+                #^{-1}
+
+                Go := {}
+                g = \@Go {} -> {}
+                #^{-1}
+
+                main =
+                #^^^^{-1}
+                    h = f (@Fo {})
+                #   ^   ^
+                    h
+                "#
+            ),
+            &[
+                "Fo#f(10) : Fo -[[f(10)]]-> (b -[[] + b:g(8):1]-> {}) | b has G",
+                "Go#g(11) : Go -[[g(11)]]-> {}",
+                "main : b -[[] + b:g(8):1]-> {} | b has G",
+                "h : b -[[] + b:g(8):1]-> {} | b has G",
+                "Fo#f(10) : Fo -[[f(10)]]-> (b -[[] + b:g(8):1]-> {}) | b has G",
             ],
         );
     }
@@ -7235,7 +7282,7 @@ mod solve_expr {
                 "Fo#f(10) : Fo, b -[[f(10)]]-> ({} -[[13(13) b]]-> ({} -[[] + b:g(8):2]-> {})) | b has G",
                 "Go#g(11) : Go -[[g(11)]]-> ({} -[[14(14)]]-> {})",
                 // TODO this is wrong: why is there a unspecialized lambda set left over?
-                "Fo#f(10) : Fo, Go -[[f(10)]]-> ({} -[[13(13) Go]]-> ({} -[[14(14)] + b:g(8):2]-> {})) | b has G",
+                "Fo#f(10) : Fo, Go -[[f(10)]]-> ({} -[[13(13) Go]]-> ({} -[[14(14)]]-> {})) | b has G",
             ],
         );
     }

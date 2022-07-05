@@ -11,7 +11,7 @@ use roc_can::expr::PendingDerives;
 use roc_collections::all::MutMap;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
-use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
+use roc_debug_flags::{ROC_TRACE_COMPACTION, ROC_VERIFY_RIGID_LET_GENERALIZED};
 use roc_derive_key::{DeriveError, Derived, GlobalDerivedSymbols};
 use roc_error_macros::internal_error;
 use roc_module::ident::TagName;
@@ -1487,34 +1487,38 @@ fn solve(
 
                 state
             }
+            // TODO: turning off opportunistic specialization for now because it doesn't mesh well with
+            // the polymorphic lambda resolution algorithm. After
+            // https://github.com/rtfeldman/roc/issues/3207 is resolved, this may be redundant
+            // anyway.
             &Resolve(OpportunisticResolve {
-                specialization_variable,
-                specialization_expectation,
-                member,
-                specialization_id,
+                specialization_variable: _,
+                specialization_expectation: _,
+                member: _,
+                specialization_id: _,
             }) => {
-                if let Some(Resolved::Specialization(specialization)) =
-                    resolve_ability_specialization(
-                        subs,
-                        abilities_store,
-                        member,
-                        specialization_variable,
-                    )
-                {
-                    abilities_store.insert_resolved(specialization_id, specialization);
+                // if let Some(Resolved::Specialization(specialization)) =
+                //     resolve_ability_specialization(
+                //         subs,
+                //         abilities_store,
+                //         member,
+                //         specialization_variable,
+                //     )
+                // {
+                //     abilities_store.insert_resolved(specialization_id, specialization);
 
-                    // We must now refine the current type state to account for this specialization.
-                    let lookup_constr = arena.alloc(Constraint::Lookup(
-                        specialization,
-                        specialization_expectation,
-                        Region::zero(),
-                    ));
-                    stack.push(Work::Constraint {
-                        env,
-                        rank,
-                        constraint: lookup_constr,
-                    });
-                }
+                //     // We must now refine the current type state to account for this specialization.
+                //     let lookup_constr = arena.alloc(Constraint::Lookup(
+                //         specialization,
+                //         specialization_expectation,
+                //         Region::zero(),
+                //     ));
+                //     stack.push(Work::Constraint {
+                //         env,
+                //         rank,
+                //         constraint: lookup_constr,
+                //     });
+                // }
 
                 state
             }
@@ -1758,12 +1762,121 @@ fn check_ability_specialization(
     }
 }
 
+#[cfg(debug_assertions)]
+fn trace_compaction_step_1(subs: &Subs, c_a: Variable, uls_a: &[Variable]) {
+    let c_a = roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(c_a), subs);
+    let uls_a = uls_a
+        .iter()
+        .map(|v| {
+            format!(
+                "{:?}",
+                roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(*v), subs)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    eprintln!("===lambda set compaction===");
+    eprintln!("  concrete type: {:?}", c_a);
+    eprintln!("  step 1:");
+    eprintln!("    uls_a = {{ {} }}", uls_a);
+}
+
+#[cfg(debug_assertions)]
+fn trace_compaction_step_2(subs: &Subs, uls_a: &[Variable]) {
+    let uls_a = uls_a
+        .iter()
+        .map(|v| {
+            format!(
+                "{:?}",
+                roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(*v), subs)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    eprintln!("  step 2:");
+    eprintln!("    uls_a' = {{ {} }}", uls_a);
+}
+
+#[cfg(debug_assertions)]
+fn trace_compaction_step_3start() {
+    eprintln!("  step 3:");
+}
+
+#[cfg(debug_assertions)]
+fn trace_compaction_step_3iter_start(
+    subs: &Subs,
+    iteration_lambda_set: Variable,
+    t_f1: Variable,
+    t_f2: Variable,
+) {
+    let iteration_lambda_set = roc_types::subs::SubsFmtContent(
+        subs.get_content_without_compacting(iteration_lambda_set),
+        subs,
+    );
+    let t_f1 = roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(t_f1), subs);
+    let t_f2 = roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(t_f2), subs);
+    eprintln!("    - iteration: {:?}", iteration_lambda_set);
+    eprintln!("         {:?}", t_f1);
+    eprintln!("      ~  {:?}", t_f2);
+}
+
+#[cfg(debug_assertions)]
+#[rustfmt::skip]
+fn trace_compaction_step_3iter_end(subs: &Subs, t_f_result: Variable, skipped: bool) {
+    let t_f_result =
+        roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(t_f_result), subs);
+    if skipped {
+    eprintln!("      SKIP");
+    }
+    eprintln!("      =  {:?}\n", t_f_result);
+}
+
+macro_rules! trace_compact {
+    (1. $subs:expr, $c_a:expr, $uls_a:expr) => {{
+        dbg_do!(ROC_TRACE_COMPACTION, {
+            trace_compaction_step_1($subs, $c_a, $uls_a)
+        })
+    }};
+    (2. $subs:expr, $uls_a:expr) => {{
+        dbg_do!(ROC_TRACE_COMPACTION, {
+            trace_compaction_step_2($subs, $uls_a)
+        })
+    }};
+    (3start.) => {{
+        dbg_do!(ROC_TRACE_COMPACTION, { trace_compaction_step_3start() })
+    }};
+    (3iter_start. $subs:expr, $iteration_lset:expr, $t_f1:expr, $t_f2:expr) => {{
+        dbg_do!(ROC_TRACE_COMPACTION, {
+            trace_compaction_step_3iter_start($subs, $iteration_lset, $t_f1, $t_f2)
+        })
+    }};
+    (3iter_end. $subs:expr, $t_f_result:expr) => {{
+        dbg_do!(ROC_TRACE_COMPACTION, {
+            trace_compaction_step_3iter_end($subs, $t_f_result, false)
+        })
+    }};
+    (3iter_end_skipped. $subs:expr, $t_f_result:expr) => {{
+        dbg_do!(ROC_TRACE_COMPACTION, {
+            trace_compaction_step_3iter_end($subs, $t_f_result, true)
+        })
+    }};
+}
+
+#[inline(always)]
+fn iter_concrete_of_unspecialized<'a>(
+    subs: &'a Subs,
+    c_a: Variable,
+    uls: &'a [Uls],
+) -> impl Iterator<Item = &'a Uls> {
+    uls.iter()
+        .filter(move |Uls(var, _, _)| subs.equivalent_without_compacting(*var, c_a))
+}
+
 /// Gets the unique unspecialized lambda resolving to concrete type `c_a` in a list of
 /// unspecialized lambda sets.
+#[inline(always)]
 fn unique_unspecialized_lambda(subs: &Subs, c_a: Variable, uls: &[Uls]) -> Option<Uls> {
-    let mut iter_concrete = uls
-        .iter()
-        .filter(|Uls(var, _, _)| subs.equivalent_without_compacting(*var, c_a));
+    let mut iter_concrete = iter_concrete_of_unspecialized(subs, c_a, uls);
     let uls = iter_concrete.next()?;
     debug_assert!(iter_concrete.next().is_none(), "multiple concrete");
     Some(*uls)
@@ -1791,15 +1904,79 @@ pub fn compact_lambda_sets_of_vars<P: Phase>(
         //    NB: There may be multiple unspecialized lambdas of form `C:f:r, C:f1:r1, ..., C:fn:rn` in `l`.
         //    In this case, let `t1, ... tm` be the other unspecialized lambdas not of form `C:_:_`,
         //    that is, none of which are now specialized to the type `C`. Then, deconstruct
-        //    `l` such that `l' = [concrete_lambdas + t1 + ... + tm + C:f:r` and `l1 = [[] + C:f1:r1], ..., ln = [[] + C:fn:rn]`.
+        //    `l` such that `l' = [concrete_lambdas + t1 + ... + tm + C:f:r]` and `l1 = [[] + C:f1:r1], ..., ln = [[] + C:fn:rn]`.
         //    Replace `l` with `l', l1, ..., ln` in `uls_a`, flattened.
         //    TODO: the flattening step described above
-        let mut uls_a = uls_a.into_vec();
-        // We can remove all the lambda sets that don't have any unspecialized lambdas.
-        uls_a.retain(|lambda_set| {
-            let unspec = subs.get_subs_slice(subs.get_lambda_set(*lambda_set).unspecialized);
-            unique_unspecialized_lambda(subs, c_a, unspec).is_some()
-        });
+        let uls_a = uls_a.into_vec();
+        trace_compact!(1. subs, c_a, &uls_a);
+
+        // The flattening step - remove lambda sets that don't reference the concrete var, and for
+        // flatten lambda sets that reference it more than once.
+        let mut uls_a: Vec<_> = uls_a
+            .into_iter()
+            .flat_map(|lambda_set| {
+                let LambdaSet {
+                    solved,
+                    recursion_var,
+                    unspecialized,
+                    ambient_function,
+                } = subs.get_lambda_set(lambda_set);
+                let lambda_set_rank = subs.get_rank(lambda_set);
+                let unspecialized = subs.get_subs_slice(unspecialized);
+                // TODO: is it faster to traverse once, see if we only have one concrete lambda, and
+                // bail in that happy-path, rather than always splitting?
+                let (concrete, mut not_concrete): (Vec<_>, Vec<_>) = unspecialized
+                    .iter()
+                    .copied()
+                    .partition(|Uls(var, _, _)| subs.equivalent_without_compacting(*var, c_a));
+                if concrete.len() == 1 {
+                    // No flattening needs to be done, just return the lambda set as-is
+                    return vec![lambda_set];
+                }
+                // Must flatten
+                concrete
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, concrete_lambda)| {
+                        let (var, unspecialized) = if i == 0 {
+                            // `l' = [concrete_lambdas + t1 + ... + tm + C:f:r`
+                            let unspecialized = SubsSlice::extend_new(
+                                &mut subs.unspecialized_lambda_sets,
+                                not_concrete
+                                    .drain(..)
+                                    .chain(std::iter::once(concrete_lambda)),
+                            );
+                            (lambda_set, unspecialized)
+                        } else {
+                            // ln = [[] + C:fn:rn]
+                            let unspecialized = SubsSlice::extend_new(
+                                &mut subs.unspecialized_lambda_sets,
+                                [concrete_lambda],
+                            );
+                            let var = subs.fresh(Descriptor {
+                                content: Content::Error,
+                                rank: lambda_set_rank,
+                                mark: Mark::NONE,
+                                copy: OptVariable::NONE,
+                            });
+                            (var, unspecialized)
+                        };
+
+                        subs.set_content(
+                            var,
+                            Content::LambdaSet(LambdaSet {
+                                solved,
+                                recursion_var,
+                                unspecialized,
+                                ambient_function,
+                            }),
+                        );
+                        var
+                    })
+                    .collect()
+            })
+            .collect();
+
         // 2. Now, each `l` in `uls_a` has a unique unspecialized lambda of form `C:f:r`.
         //    Sort `uls_a` primarily by `f` (arbitrary order), and secondarily by `r` in descending order.
         uls_a.sort_by(|v1, v2| {
@@ -1817,12 +1994,15 @@ pub fn compact_lambda_sets_of_vars<P: Phase>(
                 ord => ord,
             }
         });
+        trace_compact!(2. subs, &uls_a);
+
         // 3. For each `l` in `uls_a` with unique unspecialized lambda `C:f:r`:
         //    1. Let `t_f1` be the directly ambient function of the lambda set containing `C:f:r`. Remove `C:f:r` from `t_f1`'s lambda set.
         //       - For example, `(b' -[[] + Fo:f:2]-> {})` if `C:f:r=Fo:f:2`. Removing `Fo:f:2`, we get `(b' -[[]]-> {})`.
         //    2. Let `t_f2` be the directly ambient function of the specialization lambda set resolved by `C:f:r`.
         //       - For example, `(b -[[] + b:g:1]-> {})` if `C:f:r=Fo:f:2`, running on example from above.
         //    3. Unify `t_f1 ~ t_f2`.
+        trace_compact!(3start.);
         for l in uls_a {
             // let root_lset = subs.get_root_key_without_compacting(l);
             // if seen.contains(&root_lset) {
@@ -1870,7 +2050,7 @@ fn compact_lambda_set<P: Phase>(
 
     let unspecialized = subs.get_subs_slice(unspecialized);
 
-    // 1. jLet `t_f1` be the directly ambient function of the lambda set containing `C:f:r`.
+    // 1. Let `t_f1` be the directly ambient function of the lambda set containing `C:f:r`.
     let Uls(c, f, r) = unique_unspecialized_lambda(subs, resolved_concrete, unspecialized).unwrap();
 
     debug_assert!(subs.equivalent_without_compacting(c, resolved_concrete));
@@ -2034,8 +2214,10 @@ fn compact_lambda_set<P: Phase>(
             let t_f2 = deep_copy_var_in(subs, target_rank, pools, t_f2, arena);
 
             // 3. Unify `t_f1 ~ t_f2`.
+            trace_compact!(3iter_start. subs, this_lambda_set, t_f1, t_f2);
             let (vars, new_must_implement_ability, new_lambda_sets_to_specialize, _meta) =
                 unify(subs, t_f1, t_f2, Mode::EQ).expect_success("ambient functions don't unify");
+            trace_compact!(3iter_end. subs, t_f1);
 
             introduce(subs, target_rank, pools, &vars);
 
@@ -2044,6 +2226,7 @@ fn compact_lambda_set<P: Phase>(
         Spec::Drop => {
             // Do nothing other than to remove the concrete lambda to drop from the lambda set,
             // which we already did in 1b above.
+            trace_compact!(3iter_end_skipped. subs, t_f1);
             (Default::default(), Default::default())
         }
     }
