@@ -12,6 +12,16 @@ pub struct RocCallResult<T> {
     value: MaybeUninit<T>,
 }
 
+impl<T> RocCallResult<T> {
+    pub fn new(value: T) -> Self {
+        Self {
+            tag: 0,
+            error_msg: std::ptr::null_mut(),
+            value: MaybeUninit::new(value),
+        }
+    }
+}
+
 impl<T: Default> Default for RocCallResult<T> {
     fn default() -> Self {
         Self {
