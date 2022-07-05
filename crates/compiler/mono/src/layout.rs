@@ -1208,6 +1208,16 @@ pub fn is_unresolved_var(subs: &Subs, var: Variable) -> bool {
     )
 }
 
+#[inline(always)]
+pub fn is_any_float_range(subs: &Subs, var: Variable) -> bool {
+    use {roc_types::num::IntLitWidth::*, Content::*, NumericRange::*};
+    let content = subs.get_content_without_compacting(var);
+    matches!(
+        content,
+        RangedNumber(NumAtLeastEitherSign(I8) | NumAtLeastSigned(I8)),
+    )
+}
+
 impl<'a> Layout<'a> {
     pub const VOID: Self = Layout::Union(UnionLayout::NonRecursive(&[]));
     pub const UNIT: Self = Layout::Struct {
@@ -1255,7 +1265,8 @@ impl<'a> Layout<'a> {
                     }
 
                     Symbol::NUM_FRAC | Symbol::NUM_FLOATINGPOINT
-                        if is_unresolved_var(env.subs, actual_var) =>
+                        if is_unresolved_var(env.subs, actual_var)
+                            || is_any_float_range(env.subs, actual_var) =>
                     {
                         // default to f64
                         return Ok(Layout::f64());

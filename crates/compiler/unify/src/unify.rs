@@ -594,7 +594,7 @@ fn check_and_merge_valid_range<M: MetaCollector>(
                 merge_if!(range.contains_int_width(IntLitWidth::U128))
             }
 
-            Symbol::NUM_DEC => {
+            Symbol::NUM_DEC | Symbol::NUM_DECIMAL => {
                 merge_if!(range.contains_float_width(FloatWidth::Dec))
             }
             Symbol::NUM_F32 | Symbol::NUM_BINARY32 => {
