@@ -3525,15 +3525,31 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
 
     let mut arguments_for_call = Vec::with_capacity_in(args.len(), env.arena);
 
-    let it = args.iter().zip(roc_function.get_type().get_param_types());
-    for (arg, fastcc_type) in it {
+    let it = args
+        .iter()
+        .zip(roc_function.get_type().get_param_types())
+        .zip(arguments);
+    for ((arg, fastcc_type), layout) in it {
         let arg_type = arg.get_type();
         if arg_type == fastcc_type {
             // the C and Fast calling conventions agree
             arguments_for_call.push(*arg);
         } else {
-            let cast = complex_bitcast_check_size(env, *arg, fastcc_type, "to_fastcc_type");
-            arguments_for_call.push(cast);
+            match layout {
+                Layout::Builtin(Builtin::List(_)) => {
+                    let loaded = env
+                        .builder
+                        .build_load(arg.into_pointer_value(), "load_list_pointer");
+                    let cast =
+                        complex_bitcast_check_size(env, loaded, fastcc_type, "to_fastcc_type_1");
+                    arguments_for_call.push(cast);
+                }
+                _ => {
+                    let cast =
+                        complex_bitcast_check_size(env, *arg, fastcc_type, "to_fastcc_type_1");
+                    arguments_for_call.push(cast);
+                }
+            }
         }
     }
 
@@ -3657,7 +3673,7 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
             // the C and Fast calling conventions agree
             *arg
         } else {
-            complex_bitcast_check_size(env, *arg, *fastcc_type, "to_fastcc_type")
+            complex_bitcast_check_size(env, *arg, *fastcc_type, "to_fastcc_type_2")
         }
     });
 
