@@ -2613,7 +2613,7 @@ fn list_range() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_sort_with() {
     assert_evals_to!(
         "List.sortWith [] Num.compare",
@@ -2633,7 +2633,7 @@ fn list_sort_with() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_sort_asc() {
     assert_evals_to!(
         "List.sortAsc []",
@@ -2648,7 +2648,7 @@ fn list_sort_asc() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_sort_desc() {
     assert_evals_to!(
         "List.sortDesc []",

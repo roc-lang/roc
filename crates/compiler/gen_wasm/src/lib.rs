@@ -169,7 +169,8 @@ pub fn build_app_module<'a>(
         match source {
             Roc => { /* already generated */ }
             Helper => backend.build_proc(helper_iter.next().unwrap()),
-            HigherOrderWrapper(inner_idx) => backend.build_higher_order_wrapper(idx, *inner_idx),
+            HigherOrderMapper(inner_idx) => backend.build_higher_order_mapper(idx, *inner_idx),
+            HigherOrderCompare(inner_idx) => backend.build_higher_order_compare(idx, *inner_idx),
         }
     }
 
