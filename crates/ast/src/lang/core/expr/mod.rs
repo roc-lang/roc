@@ -1,5 +1,4 @@
 pub mod expr2;
-#[allow(clippy::format_push_string)]
 pub mod expr2_to_string;
 pub mod expr_to_expr2;
 mod introduced_vars;
