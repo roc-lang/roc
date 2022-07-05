@@ -4,10 +4,7 @@ use core::ffi::c_void;
 /// The Roc application needs this.
 #[no_mangle]
 pub unsafe fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
-    let ptr = libc::malloc(size);
-    println!("allocated: {:x?}", ptr);
-
-    ptr
+    libc::malloc(size)
 }
 
 /// # Safety
