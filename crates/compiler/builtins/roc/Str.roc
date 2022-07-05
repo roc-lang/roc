@@ -391,7 +391,7 @@ walkScalarsUntilHelp = \string, state, step, index, length ->
         when step state scalar is
             Continue newState ->
                 walkScalarsHelp string newState step (index + bytesParsed) length
-            Done newState ->
+            Break newState ->
                 newState
     else
         state
