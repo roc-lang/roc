@@ -58,3 +58,7 @@ gen-llvm = []
 gen-dev = []
 gen-wasm = []
 wasm-cli-run = []
+
+[[bench]]
+name = "list_map"
+harness = false
