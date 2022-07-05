@@ -795,7 +795,7 @@ fn list_walk_until_sum() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_walk_implements_position() {
     assert_evals_to!(
         r#"
@@ -818,7 +818,7 @@ fn list_walk_implements_position() {
             Some v -> v
         "#,
         2,
-        i64
+        usize
     );
 }
 
@@ -2289,7 +2289,7 @@ fn quicksort_singleton() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn empty_list_increment_decrement() {
     assert_evals_to!(
         indoc!(
@@ -2301,12 +2301,12 @@ fn empty_list_increment_decrement() {
             "#
         ),
         0,
-        i64
+        usize
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_literal_increment_decrement() {
     assert_evals_to!(
         indoc!(
@@ -2318,7 +2318,7 @@ fn list_literal_increment_decrement() {
             "#
         ),
         6,
-        i64
+        usize
     );
 }
 
@@ -2874,7 +2874,7 @@ fn list_find_empty_layout() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_find_index() {
     assert_evals_to!(
         indoc!(
@@ -2885,12 +2885,12 @@ fn list_find_index() {
             "#
         ),
         1,
-        i64
+        usize
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_find_index_not_found() {
     assert_evals_to!(
         indoc!(
@@ -2901,12 +2901,12 @@ fn list_find_index_not_found() {
             "#
         ),
         999,
-        i64
+        usize
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_find_index_empty_typed_list() {
     assert_evals_to!(
         indoc!(
@@ -2917,12 +2917,12 @@ fn list_find_index_empty_typed_list() {
             "#
         ),
         999,
-        i64
+        usize
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn monomorphized_lists() {
     assert_evals_to!(
         indoc!(
@@ -2936,7 +2936,7 @@ fn monomorphized_lists() {
             "#
         ),
         18,
-        u64
+        usize
     )
 }
 
