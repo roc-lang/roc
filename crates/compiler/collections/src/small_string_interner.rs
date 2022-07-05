@@ -29,7 +29,7 @@ impl Length {
         } else if self.0 > 0 {
             Kind::Interned(self.0 as usize)
         } else {
-            Kind::Generated(self.0.abs() as usize)
+            Kind::Generated(self.0.unsigned_abs() as usize)
         }
     }
 
