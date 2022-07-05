@@ -251,6 +251,7 @@ pub struct HelperConfig {
     pub is_gen_test: bool,
     pub ignore_problems: bool,
     pub add_debug_info: bool,
+    pub opt_level: OptLevel,
 }
 
 #[allow(dead_code)]
@@ -263,12 +264,6 @@ pub fn helper<'a>(
 ) -> (&'static str, String, Library) {
     let target = target_lexicon::Triple::host();
 
-    let opt_level = if cfg!(debug_assertions) {
-        OptLevel::Normal
-    } else {
-        OptLevel::Optimize
-    };
-
     let (main_fn_name, delayed_errors, module) = create_llvm_module(
         arena,
         src,
@@ -276,14 +271,14 @@ pub fn helper<'a>(
         config.ignore_problems,
         context,
         &target,
-        opt_level,
+        config.opt_level,
     );
 
     let res_lib = if config.add_debug_info {
         let module = annotate_with_debug_info(module, context);
-        module_to_dylib(&module, &target, opt_level)
+        module_to_dylib(&module, &target, config.opt_level)
     } else {
-        module_to_dylib(module, &target, opt_level)
+        module_to_dylib(module, &target, config.opt_level)
     };
 
     let lib = res_lib.expect("Error loading compiled dylib for test");
@@ -563,14 +558,22 @@ macro_rules! assert_llvm_evals_to {
         use bumpalo::Bump;
         use inkwell::context::Context;
         use roc_gen_llvm::run_jit_function;
+        use roc_mono::ir::OptLevel;
 
         let arena = Bump::new();
         let context = Context::create();
+
+        let opt_level = if cfg!(debug_assertions) {
+            OptLevel::Normal
+        } else {
+            OptLevel::Optimize
+        };
 
         let config = $crate::helpers::llvm::HelperConfig {
             is_gen_test: true,
             add_debug_info: false,
             ignore_problems: $ignore_problems,
+            opt_level,
         };
 
         let (main_fn_name, errors, lib) =
