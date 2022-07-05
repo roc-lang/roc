@@ -39,17 +39,17 @@ procedure Num.22 (#Attr.2, #Attr.3):
 
 procedure Str.27 (#Attr.2):
     let #Attr.3 : {I64, U8} = lowlevel StrToNum #Attr.2;
-    let Str.42 : U8 = StructAtIndex 1 #Attr.3;
-    let Str.43 : U8 = 0i64;
-    let Str.39 : Int1 = lowlevel NumGt Str.42 Str.43;
-    if Str.39 then
-        let Str.41 : Int1 = false;
-        let Str.40 : [C Int1, C I64] = TagId(0) Str.41;
-        ret Str.40;
+    let Str.159 : U8 = StructAtIndex 1 #Attr.3;
+    let Str.160 : U8 = 0i64;
+    let Str.156 : Int1 = lowlevel NumGt Str.159 Str.160;
+    if Str.156 then
+        let Str.158 : Int1 = false;
+        let Str.157 : [C Int1, C I64] = TagId(0) Str.158;
+        ret Str.157;
     else
-        let Str.38 : I64 = StructAtIndex 0 #Attr.3;
-        let Str.37 : [C Int1, C I64] = TagId(1) Str.38;
-        ret Str.37;
+        let Str.155 : I64 = StructAtIndex 0 #Attr.3;
+        let Str.154 : [C Int1, C I64] = TagId(1) Str.155;
+        ret Str.154;
 
 procedure Test.0 ():
     let Test.4 : Int1 = true;

@@ -9,6 +9,7 @@ interface Str
             split,
             repeat,
             countGraphemes,
+            countUtf8Bytes,
             startsWithScalar,
             toUtf8,
             fromUtf8,
@@ -33,6 +34,13 @@ interface Str
             toU8,
             toI8,
             toScalars,
+            splitFirst,
+            splitLast,
+            walkUtf8WithIndex,
+            reserve,
+            appendScalar,
+            walkScalars,
+            walkScalarsUntil,
         ]
     imports [Bool.{ Bool }, Result.{ Result }]
 
@@ -221,3 +229,169 @@ toU16 : Str -> Result U16 [InvalidNumStr]*
 toI16 : Str -> Result I16 [InvalidNumStr]*
 toU8 : Str -> Result U8 [InvalidNumStr]*
 toI8 : Str -> Result I8 [InvalidNumStr]*
+
+## Gets the byte at the given index, without performing a bounds check
+getUnsafe : Str, Nat -> U8
+
+## gives the number of string bytes
+countUtf8Bytes : Str -> Nat
+
+## string slice that does not do bounds checking or utf-8 verification
+substringUnsafe : Str, Nat, Nat -> Str
+
+## Returns the string before the first occurrence of a delimiter, as well as the
+## rest of the string after that occurrence. If the delimiter is not found, returns `Err`.
+##
+##     Str.splitFirst "foo/bar/baz" "/" == Ok { before: "foo", after: "bar/baz" }
+splitFirst : Str, Str -> Result { before : Str, after : Str } [NotFound]*
+splitFirst = \haystack, needle ->
+    when firstMatch haystack needle is
+        Some index ->
+            remaining = Str.countUtf8Bytes haystack - Str.countUtf8Bytes needle - index
+
+            before = Str.substringUnsafe haystack 0 index
+            after = Str.substringUnsafe haystack (index + Str.countUtf8Bytes needle) remaining
+
+            Ok { before, after }
+        None ->
+            Err NotFound
+
+firstMatch : Str, Str -> [Some Nat, None]
+firstMatch = \haystack, needle ->
+    haystackLength = Str.countUtf8Bytes haystack
+    needleLength = Str.countUtf8Bytes needle
+    lastPossible = Num.subSaturated haystackLength needleLength
+
+    firstMatchHelp haystack needle 0 lastPossible
+
+firstMatchHelp : Str, Str, Nat, Nat -> [Some Nat, None]
+firstMatchHelp = \haystack, needle, index, lastPossible ->
+    if index < lastPossible then
+        if matchesAt haystack index needle then
+            Some index
+        else
+            firstMatchHelp haystack needle (index + 1) lastPossible
+    else
+        None
+
+## Returns the string before the last occurrence of a delimiter, as well as the
+## rest of the string after that occurrence. If the delimiter is not found, returns `Err`.
+##
+##     Str.splitLast "foo/bar/baz" "/" == Ok { before: "foo/bar", after: "baz" }
+splitLast : Str, Str -> Result { before : Str, after : Str } [NotFound]*
+splitLast = \haystack, needle ->
+    when lastMatch haystack needle is
+        Some index ->
+            remaining = Str.countUtf8Bytes haystack - Str.countUtf8Bytes needle - index
+
+            before = Str.substringUnsafe haystack 0 index
+            after = Str.substringUnsafe haystack (index + Str.countUtf8Bytes needle) remaining
+
+            Ok { before, after }
+        None ->
+            Err NotFound
+
+lastMatch : Str, Str -> [Some Nat, None]
+lastMatch = \haystack, needle ->
+    haystackLength = Str.countUtf8Bytes haystack
+    needleLength = Str.countUtf8Bytes needle
+    lastPossibleIndex = Num.subSaturated haystackLength (needleLength + 1)
+
+    lastMatchHelp haystack needle lastPossibleIndex
+
+lastMatchHelp : Str, Str, Nat -> [Some Nat, None]
+lastMatchHelp = \haystack, needle, index ->
+    if matchesAt haystack index needle then
+        Some index
+    else
+        when Num.subChecked index 1 is
+            Ok nextIndex ->
+                lastMatchHelp haystack needle nextIndex
+            Err _ ->
+                None
+
+min = \x, y -> if x < y then x else y
+
+matchesAt : Str, Nat, Str -> Bool
+matchesAt = \haystack, haystackIndex, needle ->
+    haystackLength = Str.countUtf8Bytes haystack
+    needleLength = Str.countUtf8Bytes needle
+    endIndex = min (haystackIndex + needleLength) haystackLength
+
+    matchesAtHelp haystack haystackIndex needle 0 endIndex
+
+matchesAtHelp : Str, Nat, Str, Nat, Nat -> Bool
+matchesAtHelp = \haystack, haystackIndex, needle, needleIndex, endIndex ->
+    if haystackIndex < endIndex then
+        if Str.getUnsafe haystack haystackIndex == Str.getUnsafe needle needleIndex then
+            matchesAtHelp haystack (haystackIndex + 1) needle (needleIndex + 1) endIndex
+        else
+            False
+    else
+        True
+
+## Walks over the string's UTF-8 bytes, calling a function which updates a state using each
+## UTF-8 `U8` byte as well as the index of that byte within the string.
+walkUtf8WithIndex : Str, state, (state, U8, Nat -> state) -> state
+walkUtf8WithIndex = \string, state, step ->
+    walkUtf8WithIndexHelp string state step 0 (Str.countUtf8Bytes string)
+
+walkUtf8WithIndexHelp : Str, state, (state, U8, Nat -> state), Nat, Nat -> state
+walkUtf8WithIndexHelp = \string, state, step, index, length ->
+    if index < length then
+        byte = Str.getUnsafe string index
+        newState = step state byte index
+
+        walkUtf8WithIndexHelp string newState step (index + 1) length
+    else
+        state
+
+## Make sure at least some number of bytes fit in this string without reallocating
+reserve : Str, Nat -> Str
+
+## is UB when the scalar is invalid
+appendScalarUnsafe : Str, U32 -> Str
+
+appendScalar : Str, U32 -> Result Str [InvalidScalar]*
+appendScalar = \string, scalar ->
+    if isValidScalar scalar then
+        Ok (appendScalarUnsafe string scalar)
+    else
+        Err InvalidScalar
+
+isValidScalar : U32 -> Bool
+isValidScalar = \scalar ->
+    scalar <= 0xD7FF || (scalar >= 0xE000 && scalar <= 0x10FFFF)
+
+getScalarUnsafe : Str, Nat -> { scalar : U32, bytesParsed : Nat }
+
+walkScalars : Str, state, (state, U32 -> state) -> state
+walkScalars = \string, init, step ->
+    walkScalarsHelp string init step 0 (Str.countUtf8Bytes string)
+
+walkScalarsHelp : Str, state, (state, U32 -> state), Nat, Nat -> state
+walkScalarsHelp = \string, state, step, index, length ->
+    if index < length then
+        { scalar, bytesParsed } = getScalarUnsafe string index
+        newState = step state scalar
+
+        walkScalarsHelp string newState step (index + bytesParsed) length
+    else
+        state
+
+walkScalarsUntil : Str, state, (state, U32 -> [Break state, Continue state]) -> state
+walkScalarsUntil = \string, init, step ->
+    walkScalarsUntilHelp string init step 0 (Str.countUtf8Bytes string)
+
+walkScalarsUntilHelp : Str, state, (state, U32 -> [Break state, Continue state]), Nat, Nat -> state
+walkScalarsUntilHelp = \string, state, step, index, length ->
+    if index < length then
+        { scalar, bytesParsed } = getScalarUnsafe string index
+
+        when step state scalar is
+            Continue newState ->
+                walkScalarsUntilHelp string newState step (index + bytesParsed) length
+            Break newState ->
+                newState
+    else
+        state

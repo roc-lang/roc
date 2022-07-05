@@ -5365,11 +5365,51 @@ fn run_low_level<'a, 'ctx, 'env>(
             BasicValueEnum::IntValue(is_zero)
         }
         StrCountGraphemes => {
-            // Str.countGraphemes : Str -> Int
+            // Str.countGraphemes : Str -> Nat
             debug_assert_eq!(args.len(), 1);
 
             let string = load_symbol(scope, &args[0]);
             call_bitcode_fn(env, &[string], bitcode::STR_COUNT_GRAPEHEME_CLUSTERS)
+        }
+        StrGetScalarUnsafe => {
+            // Str.getScalarUnsafe : Str, Nat -> { bytesParsed : Nat, scalar : U32 }
+            debug_assert_eq!(args.len(), 2);
+
+            let string = load_symbol(scope, &args[0]);
+            let index = load_symbol(scope, &args[1]);
+            call_bitcode_fn(env, &[string, index], bitcode::STR_GET_SCALAR_UNSAFE)
+        }
+        StrCountUtf8Bytes => {
+            // Str.countGraphemes : Str -> Nat
+            debug_assert_eq!(args.len(), 1);
+
+            let string = load_symbol(scope, &args[0]);
+            call_bitcode_fn(env, &[string], bitcode::STR_COUNT_UTF8_BYTES)
+        }
+        StrSubstringUnsafe => {
+            // Str.substringUnsafe : Str, Nat, Nat -> Str
+            debug_assert_eq!(args.len(), 3);
+
+            let string = load_symbol(scope, &args[0]);
+            let start = load_symbol(scope, &args[1]);
+            let length = load_symbol(scope, &args[2]);
+            call_str_bitcode_fn(env, &[string, start, length], bitcode::STR_SUBSTRING_UNSAFE)
+        }
+        StrReserve => {
+            // Str.reserve : Str, Nat -> Str
+            debug_assert_eq!(args.len(), 2);
+
+            let string = load_symbol(scope, &args[0]);
+            let capacity = load_symbol(scope, &args[1]);
+            call_str_bitcode_fn(env, &[string, capacity], bitcode::STR_RESERVE)
+        }
+        StrAppendScalar => {
+            // Str.appendScalar : Str, U32 -> Str
+            debug_assert_eq!(args.len(), 2);
+
+            let string = load_symbol(scope, &args[0]);
+            let capacity = load_symbol(scope, &args[1]);
+            call_str_bitcode_fn(env, &[string, capacity], bitcode::STR_APPEND_SCALAR)
         }
         StrTrim => {
             // Str.trim : Str -> Str
@@ -5499,8 +5539,17 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             list_prepend(env, original_wrapper, elem, elem_layout)
         }
+        StrGetUnsafe => {
+            // List.getUnsafe : List elem, Nat -> elem
+            debug_assert_eq!(args.len(), 2);
+
+            let wrapper_struct = load_symbol(scope, &args[0]);
+            let elem_index = load_symbol(scope, &args[1]);
+
+            call_bitcode_fn(env, &[wrapper_struct, elem_index], bitcode::STR_GET_UNSAFE)
+        }
         ListGetUnsafe => {
-            // List.get : List elem, Nat -> [Ok elem, OutOfBounds]*
+            // List.getUnsafe : List elem, Nat -> elem
             debug_assert_eq!(args.len(), 2);
 
             let (wrapper_struct, list_layout) = load_symbol_and_layout(scope, &args[0]);
