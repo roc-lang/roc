@@ -6,7 +6,7 @@ use roc_debug_flags::{ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_types::num::NumericRange;
+use roc_types::num::{FloatWidth, IntLitWidth, NumericRange};
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
     AliasVariables, Descriptor, ErrorTypeContext, FlatType, GetSubsSlice, LambdaSet, Mark,
@@ -475,7 +475,7 @@ fn unify_context<M: MetaCollector>(subs: &mut Subs, pool: &mut Pool, ctx: Contex
             unify_opaque(subs, pool, &ctx, *symbol, *args, *real_var)
         }
         LambdaSet(lset) => unify_lambda_set(subs, pool, &ctx, *lset, &ctx.second_desc.content),
-        &RangedNumber(range_vars) => unify_ranged_number(subs, &ctx, range_vars),
+        &RangedNumber(range_vars) => unify_ranged_number(subs, pool, &ctx, range_vars),
         Error => {
             // Error propagates. Whatever we're comparing it to doesn't matter!
             merge(subs, &ctx, Error)
@@ -500,6 +500,7 @@ fn not_in_range_mismatch<M: MetaCollector>() -> Outcome<M> {
 #[inline(always)]
 fn unify_ranged_number<M: MetaCollector>(
     subs: &mut Subs,
+    pool: &mut Pool,
     ctx: &Context,
     range_vars: NumericRange,
 ) -> Outcome<M> {
@@ -515,7 +516,7 @@ fn unify_ranged_number<M: MetaCollector>(
             merge(subs, ctx, RigidVar(*name))
         }
         RecursionVar { .. } | Alias(..) | Structure(..) | RigidAbleVar(..) | FlexAbleVar(..) => {
-            check_and_merge_valid_range(subs, ctx, ctx.second, range_vars)
+            check_and_merge_valid_range(subs, pool, ctx, ctx.first, range_vars, ctx.second)
         }
         &RangedNumber(other_range_vars) => match range_vars.intersection(&other_range_vars) {
             Some(range) => merge(subs, ctx, RangedNumber(range)),
@@ -528,19 +529,130 @@ fn unify_ranged_number<M: MetaCollector>(
 
 fn check_and_merge_valid_range<M: MetaCollector>(
     subs: &mut Subs,
+    pool: &mut Pool,
     ctx: &Context,
-    var: Variable,
+    range_var: Variable,
     range: NumericRange,
+    var: Variable,
 ) -> Outcome<M> {
-    use roc_types::num::MatchResult;
+    use Content::*;
     let content = *subs.get_content_without_compacting(var);
 
-    match range.match_content(subs, &content) {
-        MatchResult::RangeInContent => merge(subs, ctx, RangedNumber(range)),
-        MatchResult::ContentInRange => merge(subs, ctx, content),
-        MatchResult::NoIntersection => not_in_range_mismatch(),
-        MatchResult::DifferentContent => mismatch!(),
+    macro_rules! merge_if {
+        ($cond:expr) => {
+            if $cond {
+                merge(subs, ctx, content)
+            } else {
+                not_in_range_mismatch()
+            }
+        };
     }
+
+    match content {
+        RangedNumber(other_range) => match range.intersection(&other_range) {
+            Some(r) => {
+                if r == range {
+                    merge(subs, ctx, RangedNumber(range))
+                } else {
+                    merge(subs, ctx, RangedNumber(other_range))
+                }
+            }
+            None => not_in_range_mismatch(),
+        },
+        Alias(symbol, args, _real_var, kind) => match symbol {
+            Symbol::NUM_I8 | Symbol::NUM_SIGNED8 => {
+                merge_if!(range.contains_int_width(IntLitWidth::I8))
+            }
+            Symbol::NUM_U8 | Symbol::NUM_UNSIGNED8 => {
+                merge_if!(range.contains_int_width(IntLitWidth::U8))
+            }
+            Symbol::NUM_I16 | Symbol::NUM_SIGNED16 => {
+                merge_if!(range.contains_int_width(IntLitWidth::I16))
+            }
+            Symbol::NUM_U16 | Symbol::NUM_UNSIGNED16 => {
+                merge_if!(range.contains_int_width(IntLitWidth::U16))
+            }
+            Symbol::NUM_I32 | Symbol::NUM_SIGNED32 => {
+                merge_if!(range.contains_int_width(IntLitWidth::I32))
+            }
+            Symbol::NUM_U32 | Symbol::NUM_UNSIGNED32 => {
+                merge_if!(range.contains_int_width(IntLitWidth::U32))
+            }
+            Symbol::NUM_I64 | Symbol::NUM_SIGNED64 => {
+                merge_if!(range.contains_int_width(IntLitWidth::I64))
+            }
+            Symbol::NUM_NAT | Symbol::NUM_NATURAL => {
+                merge_if!(range.contains_int_width(IntLitWidth::Nat))
+            }
+            Symbol::NUM_U64 | Symbol::NUM_UNSIGNED64 => {
+                merge_if!(range.contains_int_width(IntLitWidth::U64))
+            }
+            Symbol::NUM_I128 | Symbol::NUM_SIGNED128 => {
+                merge_if!(range.contains_int_width(IntLitWidth::I128))
+            }
+            Symbol::NUM_U128 | Symbol::NUM_UNSIGNED128 => {
+                merge_if!(range.contains_int_width(IntLitWidth::U128))
+            }
+
+            Symbol::NUM_DEC => {
+                merge_if!(range.contains_float_width(FloatWidth::Dec))
+            }
+            Symbol::NUM_F32 | Symbol::NUM_BINARY32 => {
+                merge_if!(range.contains_float_width(FloatWidth::F32))
+            }
+            Symbol::NUM_F64 | Symbol::NUM_BINARY64 => {
+                merge_if!(range.contains_float_width(FloatWidth::F64))
+            }
+            Symbol::NUM_FRAC | Symbol::NUM_FLOATINGPOINT => match range {
+                NumericRange::IntAtLeastSigned(_) | NumericRange::IntAtLeastEitherSign(_) => {
+                    mismatch!()
+                }
+                NumericRange::NumAtLeastSigned(_) | NumericRange::NumAtLeastEitherSign(_) => {
+                    debug_assert_eq!(args.len(), 1);
+                    let arg = subs.get_subs_slice(args.all_variables())[0];
+                    let new_range_var = wrap_range_var(subs, symbol, range_var, kind);
+                    unify_pool(subs, pool, new_range_var, arg, ctx.mode)
+                }
+            },
+            Symbol::NUM_NUM => {
+                debug_assert_eq!(args.len(), 1);
+                let arg = subs.get_subs_slice(args.all_variables())[0];
+                let new_range_var = wrap_range_var(subs, symbol, range_var, kind);
+                unify_pool(subs, pool, new_range_var, arg, ctx.mode)
+            }
+            Symbol::NUM_INT | Symbol::NUM_INTEGER => {
+                debug_assert_eq!(args.len(), 1);
+                let arg = subs.get_subs_slice(args.all_variables())[0];
+                let new_range_var = wrap_range_var(subs, symbol, range_var, kind);
+                unify_pool(subs, pool, new_range_var, arg, ctx.mode)
+            }
+
+            _ => mismatch!(),
+        },
+
+        _ => mismatch!(),
+    }
+}
+
+/// Push a number range var down into a number type, so as to preserve type hierarchy structure.
+/// For example when we have Num (Int a) ~ Num (NumericRange <U128>), we want to produce
+///   Num (Int (NumericRange <U128>))
+/// on the right (which this function does) and then unify
+///   Num (Int a) ~ Num (Int (NumericRange <U128>))
+fn wrap_range_var(
+    subs: &mut Subs,
+    symbol: Symbol,
+    range_var: Variable,
+    alias_kind: AliasKind,
+) -> Variable {
+    let range_desc = subs.get(range_var);
+    let new_range_var = subs.fresh(range_desc);
+    let var_slice = AliasVariables::insert_into_subs(subs, [new_range_var], []);
+    subs.set_content(
+        range_var,
+        Alias(symbol, var_slice, new_range_var, alias_kind),
+    );
+    new_range_var
 }
 
 #[inline(always)]
@@ -635,7 +747,7 @@ fn unify_alias<M: MetaCollector>(
         }
         Structure(_) => unify_pool(subs, pool, real_var, ctx.second, ctx.mode),
         RangedNumber(other_range_vars) => {
-            check_and_merge_valid_range(subs, ctx, ctx.first, *other_range_vars)
+            check_and_merge_valid_range(subs, pool, ctx, ctx.second, *other_range_vars, ctx.first)
         }
         LambdaSet(..) => mismatch!("cannot unify alias {:?} with lambda set {:?}: lambda sets should never be directly behind an alias!", ctx.first, other_content),
         Error => merge(subs, ctx, Error),
@@ -694,7 +806,7 @@ fn unify_opaque<M: MetaCollector>(
         }
         RangedNumber(other_range_vars) => {
             // This opaque might be a number, check if it unifies with the target ranged number var.
-            check_and_merge_valid_range(subs, ctx, ctx.first, *other_range_vars)
+            check_and_merge_valid_range(subs, pool, ctx, ctx.second, *other_range_vars, ctx.first)
         }
         Error => merge(subs, ctx, Error),
         // _other has an underscore because it's unused in --release builds
@@ -832,7 +944,7 @@ fn unify_structure<M: MetaCollector>(
             )
         }
         RangedNumber(other_range_vars) => {
-            check_and_merge_valid_range(subs, ctx, ctx.first, *other_range_vars)
+            check_and_merge_valid_range(subs, pool, ctx, ctx.second, *other_range_vars, ctx.first)
         }
         Error => merge(subs, ctx, Error),
     }

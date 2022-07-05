@@ -1,5 +1,4 @@
-use crate::subs::{Content, GetSubsSlice, Subs, Variable};
-use roc_module::symbol::Symbol;
+use crate::subs::Variable;
 
 /// A bound placed on a number because of its literal value.
 /// e.g. `-5` cannot be unsigned, and 300 does not fit in a U8
@@ -11,128 +10,13 @@ pub enum NumericRange {
     NumAtLeastEitherSign(IntLitWidth),
 }
 
-#[derive(Debug)]
-pub enum MatchResult {
-    /// When the range < content, for example <U8, I8> < Int *
-    RangeInContent,
-    /// When the content < range, for example I8 < <U8, I8>
-    ContentInRange,
-    /// Ranges don't intersect
-    NoIntersection,
-    /// The content is not comparable
-    DifferentContent,
-}
-
-fn from_content_in_range(result: bool) -> MatchResult {
-    if result {
-        MatchResult::ContentInRange
-    } else {
-        MatchResult::NoIntersection
-    }
-}
-
 impl NumericRange {
-    pub fn match_content(&self, subs: &Subs, content: &Content) -> MatchResult {
-        use Content::*;
-        match content {
-            RangedNumber(other_range) => match self.intersection(other_range) {
-                Some(r) => {
-                    if r == *other_range {
-                        MatchResult::ContentInRange
-                    } else {
-                        MatchResult::RangeInContent
-                    }
-                }
-                None => MatchResult::NoIntersection,
-            },
-            Alias(symbol, args, real_var, _) => match *symbol {
-                Symbol::NUM_I8 | Symbol::NUM_SIGNED8 => {
-                    from_content_in_range(self.contains_int_width(IntLitWidth::I8))
-                }
-                Symbol::NUM_U8 | Symbol::NUM_UNSIGNED8 => {
-                    from_content_in_range(self.contains_int_width(IntLitWidth::U8))
-                }
-                Symbol::NUM_I16 | Symbol::NUM_SIGNED16 => {
-                    from_content_in_range(self.contains_int_width(IntLitWidth::I16))
-                }
-                Symbol::NUM_U16 | Symbol::NUM_UNSIGNED16 => {
-                    from_content_in_range(self.contains_int_width(IntLitWidth::U16))
-                }
-                Symbol::NUM_I32 | Symbol::NUM_SIGNED32 => {
-                    from_content_in_range(self.contains_int_width(IntLitWidth::I32))
-                }
-                Symbol::NUM_U32 | Symbol::NUM_UNSIGNED32 => {
-                    from_content_in_range(self.contains_int_width(IntLitWidth::U32))
-                }
-                Symbol::NUM_I64 | Symbol::NUM_SIGNED64 => {
-                    from_content_in_range(self.contains_int_width(IntLitWidth::I64))
-                }
-                Symbol::NUM_NAT | Symbol::NUM_NATURAL => {
-                    from_content_in_range(self.contains_int_width(IntLitWidth::Nat))
-                }
-                Symbol::NUM_U64 | Symbol::NUM_UNSIGNED64 => {
-                    from_content_in_range(self.contains_int_width(IntLitWidth::U64))
-                }
-                Symbol::NUM_I128 | Symbol::NUM_SIGNED128 => {
-                    from_content_in_range(self.contains_int_width(IntLitWidth::I128))
-                }
-                Symbol::NUM_U128 | Symbol::NUM_UNSIGNED128 => {
-                    from_content_in_range(self.contains_int_width(IntLitWidth::U128))
-                }
-
-                Symbol::NUM_DEC => {
-                    from_content_in_range(self.contains_float_width(FloatWidth::Dec))
-                }
-                Symbol::NUM_F32 => {
-                    from_content_in_range(self.contains_float_width(FloatWidth::F32))
-                }
-                Symbol::NUM_F64 => {
-                    from_content_in_range(self.contains_float_width(FloatWidth::F64))
-                }
-                Symbol::NUM_FRAC | Symbol::NUM_FLOATINGPOINT => {
-                    match self {
-                        NumericRange::IntAtLeastSigned(_)
-                        | NumericRange::IntAtLeastEitherSign(_) => MatchResult::DifferentContent,
-                        NumericRange::NumAtLeastSigned(_)
-                        | NumericRange::NumAtLeastEitherSign(_) => MatchResult::ContentInRange,
-                    }
-                }
-                Symbol::NUM_NUM => {
-                    debug_assert_eq!(args.len(), 1);
-                    match subs.get_content_without_compacting(
-                        subs.get_subs_slice(args.all_variables())[0],
-                    ) {
-                        FlexVar(_) | RigidVar(_) => MatchResult::RangeInContent,
-                        _ => {
-                            self.match_content(subs, subs.get_content_without_compacting(*real_var))
-                        }
-                    }
-                }
-                Symbol::NUM_INT | Symbol::NUM_INTEGER => {
-                    debug_assert_eq!(args.len(), 1);
-                    match subs.get_content_without_compacting(
-                        subs.get_subs_slice(args.all_variables())[0],
-                    ) {
-                        FlexVar(_) | RigidVar(_) => MatchResult::RangeInContent,
-                        _ => {
-                            self.match_content(subs, subs.get_content_without_compacting(*real_var))
-                        }
-                    }
-                }
-
-                _ => MatchResult::DifferentContent,
-            },
-
-            _ => MatchResult::DifferentContent,
-        }
-    }
-
-    fn contains_float_width(&self, _width: FloatWidth) -> bool {
+    pub fn contains_float_width(&self, _width: FloatWidth) -> bool {
         // we don't currently check the float width
         true
     }
 
-    fn contains_int_width(&self, width: IntLitWidth) -> bool {
+    pub fn contains_int_width(&self, width: IntLitWidth) -> bool {
         use NumericRange::*;
 
         let (range_signedness, at_least_width) = match self {

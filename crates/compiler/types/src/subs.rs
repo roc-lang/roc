@@ -3967,6 +3967,9 @@ impl StorageSubs {
     pub fn as_inner_mut(&mut self) -> &mut Subs {
         &mut self.subs
     }
+    pub fn as_inner(&self) -> &Subs {
+        &self.subs
+    }
 
     pub fn extend_with_variable(&mut self, source: &mut Subs, variable: Variable) -> Variable {
         storage_copy_var_to(source, &mut self.subs, variable)
@@ -4602,7 +4605,6 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
 
         RangedNumber(range) => {
             let new_content = RangedNumber(range);
-
             env.target.set(copy, make_descriptor(new_content));
             copy
         }
