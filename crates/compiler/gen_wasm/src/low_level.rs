@@ -218,6 +218,7 @@ impl<'a> LowLevelCall<'a> {
             // Str
             StrConcat => self.load_args_and_call_zig(backend, bitcode::STR_CONCAT),
             StrToScalars => self.load_args_and_call_zig(backend, bitcode::STR_TO_SCALARS),
+            StrGetUnsafe => self.load_args_and_call_zig(backend, bitcode::STR_GET_UNSAFE),
             StrJoinWith => self.load_args_and_call_zig(backend, bitcode::STR_JOIN_WITH),
             StrIsEmpty => match backend.storage.get(&self.arguments[0]) {
                 StoredValue::StackMemory { location, .. } => {
@@ -235,17 +236,12 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args_and_call_zig(backend, bitcode::STR_STARTS_WITH_SCALAR)
             }
             StrEndsWith => self.load_args_and_call_zig(backend, bitcode::STR_ENDS_WITH),
-            StrSplit => {
-                // LLVM implementation (build_str.rs) does the following
-                // 1. Call bitcode::STR_COUNT_SEGMENTS
-                // 2. Allocate a `List Str`
-                // 3. Call bitcode::STR_STR_SPLIT_IN_PLACE
-                // 4. Write the elements and length of the List
-                // To do this here, we need full access to WasmBackend, or we could make a Zig wrapper
-                todo!("{:?}", self.lowlevel);
-            }
+            StrSplit => self.load_args_and_call_zig(backend, bitcode::STR_STR_SPLIT),
             StrCountGraphemes => {
                 self.load_args_and_call_zig(backend, bitcode::STR_COUNT_GRAPEHEME_CLUSTERS)
+            }
+            StrCountUtf8Bytes => {
+                self.load_args_and_call_zig(backend, bitcode::STR_COUNT_UTF8_BYTES)
             }
             StrToNum => {
                 let number_layout = match self.ret_layout {
@@ -268,13 +264,41 @@ impl<'a> LowLevelCall<'a> {
             }
             StrFromInt => self.num_to_str(backend),
             StrFromFloat => self.num_to_str(backend),
-            StrFromUtf8 => self.load_args_and_call_zig(backend, bitcode::STR_FROM_UTF8),
+            StrFromUtf8 => {
+                /*
+                Low-level op returns a struct with all the data for both Ok and Err.
+                Roc AST wrapper converts this to a tag union, with app-dependent tag IDs.
+
+                fromUtf8C(output: *FromUtf8Result, arg: RocList, update_mode: UpdateMode) callconv(.C) void
+                    output: *FromUtf8Result   i32
+                    arg: RocList              i64, i32
+                    update_mode: UpdateMode   i32
+                */
+                backend.storage.load_symbols_for_call(
+                    backend.env.arena,
+                    &mut backend.code_builder,
+                    self.arguments,
+                    self.ret_symbol,
+                    &WasmLayout::new(&self.ret_layout),
+                    CallConv::Zig,
+                );
+                backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
+                backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8, 4, false);
+            }
+            StrFromUtf8Range => self.load_args_and_call_zig(backend, bitcode::STR_FROM_UTF8_RANGE),
             StrTrimLeft => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_LEFT),
             StrTrimRight => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_RIGHT),
-            StrFromUtf8Range => self.load_args_and_call_zig(backend, bitcode::STR_FROM_UTF8_RANGE),
             StrToUtf8 => self.load_args_and_call_zig(backend, bitcode::STR_TO_UTF8),
+            StrReserve => self.load_args_and_call_zig(backend, bitcode::STR_RESERVE),
             StrRepeat => self.load_args_and_call_zig(backend, bitcode::STR_REPEAT),
+            StrAppendScalar => self.load_args_and_call_zig(backend, bitcode::STR_APPEND_SCALAR),
             StrTrim => self.load_args_and_call_zig(backend, bitcode::STR_TRIM),
+            StrGetScalarUnsafe => {
+                self.load_args_and_call_zig(backend, bitcode::STR_GET_SCALAR_UNSAFE)
+            }
+            StrSubstringUnsafe => {
+                self.load_args_and_call_zig(backend, bitcode::STR_SUBSTRING_UNSAFE)
+            }
 
             // List
             ListLen => match backend.storage.get(&self.arguments[0]) {
@@ -289,8 +313,7 @@ impl<'a> LowLevelCall<'a> {
 
             ListIsUnique => self.load_args_and_call_zig(backend, bitcode::LIST_IS_UNIQUE),
 
-            ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListSortWith
-            | DictWalk => {
+            ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith | DictWalk => {
                 internal_error!("HigherOrder lowlevels should not be handled here")
             }
 
@@ -1715,7 +1738,8 @@ impl<'a> LowLevelCall<'a> {
             Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::List(_))
             | Layout::Struct { .. }
             | Layout::Union(_)
-            | Layout::LambdaSet(_) => {
+            | Layout::LambdaSet(_)
+            | Layout::Boxed(_) => {
                 // Don't want Zig calling convention here, we're calling internal Roc functions
                 backend
                     .storage
@@ -1732,8 +1756,6 @@ impl<'a> LowLevelCall<'a> {
                     backend.code_builder.i32_eqz();
                 }
             }
-
-            Layout::Boxed(_) => todo!(),
 
             Layout::RecursivePointer => {
                 internal_error!(
@@ -1951,12 +1973,13 @@ pub fn call_higher_order_lowlevel<'a>(
         let passed_proc_layout = ProcLayout {
             arguments: argument_layouts,
             result: *result_layout,
+            captures_niche: fn_name.captures_niche(),
         };
         let passed_proc_index = backend
             .proc_lookup
             .iter()
             .position(|ProcLookupData { name, layout, .. }| {
-                name == fn_name && layout == &passed_proc_layout
+                *name == fn_name.name() && layout == &passed_proc_layout
             })
             .unwrap();
         ProcSource::HigherOrderWrapper(passed_proc_index)
@@ -1984,6 +2007,7 @@ pub fn call_higher_order_lowlevel<'a>(
         ProcLayout {
             arguments: wrapper_arg_layouts.into_bump_slice(),
             result: Layout::UNIT,
+            captures_niche: fn_name.captures_niche(),
         }
     };
 
@@ -2059,7 +2083,7 @@ pub fn call_higher_order_lowlevel<'a>(
             *owns_captured_environment,
         ),
 
-        ListMapWithIndex { .. } | ListSortWith { .. } | DictWalk { .. } => todo!("{:?}", op),
+        ListSortWith { .. } | DictWalk { .. } => todo!("{:?}", op),
     }
 }
 

@@ -1,11 +1,11 @@
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.273 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.273;
+    let Num.188 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.188;
 
 procedure Test.0 ():
     let Test.19 : I64 = 41i64;
-    let Test.18 : [C I64, C ] = Just Test.19;
-    let Test.2 : [C [C I64, C ], C ] = Just Test.18;
+    let Test.18 : [C I64, C ] = TagId(0) Test.19;
+    let Test.2 : [C [C I64, C ], C ] = TagId(0) Test.18;
     joinpoint Test.15:
         let Test.8 : I64 = 1i64;
         ret Test.8;

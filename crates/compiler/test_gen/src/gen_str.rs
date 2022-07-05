@@ -25,7 +25,7 @@ fn str_split_empty_delimiter() {
                 "#
         ),
         1,
-        i64
+        usize
     );
 
     assert_evals_to!(
@@ -41,7 +41,7 @@ fn str_split_empty_delimiter() {
                 "#
         ),
         3,
-        i64
+        usize
     );
 }
 
@@ -55,7 +55,7 @@ fn str_split_bigger_delimiter_small_str() {
                 "#
         ),
         1,
-        i64
+        usize
     );
 
     assert_evals_to!(
@@ -71,7 +71,7 @@ fn str_split_bigger_delimiter_small_str() {
                 "#
         ),
         3,
-        i64
+        usize
     );
 }
 
@@ -210,7 +210,7 @@ fn str_split_small_str_big_delimiter() {
                 "#
         ),
         3,
-        i64
+        usize
     );
 
     assert_evals_to!(
@@ -1698,5 +1698,77 @@ fn to_scalar_4_byte() {
         ),
         RocList::from_slice(&[73728u32, 73729u32]),
         RocList<u32>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_split_first() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.splitFirst "foo/bar/baz" "/"
+            "#
+        ),
+        // the result is a { before, after } record, and because of
+        // alphabetic ordering the fields here are flipped
+        RocResult::ok((RocStr::from("bar/baz"), RocStr::from("foo"))),
+        RocResult<(RocStr, RocStr), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_split_last() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.splitLast"foo/bar/baz" "/"
+            "#
+        ),
+        RocResult::ok((RocStr::from("baz"), RocStr::from("foo/bar"))),
+        RocResult<(RocStr, RocStr), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_walk_utf8_with_index() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.walkUtf8WithIndex "abcd" [] (\list, byte, index -> List.append list (Pair index byte))
+            "#
+        ),
+        RocList::from_slice(&[(0, b'a'), (1, b'b'), (2, b'c'), (3, b'd')]),
+        RocList<(u64, u8)>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_append_scalar() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.appendScalar "abcd" 'A'
+            "#
+        ),
+        RocStr::from("abcdA"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_walk_scalars() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.walkScalars "abcd" [] List.append
+            "#
+        ),
+        RocList::from_slice(&['a', 'b', 'c', 'd']),
+        RocList<char>
     );
 }

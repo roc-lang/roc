@@ -4,9 +4,9 @@ use crate::subs::{
 };
 use crate::types::{name_type_var, RecordField, Uls};
 use roc_collections::all::MutMap;
-use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
+use std::fmt::Write;
 
 pub static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
@@ -1146,13 +1146,11 @@ fn write_flat_type<'a>(
                 )
             })
         }
-        Erroneous(problem) => {
-            buf.push_str(&format!("<Type Mismatch: {:?}>", problem));
-        }
+        Erroneous(problem) => write!(buf, "<Type Mismatch: {:?}>", problem).unwrap(),
     }
 }
 
-fn push_union<'a, L: Label>(
+pub fn push_union<'a, L: Label>(
     subs: &'a Subs,
     tags: &UnionLabels<L>,
     fields: &mut Vec<(L, Vec<Variable>)>,
@@ -1193,40 +1191,6 @@ pub fn chase_ext_tag_union<'a>(
         Content::Alias(_, _, var, _) => chase_ext_tag_union(subs, *var, fields),
 
         content => Err((var, content)),
-    }
-}
-
-pub enum ResolvedLambdaSet {
-    Set(Vec<(Symbol, Vec<Variable>)>),
-    /// TODO: figure out if this can happen in a correct program, or is the result of a bug in our
-    /// compiler. See https://github.com/rtfeldman/roc/issues/3163.
-    Unbound,
-}
-
-pub fn resolve_lambda_set(subs: &Subs, mut var: Variable) -> ResolvedLambdaSet {
-    let mut set = vec![];
-    loop {
-        match subs.get_content_without_compacting(var) {
-            Content::LambdaSet(subs::LambdaSet {
-                solved,
-                recursion_var: _,
-                unspecialized,
-            }) => {
-                debug_assert!(
-                    unspecialized.is_empty(),
-                    "unspecialized lambda sets left over during resolution: {:?}",
-                    crate::subs::SubsFmtContent(subs.get_content_without_compacting(var), subs),
-                );
-                push_union(subs, solved, &mut set);
-                return ResolvedLambdaSet::Set(set);
-            }
-            Content::RecursionVar { structure, .. } => {
-                var = *structure;
-            }
-            Content::FlexVar(_) => return ResolvedLambdaSet::Unbound,
-
-            c => internal_error!("called with a non-lambda set {:?}", c),
-        }
     }
 }
 

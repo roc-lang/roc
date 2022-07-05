@@ -20,9 +20,6 @@ pub enum HigherOrder {
         zs: Symbol,
         ws: Symbol,
     },
-    ListMapWithIndex {
-        xs: Symbol,
-    },
     ListSortWith {
         xs: Symbol,
     },
@@ -39,7 +36,6 @@ impl HigherOrder {
             HigherOrder::ListMap2 { .. } => 2,
             HigherOrder::ListMap3 { .. } => 3,
             HigherOrder::ListMap4 { .. } => 4,
-            HigherOrder::ListMapWithIndex { .. } => 2,
             HigherOrder::ListSortWith { .. } => 2,
             HigherOrder::DictWalk { .. } => 2,
         }
@@ -51,7 +47,7 @@ impl HigherOrder {
         use HigherOrder::*;
 
         match self {
-            ListMap { .. } | ListMapWithIndex { .. } | ListSortWith { .. } => 2,
+            ListMap { .. } | ListSortWith { .. } => 2,
             ListMap2 { .. } => 3,
             ListMap3 { .. } => 4,
             ListMap4 { .. } => 5,

@@ -1,6 +1,6 @@
 procedure List.4 (#Attr.2, #Attr.3):
-    let List.284 : List U8 = lowlevel ListAppend #Attr.2 #Attr.3;
-    ret List.284;
+    let List.279 : List U8 = lowlevel ListAppend #Attr.2 #Attr.3;
+    ret List.279;
 
 procedure Test.20 (Test.22):
     let Test.34 : {U8} = Struct {Test.22};

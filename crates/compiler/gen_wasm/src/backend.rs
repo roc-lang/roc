@@ -380,7 +380,7 @@ impl<'a> WasmBackend<'a> {
             println!("\ngenerating procedure {:?}\n", proc.name);
         }
 
-        self.append_proc_debug_name(proc.name);
+        self.append_proc_debug_name(proc.name.name());
 
         self.start_proc(proc);
 
@@ -1125,9 +1125,10 @@ impl<'a> WasmBackend<'a> {
                 let proc_layout = ProcLayout {
                     arguments: arg_layouts,
                     result: **result,
+                    captures_niche: func_sym.captures_niche(),
                 };
                 self.expr_call_by_name(
-                    *func_sym,
+                    func_sym.name(),
                     &proc_layout,
                     arguments,
                     ret_sym,

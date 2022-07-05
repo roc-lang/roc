@@ -163,7 +163,7 @@ impl<'a> DeclarationToIndex<'a> {
             }
         }
         unreachable!(
-            "symbol/layout {:?} {:?} combo must be in DeclarationToIndex",
+            "symbol/layout {:?} {:#?} combo must be in DeclarationToIndex",
             needle_symbol, needle_layout
         )
     }
@@ -263,7 +263,7 @@ impl<'a> ParamMap<'a> {
             self.declarations[index + i] = param;
         }
 
-        self.visit_stmt(arena, proc.name, &proc.body);
+        self.visit_stmt(arena, proc.name.name(), &proc.body);
     }
 
     fn visit_proc_always_owned(
@@ -282,7 +282,7 @@ impl<'a> ParamMap<'a> {
             self.declarations[index + i] = param;
         }
 
-        self.visit_stmt(arena, proc.name, &proc.body);
+        self.visit_stmt(arena, proc.name.name(), &proc.body);
     }
 
     fn visit_stmt(&mut self, arena: &'a Bump, _fnid: Symbol, stmt: &Stmt<'a>) {
@@ -501,11 +501,12 @@ impl<'a> BorrowInfState<'a> {
                 arg_layouts,
                 ..
             } => {
-                let top_level = ProcLayout::new(self.arena, arg_layouts, **ret_layout);
+                let top_level =
+                    ProcLayout::new(self.arena, arg_layouts, name.captures_niche(), **ret_layout);
 
                 // get the borrow signature of the applied function
                 let ps = param_map
-                    .get_symbol(*name, top_level)
+                    .get_symbol(name.name(), top_level)
                     .expect("function is defined");
 
                 // the return value will be owned
@@ -544,23 +545,18 @@ impl<'a> BorrowInfState<'a> {
                 let closure_layout = ProcLayout {
                     arguments: passed_function.argument_layouts,
                     result: passed_function.return_layout,
+                    captures_niche: passed_function.name.captures_niche(),
                 };
 
-                let function_ps = match param_map.get_symbol(passed_function.name, closure_layout) {
-                    Some(function_ps) => function_ps,
-                    None => unreachable!(),
-                };
+                let function_ps =
+                    match param_map.get_symbol(passed_function.name.name(), closure_layout) {
+                        Some(function_ps) => function_ps,
+                        None => unreachable!(),
+                    };
 
                 match op {
                     ListMap { xs } => {
                         // own the list if the function wants to own the element
-                        if !function_ps[0].borrow {
-                            self.own_var(*xs);
-                        }
-                    }
-                    ListMapWithIndex { xs } => {
-                        // List.mapWithIndex : List before, (before, Nat -> after) -> List after
-                        // own the list if the function wants to own the element (before, index 0)
                         if !function_ps[0].borrow {
                             self.own_var(*xs);
                         }
@@ -743,12 +739,13 @@ impl<'a> BorrowInfState<'a> {
             Stmt::Ret(z),
         ) = (v, b)
         {
-            let top_level = ProcLayout::new(self.arena, arg_layouts, **ret_layout);
+            let top_level =
+                ProcLayout::new(self.arena, arg_layouts, g.captures_niche(), **ret_layout);
 
-            if self.current_proc == *g && x == *z {
+            if self.current_proc == g.name() && x == *z {
                 // anonymous functions (for which the ps may not be known)
                 // can never be tail-recursive, so this is fine
-                if let Some(ps) = param_map.get_symbol(*g, top_level) {
+                if let Some(ps) = param_map.get_symbol(g.name(), top_level) {
                     self.own_params_using_args(ys, ps)
                 }
             }
@@ -852,10 +849,10 @@ impl<'a> BorrowInfState<'a> {
 
         let ys = Vec::from_iter_in(proc.args.iter().map(|t| t.1), self.arena).into_bump_slice();
         self.update_param_set_symbols(ys);
-        self.current_proc = proc.name;
+        self.current_proc = proc.name.name();
 
         // ensure that current_proc is in the owned map
-        self.owned.entry(proc.name).or_default();
+        self.owned.entry(proc.name.name()).or_default();
 
         self.collect_stmt(param_map, &proc.body);
         self.update_param_map_declaration(param_map, param_offset, proc.args.len());
@@ -887,14 +884,18 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
     // - arguments that we may want to update destructively must be Owned
     // - other refcounted arguments are Borrowed
     match op {
-        ListLen | StrIsEmpty | StrToScalars | StrCountGraphemes => {
+        ListLen | StrIsEmpty | StrToScalars | StrCountGraphemes | StrCountUtf8Bytes => {
             arena.alloc_slice_copy(&[borrowed])
         }
         ListWithCapacity => arena.alloc_slice_copy(&[irrelevant]),
         ListReplaceUnsafe => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
-        ListGetUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+        StrGetUnsafe | ListGetUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         ListConcat => arena.alloc_slice_copy(&[owned, owned]),
         StrConcat => arena.alloc_slice_copy(&[owned, borrowed]),
+        StrSubstringUnsafe => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
+        StrReserve => arena.alloc_slice_copy(&[owned, irrelevant]),
+        StrAppendScalar => arena.alloc_slice_copy(&[owned, irrelevant]),
+        StrGetScalarUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrTrim => arena.alloc_slice_copy(&[owned]),
         StrTrimLeft => arena.alloc_slice_copy(&[owned]),
         StrTrimRight => arena.alloc_slice_copy(&[owned]),
@@ -902,7 +903,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         StrToNum => arena.alloc_slice_copy(&[borrowed]),
         ListPrepend => arena.alloc_slice_copy(&[owned, owned]),
         StrJoinWith => arena.alloc_slice_copy(&[borrowed, borrowed]),
-        ListMap | ListMapWithIndex => arena.alloc_slice_copy(&[owned, function, closure_data]),
+        ListMap => arena.alloc_slice_copy(&[owned, function, closure_data]),
         ListMap2 => arena.alloc_slice_copy(&[owned, owned, function, closure_data]),
         ListMap3 => arena.alloc_slice_copy(&[owned, owned, owned, function, closure_data]),
         ListMap4 => arena.alloc_slice_copy(&[owned, owned, owned, owned, function, closure_data]),
@@ -975,7 +976,7 @@ fn call_info_call<'a>(call: &crate::ir::Call<'a>, info: &mut CallInfo<'a>) {
 
     match call.call_type {
         ByName { name, .. } => {
-            info.keys.push(name);
+            info.keys.push(name.name());
         }
         Foreign { .. } => {}
         LowLevel { .. } => {}

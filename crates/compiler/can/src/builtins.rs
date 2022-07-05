@@ -74,12 +74,18 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_CONCAT => str_concat,
         STR_JOIN_WITH => str_join_with,
         STR_TO_SCALARS => str_to_scalars,
+        STR_GET_UNSAFE => str_get_unsafe,
         STR_SPLIT => str_split,
         STR_IS_EMPTY => str_is_empty,
         STR_STARTS_WITH => str_starts_with,
         STR_STARTS_WITH_SCALAR => str_starts_with_scalar,
         STR_ENDS_WITH => str_ends_with,
         STR_COUNT_GRAPHEMES => str_count_graphemes,
+        STR_COUNT_UTF8_BYTES => str_count_bytes,
+        STR_SUBSTRING_UNSAFE => str_substring_unsafe,
+        STR_RESERVE => str_reserve,
+        STR_APPEND_SCALAR_UNSAFE => str_append_scalar_unsafe,
+        STR_GET_SCALAR_UNSAFE => str_get_scalar_unsafe,
         STR_FROM_UTF8 => str_from_utf8,
         STR_FROM_UTF8_RANGE => str_from_utf8_range,
         STR_TO_UTF8 => str_to_utf8,
@@ -118,7 +124,6 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_DROP => list_drop,
         LIST_DROP_AT => list_drop_at,
         LIST_SWAP => list_swap,
-        LIST_MAP_WITH_INDEX => list_map_with_index,
         LIST_SORT_WITH => list_sort_with,
         LIST_IS_UNIQUE => list_is_unique,
         DICT_LEN => dict_len,
@@ -1669,67 +1674,24 @@ fn str_concat(symbol: Symbol, var_store: &mut VarStore) -> Def {
     )
 }
 
+/// List.getUnsafe : Str, Nat -> U8
+fn str_get_unsafe(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::StrGetUnsafe, var_store)
+}
+
 /// Str.toScalars : Str -> List U32
 fn str_to_scalars(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let str_var = var_store.fresh();
-    let list_u32_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::StrToScalars,
-        args: vec![(str_var, Var(Symbol::ARG_1))],
-        ret_var: list_u32_var,
-    };
-
-    defn(
-        symbol,
-        vec![(str_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        list_u32_var,
-    )
+    lowlevel_1(symbol, LowLevel::StrToScalars, var_store)
 }
 
 /// Str.joinWith : List Str, Str -> Str
 fn str_join_with(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let list_str_var = var_store.fresh();
-    let str_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::StrJoinWith,
-        args: vec![
-            (list_str_var, Var(Symbol::ARG_1)),
-            (str_var, Var(Symbol::ARG_2)),
-        ],
-        ret_var: str_var,
-    };
-
-    defn(
-        symbol,
-        vec![(list_str_var, Symbol::ARG_1), (str_var, Symbol::ARG_2)],
-        var_store,
-        body,
-        str_var,
-    )
+    lowlevel_2(symbol, LowLevel::StrJoinWith, var_store)
 }
 
 /// Str.isEmpty : Str -> Bool
 fn str_is_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let str_var = var_store.fresh();
-    let bool_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::StrIsEmpty,
-        args: vec![(str_var, Var(Symbol::ARG_1))],
-        ret_var: bool_var,
-    };
-
-    defn(
-        symbol,
-        vec![(str_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        bool_var,
-    )
+    lowlevel_1(symbol, LowLevel::StrIsEmpty, var_store)
 }
 
 /// Str.startsWith : Str, Str -> Bool
@@ -1764,22 +1726,32 @@ fn str_ends_with(symbol: Symbol, var_store: &mut VarStore) -> Def {
 
 /// Str.countGraphemes : Str -> Int
 fn str_count_graphemes(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let str_var = var_store.fresh();
-    let int_var = var_store.fresh();
+    lowlevel_1(symbol, LowLevel::StrCountGraphemes, var_store)
+}
 
-    let body = RunLowLevel {
-        op: LowLevel::StrCountGraphemes,
-        args: vec![(str_var, Var(Symbol::ARG_1))],
-        ret_var: int_var,
-    };
+/// Str.countUtf8Bytes : Str -> Nat
+fn str_count_bytes(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::StrCountUtf8Bytes, var_store)
+}
 
-    defn(
-        symbol,
-        vec![(str_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        int_var,
-    )
+/// Str.substringUnsafe : Str, Nat, Nat -> Nat
+fn str_substring_unsafe(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_3(symbol, LowLevel::StrSubstringUnsafe, var_store)
+}
+
+/// Str.reserve : Str, Nat -> Str
+fn str_reserve(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::StrReserve, var_store)
+}
+
+/// Str.appendScalarUnsafe : Str, U32 -> Str
+fn str_append_scalar_unsafe(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::StrAppendScalar, var_store)
+}
+
+/// Str.getScalarUnsafe : Str, Nat -> { scalar : U32, bytesParsed : Nat }
+fn str_get_scalar_unsafe(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::StrGetScalarUnsafe, var_store)
 }
 
 /// Str.fromUtf8 : List U8 -> Result Str [BadUtf8 { byteIndex : Nat, problem : Utf8Problem  } }]*
@@ -1803,7 +1775,7 @@ fn str_from_utf8(symbol: Symbol, var_store: &mut VarStore) -> Def {
     //  Ok arg_2.str
     // else
     //  # problem
-    //  Err (BadUtf8 { byteIndex: arg_2.byteIndex, problem : arg_2.problem })
+    //  Err (BadUtf8 arg_2.problem arg_2.byteIndex)
 
     let def = crate::def::Def {
         loc_pattern: no_region(Pattern::Identifier(Symbol::ARG_2)),
@@ -1905,7 +1877,7 @@ fn str_from_utf8_range(symbol: Symbol, var_store: &mut VarStore) -> Def {
     // if arg_3.a then
     //  Ok arg_3.str
     // else
-    //  Err (BadUtf8 { byteIndex: arg_3.byteIndex, problem : arg_3.problem })
+    //  Err (BadUtf8 arg_3.problem arg_3.byteIndex)
 
     let def = crate::def::Def {
         loc_pattern: no_region(Pattern::Identifier(Symbol::ARG_3)),
@@ -2390,11 +2362,6 @@ fn list_prepend(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// List.map : List before, (before -> after) -> List after
 fn list_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListMap, var_store)
-}
-
-/// List.mapWithIndex : List before, (before, Nat -> after) -> List after
-fn list_map_with_index(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    lowlevel_2(symbol, LowLevel::ListMapWithIndex, var_store)
 }
 
 /// List.map2 : List a, List b, (a, b -> c) -> List c

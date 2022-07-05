@@ -76,7 +76,7 @@ pub fn insert_wrapper_for_layout<'a>(
             bool::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         }
         Layout::Union(UnionLayout::NonRecursive(_)) => stack_data_structure(),
-        Layout::Union(_) => {
+        Layout::Union(_) | Layout::Boxed(_) => {
             i32::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         }
         _ => stack_data_structure(),
@@ -176,6 +176,7 @@ wasm_result_primitive!(u16, i32_store16, Align::Bytes2);
 wasm_result_primitive!(i16, i32_store16, Align::Bytes2);
 wasm_result_primitive!(u32, i32_store, Align::Bytes4);
 wasm_result_primitive!(i32, i32_store, Align::Bytes4);
+wasm_result_primitive!(char, i32_store, Align::Bytes4);
 wasm_result_primitive!(u64, i64_store, Align::Bytes8);
 wasm_result_primitive!(i64, i64_store, Align::Bytes8);
 wasm_result_primitive!(usize, i32_store, Align::Bytes4);

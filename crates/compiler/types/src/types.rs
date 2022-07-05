@@ -11,6 +11,7 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use std::fmt;
+use std::fmt::Write;
 
 pub const TYPE_NUM: &str = "Num";
 pub const TYPE_INTEGER: &str = "Integer";
@@ -2299,7 +2300,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                 buf.push('(');
             }
             buf.push_str(name.as_str());
-            buf.push_str(&format!(" has {:?}", symbol));
+            write!(buf, "has {:?}", symbol).unwrap();
             if write_parens {
                 buf.push(')');
             }
@@ -2310,7 +2311,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             if write_parens {
                 buf.push('(');
             }
-            buf.push_str(&format!("{:?}", symbol));
+            write!(buf, "{:?}", symbol).unwrap();
 
             for arg in arguments {
                 buf.push(' ');
@@ -2355,7 +2356,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             if write_parens {
                 buf.push('(');
             }
-            buf.push_str(&format!("{:?}", symbol));
+            write!(buf, "{:?}", symbol).unwrap();
 
             for arg in arguments {
                 buf.push(' ');
@@ -2434,7 +2435,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             let mut it = tags.into_iter().peekable();
 
             while let Some((tag, args)) = it.next() {
-                buf.push_str(&format!("{:?}", tag));
+                write!(buf, "{:?}", tag).unwrap();
                 for arg in args {
                     buf.push(' ');
                     write_debug_error_type_help(arg, buf, Parens::InTypeParam);
@@ -2453,7 +2454,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
 
             let mut it = tags.into_iter().peekable();
             while let Some((tag, args)) = it.next() {
-                buf.push_str(&format!("{:?}", tag));
+                write!(buf, "{:?}", tag).unwrap();
                 for arg in args {
                     buf.push(' ');
                     write_debug_error_type_help(arg, buf, Parens::Unnecessary);

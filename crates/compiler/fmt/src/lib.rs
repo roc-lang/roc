@@ -89,6 +89,14 @@ impl<'a> Buf<'a> {
         self.beginning_of_line = true;
     }
 
+    /// Ensures the current buffer ends in a newline, if it didn't already.
+    /// Doesn't add a newline if the buffer already ends in one.
+    pub fn ensure_ends_in_newline(&mut self) {
+        if !self.text.ends_with('\n') {
+            self.newline()
+        }
+    }
+
     fn flush_spaces(&mut self) {
         if self.spaces_to_flush > 0 {
             for _ in 0..self.spaces_to_flush {

@@ -23,7 +23,7 @@ pub fn load_types(
         mut type_problems,
         mut declarations_by_id,
         mut solved,
-        interns,
+        mut interns,
         ..
     } = roc_load::load_and_typecheck(
         arena,
@@ -74,7 +74,7 @@ pub fn load_types(
     let types_and_targets = Architecture::iter()
         .map(|arch| {
             let target_info = arch.into();
-            let mut env = Env::new(arena, subs, &interns, target_info);
+            let mut env = Env::new(arena, subs, &mut interns, target_info);
 
             (env.vars_to_types(variables.clone()), target_info)
         })

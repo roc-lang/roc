@@ -227,38 +227,6 @@ pub fn listMap(
     }
 }
 
-// List.mapWithIndex : List before, (before, Nat -> after) -> List after
-pub fn listMapWithIndex(
-    list: RocList,
-    caller: Caller2,
-    data: Opaque,
-    inc_n_data: IncN,
-    data_is_owned: bool,
-    alignment: u32,
-    old_element_width: usize,
-    new_element_width: usize,
-) callconv(.C) RocList {
-    if (list.bytes) |source_ptr| {
-        const size = list.len();
-        var i: usize = 0;
-        const output = RocList.allocate(alignment, size, new_element_width);
-        const target_ptr = output.bytes orelse unreachable;
-
-        if (data_is_owned) {
-            inc_n_data(data, size);
-        }
-
-        while (i < size) : (i += 1) {
-            // before, Nat -> after
-            caller(data, source_ptr + (i * old_element_width), @ptrCast(?[*]u8, &i), target_ptr + (i * new_element_width));
-        }
-
-        return output;
-    } else {
-        return RocList.empty();
-    }
-}
-
 fn decrementTail(list: RocList, start_index: usize, element_width: usize, dec: Dec) void {
     if (list.bytes) |source| {
         var i = start_index;
