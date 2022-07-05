@@ -71,7 +71,7 @@ fn find_zig_str_path() -> PathBuf {
         .and_then(|path| Some(path.parent()?.join("lib").join("str.zig")));
     if let Some(exe_relative_str_path) = exe_relative_str_path {
         if std::path::Path::exists(&exe_relative_str_path) {
-            return exe_relative_str_path.into();
+            return exe_relative_str_path;
         }
     }
 
