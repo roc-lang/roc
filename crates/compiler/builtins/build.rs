@@ -169,6 +169,7 @@ fn copy_zig_builtins_to_target_dir(bitcode_path: &Path) {
         );
     });
     let mut options = fs_extra::dir::CopyOptions::new();
+    options.content_only = true;
     options.overwrite = true;
     fs_extra::dir::copy(&zig_src_dir, &target_profile_dir, &options).unwrap_or_else(|err| {
         panic!(
