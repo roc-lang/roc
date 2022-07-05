@@ -303,6 +303,10 @@ footer p {
   text-overflow: ellipsis;
 }
 
+.sidebar-module-link.active {
+  font-weight: bold;
+}
+
 a, a:visited {
   color: var(--link-color);
 }
