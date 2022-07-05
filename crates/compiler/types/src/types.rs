@@ -244,7 +244,6 @@ pub enum Type {
     },
     UnspecializedLambdaSet {
         unspecialized: Uls,
-        ambient_function: Variable,
     },
     DelayedAlias(AliasCommon),
     Alias {
@@ -325,12 +324,8 @@ impl Clone for Type {
                 captures: captures.clone(),
                 ambient_function: *ambient_function,
             },
-            Self::UnspecializedLambdaSet {
-                unspecialized,
-                ambient_function,
-            } => Self::UnspecializedLambdaSet {
+            Self::UnspecializedLambdaSet { unspecialized } => Self::UnspecializedLambdaSet {
                 unspecialized: *unspecialized,
-                ambient_function: *ambient_function,
             },
             Self::DelayedAlias(arg0) => Self::DelayedAlias(arg0.clone()),
             Self::Alias {
@@ -674,10 +669,7 @@ impl fmt::Debug for Type {
             Type::RangedNumber(range_vars) => {
                 write!(f, "Ranged({:?})", range_vars)
             }
-            Type::UnspecializedLambdaSet {
-                unspecialized,
-                ambient_function: _,
-            } => {
+            Type::UnspecializedLambdaSet { unspecialized } => {
                 write!(f, "{:?}", unspecialized)
             }
         }
@@ -823,7 +815,6 @@ impl Type {
                 RangedNumber(_) => {}
                 UnspecializedLambdaSet {
                     unspecialized: Uls(v, _, _),
-                    ambient_function: _,
                 } => {
                     debug_assert!(
                         substitutions.get(v).is_none(),
@@ -945,7 +936,6 @@ impl Type {
                 RangedNumber(_) => {}
                 UnspecializedLambdaSet {
                     unspecialized: Uls(v, _, _),
-                    ambient_function: _,
                 } => {
                     debug_assert!(
                         substitutions.get(v).is_none(),
@@ -1108,7 +1098,6 @@ impl Type {
             RangedNumber(_) => false,
             UnspecializedLambdaSet {
                 unspecialized: Uls(_, sym, _),
-                ambient_function: _,
             } => *sym == rep_symbol,
             EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => false,
         }
@@ -1139,7 +1128,6 @@ impl Type {
             } => captures.iter().any(|t| t.contains_variable(rep_variable)),
             UnspecializedLambdaSet {
                 unspecialized: Uls(v, _, _),
-                ambient_function: _,
             } => *v == rep_variable,
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
                 Self::contains_variable_ext(ext, rep_variable)
@@ -1435,11 +1423,10 @@ impl Type {
 
     pub fn instantiate_lambda_sets_as_unspecialized(
         &mut self,
-        var_store: &mut VarStore,
         able_var: Variable,
         ability_member: Symbol,
     ) {
-        instantiate_lambda_sets_as_unspecialized(var_store, self, able_var, ability_member)
+        instantiate_lambda_sets_as_unspecialized(self, able_var, ability_member)
     }
 
     pub fn is_tag_union_like(&self) -> bool {
@@ -1567,7 +1554,6 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
             RangedNumber(_) => {}
             UnspecializedLambdaSet {
                 unspecialized: Uls(_, _sym, _),
-                ambient_function: _,
             } => {
                 // ignore the member symbol because unspecialized lambda sets are internal-only
             }
@@ -1624,7 +1610,6 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
         }
         UnspecializedLambdaSet {
             unspecialized: Uls(v, _, _),
-            ambient_function: _,
         } => {
             accum.insert(*v);
         }
@@ -1782,7 +1767,6 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
         }
         UnspecializedLambdaSet {
             unspecialized: Uls(var, _, _),
-            ambient_function: _,
         } => {
             accum.type_variables.insert(*var);
         }
@@ -2779,7 +2763,6 @@ pub fn gather_tags(subs: &Subs, other_fields: UnionTags, var: Variable) -> TagUn
 }
 
 fn instantiate_lambda_sets_as_unspecialized(
-    var_store: &mut VarStore,
     typ: &mut Type,
     able_var: Variable,
     ability_member: Symbol,
@@ -2793,7 +2776,6 @@ fn instantiate_lambda_sets_as_unspecialized(
         region += 1;
         Type::UnspecializedLambdaSet {
             unspecialized: Uls(able_var, ability_member, region),
-            ambient_function: var_store.fresh(),
         }
     };
 
@@ -2911,14 +2893,13 @@ mod test {
 
         let able_var = var_store.fresh();
         let member = Symbol::UNDERSCORE;
-        typ.instantiate_lambda_sets_as_unspecialized(&mut var_store, able_var, member);
+        typ.instantiate_lambda_sets_as_unspecialized(able_var, member);
 
         macro_rules! check_uls {
             ($typ:expr, $region:literal) => {{
                 match $typ {
                     Type::UnspecializedLambdaSet {
                         unspecialized: Uls(var1, member1, $region),
-                        ambient_function: _,
                     } => {
                         assert!(var1 == able_var && member1 == member)
                     }

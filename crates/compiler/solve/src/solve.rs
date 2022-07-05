@@ -21,9 +21,9 @@ use roc_problem::can::CycleEntry;
 use roc_region::all::{Loc, Region};
 use roc_types::solved_types::Solved;
 use roc_types::subs::{
-    self, AliasVariables, Content, Descriptor, FlatType, LambdaSet, Mark, OptVariable, Rank,
-    RecordFields, Subs, SubsIndex, SubsSlice, UlsOfVar, UnionLabels, UnionLambdas, UnionTags,
-    Variable, VariableSubsSlice,
+    self, AliasVariables, Content, Descriptor, FlatType, GetSubsSlice, LambdaSet, Mark,
+    OptVariable, Rank, RecordFields, Subs, SubsIndex, SubsSlice, UlsOfVar, UnionLabels,
+    UnionLambdas, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
@@ -375,7 +375,16 @@ impl Aliases {
         // assumption: an alias does not (transitively) syntactically contain itself
         // (if it did it would have to be a recursive tag union, which we should have fixed up
         // during canonicalization)
-        let alias_variable = type_to_variable(subs, rank, pools, arena, self, &t);
+        let alias_variable = type_to_variable(
+            subs,
+            rank,
+            pools,
+            arena,
+            self,
+            &t,
+            false,
+            alias_variables.lambda_set_variables(),
+        );
 
         {
             match self.aliases.iter_mut().find(|(s, _, _, _)| *s == symbol) {
@@ -2059,7 +2068,16 @@ pub(crate) fn type_to_var(
     } else {
         let mut arena = take_scratchpad();
 
-        let var = type_to_variable(subs, rank, pools, &arena, aliases, typ);
+        let var = type_to_variable(
+            subs,
+            rank,
+            pools,
+            &arena,
+            aliases,
+            typ,
+            false,
+            SubsSlice::default(),
+        );
 
         arena.reset();
         put_scratchpad(arena);
@@ -2135,16 +2153,67 @@ impl RegisterVariable {
             Self::Direct(var) => var,
             Self::Deferred => {
                 let var = subs.fresh_unnamed_flex_var();
-                stack.push(TypeToVar::Defer(typ, var));
+                stack.push(TypeToVar::Defer {
+                    typ,
+                    destination: var,
+                    ambient_function: AmbientFunctionPolicy::NoFunction,
+                });
                 var
             }
         }
     }
 }
 
+/// Instantiation of ambient functions in unspecialized lambda sets is somewhat tricky due to other
+/// optimizations we have in place. This struct tells us how they should be instantiated.
+#[derive(Debug)]
+enum AmbientFunctionPolicy {
+    /// We're not in a function. This variant may never hold for unspecialized lambda sets.
+    NoFunction,
+    /// We're in a known function.
+    Function(Variable),
+}
+
+impl AmbientFunctionPolicy {
+    fn link_to_alias_lambda_set_var(&self, subs: &mut Subs, var: Variable) {
+        let ambient_function = match self {
+            AmbientFunctionPolicy::Function(var) => *var,
+            _ => internal_error!("Not a function, can't link the var"),
+        };
+        let content = subs.get_content_without_compacting(var);
+        let new_content = match content {
+            Content::LambdaSet(LambdaSet {
+                solved,
+                recursion_var,
+                unspecialized,
+                ambient_function: _,
+            }) => Content::LambdaSet(LambdaSet {
+                solved: *solved,
+                recursion_var: *recursion_var,
+                unspecialized: *unspecialized,
+                ambient_function,
+            }),
+            Content::FlexVar(_) => {
+                // Something like
+                //   Encoder fmt <a> : List U8, fmt -a-> List U8 | fmt has EncoderFormatting
+                // THEORY: Just allow this, it's fine, because the lambda set is unbound,
+                // but it's not part of an ability signature, so it doesn't have an unspecialized
+                // lambda set, and hence doesn't need a link to the ambient function.
+                *content
+            }
+            content => internal_error!("{:?}({:?}) not a lambda set", content, var),
+        };
+        subs.set_content_unchecked(var, new_content);
+    }
+}
+
 #[derive(Debug)]
 enum TypeToVar<'a> {
-    Defer(&'a Type, Variable),
+    Defer {
+        typ: &'a Type,
+        destination: Variable,
+        ambient_function: AmbientFunctionPolicy,
+    },
 }
 
 fn type_to_variable<'a>(
@@ -2154,27 +2223,53 @@ fn type_to_variable<'a>(
     arena: &'a bumpalo::Bump,
     aliases: &mut Aliases,
     typ: &Type,
+    // Helpers for instantiating ambient functions of lambda set variables from type aliases.
+    is_alias_lambda_set_arg: bool,
+    // If we're instantiating a delayed alias in this call, what lambda sets do we need to link to
+    // their ambient function types?
+    delayed_alias_lambda_set_vars: VariableSubsSlice,
 ) -> Variable {
     use bumpalo::collections::Vec;
 
     let mut stack = Vec::with_capacity_in(8, arena);
 
     macro_rules! helper {
-        ($typ:expr) => {{
+        ($typ:expr, $ambient_function_policy:expr) => {{
             match RegisterVariable::from_type(subs, rank, pools, arena, $typ) {
-                RegisterVariable::Direct(var) => var,
+                RegisterVariable::Direct(var) => {
+                    if delayed_alias_lambda_set_vars.len() > 0 {
+                        let slice = subs.get_subs_slice(delayed_alias_lambda_set_vars);
+                        if slice.contains(&var) {
+                            $ambient_function_policy.link_to_alias_lambda_set_var(subs, var);
+                        }
+                    }
+
+                    var
+                }
                 RegisterVariable::Deferred => {
                     let var = subs.fresh_unnamed_flex_var();
-                    stack.push(TypeToVar::Defer($typ, var));
+                    stack.push(TypeToVar::Defer {
+                        typ: $typ,
+                        destination: var,
+                        ambient_function: $ambient_function_policy,
+                    });
                     var
                 }
             }
+        }};
+        ($typ:expr) => {{
+            helper!($typ, AmbientFunctionPolicy::NoFunction)
         }};
     }
 
     let result = helper!(typ);
 
-    while let Some(TypeToVar::Defer(typ, destination)) = stack.pop() {
+    while let Some(TypeToVar::Defer {
+        typ,
+        destination,
+        ambient_function,
+    }) = stack.pop()
+    {
         match typ {
             Variable(_) | EmptyRec | EmptyTagUnion => {
                 unreachable!("This variant should never be deferred!")
@@ -2216,20 +2311,31 @@ fn type_to_variable<'a>(
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
-            UnspecializedLambdaSet {
-                unspecialized,
-                ambient_function,
-            } => {
-                let unspecialized = SubsSlice::extend_new(
+            UnspecializedLambdaSet { unspecialized } => {
+                let unspecialized_slice = SubsSlice::extend_new(
                     &mut subs.unspecialized_lambda_sets,
                     std::iter::once(*unspecialized),
                 );
 
+                // `ClosureTag` ambient functions are resolved during constraint generation.
+                // But `UnspecializedLambdaSet`s can only ever live in a type signature, and don't
+                // correspond to a expression, so they are never constrained.
+                // Instead, we resolve their ambient functions during type translation, observing
+                // the invariant that a lambda set can only ever appear under a function type.
+                let ambient_function = match ambient_function {
+                    AmbientFunctionPolicy::NoFunction => {
+                        debug_assert!(is_alias_lambda_set_arg);
+                        // To be filled in during delayed type alias instantiation
+                        Variable::NULL
+                    }
+                    AmbientFunctionPolicy::Function(var) => var,
+                };
+
                 let content = Content::LambdaSet(subs::LambdaSet {
-                    unspecialized,
+                    unspecialized: unspecialized_slice,
                     solved: UnionLabels::default(),
                     recursion_var: OptVariable::NONE,
-                    ambient_function: *ambient_function,
+                    ambient_function,
                 });
 
                 register_with_known_var(subs, destination, rank, pools, content)
@@ -2243,7 +2349,8 @@ fn type_to_variable<'a>(
                 }
 
                 let ret_var = helper!(ret_type);
-                let closure_var = helper!(closure_type);
+                let closure_var =
+                    helper!(closure_type, AmbientFunctionPolicy::Function(destination));
                 let content =
                     Content::Structure(FlatType::Func(new_arguments, closure_var, ret_var));
 
@@ -2370,7 +2477,18 @@ fn type_to_variable<'a>(
                     let it = (new_variables.indices().skip(type_arguments.len()))
                         .zip(lambda_set_variables);
                     for (target_index, ls) in it {
-                        let copy_var = helper!(&ls.0);
+                        // We MUST do this now, otherwise when linking the ambient function during
+                        // instantiation of the real var, there will be nothing to link against.
+                        let copy_var = type_to_variable(
+                            subs,
+                            rank,
+                            pools,
+                            arena,
+                            aliases,
+                            &ls.0,
+                            true,
+                            SubsSlice::default(),
+                        );
                         subs.variables[target_index] = copy_var;
                     }
 
@@ -2435,7 +2553,11 @@ fn type_to_variable<'a>(
                                         // TODO associate the type to the bound ability, and check
                                         // that it correctly implements the ability.
                                         let var = subs.fresh_unnamed_flex_var();
-                                        stack.push(TypeToVar::Defer(typ, var));
+                                        stack.push(TypeToVar::Defer {
+                                            typ,
+                                            destination: var,
+                                            ambient_function: AmbientFunctionPolicy::NoFunction,
+                                        });
                                         var
                                     }
                                 }
@@ -2491,9 +2613,19 @@ fn type_to_variable<'a>(
                     }
                 };
 
+                let lambda_set_variables_slice = alias_variables.lambda_set_variables();
+
                 // cannot use helper! here because this variable may be involved in unification below
-                let alias_variable =
-                    type_to_variable(subs, rank, pools, arena, aliases, alias_type);
+                let alias_variable = type_to_variable(
+                    subs,
+                    rank,
+                    pools,
+                    arena,
+                    aliases,
+                    alias_type,
+                    false,
+                    lambda_set_variables_slice,
+                );
                 // TODO(opaques): I think host-exposed aliases should always be structural
                 // (when does it make sense to give a host an opaque type?)
                 let content = Content::Alias(
