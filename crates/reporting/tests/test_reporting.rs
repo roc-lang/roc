@@ -9369,4 +9369,71 @@ All branches in an `if` must have the same type!
             a -> Str
         "###
     );
+
+    test_report!(
+        same_phantom_types_unify,
+        indoc!(
+            r#"
+            F a b := b
+
+            foo : F Str Str -> {}
+
+            x : F Str Str
+
+            foo x
+            "#
+        ),
+        @r"" // okay
+    );
+
+    test_report!(
+        different_phantom_types,
+        indoc!(
+            r#"
+            F a b := b
+
+            foo : F Str Str -> {}
+
+            x : F U8 Str
+
+            foo x
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 1st argument to `foo` is not what I expect:
+
+    10│      foo x
+                 ^
+
+    This `x` value is a:
+
+        F U8 Str
+
+    But `foo` needs the 1st argument to be:
+
+        F Str Str
+    "###
+    );
+
+    test_report!(
+        #[ignore = "TODO This should be a type error"]
+        phantom_type_bound_to_ability_not_implementing,
+        indoc!(
+            r#"
+            app "test" provides [x] to "./platform"
+
+            Foo has foo : a -> a | a has Foo
+
+            F a b := b | a has Foo
+
+            Hash := {}
+
+            x : F Hash {}
+            "#
+        ),
+        @r###"
+        "###
+    );
 }

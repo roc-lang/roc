@@ -7050,4 +7050,55 @@ mod solve_expr {
             &["fun : {} -[[thunk(5) [A Str]*, thunk(5) { a : Str }]]-> Str",]
         );
     }
+
+    #[test]
+    fn check_phantom_type() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                F a b := b
+
+                foo : F Str Str -> F U8 Str
+
+                x : F Str Str
+
+                foo x
+                "#
+            ),
+            "F U8 Str",
+        );
+    }
+
+    #[test]
+    fn infer_phantom_type_flow() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                F a b := b
+
+                foo : _ -> F U8 Str
+                foo = \it -> it
+
+                foo
+                "#
+            ),
+            "F U8 Str -> F U8 Str",
+        );
+    }
+
+    #[test]
+    fn infer_unbound_phantom_type_star() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                F a b := b
+
+                foo = \@F {} -> @F ""
+
+                foo
+                "#
+            ),
+            "F * {}* -> F * Str",
+        );
+    }
 }
