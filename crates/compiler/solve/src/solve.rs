@@ -2216,6 +2216,7 @@ enum TypeToVar<'a> {
     },
 }
 
+#[allow(clippy::too_many_arguments)]
 fn type_to_variable<'a>(
     subs: &mut Subs,
     rank: Rank,
@@ -2224,6 +2225,7 @@ fn type_to_variable<'a>(
     aliases: &mut Aliases,
     typ: &Type,
     // Helpers for instantiating ambient functions of lambda set variables from type aliases.
+    // TODO: see if we can remove these?
     is_alias_lambda_set_arg: bool,
     // If we're instantiating a delayed alias in this call, what lambda sets do we need to link to
     // their ambient function types?
