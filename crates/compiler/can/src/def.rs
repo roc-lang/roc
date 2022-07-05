@@ -952,8 +952,11 @@ fn resolve_abilities<'a>(
 
             let signature = {
                 let mut signature = member_annot.typ;
-                signature
-                    .instantiate_lambda_sets_as_unspecialized(var_bound_to_ability, member_sym);
+                signature.instantiate_lambda_sets_as_unspecialized(
+                    var_store,
+                    var_bound_to_ability,
+                    member_sym,
+                );
                 signature
             };
 

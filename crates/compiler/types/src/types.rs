@@ -240,8 +240,12 @@ pub enum Type {
     ClosureTag {
         name: Symbol,
         captures: Vec<Type>,
+        ambient_function: Variable,
     },
-    UnspecializedLambdaSet(Uls),
+    UnspecializedLambdaSet {
+        unspecialized: Uls,
+        ambient_function: Variable,
+    },
     DelayedAlias(AliasCommon),
     Alias {
         symbol: Symbol,
@@ -312,11 +316,22 @@ impl Clone for Type {
             Self::FunctionOrTagUnion(arg0, arg1, arg2) => {
                 Self::FunctionOrTagUnion(arg0.clone(), *arg1, arg2.clone())
             }
-            Self::ClosureTag { name, captures } => Self::ClosureTag {
+            Self::ClosureTag {
+                name,
+                captures,
+                ambient_function,
+            } => Self::ClosureTag {
                 name: *name,
                 captures: captures.clone(),
+                ambient_function: *ambient_function,
             },
-            Self::UnspecializedLambdaSet(uls) => Self::UnspecializedLambdaSet(*uls),
+            Self::UnspecializedLambdaSet {
+                unspecialized,
+                ambient_function,
+            } => Self::UnspecializedLambdaSet {
+                unspecialized: *unspecialized,
+                ambient_function: *ambient_function,
+            },
             Self::DelayedAlias(arg0) => Self::DelayedAlias(arg0.clone()),
             Self::Alias {
                 symbol,
@@ -622,7 +637,11 @@ impl fmt::Debug for Type {
                     }
                 }
             }
-            Type::ClosureTag { name, captures } => {
+            Type::ClosureTag {
+                name,
+                captures,
+                ambient_function: _,
+            } => {
                 write!(f, "ClosureTag(")?;
 
                 write!(f, "{:?}, ", name)?;
@@ -655,8 +674,11 @@ impl fmt::Debug for Type {
             Type::RangedNumber(range_vars) => {
                 write!(f, "Ranged({:?})", range_vars)
             }
-            Type::UnspecializedLambdaSet(uls) => {
-                write!(f, "{:?}", uls)
+            Type::UnspecializedLambdaSet {
+                unspecialized,
+                ambient_function: _,
+            } => {
+                write!(f, "{:?}", unspecialized)
             }
         }
     }
@@ -713,7 +735,11 @@ impl Type {
                     stack.push(closure);
                     stack.push(ret);
                 }
-                ClosureTag { name: _, captures } => stack.extend(captures),
+                ClosureTag {
+                    name: _,
+                    captures,
+                    ambient_function: _,
+                } => stack.extend(captures),
                 TagUnion(tags, ext) => {
                     for (_, args) in tags {
                         stack.extend(args.iter_mut());
@@ -795,7 +821,10 @@ impl Type {
                     stack.extend(args);
                 }
                 RangedNumber(_) => {}
-                UnspecializedLambdaSet(Uls(v, _, _)) => {
+                UnspecializedLambdaSet {
+                    unspecialized: Uls(v, _, _),
+                    ambient_function: _,
+                } => {
                     debug_assert!(
                         substitutions.get(v).is_none(),
                         "unspecialized lambda sets should never be substituted before solving"
@@ -824,7 +853,11 @@ impl Type {
                     stack.push(closure);
                     stack.push(ret);
                 }
-                ClosureTag { name: _, captures } => {
+                ClosureTag {
+                    name: _,
+                    captures,
+                    ambient_function: _,
+                } => {
                     stack.extend(captures);
                 }
                 TagUnion(tags, ext) => {
@@ -910,7 +943,10 @@ impl Type {
                     stack.extend(args);
                 }
                 RangedNumber(_) => {}
-                UnspecializedLambdaSet(Uls(v, _, _)) => {
+                UnspecializedLambdaSet {
+                    unspecialized: Uls(v, _, _),
+                    ambient_function: _,
+                } => {
                     debug_assert!(
                         substitutions.get(v).is_none(),
                         "unspecialized lambda sets should never be substituted before solving"
@@ -1013,7 +1049,7 @@ impl Type {
                 Ok(())
             }
             RangedNumber(_) => Ok(()),
-            UnspecializedLambdaSet(..) => Ok(()),
+            UnspecializedLambdaSet { .. } => Ok(()),
             EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => Ok(()),
         }
     }
@@ -1070,7 +1106,10 @@ impl Type {
             Apply(symbol, _, _) if *symbol == rep_symbol => true,
             Apply(_, args, _) => args.iter().any(|arg| arg.contains_symbol(rep_symbol)),
             RangedNumber(_) => false,
-            UnspecializedLambdaSet(Uls(_, sym, _)) => *sym == rep_symbol,
+            UnspecializedLambdaSet {
+                unspecialized: Uls(_, sym, _),
+                ambient_function: _,
+            } => *sym == rep_symbol,
             EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => false,
         }
     }
@@ -1093,10 +1132,15 @@ impl Type {
                     || args.iter().any(|arg| arg.contains_variable(rep_variable))
             }
             FunctionOrTagUnion(_, _, ext) => Self::contains_variable_ext(ext, rep_variable),
-            ClosureTag { name: _, captures } => {
-                captures.iter().any(|t| t.contains_variable(rep_variable))
-            }
-            UnspecializedLambdaSet(Uls(v, _, _)) => *v == rep_variable,
+            ClosureTag {
+                name: _,
+                captures,
+                ambient_function: _,
+            } => captures.iter().any(|t| t.contains_variable(rep_variable)),
+            UnspecializedLambdaSet {
+                unspecialized: Uls(v, _, _),
+                ambient_function: _,
+            } => *v == rep_variable,
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
                 Self::contains_variable_ext(ext, rep_variable)
                     || tags
@@ -1384,17 +1428,18 @@ impl Type {
                 }
             }
             RangedNumber(_) => {}
-            UnspecializedLambdaSet(..) => {}
+            UnspecializedLambdaSet { .. } => {}
             EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
         }
     }
 
     pub fn instantiate_lambda_sets_as_unspecialized(
         &mut self,
+        var_store: &mut VarStore,
         able_var: Variable,
         ability_member: Symbol,
     ) {
-        instantiate_lambda_sets_as_unspecialized(self, able_var, ability_member)
+        instantiate_lambda_sets_as_unspecialized(var_store, self, able_var, ability_member)
     }
 
     pub fn is_tag_union_like(&self) -> bool {
@@ -1520,7 +1565,10 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
                 output.push(*alias);
             }
             RangedNumber(_) => {}
-            UnspecializedLambdaSet(Uls(_, _sym, _)) => {
+            UnspecializedLambdaSet {
+                unspecialized: Uls(_, _sym, _),
+                ambient_function: _,
+            } => {
                 // ignore the member symbol because unspecialized lambda sets are internal-only
             }
             EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
@@ -1565,12 +1613,19 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
                 variables_help(ext, accum);
             }
         }
-        ClosureTag { name: _, captures } => {
+        ClosureTag {
+            name: _,
+            captures,
+            ambient_function: _,
+        } => {
             for t in captures {
                 variables_help(t, accum);
             }
         }
-        UnspecializedLambdaSet(Uls(v, _, _)) => {
+        UnspecializedLambdaSet {
+            unspecialized: Uls(v, _, _),
+            ambient_function: _,
+        } => {
             accum.insert(*v);
         }
         TagUnion(tags, ext) => {
@@ -1700,7 +1755,11 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
                 variables_help_detailed(ext, accum);
             }
         }
-        ClosureTag { name: _, captures } => {
+        ClosureTag {
+            name: _,
+            captures,
+            ambient_function: _,
+        } => {
             for t in captures {
                 variables_help_detailed(t, accum);
             }
@@ -1721,7 +1780,10 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
                 variables_help_detailed(ext, accum);
             }
         }
-        UnspecializedLambdaSet(Uls(var, _, _)) => {
+        UnspecializedLambdaSet {
+            unspecialized: Uls(var, _, _),
+            ambient_function: _,
+        } => {
             accum.type_variables.insert(*var);
         }
         RecursiveTagUnion(rec, tags, ext) => {
@@ -2717,6 +2779,7 @@ pub fn gather_tags(subs: &Subs, other_fields: UnionTags, var: Variable) -> TagUn
 }
 
 fn instantiate_lambda_sets_as_unspecialized(
+    var_store: &mut VarStore,
     typ: &mut Type,
     able_var: Variable,
     ability_member: Symbol,
@@ -2728,7 +2791,10 @@ fn instantiate_lambda_sets_as_unspecialized(
 
     let mut new_uls = || {
         region += 1;
-        Type::UnspecializedLambdaSet(Uls(able_var, ability_member, region))
+        Type::UnspecializedLambdaSet {
+            unspecialized: Uls(able_var, ability_member, region),
+            ambient_function: var_store.fresh(),
+        }
     };
 
     while let Some(typ) = stack.pop() {
@@ -2762,10 +2828,14 @@ fn instantiate_lambda_sets_as_unspecialized(
             Type::FunctionOrTagUnion(_, _, ext) => {
                 stack.extend(ext.iter_mut());
             }
-            Type::ClosureTag { name: _, captures } => {
+            Type::ClosureTag {
+                name: _,
+                captures,
+                ambient_function: _,
+            } => {
                 stack.extend(captures.iter_mut().rev());
             }
-            Type::UnspecializedLambdaSet(..) => {
+            Type::UnspecializedLambdaSet { .. } => {
                 internal_error!("attempting to re-instantiate ULS")
             }
             Type::DelayedAlias(AliasCommon {
@@ -2841,12 +2911,15 @@ mod test {
 
         let able_var = var_store.fresh();
         let member = Symbol::UNDERSCORE;
-        typ.instantiate_lambda_sets_as_unspecialized(able_var, member);
+        typ.instantiate_lambda_sets_as_unspecialized(&mut var_store, able_var, member);
 
         macro_rules! check_uls {
             ($typ:expr, $region:literal) => {{
                 match $typ {
-                    Type::UnspecializedLambdaSet(Uls(var1, member1, $region)) => {
+                    Type::UnspecializedLambdaSet {
+                        unspecialized: Uls(var1, member1, $region),
+                        ambient_function: _,
+                    } => {
                         assert!(var1 == able_var && member1 == member)
                     }
                     _ => panic!(),

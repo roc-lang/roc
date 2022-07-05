@@ -1784,6 +1784,7 @@ fn compact_lambda_set<P: Phase>(
         solved,
         recursion_var,
         unspecialized,
+        ambient_function,
     } = subs.get_lambda_set(this_lambda_set);
     let target_rank = subs.get_rank(this_lambda_set);
 
@@ -1820,11 +1821,14 @@ fn compact_lambda_set<P: Phase>(
                             subs,
                             vec![(specialization_symbol, vec![])],
                         );
+                        // TODO: This is WRONG, fix it!
+                        let ambient_function = subs.fresh_unnamed_flex_var();
                         let lambda_set_for_derived = subs.fresh(Descriptor {
                             content: LambdaSet(subs::LambdaSet {
                                 solved: specialization_symbol_slice,
                                 recursion_var: OptVariable::NONE,
                                 unspecialized: SubsSlice::default(),
+                                ambient_function,
                             }),
                             rank: target_rank,
                             mark: Mark::NONE,
@@ -1928,6 +1932,7 @@ fn compact_lambda_set<P: Phase>(
         solved,
         recursion_var,
         unspecialized: new_unspecialized_slice,
+        ambient_function,
     });
     subs.set_content(this_lambda_set, partial_compacted_lambda_set);
 
@@ -2192,7 +2197,11 @@ fn type_to_variable<'a>(
                 register_with_known_var(subs, destination, rank, pools, content)
             }
 
-            ClosureTag { name, captures } => {
+            ClosureTag {
+                name,
+                captures,
+                ambient_function,
+            } => {
                 let union_lambdas =
                     create_union_lambda(subs, rank, pools, arena, *name, captures, &mut stack);
 
@@ -2202,20 +2211,25 @@ fn type_to_variable<'a>(
                     // is to begin with.
                     recursion_var: OptVariable::NONE,
                     unspecialized: SubsSlice::default(),
+                    ambient_function: *ambient_function,
                 });
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
-            UnspecializedLambdaSet(uls) => {
+            UnspecializedLambdaSet {
+                unspecialized,
+                ambient_function,
+            } => {
                 let unspecialized = SubsSlice::extend_new(
                     &mut subs.unspecialized_lambda_sets,
-                    std::iter::once(*uls),
+                    std::iter::once(*unspecialized),
                 );
 
                 let content = Content::LambdaSet(subs::LambdaSet {
                     unspecialized,
                     solved: UnionLabels::default(),
                     recursion_var: OptVariable::NONE,
+                    ambient_function: *ambient_function,
                 });
 
                 register_with_known_var(subs, destination, rank, pools, content)
@@ -2877,8 +2891,14 @@ fn check_for_infinite_type(
                 solved,
                 recursion_var: _,
                 unspecialized,
+                ambient_function: ambient_function_var,
             }) => {
-                subs.mark_lambda_set_recursive(recursive, solved, unspecialized);
+                subs.mark_lambda_set_recursive(
+                    recursive,
+                    solved,
+                    unspecialized,
+                    ambient_function_var,
+                );
             }
 
             _other => circular_error(subs, problems, symbol, &loc_var),
@@ -3226,6 +3246,7 @@ fn adjust_rank_content(
             solved,
             recursion_var,
             unspecialized,
+            ambient_function: ambient_function_var,
         }) => {
             let mut rank = group_rank;
 
@@ -3260,6 +3281,11 @@ fn adjust_rank_content(
                     subs.get_content_without_compacting(rec_var),
                     rec_var_rank
                 );
+            }
+
+            // NEVER TOUCH the ambient function var, it would already have been passed through.
+            {
+                let _ = ambient_function_var;
             }
 
             rank
@@ -3525,6 +3551,7 @@ fn deep_copy_var_help(
                 solved,
                 recursion_var,
                 unspecialized,
+                ambient_function: ambient_function_var,
             }) => {
                 let lambda_set_var = copy;
 
@@ -3545,12 +3572,19 @@ fn deep_copy_var_help(
                     subs.uls_of_var.add(new_var, lambda_set_var);
                 }
 
+                let new_ambient_function_var = work!(ambient_function_var);
+                debug_assert_ne!(
+                    ambient_function_var, new_ambient_function_var,
+                    "lambda set cloned but its ambient function wasn't?"
+                );
+
                 subs.set_content_unchecked(
                     lambda_set_var,
                     LambdaSet(subs::LambdaSet {
                         solved: new_solved,
                         recursion_var: new_rec_var,
                         unspecialized: new_unspecialized,
+                        ambient_function: new_ambient_function_var,
                     }),
                 );
             }

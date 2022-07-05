@@ -1127,6 +1127,7 @@ fn resolve_lambda_set(subs: &Subs, mut var: Variable) -> ResolvedLambdaSet {
                 solved,
                 recursion_var: _,
                 unspecialized,
+                ambient_function: _,
             }) => {
                 debug_assert!(
                     unspecialized.is_empty(),
@@ -1966,6 +1967,7 @@ fn layout_from_lambda_set<'a>(
         solved,
         recursion_var,
         unspecialized,
+        ambient_function: _,
     } = lset;
 
     if !unspecialized.is_empty() {

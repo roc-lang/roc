@@ -967,6 +967,7 @@ fn unify_lambda_set<M: MetaCollector>(
                     solved: UnionLabels::default(),
                     recursion_var: OptVariable::NONE,
                     unspecialized: SubsSlice::default(),
+                    ambient_function: subs.fresh_unnamed_flex_var(),
                 };
 
                 extract_specialization_lambda_set(subs, ctx, lambda_set, zero_lambda_set)
@@ -1012,6 +1013,7 @@ fn extract_specialization_lambda_set<M: MetaCollector>(
         solved: member_solved,
         recursion_var: member_rec_var,
         unspecialized: member_uls_slice,
+        ambient_function: _,
     } = ability_member_proto_lset;
 
     debug_assert!(
@@ -1220,12 +1222,19 @@ fn unify_lambda_set_help<M: MetaCollector>(
         solved: solved1,
         recursion_var: rec1,
         unspecialized: uls1,
+        ambient_function: ambient_function_var1,
     } = lset1;
     let LambdaSet {
         solved: solved2,
         recursion_var: rec2,
         unspecialized: uls2,
+        ambient_function: ambient_function_var2,
     } = lset2;
+
+    // Assumed precondition: the ambient functions have already been unified, or are in the process
+    // of being unified - otherwise, how could we have reached unification of lambda sets?
+    let _ = ambient_function_var2;
+    let ambient_function_var = ambient_function_var1;
 
     debug_assert!(
         (rec1.into_variable().into_iter())
@@ -1293,6 +1302,7 @@ fn unify_lambda_set_help<M: MetaCollector>(
         solved: new_solved,
         recursion_var,
         unspecialized: merged_unspecialized,
+        ambient_function: ambient_function_var,
     });
 
     merge(subs, ctx, new_lambda_set)
@@ -1926,8 +1936,9 @@ fn maybe_mark_union_recursive(subs: &mut Subs, union_var: Variable) {
                     solved,
                     recursion_var: OptVariable::NONE,
                     unspecialized,
+                    ambient_function: ambient_function_var,
                 }) => {
-                    subs.mark_lambda_set_recursive(v, solved, unspecialized);
+                    subs.mark_lambda_set_recursive(v, solved, unspecialized, ambient_function_var);
                     continue 'outer;
                 }
                 _ => { /* fall through */ }
@@ -2685,10 +2696,12 @@ fn unify_function_or_tag_union_and_func<M: MetaCollector>(
 
     {
         let union_tags = UnionLambdas::tag_without_arguments(subs, tag_symbol);
+        let ambient_function_var = if left { ctx.first } else { ctx.second };
         let lambda_set_content = LambdaSet(self::LambdaSet {
             solved: union_tags,
             recursion_var: OptVariable::NONE,
             unspecialized: SubsSlice::default(),
+            ambient_function: ambient_function_var,
         });
 
         let tag_lambda_set = register(

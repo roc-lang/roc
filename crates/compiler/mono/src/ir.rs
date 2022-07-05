@@ -5114,6 +5114,7 @@ fn late_resolve_ability_specialization<'a>(
             solved,
             unspecialized,
             recursion_var: _,
+            ambient_function: _,
         } = env.subs.get_lambda_set(*lambda_set);
 
         debug_assert!(unspecialized.is_empty());
