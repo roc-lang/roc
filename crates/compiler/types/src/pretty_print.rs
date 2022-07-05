@@ -6,6 +6,7 @@ use crate::types::{name_type_var, RecordField, Uls};
 use roc_collections::all::MutMap;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
+use std::fmt::Write;
 
 pub static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
@@ -1145,9 +1146,7 @@ fn write_flat_type<'a>(
                 )
             })
         }
-        Erroneous(problem) => {
-            buf.push_str(&format!("<Type Mismatch: {:?}>", problem));
-        }
+        Erroneous(problem) => write!(buf, "<Type Mismatch: {:?}>", problem).unwrap(),
     }
 }
 
