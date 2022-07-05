@@ -246,13 +246,19 @@ fn create_llvm_module<'a>(
     (main_fn_name, delayed_errors.join("\n"), env.module)
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct HelperConfig {
+    pub is_gen_test: bool,
+    pub ignore_problems: bool,
+    pub add_debug_info: bool,
+}
+
 #[allow(dead_code)]
 #[inline(never)]
 pub fn helper<'a>(
     arena: &'a bumpalo::Bump,
+    config: HelperConfig,
     src: &str,
-    is_gen_test: bool,
-    ignore_problems: bool,
     context: &'a inkwell::context::Context,
 ) -> (&'static str, String, Library) {
     let target = target_lexicon::Triple::host();
@@ -266,17 +272,61 @@ pub fn helper<'a>(
     let (main_fn_name, delayed_errors, module) = create_llvm_module(
         arena,
         src,
-        is_gen_test,
-        ignore_problems,
+        config.is_gen_test,
+        config.ignore_problems,
         context,
         &target,
         opt_level,
     );
 
-    let lib =
-        module_to_dylib(module, &target, opt_level).expect("Error loading compiled dylib for test");
+    let res_lib = if config.add_debug_info {
+        let module = annotate_with_debug_info(module, context);
+        module_to_dylib(&module, &target, opt_level)
+    } else {
+        module_to_dylib(module, &target, opt_level)
+    };
+
+    let lib = res_lib.expect("Error loading compiled dylib for test");
 
     (main_fn_name, delayed_errors, lib)
+}
+
+fn annotate_with_debug_info<'ctx>(
+    module: &Module<'ctx>,
+    context: &'ctx inkwell::context::Context,
+) -> Module<'ctx> {
+    use std::process::Command;
+
+    let app_ll_file = "/tmp/roc-debugir.ll";
+    let app_dbg_ll_file = "/tmp/roc-debugir.dbg.ll";
+    let app_bc_file = "/tmp/roc-debugir.bc";
+
+    // write the ll code to a file, so we can modify it
+    module.print_to_file(&app_ll_file).unwrap();
+
+    // run the debugir https://github.com/vaivaswatha/debugir tool
+    match Command::new("debugir")
+        .args(&["-instnamer", app_ll_file])
+        .output()
+    {
+        Ok(_) => {}
+        Err(error) => {
+            use std::io::ErrorKind;
+            match error.kind() {
+                ErrorKind::NotFound => panic!(
+                    r"I could not find the `debugir` tool on the PATH, install it from https://github.com/vaivaswatha/debugir"
+                ),
+                _ => panic!("{:?}", error),
+            }
+        }
+    }
+
+    Command::new("llvm-as")
+        .args(&[app_dbg_ll_file, "-o", app_bc_file])
+        .output()
+        .unwrap();
+
+    inkwell::module::Module::parse_bitcode_from_path(&app_bc_file, context).unwrap()
 }
 
 fn wasm32_target_tripple() -> Triple {
@@ -517,9 +567,14 @@ macro_rules! assert_llvm_evals_to {
         let arena = Bump::new();
         let context = Context::create();
 
-        let is_gen_test = true;
+        let config = $crate::helpers::llvm::HelperConfig {
+            is_gen_test: true,
+            add_debug_info: false,
+            ignore_problems: $ignore_problems,
+        };
+
         let (main_fn_name, errors, lib) =
-            $crate::helpers::llvm::helper(&arena, $src, is_gen_test, $ignore_problems, &context);
+            $crate::helpers::llvm::helper(&arena, config, $src, &context);
 
         let transform = |success| {
             let expected = $expected;
