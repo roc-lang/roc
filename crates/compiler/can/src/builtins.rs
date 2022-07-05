@@ -124,7 +124,6 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_DROP => list_drop,
         LIST_DROP_AT => list_drop_at,
         LIST_SWAP => list_swap,
-        LIST_MAP_WITH_INDEX => list_map_with_index,
         LIST_SORT_WITH => list_sort_with,
         LIST_IS_UNIQUE => list_is_unique,
         DICT_LEN => dict_len,
@@ -2363,11 +2362,6 @@ fn list_prepend(symbol: Symbol, var_store: &mut VarStore) -> Def {
 /// List.map : List before, (before -> after) -> List after
 fn list_map(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListMap, var_store)
-}
-
-/// List.mapWithIndex : List before, (before, Nat -> after) -> List after
-fn list_map_with_index(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    lowlevel_2(symbol, LowLevel::ListMapWithIndex, var_store)
 }
 
 /// List.map2 : List a, List b, (a, b -> c) -> List c

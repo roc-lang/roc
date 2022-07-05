@@ -9,9 +9,9 @@ use crate::llvm::build_dict::{
 use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
     self, allocate_list, empty_polymorphic_list, list_append, list_concat, list_drop_at,
-    list_get_unsafe, list_len, list_map, list_map2, list_map3, list_map4, list_map_with_index,
-    list_prepend, list_replace_unsafe, list_sort_with, list_sublist, list_swap,
-    list_symbol_to_c_abi, list_to_c_abi, list_with_capacity,
+    list_get_unsafe, list_len, list_map, list_map2, list_map3, list_map4, list_prepend,
+    list_replace_unsafe, list_sort_with, list_sublist, list_swap, list_symbol_to_c_abi,
+    list_to_c_abi, list_with_capacity,
 };
 use crate::llvm::build_str::{
     str_from_float, str_from_int, str_from_utf8, str_from_utf8_range, str_split,
@@ -5083,35 +5083,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!("invalid list layout"),
             }
         }
-        ListMapWithIndex { xs } => {
-            // List.mapWithIndex : List before, (before, Nat -> after) -> List after
-            let (list, list_layout) = load_symbol_and_layout(scope, xs);
-
-            let (function, closure, closure_layout) = function_details!();
-
-            match (list_layout, return_layout) {
-                (
-                    Layout::Builtin(Builtin::List(element_layout)),
-                    Layout::Builtin(Builtin::List(result_layout)),
-                ) => {
-                    let argument_layouts = &[**element_layout, Layout::usize(env.target_info)];
-
-                    let roc_function_call = roc_function_call(
-                        env,
-                        layout_ids,
-                        function,
-                        closure,
-                        closure_layout,
-                        function_owns_closure_data,
-                        argument_layouts,
-                        **result_layout,
-                    );
-
-                    list_map_with_index(env, roc_function_call, list, element_layout, result_layout)
-                }
-                _ => unreachable!("invalid list layout"),
-            }
-        }
         ListSortWith { xs } => {
             // List.sortWith : List a, (a, a -> Ordering) -> List a
             let (list, list_layout) = load_symbol_and_layout(scope, xs);
@@ -6025,7 +5996,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             set
         }
 
-        ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListSortWith | DictWalk => {
+        ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith | DictWalk => {
             unreachable!("these are higher order, and are handled elsewhere")
         }
 

@@ -561,13 +561,6 @@ impl<'a> BorrowInfState<'a> {
                             self.own_var(*xs);
                         }
                     }
-                    ListMapWithIndex { xs } => {
-                        // List.mapWithIndex : List before, (before, Nat -> after) -> List after
-                        // own the list if the function wants to own the element (before, index 0)
-                        if !function_ps[0].borrow {
-                            self.own_var(*xs);
-                        }
-                    }
                     ListMap2 { xs, ys } => {
                         // own the lists if the function wants to own the element
                         if !function_ps[0].borrow {
@@ -910,7 +903,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         StrToNum => arena.alloc_slice_copy(&[borrowed]),
         ListPrepend => arena.alloc_slice_copy(&[owned, owned]),
         StrJoinWith => arena.alloc_slice_copy(&[borrowed, borrowed]),
-        ListMap | ListMapWithIndex => arena.alloc_slice_copy(&[owned, function, closure_data]),
+        ListMap => arena.alloc_slice_copy(&[owned, function, closure_data]),
         ListMap2 => arena.alloc_slice_copy(&[owned, owned, function, closure_data]),
         ListMap3 => arena.alloc_slice_copy(&[owned, owned, owned, function, closure_data]),
         ListMap4 => arena.alloc_slice_copy(&[owned, owned, owned, owned, function, closure_data]),

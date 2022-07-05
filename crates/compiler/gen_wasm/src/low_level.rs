@@ -313,8 +313,7 @@ impl<'a> LowLevelCall<'a> {
 
             ListIsUnique => self.load_args_and_call_zig(backend, bitcode::LIST_IS_UNIQUE),
 
-            ListMap | ListMap2 | ListMap3 | ListMap4 | ListMapWithIndex | ListSortWith
-            | DictWalk => {
+            ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith | DictWalk => {
                 internal_error!("HigherOrder lowlevels should not be handled here")
             }
 
@@ -2084,7 +2083,7 @@ pub fn call_higher_order_lowlevel<'a>(
             *owns_captured_environment,
         ),
 
-        ListMapWithIndex { .. } | ListSortWith { .. } | DictWalk { .. } => todo!("{:?}", op),
+        ListSortWith { .. } | DictWalk { .. } => todo!("{:?}", op),
     }
 }
 
