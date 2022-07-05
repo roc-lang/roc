@@ -67,6 +67,8 @@ fn main() {
         "builtins-wasm32.o",
     );
 
+    copy_zig_builtins_to_target_dir(&bitcode_path);
+
     get_zig_files(bitcode_path.as_path(), &|path| {
         let path: &Path = path;
         println!(
@@ -142,6 +144,38 @@ fn generate_bc_file(bitcode_path: &Path, zig_object: &str, file_name: &str) {
         &zig_executable(),
         &["build", zig_object, "-Drelease=true"],
     );
+}
+
+fn copy_zig_builtins_to_target_dir(bitcode_path: &Path) {
+    // To enable roc to find the zig biultins, we want them to be moved to a folder next to the roc executable.
+    // So if <roc_folder>/roc is the executable. The zig files will be in <roc_folder>/lib/*.zig
+
+    // Currently we have the OUT_DIR variable which points to `/target/debug/build/roc_builtins-*/out/`.
+    // So we just need to shed a 3 of the outer layers to get `/target/debug/` and then add `lib`.
+    let out_dir = env::var_os("OUT_DIR").unwrap();
+    let target_profile_dir = Path::new(&out_dir)
+        .parent()
+        .and_then(|path| path.parent())
+        .and_then(|path| path.parent())
+        .unwrap()
+        .join("lib");
+
+    let zig_src_dir = bitcode_path.join("src");
+
+    std::fs::create_dir_all(&target_profile_dir).unwrap_or_else(|err| {
+        panic!(
+            "Failed to create output library directory for zig bitcode {:?}: {:?}",
+            target_profile_dir, err
+        );
+    });
+    let mut options = fs_extra::dir::CopyOptions::new();
+    options.overwrite = true;
+    fs_extra::dir::copy(&zig_src_dir, &target_profile_dir, &options).unwrap_or_else(|err| {
+        panic!(
+            "Failed to copy zig bitcode files {:?} to {:?}: {:?}",
+            zig_src_dir, target_profile_dir, err
+        );
+    });
 }
 
 fn run_command<S, I: Copy, P: AsRef<Path> + Copy>(path: P, command_str: &str, args: I)
