@@ -43,6 +43,7 @@ libloading = "0.7.1"
 wasmer-wasi = "2.2.1"
 tempfile = "3.2.0"
 indoc = "1.0.3"
+criterion = { git = "https://github.com/Anton-4/criterion.rs" }
 
 # Wasmer singlepass compiler only works on x86_64.
 [target.'cfg(target_arch = "x86_64")'.dev-dependencies]
