@@ -8849,16 +8849,16 @@ enum NumLiteral {
 }
 
 impl NumLiteral {
-    fn to_expr_literal(self) -> Literal<'static> {
-        match self {
+    fn to_expr_literal(&self) -> Literal<'static> {
+        match *self {
             NumLiteral::Int(n, _) => Literal::Int(n),
             NumLiteral::U128(n) => Literal::U128(n),
             NumLiteral::Float(n, _) => Literal::Float(n),
             NumLiteral::Decimal(n) => Literal::Decimal(n),
         }
     }
-    fn to_pattern(self) -> Pattern<'static> {
-        match self {
+    fn to_pattern(&self) -> Pattern<'static> {
+        match *self {
             NumLiteral::Int(n, w) => Pattern::IntLiteral(n, w),
             NumLiteral::U128(_) => todo!(),
             NumLiteral::Float(n, w) => Pattern::FloatLiteral(f64::to_bits(n), w),
@@ -8867,11 +8867,7 @@ impl NumLiteral {
     }
 }
 
-fn make_num_literal<'a>(
-    layout: Layout<'a>,
-    num_str: &str,
-    num_value: IntOrFloatValue,
-) -> NumLiteral {
+fn make_num_literal(layout: Layout<'_>, num_str: &str, num_value: IntOrFloatValue) -> NumLiteral {
     match layout {
         Layout::Builtin(Builtin::Int(width)) => match num_value {
             IntOrFloatValue::Int(IntValue::I128(n)) => NumLiteral::Int(n, width),
@@ -8888,7 +8884,7 @@ fn make_num_literal<'a>(
             },
         },
         Layout::Builtin(Builtin::Decimal) => {
-            let dec = match RocDec::from_str(&num_str) {
+            let dec = match RocDec::from_str(num_str) {
                 Some(d) => d,
                 None => internal_error!(
                     "Invalid decimal for float literal = {}. This should be a type error!",
@@ -8914,7 +8910,7 @@ fn assign_num_literal_expr<'a>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     let layout = layout_cache
-        .from_var(env.arena, variable, &env.subs)
+        .from_var(env.arena, variable, env.subs)
         .unwrap();
     let literal = make_num_literal(layout, num_str, num_value).to_expr_literal();
 
@@ -8929,7 +8925,7 @@ fn make_num_literal_pattern<'a>(
     num_value: IntOrFloatValue,
 ) -> Pattern<'a> {
     let layout = layout_cache
-        .from_var(env.arena, variable, &env.subs)
+        .from_var(env.arena, variable, env.subs)
         .unwrap();
     let literal = make_num_literal(layout, num_str, num_value);
     literal.to_pattern()

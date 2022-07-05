@@ -177,7 +177,7 @@ impl IntLitWidth {
     }
 
     fn is_signed(&self) -> bool {
-        return self.signedness_and_width().0 == IntSignedness::Signed;
+        self.signedness_and_width().0 == IntSignedness::Signed
     }
 
     pub fn type_str(&self) -> &'static str {

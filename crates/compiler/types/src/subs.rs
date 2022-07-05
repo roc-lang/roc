@@ -3676,11 +3676,10 @@ fn content_to_err_type(
             let err_type = var_to_err_type(subs, state, aliased_to);
 
             // Lift RangedNumber up if needed.
-            match (symbol, &err_type) {
-                (Symbol::NUM_INT | Symbol::NUM_NUM | Symbol::NUM_INTEGER, ErrorType::Range(_)) => {
-                    return err_type;
-                }
-                _ => {}
+            if let (Symbol::NUM_INT | Symbol::NUM_NUM | Symbol::NUM_INTEGER, ErrorType::Range(_)) =
+                (symbol, &err_type)
+            {
+                return err_type;
             }
 
             let mut err_args = Vec::with_capacity(args.len());

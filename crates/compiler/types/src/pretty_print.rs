@@ -804,7 +804,7 @@ fn write_content<'a>(
                     Parens::Unnecessary,
                 );
             }
-            buf.push_str(")");
+            buf.push(')');
         }
         Error => buf.push_str("<type mismatch>"),
     }
