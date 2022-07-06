@@ -4307,17 +4307,15 @@ mod test_fmt {
         module_formats_same(indoc!(
             r#"
                 interface Foo
-                    exposes
-                        [
-                            Stuff,
-                            Things,
-                            somethingElse,
-                        ]
-                    imports
-                        [
-                            Blah,
-                            Baz.{ stuff, things },
-                        ]"#
+                    exposes [
+                        Stuff,
+                        Things,
+                        somethingElse,
+                    ]
+                    imports [
+                        Blah,
+                        Baz.{ stuff, things },
+                    ]"#
         ));
     }
 
@@ -4387,23 +4385,20 @@ mod test_fmt {
         module_formats_same(indoc!(
             r#"
                 hosted Foo
-                    exposes
-                        [
-                            Stuff,
-                            Things,
-                            somethingElse,
-                        ]
-                    imports
-                        [
-                            Blah,
-                            Baz.{ stuff, things },
-                        ]
-                    generates Bar with
-                        [
-                            map,
-                            after,
-                            loop,
-                        ]"#
+                    exposes [
+                        Stuff,
+                        Things,
+                        somethingElse,
+                    ]
+                    imports [
+                        Blah,
+                        Baz.{ stuff, things },
+                    ]
+                    generates Bar with [
+                        map,
+                        after,
+                        loop,
+                    ]"#
         ));
     }
 
@@ -4522,11 +4517,11 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r#"
             Expr : [
-                    Add Expr Expr,
-                    Mul Expr Expr,
-                    Val I64,
-                    Var I64,
-                ]
+                Add Expr Expr,
+                Mul Expr Expr,
+                Val I64,
+                Var I64,
+            ]
 
             Expr"#
         ));
