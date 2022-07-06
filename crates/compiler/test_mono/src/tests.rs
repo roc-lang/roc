@@ -1693,3 +1693,13 @@ fn call_function_in_empty_list() {
         "#
     )
 }
+
+#[mono_test]
+fn call_function_in_empty_list_unbound() {
+    indoc!(
+        r#"
+        lst = []
+        List.map lst \f -> f {}
+        "#
+    )
+}
