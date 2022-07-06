@@ -75,10 +75,16 @@ int main() {
   // Write to stdout
   if (write(1, str_bytes, str_len) >= 0) {
     // Writing succeeded!
+    if (!is_small_str(str)) {
+        roc_dealloc(str_bytes - sizeof(size_t), 8);
+    }
     return 0;
   } else {
     printf("Error writing to stdout: %s\n", strerror(errno));
 
+    if (!is_small_str(str)) {
+        roc_dealloc(str_bytes - sizeof(size_t), 8);
+    }
     return 1;
   }
 }
