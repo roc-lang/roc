@@ -298,7 +298,7 @@ pub fn build(
 
     let linking_strategy = if wasm_dev_backend {
         LinkingStrategy::Additive
-    } else if !roc_linker::supported(&link_type, &triple)
+    } else if !roc_linker::supported(link_type, &triple)
         || matches.value_of(FLAG_LINKER) == Some("legacy")
     {
         LinkingStrategy::Legacy

@@ -282,13 +282,7 @@ pub fn build_file<'a>(
     let link_start = SystemTime::now();
     let problems = match (linking_strategy, link_type) {
         (LinkingStrategy::Surgical, _) => {
-            roc_linker::link_preprocessed_host(target, &host_input_path, app_o_file, &binary_path)
-                .map_err(|err| {
-                    todo!(
-                        "gracefully handle failing to surgically link with error: {:?}",
-                        err
-                    );
-                })?;
+            roc_linker::link_preprocessed_host(target, &host_input_path, app_o_file, &binary_path);
             problems
         }
         (LinkingStrategy::Additive, _) | (LinkingStrategy::Legacy, LinkType::None) => {
@@ -392,8 +386,7 @@ fn spawn_rebuild_thread(
                         exported_symbols,
                         exported_closure_types,
                         target_valgrind,
-                    )
-                    .unwrap();
+                    );
                 }
                 LinkingStrategy::Legacy => {
                     rebuild_host(
