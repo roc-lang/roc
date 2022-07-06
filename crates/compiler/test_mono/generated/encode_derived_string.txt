@@ -45,47 +45,47 @@ procedure Json.65 (Json.66, Json.105, #Attr.12):
     inc Json.64;
     dec #Attr.12;
     let Json.114 : I32 = 34i64;
-    let Json.113 : U8 = CallByName Num.122 Json.114;
+    let Json.113 : U8 = CallByName Num.123 Json.114;
     let Json.111 : List U8 = CallByName List.4 Json.66 Json.113;
     let Json.112 : List U8 = CallByName Str.12 Json.64;
     let Json.108 : List U8 = CallByName List.8 Json.111 Json.112;
     let Json.110 : I32 = 34i64;
-    let Json.109 : U8 = CallByName Num.122 Json.110;
+    let Json.109 : U8 = CallByName Num.123 Json.110;
     let Json.107 : List U8 = CallByName List.4 Json.108 Json.109;
     ret Json.107;
 
 procedure List.4 (#Attr.2, #Attr.3):
-    let List.141 : List U8 = lowlevel ListAppend #Attr.2 #Attr.3;
-    ret List.141;
+    let List.280 : List U8 = lowlevel ListAppend #Attr.2 #Attr.3;
+    ret List.280;
 
 procedure List.8 (#Attr.2, #Attr.3):
-    let List.142 : List U8 = lowlevel ListConcat #Attr.2 #Attr.3;
-    ret List.142;
+    let List.281 : List U8 = lowlevel ListConcat #Attr.2 #Attr.3;
+    ret List.281;
 
-procedure Num.122 (#Attr.2):
-    let Num.272 : U8 = lowlevel NumIntCast #Attr.2;
-    ret Num.272;
+procedure Num.123 (#Attr.2):
+    let Num.189 : U8 = lowlevel NumIntCast #Attr.2;
+    ret Num.189;
 
 procedure Str.12 (#Attr.2):
-    let Str.73 : List U8 = lowlevel StrToUtf8 #Attr.2;
-    ret Str.73;
+    let Str.162 : List U8 = lowlevel StrToUtf8 #Attr.2;
+    ret Str.162;
 
 procedure Str.9 (#Attr.2):
     let #Attr.3 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8 #Attr.2;
-    let Str.69 : Int1 = StructAtIndex 2 #Attr.3;
-    if Str.69 then
-        let Str.71 : Str = StructAtIndex 1 #Attr.3;
-        inc Str.71;
+    let Str.158 : Int1 = StructAtIndex 2 #Attr.3;
+    if Str.158 then
+        let Str.160 : Str = StructAtIndex 1 #Attr.3;
+        inc Str.160;
         dec #Attr.3;
-        let Str.70 : [C {U64, U8}, C Str] = Ok Str.71;
-        ret Str.70;
+        let Str.159 : [C {U64, U8}, C Str] = TagId(1) Str.160;
+        ret Str.159;
     else
-        let Str.67 : U8 = StructAtIndex 3 #Attr.3;
-        let Str.68 : U64 = StructAtIndex 0 #Attr.3;
+        let Str.156 : U8 = StructAtIndex 3 #Attr.3;
+        let Str.157 : U64 = StructAtIndex 0 #Attr.3;
         dec #Attr.3;
-        let Str.66 : {U64, U8} = Struct {Str.68, Str.67};
-        let Str.65 : [C {U64, U8}, C Str] = Err Str.66;
-        ret Str.65;
+        let Str.155 : {U64, U8} = Struct {Str.157, Str.156};
+        let Str.154 : [C {U64, U8}, C Str] = TagId(0) Str.155;
+        ret Str.154;
 
 procedure Test.0 ():
     let Test.9 : Str = "abc";

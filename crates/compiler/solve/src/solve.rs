@@ -2370,7 +2370,7 @@ fn make_specialization_decision(subs: &Subs, var: Variable) -> SpecializeDecisio
         | FlexVar(..)
         | RecursionVar { .. }
         | LambdaSet(..)
-        | RangedNumber(_, _) => {
+        | RangedNumber(..) => {
             internal_error!("unexpected")
         }
     }
