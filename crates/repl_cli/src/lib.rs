@@ -9,7 +9,7 @@ use std::borrow::Cow;
 use std::io;
 use target_lexicon::Triple;
 
-use roc_build::link::module_to_dylib;
+use roc_build::link::llvm_module_to_dylib;
 use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
@@ -300,7 +300,7 @@ fn gen_and_eval_llvm<'a>(
         );
     }
 
-    let lib = module_to_dylib(env.module, &target, opt_level)
+    let lib = llvm_module_to_dylib(env.module, &target, opt_level)
         .expect("Error loading compiled dylib for test");
 
     let app = CliApp { lib };
