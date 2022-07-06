@@ -196,21 +196,13 @@ pub fn expect_mono_module_to_dylib<'a>(
     target: Triple,
     loaded: MonomorphizedModule<'a>,
     opt_level: OptLevel,
-) -> Result<
-    (
-        libloading::Library,
-        bumpalo::collections::Vec<'a, &'a str>,
-        Subs,
-    ),
-    libloading::Error,
-> {
+) -> Result<(libloading::Library, bumpalo::collections::Vec<'a, &'a str>), libloading::Error> {
     let target_info = TargetInfo::from(&target);
 
     let MonomorphizedModule {
         procedures,
         entry_point,
         interns,
-        subs,
         ..
     } = loaded;
 
@@ -221,7 +213,7 @@ pub fn expect_mono_module_to_dylib<'a>(
     ));
 
     let module = arena.alloc(module);
-    let (module_pass, function_pass) =
+    let (module_pass, _function_pass) =
         roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
 
     let (dibuilder, compile_unit) = roc_gen_llvm::llvm::build::Env::new_debug_info(module);
@@ -273,7 +265,7 @@ pub fn expect_mono_module_to_dylib<'a>(
         );
     }
 
-    llvm_module_to_dylib(env.module, &target, opt_level).map(|lib| (lib, expects, subs))
+    llvm_module_to_dylib(env.module, &target, opt_level).map(|lib| (lib, expects))
 }
 
 pub fn mono_module_to_dylib<'a>(
