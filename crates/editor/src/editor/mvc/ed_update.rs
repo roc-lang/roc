@@ -3168,7 +3168,7 @@ pub mod test_ed_update {
 
         assert_type_tooltips_clean(
             ovec!["val = [ [ 0, 1, \"2\" ], [ 3, 4, 5 ┃] ]"],
-            ovec!["List (Num *)", "List <type mismatch>"],
+            ovec!["List (Num *)", "List (List <type mismatch>)"],
         )?;
 
         Ok(())
