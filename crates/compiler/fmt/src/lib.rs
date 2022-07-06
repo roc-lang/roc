@@ -120,6 +120,18 @@ impl<'a> Buf<'a> {
     pub fn fmt_end_of_file(&mut self) {
         fmt_text_eof(&mut self.text)
     }
+
+    pub fn ends_with_space(&self) -> bool {
+        self.spaces_to_flush > 0 || self.text.ends_with(' ')
+    }
+
+    pub fn ends_with_newline(&self) -> bool {
+        self.spaces_to_flush == 0 && self.text.ends_with('\n')
+    }
+
+    fn is_empty(&self) -> bool {
+        self.spaces_to_flush == 0 && self.text.is_empty()
+    }
 }
 
 /// Ensures the text ends in a newline with no whitespace preceding it.
