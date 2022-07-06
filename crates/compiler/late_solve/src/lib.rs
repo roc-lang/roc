@@ -225,26 +225,3 @@ pub fn unify(
         Unified::Failure(..) | Unified::BadType(..) => Err(UnificationFailed),
     }
 }
-
-pub fn hack(
-    lset: Variable,
-    home: ModuleId,
-    arena: &Bump,
-    subs: &mut Subs,
-    abilities: &AbilitiesView,
-    derived_module: &SharedDerivedModule,
-    exposed_by_module: &ExposedByModule,
-) {
-    let mut subs_proxy = SubsProxy::new(home, subs, derived_module);
-    let late_phase = LatePhase { home, abilities };
-    let mut uls_of_var = roc_types::subs::UlsOfVar::default();
-    uls_of_var.add(lset, lset);
-    compact_lambda_sets_of_vars(
-        &mut subs_proxy,
-        arena,
-        &mut Pools::default(),
-        uls_of_var,
-        &late_phase,
-        exposed_by_module,
-    );
-}

@@ -2669,7 +2669,8 @@ fn specialize_suspended<'a>(
                     v
                 }
                 None => {
-                    if env.home == ModuleId::DERIVED && name.module_id() == ModuleId::DERIVED {
+                    if env.home == ModuleId::DERIVED && name.name().module_id() == ModuleId::DERIVED
+                    {
                         // TODO: This can happen when we find another symbol to derive, but haven't
                         // yet derived it. We don't need this branch if we make deriving closer to
                         // mono and have derived impls assembled into procs here, rather than in
@@ -2680,7 +2681,7 @@ fn specialize_suspended<'a>(
                     } else {
                         // TODO this assumes the specialization is done by another module
                         // make sure this does not become a problem down the road!
-                        debug_assert!(name.module_id() != name.module_id());
+                        debug_assert!(name.name().module_id() != name.name().module_id());
                     }
                     continue;
                 }
@@ -2923,7 +2924,7 @@ fn specialize_external<'a>(
     host_exposed_variables: &[(Symbol, Variable)],
     partial_proc_id: PartialProcId,
 ) -> Result<Proc<'a>, LayoutProblem> {
-    dbg!(("spec ", proc_name));
+    dbg!(("spec ", lambda_name));
     let partial_proc = procs.partial_procs.get_id(partial_proc_id);
     let captured_symbols = partial_proc.captured_symbols;
 
