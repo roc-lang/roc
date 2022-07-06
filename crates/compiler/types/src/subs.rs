@@ -3991,9 +3991,6 @@ impl StorageSubs {
     pub fn as_inner_mut(&mut self) -> &mut Subs {
         &mut self.subs
     }
-    pub fn as_inner(&self) -> &Subs {
-        &self.subs
-    }
 
     pub fn as_inner(&self) -> &Subs {
         &self.subs
