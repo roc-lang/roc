@@ -1492,33 +1492,33 @@ fn solve(
             // https://github.com/rtfeldman/roc/issues/3207 is resolved, this may be redundant
             // anyway.
             &Resolve(OpportunisticResolve {
-                specialization_variable: _,
-                specialization_expectation: _,
-                member: _,
-                specialization_id: _,
+                specialization_variable,
+                specialization_expectation,
+                member,
+                specialization_id,
             }) => {
-                // if let Some(Resolved::Specialization(specialization)) =
-                //     resolve_ability_specialization(
-                //         subs,
-                //         abilities_store,
-                //         member,
-                //         specialization_variable,
-                //     )
-                // {
-                //     abilities_store.insert_resolved(specialization_id, specialization);
+                if let Some(Resolved::Specialization(specialization)) =
+                    resolve_ability_specialization(
+                        subs,
+                        abilities_store,
+                        member,
+                        specialization_variable,
+                    )
+                {
+                    abilities_store.insert_resolved(specialization_id, specialization);
 
-                //     // We must now refine the current type state to account for this specialization.
-                //     let lookup_constr = arena.alloc(Constraint::Lookup(
-                //         specialization,
-                //         specialization_expectation,
-                //         Region::zero(),
-                //     ));
-                //     stack.push(Work::Constraint {
-                //         env,
-                //         rank,
-                //         constraint: lookup_constr,
-                //     });
-                // }
+                    // We must now refine the current type state to account for this specialization.
+                    let lookup_constr = arena.alloc(Constraint::Lookup(
+                        specialization,
+                        specialization_expectation,
+                        Region::zero(),
+                    ));
+                    stack.push(Work::Constraint {
+                        env,
+                        rank,
+                        constraint: lookup_constr,
+                    });
+                }
 
                 state
             }
@@ -2081,7 +2081,6 @@ fn compact_lambda_set<P: Phase>(
         Some { t_f2: Variable },
         // The specialized lambda set should actually just be dropped, not resolved and unified.
         Drop,
-        // NotYetSpecialized,
     }
 
     let spec = match subs.get_content_without_compacting(c) {
@@ -2119,9 +2118,10 @@ fn compact_lambda_set<P: Phase>(
                     }
                 }
                 Err(DeriveError::UnboundVar) => {
-                    // not specialized yet
-                    todo!()
-                    // Spec::NotYetSpecialized
+                    // not specialized yet, but that also means that it can't possibly be derivable
+                    // at this point?
+                    // TODO: is this right? Revisit if it causes us problems in the future.
+                    Spec::Drop
                 }
                 Err(DeriveError::Underivable) => {
                     // we should have reported an error for this; drop the lambda set.
@@ -2193,9 +2193,6 @@ fn compact_lambda_set<P: Phase>(
     };
 
     match spec {
-        // Spec::NotYetSpecialized => {
-        //     // Do nothing; no compaction ready yet.
-        // }
         Spec::Some { t_f2 } => {
             // Ensure the specialization lambda set is already compacted.
             // if subs.get_root_key(specialized_lambda_set) != subs.get_root_key(this_lambda_set) {

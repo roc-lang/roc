@@ -7281,8 +7281,7 @@ mod solve_expr {
             &[
                 "Fo#f(10) : Fo, b -[[f(10)]]-> ({} -[[13(13) b]]-> ({} -[[] + b:g(8):2]-> {})) | b has G",
                 "Go#g(11) : Go -[[g(11)]]-> ({} -[[14(14)]]-> {})",
-                // TODO this is wrong: why is there a unspecialized lambda set left over?
-                "Fo#f(10) : Fo, Go -[[f(10)]]-> ({} -[[13(13) Go]]-> ({} -[[14(14)]]-> {})) | b has G",
+                "Fo#f(10) : Fo, Go -[[f(10)]]-> ({} -[[13(13) Go]]-> ({} -[[14(14)]]-> {}))",
             ],
         );
     }

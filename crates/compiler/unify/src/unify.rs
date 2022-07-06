@@ -1208,6 +1208,64 @@ fn separate_union_lambdas(
     }
 }
 
+fn unify_unspecialized_lambdas<M: MetaCollector>(
+    subs: &mut Subs,
+    pool: &mut Pool,
+    uls1: SubsSlice<Uls>,
+    uls2: SubsSlice<Uls>,
+) -> Result<SubsSlice<Uls>, Outcome<M>> {
+    // For now we merge all variables of unspecialized lambdas in a lambda set that share the same
+    // ability member/region.
+    // See the section "A property that's lost, and how we can hold on to it" of
+    // solve/docs/ambient_lambda_set_specialization.md to see how we can loosen this restriction.
+
+    // Note that we don't need to update the bookkeeping of variable -> lambda set to be resolved,
+    // because if we had v1 -> lset1, and now lset1 ~ lset2, then afterward either lset1 still
+    // resolves to itself or re-points to lset2.
+    // In either case the merged unspecialized lambda sets will be there.
+    match (uls1.is_empty(), uls2.is_empty()) {
+        (true, true) => Ok(SubsSlice::default()),
+        (false, true) => Ok(uls1),
+        (true, false) => Ok(uls2),
+        (false, false) => {
+            let mut all_uls = (subs.get_subs_slice(uls1).iter())
+                .chain(subs.get_subs_slice(uls2))
+                .map(|&Uls(var, sym, region)| {
+                    // Take the root key to deduplicate
+                    Uls(subs.get_root_key_without_compacting(var), sym, region)
+                })
+                .collect::<Vec<_>>();
+            // Arrange into partitions of (_, member, region).
+            all_uls.sort_by_key(|&Uls(_, sym, region)| (sym, region));
+
+            // Now merge the variables of unspecialized lambdas pointing to the same
+            // member/region.
+            let mut j = 1;
+            while j < all_uls.len() {
+                let i = j - 1;
+                let Uls(var_i, sym_i, region_i) = all_uls[i];
+                let Uls(var_j, sym_j, region_j) = all_uls[j];
+                if sym_i == sym_j && region_i == region_j {
+                    let outcome = unify_pool(subs, pool, var_i, var_j, Mode::EQ);
+                    if !outcome.mismatches.is_empty() {
+                        return Err(outcome);
+                    }
+                    // Keep the Uls in position `i` and remove the one in position `j`.
+                    all_uls.remove(j);
+                } else {
+                    // Keep both Uls, look at the next one.
+                    j += 1;
+                }
+            }
+
+            Ok(SubsSlice::extend_new(
+                &mut subs.unspecialized_lambda_sets,
+                all_uls,
+            ))
+        }
+    }
+}
+
 fn unify_lambda_set_help<M: MetaCollector>(
     subs: &mut Subs,
     pool: &mut Pool,
@@ -1274,26 +1332,11 @@ fn unify_lambda_set_help<M: MetaCollector>(
         (None, None) => OptVariable::NONE,
     };
 
-    // Combine the unspecialized lambda sets as needed. Note that we don't need to update the
-    // bookkeeping of variable -> lambda set to be resolved, because if we had v1 -> lset1, and
-    // now lset1 ~ lset2, then afterward either lset1 still resolves to itself or re-points to
-    // lset2. In either case the merged unspecialized lambda sets will be there.
-    let merged_unspecialized = match (uls1.is_empty(), uls2.is_empty()) {
-        (true, true) => SubsSlice::default(),
-        (false, true) => uls1,
-        (true, false) => uls2,
-        (false, false) => {
-            let mut all_uls = (subs.get_subs_slice(uls1).iter())
-                .chain(subs.get_subs_slice(uls2))
-                .map(|&Uls(var, sym, region)| {
-                    // Take the root key to deduplicate
-                    Uls(subs.get_root_key_without_compacting(var), sym, region)
-                })
-                .collect::<Vec<_>>();
-            all_uls.sort();
-            all_uls.dedup();
-
-            SubsSlice::extend_new(&mut subs.unspecialized_lambda_sets, all_uls)
+    let merged_unspecialized = match unify_unspecialized_lambdas(subs, pool, uls1, uls2) {
+        Ok(merged) => merged,
+        Err(outcome) => {
+            debug_assert!(!outcome.mismatches.is_empty());
+            return outcome;
         }
     };
 
