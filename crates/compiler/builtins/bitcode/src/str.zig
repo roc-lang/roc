@@ -1419,6 +1419,13 @@ fn strConcat(arg1: RocStr, arg2: RocStr) RocStr {
 
         const element_width = 1;
 
+        if (arg1.isUnique() and (arg1.capacity() - arg1.len()) >= arg2.len()) {
+            const destination = arg1.asU8ptr() + arg1.len();
+            @memcpy(destination, arg2.asU8ptr(), arg2.len());
+
+            return arg1;
+        }
+
         if (!arg1.isSmallStr() and arg1.isUnique()) {
             if (arg1.str_bytes) |source_ptr| {
                 const new_source = utils.unsafeReallocate(
