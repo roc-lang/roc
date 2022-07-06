@@ -351,15 +351,28 @@ fn canonicalize_alias<'a>(
                     region: loc_lowercase.region,
                 });
             }
-            None => {
-                is_phantom = true;
+            None => match kind {
+                AliasKind::Structural => {
+                    is_phantom = true;
 
-                env.problems.push(Problem::PhantomTypeArgument {
-                    typ: symbol,
-                    variable_region: loc_lowercase.region,
-                    variable_name: loc_lowercase.value.clone(),
-                });
-            }
+                    env.problems.push(Problem::PhantomTypeArgument {
+                        typ: symbol,
+                        variable_region: loc_lowercase.region,
+                        variable_name: loc_lowercase.value.clone(),
+                    });
+                }
+                AliasKind::Opaque => {
+                    // Opaques can have phantom types.
+                    can_vars.push(Loc {
+                        value: AliasVar {
+                            name: loc_lowercase.value.clone(),
+                            var: var_store.fresh(),
+                            opt_bound_ability: None,
+                        },
+                        region: loc_lowercase.region,
+                    });
+                }
+            },
         }
     }
 
