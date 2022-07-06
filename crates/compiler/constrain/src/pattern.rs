@@ -226,15 +226,14 @@ pub fn constrain_pattern(
             );
         }
 
-        &NumLiteral(var, _, _, bound) => {
-            state.vars.push(var);
-
-            let num_type = builtins::num_num(Type::Variable(var));
+        &NumLiteral(precision_var, _, _, bound) => {
+            state.vars.push(precision_var);
 
             let num_type = builtins::add_numeric_bound_constr(
                 constraints,
                 &mut state.constraints,
-                num_type,
+                precision_var,
+                precision_var,
                 bound,
                 region,
                 Category::Num,
@@ -248,13 +247,14 @@ pub fn constrain_pattern(
             ));
         }
 
-        &IntLiteral(num_var, precision_var, _, _, bound) => {
+        &IntLiteral(num_precision_var, precision_var, _, _, bound) => {
             // First constraint on the free num var; this improves the resolved type quality in
             // case the bound is an alias.
             let num_type = builtins::add_numeric_bound_constr(
                 constraints,
                 &mut state.constraints,
-                Type::Variable(num_var),
+                num_precision_var,
+                num_precision_var,
                 bound,
                 region,
                 Category::Int,
@@ -264,7 +264,7 @@ pub fn constrain_pattern(
             let int_type = builtins::num_int(Type::Variable(precision_var));
 
             state.constraints.push(constraints.equal_types(
-                num_type, // TODO check me if something breaks!
+                num_type.clone(), // TODO check me if something breaks!
                 Expected::NoExpectation(int_type),
                 Category::Int,
                 region,
@@ -272,20 +272,21 @@ pub fn constrain_pattern(
 
             // Also constrain the pattern against the num var, again to reuse aliases if they're present.
             state.constraints.push(constraints.equal_pattern_types(
-                Type::Variable(num_var),
+                num_type,
                 expected,
                 PatternCategory::Int,
                 region,
             ));
         }
 
-        &FloatLiteral(num_var, precision_var, _, _, bound) => {
+        &FloatLiteral(num_precision_var, precision_var, _, _, bound) => {
             // First constraint on the free num var; this improves the resolved type quality in
             // case the bound is an alias.
             let num_type = builtins::add_numeric_bound_constr(
                 constraints,
                 &mut state.constraints,
-                Type::Variable(num_var),
+                num_precision_var,
+                num_precision_var,
                 bound,
                 region,
                 Category::Float,

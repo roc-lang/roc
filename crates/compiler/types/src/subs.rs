@@ -841,8 +841,8 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
             }
             write!(f, ")")
         }
-        Content::RangedNumber(typ, range) => {
-            write!(f, "RangedNumber({:?}, {:?})", typ, range)
+        Content::RangedNumber(range) => {
+            write!(f, "RangedNumber( {:?})", range)
         }
         Content::Error => write!(f, "Error"),
     }
@@ -2202,7 +2202,7 @@ pub enum Content {
     LambdaSet(LambdaSet),
     Structure(FlatType),
     Alias(Symbol, AliasVariables, Variable, AliasKind),
-    RangedNumber(Variable, crate::num::NumericRange),
+    RangedNumber(crate::num::NumericRange),
     Error,
 }
 
@@ -3150,15 +3150,7 @@ fn occurs(
 
                 occurs_union(subs, root_var, &new_seen, include_recursion_var, solved)
             }
-            RangedNumber(typ, _range_vars) => {
-                let mut new_seen = seen.to_owned();
-                new_seen.push(root_var);
-
-                short_circuit_help(subs, root_var, &new_seen, *typ, include_recursion_var)?;
-                // _range_vars excluded because they are not explicitly part of the type.
-
-                Ok(())
-            }
+            RangedNumber(_range_vars) => Ok(()),
         }
     }
 }
@@ -3345,10 +3337,8 @@ fn explicit_substitute(
 
                 in_var
             }
-            RangedNumber(typ, range) => {
-                let new_typ = explicit_substitute(subs, from, to, typ, seen);
-
-                subs.set_content(in_var, RangedNumber(new_typ, range));
+            RangedNumber(range) => {
+                subs.set_content(in_var, RangedNumber(range));
 
                 in_var
             }
@@ -3462,7 +3452,7 @@ fn get_var_names(
                 taken_names
             }
 
-            RangedNumber(typ, _) => get_var_names(subs, typ, taken_names),
+            RangedNumber(_) => taken_names,
 
             Structure(flat_type) => match flat_type {
                 FlatType::Apply(_, args) => {
@@ -3685,6 +3675,13 @@ fn content_to_err_type(
         Alias(symbol, args, aliased_to, kind) => {
             let err_type = var_to_err_type(subs, state, aliased_to);
 
+            // Lift RangedNumber up if needed.
+            if let (Symbol::NUM_INT | Symbol::NUM_NUM | Symbol::NUM_INTEGER, ErrorType::Range(_)) =
+                (symbol, &err_type)
+            {
+                return err_type;
+            }
+
             let mut err_args = Vec::with_capacity(args.len());
 
             for var_index in args.into_iter() {
@@ -3703,17 +3700,18 @@ fn content_to_err_type(
             ErrorType::Error
         }
 
-        RangedNumber(typ, range) => {
-            let err_type = var_to_err_type(subs, state, typ);
-
+        RangedNumber(range) => {
             if state.context == ErrorTypeContext::ExpandRanges {
                 let mut types = Vec::new();
                 for var in range.variable_slice() {
                     types.push(var_to_err_type(subs, state, *var));
                 }
-                ErrorType::Range(Box::new(err_type), types)
+                ErrorType::Range(types)
             } else {
-                err_type
+                let content = FlexVar(None);
+                subs.set_content(var, content);
+                subs.set_mark(var, Mark::NONE);
+                var_to_err_type(subs, state, var)
             }
         }
 
@@ -3968,6 +3966,9 @@ impl StorageSubs {
     pub fn as_inner_mut(&mut self) -> &mut Subs {
         &mut self.subs
     }
+    pub fn as_inner(&self) -> &Subs {
+        &self.subs
+    }
 
     pub fn extend_with_variable(&mut self, source: &mut Subs, variable: Variable) -> Variable {
         storage_copy_var_to(source, &mut self.subs, variable)
@@ -4160,7 +4161,7 @@ impl StorageSubs {
                 recursion_var: recursion_var.map(|v| Self::offset_variable(offsets, v)),
                 unspecialized: Self::offset_uls_slice(offsets, *unspecialized),
             }),
-            RangedNumber(typ, range) => RangedNumber(Self::offset_variable(offsets, *typ), *range),
+            RangedNumber(range) => RangedNumber(*range),
             Error => Content::Error,
         }
     }
@@ -4601,11 +4602,8 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
             copy
         }
 
-        RangedNumber(typ, range) => {
-            let new_typ = storage_copy_var_to_help(env, typ);
-
-            let new_content = RangedNumber(new_typ, range);
-
+        RangedNumber(range) => {
+            let new_content = RangedNumber(range);
             env.target.set(copy, make_descriptor(new_content));
             copy
         }
@@ -4729,7 +4727,7 @@ fn is_registered(content: &Content) -> bool {
         Content::Structure(_)
         | Content::RecursionVar { .. }
         | Content::Alias(_, _, _, _)
-        | Content::RangedNumber(_, _)
+        | Content::RangedNumber(_)
         | Content::Error
         | Content::LambdaSet(_) => true,
     }
@@ -5067,10 +5065,8 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
             copy
         }
 
-        RangedNumber(typ, range) => {
-            let new_typ = copy_import_to_help(env, max_rank, typ);
-
-            let new_content = RangedNumber(new_typ, range);
+        RangedNumber(range) => {
+            let new_content = RangedNumber(range);
 
             env.target.set(copy, make_descriptor(new_content));
             copy
@@ -5232,9 +5228,7 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                     stack.push(*var);
                 }
             }
-            &RangedNumber(typ, _) => {
-                stack.push(typ);
-            }
+            &RangedNumber(_) => {}
         }
     }
 

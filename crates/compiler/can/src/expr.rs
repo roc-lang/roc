@@ -63,7 +63,7 @@ impl Output {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Copy)]
 pub enum IntValue {
     I128([u8; 16]),
     U128([u8; 16]),

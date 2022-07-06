@@ -53,10 +53,8 @@ pub fn deep_copy_type_vars_into_expr<'a>(
         let go_help = |e: &Expr| help(subs, e, substitutions);
 
         match expr {
-            Num(var, str, val, bound) => Num(sub!(*var), str.clone(), val.clone(), *bound),
-            Int(v1, v2, str, val, bound) => {
-                Int(sub!(*v1), sub!(*v2), str.clone(), val.clone(), *bound)
-            }
+            Num(var, str, val, bound) => Num(sub!(*var), str.clone(), *val, *bound),
+            Int(v1, v2, str, val, bound) => Int(sub!(*v1), sub!(*v2), str.clone(), *val, *bound),
             Float(v1, v2, str, val, bound) => {
                 Float(sub!(*v1), sub!(*v2), str.clone(), *val, *bound)
             }
@@ -663,10 +661,8 @@ fn deep_copy_type_vars<'a>(
                 })
             }
 
-            RangedNumber(typ, range) => {
-                let new_typ = descend_var!(typ);
-
-                perform_clone!(RangedNumber(new_typ, range))
+            RangedNumber(range) => {
+                perform_clone!(RangedNumber(range))
             }
             Error => Error,
         };
