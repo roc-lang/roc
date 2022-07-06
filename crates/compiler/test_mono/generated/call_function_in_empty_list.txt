@@ -5,7 +5,12 @@ procedure List.5 (#Attr.2, #Attr.3):
 
 procedure Test.2 (Test.3):
     let Test.7 : {} = Struct {};
+<<<<<<< HEAD
     Error a Lambda Set is empty. Most likely there is a type error in your program.
+=======
+    let Test.8 : U8 = GetTagId Test.3;
+    Error a Lambda Set isempty. Most likely there is a type error in your program.
+>>>>>>> 1d9e5043e (Update mono tests)
 
 procedure Test.0 ():
     let Test.1 : List [] = Array [];
