@@ -2958,3 +2958,37 @@ fn with_capacity() {
         RocList<u64>
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn call_function_in_empty_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            lst : List ({} -> {})
+            lst = []
+            List.map lst \f -> f {}
+            "#
+        ),
+        RocList::from_slice(&[]),
+        RocList<()>
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+// TODO to be improved, if we can generate the void function type for the function in the list,
+// this should succeed.
+#[should_panic(expected = r#"Roc failed with message: "#)]
+fn call_function_in_empty_list_unbound() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            lst = []
+            List.map lst \f -> f {}
+            "#
+        ),
+        RocList::from_slice(&[]),
+        RocList<()>
+    )
+}
