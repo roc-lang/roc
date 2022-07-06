@@ -121,6 +121,7 @@ pub enum LowLevel {
     RefCountDec,
     BoxExpr,
     UnboxExpr,
+    Unreachable,
 }
 
 macro_rules! higher_order {

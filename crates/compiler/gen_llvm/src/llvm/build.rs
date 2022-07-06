@@ -6090,6 +6090,20 @@ fn run_low_level<'a, 'ctx, 'env>(
         PtrCast | RefCountInc | RefCountDec => {
             unreachable!("Not used in LLVM backend: {:?}", op);
         }
+
+        Unreachable => match RocReturn::from_layout(env, layout) {
+            RocReturn::Return => {
+                let basic_type = basic_type_from_layout(env, layout);
+                basic_type.const_zero()
+            }
+            RocReturn::ByPointer => {
+                let basic_type = basic_type_from_layout(env, layout);
+                let ptr = env.builder.build_alloca(basic_type, "unreachable_alloca");
+                env.builder.build_store(ptr, basic_type.const_zero());
+
+                ptr.into()
+            }
+        },
     }
 }
 
