@@ -32,8 +32,27 @@ pub fn fmt_default_spaces<'a, 'buf>(
     }
 }
 
+/// Like fmt_spaces, but disallows two consecutive newlines.
+pub fn fmt_spaces_no_blank_lines<'a, 'buf, I>(buf: &mut Buf<'buf>, spaces: I, indent: u16)
+where
+    I: Iterator<Item = &'a CommentOrNewline<'a>>,
+{
+    fmt_spaces_max_consecutive_newlines(buf, spaces, 1, indent)
+}
+
 pub fn fmt_spaces<'a, 'buf, I>(buf: &mut Buf<'buf>, spaces: I, indent: u16)
 where
+    I: Iterator<Item = &'a CommentOrNewline<'a>>,
+{
+    fmt_spaces_max_consecutive_newlines(buf, spaces, 2, indent)
+}
+
+fn fmt_spaces_max_consecutive_newlines<'a, 'buf, I>(
+    buf: &mut Buf<'buf>,
+    spaces: I,
+    max_consecutive_newlines: usize,
+    indent: u16,
+) where
     I: Iterator<Item = &'a CommentOrNewline<'a>>,
 {
     use self::CommentOrNewline::*;
@@ -41,17 +60,16 @@ where
     // Only ever print two newlines back to back.
     // (Two newlines renders as one blank line.)
     let mut consecutive_newlines = 0;
-
     let mut encountered_comment = false;
 
     for space in spaces {
         match space {
             Newline => {
-                if !encountered_comment && (consecutive_newlines < 2) {
+                if !encountered_comment && (consecutive_newlines < max_consecutive_newlines) {
                     buf.newline();
 
                     // Don't bother incrementing it if we're already over the limit.
-                    // There's no upside, and it might eventually overflow,
+                    // There's no upside, and it might eventually overflow.
                     consecutive_newlines += 1;
                 }
             }

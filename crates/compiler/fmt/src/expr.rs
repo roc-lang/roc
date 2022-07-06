@@ -2,7 +2,10 @@ use crate::annotation::{Formattable, Newlines, Parens};
 use crate::collection::{fmt_collection, Braces};
 use crate::def::fmt_defs;
 use crate::pattern::fmt_pattern;
-use crate::spaces::{count_leading_newlines, fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
+use crate::spaces::{
+    count_leading_newlines, fmt_comments_only, fmt_spaces, fmt_spaces_no_blank_lines, NewlineAt,
+    INDENT,
+};
 use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
@@ -756,15 +759,16 @@ fn fmt_when<'a, 'buf>(
 
         buf.push_str(" ->");
 
-        if is_multiline_expr {
-            buf.newline();
-        } else {
-            buf.spaces(1);
-        }
-
         match expr.value {
             Expr::SpaceBefore(nested, spaces) => {
-                fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent + (INDENT * 2));
+                fmt_spaces_no_blank_lines(buf, spaces.iter(), indent + (INDENT * 2));
+
+                if is_multiline_expr {
+                    buf.ensure_ends_in_newline();
+                } else {
+                    buf.spaces(1);
+                }
+
                 nested.format_with_options(
                     buf,
                     Parens::NotNeeded,
@@ -773,6 +777,12 @@ fn fmt_when<'a, 'buf>(
                 );
             }
             _ => {
+                if is_multiline_expr {
+                    buf.ensure_ends_in_newline();
+                } else {
+                    buf.spaces(1);
+                }
+
                 expr.format_with_options(
                     buf,
                     Parens::NotNeeded,

@@ -4044,6 +4044,13 @@ mod test_fmt {
                     4
                         / 5 # comment 5
                         < 1 # comment 6
+                46 # first pattern comment
+                    | 95 # alternative comment 1
+                    | 126 # alternative comment 2
+                    | 150 -> # This comment goes after the ->
+                    # This comment is for the expr
+                    Str.appendScalar output (Num.toU32 byte)
+                        |> Result.withDefault "" # this will never fail
                 _ ->
                     42
             "#
