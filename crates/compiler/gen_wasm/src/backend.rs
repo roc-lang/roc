@@ -516,16 +516,22 @@ impl<'a> WasmBackend<'a> {
         for (i, wrapper_arg) in wrapper_arg_layouts.iter().enumerate() {
             let is_closure_data = i == 0; // Skip closure data (first for wrapper, last for inner)
             let is_return_pointer = i == wrapper_arg_layouts.len() - 1; // Skip return pointer (may not be an arg for inner. And if it is, swaps from end to start)
-            if is_closure_data || is_return_pointer || wrapper_arg.stack_size(TARGET_INFO) == 0 {
+            if is_closure_data || is_return_pointer {
                 continue;
             }
+
+            let inner_layout = match wrapper_arg {
+                Layout::Boxed(inner) => inner,
+                x => internal_error!("Expected a Boxed layout, got {:?}", x),
+            };
+            if inner_layout.stack_size(TARGET_INFO) == 0 {
+                continue;
+            }
+
+            // Load the argument pointer. If it's a primitive value, dereference it too.
             n_inner_wasm_args += 1;
-
-            // Load wrapper argument. They're all pointers.
             self.code_builder.get_local(LocalId(i as u32));
-
-            // Dereference any primitive-valued arguments
-            self.dereference_boxed_value(wrapper_arg);
+            self.dereference_boxed_value(inner_layout);
         }
 
         // If the inner function has closure data, it's the last arg of the inner fn
@@ -593,14 +599,20 @@ impl<'a> WasmBackend<'a> {
             self.code_builder.get_local(LocalId(0));
             n_inner_args += 1;
         }
+
+        let inner_layout = match value_layout {
+            Layout::Boxed(inner) => inner,
+            x => internal_error!("Expected a Boxed layout, got {:?}", x),
+        };
         self.code_builder.get_local(LocalId(1));
-        self.dereference_boxed_value(&value_layout);
+        self.dereference_boxed_value(inner_layout);
         self.code_builder.get_local(LocalId(2));
-        self.dereference_boxed_value(&value_layout);
+        self.dereference_boxed_value(inner_layout);
 
         // Call the wrapped inner function
         let inner_wasm_fn_index = self.fn_index_offset + inner_lookup_idx as u32;
-        self.code_builder.call(inner_wasm_fn_index, n_inner_args, true);
+        self.code_builder
+            .call(inner_wasm_fn_index, n_inner_args, true);
 
         // Write empty function header (local variables array with zero length)
         self.code_builder.build_fn_header_and_footer(&[], 0, None);
@@ -614,37 +626,34 @@ impl<'a> WasmBackend<'a> {
         self.reset();
     }
 
-    fn dereference_boxed_value(&mut self, boxed_layout: &Layout) {
+    fn dereference_boxed_value(&mut self, inner: &Layout) {
         use Align::*;
 
-        match boxed_layout {
-            Layout::Boxed(inner) => match inner {
-                Layout::Builtin(Builtin::Int(IntWidth::U8 | IntWidth::I8)) => {
-                    self.code_builder.i32_load8_u(Bytes1, 0);
-                }
-                Layout::Builtin(Builtin::Int(IntWidth::U16 | IntWidth::I16)) => {
-                    self.code_builder.i32_load16_u(Bytes2, 0);
-                }
-                Layout::Builtin(Builtin::Int(IntWidth::U32 | IntWidth::I32)) => {
-                    self.code_builder.i32_load(Bytes4, 0);
-                }
-                Layout::Builtin(Builtin::Int(IntWidth::U64 | IntWidth::I64)) => {
-                    self.code_builder.i64_load(Bytes8, 0);
-                }
-                Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
-                    self.code_builder.f32_load(Bytes4, 0);
-                }
-                Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
-                    self.code_builder.f64_load(Bytes8, 0);
-                }
-                Layout::Builtin(Builtin::Bool) => {
-                    self.code_builder.i32_load8_u(Bytes1, 0);
-                }
-                _ => {
-                    // Any other layout is a pointer, which we've already loaded. Nothing to do!
-                }
-            },
-            x => internal_error!("Expected a Box layout, got {:?}", x),
+        match inner {
+            Layout::Builtin(Builtin::Int(IntWidth::U8 | IntWidth::I8)) => {
+                self.code_builder.i32_load8_u(Bytes1, 0);
+            }
+            Layout::Builtin(Builtin::Int(IntWidth::U16 | IntWidth::I16)) => {
+                self.code_builder.i32_load16_u(Bytes2, 0);
+            }
+            Layout::Builtin(Builtin::Int(IntWidth::U32 | IntWidth::I32)) => {
+                self.code_builder.i32_load(Bytes4, 0);
+            }
+            Layout::Builtin(Builtin::Int(IntWidth::U64 | IntWidth::I64)) => {
+                self.code_builder.i64_load(Bytes8, 0);
+            }
+            Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                self.code_builder.f32_load(Bytes4, 0);
+            }
+            Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                self.code_builder.f64_load(Bytes8, 0);
+            }
+            Layout::Builtin(Builtin::Bool) => {
+                self.code_builder.i32_load8_u(Bytes1, 0);
+            }
+            _ => {
+                // Any other layout is a pointer, which we've already loaded. Nothing to do!
+            }
         }
     }
 
