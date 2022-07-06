@@ -1652,3 +1652,33 @@ fn lambda_set_niche_same_layout_different_constructor() {
         "#
     )
 }
+
+#[mono_test]
+fn choose_u64_layout() {
+    indoc!(
+        r#"
+        9999999999999999999 + 1
+        "#
+    )
+}
+
+#[mono_test]
+fn choose_i128_layout() {
+    indoc!(
+        r#"
+        {
+            a: 18446744073709551616 + 1,
+            b: -9223372036854775809 + 1,
+        }
+        "#
+    )
+}
+
+#[mono_test]
+fn choose_u128_layout() {
+    indoc!(
+        r#"
+        170141183460469231731687303715884105728 + 1
+        "#
+    )
+}

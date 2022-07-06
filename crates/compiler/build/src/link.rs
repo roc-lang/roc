@@ -65,6 +65,16 @@ pub fn link(
 }
 
 fn find_zig_str_path() -> PathBuf {
+    // First try using the lib path relative to the executable location.
+    let exe_relative_str_path = std::env::current_exe()
+        .ok()
+        .and_then(|path| Some(path.parent()?.join("lib").join("str.zig")));
+    if let Some(exe_relative_str_path) = exe_relative_str_path {
+        if std::path::Path::exists(&exe_relative_str_path) {
+            return exe_relative_str_path;
+        }
+    }
+
     let zig_str_path = PathBuf::from("crates/compiler/builtins/bitcode/src/str.zig");
 
     if std::path::Path::exists(&zig_str_path) {
@@ -1090,7 +1100,7 @@ fn link_windows(
     todo!("Add windows support to the surgical linker. See issue #2608.")
 }
 
-pub fn module_to_dylib(
+pub fn llvm_module_to_dylib(
     module: &inkwell::module::Module,
     target: &Triple,
     opt_level: OptLevel,

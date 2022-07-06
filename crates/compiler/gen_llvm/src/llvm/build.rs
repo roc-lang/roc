@@ -4181,6 +4181,89 @@ pub fn build_procedures_return_main<'a, 'ctx, 'env>(
     promote_to_main_function(env, mod_solutions, entry_point.symbol, entry_point.layout)
 }
 
+pub fn build_procedures_expose_expects<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    opt_level: OptLevel,
+    procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
+    entry_point: EntryPoint<'a>,
+) -> Vec<'a, &'a str> {
+    use bumpalo::collections::CollectIn;
+
+    // this is not entirely accurate: it will treat every top-level bool value (turned into a
+    // zero-argument thunk) as an expect.
+    let expects: Vec<_> = procedures
+        .keys()
+        .filter_map(|(symbol, proc_layout)| {
+            if proc_layout.arguments.is_empty() && proc_layout.result == Layout::bool() {
+                Some(*symbol)
+            } else {
+                None
+            }
+        })
+        .collect_in(env.arena);
+
+    let mod_solutions = build_procedures_help(
+        env,
+        opt_level,
+        procedures,
+        entry_point,
+        Some(Path::new("/tmp/test.ll")),
+    );
+
+    let captures_niche = CapturesNiche::no_niche();
+
+    let top_level = ProcLayout {
+        arguments: &[],
+        result: Layout::bool(),
+        captures_niche,
+    };
+
+    let mut expect_names = Vec::with_capacity_in(expects.len(), env.arena);
+
+    for symbol in expects.iter().copied() {
+        let it = top_level.arguments.iter().copied();
+        let bytes =
+            roc_alias_analysis::func_name_bytes_help(symbol, it, captures_niche, &top_level.result);
+        let func_name = FuncName(&bytes);
+        let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
+
+        let mut it = func_solutions.specs();
+        let func_spec = it.next().unwrap();
+        debug_assert!(
+            it.next().is_none(),
+            "we expect only one specialization of this symbol"
+        );
+
+        // NOTE fake layout; it is only used for debug prints
+        let roc_main_fn = function_value_by_func_spec(
+            env,
+            *func_spec,
+            symbol,
+            &[],
+            captures_niche,
+            &Layout::UNIT,
+        );
+
+        let name = roc_main_fn.get_name().to_str().unwrap();
+
+        let expect_name = &format!("Expect_{}", name);
+        let expect_name = env.arena.alloc_str(expect_name);
+        expect_names.push(&*expect_name);
+
+        // Add main to the module.
+        let _ = expose_function_to_host_help_c_abi(
+            env,
+            name,
+            roc_main_fn,
+            top_level.arguments,
+            top_level.result,
+            &format!("Expect_{}", name),
+        );
+    }
+
+    expect_names
+}
+
 fn build_procedures_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
@@ -5352,11 +5435,51 @@ fn run_low_level<'a, 'ctx, 'env>(
             BasicValueEnum::IntValue(is_zero)
         }
         StrCountGraphemes => {
-            // Str.countGraphemes : Str -> Int
+            // Str.countGraphemes : Str -> Nat
             debug_assert_eq!(args.len(), 1);
 
             let string = load_symbol(scope, &args[0]);
             call_bitcode_fn(env, &[string], bitcode::STR_COUNT_GRAPEHEME_CLUSTERS)
+        }
+        StrGetScalarUnsafe => {
+            // Str.getScalarUnsafe : Str, Nat -> { bytesParsed : Nat, scalar : U32 }
+            debug_assert_eq!(args.len(), 2);
+
+            let string = load_symbol(scope, &args[0]);
+            let index = load_symbol(scope, &args[1]);
+            call_bitcode_fn(env, &[string, index], bitcode::STR_GET_SCALAR_UNSAFE)
+        }
+        StrCountUtf8Bytes => {
+            // Str.countGraphemes : Str -> Nat
+            debug_assert_eq!(args.len(), 1);
+
+            let string = load_symbol(scope, &args[0]);
+            call_bitcode_fn(env, &[string], bitcode::STR_COUNT_UTF8_BYTES)
+        }
+        StrSubstringUnsafe => {
+            // Str.substringUnsafe : Str, Nat, Nat -> Str
+            debug_assert_eq!(args.len(), 3);
+
+            let string = load_symbol(scope, &args[0]);
+            let start = load_symbol(scope, &args[1]);
+            let length = load_symbol(scope, &args[2]);
+            call_str_bitcode_fn(env, &[string, start, length], bitcode::STR_SUBSTRING_UNSAFE)
+        }
+        StrReserve => {
+            // Str.reserve : Str, Nat -> Str
+            debug_assert_eq!(args.len(), 2);
+
+            let string = load_symbol(scope, &args[0]);
+            let capacity = load_symbol(scope, &args[1]);
+            call_str_bitcode_fn(env, &[string, capacity], bitcode::STR_RESERVE)
+        }
+        StrAppendScalar => {
+            // Str.appendScalar : Str, U32 -> Str
+            debug_assert_eq!(args.len(), 2);
+
+            let string = load_symbol(scope, &args[0]);
+            let capacity = load_symbol(scope, &args[1]);
+            call_str_bitcode_fn(env, &[string, capacity], bitcode::STR_APPEND_SCALAR)
         }
         StrTrim => {
             // Str.trim : Str -> Str
@@ -5486,8 +5609,17 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             list_prepend(env, original_wrapper, elem, elem_layout)
         }
+        StrGetUnsafe => {
+            // List.getUnsafe : List elem, Nat -> elem
+            debug_assert_eq!(args.len(), 2);
+
+            let wrapper_struct = load_symbol(scope, &args[0]);
+            let elem_index = load_symbol(scope, &args[1]);
+
+            call_bitcode_fn(env, &[wrapper_struct, elem_index], bitcode::STR_GET_UNSAFE)
+        }
         ListGetUnsafe => {
-            // List.get : List elem, Nat -> [Ok elem, OutOfBounds]*
+            // List.getUnsafe : List elem, Nat -> elem
             debug_assert_eq!(args.len(), 2);
 
             let (wrapper_struct, list_layout) = load_symbol_and_layout(scope, &args[0]);
@@ -5974,6 +6106,20 @@ fn run_low_level<'a, 'ctx, 'env>(
         PtrCast | RefCountInc | RefCountDec => {
             unreachable!("Not used in LLVM backend: {:?}", op);
         }
+
+        Unreachable => match RocReturn::from_layout(env, layout) {
+            RocReturn::Return => {
+                let basic_type = basic_type_from_layout(env, layout);
+                basic_type.const_zero()
+            }
+            RocReturn::ByPointer => {
+                let basic_type = basic_type_from_layout(env, layout);
+                let ptr = env.builder.build_alloca(basic_type, "unreachable_alloca");
+                env.builder.build_store(ptr, basic_type.const_zero());
+
+                ptr.into()
+            }
+        },
     }
 }
 

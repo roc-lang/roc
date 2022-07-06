@@ -23,7 +23,7 @@ macro_rules! wasm32_sized_primitive {
 }
 
 wasm32_sized_primitive!(
-    u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, f32, f64, bool, RocDec, RocOrder,
+    u8, i8, u16, i16, u32, i32, char, u64, i64, u128, i128, f32, f64, bool, RocDec, RocOrder,
 );
 
 impl Wasm32Sized for () {

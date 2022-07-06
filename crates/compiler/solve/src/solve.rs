@@ -1855,7 +1855,7 @@ fn compact_lambda_set<P: Phase>(
             | FlexVar(..)
             | RecursionVar { .. }
             | LambdaSet(..)
-            | RangedNumber(_, _) => {
+            | RangedNumber(_) => {
                 internal_error!("unexpected")
             }
         };
@@ -2174,9 +2174,8 @@ fn type_to_variable<'a>(
             Variable(_) | EmptyRec | EmptyTagUnion => {
                 unreachable!("This variant should never be deferred!")
             }
-            RangedNumber(typ, range) => {
-                let ty_var = helper!(typ);
-                let content = Content::RangedNumber(ty_var, *range);
+            RangedNumber(range) => {
+                let content = Content::RangedNumber(*range);
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
@@ -3266,7 +3265,7 @@ fn adjust_rank_content(
             rank
         }
 
-        RangedNumber(typ, _) => adjust_rank(subs, young_mark, visit_mark, group_rank, *typ),
+        RangedNumber(_) => group_rank,
     }
 }
 
@@ -3556,8 +3555,8 @@ fn deep_copy_var_help(
                 );
             }
 
-            RangedNumber(typ, range) => {
-                let new_content = RangedNumber(work!(typ), range);
+            RangedNumber(range) => {
+                let new_content = RangedNumber(range);
 
                 subs.set_content_unchecked(copy, new_content);
             }

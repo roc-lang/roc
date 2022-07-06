@@ -3385,6 +3385,7 @@ name = "roc_builtins"
 version = "0.1.0"
 dependencies = [
  "dunce",
+ "fs_extra",
  "lazy_static",
  "roc_collections",
  "roc_module",
@@ -3900,6 +3901,31 @@ dependencies = [
  "roc_std",
  "roc_target",
  "roc_types",
+]
+
+[[package]]
+name = "roc_repl_expect"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "const_format",
+ "inkwell 0.1.0",
+ "libloading",
+ "roc_build",
+ "roc_builtins",
+ "roc_collections",
+ "roc_load",
+ "roc_module",
+ "roc_mono",
+ "roc_parse",
+ "roc_repl_eval",
+ "roc_reporting",
+ "roc_std",
+ "roc_target",
+ "roc_types",
+ "rustyline",
+ "rustyline-derive",
+ "target-lexicon",
 ]
 
 [[package]]

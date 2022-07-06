@@ -13,6 +13,7 @@ pub enum LowLevel {
     StrEndsWith,
     StrSplit,
     StrCountGraphemes,
+    StrCountUtf8Bytes,
     StrFromInt,
     StrFromUtf8,
     StrFromUtf8Range,
@@ -24,6 +25,11 @@ pub enum LowLevel {
     StrTrimRight,
     StrToNum,
     StrToScalars,
+    StrGetUnsafe,
+    StrSubstringUnsafe,
+    StrReserve,
+    StrAppendScalar,
+    StrGetScalarUnsafe,
     ListLen,
     ListWithCapacity,
     ListGetUnsafe,
@@ -115,6 +121,7 @@ pub enum LowLevel {
     RefCountDec,
     BoxExpr,
     UnboxExpr,
+    Unreachable,
 }
 
 macro_rules! higher_order {
@@ -165,6 +172,7 @@ impl LowLevelWrapperType {
 
         match symbol {
             Symbol::STR_CONCAT => CanBeReplacedBy(StrConcat),
+            Symbol::STR_GET_UNSAFE => CanBeReplacedBy(StrGetUnsafe),
             Symbol::STR_TO_SCALARS => CanBeReplacedBy(StrToScalars),
             Symbol::STR_JOIN_WITH => CanBeReplacedBy(StrJoinWith),
             Symbol::STR_IS_EMPTY => CanBeReplacedBy(StrIsEmpty),
@@ -173,10 +181,13 @@ impl LowLevelWrapperType {
             Symbol::STR_ENDS_WITH => CanBeReplacedBy(StrEndsWith),
             Symbol::STR_SPLIT => CanBeReplacedBy(StrSplit),
             Symbol::STR_COUNT_GRAPHEMES => CanBeReplacedBy(StrCountGraphemes),
+            Symbol::STR_COUNT_UTF8_BYTES => CanBeReplacedBy(StrCountUtf8Bytes),
             Symbol::STR_FROM_UTF8 => WrapperIsRequired,
             Symbol::STR_FROM_UTF8_RANGE => WrapperIsRequired,
             Symbol::STR_TO_UTF8 => CanBeReplacedBy(StrToUtf8),
             Symbol::STR_REPEAT => CanBeReplacedBy(StrRepeat),
+            Symbol::STR_RESERVE => CanBeReplacedBy(StrReserve),
+            Symbol::STR_APPEND_SCALAR_UNSAFE => CanBeReplacedBy(StrAppendScalar),
             Symbol::STR_TRIM => CanBeReplacedBy(StrTrim),
             Symbol::STR_TRIM_LEFT => CanBeReplacedBy(StrTrimLeft),
             Symbol::STR_TRIM_RIGHT => CanBeReplacedBy(StrTrimRight),

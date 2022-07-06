@@ -146,6 +146,7 @@ comptime {
     exportStrFn(str.strSplitInPlaceC, "str_split_in_place");
     exportStrFn(str.countSegments, "count_segments");
     exportStrFn(str.countGraphemeClusters, "count_grapheme_clusters");
+    exportStrFn(str.countUtf8Bytes, "count_utf8_bytes");
     exportStrFn(str.startsWith, "starts_with");
     exportStrFn(str.startsWithScalar, "starts_with_scalar");
     exportStrFn(str.endsWith, "ends_with");
@@ -154,6 +155,11 @@ comptime {
     exportStrFn(str.strNumberOfBytes, "number_of_bytes");
     exportStrFn(str.strFromFloatC, "from_float");
     exportStrFn(str.strEqual, "equal");
+    exportStrFn(str.substringUnsafe, "substring_unsafe");
+    exportStrFn(str.getUnsafe, "get_unsafe");
+    exportStrFn(str.reserve, "reserve");
+    exportStrFn(str.getScalarUnsafe, "get_scalar_unsafe");
+    exportStrFn(str.appendScalar, "append_scalar");
     exportStrFn(str.strToUtf8C, "to_utf8");
     exportStrFn(str.fromUtf8C, "from_utf8");
     exportStrFn(str.fromUtf8RangeC, "from_utf8_range");

@@ -586,7 +586,7 @@ fn add_type_help<'a>(
                 add_type_help(env, layout, *real_var, Some(*name), types)
             }
         }
-        Content::RangedNumber(_, _) => todo!(),
+        Content::RangedNumber(_) => todo!(),
         Content::Error => todo!(),
         Content::RecursionVar { structure, .. } => {
             let type_id = types.add(RocType::RecursivePointer(TypeId::PENDING), layout);

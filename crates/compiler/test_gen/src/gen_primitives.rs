@@ -173,7 +173,7 @@ fn when_two_element_tag_first() {
     assert_evals_to!(
         indoc!(
             r#"
-            x : [A (Int *), B (Int *)]
+            x : [A (Int a), B (Int a)]
             x = A 0x2
 
             when x is
@@ -192,7 +192,7 @@ fn when_two_element_tag_second() {
     assert_evals_to!(
         indoc!(
             r#"
-            x : [A (Int *), B (Int *)]
+            x : [A (Int a), B (Int a)]
             x = B 0x3
 
             when x is

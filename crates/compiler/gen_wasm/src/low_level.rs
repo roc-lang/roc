@@ -218,6 +218,7 @@ impl<'a> LowLevelCall<'a> {
             // Str
             StrConcat => self.load_args_and_call_zig(backend, bitcode::STR_CONCAT),
             StrToScalars => self.load_args_and_call_zig(backend, bitcode::STR_TO_SCALARS),
+            StrGetUnsafe => self.load_args_and_call_zig(backend, bitcode::STR_GET_UNSAFE),
             StrJoinWith => self.load_args_and_call_zig(backend, bitcode::STR_JOIN_WITH),
             StrIsEmpty => match backend.storage.get(&self.arguments[0]) {
                 StoredValue::StackMemory { location, .. } => {
@@ -238,6 +239,9 @@ impl<'a> LowLevelCall<'a> {
             StrSplit => self.load_args_and_call_zig(backend, bitcode::STR_STR_SPLIT),
             StrCountGraphemes => {
                 self.load_args_and_call_zig(backend, bitcode::STR_COUNT_GRAPEHEME_CLUSTERS)
+            }
+            StrCountUtf8Bytes => {
+                self.load_args_and_call_zig(backend, bitcode::STR_COUNT_UTF8_BYTES)
             }
             StrToNum => {
                 let number_layout = match self.ret_layout {
@@ -285,8 +289,16 @@ impl<'a> LowLevelCall<'a> {
             StrTrimLeft => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_LEFT),
             StrTrimRight => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_RIGHT),
             StrToUtf8 => self.load_args_and_call_zig(backend, bitcode::STR_TO_UTF8),
+            StrReserve => self.load_args_and_call_zig(backend, bitcode::STR_RESERVE),
             StrRepeat => self.load_args_and_call_zig(backend, bitcode::STR_REPEAT),
+            StrAppendScalar => self.load_args_and_call_zig(backend, bitcode::STR_APPEND_SCALAR),
             StrTrim => self.load_args_and_call_zig(backend, bitcode::STR_TRIM),
+            StrGetScalarUnsafe => {
+                self.load_args_and_call_zig(backend, bitcode::STR_GET_SCALAR_UNSAFE)
+            }
+            StrSubstringUnsafe => {
+                self.load_args_and_call_zig(backend, bitcode::STR_SUBSTRING_UNSAFE)
+            }
 
             // List
             ListLen => match backend.storage.get(&self.arguments[0]) {
@@ -1684,6 +1696,17 @@ impl<'a> LowLevelCall<'a> {
             BoxExpr | UnboxExpr => {
                 unreachable!("The {:?} operation is turned into mono Expr", self.lowlevel)
             }
+
+            Unreachable => match self.ret_storage {
+                StoredValue::VirtualMachineStack { value_type, .. }
+                | StoredValue::Local { value_type, .. } => match value_type {
+                    ValueType::I32 => backend.code_builder.i32_const(0),
+                    ValueType::I64 => backend.code_builder.i64_const(0),
+                    ValueType::F32 => backend.code_builder.f32_const(0.0),
+                    ValueType::F64 => backend.code_builder.f64_const(0.0),
+                },
+                StoredValue::StackMemory { .. } => { /* do nothing */ }
+            },
         }
     }
 

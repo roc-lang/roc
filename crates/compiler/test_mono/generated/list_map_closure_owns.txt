@@ -29,8 +29,8 @@ procedure Num.22 (#Attr.2, #Attr.3):
     ret Num.188;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.38 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.38;
+    let Str.155 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.155;
 
 procedure Test.1 ():
     let Test.21 : Str = "lllllllllllllllllllllooooooooooong";

@@ -1,7 +1,7 @@
 use crate::helpers::from_wasmer_memory::FromWasmerMemory;
 use inkwell::module::Module;
 use libloading::Library;
-use roc_build::link::module_to_dylib;
+use roc_build::link::llvm_module_to_dylib;
 use roc_build::program::FunctionIterator;
 use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;

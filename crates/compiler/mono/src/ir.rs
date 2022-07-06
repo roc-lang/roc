@@ -17,7 +17,7 @@ use roc_debug_flags::{
     ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
 };
 use roc_derive_key::GlobalDerivedSymbols;
-use roc_error_macros::todo_abilities;
+use roc_error_macros::{internal_error, todo_abilities};
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
@@ -3610,66 +3610,22 @@ fn specialize_naked_symbol<'a>(
     )
 }
 
-fn try_make_literal<'a>(
-    env: &mut Env<'a, '_>,
-    can_expr: &roc_can::expr::Expr,
-) -> Option<Literal<'a>> {
+fn try_make_literal<'a>(can_expr: &roc_can::expr::Expr, layout: Layout<'a>) -> Option<Literal<'a>> {
     use roc_can::expr::Expr::*;
 
     match can_expr {
-        Int(_, precision, _, int, _bound) => {
-            match num_argument_to_int_or_float(env.subs, env.target_info, *precision, false) {
-                IntOrFloat::Int(_) => Some(match *int {
-                    IntValue::I128(n) => Literal::Int(n),
-                    IntValue::U128(n) => Literal::U128(n),
-                }),
-                _ => unreachable!("unexpected float precision for integer"),
-            }
+        Int(_, _, int_str, int, _bound) => {
+            Some(make_num_literal(layout, int_str, IntOrFloatValue::Int(*int)).to_expr_literal())
         }
 
-        Float(_, precision, float_str, float, _bound) => {
-            match num_argument_to_int_or_float(env.subs, env.target_info, *precision, true) {
-                IntOrFloat::Float(_) => Some(Literal::Float(*float)),
-                IntOrFloat::DecimalFloatType => {
-                    let dec = match RocDec::from_str(float_str) {
-                        Some(d) => d,
-                        None => panic!(
-                            r"Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message",
-                            float_str
-                        ),
-                    };
-
-                    Some(Literal::Decimal(dec.to_ne_bytes()))
-                }
-                _ => unreachable!("unexpected float precision for integer"),
-            }
-        }
+        Float(_, _, float_str, float, _bound) => Some(
+            make_num_literal(layout, float_str, IntOrFloatValue::Float(*float)).to_expr_literal(),
+        ),
 
         // TODO investigate lifetime trouble
         // Str(string) => Some(Literal::Str(env.arena.alloc(string))),
-        Num(var, num_str, num, _bound) => {
-            // first figure out what kind of number this is
-            match num_argument_to_int_or_float(env.subs, env.target_info, *var, false) {
-                IntOrFloat::Int(_) => Some(match *num {
-                    IntValue::I128(n) => Literal::Int(n),
-                    IntValue::U128(n) => Literal::U128(n),
-                }),
-                IntOrFloat::Float(_) => Some(match *num {
-                    IntValue::I128(n) => Literal::Float(i128::from_ne_bytes(n) as f64),
-                    IntValue::U128(n) => Literal::Float(u128::from_ne_bytes(n) as f64),
-                }),
-                IntOrFloat::DecimalFloatType => {
-                    let dec = match RocDec::from_str(num_str) {
-                        Some(d) => d,
-                        None => panic!(
-                            r"Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message",
-                            num_str
-                        ),
-                    };
-
-                    Some(Literal::Decimal(dec.to_ne_bytes()))
-                }
-            }
+        Num(_, num_str, num, _bound) => {
+            Some(make_num_literal(layout, num_str, IntOrFloatValue::Int(*num)).to_expr_literal())
         }
         _ => None,
     }
@@ -3689,44 +3645,35 @@ pub fn with_hole<'a>(
     let arena = env.arena;
 
     match can_expr {
-        Int(_, precision, _, int, _bound) => {
-            match num_argument_to_int_or_float(env.subs, env.target_info, precision, false) {
-                IntOrFloat::Int(precision) => Stmt::Let(
-                    assigned,
-                    Expr::Literal(match int {
-                        IntValue::I128(n) => Literal::Int(n),
-                        IntValue::U128(n) => Literal::U128(n),
-                    }),
-                    Layout::Builtin(Builtin::Int(precision)),
-                    hole,
-                ),
-                _ => unreachable!("unexpected float precision for integer"),
-            }
-        }
+        Int(_, _, int_str, int, _bound) => assign_num_literal_expr(
+            env,
+            layout_cache,
+            assigned,
+            variable,
+            &int_str,
+            IntOrFloatValue::Int(int),
+            hole,
+        ),
 
-        Float(_, precision, float_str, float, _bound) => {
-            match num_argument_to_int_or_float(env.subs, env.target_info, precision, true) {
-                IntOrFloat::Float(precision) => Stmt::Let(
-                    assigned,
-                    Expr::Literal(Literal::Float(float)),
-                    Layout::Builtin(Builtin::Float(precision)),
-                    hole,
-                ),
-                IntOrFloat::DecimalFloatType => {
-                    let dec = match RocDec::from_str(&float_str) {
-                            Some(d) => d,
-                            None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", float_str),
-                        };
-                    Stmt::Let(
-                        assigned,
-                        Expr::Literal(Literal::Decimal(dec.to_ne_bytes())),
-                        Layout::Builtin(Builtin::Decimal),
-                        hole,
-                    )
-                }
-                _ => unreachable!("unexpected float precision for integer"),
-            }
-        }
+        Float(_, _, float_str, float, _bound) => assign_num_literal_expr(
+            env,
+            layout_cache,
+            assigned,
+            variable,
+            &float_str,
+            IntOrFloatValue::Float(float),
+            hole,
+        ),
+
+        Num(_, num_str, num, _bound) => assign_num_literal_expr(
+            env,
+            layout_cache,
+            assigned,
+            variable,
+            &num_str,
+            IntOrFloatValue::Int(num),
+            hole,
+        ),
 
         Str(string) => Stmt::Let(
             assigned,
@@ -3741,42 +3688,6 @@ pub fn with_hole<'a>(
             Layout::int_width(IntWidth::I32),
             hole,
         ),
-
-        Num(var, num_str, num, _bound) => {
-            // first figure out what kind of number this is
-            match num_argument_to_int_or_float(env.subs, env.target_info, var, false) {
-                IntOrFloat::Int(precision) => Stmt::Let(
-                    assigned,
-                    Expr::Literal(match num {
-                        IntValue::I128(n) => Literal::Int(n),
-                        IntValue::U128(n) => Literal::U128(n),
-                    }),
-                    Layout::int_width(precision),
-                    hole,
-                ),
-                IntOrFloat::Float(precision) => Stmt::Let(
-                    assigned,
-                    Expr::Literal(match num {
-                        IntValue::I128(n) => Literal::Float(i128::from_ne_bytes(n) as f64),
-                        IntValue::U128(n) => Literal::Float(u128::from_ne_bytes(n) as f64),
-                    }),
-                    Layout::float_width(precision),
-                    hole,
-                ),
-                IntOrFloat::DecimalFloatType => {
-                    let dec = match RocDec::from_str(&num_str) {
-                            Some(d) => d,
-                            None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", num_str),
-                        };
-                    Stmt::Let(
-                        assigned,
-                        Expr::Literal(Literal::Decimal(dec.to_ne_bytes())),
-                        Layout::Builtin(Builtin::Decimal),
-                        hole,
-                    )
-                }
-            }
-        }
         LetNonRec(def, cont) => from_can_let(
             env,
             procs,
@@ -4281,8 +4192,12 @@ pub fn with_hole<'a>(
 
             let mut symbol_exprs = Vec::with_capacity_in(loc_elems.len(), env.arena);
 
+            let elem_layout = layout_cache
+                .from_var(env.arena, elem_var, env.subs)
+                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+
             for arg_expr in loc_elems.into_iter() {
-                if let Some(literal) = try_make_literal(env, &arg_expr.value) {
+                if let Some(literal) = try_make_literal(&arg_expr.value, elem_layout) {
                     elements.push(ListLiteralElement::Literal(literal));
                 } else {
                     let symbol = possible_reuse_symbol_or_specialize(
@@ -4299,10 +4214,6 @@ pub fn with_hole<'a>(
                 }
             }
             let arg_symbols = arg_symbols.into_bump_slice();
-
-            let elem_layout = layout_cache
-                .from_var(env.arena, elem_var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
             let expr = Expr::Array {
                 elem_layout,
@@ -8275,40 +8186,20 @@ fn from_can_pattern_help<'a>(
         Underscore => Ok(Pattern::Underscore),
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
         AbilityMemberSpecialization { ident, .. } => Ok(Pattern::Identifier(*ident)),
-        IntLiteral(_, precision_var, _, int, _bound) => {
-            match num_argument_to_int_or_float(env.subs, env.target_info, *precision_var, false) {
-                IntOrFloat::Int(precision) => match *int {
-                    IntValue::I128(n) | IntValue::U128(n) => Ok(Pattern::IntLiteral(n, precision)),
-                },
-                other => {
-                    panic!(
-                        "Invalid precision for int pattern: {:?} has {:?}",
-                        can_pattern, other
-                    )
-                }
-            }
-        }
-        FloatLiteral(_, precision_var, float_str, float, _bound) => {
-            // TODO: Can I reuse num_argument_to_int_or_float here if I pass in true?
-            match num_argument_to_int_or_float(env.subs, env.target_info, *precision_var, true) {
-                IntOrFloat::Int(_) => {
-                    panic!("Invalid precision for float pattern {:?}", precision_var)
-                }
-                IntOrFloat::Float(precision) => {
-                    Ok(Pattern::FloatLiteral(f64::to_bits(*float), precision))
-                }
-                IntOrFloat::DecimalFloatType => {
-                    let dec = match RocDec::from_str(float_str) {
-                        Some(d) => d,
-                        None => panic!(
-                            r"Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message",
-                            float_str
-                        ),
-                    };
-                    Ok(Pattern::DecimalLiteral(dec.to_ne_bytes()))
-                }
-            }
-        }
+        IntLiteral(var, _, int_str, int, _bound) => Ok(make_num_literal_pattern(
+            env,
+            layout_cache,
+            *var,
+            int_str,
+            IntOrFloatValue::Int(*int),
+        )),
+        FloatLiteral(var, _, float_str, float, _bound) => Ok(make_num_literal_pattern(
+            env,
+            layout_cache,
+            *var,
+            float_str,
+            IntOrFloatValue::Float(*float),
+        )),
         StrLiteral(v) => Ok(Pattern::StrLiteral(v.clone())),
         SingleQuote(c) => Ok(Pattern::IntLiteral(
             (*c as i128).to_ne_bytes(),
@@ -8328,30 +8219,13 @@ fn from_can_pattern_help<'a>(
             // TODO(opaques) should be `RuntimeError::OpaqueNotDefined`
             Err(RuntimeError::UnsupportedPattern(loc_ident.region))
         }
-        NumLiteral(var, num_str, num, _bound) => {
-            match num_argument_to_int_or_float(env.subs, env.target_info, *var, false) {
-                IntOrFloat::Int(precision) => Ok(match num {
-                    IntValue::I128(num) | IntValue::U128(num) => {
-                        Pattern::IntLiteral(*num, precision)
-                    }
-                }),
-                IntOrFloat::Float(precision) => {
-                    // TODO: this may be lossy
-                    let num = match *num {
-                        IntValue::I128(n) => f64::to_bits(i128::from_ne_bytes(n) as f64),
-                        IntValue::U128(n) => f64::to_bits(u128::from_ne_bytes(n) as f64),
-                    };
-                    Ok(Pattern::FloatLiteral(num, precision))
-                }
-                IntOrFloat::DecimalFloatType => {
-                    let dec = match RocDec::from_str(num_str) {
-                            Some(d) => d,
-                            None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", num_str),
-                        };
-                    Ok(Pattern::DecimalLiteral(dec.to_ne_bytes()))
-                }
-            }
-        }
+        NumLiteral(var, num_str, num, _bound) => Ok(make_num_literal_pattern(
+            env,
+            layout_cache,
+            *var,
+            num_str,
+            IntOrFloatValue::Int(*num),
+        )),
 
         AppliedTag {
             whole_var,
@@ -8962,77 +8836,99 @@ fn from_can_record_destruct<'a>(
     })
 }
 
-#[derive(Debug)]
-pub enum IntOrFloat {
-    Int(IntWidth),
-    Float(FloatWidth),
-    DecimalFloatType,
+enum IntOrFloatValue {
+    Int(IntValue),
+    Float(f64),
 }
 
-/// Given the `a` in `Num a`, determines whether it's an int or a float
-pub fn num_argument_to_int_or_float(
-    subs: &Subs,
-    target_info: TargetInfo,
-    var: Variable,
-    known_to_be_float: bool,
-) -> IntOrFloat {
-    match subs.get_content_without_compacting(var) {
-        Content::FlexVar(_) | Content::RigidVar(_) if known_to_be_float => {
-            IntOrFloat::Float(FloatWidth::F64)
-        }
-        Content::FlexVar(_) | Content::RigidVar(_) => IntOrFloat::Int(IntWidth::I64), // We default (Num *) to I64
+enum NumLiteral {
+    Int([u8; 16], IntWidth),
+    U128([u8; 16]),
+    Float(f64, FloatWidth),
+    Decimal([u8; 16]),
+}
 
-        Content::Alias(Symbol::NUM_INTEGER, args, _, _) => {
-            debug_assert!(args.len() == 1);
-
-            // Recurse on the second argument
-            let var = subs[args.all_variables().into_iter().next().unwrap()];
-            num_argument_to_int_or_float(subs, target_info, var, false)
-        }
-
-        other @ Content::Alias(symbol, args, _, _) => {
-            if let Some(int_width) = IntWidth::try_from_symbol(*symbol) {
-                return IntOrFloat::Int(int_width);
-            }
-
-            if let Some(float_width) = FloatWidth::try_from_symbol(*symbol) {
-                return IntOrFloat::Float(float_width);
-            }
-
-            match *symbol {
-                Symbol::NUM_FLOATINGPOINT => {
-                    debug_assert!(args.len() == 1);
-
-                    // Recurse on the second argument
-                    let var = subs[args.all_variables().into_iter().next().unwrap()];
-                    num_argument_to_int_or_float(subs, target_info, var, true)
-                }
-
-                Symbol::NUM_DECIMAL => IntOrFloat::DecimalFloatType,
-
-                Symbol::NUM_NAT | Symbol::NUM_NATURAL => {
-                    let int_width = match target_info.ptr_width() {
-                        roc_target::PtrWidth::Bytes4 => IntWidth::U32,
-                        roc_target::PtrWidth::Bytes8 => IntWidth::U64,
-                    };
-
-                    IntOrFloat::Int(int_width)
-                }
-
-                _ => panic!(
-                    "Unrecognized Num type argument for var {:?} with Content: {:?}",
-                    var, other
-                ),
-            }
-        }
-
-        other => {
-            panic!(
-                "Unrecognized Num type argument for var {:?} with Content: {:?}",
-                var, other
-            );
+impl NumLiteral {
+    fn to_expr_literal(&self) -> Literal<'static> {
+        match *self {
+            NumLiteral::Int(n, _) => Literal::Int(n),
+            NumLiteral::U128(n) => Literal::U128(n),
+            NumLiteral::Float(n, _) => Literal::Float(n),
+            NumLiteral::Decimal(n) => Literal::Decimal(n),
         }
     }
+    fn to_pattern(&self) -> Pattern<'static> {
+        match *self {
+            NumLiteral::Int(n, w) => Pattern::IntLiteral(n, w),
+            NumLiteral::U128(_) => todo!(),
+            NumLiteral::Float(n, w) => Pattern::FloatLiteral(f64::to_bits(n), w),
+            NumLiteral::Decimal(n) => Pattern::DecimalLiteral(n),
+        }
+    }
+}
+
+fn make_num_literal(layout: Layout<'_>, num_str: &str, num_value: IntOrFloatValue) -> NumLiteral {
+    match layout {
+        Layout::Builtin(Builtin::Int(width)) => match num_value {
+            IntOrFloatValue::Int(IntValue::I128(n)) => NumLiteral::Int(n, width),
+            IntOrFloatValue::Int(IntValue::U128(n)) => NumLiteral::U128(n),
+            IntOrFloatValue::Float(..) => {
+                internal_error!("Float value where int was expected, should have been a type error")
+            }
+        },
+        Layout::Builtin(Builtin::Float(width)) => match num_value {
+            IntOrFloatValue::Float(n) => NumLiteral::Float(n, width),
+            IntOrFloatValue::Int(int_value) => match int_value {
+                IntValue::I128(n) => NumLiteral::Float(i128::from_ne_bytes(n) as f64, width),
+                IntValue::U128(n) => NumLiteral::Float(u128::from_ne_bytes(n) as f64, width),
+            },
+        },
+        Layout::Builtin(Builtin::Decimal) => {
+            let dec = match RocDec::from_str(num_str) {
+                Some(d) => d,
+                None => internal_error!(
+                    "Invalid decimal for float literal = {}. This should be a type error!",
+                    num_str
+                ),
+            };
+            NumLiteral::Decimal(dec.to_ne_bytes())
+        }
+        layout => internal_error!(
+            "Found a non-num layout where a number was expected: {:?}",
+            layout
+        ),
+    }
+}
+
+fn assign_num_literal_expr<'a>(
+    env: &mut Env<'a, '_>,
+    layout_cache: &mut LayoutCache<'a>,
+    assigned: Symbol,
+    variable: Variable,
+    num_str: &str,
+    num_value: IntOrFloatValue,
+    hole: &'a Stmt<'a>,
+) -> Stmt<'a> {
+    let layout = layout_cache
+        .from_var(env.arena, variable, env.subs)
+        .unwrap();
+    let literal = make_num_literal(layout, num_str, num_value).to_expr_literal();
+
+    Stmt::Let(assigned, Expr::Literal(literal), layout, hole)
+}
+
+fn make_num_literal_pattern<'a>(
+    env: &mut Env<'a, '_>,
+    layout_cache: &mut LayoutCache<'a>,
+    variable: Variable,
+    num_str: &str,
+    num_value: IntOrFloatValue,
+) -> Pattern<'a> {
+    let layout = layout_cache
+        .from_var(env.arena, variable, env.subs)
+        .unwrap();
+    let literal = make_num_literal(layout, num_str, num_value);
+    literal.to_pattern()
 }
 
 type ToLowLevelCallArguments<'a> = (
