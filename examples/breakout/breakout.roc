@@ -14,19 +14,19 @@ numCols = 8
 numBlocks = numRows * numCols
 
 Model : {
-        # Screen height and width
-        height : F32,
-        width : F32,
-        # Paddle X-coordinate
-        paddleX : F32,
-        # Ball coordinates
-        ballX : F32,
-        ballY : F32,
-        dBallX : F32,
-        # delta x - how much it moves per tick
-        dBallY : F32,
-        # delta y - how much it moves per tick
-    }
+    # Screen height and width
+    height : F32,
+    width : F32,
+    # Paddle X-coordinate
+    paddleX : F32,
+    # Ball coordinates
+    ballX : F32,
+    ballY : F32,
+    dBallX : F32,
+    # delta x - how much it moves per tick
+    dBallY : F32,
+    # delta y - how much it moves per tick
+}
 
 init : Bounds -> Model
 init = \{ width, height } -> {
