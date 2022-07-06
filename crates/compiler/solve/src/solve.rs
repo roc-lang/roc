@@ -374,16 +374,7 @@ impl Aliases {
         // assumption: an alias does not (transitively) syntactically contain itself
         // (if it did it would have to be a recursive tag union, which we should have fixed up
         // during canonicalization)
-        let alias_variable = type_to_variable(
-            subs,
-            rank,
-            pools,
-            arena,
-            self,
-            &t,
-            false,
-            alias_variables.lambda_set_variables(),
-        );
+        let alias_variable = type_to_variable(subs, rank, pools, arena, self, &t, false);
 
         {
             match self.aliases.iter_mut().find(|(s, _, _, _)| *s == symbol) {
@@ -2327,16 +2318,7 @@ pub(crate) fn type_to_var(
     } else {
         let mut arena = take_scratchpad();
 
-        let var = type_to_variable(
-            subs,
-            rank,
-            pools,
-            &arena,
-            aliases,
-            typ,
-            false,
-            SubsSlice::default(),
-        );
+        let var = type_to_variable(subs, rank, pools, &arena, aliases, typ, false);
 
         arena.reset();
         put_scratchpad(arena);
@@ -2491,11 +2473,7 @@ fn type_to_variable<'a>(
     aliases: &mut Aliases,
     typ: &Type,
     // Helpers for instantiating ambient functions of lambda set variables from type aliases.
-    // TODO: see if we can remove these?
     is_alias_lambda_set_arg: bool,
-    // If we're instantiating a delayed alias in this call, what lambda sets do we need to link to
-    // their ambient function types?
-    delayed_alias_lambda_set_vars: VariableSubsSlice,
 ) -> Variable {
     use bumpalo::collections::Vec;
 
@@ -2505,15 +2483,9 @@ fn type_to_variable<'a>(
         ($typ:expr, $ambient_function_policy:expr) => {{
             match RegisterVariable::from_type(subs, rank, pools, arena, $typ) {
                 RegisterVariable::Direct(var) => {
-                    let slice = subs.get_subs_slice(delayed_alias_lambda_set_vars);
-                    if slice.contains(&var)
-                        || matches!(
-                            $ambient_function_policy,
-                            AmbientFunctionPolicy::Function(..)
-                        )
-                    {
-                        $ambient_function_policy.link_to_alias_lambda_set_var(subs, var);
-                    }
+                    // If the variable is just a type variable but we know we're in a lambda set
+                    // context, try to link to the ambient function.
+                    $ambient_function_policy.link_to_alias_lambda_set_var(subs, var);
 
                     var
                 }
@@ -2750,16 +2722,8 @@ fn type_to_variable<'a>(
                     for (target_index, ls) in it {
                         // We MUST do this now, otherwise when linking the ambient function during
                         // instantiation of the real var, there will be nothing to link against.
-                        let copy_var = type_to_variable(
-                            subs,
-                            rank,
-                            pools,
-                            arena,
-                            aliases,
-                            &ls.0,
-                            true,
-                            SubsSlice::default(),
-                        );
+                        let copy_var =
+                            type_to_variable(subs, rank, pools, arena, aliases, &ls.0, true);
                         subs.variables[target_index] = copy_var;
                     }
 
@@ -2884,19 +2848,9 @@ fn type_to_variable<'a>(
                     }
                 };
 
-                let lambda_set_variables_slice = alias_variables.lambda_set_variables();
-
                 // cannot use helper! here because this variable may be involved in unification below
-                let alias_variable = type_to_variable(
-                    subs,
-                    rank,
-                    pools,
-                    arena,
-                    aliases,
-                    alias_type,
-                    false,
-                    lambda_set_variables_slice,
-                );
+                let alias_variable =
+                    type_to_variable(subs, rank, pools, arena, aliases, alias_type, false);
                 // TODO(opaques): I think host-exposed aliases should always be structural
                 // (when does it make sense to give a host an opaque type?)
                 let content = Content::Alias(
