@@ -2194,18 +2194,6 @@ fn compact_lambda_set<P: Phase>(
 
     match spec {
         Spec::Some { t_f2 } => {
-            // Ensure the specialization lambda set is already compacted.
-            // if subs.get_root_key(specialized_lambda_set) != subs.get_root_key(this_lambda_set) {
-            //     compact_lambda_set(
-            //         subs,
-            //         arena,
-            //         pools,
-            //         specialized_lambda_set,
-            //         phase,
-            //         derived_symbols,
-            //     );
-            // }
-
             // Ensure the specialized ambient function we'll unify with is not a generalized one, but one
             // at the rank of the lambda set being compacted.
             let t_f2 = deep_copy_var_in(subs, target_rank, pools, t_f2, arena);
