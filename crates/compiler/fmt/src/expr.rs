@@ -656,11 +656,22 @@ fn fmt_when<'a, 'buf>(
                 buf.newline();
                 match &expr_below {
                     Expr::SpaceAfter(expr_above, spaces_below_expr) => {
+                        // If any of the spaces is a newline, add a newline at the top.
+                        // Otherwise leave it as just a comment.
+                        let newline_at = if spaces_below_expr
+                            .iter()
+                            .any(|spaces| matches!(spaces, CommentOrNewline::Newline))
+                        {
+                            NewlineAt::Top
+                        } else {
+                            NewlineAt::None
+                        };
+
                         expr_above.format(buf, condition_indent);
                         fmt_comments_only(
                             buf,
                             spaces_below_expr.iter(),
-                            NewlineAt::Top,
+                            newline_at,
                             condition_indent,
                         );
                         buf.newline();
