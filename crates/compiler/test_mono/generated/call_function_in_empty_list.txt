@@ -8,7 +8,7 @@ procedure Test.2 (Test.3):
     let Test.6 : {} = CallByName Test.8 Test.7;
     ret Test.6;
 
-procedure Test.8 (Test.9, #Attr.12):
+procedure Test.8 (Test.9):
     Error The `#UserApp.IdentId(8)` function could not be generated, likely due to a type error.
 
 procedure Test.0 ():
