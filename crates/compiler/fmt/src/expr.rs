@@ -699,6 +699,8 @@ fn fmt_when<'a, 'buf>(
     buf.push_str("is");
     buf.newline();
 
+    let mut prev_branch_was_multiline = false;
+
     for (branch_index, branch) in branches.iter().enumerate() {
         let expr = &branch.value;
         let patterns = &branch.patterns;
@@ -721,12 +723,22 @@ fn fmt_when<'a, 'buf>(
 
                         if branch_index > 0 {
                             buf.ensure_ends_in_newline();
+
+                            if prev_branch_was_multiline {
+                                // Multiline branches always get a full blank line after them.
+                                buf.newline();
+                            }
                         }
 
                         fmt_pattern(buf, sub_pattern, indent + INDENT, Parens::NotNeeded);
                     }
                     other => {
                         buf.ensure_ends_in_newline();
+
+                        if prev_branch_was_multiline {
+                            // Multiline branches always get a full blank line after them.
+                            buf.newline();
+                        }
 
                         fmt_pattern(buf, other, indent + INDENT, Parens::NotNeeded);
                     }
@@ -789,6 +801,8 @@ fn fmt_when<'a, 'buf>(
                 );
             }
         }
+
+        prev_branch_was_multiline = is_multiline_expr || is_multiline_patterns;
     }
 }
 
