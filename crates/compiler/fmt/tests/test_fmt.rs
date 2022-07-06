@@ -4038,6 +4038,27 @@ mod test_fmt {
     }
 
     #[test]
+    fn multiline_binop_conditional_with_comments() {
+        expr_formats_same(indoc!(
+            r#"
+            if
+                x
+                    + 1 # comment 1
+                    > 0 # comment 2
+            then
+                y
+                    * 2 # comment 3
+                    < 1 # comment 4
+            else
+                42
+            "#
+        ));
+    }
+            "#
+        ));
+    }
+
+    #[test]
     fn precedence_conflict_greater_than() {
         expr_formats_same(indoc!(
             r#"

@@ -828,10 +828,22 @@ fn fmt_if<'a, 'buf>(
                     match &expr_below {
                         Expr::SpaceAfter(expr_above, spaces_after_expr) => {
                             expr_above.format(buf, return_indent);
+
+                            // If any of the spaces is a newline, add a newline at the top.
+                            // Otherwise leave it as just a comment.
+                            let newline_at = if spaces_after_expr
+                                .iter()
+                                .any(|spaces| matches!(spaces, CommentOrNewline::Newline))
+                            {
+                                NewlineAt::Top
+                            } else {
+                                NewlineAt::None
+                            };
+
                             fmt_comments_only(
                                 buf,
                                 spaces_after_expr.iter(),
-                                NewlineAt::None,
+                                newline_at,
                                 return_indent,
                             );
                             buf.newline();
@@ -876,12 +888,18 @@ fn fmt_if<'a, 'buf>(
                         Expr::SpaceAfter(expr_above, spaces_above) => {
                             expr_above.format(buf, return_indent);
 
-                            fmt_comments_only(
-                                buf,
-                                spaces_above.iter(),
-                                NewlineAt::Top,
-                                return_indent,
-                            );
+                            // If any of the spaces is a newline, add a newline at the top.
+                            // Otherwise leave it as just a comment.
+                            let newline_at = if spaces_above
+                                .iter()
+                                .any(|spaces| matches!(spaces, CommentOrNewline::Newline))
+                            {
+                                NewlineAt::Top
+                            } else {
+                                NewlineAt::None
+                            };
+
+                            fmt_comments_only(buf, spaces_above.iter(), newline_at, return_indent);
                             buf.newline();
                         }
 
