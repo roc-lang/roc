@@ -123,7 +123,10 @@ impl Phase for LatePhase<'_> {
 
                 let copied = module_types
                     .storage_subs
-                    .export_variable_to(target_subs, ambient_function);
+                    // TODO: I think this is always okay, but revisit later when we're in a more
+                    // stable position to see if we can get rid of the bookkeeping done as a result
+                    // of this.
+                    .export_variable_to_directly_to_use_site(target_subs, ambient_function);
                 let our_ambient_function_var = copied.variable;
 
                 debug_assert!(matches!(
