@@ -20,11 +20,11 @@ main =
                 |> Task.putLine
 
 Expr : [
-        Add Expr Expr,
-        Mul Expr Expr,
-        Val I64,
-        Var I64,
-    ]
+    Add Expr Expr,
+    Mul Expr Expr,
+    Val I64,
+    Var I64,
+]
 
 mkExpr : I64, I64 -> Expr
 mkExpr = \n, v ->
