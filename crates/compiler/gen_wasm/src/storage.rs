@@ -222,6 +222,7 @@ impl<'a> Storage<'a> {
         arena: &'a Bump,
     ) {
         let mut wide_number_args = Vec::with_capacity_in(args.len(), arena);
+        let mut has_zero_size_arg = false;
 
         for (layout, symbol) in args {
             self.symbol_layouts.insert(*symbol, *layout);
@@ -260,6 +261,7 @@ impl<'a> Storage<'a> {
                             if size == 0 {
                                 // An argument with zero size is purely conceptual, and will not exist in Wasm.
                                 // However we need to track the symbol, so we treat it like a local variable.
+                                has_zero_size_arg = true;
                                 StackMemoryLocation::FrameOffset(0)
                             } else {
                                 StackMemoryLocation::PointerArg(LocalId(local_index))
@@ -282,7 +284,7 @@ impl<'a> Storage<'a> {
         // If any arguments are 128-bit numbers, store them in the stack frame
         // This makes it easier to keep track of which symbols are on the Wasm value stack
         // The frame pointer will be the next local after the arguments
-        if self.stack_frame_size > 0 {
+        if  self.stack_frame_size > 0 || has_zero_size_arg {
             let frame_ptr = LocalId(self.arg_types.len() as u32);
             self.stack_frame_pointer = Some(frame_ptr);
             self.local_types.push(PTR_TYPE);
