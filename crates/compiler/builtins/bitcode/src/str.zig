@@ -50,7 +50,7 @@ pub const RocStr = extern struct {
     // This clones the pointed-to bytes if they won't fit in a
     // small string, and returns a (pointer, len) tuple which points to them.
     pub fn init(bytes_ptr: [*]const u8, length: usize) RocStr {
-        var result = RocStr.allocate(InPlace.Clone, length);
+        var result = RocStr.allocate(length, length);
         @memcpy(result.asU8ptr(), bytes_ptr, length);
 
         return result;
@@ -60,26 +60,26 @@ pub const RocStr = extern struct {
         return RocStr.init(slice.ptr, slice.len);
     }
 
-    pub fn initBig(_: InPlace, number_of_chars: usize) RocStr {
-        const first_element = utils.allocateWithRefcount(number_of_chars, @sizeOf(usize));
+    fn allocateBig(length: usize, capacity: usize) RocStr {
+        const first_element = utils.allocateWithRefcount(capacity, @sizeOf(usize));
 
         return RocStr{
             .str_bytes = first_element,
-            .str_len = number_of_chars,
-            .str_capacity = number_of_chars,
+            .str_len = length,
+            .str_capacity = capacity,
         };
     }
 
     // allocate space for a (big or small) RocStr, but put nothing in it yet
-    pub fn allocate(result_in_place: InPlace, number_of_chars: usize) RocStr {
-        const result_is_big = number_of_chars >= SMALL_STRING_SIZE;
+    pub fn allocate(length: usize, capacity: usize) RocStr {
+        const result_is_big = capacity >= SMALL_STRING_SIZE;
 
         if (result_is_big) {
-            return RocStr.initBig(result_in_place, number_of_chars);
+            return RocStr.allocateBig(length, capacity);
         } else {
             var string = RocStr.empty();
 
-            string.asU8ptr()[@sizeOf(RocStr) - 1] = @intCast(u8, number_of_chars) | 0b1000_0000;
+            string.asU8ptr()[@sizeOf(RocStr) - 1] = @intCast(u8, length) | 0b1000_0000;
 
             return string;
         }
@@ -150,12 +150,12 @@ pub const RocStr = extern struct {
         return true;
     }
 
-    pub fn clone(in_place: InPlace, str: RocStr) RocStr {
+    pub fn clone(str: RocStr) RocStr {
         if (str.isSmallStr()) {
             // just return the bytes
             return str;
         } else {
-            var new_str = RocStr.initBig(in_place, str.str_len);
+            var new_str = RocStr.allocateBig(str.str_len, str.str_len);
 
             var old_bytes: [*]u8 = @ptrCast([*]u8, str.str_bytes);
             var new_bytes: [*]u8 = @ptrCast([*]u8, new_str.str_bytes);
@@ -169,29 +169,38 @@ pub const RocStr = extern struct {
     pub fn reallocate(
         self: RocStr,
         new_length: usize,
+        new_capacity: usize,
     ) RocStr {
         const element_width = 1;
+        const old_capacity = self.getCapacity();
 
         if (self.str_bytes) |source_ptr| {
             if (self.isUnique() and !self.isSmallStr()) {
-                const new_source = utils.unsafeReallocate(source_ptr, RocStr.alignment, self.len(), new_length, element_width);
+                const new_source = utils.unsafeReallocate(
+                    source_ptr,
+                    RocStr.alignment,
+                    old_capacity,
+                    new_capacity,
+                    element_width,
+                );
 
-                return RocStr{ .str_bytes = new_source, .str_len = new_length, .str_capacity = new_length };
+                return RocStr{ .str_bytes = new_source, .str_len = new_length, .str_capacity = new_capacity };
             }
         }
 
-        return self.reallocateFresh(new_length);
+        return self.reallocateFresh(new_length, new_capacity);
     }
 
     /// reallocate by explicitly making a new allocation and copying elements over
     pub fn reallocateFresh(
         self: RocStr,
         new_length: usize,
+        new_capacity: usize,
     ) RocStr {
         const old_length = self.len();
         const delta_length = new_length - old_length;
 
-        const result = RocStr.allocate(InPlace.Clone, new_length);
+        const result = RocStr.allocate(new_length, new_capacity);
 
         // transfer the memory
 
@@ -227,7 +236,7 @@ pub const RocStr = extern struct {
         }
     }
 
-    pub fn capacity(self: RocStr) usize {
+    pub fn getCapacity(self: RocStr) usize {
         if (self.isSmallStr()) {
             return SMALL_STR_MAX_LENGTH;
         } else {
@@ -316,7 +325,7 @@ pub const RocStr = extern struct {
     }
 
     pub fn asSliceWithCapacity(self: RocStr) []u8 {
-        return self.asU8ptr()[0..self.capacity()];
+        return self.asU8ptr()[0..self.getCapacity()];
     }
 
     pub fn asU8ptr(self: RocStr) [*]u8 {
@@ -490,7 +499,7 @@ fn strToScalars(string: RocStr) callconv(.C) RocList {
     var capacity = str_len;
 
     if (!string.isSmallStr()) {
-        capacity = string.capacity();
+        capacity = string.getCapacity();
     }
 
     // For purposes of preallocation, assume the number of code points is the same
@@ -1203,7 +1212,6 @@ pub fn countUtf8Bytes(string: RocStr) callconv(.C) usize {
 
 pub fn substringUnsafe(string: RocStr, start: usize, length: usize) callconv(.C) RocStr {
     const slice = string.asSlice()[start .. start + length];
-
     return RocStr.fromSlice(slice);
 }
 
@@ -1275,7 +1283,7 @@ pub fn repeat(string: RocStr, count: usize) callconv(.C) RocStr {
     const bytes_len = string.len();
     const bytes_ptr = string.asU8ptr();
 
-    var ret_string = RocStr.allocate(.Clone, count * bytes_len);
+    var ret_string = RocStr.allocate(count * bytes_len, count * bytes_len);
     var ret_string_ptr = ret_string.asU8ptr();
 
     var i: usize = 0;
@@ -1409,48 +1417,16 @@ pub fn strConcatC(arg1: RocStr, arg2: RocStr) callconv(.C) RocStr {
 fn strConcat(arg1: RocStr, arg2: RocStr) RocStr {
     if (arg1.isEmpty()) {
         // the second argument is borrowed, so we must increment its refcount before returning
-        const result_in_place = InPlace.Clone;
-        return RocStr.clone(result_in_place, arg2);
+        return RocStr.clone(arg2);
     } else if (arg2.isEmpty()) {
         // the first argument is owned, so we can return it without cloning
         return arg1;
     } else {
         const combined_length = arg1.len() + arg2.len();
 
-        const element_width = 1;
+        const result = arg1.reallocate(combined_length, combined_length);
 
-        if (arg1.isUnique() and (arg1.capacity() - arg1.len()) >= arg2.len()) {
-            const destination = arg1.asU8ptr() + arg1.len();
-            @memcpy(destination, arg2.asU8ptr(), arg2.len());
-
-            return arg1;
-        }
-
-        if (!arg1.isSmallStr() and arg1.isUnique()) {
-            if (arg1.str_bytes) |source_ptr| {
-                const new_source = utils.unsafeReallocate(
-                    source_ptr,
-                    RocStr.alignment,
-                    arg1.len(),
-                    combined_length,
-                    element_width,
-                );
-
-                @memcpy(new_source + arg1.len(), arg2.asU8ptr(), arg2.len());
-
-                return RocStr{
-                    .str_bytes = new_source,
-                    .str_len = combined_length,
-                    .str_capacity = combined_length,
-                };
-            }
-        }
-
-        var result = arg1.reallocateFresh(combined_length);
-        var result_ptr = result.asU8ptr();
-
-        arg1.memcpy(result_ptr);
-        arg2.memcpy(result_ptr + arg1.len());
+        @memcpy(result.asU8ptr() + arg1.len(), arg2.asU8ptr(), arg2.len());
 
         return result;
     }
@@ -1520,7 +1496,7 @@ fn strJoinWith(list: RocListStr, separator: RocStr) RocStr {
         // include size of the separator
         total_size += separator.len() * (len - 1);
 
-        var result = RocStr.allocate(InPlace.Clone, total_size);
+        var result = RocStr.allocate(total_size, total_size);
         var result_ptr = result.asU8ptr();
 
         var offset: usize = 0;
@@ -2376,7 +2352,7 @@ test "capacity: small string" {
     var data = RocStr.init(data_bytes, data_bytes.len);
     defer data.deinit();
 
-    try expectEqual(data.capacity(), SMALL_STR_MAX_LENGTH);
+    try expectEqual(data.getCapacity(), SMALL_STR_MAX_LENGTH);
 }
 
 test "capacity: big string" {
@@ -2384,14 +2360,14 @@ test "capacity: big string" {
     var data = RocStr.init(data_bytes, data_bytes.len);
     defer data.deinit();
 
-    try expectEqual(data.capacity(), data_bytes.len);
+    try expectEqual(data.getCapacity(), data_bytes.len);
 }
 
 pub fn appendScalar(string: RocStr, scalar_u32: u32) callconv(.C) RocStr {
     const scalar = @intCast(u21, scalar_u32);
     const width = std.unicode.utf8CodepointSequenceLength(scalar) catch unreachable;
 
-    var output = string.reallocate(string.len() + width);
+    var output = string.reallocate(string.len() + width, string.len() + width);
     var slice = output.asSliceWithCapacity();
 
     _ = std.unicode.utf8Encode(scalar, slice[string.len() .. string.len() + width]) catch unreachable;
@@ -2460,8 +2436,9 @@ test "appendScalar: big 😀" {
 }
 
 pub fn reserve(string: RocStr, capacity: usize) callconv(.C) RocStr {
-    if (capacity > string.capacity()) {
-        return string.reallocate(capacity);
+    if (capacity > string.getCapacity()) {
+        // expand allocation but keep string length the same
+        return string.reallocate(string.len(), capacity);
     } else {
         return string;
     }
