@@ -3959,6 +3959,60 @@ mod test_fmt {
     }
 
     #[test]
+    fn multiline_binop_with_comments() {
+        expr_formats_same(indoc!(
+            r#"
+            x = 1
+                + 1 # comment 1
+                - 1 # comment 2
+                * 1 # comment 3
+
+            x
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            x = 1
+                + 1 # comment 1
+                * 1 # comment 2
+
+            x
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            x = 1
+                + 1 # comment
+
+            x
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            x = 1
+                * 1
+                + 1 # comment
+
+            x
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            x = 1
+                - 1
+                * 1
+                + 1
+
+            x
+            "#
+        ));
+    }
+
+    #[test]
     fn precedence_conflict_greater_than() {
         expr_formats_same(indoc!(
             r#"
@@ -4266,7 +4320,7 @@ mod test_fmt {
             indoc!(
                 r#"
             interface Foo exposes [] imports []
-            a = 42# Yay greetings
+            a = 42 # Yay greetings
             "#
             ),
         );
