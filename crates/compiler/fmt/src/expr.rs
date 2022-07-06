@@ -699,9 +699,7 @@ fn fmt_when<'a, 'buf>(
     buf.push_str("is");
     buf.newline();
 
-    let mut it = branches.iter().enumerate().peekable();
-
-    while let Some((branch_index, branch)) = it.next() {
+    for (branch_index, branch) in branches.iter().enumerate() {
         let expr = &branch.value;
         let patterns = &branch.patterns;
         let is_multiline_expr = expr.is_multiline();
