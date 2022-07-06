@@ -645,7 +645,7 @@ fn write_content<'a>(
                                     subs,
                                     buf,
                                     parens,
-                                    false,
+                                    write_parens,
                                 );
                             }
                             Symbol::NUM_FLOATINGPOINT => write_float(
