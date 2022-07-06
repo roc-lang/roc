@@ -550,7 +550,7 @@ fn fmt_bin_ops<'a, 'buf>(
         loc_left_side.format_with_options(buf, apply_needs_parens, Newlines::No, curr_indent);
 
         if is_multiline {
-            buf.newline();
+            buf.ensure_ends_in_newline();
             curr_indent = indent + INDENT;
             buf.indent(curr_indent);
         } else {
