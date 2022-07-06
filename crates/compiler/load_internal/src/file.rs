@@ -4664,6 +4664,7 @@ fn build_pending_specializations<'a>(
     mut layout_cache: LayoutCache<'a>,
     target_info: TargetInfo,
     exposed_to_host: ExposedToHost,
+    exposed_by_module: &ExposedByModule,
     abilities_store: AbilitiesStore,
     derived_module: SharedDerivedModule,
 ) -> Msg<'a> {
