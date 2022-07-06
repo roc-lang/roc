@@ -1520,7 +1520,6 @@ fn type_comparison<'b>(
         lines.push(alloc.concat(context_hints));
     }
 
-    dbg!(&comparison.problems);
     lines.extend(problems_to_tip(
         alloc,
         comparison.problems,
