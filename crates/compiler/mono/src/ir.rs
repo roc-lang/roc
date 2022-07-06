@@ -2819,13 +2819,15 @@ fn generate_runtime_error_function<'a>(
 
     let (args, ret_layout) = match layout {
         RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout) => {
-            let mut args = Vec::with_capacity_in(arg_layouts.len(), env.arena);
+            let real_arg_layouts = lambda_set.extend_argument_list(env.arena, arg_layouts);
+            let mut args = Vec::with_capacity_in(real_arg_layouts.len(), env.arena);
 
             for arg in arg_layouts {
                 args.push((*arg, env.unique_symbol()));
             }
-
-            args.push((Layout::LambdaSet(lambda_set), Symbol::ARG_CLOSURE));
+            if real_arg_layouts.len() != arg_layouts.len() {
+                args.push((Layout::LambdaSet(lambda_set), Symbol::ARG_CLOSURE));
+            }
 
             (args.into_bump_slice(), *ret_layout)
         }
