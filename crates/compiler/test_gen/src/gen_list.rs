@@ -2734,7 +2734,7 @@ fn lists_with_incompatible_type_param_in_if() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn map_with_index_multi_record() {
     // see https://github.com/rtfeldman/roc/issues/1700
     assert_evals_to!(
