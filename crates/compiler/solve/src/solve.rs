@@ -1900,11 +1900,11 @@ pub fn compact_lambda_sets_of_vars<P: Phase>(
     // Suppose a type variable `a` with `uls_of_var` mapping `uls_a = {l1, ... ln}` has been instantiated to a concrete type `C_a`.
     while let Some((c_a, uls_a)) = uls_of_var_queue.pop_front() {
         let c_a = subs.get_root_key_without_compacting(c_a);
-        // 1. Let each `l` in `uls_a` be of form `[concrete_lambdas + ... + C:f:r + ...]`.
+        // 1. Let each `l` in `uls_a` be of form `[solved_lambdas + ... + C:f:r + ...]`.
         //    NB: There may be multiple unspecialized lambdas of form `C:f:r, C:f1:r1, ..., C:fn:rn` in `l`.
         //    In this case, let `t1, ... tm` be the other unspecialized lambdas not of form `C:_:_`,
         //    that is, none of which are now specialized to the type `C`. Then, deconstruct
-        //    `l` such that `l' = [concrete_lambdas + t1 + ... + tm + C:f:r]` and `l1 = [[] + C:f1:r1], ..., ln = [[] + C:fn:rn]`.
+        //    `l` such that `l' = [solved_lambdas + t1 + ... + tm + C:f:r]` and `l1 = [[] + C:f1:r1], ..., ln = [[] + C:fn:rn]`.
         //    Replace `l` with `l', l1, ..., ln` in `uls_a`, flattened.
         //    TODO: the flattening step described above
         let uls_a = uls_a.into_vec();
@@ -1939,7 +1939,9 @@ pub fn compact_lambda_sets_of_vars<P: Phase>(
                     .enumerate()
                     .map(|(i, concrete_lambda)| {
                         let (var, unspecialized) = if i == 0 {
-                            // `l' = [concrete_lambdas + t1 + ... + tm + C:f:r`
+                            // The first lambda set contains one concrete lambda, plus all solved
+                            // lambdas, plus all other unspecialized lambdas.
+                            // l' = [solved_lambdas + t1 + ... + tm + C:f:r]
                             let unspecialized = SubsSlice::extend_new(
                                 &mut subs.unspecialized_lambda_sets,
                                 not_concrete
@@ -1948,6 +1950,8 @@ pub fn compact_lambda_sets_of_vars<P: Phase>(
                             );
                             (lambda_set, unspecialized)
                         } else {
+                            // All the other lambda sets consists only of their respective concrete
+                            // lambdas.
                             // ln = [[] + C:fn:rn]
                             let unspecialized = SubsSlice::extend_new(
                                 &mut subs.unspecialized_lambda_sets,
@@ -2100,7 +2104,7 @@ fn compact_lambda_set<P: Phase>(
                     let specialization_symbol_slice =
                         UnionLabels::insert_into_subs(subs, vec![(specialization_symbol, vec![])]);
                     // TODO: This is WRONG, fix it!
-                    let ambient_function = subs.fresh_unnamed_flex_var();
+                    let ambient_function = Variable::NULL;
                     let _lambda_set_for_derived = subs.fresh(Descriptor {
                         content: Content::LambdaSet(subs::LambdaSet {
                             solved: specialization_symbol_slice,
@@ -2501,11 +2505,14 @@ fn type_to_variable<'a>(
         ($typ:expr, $ambient_function_policy:expr) => {{
             match RegisterVariable::from_type(subs, rank, pools, arena, $typ) {
                 RegisterVariable::Direct(var) => {
-                    if delayed_alias_lambda_set_vars.len() > 0 {
-                        let slice = subs.get_subs_slice(delayed_alias_lambda_set_vars);
-                        if slice.contains(&var) {
-                            $ambient_function_policy.link_to_alias_lambda_set_var(subs, var);
-                        }
+                    let slice = subs.get_subs_slice(delayed_alias_lambda_set_vars);
+                    if slice.contains(&var)
+                        || matches!(
+                            $ambient_function_policy,
+                            AmbientFunctionPolicy::Function(..)
+                        )
+                    {
+                        $ambient_function_policy.link_to_alias_lambda_set_var(subs, var);
                     }
 
                     var

@@ -9,7 +9,7 @@ use roc_collections::MutMap;
 use roc_derive_key::GlobalDerivedSymbols;
 use roc_module::symbol::ModuleId;
 use roc_solve::solve::{compact_lambda_sets_of_vars, Phase, Pools};
-use roc_types::subs::{Content, LambdaSet};
+use roc_types::subs::{Content, FlatType, LambdaSet};
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, Variable};
 use roc_unify::unify::{unify as unify_unify, Mode, Unified};
 
@@ -121,19 +121,17 @@ impl Phase for LatePhase<'_> {
                     .as_inner()
                     .get_lambda_set(storage_lambda_set_var);
 
-                todo!("I don't think the ambient function is in the storage subs properly yet");
-
                 let copied = module_types
                     .storage_subs
-                    .export_variable_to(target_subs, storage_lambda_set_var);
-                let our_lambda_set_var = copied.variable;
+                    .export_variable_to(target_subs, ambient_function);
+                let our_ambient_function_var = copied.variable;
 
                 debug_assert!(matches!(
-                    target_subs.get_content_without_compacting(our_lambda_set_var),
-                    Content::LambdaSet(..)
+                    target_subs.get_content_without_compacting(our_ambient_function_var),
+                    Content::Structure(FlatType::Func(..))
                 ));
 
-                our_lambda_set_var
+                our_ambient_function_var
             }
         }
     }
@@ -162,7 +160,7 @@ pub fn unify(
 
             let late_phase = LatePhase { home, abilities };
 
-            compact_lambda_sets_of_vars(
+            let must_implement_constraints = compact_lambda_sets_of_vars(
                 subs,
                 arena,
                 &mut pools,
@@ -170,6 +168,11 @@ pub fn unify(
                 &late_phase,
                 derived_symbols,
             );
+            // At this point we can't do anything with must-implement constraints, since we're no
+            // longer solving. We must assume that they were totally caught during solving.
+            // After we land https://github.com/rtfeldman/roc/issues/3207 this concern should totally
+            // go away.
+            let _ = must_implement_constraints;
             // Pools are only used to keep track of variable ranks for generalization purposes.
             // Since we break generalization during monomorphization, `pools` is irrelevant
             // here. We only need it for `compact_lambda_sets_of_vars`, which is also used in a
