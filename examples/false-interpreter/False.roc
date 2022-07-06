@@ -350,8 +350,8 @@ stepExecCtx = \ctx, char ->
             when result2 is
                 Ok a ->
                     Task.succeed a
-                # Being explicit with error type is required to stop the need to propogate the error parameters to Context.popStack
 
+                # Being explicit with error type is required to stop the need to propogate the error parameters to Context.popStack
                 Err EmptyStack ->
                     Task.fail EmptyStack
 
@@ -366,8 +366,8 @@ stepExecCtx = \ctx, char ->
             when result2 is
                 Ok a ->
                     Task.succeed a
-                # Being explicit with error type is required to stop the need to propogate the error parameters to Context.popStack
 
+                # Being explicit with error type is required to stop the need to propogate the error parameters to Context.popStack
                 Err EmptyStack ->
                     Task.fail EmptyStack
 
@@ -461,8 +461,7 @@ stepExecCtx = \ctx, char ->
 
         0x7E ->
             # `~` bitwise not
-            Task.fromResult (unaryOp ctx (\x -> Num.bitwiseXor x -1))
-        # xor with -1 should be bitwise not
+            Task.fromResult (unaryOp ctx (\x -> Num.bitwiseXor x -1)) # xor with -1 should be bitwise not
 
         0x2C ->
             # `,` write char

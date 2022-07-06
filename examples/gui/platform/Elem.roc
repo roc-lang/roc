@@ -186,7 +186,7 @@ translateOrDrop = \child, toChild, toParent ->
 
                         Err _ ->
                             None
-        # I don't think this should ever happen in practice.
 
+        # I don't think this should ever happen in practice.
         None ->
             None
