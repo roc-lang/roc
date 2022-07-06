@@ -381,7 +381,7 @@ fn find_names_needed(
                 );
             }
         }
-        RangedNumber(range) => {
+        RangedNumber(_) => {
             subs.set_content(variable, FlexVar(None));
             find_names_needed(
                 variable,
