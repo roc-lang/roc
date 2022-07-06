@@ -405,20 +405,7 @@ fn starts_with_newline(expr: &Expr) -> bool {
 
     match expr {
         SpaceBefore(_, comment_or_newline) => {
-            if !comment_or_newline.is_empty() {
-                // safe because we check the length before
-                comment_or_newline.get(0).unwrap().is_newline()
-            } else {
-                false
-            }
-        }
-        SpaceAfter(_, comment_or_newline) => {
-            if !(**comment_or_newline).is_empty() {
-                // safe because we check the length before
-                comment_or_newline.get(0).unwrap().is_newline()
-            } else {
-                false
-            }
+            matches!(comment_or_newline.first(), Some(CommentOrNewline::Newline))
         }
         _ => false,
     }
@@ -829,17 +816,22 @@ fn fmt_if<'a, 'buf>(
 
         if is_multiline_condition {
             match &loc_condition.value {
-                Expr::SpaceBefore(expr_below, spaces_above_expr) => {
-                    fmt_comments_only(buf, spaces_above_expr.iter(), NewlineAt::Top, return_indent);
+                Expr::SpaceBefore(expr_below, spaces_before_expr) => {
+                    fmt_comments_only(
+                        buf,
+                        spaces_before_expr.iter(),
+                        NewlineAt::Top,
+                        return_indent,
+                    );
                     buf.newline();
 
                     match &expr_below {
-                        Expr::SpaceAfter(expr_above, spaces_below_expr) => {
+                        Expr::SpaceAfter(expr_above, spaces_after_expr) => {
                             expr_above.format(buf, return_indent);
                             fmt_comments_only(
                                 buf,
-                                spaces_below_expr.iter(),
-                                NewlineAt::Top,
+                                spaces_after_expr.iter(),
+                                NewlineAt::None,
                                 return_indent,
                             );
                             buf.newline();
