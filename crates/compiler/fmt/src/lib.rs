@@ -53,7 +53,14 @@ impl<'a> Buf<'a> {
 
     pub fn push(&mut self, ch: char) {
         debug_assert!(!self.beginning_of_line);
-        debug_assert!(ch != '\n' && ch != ' ');
+        debug_assert!(
+            ch != '\n',
+            "Don't call buf.push('\\n') - rather, call buf.newline()"
+        );
+        debug_assert!(
+            ch != ' ',
+            "Don't call buf.push(' ') - rather, call buf.spaces(1)"
+        );
 
         self.flush_spaces();
 
@@ -92,7 +99,10 @@ impl<'a> Buf<'a> {
     /// Ensures the current buffer ends in a newline, if it didn't already.
     /// Doesn't add a newline if the buffer already ends in one.
     pub fn ensure_ends_in_newline(&mut self) {
-        if !self.text.ends_with('\n') {
+        if self.spaces_to_flush > 0 {
+            self.flush_spaces();
+            self.newline();
+        } else if !self.text.ends_with('\n') {
             self.newline()
         }
     }
@@ -109,6 +119,18 @@ impl<'a> Buf<'a> {
     /// Ensures the text ends in a newline with no whitespace preceding it.
     pub fn fmt_end_of_file(&mut self) {
         fmt_text_eof(&mut self.text)
+    }
+
+    pub fn ends_with_space(&self) -> bool {
+        self.spaces_to_flush > 0 || self.text.ends_with(' ')
+    }
+
+    pub fn ends_with_newline(&self) -> bool {
+        self.spaces_to_flush == 0 && self.text.ends_with('\n')
+    }
+
+    fn is_empty(&self) -> bool {
+        self.spaces_to_flush == 0 && self.text.is_empty()
     }
 }
 

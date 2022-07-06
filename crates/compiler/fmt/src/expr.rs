@@ -550,7 +550,7 @@ fn fmt_bin_ops<'a, 'buf>(
         loc_left_side.format_with_options(buf, apply_needs_parens, Newlines::No, curr_indent);
 
         if is_multiline {
-            buf.newline();
+            buf.ensure_ends_in_newline();
             curr_indent = indent + INDENT;
             buf.indent(curr_indent);
         } else {
@@ -577,12 +577,13 @@ fn format_spaces<'a, 'buf>(
     newlines: Newlines,
     indent: u16,
 ) {
-    let format_newlines = newlines == Newlines::Yes;
-
-    if format_newlines {
-        fmt_spaces(buf, spaces.iter(), indent);
-    } else {
-        fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
+    match newlines {
+        Newlines::Yes => {
+            fmt_spaces(buf, spaces.iter(), indent);
+        }
+        Newlines::No => {
+            fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
+        }
     }
 }
 

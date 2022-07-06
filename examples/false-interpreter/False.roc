@@ -58,23 +58,19 @@ interpretFile = \filename ->
 isDigit : U8 -> Bool
 isDigit = \char ->
     char
-        >= 0x30# `0`
-
+        >= 0x30 # `0`
         && char
-        <= 0x39# `0`
+        <= 0x39 # `0`
 isWhitespace : U8 -> Bool
 isWhitespace = \char ->
     char
-        == 0xA# new line
-
+        == 0xA # new line
         || char
-        == 0xB# carriage return
-
+        == 0xB # carriage return
         || char
-        == 0x20# space
-
+        == 0x20 # space
         || char
-        == 0x9# tab
+        == 0x9 # tab
 interpretCtx : Context -> Task Context InterpreterErrors
 interpretCtx = \ctx ->
     Task.loop ctx interpretCtxLoop

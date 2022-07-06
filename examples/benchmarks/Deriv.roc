@@ -17,8 +17,7 @@ main =
             f : Expr
             f = pow x x
 
-            nest deriv n f# original koka n = 10
-
+            nest deriv n f # original koka n = 10
                 |> Task.map (\_ -> {})
 
 nest : (I64, Expr -> IO Expr), I64, Expr -> IO Expr

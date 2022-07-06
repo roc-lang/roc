@@ -200,6 +200,31 @@ mod test_fmt {
     }
 
     #[test]
+    fn comment_with_trailing_space() {
+        expr_formats_to(
+            &format!(
+                indoc!(
+                    r#"
+            # first comment{space}
+            x = 0 # second comment{space}
+
+            x
+            "#
+                ),
+                space = " ",
+            ),
+            indoc!(
+                r#"
+            # first comment
+            x = 0 # second comment
+
+            x
+            "#
+            ),
+        );
+    }
+
+    #[test]
     fn def_with_inline_comment() {
         expr_formats_same(indoc!(
             r#"
@@ -3959,6 +3984,60 @@ mod test_fmt {
     }
 
     #[test]
+    fn multiline_binop_with_comments() {
+        expr_formats_same(indoc!(
+            r#"
+            x = 1
+                + 1 # comment 1
+                - 1 # comment 2
+                * 1 # comment 3
+
+            x
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            x = 1
+                + 1 # comment 1
+                * 1 # comment 2
+
+            x
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            x = 1
+                + 1 # comment
+
+            x
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            x = 1
+                * 1
+                + 1 # comment
+
+            x
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            x = 1
+                - 1
+                * 1
+                + 1
+
+            x
+            "#
+        ));
+    }
+
+    #[test]
     fn precedence_conflict_greater_than() {
         expr_formats_same(indoc!(
             r#"
@@ -4266,7 +4345,7 @@ mod test_fmt {
             indoc!(
                 r#"
             interface Foo exposes [] imports []
-            a = 42# Yay greetings
+            a = 42 # Yay greetings
             "#
             ),
         );
@@ -4336,6 +4415,37 @@ mod test_fmt {
             packages {} \
             imports [Task.{ Task }] \
             provides [mainForHost]",
+        );
+    }
+
+    #[test]
+    fn module_defs_with_comments() {
+        module_formats_to(
+            &format!(
+                indoc!(
+                    r#"
+                    interface Foo
+                        exposes []
+                        imports []
+
+                    # comment 1{space}
+                    def = "" # comment 2{space}
+                    # comment 3{space}
+                "#
+                ),
+                space = " "
+            ),
+            indoc!(
+                r#"
+                    interface Foo
+                        exposes []
+                        imports []
+
+                    # comment 1
+                    def = "" # comment 2
+                    # comment 3
+                "#
+            ),
         );
     }
 

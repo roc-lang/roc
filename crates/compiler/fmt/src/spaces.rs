@@ -125,6 +125,12 @@ pub fn fmt_comments_only<'a, 'buf, I>(
 }
 
 fn fmt_comment<'buf>(buf: &mut Buf<'buf>, comment: &str) {
+    // The '#' in a comment should always be preceded by a newline or a space,
+    // unless it's the very beginning of the buffer.
+    if !buf.is_empty() && !buf.ends_with_space() && !buf.ends_with_newline() {
+        buf.spaces(1);
+    }
+
     buf.push('#');
     if !comment.starts_with(' ') {
         buf.spaces(1);
@@ -158,6 +164,12 @@ where
 }
 
 fn fmt_docs<'buf>(buf: &mut Buf<'buf>, docs: &str) {
+    // The "##" in a doc comment should always be preceded by a newline or a space,
+    // unless it's the very beginning of the buffer.
+    if !buf.is_empty() && !buf.ends_with_space() && !buf.ends_with_newline() {
+        buf.spaces(1);
+    }
+
     buf.push_str("##");
     if !docs.is_empty() {
         buf.spaces(1);
