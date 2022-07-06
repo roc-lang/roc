@@ -25,10 +25,8 @@ cheapestOpen = \costFn, model ->
         |> List.keepOks
             (\position ->
                 when Dict.get model.costs position is
-                    Err _ ->
-                        Err {}
-                    Ok cost ->
-                        Ok { cost: cost + costFn position, position }
+                    Err _ -> Err {}
+                    Ok cost -> Ok { cost: cost + costFn position, position }
             )
         |> Quicksort.sortBy .cost
         |> List.first
@@ -38,10 +36,8 @@ cheapestOpen = \costFn, model ->
 reconstructPath : Dict position position, position -> List position
 reconstructPath = \cameFrom, goal ->
     when Dict.get cameFrom goal is
-        Err _ ->
-            []
-        Ok next ->
-            List.append (reconstructPath cameFrom next) goal
+        Err _ -> []
+        Ok next -> List.append (reconstructPath cameFrom next) goal
 
 updateCost : position, position, Model position -> Model position
 updateCost = \current, neighbor, model ->
@@ -65,6 +61,7 @@ updateCost = \current, neighbor, model ->
     when Dict.get model.costs neighbor is
         Err _ ->
             newModel
+
         Ok previousDistance ->
             if distanceTo < previousDistance then
                 newModel
@@ -74,8 +71,7 @@ updateCost = \current, neighbor, model ->
 astar : (position, position -> F64), (position -> Set position), position, Model position -> Result (List position) {}
 astar = \costFn, moveFn, goal, model ->
     when cheapestOpen (\source -> costFn source goal) model is
-        Err {} ->
-            Err {}
+        Err {} -> Err {}
         Ok current ->
             if current == goal then
                 Ok (reconstructPath model.cameFrom goal)

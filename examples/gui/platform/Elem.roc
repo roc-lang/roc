@@ -53,6 +53,7 @@ lazy = \state, render ->
                     # same as the cached one, then we can return exactly
                     # what we had cached.
                     cached
+
                 _ ->
                     # Either the state changed or else we didn't have a
                     # cached value to use. Either way, we need to render
@@ -79,10 +80,13 @@ translate = \child, toChild, toParent ->
     when child is
         Text str ->
             Text str
+
         Col elems ->
             Col (List.map elems \elem -> translate elem toChild toParent)
+
         Row elems ->
             Row (List.map elems \elem -> translate elem toChild toParent)
+
         Button config label ->
             onPress = \parentState, event ->
                 toChild parentState
@@ -90,6 +94,7 @@ translate = \child, toChild, toParent ->
                     |> Action.map \c -> toParent parentState c
 
             Button { onPress } (translate label toChild toParent)
+
         Lazy renderChild ->
             Lazy
                 \parentState ->
@@ -99,6 +104,7 @@ translate = \child, toChild, toParent ->
                         elem: translate toChild toParent newChild,
                         state: toParent parentState state,
                     }
+
         None ->
             None
 
@@ -147,10 +153,13 @@ translateOrDrop = \child, toChild, toParent ->
     when child is
         Text str ->
             Text str
+
         Col elems ->
             Col (List.map elems \elem -> translateOrDrop elem toChild toParent)
+
         Row elems ->
             Row (List.map elems \elem -> translateOrDrop elem toChild toParent)
+
         Button config label ->
             onPress = \parentState, event ->
                 when toChild parentState is
@@ -158,12 +167,14 @@ translateOrDrop = \child, toChild, toParent ->
                         newChild
                             |> config.onPress event
                             |> Action.map \c -> toParent parentState c
+
                     Err _ ->
                         # The child was removed from the list before this onPress handler resolved.
                         # (For example, by a previous event handler that fired simultaneously.)
                         Action.none
 
             Button { onPress } (translateOrDrop label toChild toParent)
+
         Lazy childState renderChild ->
             Lazy
                 (toParent childState)
@@ -172,8 +183,10 @@ translateOrDrop = \child, toChild, toParent ->
                         Ok newChild ->
                             renderChild newChild
                                 |> translateOrDrop toChild toParent
+
                         Err _ ->
                             None
         # I don't think this should ever happen in practice.
+
         None ->
             None

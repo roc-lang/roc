@@ -11,6 +11,7 @@ decode = \bytes, @Decoder decoder ->
     when decoder { bytes, cursor: 0 } is
         Good _ value ->
             Ok value
+
         Bad e ->
             Err e
 
@@ -24,6 +25,7 @@ map = \@Decoder decoder, transform ->
             when decoder state is
                 Good state1 value ->
                     Good state1 (transform value)
+
                 Bad e ->
                     Bad e
 
@@ -36,8 +38,10 @@ map2 = \@Decoder decoder1, @Decoder decoder2, transform ->
                     when decoder2 state2 is
                         Good state3 b ->
                             Good state3 (transform a b)
+
                         Bad e ->
                             Bad e
+
                 Bad e ->
                     Bad e
 
@@ -52,10 +56,13 @@ map3 = \@Decoder decoder1, @Decoder decoder2, @Decoder decoder3, transform ->
                             when decoder3 state3 is
                                 Good state4 c ->
                                     Good state4 (transform a b c)
+
                                 Bad e ->
                                     Bad e
+
                         Bad e ->
                             Bad e
+
                 Bad e ->
                     Bad e
 
@@ -68,6 +75,7 @@ after = \@Decoder decoder, transform ->
                     (@Decoder decoder1) = transform value
 
                     decoder1 state1
+
                 Bad e ->
                     Bad e
 
@@ -77,6 +85,7 @@ u8 = @Decoder
         when List.get state.bytes state.cursor is
             Ok b ->
                 Good { state & cursor: state.cursor + 1 } b
+
             Err _ ->
                 Bad OutOfBytes
 
@@ -94,7 +103,9 @@ loopHelp = \stepper, accum, state ->
     when stepper1 state is
         Good newState (Done value) ->
             Good newState value
+
         Good newState (Loop newAccum) ->
             loopHelp stepper newAccum newState
+
         Bad e ->
             Bad e
