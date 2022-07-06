@@ -330,7 +330,7 @@ impl<'a> Formattable for Expr<'a> {
                 match &ret.value {
                     SpaceBefore(sub_expr, spaces) => {
                         let empty_line_before_return = empty_line_before_expr(&ret.value);
-                        let has_inline_comment = with_inline_comment(&ret.value);
+                        let has_inline_comment = has_line_comment_before(&ret.value);
 
                         if has_inline_comment {
                             buf.spaces(1);
@@ -587,15 +587,13 @@ fn format_spaces<'a, 'buf>(
     }
 }
 
-fn with_inline_comment<'a>(expr: &'a Expr<'a>) -> bool {
+fn has_line_comment_before<'a>(expr: &'a Expr<'a>) -> bool {
     use roc_parse::ast::Expr::*;
 
     match expr {
-        SpaceBefore(_, spaces) => match spaces.iter().next() {
-            Some(CommentOrNewline::LineComment(_)) => true,
-            Some(_) => false,
-            None => false,
-        },
+        SpaceBefore(_, spaces) => {
+            matches!(spaces.iter().next(), Some(CommentOrNewline::LineComment(_)))
+        }
         _ => false,
     }
 }
