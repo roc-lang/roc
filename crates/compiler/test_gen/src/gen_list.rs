@@ -2958,3 +2958,19 @@ fn with_capacity() {
         RocList<u64>
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn call_function_in_empty_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            lst : List ({} -> {})
+            lst = []
+            List.map lst \f -> f {}
+            "#
+        ),
+        RocList::from_slice(&[]),
+        RocList<()>
+    )
+}
