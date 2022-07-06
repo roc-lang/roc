@@ -1,7 +1,7 @@
 use crate::helpers::from_wasmer_memory::FromWasmerMemory;
 use inkwell::module::Module;
 use libloading::Library;
-use roc_build::link::module_to_dylib;
+use roc_build::link::llvm_module_to_dylib;
 use roc_build::program::FunctionIterator;
 use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
@@ -273,8 +273,8 @@ pub fn helper<'a>(
         opt_level,
     );
 
-    let lib =
-        module_to_dylib(module, &target, opt_level).expect("Error loading compiled dylib for test");
+    let lib = llvm_module_to_dylib(module, &target, opt_level)
+        .expect("Error loading compiled dylib for test");
 
     (main_fn_name, delayed_errors, lib)
 }

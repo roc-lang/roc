@@ -45,6 +45,7 @@ members = [
     "crates/repl_eval",
     "crates/repl_test",
     "crates/repl_wasm",
+    "crates/repl_expect",
     "crates/test_utils",
     "crates/utils",
     "crates/docs",
