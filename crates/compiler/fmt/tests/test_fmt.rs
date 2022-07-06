@@ -4038,7 +4038,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn multiline_binop_conditional_with_comments() {
+    fn multiline_binop_if_with_comments() {
         expr_formats_same(indoc!(
             r#"
             if
@@ -4054,6 +4054,26 @@ mod test_fmt {
             "#
         ));
     }
+
+    #[test]
+    fn multiline_binop_when_with_comments() {
+        expr_formats_same(indoc!(
+            r#"
+            when
+                x
+                    + 1 # comment 1
+                    > 0 # comment 2
+            is
+                y ->
+                    3
+                        * 2 # comment 3
+                        < 1 # comment 4
+                z ->
+                    4
+                        / 5 # comment 5
+                        < 1 # comment 6
+                _ ->
+                    42
             "#
         ));
     }

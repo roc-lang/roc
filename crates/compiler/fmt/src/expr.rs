@@ -704,17 +704,29 @@ fn fmt_when<'a, 'buf>(
         let is_multiline_expr = expr.is_multiline();
         let is_multiline_patterns = is_when_patterns_multiline(branch);
 
-        for (index, pattern) in patterns.iter().enumerate() {
-            if index == 0 {
+        for (pattern_index, pattern) in patterns.iter().enumerate() {
+            if pattern_index == 0 {
                 match &pattern.value {
-                    Pattern::SpaceBefore(sub_pattern, spaces) if branch_index == 0 => {
-                        // Never include extra newlines before the first branch.
-                        // Instead, write the comments and that's it.
+                    Pattern::SpaceBefore(sub_pattern, spaces) => {
+                        if branch_index > 0 // Never render newlines before the first branch.
+                            && matches!(spaces.first(), Some(CommentOrNewline::Newline))
+                        {
+                            buf.ensure_ends_in_newline();
+                        }
+
+                        // Write comments (which may have been attached to the previous
+                        // branch's expr, if there was a previous branch).
                         fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent + INDENT);
+
+                        if branch_index > 0 {
+                            buf.ensure_ends_in_newline();
+                        }
 
                         fmt_pattern(buf, sub_pattern, indent + INDENT, Parens::NotNeeded);
                     }
                     other => {
+                        buf.ensure_ends_in_newline();
+
                         fmt_pattern(buf, other, indent + INDENT, Parens::NotNeeded);
                     }
                 }
@@ -768,10 +780,6 @@ fn fmt_when<'a, 'buf>(
                     indent + 2 * INDENT,
                 );
             }
-        }
-
-        if it.peek().is_some() {
-            buf.newline();
         }
     }
 }
