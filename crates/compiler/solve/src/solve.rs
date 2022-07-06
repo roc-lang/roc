@@ -1765,6 +1765,7 @@ fn check_ability_specialization(
 
 /// A proxy for managing [`Subs`] and the derived module, in the presence of possibly having to
 /// solve within the derived module's subs.
+// TODO remove this, how can we make this better?
 pub struct SubsProxy<'a> {
     home: ModuleId,
     subs: &'a mut Subs,
@@ -1786,10 +1787,6 @@ impl<'a> SubsProxy<'a> {
             subs,
             derived_module,
         }
-    }
-
-    fn borrow_subs(&mut self) -> &mut Subs {
-        self.subs
     }
 
     fn with_subs<T, F>(&mut self, f: F) -> T
@@ -1815,16 +1812,18 @@ impl<'a> SubsProxy<'a> {
         f(&mut derived_module)
     }
 
-    fn copy_lambda_set_var_from_derived_to_subs(
+    fn copy_lambda_set_ambient_function_from_derived_to_subs(
         &mut self,
         lambda_set_var_in_derived: Variable,
         target_rank: Rank,
     ) -> Variable {
         if self.home == ModuleId::DERIVED {
-            lambda_set_var_in_derived
+            self.subs
+                .get_lambda_set(lambda_set_var_in_derived)
+                .ambient_function
         } else {
             let derived_module = self.derived_module.lock().unwrap();
-            derived_module.copy_lambda_set_var_to_subs(
+            derived_module.copy_lambda_set_ambient_function_to_subs(
                 lambda_set_var_in_derived,
                 self.subs,
                 target_rank,
@@ -1970,108 +1969,110 @@ pub fn compact_lambda_sets_of_vars<P: Phase>(
 
     // Suppose a type variable `a` with `uls_of_var` mapping `uls_a = {l1, ... ln}` has been instantiated to a concrete type `C_a`.
     while let Some((c_a, uls_a)) = uls_of_var_queue.pop_front() {
-        let subs = subs_proxy.borrow_subs();
+        let uls_a = subs_proxy.with_subs(|subs| {
+            let c_a = subs.get_root_key_without_compacting(c_a);
+            // 1. Let each `l` in `uls_a` be of form `[solved_lambdas + ... + C:f:r + ...]`.
+            //    NB: There may be multiple unspecialized lambdas of form `C:f:r, C:f1:r1, ..., C:fn:rn` in `l`.
+            //    In this case, let `t1, ... tm` be the other unspecialized lambdas not of form `C:_:_`,
+            //    that is, none of which are now specialized to the type `C`. Then, deconstruct
+            //    `l` such that `l' = [solved_lambdas + t1 + ... + tm + C:f:r]` and `l1 = [[] + C:f1:r1], ..., ln = [[] + C:fn:rn]`.
+            //    Replace `l` with `l', l1, ..., ln` in `uls_a`, flattened.
+            //    TODO: the flattening step described above
+            let uls_a = uls_a.into_vec();
+            trace_compact!(1. subs, c_a, &uls_a);
 
-        let c_a = subs.get_root_key_without_compacting(c_a);
-        // 1. Let each `l` in `uls_a` be of form `[solved_lambdas + ... + C:f:r + ...]`.
-        //    NB: There may be multiple unspecialized lambdas of form `C:f:r, C:f1:r1, ..., C:fn:rn` in `l`.
-        //    In this case, let `t1, ... tm` be the other unspecialized lambdas not of form `C:_:_`,
-        //    that is, none of which are now specialized to the type `C`. Then, deconstruct
-        //    `l` such that `l' = [solved_lambdas + t1 + ... + tm + C:f:r]` and `l1 = [[] + C:f1:r1], ..., ln = [[] + C:fn:rn]`.
-        //    Replace `l` with `l', l1, ..., ln` in `uls_a`, flattened.
-        //    TODO: the flattening step described above
-        let uls_a = uls_a.into_vec();
-        trace_compact!(1. subs, c_a, &uls_a);
+            // The flattening step - remove lambda sets that don't reference the concrete var, and for
+            // flatten lambda sets that reference it more than once.
+            let mut uls_a: Vec<_> = uls_a
+                .into_iter()
+                .flat_map(|lambda_set| {
+                    let LambdaSet {
+                        solved,
+                        recursion_var,
+                        unspecialized,
+                        ambient_function,
+                    } = subs.get_lambda_set(lambda_set);
+                    let lambda_set_rank = subs.get_rank(lambda_set);
+                    let unspecialized = subs.get_subs_slice(unspecialized);
+                    // TODO: is it faster to traverse once, see if we only have one concrete lambda, and
+                    // bail in that happy-path, rather than always splitting?
+                    let (concrete, mut not_concrete): (Vec<_>, Vec<_>) = unspecialized
+                        .iter()
+                        .copied()
+                        .partition(|Uls(var, _, _)| subs.equivalent_without_compacting(*var, c_a));
+                    if concrete.len() == 1 {
+                        // No flattening needs to be done, just return the lambda set as-is
+                        return vec![lambda_set];
+                    }
+                    // Must flatten
+                    concrete
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, concrete_lambda)| {
+                            let (var, unspecialized) = if i == 0 {
+                                // The first lambda set contains one concrete lambda, plus all solved
+                                // lambdas, plus all other unspecialized lambdas.
+                                // l' = [solved_lambdas + t1 + ... + tm + C:f:r]
+                                let unspecialized = SubsSlice::extend_new(
+                                    &mut subs.unspecialized_lambda_sets,
+                                    not_concrete
+                                        .drain(..)
+                                        .chain(std::iter::once(concrete_lambda)),
+                                );
+                                (lambda_set, unspecialized)
+                            } else {
+                                // All the other lambda sets consists only of their respective concrete
+                                // lambdas.
+                                // ln = [[] + C:fn:rn]
+                                let unspecialized = SubsSlice::extend_new(
+                                    &mut subs.unspecialized_lambda_sets,
+                                    [concrete_lambda],
+                                );
+                                let var = subs.fresh(Descriptor {
+                                    content: Content::Error,
+                                    rank: lambda_set_rank,
+                                    mark: Mark::NONE,
+                                    copy: OptVariable::NONE,
+                                });
+                                (var, unspecialized)
+                            };
 
-        // The flattening step - remove lambda sets that don't reference the concrete var, and for
-        // flatten lambda sets that reference it more than once.
-        let mut uls_a: Vec<_> = uls_a
-            .into_iter()
-            .flat_map(|lambda_set| {
-                let LambdaSet {
-                    solved,
-                    recursion_var,
-                    unspecialized,
-                    ambient_function,
-                } = subs.get_lambda_set(lambda_set);
-                let lambda_set_rank = subs.get_rank(lambda_set);
-                let unspecialized = subs.get_subs_slice(unspecialized);
-                // TODO: is it faster to traverse once, see if we only have one concrete lambda, and
-                // bail in that happy-path, rather than always splitting?
-                let (concrete, mut not_concrete): (Vec<_>, Vec<_>) = unspecialized
-                    .iter()
-                    .copied()
-                    .partition(|Uls(var, _, _)| subs.equivalent_without_compacting(*var, c_a));
-                if concrete.len() == 1 {
-                    // No flattening needs to be done, just return the lambda set as-is
-                    return vec![lambda_set];
-                }
-                // Must flatten
-                concrete
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, concrete_lambda)| {
-                        let (var, unspecialized) = if i == 0 {
-                            // The first lambda set contains one concrete lambda, plus all solved
-                            // lambdas, plus all other unspecialized lambdas.
-                            // l' = [solved_lambdas + t1 + ... + tm + C:f:r]
-                            let unspecialized = SubsSlice::extend_new(
-                                &mut subs.unspecialized_lambda_sets,
-                                not_concrete
-                                    .drain(..)
-                                    .chain(std::iter::once(concrete_lambda)),
+                            subs.set_content(
+                                var,
+                                Content::LambdaSet(LambdaSet {
+                                    solved,
+                                    recursion_var,
+                                    unspecialized,
+                                    ambient_function,
+                                }),
                             );
-                            (lambda_set, unspecialized)
-                        } else {
-                            // All the other lambda sets consists only of their respective concrete
-                            // lambdas.
-                            // ln = [[] + C:fn:rn]
-                            let unspecialized = SubsSlice::extend_new(
-                                &mut subs.unspecialized_lambda_sets,
-                                [concrete_lambda],
-                            );
-                            let var = subs.fresh(Descriptor {
-                                content: Content::Error,
-                                rank: lambda_set_rank,
-                                mark: Mark::NONE,
-                                copy: OptVariable::NONE,
-                            });
-                            (var, unspecialized)
-                        };
+                            var
+                        })
+                        .collect()
+                })
+                .collect();
 
-                        subs.set_content(
-                            var,
-                            Content::LambdaSet(LambdaSet {
-                                solved,
-                                recursion_var,
-                                unspecialized,
-                                ambient_function,
-                            }),
-                        );
-                        var
-                    })
-                    .collect()
-            })
-            .collect();
+            // 2. Now, each `l` in `uls_a` has a unique unspecialized lambda of form `C:f:r`.
+            //    Sort `uls_a` primarily by `f` (arbitrary order), and secondarily by `r` in descending order.
+            uls_a.sort_by(|v1, v2| {
+                let unspec_1 = subs.get_subs_slice(subs.get_lambda_set(*v1).unspecialized);
+                let unspec_2 = subs.get_subs_slice(subs.get_lambda_set(*v2).unspecialized);
 
-        // 2. Now, each `l` in `uls_a` has a unique unspecialized lambda of form `C:f:r`.
-        //    Sort `uls_a` primarily by `f` (arbitrary order), and secondarily by `r` in descending order.
-        uls_a.sort_by(|v1, v2| {
-            let unspec_1 = subs.get_subs_slice(subs.get_lambda_set(*v1).unspecialized);
-            let unspec_2 = subs.get_subs_slice(subs.get_lambda_set(*v2).unspecialized);
+                let Uls(_, f1, r1) = unique_unspecialized_lambda(subs, c_a, unspec_1).unwrap();
+                let Uls(_, f2, r2) = unique_unspecialized_lambda(subs, c_a, unspec_2).unwrap();
 
-            let Uls(_, f1, r1) = unique_unspecialized_lambda(subs, c_a, unspec_1).unwrap();
-            let Uls(_, f2, r2) = unique_unspecialized_lambda(subs, c_a, unspec_2).unwrap();
-
-            match f1.cmp(&f2) {
-                std::cmp::Ordering::Equal => {
-                    // Order by descending order of region.
-                    r2.cmp(&r1)
+                match f1.cmp(&f2) {
+                    std::cmp::Ordering::Equal => {
+                        // Order by descending order of region.
+                        r2.cmp(&r1)
+                    }
+                    ord => ord,
                 }
-                ord => ord,
-            }
+            });
+
+            trace_compact!(2. subs, &uls_a);
+            uls_a
         });
-        trace_compact!(2. subs, &uls_a);
 
         // 3. For each `l` in `uls_a` with unique unspecialized lambda `C:f:r`:
         //    1. Let `t_f1` be the directly ambient function of the lambda set containing `C:f:r`. Remove `C:f:r` from `t_f1`'s lambda set.
@@ -2115,46 +2116,50 @@ fn compact_lambda_set<P: Phase>(
     //    2. Let `t_f2` be the directly ambient function of the specialization lambda set resolved by `C:f:r`.
     //       - For example, `(b -[[] + b:g:1]-> {})` if `C:f:r=Fo:f:2`, from the algorithm's running example.
     //    3. Unify `t_f1 ~ t_f2`.
-    let subs = subs_proxy.borrow_subs();
-    let LambdaSet {
-        solved,
-        recursion_var,
-        unspecialized,
-        ambient_function: t_f1,
-    } = subs.get_lambda_set(this_lambda_set);
-    let target_rank = subs.get_rank(this_lambda_set);
+    let (target_rank, f, r, t_f1, specialization_decision) = subs_proxy.with_subs(|subs| {
+        let LambdaSet {
+            solved,
+            recursion_var,
+            unspecialized,
+            ambient_function: t_f1,
+        } = subs.get_lambda_set(this_lambda_set);
+        let target_rank = subs.get_rank(this_lambda_set);
 
-    debug_assert!(!unspecialized.is_empty());
+        debug_assert!(!unspecialized.is_empty());
 
-    let unspecialized = subs.get_subs_slice(unspecialized);
+        let unspecialized = subs.get_subs_slice(unspecialized);
 
-    // 1. Let `t_f1` be the directly ambient function of the lambda set containing `C:f:r`.
-    let Uls(c, f, r) = unique_unspecialized_lambda(subs, resolved_concrete, unspecialized).unwrap();
+        // 1. Let `t_f1` be the directly ambient function of the lambda set containing `C:f:r`.
+        let Uls(c, f, r) =
+            unique_unspecialized_lambda(subs, resolved_concrete, unspecialized).unwrap();
 
-    debug_assert!(subs.equivalent_without_compacting(c, resolved_concrete));
+        debug_assert!(subs.equivalent_without_compacting(c, resolved_concrete));
 
-    // 1b. Remove `C:f:r` from `t_f1`'s lambda set.
-    let new_unspecialized: Vec<_> = unspecialized
-        .iter()
-        .filter(|Uls(v, _, _)| !subs.equivalent_without_compacting(*v, resolved_concrete))
-        .copied()
-        .collect();
-    debug_assert_eq!(new_unspecialized.len(), unspecialized.len() - 1);
-    let t_f1_lambda_set_without_concrete = LambdaSet {
-        solved,
-        recursion_var,
-        unspecialized: SubsSlice::extend_new(
-            &mut subs.unspecialized_lambda_sets,
-            new_unspecialized,
-        ),
-        ambient_function: t_f1,
-    };
-    subs.set_content(
-        this_lambda_set,
-        Content::LambdaSet(t_f1_lambda_set_without_concrete),
-    );
+        // 1b. Remove `C:f:r` from `t_f1`'s lambda set.
+        let new_unspecialized: Vec<_> = unspecialized
+            .iter()
+            .filter(|Uls(v, _, _)| !subs.equivalent_without_compacting(*v, resolved_concrete))
+            .copied()
+            .collect();
+        debug_assert_eq!(new_unspecialized.len(), unspecialized.len() - 1);
+        let t_f1_lambda_set_without_concrete = LambdaSet {
+            solved,
+            recursion_var,
+            unspecialized: SubsSlice::extend_new(
+                &mut subs.unspecialized_lambda_sets,
+                new_unspecialized,
+            ),
+            ambient_function: t_f1,
+        };
+        subs.set_content(
+            this_lambda_set,
+            Content::LambdaSet(t_f1_lambda_set_without_concrete),
+        );
 
-    let specialization_decision = make_specialization_decision(subs, c);
+        let specialization_decision = make_specialization_decision(subs, c);
+
+        (target_rank, f, r, t_f1, specialization_decision)
+    });
 
     let specialization_key = match specialization_decision {
         SpecializeDecision::Specialize(key) => key,
@@ -2181,25 +2186,26 @@ fn compact_lambda_set<P: Phase>(
         Err(()) => {
             // Do nothing other than to remove the concrete lambda to drop from the lambda set,
             // which we already did in 1b above.
-            trace_compact!(3iter_end_skipped. subs_proxy.borrow_subs(), t_f1);
+            subs_proxy.with_subs(|subs| trace_compact!(3iter_end_skipped. subs, t_f1));
             return (Default::default(), Default::default());
         }
     };
 
-    // Ensure the specialized ambient function we'll unify with is not a generalized one, but one
-    // at the rank of the lambda set being compacted.
-    let t_f2 = subs_proxy.with_subs(|subs| deep_copy_var_in(subs, target_rank, pools, t_f2, arena));
+    subs_proxy.with_subs(|subs| {
+        // Ensure the specialized ambient function we'll unify with is not a generalized one, but one
+        // at the rank of the lambda set being compacted.
+        let t_f2 = deep_copy_var_in(subs, target_rank, pools, t_f2, arena);
 
-    // 3. Unify `t_f1 ~ t_f2`.
-    let subs = subs_proxy.borrow_subs();
-    trace_compact!(3iter_start. subs, this_lambda_set, t_f1, t_f2);
-    let (vars, new_must_implement_ability, new_lambda_sets_to_specialize, _meta) =
-        unify(subs, t_f1, t_f2, Mode::EQ).expect_success("ambient functions don't unify");
-    trace_compact!(3iter_end. subs, t_f1);
+        // 3. Unify `t_f1 ~ t_f2`.
+        trace_compact!(3iter_start. subs, this_lambda_set, t_f1, t_f2);
+        let (vars, new_must_implement_ability, new_lambda_sets_to_specialize, _meta) =
+            unify(subs, t_f1, t_f2, Mode::EQ).expect_success("ambient functions don't unify");
+        trace_compact!(3iter_end. subs, t_f1);
 
-    introduce(subs, target_rank, pools, &vars);
+        introduce(subs, target_rank, pools, &vars);
 
-    (new_must_implement_ability, new_lambda_sets_to_specialize)
+        (new_must_implement_ability, new_lambda_sets_to_specialize)
+    })
 }
 
 enum SpecializationTypeKey {
@@ -2330,8 +2336,10 @@ fn get_specialization_lambda_set_ambient_function<P: Phase>(
                     .expect("lambda set region not resolved")
             });
 
-            let local_lset =
-                subs.copy_lambda_set_var_from_derived_to_subs(specialized_lambda_set, target_rank);
+            let local_lset = subs.copy_lambda_set_ambient_function_from_derived_to_subs(
+                specialized_lambda_set,
+                target_rank,
+            );
 
             Ok(local_lset)
         }

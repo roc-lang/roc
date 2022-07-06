@@ -190,9 +190,9 @@ impl DerivedModule {
         self.derived_ident_ids = ident_ids;
     }
 
-    pub fn copy_lambda_set_var_to_subs(
+    pub fn copy_lambda_set_ambient_function_to_subs(
         &self,
-        var: Variable,
+        lambda_set_var: Variable,
         target: &mut Subs,
         target_rank: Rank,
     ) -> Variable {
@@ -201,12 +201,14 @@ impl DerivedModule {
             debug_assert!(!self.stolen);
         }
 
+        let ambient_function_var = self.subs.get_lambda_set(lambda_set_var).ambient_function;
+
         let copied_import = copy_import_to(
             &self.subs,
             target,
             // bookkeep unspecialized lambda sets of var - I think we want this here
-            false,
-            var,
+            true,
+            ambient_function_var,
             // TODO: I think this is okay because the only use of `copy_lambda_set_var_to_subs`
             // (at least right now) is for lambda set compaction, which will automatically unify
             // and lower ranks, and never generalize.
