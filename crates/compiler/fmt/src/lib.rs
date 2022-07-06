@@ -53,7 +53,14 @@ impl<'a> Buf<'a> {
 
     pub fn push(&mut self, ch: char) {
         debug_assert!(!self.beginning_of_line);
-        debug_assert!(ch != '\n' && ch != ' ');
+        debug_assert!(
+            ch != '\n',
+            "Don't call buf.push('\\n') - rather, call buf.newline()"
+        );
+        debug_assert!(
+            ch != ' ',
+            "Don't call buf.push(' ') - rather, call buf.spaces(1)"
+        );
 
         self.flush_spaces();
 
