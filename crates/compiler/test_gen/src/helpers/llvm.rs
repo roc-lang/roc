@@ -276,9 +276,9 @@ pub fn helper<'a>(
 
     let res_lib = if config.add_debug_info {
         let module = annotate_with_debug_info(module, context);
-        module_to_dylib(&module, &target, config.opt_level)
+        llvm_module_to_dylib(&module, &target, config.opt_level)
     } else {
-        module_to_dylib(module, &target, config.opt_level)
+        llvm_module_to_dylib(module, &target, config.opt_level)
     };
 
     let lib = res_lib.expect("Error loading compiled dylib for test");
