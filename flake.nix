@@ -96,7 +96,6 @@
 
           # faster builds - see https://github.com/rtfeldman/roc/blob/trunk/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
           llvmPkgs.lld
-          llvmPkgs.lldb
           debugir
           rust
         ]);

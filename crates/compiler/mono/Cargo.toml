@@ -1,0 +1,26 @@
+[package]
+name = "roc_mono"
+version = "0.1.0"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+edition = "2021"
+
+[dependencies]
+roc_collections = { path = "../collections" }
+roc_exhaustive = { path = "../exhaustive" }
+roc_region = { path = "../region" }
+roc_module = { path = "../module" }
+roc_types = { path = "../types" }
+roc_can = { path = "../can" }
+roc_derive_key = { path = "../derive_key" }
+roc_late_solve = { path = "../late_solve" }
+roc_std = { path = "../../roc_std", default-features = false }
+roc_problem = { path = "../problem" }
+roc_builtins = { path = "../builtins" }
+roc_target = { path = "../roc_target" }
+roc_error_macros = {path="../../error_macros"}
+roc_debug_flags = {path="../debug_flags"}
+ven_pretty = { path = "../../vendor/pretty" }
+bumpalo = { version = "3.8.0", features = ["collections"] }
+hashbrown = { version = "0.12.1", features = [ "bumpalo" ] }
+static_assertions = "1.1.0"

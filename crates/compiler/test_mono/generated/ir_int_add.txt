@@ -1,0 +1,19 @@
+procedure List.6 (#Attr.2):
+    let List.279 : U64 = lowlevel ListLen #Attr.2;
+    ret List.279;
+
+procedure Num.19 (#Attr.2, #Attr.3):
+    let Num.190 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.190;
+
+procedure Test.0 ():
+    let Test.1 : List I64 = Array [1i64, 2i64];
+    let Test.7 : U64 = 5i64;
+    let Test.8 : U64 = 4i64;
+    let Test.5 : U64 = CallByName Num.19 Test.7 Test.8;
+    let Test.6 : U64 = 3i64;
+    let Test.3 : U64 = CallByName Num.19 Test.5 Test.6;
+    let Test.4 : U64 = CallByName List.6 Test.1;
+    dec Test.1;
+    let Test.2 : U64 = CallByName Num.19 Test.3 Test.4;
+    ret Test.2;

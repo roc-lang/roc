@@ -1,0 +1,36 @@
+[package]
+name = "roc_load_internal"
+version = "0.1.0"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+edition = "2021"
+
+[dependencies]
+roc_collections = { path = "../collections" }
+roc_error_macros = { path = "../../error_macros" }
+roc_region = { path = "../region" }
+roc_module = { path = "../module" }
+roc_types = { path = "../types" }
+roc_can = { path = "../can" }
+roc_constrain = { path = "../constrain" }
+roc_derive_key = { path = "../derive_key" }
+roc_builtins = { path = "../builtins" }
+roc_problem = { path = "../problem" }
+roc_unify = { path = "../unify" }
+roc_parse = { path = "../parse" }
+roc_solve = { path = "../solve" }
+roc_late_solve = { path = "../late_solve" }
+roc_mono = { path = "../mono" }
+roc_target = { path = "../roc_target" }
+roc_reporting = { path = "../../reporting" }
+roc_debug_flags = { path = "../debug_flags" }
+ven_pretty = { path = "../../vendor/pretty" }
+bumpalo = { version = "3.8.0", features = ["collections"] }
+parking_lot = "0.12"
+crossbeam = "0.8.1"
+
+[dev-dependencies]
+pretty_assertions = "1.0.0"
+maplit = "1.0.2"
+indoc = "1.0.3"
+roc_test_utils = { path = "../../test_utils" }

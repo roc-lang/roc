@@ -1,0 +1,6 @@
+procedure Test.0 ():
+    let Test.11 : [<rnu><null>, C *self] = TagId(1) ;
+    let Test.10 : [<rnu><null>, C *self] = TagId(0) Test.11;
+    let Test.9 : [<rnu><null>, C *self] = TagId(0) Test.10;
+    let Test.3 : [<rnu><null>, C *self] = TagId(0) Test.9;
+    ret Test.3;

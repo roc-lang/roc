@@ -53,15 +53,19 @@ install-zig-llvm-valgrind-clippy-rustfmt:
 
 copy-dirs:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
-    COPY --dir bindgen cli cli_utils compiler docs docs_cli editor ast code_markup error_macros highlight utils test_utils reporting repl_cli repl_eval repl_test repl_wasm repl_www roc_std vendor examples linker Cargo.toml Cargo.lock version.txt www wasi-libc-sys ./
+    COPY --dir crates repl_www examples Cargo.toml Cargo.lock version.txt www ./
 
 test-zig:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
-    COPY --dir compiler/builtins/bitcode ./
+    COPY --dir crates/compiler/builtins/bitcode ./
     RUN cd bitcode && ./run-tests.sh && ./run-wasm-tests.sh
 
 build-rust-test:
     FROM +copy-dirs
+    RUN echo "deb http://deb.debian.org/debian testing main contrib non-free" >> /etc/apt/sources.list # to get gcc 10.3
+    RUN apt -y update
+    RUN apt -y install gcc-10 g++-10 && rm /usr/bin/gcc && ln -s /usr/bin/gcc-10 /usr/bin/gcc # gcc-9 maybe causes segfault
+    RUN gcc --version
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         cargo test --locked --release --features with_sound --workspace --no-run && sccache --show-stats
 
@@ -80,7 +84,7 @@ check-rustfmt:
 
 check-typos:
     RUN cargo install typos-cli --version 1.0.11 # version set to prevent confusion if the version is updated automatically
-    COPY --dir .github ci cli cli_utils compiler docs editor examples ast code_markup highlight utils linker nightly_benches packages roc_std www *.md LEGAL_DETAILS shell.nix version.txt ./
+    COPY --dir .github ci crates examples nightly_benches www *.md LEGAL_DETAILS flake.nix version.txt ./
     RUN typos
 
 test-rust:
@@ -91,6 +95,7 @@ test-rust:
     ENV ROC_NUM_WORKERS=1
     # run one of the benchmarks to make sure the host is compiled
     # not pre-compiling the host can cause race conditions
+    RUN gcc --version
     RUN echo "4" | cargo run --release examples/benchmarks/NQueens.roc
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         cargo test --locked --release --features with_sound --workspace && sccache --show-stats
@@ -102,7 +107,7 @@ test-rust:
         cargo test --locked --release --package test_gen --no-default-features --features gen-wasm -- --test-threads=1 && sccache --show-stats
     # repl_test: build the compiler for wasm target, then run the tests on native target
     RUN --mount=type=cache,target=$SCCACHE_DIR \
-        repl_test/test_wasm.sh && sccache --show-stats
+        crates/repl_test/test_wasm.sh && sccache --show-stats
     # run i386 (32-bit linux) cli tests
     # NOTE: disabled until zig 0.9
     # RUN echo "4" | cargo run --locked --release --features="target-x86" -- --target=x86_32 examples/benchmarks/NQueens.roc
@@ -147,13 +152,13 @@ prep-bench-folder:
     ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld -C target-cpu=native"
     ARG BENCH_SUFFIX=branch
     RUN cargo criterion -V
-    RUN --mount=type=cache,target=$SCCACHE_DIR cd cli && cargo criterion --no-run
-    RUN mkdir -p bench-folder/compiler/builtins/bitcode/src
+    RUN --mount=type=cache,target=$SCCACHE_DIR cd crates/cli && cargo criterion --no-run
+    RUN mkdir -p bench-folder/crates/compiler/builtins/bitcode/src
     RUN mkdir -p bench-folder/target/release/deps
     RUN mkdir -p bench-folder/examples/benchmarks
     RUN cp examples/benchmarks/*.roc bench-folder/examples/benchmarks/
     RUN cp -r examples/benchmarks/platform bench-folder/examples/benchmarks/
-    RUN cp compiler/builtins/bitcode/src/str.zig bench-folder/compiler/builtins/bitcode/src
+    RUN cp crates/compiler/builtins/bitcode/src/str.zig bench-folder/crates/compiler/builtins/bitcode/src
     RUN cp target/release/roc bench-folder/target/release
     # copy the most recent time bench to bench-folder
     RUN cp target/release/deps/`ls -t target/release/deps/ | grep time_bench | head -n 1` bench-folder/target/release/deps/time_bench

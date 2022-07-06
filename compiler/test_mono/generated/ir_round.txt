@@ -1,8 +1,0 @@
-procedure Num.45 (#Attr.2):
-    let Num.273 : I64 = lowlevel NumRound #Attr.2;
-    ret Num.273;
-
-procedure Test.0 ():
-    let Test.2 : Float64 = 3.6f64;
-    let Test.1 : I64 = CallByName Num.45 Test.2;
-    ret Test.1;
