@@ -60,7 +60,7 @@ lazy = \state, render ->
                     { state, elem: render state }
 
 none : Elem *
-none = None# I've often wanted this in elm/html. Usually end up resorting to (Html.text "") - this seems nicer.
+none = None # I've often wanted this in elm/html. Usually end up resorting to (Html.text "") - this seems nicer.
 ## Change an element's state type.
 ##
 ## TODO: indent the following once https://github.com/rtfeldman/roc/issues/2585 is fixed.

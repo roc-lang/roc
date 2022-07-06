@@ -8,8 +8,7 @@ main =
     Task.after
         Task.getInt
         \n ->
-            queens n# original koka 13
-
+            queens n # original koka 13
                 |> Num.toStr
                 |> Task.putLine
 
