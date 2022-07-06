@@ -369,7 +369,7 @@ impl<'a> Formattable for Expr<'a> {
             }
             When(loc_condition, branches) => fmt_when(buf, loc_condition, branches, indent),
             List(items) => fmt_collection(buf, indent, Braces::Square, *items, Newlines::No),
-            BinOps(lefts, right) => fmt_bin_ops(buf, lefts, right, false, parens, indent),
+            BinOps(lefts, right) => fmt_binops(buf, lefts, right, false, parens, indent),
             UnaryOp(sub_expr, unary_op) => {
                 buf.indent(indent);
                 match &unary_op.value {
@@ -530,22 +530,22 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
     buf.push('"');
 }
 
-fn fmt_bin_ops<'a, 'buf>(
+fn fmt_binops<'a, 'buf>(
     buf: &mut Buf<'buf>,
     lefts: &'a [(Loc<Expr<'a>>, Loc<BinOp>)],
     loc_right_side: &'a Loc<Expr<'a>>,
-    part_of_multi_line_bin_ops: bool,
+    part_of_multi_line_binops: bool,
     apply_needs_parens: Parens,
     indent: u16,
 ) {
-    let is_multiline = part_of_multi_line_bin_ops
+    let is_multiline = part_of_multi_line_binops
         || (&loc_right_side.value).is_multiline()
         || lefts.iter().any(|(expr, _)| expr.value.is_multiline());
 
     let mut curr_indent = indent;
 
-    for (loc_left_side, loc_bin_op) in lefts {
-        let bin_op = loc_bin_op.value;
+    for (loc_left_side, loc_binop) in lefts {
+        let binop = loc_binop.value;
 
         loc_left_side.format_with_options(buf, apply_needs_parens, Newlines::No, curr_indent);
 
@@ -557,7 +557,7 @@ fn fmt_bin_ops<'a, 'buf>(
             buf.spaces(1);
         }
 
-        push_op(buf, bin_op);
+        push_op(buf, binop);
 
         buf.spaces(1);
     }
@@ -1295,7 +1295,7 @@ fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
         Expr::BinOps(left_side, _) => {
             left_side
                 .iter()
-                .any(|(_, loc_bin_op)| match loc_bin_op.value {
+                .any(|(_, loc_binop)| match loc_binop.value {
                     BinOp::Caret
                     | BinOp::Star
                     | BinOp::Slash
