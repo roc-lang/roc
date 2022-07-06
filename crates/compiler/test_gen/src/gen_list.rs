@@ -2960,7 +2960,7 @@ fn with_capacity() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm"))]
 fn call_function_in_empty_list() {
     assert_evals_to!(
         indoc!(
