@@ -1,5 +1,5 @@
 use roc_gen_wasm::wasm32_sized::Wasm32Sized;
-use roc_std::{RocDec, RocList, RocOrder, RocStr};
+use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr};
 use std::convert::TryInto;
 
 pub trait FromWasmerMemory: Wasm32Sized {
@@ -92,6 +92,26 @@ impl<T: FromWasmerMemory + Clone> FromWasmerMemory for RocList<T> {
         }
 
         RocList::from_slice(&items)
+    }
+}
+
+impl<T: FromWasmerMemory + Wasm32Sized, E: FromWasmerMemory + Wasm32Sized> FromWasmerMemory
+    for RocResult<T, E>
+{
+    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
+        let tag_offset = if T::ACTUAL_WIDTH > E::ACTUAL_WIDTH {
+            T::ACTUAL_WIDTH
+        } else {
+            E::ACTUAL_WIDTH
+        };
+        let tag = <u8 as FromWasmerMemory>::decode(memory, offset + tag_offset as u32);
+        if tag == 1 {
+            let value = <T as FromWasmerMemory>::decode(memory, offset);
+            RocResult::ok(value)
+        } else {
+            let payload = <E as FromWasmerMemory>::decode(memory, offset);
+            RocResult::err(payload)
+        }
     }
 }
 
