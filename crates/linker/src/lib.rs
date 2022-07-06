@@ -505,7 +505,7 @@ pub fn preprocess(
                             // of this can fail due to the interior nul bytes.
                             //
                             // Also, we have to use from_ptr instead of
-                            // from_bytes_with_nul_unchecked because currenty
+                            // from_bytes_with_nul_unchecked because currently
                             // std::ffi::CStr is actually not a char* under
                             // the hood (!) but rather an array, so to strip
                             // the trailing null bytes we have to use from_ptr.
@@ -872,7 +872,7 @@ fn gen_macho_le(
     // I was talking to Jakub from the Zig team about macho linking and here are some useful comments:
     // 1) Macho WILL run fine with multiple text segments (and theoretically data segments).
     // 2) Theoretically the headers just need to be in a loadable segment,
-    //    but otherwise don't need to relate to the starting text segment (releated to some added byte shifting infomation below).
+    //    but otherwise don't need to relate to the starting text segment (releated to some added byte shifting information below).
     // 2) Apple tooling dislikes whenever you do something non-standard,
     //    and there is a chance it won't work right (e.g. codesigning might fail)
     // 3) Jakub wants to make apple tooling absolute is working on zignature for code signing and zig-deploy for ios apps
