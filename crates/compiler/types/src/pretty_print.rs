@@ -839,21 +839,23 @@ fn write_integer<'a>(
 
     macro_rules! derive_num_writes {
         ($($lit:expr, $tag:path)*) => {
-            write_parens!(
-                write_parens,
-                buf,
-                match content {
-                    $(
-                    &Alias($tag, _, _, _) => {
-                        buf.push_str($lit)
-                    },
-                    )*
-                    actual => {
-                        buf.push_str("Int ");
-                        write_content(env, ctx, actual, subs, buf, parens);
-                    }
+            match content {
+                $(
+                &Alias($tag, _, _, _) => {
+                    buf.push_str($lit)
+                },
+                )*
+                actual => {
+                    write_parens!(
+                        write_parens,
+                        buf,
+                        {
+                            buf.push_str("Int ");
+                            write_content(env, ctx, actual, subs, buf, parens);
+                        }
+                    )
                 }
-            )
+            }
         }
     }
 
