@@ -1,4 +1,3 @@
-use crate::num::IntLitWidth;
 use crate::subs::{
     self, AliasVariables, Content, FlatType, GetSubsSlice, Label, Subs, SubsIndex, UnionLabels,
     UnionTags, UnsortedUnionLabels, Variable,
@@ -382,21 +381,17 @@ fn find_names_needed(
                 );
             }
         }
-        RangedNumber(range) => match range {
-            crate::num::NumericRange::NumAtLeastEitherSign(IntLitWidth::I8)
-            | crate::num::NumericRange::IntAtLeastEitherSign(IntLitWidth::I8) => {
-                subs.set_content(variable, FlexVar(None));
-                find_names_needed(
-                    variable,
-                    subs,
-                    roots,
-                    root_appearances,
-                    names_taken,
-                    find_under_alias,
-                )
-            }
-            _ => {}
-        },
+        RangedNumber(range) => {
+            subs.set_content(variable, FlexVar(None));
+            find_names_needed(
+                variable,
+                subs,
+                roots,
+                root_appearances,
+                names_taken,
+                find_under_alias,
+            );
+        }
         Error | Structure(Erroneous(_)) | Structure(EmptyRecord) | Structure(EmptyTagUnion) => {
             // Errors and empty records don't need names.
         }
