@@ -3542,34 +3542,6 @@ mod test_fmt {
     }
 
     #[test]
-    fn when_with_moving_comments() {
-        expr_formats_to(
-            indoc!(
-                r#"
-                when b is
-                    1 ->
-                        1 # when 1
-
-                    # fall through
-                    _ ->
-                        2
-                "#
-            ),
-            indoc!(
-                r#"
-                when b is
-                    1 ->
-                        1
-                    # when 1
-                    # fall through
-                    _ ->
-                        2
-                "#
-            ),
-        );
-    }
-
-    #[test]
     fn multi_line_when_condition_1() {
         expr_formats_same(indoc!(
             r#"
