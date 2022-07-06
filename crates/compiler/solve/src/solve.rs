@@ -2452,18 +2452,16 @@ impl AmbientFunctionPolicy {
                 ambient_function,
             }),
             Content::FlexVar(_) => {
+                // Something like
+                //   Encoder fmt <a> : List U8, fmt -a-> List U8 | fmt has EncoderFormatting
+                // THEORY: Replace these with empty lambda sets. They will unify the same as a flex
+                // var does, but allows us to record the ambient function properly.
                 Content::LambdaSet(LambdaSet {
                     solved: UnionLabels::default(),
                     recursion_var: OptVariable::NONE,
                     unspecialized: SubsSlice::default(),
                     ambient_function,
                 })
-                // Something like
-                //   Encoder fmt <a> : List U8, fmt -a-> List U8 | fmt has EncoderFormatting
-                // THEORY: Just allow this, it's fine, because the lambda set is unbound,
-                // but it's not part of an ability signature, so it doesn't have an unspecialized
-                // lambda set, and hence doesn't need a link to the ambient function.
-                // *content
             }
             content => internal_error!("{:?}({:?}) not a lambda set", content, var),
         };
