@@ -9,6 +9,8 @@ interface Url
         hasFragment,
         query,
         fragment,
+        reserve,
+        withCapacity,
         withQuery,
         withFragment,
     ]
@@ -19,6 +21,15 @@ interface Url
 ## It could be an absolute address, such as `https://roc-lang.org/authors` or
 ## a relative address, such as `/authors`. You can create one using [Url.fromStr].
 Url := Str
+
+withCapacity : Nat -> Url
+withCapacity = \cap ->
+    # TODO use Str.withCapacity once it exists
+    @Url (Str.reserve "" cap)
+
+reserve : Url, Nat -> Url
+reserve = \@Url str, cap ->
+    @Url (Str.reserve str cap)
 
 ## Create a [Url] without validating or [percent-encoding](https://en.wikipedia.org/wiki/Percent-encoding)
 ## anything.
