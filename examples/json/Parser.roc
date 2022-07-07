@@ -1,4 +1,4 @@
-interface Json.Decoder
+interface Parser
   exposes [
     runPartialRaw,
     runPartialStr,
@@ -102,7 +102,7 @@ andThen = \firstParser, buildNextParser ->
 
 oneOf : List (Parser a) -> Parser a
 oneOf = \parsers ->
-  List.walk parsers (fail "Always fail") alt
+  List.walkBackwards parsers (fail "Always fail") (\laterParser, earlierParser -> alt earlierParser laterParser)
 
 map : Parser a, (a -> b) -> Parser b
 map = \simpleParser, transform ->
