@@ -12,6 +12,8 @@ interface Parser.Core
     andThen,
     oneOf,
     map,
+    map2,
+    map3,
     lazy,
     maybe,
     oneOrMore,
@@ -132,6 +134,22 @@ map : Parser a, (a -> b) -> Parser b
 map = \simpleParser, transform ->
   const transform
   |> apply simpleParser
+
+map2 : Parser a, Parser b, (a, b -> c) -> Parser c
+map2 = \parserA, parserB, transform ->
+  const (\a -> \b -> transform a b)
+  |> apply parserA
+  |> apply parserB
+
+map3 : Parser a, Parser b, Parser c, (a, b, c-> d) -> Parser d
+map3 = \parserA, parserB, parserC, transform ->
+  const (\a -> \b -> \c -> transform a b c)
+  |> apply parserA
+  |> apply parserB
+  |> apply parserC
+
+# ^ And this could be repeated for as high as we want, of course.
+
 
 lazy : ({} -> Parser a) -> Parser a
 lazy = \thunk ->
