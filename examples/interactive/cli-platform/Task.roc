@@ -1,87 +1,88 @@
 interface Task
     exposes [Task, succeed, fail, await, map, onFail, attempt, forever, loop]
-    imports [pf.Effect]
+    imports [pf.Effect, pf.InternalTask]
 
-Task ok err : Effect.Effect (Result ok err)
+Task ok err fx : InternalTask.Task ok err fx
 
-forever : Task val err -> Task * err
+forever : Task val err fx -> Task * err fx
 forever = \task ->
     looper = \{} ->
         task
+            |> InternalTask.toEffect
             |> Effect.map
                 \res ->
                     when res is
-                        Ok _ ->
-                            Step {}
-                        Err e ->
-                            Done (Err e)
+                        Ok _ -> Step {}
+                        Err e -> Done (Err e)
 
     Effect.loop {} looper
+        |> InternalTask.fromEffect
 
-loop : state, (state -> Task [Step state, Done done] err) -> Task done err
+loop : state, (state -> Task [Step state, Done done] err fx) -> Task done err fx
 loop = \state, step ->
     looper = \current ->
         step current
+            |> InternalTask.toEffect
             |> Effect.map
                 \res ->
                     when res is
-                        Ok (Step newState) ->
-                            Step newState
-                        Ok (Done result) ->
-                            Done (Ok result)
-                        Err e ->
-                            Done (Err e)
+                        Ok (Step newState) -> Step newState
+                        Ok (Done result) -> Done (Ok result)
+                        Err e -> Done (Err e)
 
     Effect.loop state looper
+        |> InternalTask.fromEffect
 
-succeed : val -> Task val *
+succeed : val -> Task val * *
 succeed = \val ->
     Effect.always (Ok val)
+        |> InternalTask.fromEffect
 
-fail : err -> Task * err
+fail : err -> Task * err *
 fail = \val ->
     Effect.always (Err val)
+        |> InternalTask.fromEffect
 
-attempt : Task a b, (Result a b -> Task c d) -> Task c d
-attempt = \effect, transform ->
-    Effect.after
-        effect
+attempt : Task a b fx, (Result a b -> Task c d fx) -> Task c d fx
+attempt = \task, transform ->
+    effect = Effect.after
+        (InternalTask.toEffect task)
         \result ->
             when result is
-                Ok ok ->
-                    transform (Ok ok)
-                Err err ->
-                    transform (Err err)
+                Ok ok -> transform (Ok ok) |> InternalTask.toEffect
+                Err err -> transform (Err err) |> InternalTask.toEffect
 
-await : Task a err, (a -> Task b err) -> Task b err
-await = \effect, transform ->
-    Effect.after
-        effect
+    InternalTask.fromEffect effect
+
+await : Task a err fx, (a -> Task b err fx) -> Task b err fx
+await = \task, transform ->
+    effect = Effect.after
+        (InternalTask.toEffect task)
         \result ->
             when result is
-                Ok a ->
-                    transform a
-                Err err ->
-                    Task.fail err
+                Ok a -> transform a |> InternalTask.toEffect
+                Err err -> Task.fail err |> InternalTask.toEffect
 
-onFail : Task ok a, (a -> Task ok b) -> Task ok b
-onFail = \effect, transform ->
-    Effect.after
-        effect
+    InternalTask.fromEffect effect
+
+onFail : Task ok a fx, (a -> Task ok b fx) -> Task ok b fx
+onFail = \task, transform ->
+    effect = Effect.after
+        (InternalTask.toEffect task)
         \result ->
             when result is
-                Ok a ->
-                    Task.succeed a
-                Err err ->
-                    transform err
+                Ok a -> Task.succeed a |> InternalTask.toEffect
+                Err err -> transform err |> InternalTask.toEffect
 
-map : Task a err, (a -> b) -> Task b err
-map = \effect, transform ->
-    Effect.after
-        effect
+    InternalTask.fromEffect effect
+
+map : Task a err fx, (a -> b) -> Task b err fx
+map = \task, transform ->
+    effect = Effect.after
+        (InternalTask.toEffect task)
         \result ->
             when result is
-                Ok a ->
-                    Task.succeed (transform a)
-                Err err ->
-                    Task.fail err
+                Ok a -> Task.succeed (transform a) |> InternalTask.toEffect
+                Err err -> Task.fail err |> InternalTask.toEffect
+
+    InternalTask.fromEffect effect
