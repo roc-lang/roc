@@ -3,7 +3,7 @@ use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
-        AbilityMember, AssignedField, Collection, CommentOrNewline, Def, Derived, Expr, Has,
+        AbilityMember, AssignedField, Collection, CommentOrNewline, Def, Defs, Derived, Expr, Has,
         HasClause, Module, Pattern, Spaced, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef,
         TypeHeader, ValueDef, WhenBranch,
     },
@@ -213,24 +213,32 @@ impl<'a> RemoveSpaces<'a> for Ast<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         Ast {
             module: self.module.remove_spaces(arena),
-            defs: {
-                let mut defs = self.defs.clone();
-
-                for type_def in defs.type_defs.iter_mut() {
-                    *type_def = type_def.remove_spaces(arena);
-                }
-
-                for value_def in defs.value_defs.iter_mut() {
-                    *value_def = value_def.remove_spaces(arena);
-                }
-
-                for region_def in defs.regions.iter_mut() {
-                    *region_def = region_def.remove_spaces(arena);
-                }
-
-                defs
-            },
+            defs: self.defs.remove_spaces(arena),
         }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for Defs<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        let mut defs = self.clone();
+
+        defs.spaces.clear();
+        defs.space_before.clear();
+        defs.space_after.clear();
+
+        for type_def in defs.type_defs.iter_mut() {
+            *type_def = type_def.remove_spaces(arena);
+        }
+
+        for value_def in defs.value_defs.iter_mut() {
+            *value_def = value_def.remove_spaces(arena);
+        }
+
+        for region_def in defs.regions.iter_mut() {
+            *region_def = region_def.remove_spaces(arena);
+        }
+
+        defs
     }
 }
 
