@@ -3542,34 +3542,6 @@ mod test_fmt {
     }
 
     #[test]
-    fn when_with_moving_comments() {
-        expr_formats_to(
-            indoc!(
-                r#"
-                when b is
-                    1 ->
-                        1 # when 1
-
-                    # fall through
-                    _ ->
-                        2
-                "#
-            ),
-            indoc!(
-                r#"
-                when b is
-                    1 ->
-                        1
-                    # when 1
-                    # fall through
-                    _ ->
-                        2
-                "#
-            ),
-        );
-    }
-
-    #[test]
     fn multi_line_when_condition_1() {
         expr_formats_same(indoc!(
             r#"
@@ -4033,6 +4005,54 @@ mod test_fmt {
                 + 1
 
             x
+            "#
+        ));
+    }
+
+    #[test]
+    fn multiline_binop_if_with_comments() {
+        expr_formats_same(indoc!(
+            r#"
+            if
+                x
+                    + 1 # comment 1
+                    > 0 # comment 2
+            then
+                y
+                    * 2 # comment 3
+                    < 1 # comment 4
+            else
+                42
+            "#
+        ));
+    }
+
+    #[test]
+    fn multiline_binop_when_with_comments() {
+        expr_formats_same(indoc!(
+            r#"
+            when
+                x
+                    + 1 # comment 1
+                    > 0 # comment 2
+            is
+                y ->
+                    3
+                        * 2 # comment 3
+                        < 1 # comment 4
+                z ->
+                    4
+                        / 5 # comment 5
+                        < 1 # comment 6
+                46 # first pattern comment
+                    | 95 # alternative comment 1
+                    | 126 # alternative comment 2
+                    | 150 -> # This comment goes after the ->
+                    # This comment is for the expr
+                    Str.appendScalar output (Num.toU32 byte)
+                        |> Result.withDefault "" # this will never fail
+                _ ->
+                    42
             "#
         ));
     }

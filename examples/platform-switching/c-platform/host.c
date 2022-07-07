@@ -75,10 +75,15 @@ int main() {
   // Write to stdout
   if (write(1, str_bytes, str_len) >= 0) {
     // Writing succeeded!
+
+    // NOTE: the string is a static string, read from in the binary
+    // if you make it a heap-allocated string, it'll be leaked here
     return 0;
   } else {
     printf("Error writing to stdout: %s\n", strerror(errno));
 
+    // NOTE: the string is a static string, read from in the binary
+    // if you make it a heap-allocated string, it'll be leaked here
     return 1;
   }
 }
