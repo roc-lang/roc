@@ -129,9 +129,31 @@ apply = \funParser, valParser ->
       {val: funVal val, input: rest2}
   @Parser combined
 
+
+# NOTE: Using this implementation in an actual program,
+# currently causes a compile-time StackOverflow (c.f. https://github.com/rtfeldman/roc/issues/3444 )
+oneOfBroken : List (Parser a) -> Parser a
+oneOfBroken = \parsers ->
+  List.walkBackwards parsers (fail "Always fail") (\laterParser, earlierParser -> alt earlierParser laterParser)
+
+oneOfBroken2 : List (Parser a) -> Parser a
+oneOfBroken2 = \parsers ->
+  if List.isEmpty parsers then
+    fail "(always fail)"
+  else
+    firstParser = List.get parsers (List.len parsers - 1) |> Result.withDefault (fail "this should never happen!!")
+    alt firstParser (oneOf (List.dropLast parsers))
+
+
 oneOf : List (Parser a) -> Parser a
 oneOf = \parsers ->
-  List.walkBackwards parsers (fail "Always fail") (\laterParser, earlierParser -> alt earlierParser laterParser)
+  @Parser \input ->
+    List.walkUntil parsers (Err (ParsingFailure "(no possibilities)")) \_, parser ->
+      when runPartialRaw parser input is
+        Ok val ->
+          Break (Ok val)
+        Err problem ->
+          Continue (Err problem)
 
 map : Parser a, (a -> b) -> Parser b
 map = \simpleParser, transform ->

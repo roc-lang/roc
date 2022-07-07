@@ -34,7 +34,7 @@ fullTest = \parser, input ->
 
 myparser : Parser (List Str)
 myparser =
-  (Parser.Core.string "a")
+  Parser.Core.oneOf [Parser.Core.string "a", Parser.Core.string "b"]
   |> Parser.Core.oneOrMore
   |> Parser.Core.map (\vals -> Str.joinWith vals "")
   |> Parser.Core.sepBy (Parser.Core.scalar ',')
@@ -48,7 +48,7 @@ myparser =
   # string "h"
 
   # NOTE: using oneOf currently causes a StackOverflow in the compiler
-  # Parser.Core.oneOf [
+  # Parser.Core.oneOfBroken [
   #   Parser.Core.string "hello",
   #   Parser.Core.string "george",
   #   Parser.Core.string "richard",
