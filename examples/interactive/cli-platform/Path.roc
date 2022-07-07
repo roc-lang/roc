@@ -1,5 +1,7 @@
 interface Path
-    exposes [Path, PathComponent, WindowsRoot, toComponents, walkComponents, fromStr, fromBytes]
+    exposes [
+        Path, PathComponent, WindowsRoot, toComponents, walkComponents, fromStr, fromBytes
+    ]
     imports []
 
 ## You can canonicalize a [Path] using [Path.canonicalize].
@@ -45,11 +47,11 @@ Path := [
     # Note that the nul terminator byte is right after the end of the length (into the
     # unused capacity), so this can both be compared directly to other `List U8`s that
     # aren't nul-terminated, while also being able to be passed directly to OS APIs.
-    FromOperatingSystem : List U8,
+    FromOperatingSystem (List U8),
 
     # These come from userspace (e.g. Path.fromBytes), so they need to be checked for interior
     # nuls and then nul-terminated before the host can pass them to OS APIs.
-    ArbitraryBytes : List U8,
+    ArbitraryBytes (List U8),
 
     # This was created as a RocStr, so it might have interior nul bytes but it's definitely UTF-8.
     # That means we can `toStr` it trivially, but have to validate before sending it to OS
@@ -60,7 +62,7 @@ Path := [
     # See https://docs.microsoft.com/en-us/windows/apps/design/globalizing/use-utf8-code-page#-a-vs--w-apis
     # and https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/setmbcp?view=msvc-170
     # for more details on the UTF-8 Code Page in Windows.
-    FromStr : Str,
+    FromStr Str,
 ]
 
 ## ## Creating and transforming
@@ -137,7 +139,7 @@ displayUtf8 = \@Path path ->
             Str.displayUtf8 bytes
 
 isEq : Path, Path -> Bool
-isEq = @Path p1, @Path p2 ->
+isEq = \@Path p1, @Path p2 ->
     when p1 is
         NoInteriorNul bytes1 | ArbitraryBytes bytes1 ->
             when p2 is
@@ -156,7 +158,7 @@ isEq = @Path p1, @Path p2 ->
                 FromStr str2 -> str1 == str2
 
 compare : Path, Path -> [Lt, Eq, Gt]
-compare = @Path p1, @Path p2 ->
+compare = \@Path p1, @Path p2 ->
     when p1 is
         NoInteriorNul bytes1 | ArbitraryBytes bytes1 ->
             when p2 is
@@ -190,14 +192,13 @@ PathRoot : [
     None,
 ]
 
-WindowsRoot : [
-    # TODO see https://doc.rust-lang.org/std/path/enum.Prefix.html
-]
+# TODO see https://doc.rust-lang.org/std/path/enum.Prefix.html
+WindowsRoot : []
 
 ## Returns the root of the path.
 root : Path -> PathRoot
 
-components : Path -> (PathRoot, List PathComponent)
+components : Path -> { root: PathRoot, components: List PathComponent }
 
 ## Walk over the path's [components].
 walk :
@@ -217,55 +218,60 @@ dropLast : Path -> Path
 
 append : Path, Path -> Path
 append = \@Path prefix, @Path suffix ->
-    @Path when prefix is
-        NoInteriorNul prefixBytes ->
-            when suffix is
-                NoInteriorNul suffixBytes
-                    List.append prefixBytes suffixBytes
-                        # Neither prefix nor suffix had interior nuls, so the answer won't either.
-                        |> NoInteriorNul
+    content =
+        when prefix is
+            NoInteriorNul prefixBytes ->
+                when suffix is
+                    NoInteriorNul suffixBytes ->
+                        List.append prefixBytes suffixBytes
+                            # Neither prefix nor suffix had interior nuls, so the answer won't either.
+                            |> NoInteriorNul
 
-                ArbitraryBytes suffixBytes ->
-                    List.append prefixBytes suffixBytes
-                        |> ArbitraryBytes
+                    ArbitraryBytes suffixBytes ->
+                        List.append prefixBytes suffixBytes
+                            |> ArbitraryBytes
 
-                FromStr suffixStr ->
-                    # Append suffixStr by writing it to the end of prefixBytes
-                    Str.writeUtf8 suffixStr prefixBytes (List.len prefixBytes)
-                        |> ArbitraryBytes
+                    FromStr suffixStr ->
+                        # Append suffixStr by writing it to the end of prefixBytes
+                        Str.writeUtf8 suffixStr prefixBytes (List.len prefixBytes)
+                            |> ArbitraryBytes
 
-        ArbitraryBytes prefixBytes ->
-            when suffix is
-                ArbitraryBytes suffixBytes | NoInteriorNul suffixBytes ->
-                    List.append prefixBytes suffixBytes
-                        |> ArbitraryBytes
+            ArbitraryBytes prefixBytes ->
+                when suffix is
+                    ArbitraryBytes suffixBytes | NoInteriorNul suffixBytes ->
+                        List.append prefixBytes suffixBytes
+                            |> ArbitraryBytes
 
-                FromStr suffixStr ->
-                    # Append suffixStr by writing it to the end of prefixBytes
-                    Str.writeUtf8 suffixStr prefixBytes (List.len prefixBytes)
-                        |> ArbitraryBytes
+                    FromStr suffixStr ->
+                        # Append suffixStr by writing it to the end of prefixBytes
+                        Str.writeUtf8 suffixStr prefixBytes (List.len prefixBytes)
+                            |> ArbitraryBytes
 
-        FromStr prefixStr ->
-            when suffix is
-                ArbitraryBytes suffixBytes | NoInteriorNul suffixBytes ->
-                    List.append (Str.toUtf8 prefixStr) suffixBytes
-                        |> ArbitraryBytes
+            FromStr prefixStr ->
+                when suffix is
+                    ArbitraryBytes suffixBytes | NoInteriorNul suffixBytes ->
+                        List.append (Str.toUtf8 prefixStr) suffixBytes
+                            |> ArbitraryBytes
 
-                FromStr suffixStr ->
-                    Str.append prefixStr suffixStr
-                        |> FromStr
+                    FromStr suffixStr ->
+                        Str.append prefixStr suffixStr
+                            |> FromStr
+    @Path content
 
 appendStr : Path, Str -> Path
 appendStr = \@Path prefix, suffixStr ->
-    @Path when prefix is
-        NoInteriorNul prefixBytes | ArbitraryBytes prefixBytes ->
-            # Append suffixStr by writing it to the end of prefixBytes
-            Str.writeUtf8 suffixStr prefixBytes (List.len prefixBytes)
-                |> ArbitraryBytes
+    content =
+        when prefix is
+            NoInteriorNul prefixBytes | ArbitraryBytes prefixBytes ->
+                # Append suffixStr by writing it to the end of prefixBytes
+                Str.writeUtf8 suffixStr prefixBytes (List.len prefixBytes)
+                    |> ArbitraryBytes
 
-        FromStr prefixStr ->
-            Str.append prefixStr suffixStr
-                |> FromStr
+            FromStr prefixStr ->
+                Str.append prefixStr suffixStr
+                    |> FromStr
+
+    @Path content
 
 ## Returns `True` if the first path begins with the second.
 startsWith : Path, Path -> Bool
@@ -343,7 +349,7 @@ withExtension = \@Path path, extension ->
         NoInteriorNul bytes | ArbitraryBytes bytes ->
             beforeDot =
                 when List.splitLast '.' is
-                    Ok (before, _) -> before
+                    Ok { before } -> before
                     Err NotFound -> list
 
             beforeDot
@@ -354,7 +360,7 @@ withExtension = \@Path path, extension ->
         FromStr str ->
             beforeDot =
                 when Str.splitLast str "." is
-                    Ok (before, _) -> before
+                    Ok { before } -> before
                     Err NotFound -> str
 
             beforeDot
