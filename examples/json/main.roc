@@ -8,12 +8,12 @@ app "main"
 # with hard-coded input.
 
 main : Str
-main = fullTest myparser "[aaaaaa]"
+main = fullTest myparser "[aaaaaa,aaa,a,aaa]"
 
 partialTest = \parser, input ->
   when Parser.Core.runPartialStr parser input is
     Ok result ->
-      val = result.val |> Str.joinWith(", ")
+      val = result.val |> Str.joinWith("  --  ")
       # val = result.val
       leftover = result.input
       "Parse success: \(val) (leftover string: \(leftover))\n"
@@ -23,7 +23,8 @@ partialTest = \parser, input ->
 fullTest = \parser, input ->
   when Parser.Core.runStr parser input is
     Ok result ->
-      val = result |> Str.joinWith(", ")
+      # val = result |> Str.joinWith(", ")
+      val = result |> Str.joinWith("  --  ")
       # val = result
       "Parse success: \(val)\n"
     Err (ParsingFailure problem) ->
@@ -31,11 +32,14 @@ fullTest = \parser, input ->
     Err (ParsingIncomplete leftover) ->
       "Parse failure: Expected to reach end of input, but the following was still left: \(leftover)\n"
 
-# input : Str
-# input = "[aaaaaa]"
-
 myparser : Parser (List Str)
-myparser = Parser.Core.betweenBraces (Parser.Core.many (Parser.Core.string "a"))
+myparser =
+  (Parser.Core.string "a")
+  |> Parser.Core.oneOrMore
+  |> Parser.Core.map (\vals -> Str.joinWith vals "")
+  |> Parser.Core.sepBy (Parser.Core.scalar ',')
+  |> Parser.Core.betweenBraces
+
   # "a"
   # |> Parser.Core.string
   # |> Parser.Core.many

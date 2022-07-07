@@ -18,6 +18,9 @@ interface Parser.Core
     maybe,
     oneOrMore,
     many,
+    between,
+    sepBy,
+    sepBy1,
     codepoint,
     stringRaw,
     string,
@@ -215,13 +218,30 @@ oneOrMore = \parser ->
 #    |> applyOld (parser |> map (\res -> \_ -> res))
 #    |> applyOld (string "]" |> map (\_ -> \res -> res))
 
+between : Parser open, Parser close, Parser a -> Parser a
+between = \open, close, parser ->
+  const (\_ -> \val -> \_ -> val)
+  |> apply open
+  |> apply parser
+  |> apply close
+
 betweenBraces : Parser a -> Parser a
 betweenBraces = \parser ->
-  const (\_ -> \val -> \_ -> val)
-  |> apply (string "[")
-  |> apply parser
-  |> apply (string "]")
+  between (scalar '[') (scalar ']') parser
 
+sepBy1 : Parser a, Parser sep -> Parser (List a)
+sepBy1 = \parser, separator ->
+  parserFollowedBySep =
+    const (\_ -> \val -> val)
+    |> apply separator
+    |> apply parser
+  const (\val -> \vals -> List.prepend vals val)
+  |> apply parser
+  |> apply (many parserFollowedBySep)
+
+sepBy : Parser a, Parser sep -> Parser (List a)
+sepBy = \parser, separator ->
+  alt (sepBy1 parser separator) (const [])
 # -- Specific parsers:
 
 codepoint : U8 -> Parser U8
