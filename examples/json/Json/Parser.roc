@@ -11,9 +11,11 @@ interface Json.Decoder
     oneOf,
     map,
     lazy,
-    char,
+    maybe,
+    codepoint,
     stringRaw,
     string,
+    scalar,
   ]
   imports []
 
@@ -111,10 +113,14 @@ lazy : ({} -> Parser a) -> Parser a
 lazy = \thunk ->
   andThen (const {}) thunk
 
+maybe : Parser a -> Parser (Result a [Nothing])
+maybe = \parser ->
+  alt (parser |> map (\val -> Ok val)) (const (Err Nothing))
+
 # -- Specific parsers:
 
-char : U8 -> Parser U8
-char = \expectedCodePoint ->
+codepoint : U8 -> Parser U8
+codepoint = \expectedCodePoint ->
   @Parser \input ->
     {before: start, others: inputRest} = List.split input 1
     if List.isEmpty start then
@@ -125,9 +131,7 @@ char = \expectedCodePoint ->
         Ok {val: expectedCodePoint, input: inputRest}
       else
         errorChar = Result.withDefault (Str.appendScalar "" (Num.intCast expectedCodePoint)) "?" # TODO: Introduce a cleaner way to do this with new builtins?
-        # actualChar = Str.appendScalar "" (Num.castInt firstCodePoint) # TODO: Introduce a cleaner way to do this with new builtins?
         Err (ParsingFailure "expected char `\(errorChar)` but found something else")
-
 
 stringRaw : List U8 -> Parser (List U8)
 stringRaw = \expectedString ->
@@ -144,3 +148,21 @@ string = \expectedString ->
   (Str.toUtf8 expectedString)
   |> stringRaw
   |> map (\_val -> expectedString)
+
+scalar : U32 -> Parser U32
+scalar = \expectedScalar ->
+  ""
+  |> Str.appendScalar expectedScalar
+  |> Result.map (\str -> str |> string |> map (\_ -> expectedScalar))
+  |> Result.mapErr \_ ->
+    num = Num.toStr expectedScalar
+    fail "Invalid scalar value in scalar parser construction \(num)"
+  |> collapseResult
+
+collapseResult : Result a a -> a
+collapseResult = \result ->
+  when result is
+    Ok val ->
+      val
+    Err val ->
+      val
