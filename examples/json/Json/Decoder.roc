@@ -8,6 +8,7 @@ interface Json.Decoder
     andThen,
     oneOf,
     map,
+    lazy
   ]
   imports []
 
@@ -74,3 +75,7 @@ map : (a -> b), Parser a -> Parser b
 map = \transform, simpleParser ->
   andThen simpleParser \result ->
     const (transform result)
+
+lazy : ({} -> Parser a) -> Parser a
+lazy = \thunk ->
+  andThen (const {}) thunk
