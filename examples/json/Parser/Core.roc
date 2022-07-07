@@ -13,7 +13,7 @@ interface Parser.Core
     map,
     lazy,
     maybe,
-    # oneOrMore,
+    oneOrMore,
     many,
     codepoint,
     stringRaw,
@@ -148,16 +148,16 @@ manyImpl = \parser, vals, input ->
     Err _ ->
       Ok {val: vals, input: input}
     Ok {val: val, input: inputRest} ->
-      oneOrMoreImpl parser (List.append vals val) inputRest
+      manyImpl parser (List.append vals val) inputRest
 
 many : Parser a -> Parser (List a)
 many = \parser ->
   @Parser \input ->
-    oneOrMoreImpl parser [] input
+    manyImpl parser [] input
 
-many : Parser a -> Parser (List a)
+oneOrMore : Parser a -> Parser (List a)
 oneOrMore = \parser ->
-  parser |> andThen (many parser)
+  parser |> andThen (\val -> many parser |> map (\vals -> List.prepend vals val))
 
 
 # -- Specific parsers:

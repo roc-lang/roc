@@ -11,8 +11,8 @@ main : Str
 main =
   when Parser.Core.runPartialStr myparser input is
     Ok result ->
-      # resultStr = x.val |> Str.joinWith(", ")
-      val = result.val
+      val = result.val |> Str.joinWith(", ")
+      # val = result.val
       "Parse success: \(val)\n"
     Err (ParsingFailure problem) ->
       "Parse failure: \(problem)\n"
@@ -20,8 +20,8 @@ main =
 input : Str
 input = "aaaaaa"
 
-myparser : Parser Str
-myparser = Parser.Core.many "a"
+myparser : Parser (List Str)
+myparser = Parser.Core.oneOrMore (Parser.Core.string "a")
   # "a"
   # |> Parser.Core.string
   # |> Parser.Core.many
