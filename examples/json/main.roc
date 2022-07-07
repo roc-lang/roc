@@ -39,20 +39,3 @@ myparser =
   |> Parser.Core.map (\vals -> Str.joinWith vals "")
   |> Parser.Core.sepBy (Parser.Core.scalar ',')
   |> Parser.Core.betweenBraces
-
-  # "a"
-  # |> Parser.Core.string
-  # |> Parser.Core.many
-
-  #Parser.Core.oneOrMore (Parser.Core.string "h")
-  # string "h"
-
-  # NOTE: using oneOf currently causes a StackOverflow in the compiler
-  # Parser.Core.oneOfBroken [
-  #   Parser.Core.string "hello",
-  #   Parser.Core.string "george",
-  #   Parser.Core.string "richard",
-  # ]
-
-  # alt (string "hello") (alt (string "george") (string "richard"))
-
