@@ -8,6 +8,7 @@ interface Parser.Core
     fail,
     const,
     alt,
+    apply,
     andThen,
     oneOf,
     map,
@@ -19,6 +20,7 @@ interface Parser.Core
     stringRaw,
     string,
     scalar,
+    betweenBraces, # An example
   ]
   imports []
 
@@ -104,6 +106,24 @@ andThen = \firstParser, buildNextParser ->
     runPartialRaw nextParser rest
   @Parser fun
 
+applyOld : Parser a, Parser (a -> b) -> Parser b
+applyOld = \valParser, funParser ->
+  combined = \input ->
+    {val: val, input: rest} <- Result.after (runPartialRaw valParser input)
+    (runPartialRaw funParser rest)
+    |> Result.map \{val: funVal, input: rest2} ->
+      {val: funVal val, input: rest2}
+  @Parser combined
+
+apply : Parser (a -> b), Parser a -> Parser b
+apply = \funParser, valParser ->
+  combined = \input ->
+    {val: funVal, input: rest} <- Result.after (runPartialRaw funParser input)
+    (runPartialRaw valParser rest)
+    |> Result.map \{val: val, input: rest2} ->
+      {val: funVal val, input: rest2}
+  @Parser combined
+
 oneOf : List (Parser a) -> Parser a
 oneOf = \parsers ->
   List.walkBackwards parsers (fail "Always fail") (\laterParser, earlierParser -> alt earlierParser laterParser)
@@ -157,8 +177,32 @@ many = \parser ->
 
 oneOrMore : Parser a -> Parser (List a)
 oneOrMore = \parser ->
-  parser |> andThen (\val -> many parser |> map (\vals -> List.prepend vals val))
+  const (\val -> \vals -> List.prepend vals val)
+  |> apply parser
+  |> apply (many parser)
+  #  moreParser : Parser (a -> (List a))
+  #  moreParser =
+  #      many parser
+  #      |> map (\vals -> (\val -> List.prepend vals val))
+  #  apply parser moreParser
 
+  #  val <- andThen parser
+  #  parser
+  #  |> many
+  #  |> map (\vals -> List.prepend vals val)
+
+#  betweenBraces : Parser a -> Parser a
+#  betweenBraces = \parser ->
+#    string "["
+#    |> applyOld (parser |> map (\res -> \_ -> res))
+#    |> applyOld (string "]" |> map (\_ -> \res -> res))
+
+betweenBraces : Parser a -> Parser a
+betweenBraces = \parser ->
+  const (\_ -> \val -> \_ -> val)
+  |> apply (string "[")
+  |> apply parser
+  |> apply (string "]")
 
 # -- Specific parsers:
 
@@ -174,7 +218,9 @@ codepoint = \expectedCodePoint ->
         Ok {val: expectedCodePoint, input: inputRest}
       else
         errorChar = Result.withDefault (Str.appendScalar "" (Num.intCast expectedCodePoint)) "?" # TODO: Introduce a cleaner way to do this with new builtins?
-        Err (ParsingFailure "expected char `\(errorChar)` but found something else")
+        otherChar = Result.withDefault (Str.fromUtf8 start) "?"
+        inputStr = Result.withDefault (Str.fromUtf8 input) ""
+        Err (ParsingFailure "expected char `\(errorChar)` but found `\(otherChar)`.\n While reading: `\(inputStr)`")
 
 stringRaw : List U8 -> Parser (List U8)
 stringRaw = \expectedString ->
@@ -184,7 +230,9 @@ stringRaw = \expectedString ->
       Ok {val: expectedString, input: inputRest}
     else
       errorString = Result.withDefault (Str.fromUtf8 expectedString) ""
-      Err (ParsingFailure "expected string `\(errorString)` but found something else")
+      otherString = Result.withDefault (Str.fromUtf8 start) "?"
+      inputString = Result.withDefault (Str.fromUtf8 input) ""
+      Err (ParsingFailure "expected string `\(errorString)` but found `\(otherString)`.\nWhile reading: \(inputString)")
 
 string : Str -> Parser Str
 string = \expectedString ->

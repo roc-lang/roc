@@ -8,7 +8,7 @@ app "main"
 # with hard-coded input.
 
 main : Str
-main = fullTest myparser "aaaaaab"
+main = fullTest myparser "[aaaaaa]"
 
 partialTest = \parser, input ->
   when Parser.Core.runPartialStr parser input is
@@ -32,10 +32,10 @@ fullTest = \parser, input ->
       "Parse failure: Expected to reach end of input, but the following was still left: \(leftover)\n"
 
 # input : Str
-# input = "aaaaaab"
+# input = "[aaaaaa]"
 
 myparser : Parser (List Str)
-myparser = Parser.Core.oneOrMore (Parser.Core.string "a")
+myparser = Parser.Core.betweenBraces (Parser.Core.many (Parser.Core.string "a"))
   # "a"
   # |> Parser.Core.string
   # |> Parser.Core.many
