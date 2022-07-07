@@ -99,11 +99,7 @@ impl<T: FromWasmerMemory + Wasm32Sized, E: FromWasmerMemory + Wasm32Sized> FromW
     for RocResult<T, E>
 {
     fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
-        let tag_offset = if T::ACTUAL_WIDTH > E::ACTUAL_WIDTH {
-            T::ACTUAL_WIDTH
-        } else {
-            E::ACTUAL_WIDTH
-        };
+        let tag_offset = Ord::max(T::ACTUAL_WIDTH, E::ACTUAL_WIDTH);
         let tag = <u8 as FromWasmerMemory>::decode(memory, offset + tag_offset as u32);
         if tag == 1 {
             let value = <T as FromWasmerMemory>::decode(memory, offset);

@@ -205,16 +205,9 @@ impl<T: Wasm32Sized, E: Wasm32Sized> Wasm32Result for RocResult<T, E> {
         build_wrapper_body_stack_memory(
             code_builder,
             main_function_index,
-            max2(T::ACTUAL_WIDTH, E::ACTUAL_WIDTH) + max2(T::ALIGN_OF_WASM, E::ALIGN_OF_WASM),
+            Ord::max(T::ACTUAL_WIDTH, E::ACTUAL_WIDTH)
+                + Ord::max(T::ALIGN_OF_WASM, E::ALIGN_OF_WASM),
         )
-    }
-}
-
-fn max2(a: usize, b: usize) -> usize {
-    if a > b {
-        a
-    } else {
-        b
     }
 }
 
