@@ -10,7 +10,10 @@ interface Json.Decoder
     andThen,
     oneOf,
     map,
-    lazy
+    lazy,
+    char,
+    stringRaw,
+    string,
   ]
   imports []
 
@@ -99,8 +102,8 @@ oneOf : List (Parser a) -> Parser a
 oneOf = \parsers ->
   List.walk parsers (fail "Always fail") alt
 
-map : (a -> b), Parser a -> Parser b
-map = \transform, simpleParser ->
+map : Parser a, (a -> b) -> Parser b
+map = \simpleParser, transform ->
   andThen simpleParser \result ->
     const (transform result)
 
@@ -110,7 +113,7 @@ lazy = \thunk ->
 
 # -- Specific parsers:
 
-char : U8, Parser U8 -> Parser U8
+char : U8 -> Parser U8
 char = \expectedCodePoint ->
   @Parser \input ->
     {before: start, others: inputRest} = List.split input 1
@@ -124,3 +127,20 @@ char = \expectedCodePoint ->
         errorChar = Result.withDefault (Str.appendScalar "" (Num.intCast expectedCodePoint)) "?" # TODO: Introduce a cleaner way to do this with new builtins?
         # actualChar = Str.appendScalar "" (Num.castInt firstCodePoint) # TODO: Introduce a cleaner way to do this with new builtins?
         Err (ParsingFailure "expected char `\(errorChar)` but found something else")
+
+
+stringRaw : List U8 -> Parser (List U8)
+stringRaw = \expectedString ->
+  @Parser \input ->
+    {before: start, others: inputRest} = List.split input (List.len expectedString)
+    if start == expectedString then
+      Ok {val: expectedString, input: inputRest}
+    else
+      errorString = Result.withDefault (Str.fromUtf8 expectedString) ""
+      Err (ParsingFailure "expected string `\(errorString)` but found something else")
+
+string : Str -> Parser Str
+string = \expectedString ->
+  (Str.toUtf8 expectedString)
+  |> stringRaw
+  |> map (\_val -> expectedString)
