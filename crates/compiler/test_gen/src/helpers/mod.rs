@@ -1,5 +1,7 @@
 extern crate bumpalo;
 
+pub mod platform_functions;
+
 #[cfg(feature = "gen-dev")]
 pub mod dev;
 pub mod from_wasmer_memory;
