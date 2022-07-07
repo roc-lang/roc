@@ -1029,7 +1029,7 @@ fn lowlevel_spec(
 
             with_new_heap_cell(builder, block, bag)
         }
-        ListAppend => {
+        ListAppendUnsafe => {
             let list = env.symbols[&arguments[0]];
             let to_insert = env.symbols[&arguments[1]];
 

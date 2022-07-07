@@ -52,6 +52,7 @@ interface List
         dropIf,
         sortAsc,
         sortDesc,
+        reserve,
     ]
     imports [
         Bool.{ Bool },
@@ -243,6 +244,17 @@ set = \list, index, value ->
 ## >>> [0, 1, 2]
 ## >>>     |> List.append 3
 append : List a, a -> List a
+append = \list, element ->
+    list
+        |> List.reserve 1
+        |> List.appendUnsafe element
+
+## Writes the element after the current last element unconditionally.
+## In other words, it is assumed that
+##
+## - the list is owned (i.e. can be updated in-place
+## - the list has at least one element of spare capacity
+appendUnsafe : List a, a -> List a
 
 ## Add a single element to the beginning of a list.
 ##
@@ -261,6 +273,9 @@ len : List a -> Nat
 
 ## Create a list with space for at least capacity elements
 withCapacity : Nat -> List a
+
+## Enlarge the list for at least capacity additional elements
+reserve : List a, Nat -> List a
 
 ## Put two lists together.
 ##

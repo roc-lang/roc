@@ -154,7 +154,7 @@ fn variously_sized_list_literals() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn list_append() {
+fn list_append_basic() {
     assert_evals_to!(
         "List.append [1] 2",
         RocList::from_slice(&[1, 2]),
