@@ -10,9 +10,9 @@ use crate::helpers::wasm::assert_evals_to;
 #[cfg(test)]
 use indoc::indoc;
 
-#[cfg(all(test, feature = "gen-llvm"))]
+#[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
 use roc_std::RocList;
-#[cfg(all(test, feature = "gen-llvm"))]
+#[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
 use roc_std::RocStr;
 
 #[test]
@@ -223,7 +223,7 @@ fn ability_used_as_type_still_compiles() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode() {
     assert_evals_to!(
         indoc!(
@@ -269,7 +269,7 @@ fn encode() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn decode() {
     assert_evals_to!(
         indoc!(
@@ -327,7 +327,7 @@ fn decode() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_use_stdlib() {
     assert_evals_to!(
         indoc!(
