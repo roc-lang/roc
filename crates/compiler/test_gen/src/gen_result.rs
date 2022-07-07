@@ -268,3 +268,55 @@ fn issue_2583_specialize_errors_behind_unified_branches() {
         RocResult<i64, bool>
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn roc_result_after() {
+    assert_evals_to!(indoc!(
+        r#"
+            result : Result I64 I64
+            result = (Ok "1234") |> after (\numStr -> Num.toNat)
+
+            result
+            "#),
+        RocResult::ok(1234),
+        RocResult<i64, RocStr>
+    );
+
+    assert_evals_to!(indoc!(
+        r#"
+            result : Result I64 Str
+            result = (Err "1234") |> after (\numStr -> Num.toNat)
+
+            result
+            "#),
+        RocResult::err(RocStr::from("1234")),
+        RocResult<i64, RocStr>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn roc_result_after_err() {
+    assert_evals_to!(indoc!(
+        r#"
+            result : Result I64 Str
+            result = (Err "1234") |> afterErr (\numStr -> Num.toNat)
+
+            result
+            "#),
+        RocResult::err(1234),
+        RocResult<i64, RocStr>
+    );
+
+    assert_evals_to!(indoc!(
+        r#"
+            result : Result Str I64
+            result = (Ok "1234") |> afterErr (\numStr -> Num.toNat)
+
+            result
+            "#),
+        RocResult::ok(RocStr::from("1234")),
+        RocResult<RocStr, i64>
+    );
+}
