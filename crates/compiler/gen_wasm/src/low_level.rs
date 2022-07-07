@@ -2033,7 +2033,10 @@ pub fn call_higher_order_lowlevel<'a>(
             .unwrap();
         match op {
             ListSortWith { .. } => ProcSource::HigherOrderCompare(passed_proc_index),
-            _ => ProcSource::HigherOrderMapper(passed_proc_index),
+            ListMap { .. } | ListMap2 { .. } | ListMap3 { .. } | ListMap4 { .. } => {
+                ProcSource::HigherOrderMapper(passed_proc_index)
+            }
+            DictWalk { .. } => todo!("DictWalk"),
         }
     };
     let wrapper_sym = backend.create_symbol(&format!("#wrap#{:?}", fn_name));
@@ -2055,19 +2058,23 @@ pub fn call_higher_order_lowlevel<'a>(
                 .map(Layout::Boxed),
         );
 
-        if let ProcSource::HigherOrderMapper(_) = helper_proc_source {
-            // Our convention for mappers is that they write to the heap via the last argument
-            wrapper_arg_layouts.push(Layout::Boxed(result_layout));
-            ProcLayout {
-                arguments: wrapper_arg_layouts.into_bump_slice(),
-                result: Layout::UNIT,
-                captures_niche: fn_name.captures_niche(),
+        match helper_proc_source {
+            ProcSource::HigherOrderMapper(_) => {
+                // Our convention for mappers is that they write to the heap via the last argument
+                wrapper_arg_layouts.push(Layout::Boxed(result_layout));
+                ProcLayout {
+                    arguments: wrapper_arg_layouts.into_bump_slice(),
+                    result: Layout::UNIT,
+                    captures_niche: fn_name.captures_niche(),
+                }
             }
-        } else {
-            ProcLayout {
+            ProcSource::HigherOrderCompare(_) => ProcLayout {
                 arguments: wrapper_arg_layouts.into_bump_slice(),
                 result: *result_layout,
                 captures_niche: fn_name.captures_niche(),
+            },
+            ProcSource::Roc | ProcSource::Helper => {
+                internal_error!("Should never reach here for {:?}", helper_proc_source)
             }
         }
     };
