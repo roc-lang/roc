@@ -130,8 +130,8 @@ oneOf = \parsers ->
 
 map : Parser a, (a -> b) -> Parser b
 map = \simpleParser, transform ->
-  andThen simpleParser \result ->
-    const (transform result)
+  const transform
+  |> apply simpleParser
 
 lazy : ({} -> Parser a) -> Parser a
 lazy = \thunk ->
