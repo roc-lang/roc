@@ -93,7 +93,6 @@ after = \result, transform ->
         Err e ->
             Err e
 
-
 ## If the result is `Err`, transform the entire result by running a conversion
 ## function on the value the `Err` holds. Then return that new result.
 ##
