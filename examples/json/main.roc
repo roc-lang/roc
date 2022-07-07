@@ -8,17 +8,31 @@ app "main"
 # with hard-coded input.
 
 main : Str
-main =
-  when Parser.Core.runPartialStr myparser input is
+main = fullTest myparser "aaaaaab"
+
+partialTest = \parser, input ->
+  when Parser.Core.runPartialStr parser input is
     Ok result ->
       val = result.val |> Str.joinWith(", ")
       # val = result.val
-      "Parse success: \(val)\n"
+      leftover = result.input
+      "Parse success: \(val) (leftover string: \(leftover))\n"
     Err (ParsingFailure problem) ->
       "Parse failure: \(problem)\n"
 
-input : Str
-input = "aaaaaa"
+fullTest = \parser, input ->
+  when Parser.Core.runStr parser input is
+    Ok result ->
+      val = result |> Str.joinWith(", ")
+      # val = result
+      "Parse success: \(val)\n"
+    Err (ParsingFailure problem) ->
+      "Parse failure: \(problem)\n"
+    Err (ParsingIncomplete leftover) ->
+      "Parse failure: Expected to reach end of input, but the following was still left: \(leftover)\n"
+
+# input : Str
+# input = "aaaaaab"
 
 myparser : Parser (List Str)
 myparser = Parser.Core.oneOrMore (Parser.Core.string "a")
