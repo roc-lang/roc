@@ -3525,15 +3525,31 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
 
     let mut arguments_for_call = Vec::with_capacity_in(args.len(), env.arena);
 
-    let it = args.iter().zip(roc_function.get_type().get_param_types());
-    for (arg, fastcc_type) in it {
+    let it = args
+        .iter()
+        .zip(roc_function.get_type().get_param_types())
+        .zip(arguments);
+    for ((arg, fastcc_type), layout) in it {
         let arg_type = arg.get_type();
         if arg_type == fastcc_type {
             // the C and Fast calling conventions agree
             arguments_for_call.push(*arg);
         } else {
-            let cast = complex_bitcast_check_size(env, *arg, fastcc_type, "to_fastcc_type");
-            arguments_for_call.push(cast);
+            match layout {
+                Layout::Builtin(Builtin::List(_)) => {
+                    let loaded = env
+                        .builder
+                        .build_load(arg.into_pointer_value(), "load_list_pointer");
+                    let cast =
+                        complex_bitcast_check_size(env, loaded, fastcc_type, "to_fastcc_type_1");
+                    arguments_for_call.push(cast);
+                }
+                _ => {
+                    let cast =
+                        complex_bitcast_check_size(env, *arg, fastcc_type, "to_fastcc_type_1");
+                    arguments_for_call.push(cast);
+                }
+            }
         }
     }
 
@@ -3657,7 +3673,7 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
             // the C and Fast calling conventions agree
             *arg
         } else {
-            complex_bitcast_check_size(env, *arg, *fastcc_type, "to_fastcc_type")
+            complex_bitcast_check_size(env, *arg, *fastcc_type, "to_fastcc_type_2")
         }
     });
 
@@ -4163,6 +4179,89 @@ pub fn build_procedures_return_main<'a, 'ctx, 'env>(
     );
 
     promote_to_main_function(env, mod_solutions, entry_point.symbol, entry_point.layout)
+}
+
+pub fn build_procedures_expose_expects<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    opt_level: OptLevel,
+    procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
+    entry_point: EntryPoint<'a>,
+) -> Vec<'a, &'a str> {
+    use bumpalo::collections::CollectIn;
+
+    // this is not entirely accurate: it will treat every top-level bool value (turned into a
+    // zero-argument thunk) as an expect.
+    let expects: Vec<_> = procedures
+        .keys()
+        .filter_map(|(symbol, proc_layout)| {
+            if proc_layout.arguments.is_empty() && proc_layout.result == Layout::bool() {
+                Some(*symbol)
+            } else {
+                None
+            }
+        })
+        .collect_in(env.arena);
+
+    let mod_solutions = build_procedures_help(
+        env,
+        opt_level,
+        procedures,
+        entry_point,
+        Some(Path::new("/tmp/test.ll")),
+    );
+
+    let captures_niche = CapturesNiche::no_niche();
+
+    let top_level = ProcLayout {
+        arguments: &[],
+        result: Layout::bool(),
+        captures_niche,
+    };
+
+    let mut expect_names = Vec::with_capacity_in(expects.len(), env.arena);
+
+    for symbol in expects.iter().copied() {
+        let it = top_level.arguments.iter().copied();
+        let bytes =
+            roc_alias_analysis::func_name_bytes_help(symbol, it, captures_niche, &top_level.result);
+        let func_name = FuncName(&bytes);
+        let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
+
+        let mut it = func_solutions.specs();
+        let func_spec = it.next().unwrap();
+        debug_assert!(
+            it.next().is_none(),
+            "we expect only one specialization of this symbol"
+        );
+
+        // NOTE fake layout; it is only used for debug prints
+        let roc_main_fn = function_value_by_func_spec(
+            env,
+            *func_spec,
+            symbol,
+            &[],
+            captures_niche,
+            &Layout::UNIT,
+        );
+
+        let name = roc_main_fn.get_name().to_str().unwrap();
+
+        let expect_name = &format!("Expect_{}", name);
+        let expect_name = env.arena.alloc_str(expect_name);
+        expect_names.push(&*expect_name);
+
+        // Add main to the module.
+        let _ = expose_function_to_host_help_c_abi(
+            env,
+            name,
+            roc_main_fn,
+            top_level.arguments,
+            top_level.result,
+            &format!("Expect_{}", name),
+        );
+    }
+
+    expect_names
 }
 
 fn build_procedures_help<'a, 'ctx, 'env>(
@@ -6007,6 +6106,20 @@ fn run_low_level<'a, 'ctx, 'env>(
         PtrCast | RefCountInc | RefCountDec => {
             unreachable!("Not used in LLVM backend: {:?}", op);
         }
+
+        Unreachable => match RocReturn::from_layout(env, layout) {
+            RocReturn::Return => {
+                let basic_type = basic_type_from_layout(env, layout);
+                basic_type.const_zero()
+            }
+            RocReturn::ByPointer => {
+                let basic_type = basic_type_from_layout(env, layout);
+                let ptr = env.builder.build_alloca(basic_type, "unreachable_alloca");
+                env.builder.build_store(ptr, basic_type.const_zero());
+
+                ptr.into()
+            }
+        },
     }
 }
 

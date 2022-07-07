@@ -242,13 +242,7 @@ fn fmt_imports<'a, 'buf>(
     loc_entries: Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>,
     indent: u16,
 ) {
-    fmt_collection(
-        buf,
-        indent + INDENT,
-        Braces::Square,
-        loc_entries,
-        Newlines::No,
-    )
+    fmt_collection(buf, indent, Braces::Square, loc_entries, Newlines::No)
 }
 
 fn fmt_provides<'a, 'buf>(
@@ -260,13 +254,7 @@ fn fmt_provides<'a, 'buf>(
     fmt_collection(buf, indent, Braces::Square, loc_exposed_names, Newlines::No);
     if let Some(loc_provided) = loc_provided_types {
         fmt_default_spaces(buf, &[], indent);
-        fmt_collection(
-            buf,
-            indent + INDENT,
-            Braces::Curly,
-            loc_provided,
-            Newlines::No,
-        );
+        fmt_collection(buf, indent, Braces::Curly, loc_provided, Newlines::No);
     }
 }
 
@@ -279,18 +267,12 @@ fn fmt_to<'buf>(buf: &mut Buf<'buf>, to: To, indent: u16) {
     }
 }
 
-fn fmt_exposes<'buf, N: Formattable + Copy>(
+fn fmt_exposes<'buf, N: Formattable + Copy + core::fmt::Debug>(
     buf: &mut Buf<'buf>,
     loc_entries: Collection<'_, Loc<Spaced<'_, N>>>,
     indent: u16,
 ) {
-    fmt_collection(
-        buf,
-        indent + INDENT,
-        Braces::Square,
-        loc_entries,
-        Newlines::No,
-    )
+    fmt_collection(buf, indent, Braces::Square, loc_entries, Newlines::No)
 }
 
 pub trait FormatName {

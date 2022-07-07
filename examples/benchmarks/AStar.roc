@@ -3,13 +3,12 @@ interface AStar exposes [findPath, Model, initialModel, cheapestOpen, reconstruc
 findPath = \costFn, moveFn, start, end ->
     astar costFn moveFn end (initialModel start)
 
-Model position :
-    {
-        evaluated : Set position,
-        openSet : Set position,
-        costs : Dict position F64,
-        cameFrom : Dict position position,
-    }
+Model position : {
+    evaluated : Set position,
+    openSet : Set position,
+    costs : Dict position F64,
+    cameFrom : Dict position position,
+}
 
 initialModel : position -> Model position
 initialModel = \start -> {

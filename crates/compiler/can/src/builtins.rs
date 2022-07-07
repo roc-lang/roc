@@ -107,6 +107,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_TO_I16 => str_to_num,
         STR_TO_U8 => str_to_num,
         STR_TO_I8 => str_to_num,
+        LIST_UNREACHABLE => roc_unreachable,
         LIST_LEN => list_len,
         LIST_WITH_CAPACITY => list_with_capacity,
         LIST_GET_UNSAFE => list_get_unsafe,
@@ -2357,6 +2358,11 @@ fn list_prepend(symbol: Symbol, var_store: &mut VarStore) -> Def {
         body,
         list_var,
     )
+}
+
+/// List.unreachable : [] -> a
+fn roc_unreachable(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::Unreachable, var_store)
 }
 
 /// List.map : List before, (before -> after) -> List after

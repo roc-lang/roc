@@ -2,6 +2,7 @@ use bumpalo::Bump;
 use const_format::concatcp;
 use inkwell::context::Context;
 use libloading::Library;
+use roc_types::subs::Subs;
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
 use rustyline_derive::{Completer, Helper, Hinter};
@@ -9,7 +10,7 @@ use std::borrow::Cow;
 use std::io;
 use target_lexicon::Triple;
 
-use roc_build::link::module_to_dylib;
+use roc_build::link::llvm_module_to_dylib;
 use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
@@ -190,28 +191,18 @@ impl ReplAppMemory for CliMemory {
     }
 }
 
-fn gen_and_eval_llvm<'a>(
-    src: &str,
+pub fn expect_mono_module_to_dylib<'a>(
+    arena: &'a Bump,
     target: Triple,
+    loaded: MonomorphizedModule<'a>,
     opt_level: OptLevel,
-) -> Result<ReplOutput, SyntaxError<'a>> {
-    let arena = Bump::new();
+) -> Result<(libloading::Library, bumpalo::collections::Vec<'a, &'a str>), libloading::Error> {
     let target_info = TargetInfo::from(&target);
-
-    let loaded = match compile_to_mono(&arena, src, target_info, DEFAULT_PALETTE) {
-        Ok(x) => x,
-        Err(prob_strings) => {
-            return Ok(ReplOutput::Problems(prob_strings));
-        }
-    };
 
     let MonomorphizedModule {
         procedures,
         entry_point,
         interns,
-        exposed_to_host,
-        mut subs,
-        module_id: home,
         ..
     } = loaded;
 
@@ -221,25 +212,83 @@ fn gen_and_eval_llvm<'a>(
         &target, &context, "",
     ));
 
-    debug_assert_eq!(exposed_to_host.values.len(), 1);
-    let (main_fn_symbol, main_fn_var) = exposed_to_host.values.iter().next().unwrap();
-    let main_fn_symbol = *main_fn_symbol;
-    let main_fn_var = *main_fn_var;
+    let module = arena.alloc(module);
+    let (module_pass, _function_pass) =
+        roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
 
-    // pretty-print the expr type string for later.
-    let expr_type_str =
-        name_and_print_var(main_fn_var, &mut subs, home, &interns, DebugPrint::NOTHING);
-    let content = subs.get_content_without_compacting(main_fn_var);
+    let (dibuilder, compile_unit) = roc_gen_llvm::llvm::build::Env::new_debug_info(module);
 
-    let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
-        Some(layout) => *layout,
-        None => {
-            return Ok(ReplOutput::NoProblems {
-                expr: "<function>".to_string(),
-                expr_type: expr_type_str,
-            });
-        }
+    // Compile and add all the Procs before adding main
+    let env = roc_gen_llvm::llvm::build::Env {
+        arena,
+        builder: &builder,
+        dibuilder: &dibuilder,
+        compile_unit: &compile_unit,
+        context: &context,
+        interns,
+        module,
+        target_info,
+        is_gen_test: true, // so roc_panic is generated
+        // important! we don't want any procedures to get the C calling convention
+        exposed_to_host: MutSet::default(),
     };
+
+    // Add roc_alloc, roc_realloc, and roc_dealloc, since the repl has no
+    // platform to provide them.
+    add_default_roc_externs(&env);
+
+    let expects = roc_gen_llvm::llvm::build::build_procedures_expose_expects(
+        &env,
+        opt_level,
+        procedures,
+        entry_point,
+    );
+
+    env.dibuilder.finalize();
+
+    // we don't use the debug info, and it causes weird errors.
+    module.strip_debug_info();
+
+    // Uncomment this to see the module's un-optimized LLVM instruction output:
+    // env.module.print_to_stderr();
+
+    module_pass.run_on(env.module);
+
+    // Uncomment this to see the module's optimized LLVM instruction output:
+    // env.module.print_to_stderr();
+
+    // Verify the module
+    if let Err(errors) = env.module.verify() {
+        panic!(
+            "Errors defining module:\n{}\n\nUncomment things nearby to see more details.",
+            errors.to_string()
+        );
+    }
+
+    llvm_module_to_dylib(env.module, &target, opt_level).map(|lib| (lib, expects))
+}
+
+pub fn mono_module_to_dylib<'a>(
+    arena: &'a Bump,
+    target: Triple,
+    loaded: MonomorphizedModule,
+    opt_level: OptLevel,
+) -> Result<(libloading::Library, &'a str, Subs), libloading::Error> {
+    let target_info = TargetInfo::from(&target);
+
+    let MonomorphizedModule {
+        procedures,
+        entry_point,
+        interns,
+        subs,
+        ..
+    } = loaded;
+
+    let context = Context::create();
+    let builder = context.create_builder();
+    let module = arena.alloc(roc_gen_llvm::llvm::build::module_from_builtins(
+        &target, &context, "",
+    ));
 
     let module = arena.alloc(module);
     let (module_pass, function_pass) =
@@ -249,7 +298,7 @@ fn gen_and_eval_llvm<'a>(
 
     // Compile and add all the Procs before adding main
     let env = roc_gen_llvm::llvm::build::Env {
-        arena: &arena,
+        arena,
         builder: &builder,
         dibuilder: &dibuilder,
         compile_unit: &compile_unit,
@@ -300,8 +349,51 @@ fn gen_and_eval_llvm<'a>(
         );
     }
 
-    let lib = module_to_dylib(env.module, &target, opt_level)
-        .expect("Error loading compiled dylib for test");
+    llvm_module_to_dylib(env.module, &target, opt_level).map(|lib| (lib, main_fn_name, subs))
+}
+
+fn gen_and_eval_llvm<'a>(
+    src: &str,
+    target: Triple,
+    opt_level: OptLevel,
+) -> Result<ReplOutput, SyntaxError<'a>> {
+    let arena = Bump::new();
+    let target_info = TargetInfo::from(&target);
+
+    let mut loaded = match compile_to_mono(&arena, src, target_info, DEFAULT_PALETTE) {
+        Ok(x) => x,
+        Err(prob_strings) => {
+            return Ok(ReplOutput::Problems(prob_strings));
+        }
+    };
+
+    debug_assert_eq!(loaded.exposed_to_host.values.len(), 1);
+    let (main_fn_symbol, main_fn_var) = loaded.exposed_to_host.values.iter().next().unwrap();
+    let main_fn_symbol = *main_fn_symbol;
+    let main_fn_var = *main_fn_var;
+
+    // pretty-print the expr type string for later.
+    let expr_type_str = name_and_print_var(
+        main_fn_var,
+        &mut loaded.subs,
+        loaded.module_id,
+        &loaded.interns,
+        DebugPrint::NOTHING,
+    );
+    let content = *loaded.subs.get_content_without_compacting(main_fn_var);
+
+    let (_, main_fn_layout) = match loaded.procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
+        Some(layout) => *layout,
+        None => {
+            return Ok(ReplOutput::NoProblems {
+                expr: "<function>".to_string(),
+                expr_type: expr_type_str,
+            });
+        }
+    };
+
+    let (lib, main_fn_name, subs) =
+        mono_module_to_dylib(&arena, target, loaded, opt_level).expect("we produce a valid Dylib");
 
     let app = CliApp { lib };
 
@@ -310,7 +402,7 @@ fn gen_and_eval_llvm<'a>(
         &app,
         main_fn_name,
         main_fn_layout,
-        content,
+        &content,
         &subs,
         target_info,
     );

@@ -2,21 +2,20 @@ interface Elem
     exposes [Elem, PressEvent, row, col, text, button, none, translate, list]
     imports [Action.{ Action }]
 
-Elem state :
+Elem state : [
     # PERFORMANCE NOTE:
     # If there are 8 or fewer tags here, then on a 64-bit system, the tag can be stored
     # in the pointer - for massive memory savings. Try extremely hard to always limit the number
     # of tags in this union to 8 or fewer!
-    [
-        Button (ButtonConfig state) (Elem state),
-        Text Str,
-        Col (List (Elem state)),
-        Row (List (Elem state)),
-        Lazy (Result { state, elem : Elem state } [NotCached] -> { state, elem : Elem state }),
-        # TODO FIXME: using this definition of Lazy causes a stack overflow in the compiler!
-        # Lazy (Result (Cached state) [NotCached] -> Cached state),
-        None,
-    ]
+    Button (ButtonConfig state) (Elem state),
+    Text Str,
+    Col (List (Elem state)),
+    Row (List (Elem state)),
+    Lazy (Result { state, elem : Elem state } [NotCached] -> { state, elem : Elem state }),
+    # TODO FIXME: using this definition of Lazy causes a stack overflow in the compiler!
+    # Lazy (Result (Cached state) [NotCached] -> Cached state),
+    None,
+]
 
 ## Used internally in the type definition of Lazy
 Cached state : { state, elem : Elem state }
@@ -61,7 +60,7 @@ lazy = \state, render ->
                     { state, elem: render state }
 
 none : Elem *
-none = None# I've often wanted this in elm/html. Usually end up resorting to (Html.text "") - this seems nicer.
+none = None # I've often wanted this in elm/html. Usually end up resorting to (Html.text "") - this seems nicer.
 ## Change an element's state type.
 ##
 ## TODO: indent the following once https://github.com/rtfeldman/roc/issues/2585 is fixed.

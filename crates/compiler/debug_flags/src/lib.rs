@@ -104,6 +104,9 @@ flags! {
     /// Prints debug information during the alias analysis pass.
     ROC_DEBUG_ALIAS_ANALYSIS
 
+    /// Print to stderr when a runtime error function is generated.
+    ROC_PRINT_RUNTIME_ERROR_GEN
+
     // ===LLVM Gen===
 
     /// Prints LLVM function verification output.

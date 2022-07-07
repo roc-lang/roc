@@ -15,6 +15,7 @@ use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::{
     ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
+    ROC_PRINT_RUNTIME_ERROR_GEN,
 };
 use roc_derive_key::GlobalDerivedSymbols;
 use roc_error_macros::{internal_error, todo_abilities};
@@ -2807,22 +2808,26 @@ fn generate_runtime_error_function<'a>(
     )
     .unwrap();
 
-    eprintln!(
-        "emitted runtime error function {:?} for layout {:?}",
-        &msg, layout
-    );
+    dbg_do!(ROC_PRINT_RUNTIME_ERROR_GEN, {
+        eprintln!(
+            "emitted runtime error function {:?} for layout {:?}",
+            &msg, layout
+        );
+    });
 
     let runtime_error = Stmt::RuntimeError(msg.into_bump_str());
 
     let (args, ret_layout) = match layout {
         RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout) => {
-            let mut args = Vec::with_capacity_in(arg_layouts.len(), env.arena);
+            let real_arg_layouts = lambda_set.extend_argument_list(env.arena, arg_layouts);
+            let mut args = Vec::with_capacity_in(real_arg_layouts.len(), env.arena);
 
             for arg in arg_layouts {
                 args.push((*arg, env.unique_symbol()));
             }
-
-            args.push((Layout::LambdaSet(lambda_set), Symbol::ARG_CLOSURE));
+            if real_arg_layouts.len() != arg_layouts.len() {
+                args.push((Layout::LambdaSet(lambda_set), Symbol::ARG_CLOSURE));
+            }
 
             (args.into_bump_slice(), *ret_layout)
         }
@@ -2878,6 +2883,15 @@ fn specialize_external<'a>(
     let specialized =
         build_specialized_proc_from_var(env, layout_cache, lambda_name, pattern_symbols, fn_var)?;
 
+    let recursivity = if partial_proc.is_self_recursive {
+        SelfRecursive::SelfRecursive(JoinPointId(env.unique_symbol()))
+    } else {
+        SelfRecursive::NotSelfRecursive
+    };
+
+    let body = partial_proc.body.clone();
+    let body_var = partial_proc.body_var;
+
     // determine the layout of aliases/rigids exposed to the host
     let host_exposed_layouts = if host_exposed_variables.is_empty() {
         HostExposedLayouts::NotHostExposed
@@ -2922,6 +2936,7 @@ fn specialize_external<'a>(
 
                     let body = match_on_lambda_set(
                         env,
+                        procs,
                         lambda_set,
                         Symbol::ARG_CLOSURE,
                         argument_symbols.into_bump_slice(),
@@ -2965,15 +2980,7 @@ fn specialize_external<'a>(
         }
     };
 
-    let recursivity = if partial_proc.is_self_recursive {
-        SelfRecursive::SelfRecursive(JoinPointId(env.unique_symbol()))
-    } else {
-        SelfRecursive::NotSelfRecursive
-    };
-
-    let body = partial_proc.body.clone();
-
-    let mut specialized_body = from_can(env, partial_proc.body_var, body, procs, layout_cache);
+    let mut specialized_body = from_can(env, body_var, body, procs, layout_cache);
 
     match specialized {
         SpecializedLayout::FunctionPointerBody {
@@ -4712,6 +4719,7 @@ pub fn with_hole<'a>(
 
                                     result = match_on_lambda_set(
                                         env,
+                                        procs,
                                         lambda_set,
                                         closure_data_symbol,
                                         arg_symbols,
@@ -4752,6 +4760,7 @@ pub fn with_hole<'a>(
 
                                     result = match_on_lambda_set(
                                         env,
+                                        procs,
                                         lambda_set,
                                         closure_data_symbol,
                                         arg_symbols,
@@ -4809,6 +4818,7 @@ pub fn with_hole<'a>(
 
                                     result = match_on_lambda_set(
                                         env,
+                                        procs,
                                         lambda_set,
                                         closure_data_symbol,
                                         arg_symbols,
@@ -7485,6 +7495,7 @@ fn call_by_name<'a>(
 
                     let result = match_on_lambda_set(
                         env,
+                        procs,
                         lambda_set,
                         closure_data_symbol,
                         arg_symbols,
@@ -8030,6 +8041,7 @@ fn call_specialized_proc<'a>(
 
                 let new_hole = match_on_lambda_set(
                     env,
+                    procs,
                     lambda_set,
                     closure_data_symbol,
                     field_symbols,
@@ -9103,6 +9115,7 @@ where
 #[allow(clippy::too_many_arguments)]
 fn match_on_lambda_set<'a>(
     env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
     lambda_set: LambdaSet<'a>,
     closure_data_symbol: Symbol,
     argument_symbols: &'a [Symbol],
@@ -9146,7 +9159,22 @@ fn match_on_lambda_set<'a>(
             field_layouts,
             field_order_hash,
         } => {
-            let function_symbol = lambda_set.iter_set().next().unwrap();
+            let function_symbol = match lambda_set.iter_set().next() {
+                Some(function_symbol) => function_symbol,
+                None => {
+                    // Lambda set is empty, so this function is never called; synthesize a function
+                    // that always yields a runtime error.
+                    let name = env.unique_symbol();
+                    let function_layout =
+                        RawFunctionLayout::Function(argument_layouts, lambda_set, return_layout);
+                    let proc = generate_runtime_error_function(env, name, function_layout);
+                    let top_level =
+                        ProcLayout::from_raw(env.arena, function_layout, CapturesNiche::no_niche());
+
+                    procs.specialized.insert_specialized(name, top_level, proc);
+                    LambdaName::no_niche(name)
+                }
+            };
 
             let closure_info = match field_layouts {
                 [] => ClosureInfo::DoesNotCapture,

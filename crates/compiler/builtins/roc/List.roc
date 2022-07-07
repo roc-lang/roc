@@ -1,63 +1,61 @@
 interface List
-    exposes
-        [
-            isEmpty,
-            get,
-            set,
-            replace,
-            append,
-            map,
-            len,
-            withCapacity,
-            iterate,
-            walkBackwards,
-            concat,
-            first,
-            single,
-            repeat,
-            reverse,
-            prepend,
-            join,
-            keepIf,
-            contains,
-            sum,
-            walk,
-            last,
-            keepOks,
-            keepErrs,
-            mapWithIndex,
-            map2,
-            map3,
-            product,
-            walkUntil,
-            range,
-            sortWith,
-            drop,
-            swap,
-            dropAt,
-            dropLast,
-            min,
-            max,
-            map4,
-            dropFirst,
-            joinMap,
-            any,
-            takeFirst,
-            takeLast,
-            find,
-            findIndex,
-            sublist,
-            intersperse,
-            split,
-            all,
-            dropIf,
-            sortAsc,
-            sortDesc,
-        ]
-    imports
-        [
-            Bool.{ Bool },
-        ]
+    exposes [
+        isEmpty,
+        get,
+        set,
+        replace,
+        append,
+        map,
+        len,
+        withCapacity,
+        iterate,
+        walkBackwards,
+        concat,
+        first,
+        single,
+        repeat,
+        reverse,
+        prepend,
+        join,
+        keepIf,
+        contains,
+        sum,
+        walk,
+        last,
+        keepOks,
+        keepErrs,
+        mapWithIndex,
+        map2,
+        map3,
+        product,
+        walkUntil,
+        range,
+        sortWith,
+        drop,
+        swap,
+        dropAt,
+        dropLast,
+        min,
+        max,
+        map4,
+        dropFirst,
+        joinMap,
+        any,
+        takeFirst,
+        takeLast,
+        find,
+        findIndex,
+        sublist,
+        intersperse,
+        split,
+        all,
+        dropIf,
+        sortAsc,
+        sortDesc,
+    ]
+    imports [
+        Bool.{ Bool },
+    ]
 
 ## Types
 ## A sequential list of values.
@@ -373,17 +371,11 @@ contains = \list, needle ->
 ## `fold`, `foldLeft`, or `foldl`.
 walk : List elem, state, (state, elem -> state) -> state
 walk = \list, state, func ->
-    walkHelp list state func 0 (len list)
+    walkHelp = \currentState, element -> Continue (func currentState element)
 
-## internal helper
-walkHelp : List elem, state, (state, elem -> state), Nat, Nat -> state
-walkHelp = \list, state, f, index, length ->
-    if index < length then
-        nextState = f state (getUnsafe list index)
-
-        walkHelp list nextState f (index + 1) length
-    else
-        state
+    when List.iterate list state walkHelp is
+        Continue newState -> newState
+        Break void -> List.unreachable void
 
 ## Note that in other languages, `walkBackwards` is sometimes called `reduceRight`,
 ## `fold`, `foldRight`, or `foldr`.
@@ -841,3 +833,6 @@ iterHelp = \list, state, f, index, length ->
                 Break b
     else
         Continue state
+
+## useful for typechecking guaranteed-unreachable cases
+unreachable : [] -> a
