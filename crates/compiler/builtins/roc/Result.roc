@@ -92,3 +92,20 @@ after = \result, transform ->
             transform v
         Err e ->
             Err e
+
+
+## If the result is `Err`, transform the entire result by running a conversion
+## function on the value the `Err` holds. Then return that new result.
+##
+## (If the result is `Ok`, this has no effect. Use `after` to transform an `Ok`.)
+##
+## >>> Result.afterErr (Ok 10) \errorNum -> Str.toNat errorNum
+##
+## >>> Result.afterErr (Err "42") \errorNum -> Str.toNat errorNum
+after : Result a err, (err -> Result a otherErr) -> Result a otherErr
+after = \result, transform ->
+    when result is
+        Ok v ->
+            v
+        Err e ->
+            transform e
