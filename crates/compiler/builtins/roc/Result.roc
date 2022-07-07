@@ -1,5 +1,5 @@
 interface Result
-    exposes [Result, isOk, isErr, map, mapErr, after, withDefault]
+    exposes [Result, isOk, isErr, map, mapErr, after, afterErr, withDefault]
     imports [Bool.{ Bool }]
 
 ## The result of an operation that could fail: either the operation went
@@ -102,10 +102,10 @@ after = \result, transform ->
 ## >>> Result.afterErr (Ok 10) \errorNum -> Str.toNat errorNum
 ##
 ## >>> Result.afterErr (Err "42") \errorNum -> Str.toNat errorNum
-after : Result a err, (err -> Result a otherErr) -> Result a otherErr
-after = \result, transform ->
+afterErr : Result a err, (err -> Result a otherErr) -> Result a otherErr
+afterErr = \result, transform ->
     when result is
         Ok v ->
-            v
+            Ok v
         Err e ->
             transform e

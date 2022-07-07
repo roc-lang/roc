@@ -274,23 +274,27 @@ fn issue_2583_specialize_errors_behind_unified_branches() {
 fn roc_result_after() {
     assert_evals_to!(indoc!(
         r#"
-            result : Result I64 I64
-            result = (Ok "1234") |> after (\numStr -> Num.toNat)
+            result : Result I64 Str
+            result =
+              Result.after (Ok 1) \num ->
+                if num < 0 then Err "negative!" else Ok -num
 
             result
             "#),
-        RocResult::ok(1234),
+        RocResult::ok(-1),
         RocResult<i64, RocStr>
     );
 
     assert_evals_to!(indoc!(
         r#"
             result : Result I64 Str
-            result = (Err "1234") |> after (\numStr -> Num.toNat)
+            result =
+              Result.after (Err "already a string") \num ->
+                if num < 0 then Err "negative!" else Ok -num
 
             result
             "#),
-        RocResult::err(RocStr::from("1234")),
+        RocResult::err(RocStr::from("already a string")),
         RocResult<i64, RocStr>
     );
 }
@@ -300,23 +304,27 @@ fn roc_result_after() {
 fn roc_result_after_err() {
     assert_evals_to!(indoc!(
         r#"
-            result : Result I64 Str
-            result = (Err "1234") |> afterErr (\numStr -> Num.toNat)
+            result : Result Str I64
+            result =
+              Result.afterErr (Ok "already a string") \num ->
+                if num < 0 then Ok "negative!" else Err -num
 
             result
             "#),
-        RocResult::err(1234),
-        RocResult<i64, RocStr>
+        RocResult::ok(RocStr::from("already a string")),
+        RocResult<RocStr, i64>
     );
 
     assert_evals_to!(indoc!(
         r#"
             result : Result Str I64
-            result = (Ok "1234") |> afterErr (\numStr -> Num.toNat)
+            result =
+              Result.afterErr (Err 100) \num ->
+                if num < 0 then Ok "negative!" else Err -num
 
             result
             "#),
-        RocResult::ok(RocStr::from("1234")),
+        RocResult::err(-100),
         RocResult<RocStr, i64>
     );
 }
