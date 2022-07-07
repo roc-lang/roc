@@ -33,17 +33,14 @@ alt = \left, right ->
           Err (ParsingFailure ("\(leftErr) or \(rightErr)"))
   @Parser fun
 
-
 andThen : Parser a, (a -> Parser b) -> Parser b
-andThen = \firstParser, nextParserConstructor ->
+andThen = \firstParser, buildNextParser ->
   fun = \input ->
-    when (runPartial firstParser input) is
-    Err (ParsingFailure leftErr) ->
-      Err (ParsingFailure leftErr)
-    Ok {val: firstVal, input: rest} ->
-      nextParser = (nextParserConstructor firstVal)
-      runPartial nextParser rest
+    {val: firstVal, input: rest} <- Result.after (runPartial firstParser input)
+    nextParser = (buildNextParser firstVal)
+    runPartial nextParser rest
   @Parser fun
+
 
 runPartial : Parser a, Str -> Result {val: a, input: Str} [ParsingFailure Str]
 runPartial = \@Parser parser, input ->
