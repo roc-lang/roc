@@ -122,16 +122,16 @@ maybe = \parser ->
   alt (parser |> map (\val -> Ok val)) (const (Err Nothing))
 
 
-oneOrMore : Parser a -> Parser (List a)
-oneOrMore = \parser ->
-  # parser |> andThen (many parser)
-    parser
-    |> andThen \val ->
-        lazy (\{} -> many parser)
-        |> map (\vals -> List.prepend vals val)
+#  oneOrMore : Parser a -> Parser (List a)
+#  oneOrMore = \parser ->
+#    # parser |> andThen (many parser)
+#      parser
+#      |> andThen \val ->
+#          lazy (\{} -> many parser)
+#          |> map (\vals -> List.prepend vals val)
 
-many : Parser a -> Parser (List a)
-many = \parser ->
+#  many : Parser a -> Parser (List a)
+#  many = \parser ->
   #  @Parser \input ->
   #    result = runPartialRaw parser input
   #    when result is
@@ -140,7 +140,25 @@ many = \parser ->
   #          inputRest |> (many parser) |> map (\vals -> List.prepend vals val))
   #      Err _ ->
   #        Ok {val: [], input: input}
-  alt (oneOrMore parser) (const [])
+  #  alt (oneOrMore parser) (const [])
+
+manyImpl = \parser, vals, input ->
+  result = runPartialRaw parser input
+  when result is
+    Err _ ->
+      Ok {val: vals, input: input}
+    Ok {val: val, input: inputRest} ->
+      oneOrMoreImpl parser (List.append vals val) inputRest
+
+many : Parser a -> Parser (List a)
+many = \parser ->
+  @Parser \input ->
+    oneOrMoreImpl parser [] input
+
+many : Parser a -> Parser (List a)
+oneOrMore = \parser ->
+  parser |> andThen (many parser)
+
 
 # -- Specific parsers:
 

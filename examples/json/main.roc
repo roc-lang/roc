@@ -21,7 +21,7 @@ input : Str
 input = "aaaaaa"
 
 myparser : Parser Str
-myparser =
+myparser = Parser.Core.many "a"
   # "a"
   # |> Parser.Core.string
   # |> Parser.Core.many
@@ -30,11 +30,11 @@ myparser =
   # string "h"
 
   # NOTE: using oneOf currently causes a StackOverflow in the compiler
-  Parser.Core.oneOf [
-    Parser.Core.string "hello",
-    Parser.Core.string "george",
-    Parser.Core.string "richard",
-  ]
+  # Parser.Core.oneOf [
+  #   Parser.Core.string "hello",
+  #   Parser.Core.string "george",
+  #   Parser.Core.string "richard",
+  # ]
 
   # alt (string "hello") (alt (string "george") (string "richard"))
 
