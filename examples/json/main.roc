@@ -8,7 +8,7 @@ app "main"
 # with hard-coded input.
 
 main : Str
-main = fullTest myparser "[aaaaaa,aaa,a,aaa]"
+main = fullTest myparser "[aaaaaa,baabab,a,aaa]"
 
 partialTest = \parser, input ->
   when Parser.Core.runPartialStr parser input is
