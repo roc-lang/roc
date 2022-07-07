@@ -12,6 +12,8 @@ interface Parser.Core
     map,
     lazy,
     maybe,
+    # oneOrMore,
+    many,
     codepoint,
     stringRaw,
     string,
@@ -117,6 +119,27 @@ lazy = \thunk ->
 maybe : Parser a -> Parser (Result a [Nothing])
 maybe = \parser ->
   alt (parser |> map (\val -> Ok val)) (const (Err Nothing))
+
+
+#  oneOrMore : Parser a -> Parser (List a)
+#  oneOrMore = \parser ->
+#    parser |> andThen (many parser)
+#    #  parser
+#    #  |> andThen \val ->
+#    #      # (\{} -> many parser)
+#    #      # |> lazy
+#    #      many parser
+#    #      |> map (\vals -> List.prepend vals val)
+
+many : Parser a -> Parser (List a)
+many = \parser ->
+  @Parser \input ->
+    result = runPartialRaw parser input
+    when result is
+      Ok {val: val, input: inputRest} ->
+        go inputRest |> map (\vals -> List.prepend vals val)
+      Err _ ->
+        Ok {val: [], input: inputRest}
 
 # -- Specific parsers:
 
