@@ -313,7 +313,7 @@ repeat = \value, count ->
 repeatHelp : a, Nat, List a -> List a
 repeatHelp = \value, count, accum ->
     if count > 0 then
-        repeatHelp value (count - 1) (List.append accum value)
+        repeatHelp value (count - 1) (List.appendUnsafe accum value)
     else
         accum
 
@@ -589,7 +589,7 @@ mapWithIndexHelp = \src, dest, func, index, length ->
     if index < length then
         elem = getUnsafe src index
         mappedElem = func elem index
-        newDest = append dest mappedElem
+        newDest = List.appendUnsafe dest mappedElem
 
         mapWithIndexHelp src newDest func (index + 1) length
     else
@@ -614,7 +614,7 @@ rangeHelp = \accum, start, end ->
     if end <= start then
         accum
     else
-        rangeHelp (List.append accum start) (start + 1) end
+        rangeHelp (List.appendUnsafe accum start) (start + 1) end
 
 ## Sort with a custom comparison function
 sortWith : List a, (a, a -> [LT, EQ, GT]) -> List a
@@ -819,7 +819,11 @@ intersperse : List elem, elem -> List elem
 intersperse = \list, sep ->
     capacity = 2 * List.len list
     init = List.withCapacity capacity
-    newList = List.walk list init (\acc, elem -> acc |> List.append elem |> List.append sep)
+    newList =
+        List.walk list init \acc, elem ->
+            acc
+                |> List.appendUnsafe elem
+                |> List.appendUnsafe sep
 
     List.dropLast newList
 
