@@ -10,7 +10,6 @@ use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
 use roc_target::PtrWidth;
 
-use super::bitcode::call_list_bitcode_fn;
 use super::build::{create_entry_block_alloca, load_symbol};
 use super::build_list::list_symbol_to_c_abi;
 
