@@ -2,7 +2,10 @@ use crate::annotation::{Formattable, Newlines, Parens};
 use crate::collection::{fmt_collection, Braces};
 use crate::def::fmt_defs;
 use crate::pattern::fmt_pattern;
-use crate::spaces::{count_leading_newlines, fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
+use crate::spaces::{
+    count_leading_newlines, fmt_comments_only, fmt_spaces, fmt_spaces_no_blank_lines, NewlineAt,
+    INDENT,
+};
 use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
@@ -330,7 +333,7 @@ impl<'a> Formattable for Expr<'a> {
                 match &ret.value {
                     SpaceBefore(sub_expr, spaces) => {
                         let empty_line_before_return = empty_line_before_expr(&ret.value);
-                        let has_inline_comment = with_inline_comment(&ret.value);
+                        let has_inline_comment = has_line_comment_before(&ret.value);
 
                         if has_inline_comment {
                             buf.spaces(1);
@@ -369,7 +372,7 @@ impl<'a> Formattable for Expr<'a> {
             }
             When(loc_condition, branches) => fmt_when(buf, loc_condition, branches, indent),
             List(items) => fmt_collection(buf, indent, Braces::Square, *items, Newlines::No),
-            BinOps(lefts, right) => fmt_bin_ops(buf, lefts, right, false, parens, indent),
+            BinOps(lefts, right) => fmt_binops(buf, lefts, right, false, parens, indent),
             UnaryOp(sub_expr, unary_op) => {
                 buf.indent(indent);
                 match &unary_op.value {
@@ -405,20 +408,7 @@ fn starts_with_newline(expr: &Expr) -> bool {
 
     match expr {
         SpaceBefore(_, comment_or_newline) => {
-            if !comment_or_newline.is_empty() {
-                // safe because we check the length before
-                comment_or_newline.get(0).unwrap().is_newline()
-            } else {
-                false
-            }
-        }
-        SpaceAfter(_, comment_or_newline) => {
-            if !(**comment_or_newline).is_empty() {
-                // safe because we check the length before
-                comment_or_newline.get(0).unwrap().is_newline()
-            } else {
-                false
-            }
+            matches!(comment_or_newline.first(), Some(CommentOrNewline::Newline))
         }
         _ => false,
     }
@@ -530,22 +520,22 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
     buf.push('"');
 }
 
-fn fmt_bin_ops<'a, 'buf>(
+fn fmt_binops<'a, 'buf>(
     buf: &mut Buf<'buf>,
     lefts: &'a [(Loc<Expr<'a>>, Loc<BinOp>)],
     loc_right_side: &'a Loc<Expr<'a>>,
-    part_of_multi_line_bin_ops: bool,
+    part_of_multi_line_binops: bool,
     apply_needs_parens: Parens,
     indent: u16,
 ) {
-    let is_multiline = part_of_multi_line_bin_ops
+    let is_multiline = part_of_multi_line_binops
         || (&loc_right_side.value).is_multiline()
         || lefts.iter().any(|(expr, _)| expr.value.is_multiline());
 
     let mut curr_indent = indent;
 
-    for (loc_left_side, loc_bin_op) in lefts {
-        let bin_op = loc_bin_op.value;
+    for (loc_left_side, loc_binop) in lefts {
+        let binop = loc_binop.value;
 
         loc_left_side.format_with_options(buf, apply_needs_parens, Newlines::No, curr_indent);
 
@@ -557,7 +547,7 @@ fn fmt_bin_ops<'a, 'buf>(
             buf.spaces(1);
         }
 
-        push_op(buf, bin_op);
+        push_op(buf, binop);
 
         buf.spaces(1);
     }
@@ -587,15 +577,13 @@ fn format_spaces<'a, 'buf>(
     }
 }
 
-fn with_inline_comment<'a>(expr: &'a Expr<'a>) -> bool {
+fn has_line_comment_before<'a>(expr: &'a Expr<'a>) -> bool {
     use roc_parse::ast::Expr::*;
 
     match expr {
-        SpaceBefore(_, spaces) => match spaces.iter().next() {
-            Some(CommentOrNewline::LineComment(_)) => true,
-            Some(_) => false,
-            None => false,
-        },
+        SpaceBefore(_, spaces) => {
+            matches!(spaces.iter().next(), Some(CommentOrNewline::LineComment(_)))
+        }
         _ => false,
     }
 }
@@ -671,11 +659,22 @@ fn fmt_when<'a, 'buf>(
                 buf.newline();
                 match &expr_below {
                     Expr::SpaceAfter(expr_above, spaces_below_expr) => {
+                        // If any of the spaces is a newline, add a newline at the top.
+                        // Otherwise leave it as just a comment.
+                        let newline_at = if spaces_below_expr
+                            .iter()
+                            .any(|spaces| matches!(spaces, CommentOrNewline::Newline))
+                        {
+                            NewlineAt::Top
+                        } else {
+                            NewlineAt::None
+                        };
+
                         expr_above.format(buf, condition_indent);
                         fmt_comments_only(
                             buf,
                             spaces_below_expr.iter(),
-                            NewlineAt::Top,
+                            newline_at,
                             condition_indent,
                         );
                         buf.newline();
@@ -700,25 +699,35 @@ fn fmt_when<'a, 'buf>(
     buf.push_str("is");
     buf.newline();
 
-    let mut it = branches.iter().enumerate().peekable();
-
-    while let Some((branch_index, branch)) = it.next() {
+    for (branch_index, branch) in branches.iter().enumerate() {
         let expr = &branch.value;
         let patterns = &branch.patterns;
         let is_multiline_expr = expr.is_multiline();
         let is_multiline_patterns = is_when_patterns_multiline(branch);
 
-        for (index, pattern) in patterns.iter().enumerate() {
-            if index == 0 {
+        for (pattern_index, pattern) in patterns.iter().enumerate() {
+            if pattern_index == 0 {
                 match &pattern.value {
-                    Pattern::SpaceBefore(sub_pattern, spaces) if branch_index == 0 => {
-                        // Never include extra newlines before the first branch.
-                        // Instead, write the comments and that's it.
+                    Pattern::SpaceBefore(sub_pattern, spaces) => {
+                        if branch_index > 0 // Never render newlines before the first branch.
+                            && matches!(spaces.first(), Some(CommentOrNewline::Newline))
+                        {
+                            buf.ensure_ends_in_newline();
+                        }
+
+                        // Write comments (which may have been attached to the previous
+                        // branch's expr, if there was a previous branch).
                         fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent + INDENT);
+
+                        if branch_index > 0 {
+                            buf.ensure_ends_in_newline();
+                        }
 
                         fmt_pattern(buf, sub_pattern, indent + INDENT, Parens::NotNeeded);
                     }
                     other => {
+                        buf.ensure_ends_in_newline();
+
                         fmt_pattern(buf, other, indent + INDENT, Parens::NotNeeded);
                     }
                 }
@@ -748,15 +757,16 @@ fn fmt_when<'a, 'buf>(
 
         buf.push_str(" ->");
 
-        if is_multiline_expr {
-            buf.newline();
-        } else {
-            buf.spaces(1);
-        }
-
         match expr.value {
             Expr::SpaceBefore(nested, spaces) => {
-                fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent + (INDENT * 2));
+                fmt_spaces_no_blank_lines(buf, spaces.iter(), indent + (INDENT * 2));
+
+                if is_multiline_expr {
+                    buf.ensure_ends_in_newline();
+                } else {
+                    buf.spaces(1);
+                }
+
                 nested.format_with_options(
                     buf,
                     Parens::NotNeeded,
@@ -765,6 +775,12 @@ fn fmt_when<'a, 'buf>(
                 );
             }
             _ => {
+                if is_multiline_expr {
+                    buf.ensure_ends_in_newline();
+                } else {
+                    buf.spaces(1);
+                }
+
                 expr.format_with_options(
                     buf,
                     Parens::NotNeeded,
@@ -772,10 +788,6 @@ fn fmt_when<'a, 'buf>(
                     indent + 2 * INDENT,
                 );
             }
-        }
-
-        if it.peek().is_some() {
-            buf.newline();
         }
     }
 }
@@ -831,17 +843,34 @@ fn fmt_if<'a, 'buf>(
 
         if is_multiline_condition {
             match &loc_condition.value {
-                Expr::SpaceBefore(expr_below, spaces_above_expr) => {
-                    fmt_comments_only(buf, spaces_above_expr.iter(), NewlineAt::Top, return_indent);
+                Expr::SpaceBefore(expr_below, spaces_before_expr) => {
+                    fmt_comments_only(
+                        buf,
+                        spaces_before_expr.iter(),
+                        NewlineAt::Top,
+                        return_indent,
+                    );
                     buf.newline();
 
                     match &expr_below {
-                        Expr::SpaceAfter(expr_above, spaces_below_expr) => {
+                        Expr::SpaceAfter(expr_above, spaces_after_expr) => {
                             expr_above.format(buf, return_indent);
+
+                            // If any of the spaces is a newline, add a newline at the top.
+                            // Otherwise leave it as just a comment.
+                            let newline_at = if spaces_after_expr
+                                .iter()
+                                .any(|spaces| matches!(spaces, CommentOrNewline::Newline))
+                            {
+                                NewlineAt::Top
+                            } else {
+                                NewlineAt::None
+                            };
+
                             fmt_comments_only(
                                 buf,
-                                spaces_below_expr.iter(),
-                                NewlineAt::Top,
+                                spaces_after_expr.iter(),
+                                newline_at,
                                 return_indent,
                             );
                             buf.newline();
@@ -886,12 +915,18 @@ fn fmt_if<'a, 'buf>(
                         Expr::SpaceAfter(expr_above, spaces_above) => {
                             expr_above.format(buf, return_indent);
 
-                            fmt_comments_only(
-                                buf,
-                                spaces_above.iter(),
-                                NewlineAt::Top,
-                                return_indent,
-                            );
+                            // If any of the spaces is a newline, add a newline at the top.
+                            // Otherwise leave it as just a comment.
+                            let newline_at = if spaces_above
+                                .iter()
+                                .any(|spaces| matches!(spaces, CommentOrNewline::Newline))
+                            {
+                                NewlineAt::Top
+                            } else {
+                                NewlineAt::None
+                            };
+
+                            fmt_comments_only(buf, spaces_above.iter(), newline_at, return_indent);
                             buf.newline();
                         }
 
@@ -1295,7 +1330,7 @@ fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
         Expr::BinOps(left_side, _) => {
             left_side
                 .iter()
-                .any(|(_, loc_bin_op)| match loc_bin_op.value {
+                .any(|(_, loc_binop)| match loc_binop.value {
                     BinOp::Caret
                     | BinOp::Star
                     | BinOp::Slash
