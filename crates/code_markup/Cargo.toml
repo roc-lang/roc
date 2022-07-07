@@ -1,0 +1,17 @@
+[package]
+name = "roc_code_markup"
+version = "0.1.0"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+edition = "2021"
+description = "Our own markup language for Roc code. Used by the editor and the docs."
+
+[dependencies]
+roc_ast = { path = "../ast" }
+roc_module = { path = "../compiler/module" }
+roc_utils = { path = "../utils" }
+serde = { version = "1.0.130", features = ["derive"] }
+palette = "0.6.0"
+snafu = { version = "0.7.1", features = ["backtraces"] }
+bumpalo = { version = "3.8.0", features = ["collections"] }
+itertools = "0.10.1"

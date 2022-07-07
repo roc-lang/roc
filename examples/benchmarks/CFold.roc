@@ -9,7 +9,7 @@ main =
     Task.after
         Task.getInt
         \n ->
-            e = mkExpr n 1# original koka n = 20 (set `ulimit -s unlimited` to avoid stack overflow for n = 20)
+            e = mkExpr n 1 # original koka n = 20 (set `ulimit -s unlimited` to avoid stack overflow for n = 20)
             unoptimized = eval e
             optimized = eval (constFolding (reassoc e))
 
@@ -20,11 +20,11 @@ main =
                 |> Task.putLine
 
 Expr : [
-        Add Expr Expr,
-        Mul Expr Expr,
-        Val I64,
-        Var I64,
-    ]
+    Add Expr Expr,
+    Mul Expr Expr,
+    Val I64,
+    Var I64,
+]
 
 mkExpr : I64, I64 -> Expr
 mkExpr = \n, v ->
