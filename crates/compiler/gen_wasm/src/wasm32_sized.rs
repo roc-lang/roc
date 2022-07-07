@@ -1,4 +1,4 @@
-use roc_std::{RocDec, RocList, RocOrder, RocStr, RocResult};
+use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr};
 
 pub trait Wasm32Sized: Sized {
     const SIZE_OF_WASM: usize;

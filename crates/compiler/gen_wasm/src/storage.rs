@@ -284,7 +284,7 @@ impl<'a> Storage<'a> {
         // If any arguments are 128-bit numbers, store them in the stack frame
         // This makes it easier to keep track of which symbols are on the Wasm value stack
         // The frame pointer will be the next local after the arguments
-        if  self.stack_frame_size > 0 || has_zero_size_arg {
+        if self.stack_frame_size > 0 || has_zero_size_arg {
             let frame_ptr = LocalId(self.arg_types.len() as u32);
             self.stack_frame_pointer = Some(frame_ptr);
             self.local_types.push(PTR_TYPE);
