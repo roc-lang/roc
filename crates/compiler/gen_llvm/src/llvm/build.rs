@@ -13,9 +13,7 @@ use crate::llvm::build_list::{
     list_replace_unsafe, list_sort_with, list_sublist, list_swap, list_symbol_to_c_abi,
     list_to_c_abi, list_with_capacity,
 };
-use crate::llvm::build_str::{
-    str_from_float, str_from_int, str_from_utf8, str_from_utf8_range, str_split,
-};
+use crate::llvm::build_str::{str_from_float, str_from_int, str_from_utf8, str_from_utf8_range};
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
     self, argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout,
@@ -5410,7 +5408,10 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.split : Str, Str -> List Str
             debug_assert_eq!(args.len(), 2);
 
-            str_split(env, scope, args[0], args[1])
+            let string = load_symbol(scope, &args[0]);
+            let delimiter = load_symbol(scope, &args[1]);
+
+            call_list_bitcode_fn(env, &[string, delimiter], bitcode::STR_STR_SPLIT)
         }
         StrIsEmpty => {
             // Str.isEmpty : Str -> Str

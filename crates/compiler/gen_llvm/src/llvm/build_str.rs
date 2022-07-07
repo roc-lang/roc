@@ -1,6 +1,6 @@
 use crate::llvm::bitcode::{call_bitcode_fn, call_str_bitcode_fn, call_void_bitcode_fn};
 use crate::llvm::build::{Env, Scope};
-use crate::llvm::build_list::{allocate_list, pass_update_mode, store_list};
+use crate::llvm::build_list::pass_update_mode;
 use inkwell::builder::Builder;
 use inkwell::values::{BasicValueEnum, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
@@ -14,43 +14,6 @@ use super::build::{create_entry_block_alloca, load_symbol};
 use super::build_list::list_symbol_to_c_abi;
 
 pub static CHAR_LAYOUT: Layout = Layout::u8();
-
-/// Str.split : Str, Str -> List Str
-pub fn str_split<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
-    str_symbol: Symbol,
-    delimiter_symbol: Symbol,
-) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-
-    let string = load_symbol(scope, &str_symbol);
-    let delimiter = load_symbol(scope, &delimiter_symbol);
-
-    let segment_count =
-        call_bitcode_fn(env, &[string, delimiter], bitcode::STR_COUNT_SEGMENTS).into_int_value();
-
-    // a pointer to the elements
-    let ret_list_ptr = allocate_list(env, &Layout::Builtin(Builtin::Str), segment_count);
-
-    // get the RocStr type defined by zig
-    let roc_str_type = env.module.get_struct_type("str.RocStr").unwrap();
-
-    // convert `*mut { *mut u8, i64 }` to `*mut RocStr`
-    let ret_list_ptr_zig_rocstr = builder.build_bitcast(
-        ret_list_ptr,
-        roc_str_type.ptr_type(AddressSpace::Generic),
-        "convert_to_zig_rocstr",
-    );
-
-    call_void_bitcode_fn(
-        env,
-        &[ret_list_ptr_zig_rocstr, string, delimiter],
-        bitcode::STR_STR_SPLIT_IN_PLACE,
-    );
-
-    store_list(env, ret_list_ptr, segment_count)
-}
 
 pub fn str_symbol_to_c_abi<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
