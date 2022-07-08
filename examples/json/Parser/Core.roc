@@ -418,8 +418,7 @@ scalar : U32 -> Parser RawStr U32
 scalar = \expectedScalar ->
   expectedScalar
   |> strFromScalar
-  |> strToRaw
-  |> stringRaw
+  |> string
   |> map (\_ -> expectedScalar)
 
 collapseResult : Result a a -> a
