@@ -102,38 +102,70 @@ impl DerivedModule {
             debug_assert!(!self.stolen, "attempting to add to stolen symbols!");
         }
 
-        // TODO: can we get rid of the clone?
-        let entry = self.map.entry(key.clone());
+        match self.map.get(&key) {
+            Some(entry) => {
+                // Might happen that during rollback in specializing the Derived module, we wink
+                // away the variables associated with a derived impl. In this case, just rebuild
+                // the impl.
+                dbg!(entry.0);
+                if entry.2.iter().all(|(_, var)| self.subs.contains(*var)) {
+                    // rustc won't let us return an immutable reference *and* continue using
+                    // `self.map` immutably below, but this is safe, because we are not returning
+                    // an immutable reference to the entry.
+                    return unsafe { std::mem::transmute(entry) };
+                }
+                dbg!(entry.0);
+            }
+            None => {}
+        }
 
-        entry.or_insert_with(|| {
-            let ident_id = if cfg!(debug_assertions) || cfg!(feature = "debug-derived-symbols") {
-                let debug_name = key.debug_name();
-                debug_assert!(
-                    self.derived_ident_ids.get_id(&debug_name).is_none(),
-                    "duplicate debug name for different derive key"
-                );
-                let ident_id = self.derived_ident_ids.get_or_insert(&debug_name);
+        let ident_id = if cfg!(debug_assertions) || cfg!(feature = "debug-derived-symbols") {
+            let debug_name = key.debug_name();
+            // debug_assert!(
+            //     self.derived_ident_ids.get_id(&debug_name).is_none(),
+            //     "duplicate debug name for different derive key"
+            // );
+            let ident_id = self.derived_ident_ids.get_or_insert(&debug_name);
 
-                // This is expensive, but yields much better symbols when debugging.
-                // TODO: hide behind debug_flags?
-                DERIVED_MODULE.register_debug_idents(&self.derived_ident_ids);
+            // This is expensive, but yields much better symbols when debugging.
+            // TODO: hide behind debug_flags?
+            DERIVED_MODULE.register_debug_idents(&self.derived_ident_ids);
 
-                ident_id
-            } else {
-                self.derived_ident_ids.gen_unique()
-            };
+            ident_id
+        } else {
+            // TODO this is WRONG when we're re-instantiating the derived impl
+            self.derived_ident_ids.gen_unique()
+        };
 
-            let derived_symbol = Symbol::new(DERIVED_MODULE, ident_id);
-            let (derived_def, specialization_lsets) = build_derived_body(
-                &mut self.subs,
-                &mut self.derived_ident_ids,
-                exposed_by_module,
-                derived_symbol,
-                key.clone(),
-            );
+        let derived_symbol = Symbol::new(DERIVED_MODULE, ident_id);
+        let (derived_def, specialization_lsets) = build_derived_body(
+            &mut self.subs,
+            &mut self.derived_ident_ids,
+            exposed_by_module,
+            derived_symbol,
+            key.clone(),
+        );
 
-            (derived_symbol, derived_def, specialization_lsets)
-        })
+        let triple = (derived_symbol, derived_def, specialization_lsets);
+        self.map.remove(&key);
+        self.map.entry(key).or_insert(triple)
+    }
+
+    /// TERRIBLE HACK to deal with rollbacks: in specializing the Derived module, we snapshot and
+    /// rollback Subs every time we specialize a particular procedure. However in specializing a
+    /// procedure we may have added a new derived impl to the [`DerivedModule`] whose types are
+    /// then rolled back! Hence, we need to re-initialize the derived impl in such cases.
+    ///
+    /// But there must be a better way!!
+    pub fn refresh_stale_specializations(&mut self, exposed_by_module: &ExposedByModule) {
+        let all_derived: Vec<_> = self.map.keys().cloned().collect();
+        //dbg!(&all_derived);
+        all_derived
+            .into_iter()
+            // get_or_insert will handle re-initializing stale defs
+            .for_each(|derive_key| {
+                let _ = self.get_or_insert(exposed_by_module, derive_key);
+            });
     }
 
     pub fn iter_all(
@@ -190,9 +222,11 @@ impl DerivedModule {
         self.derived_ident_ids = ident_ids;
     }
 
+    // TODO: just pass and copy the ambient function directly, don't pass the lambda set var.
     pub fn copy_lambda_set_ambient_function_to_subs(
         &self,
         lambda_set_var: Variable,
+        target_subs_home: ModuleId,
         target: &mut Subs,
         target_rank: Rank,
     ) -> Variable {
@@ -203,23 +237,27 @@ impl DerivedModule {
 
         let ambient_function_var = self.subs.get_lambda_set(lambda_set_var).ambient_function;
 
-        let copied_import = copy_import_to(
-            &self.subs,
-            target,
-            // bookkeep unspecialized lambda sets of var - I think we want this here
-            true,
-            ambient_function_var,
-            // TODO: I think this is okay because the only use of `copy_lambda_set_var_to_subs`
-            // (at least right now) is for lambda set compaction, which will automatically unify
-            // and lower ranks, and never generalize.
-            //
-            // However this is a bad coupling and maybe not a good assumption, we should revisit
-            // this when possible.
-            Rank::import(),
-            // target_rank,
-        );
+        if target_subs_home == ModuleId::DERIVED {
+            ambient_function_var
+        } else {
+            let copied_import = copy_import_to(
+                &self.subs,
+                target,
+                // bookkeep unspecialized lambda sets of var - I think we want this here
+                true,
+                ambient_function_var,
+                // TODO: I think this is okay because the only use of `copy_lambda_set_var_to_subs`
+                // (at least right now) is for lambda set compaction, which will automatically unify
+                // and lower ranks, and never generalize.
+                //
+                // However this is a bad coupling and maybe not a good assumption, we should revisit
+                // this when possible.
+                Rank::import(),
+                // target_rank,
+            );
 
-        copied_import.variable
+            copied_import.variable
+        }
     }
 }
 

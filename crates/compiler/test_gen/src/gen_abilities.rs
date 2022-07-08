@@ -427,9 +427,8 @@ fn encode_derived_string() {
 }
 
 #[test]
-#[ignore]
 #[cfg(any(feature = "gen-llvm"))]
-fn encode_derived_record() {
+fn encode_derived_record_one_field_string() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -444,7 +443,7 @@ fn encode_derived_record() {
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from("foo"),
+        RocStr::from(r#"{"a":"foo",}"#),
         RocStr
     )
 }

@@ -1797,3 +1797,40 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
         "#
     )
 }
+
+#[mono_test]
+fn encode_derived_record_one_field_string() {
+    indoc!(
+        r#"
+        app "test"
+            imports [Encode.{ toEncoder }, Json]
+            provides [main] to "./platform"
+
+        main =
+            result = Str.fromUtf8 (Encode.toBytes {a: "foo"} Json.format)
+            when result is
+                Ok s -> s
+                _ -> "<bad>"
+        "#
+    )
+}
+
+#[mono_test]
+#[ignore = "TODO make this work (one ULS var is missing)"]
+fn encode_derived_tag_one_field_string() {
+    indoc!(
+        r#"
+        app "test"
+            imports [Encode.{ toEncoder }, Json]
+            provides [main] to "./platform"
+
+        main =
+            x : [A Str]
+            x = A "foo"
+            result = Str.fromUtf8 (Encode.toBytes x Json.format)
+            when result is
+                Ok s -> s
+                _ -> "<bad>"
+        "#
+    )
+}
