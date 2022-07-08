@@ -1,6 +1,6 @@
 app "main"
     packages { pf: "platform/main.roc" }
-    imports [ParserCore.{Parser}, ParserStr.{RawStr}]
+    imports [ParserCore.{Parser}, ParserStr.{RawStr}, ParserJson.{JsonValue}]
     provides [main] to pf
 
 # Until issue https://github.com/rtfeldman/roc/issues/3438 is fixed,
@@ -35,9 +35,9 @@ fullTest = \parser, input ->
 myparser : Parser RawStr (List Str)
 myparser =
   # ParserCore.oneOf [ParserStr.string "a", ParserStr.string "b"]
-  ParserStr.digits
+  ParserJson.jsonNumArray
   # |> ParserCore.oneOrMore
   # |> ParserCore.map (\vals -> Str.joinWith vals "")
-  |> ParserCore.map (Num.toStr)
+  |> ParserCore.map ParserJson.jsonValueToStrDebug # (Num.toStr)
   |> ParserCore.sepBy1 (ParserStr.scalar ',')
   |> ParserCore.between (ParserStr.scalar '[') (ParserStr.scalar ']')

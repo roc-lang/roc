@@ -1,5 +1,8 @@
 interface ParserJson
   exposes [
+  JsonValue,
+  jsonNumArray,
+  jsonValueToStrDebug,
   ]
     imports [
   ParserCore.{Parser, fail, const, map, map2, apply, many, oneOrMore, sepBy, sepBy1, between, ignore},
@@ -14,6 +17,14 @@ JsonValue := [
   JsonArray (List JsonValue),
   JsonDict (List [Pair Str JsonValue]),
 ]
+
+jsonValueToStrDebug : JsonValue -> Str
+jsonValueToStrDebug = \@JsonValue val ->
+  when val is
+    JsonNum numVal ->
+      Num.toStr numVal
+    other ->
+      "not implemented yet"
 
 jsonNull : Parser RawStr JsonValue
 jsonNull =
