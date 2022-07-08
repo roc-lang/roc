@@ -9501,4 +9501,49 @@ All branches in an `if` must have the same type!
         U128
     "###
     );
+
+    test_report!(
+        recursive_alias_cannot_leak_into_recursive_opaque,
+        indoc!(
+            r#"
+            OList := [Nil, Cons {} OList]
+
+            AList : [Nil, Cons {} AList]
+
+            alist : AList
+
+            olist : OList
+            olist =
+                when alist is
+                    Nil -> @OList Nil
+                    Cons _ lst -> lst
+
+            olist
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the 2nd branch of this `when` expression:
+
+    10│       olist : OList
+    11│       olist =
+    12│>          when alist is
+    13│>              Nil -> @OList Nil
+    14│>              Cons _ lst -> lst
+
+    This `lst` value is a:
+
+        [Cons {} ∞, Nil] as ∞
+
+    But the type annotation on `olist` says it should be:
+
+        OList
+
+    Tip: Type comparisons between an opaque type are only ever equal if
+    both types are the same opaque type. Did you mean to create an opaque
+    type by wrapping it? If I have an opaque type Age := U32 I can create
+    an instance of this opaque type by doing @Age 23.
+    "###
+    );
 }
