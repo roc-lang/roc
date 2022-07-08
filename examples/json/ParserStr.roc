@@ -9,8 +9,10 @@ interface ParserStr
     codepoint,
     scalar,
     oneOf,
+    digit,
+    digits,
   ]
-  imports [ParserCore.{Parser, const, fail, map, map2, apply, run, runPartial, buildPrimitiveParser, between}]
+  imports [ParserCore.{Parser, const, fail, map, map2, apply, many, oneOrMore, run, runPartial, buildPrimitiveParser, between}]
 
 # Specific string-based parsers:
 
@@ -118,6 +120,25 @@ scalar = \expectedScalar ->
 betweenBraces : Parser RawStr a -> Parser RawStr a
 betweenBraces = \parser ->
   between parser (scalar '[') (scalar ']')
+
+
+digit : Parser RawStr U8
+digit =
+  digitParsers =
+      List.range 0 10
+      |> List.map \digitNum ->
+          digitNum + 48
+          |> codepoint
+          |> map (\_ -> digitNum)
+  oneOf digitParsers
+
+digits : Parser RawStr (Int *)
+digits =
+  oneOrMore digit
+  |> map \digitsList ->
+    digitsList
+    |> List.map Num.intCast
+    |> List.walk 0 (\sum, digitVal -> 10 * sum + digitVal)
 
 ## Try a bunch of different parsers.
 ##
