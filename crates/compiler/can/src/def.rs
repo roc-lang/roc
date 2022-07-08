@@ -2422,6 +2422,7 @@ enum MakeTagUnionRecursive {
 /// ```
 ///
 /// When `Err` is returned, a problem will be added to `env`.
+#[allow(clippy::too_many_arguments)]
 fn make_tag_union_recursive_help<'a, 'b>(
     env: &mut Env<'a>,
     recursive_alias: Loc<Symbol>,
