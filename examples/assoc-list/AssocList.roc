@@ -124,10 +124,11 @@ values = \@AssocList list ->
 
 get : AssocList k v, k -> Result v [KeyNotFound]*
 get = \@AssocList list, needle ->
-    list
-        |> List.find (\Pair key _ -> key == needle)
-        |> Result.map (\Pair _ v -> v)
-        |> Result.mapErr (\NotFound -> KeyNotFound)
+        when List.find list (\Pair key _ -> key == needle) is
+          Ok (Pair _ v) -> 
+            Ok v
+          Err NotFound -> 
+            Err KeyNotFound
 
 walk : AssocList k v, state, (state, k, v -> state) -> state
 walk = \@AssocList list, initialState, transform ->
