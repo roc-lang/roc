@@ -1,9 +1,9 @@
 platform "cli"
-    requires {} { main : Task {} [] }
+    requires {} { main : Task {} [] * }
     exposes []
     packages {}
-    imports [Task.{ Task }]
+    imports [Task.{ Task }, InternalTask, Effect.{ Effect }]
     provides [mainForHost]
 
-mainForHost : Task {} [] as Fx
-mainForHost = main
+mainForHost : Effect (Result {} []) as Fx
+mainForHost = InternalTask.toEffect main
