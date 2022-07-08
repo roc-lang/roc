@@ -1064,7 +1064,7 @@ impl<'a> LambdaSet<'a> {
             Never => Layout::VOID,
             BoolUnion { .. } => Layout::bool(),
             ByteUnion { .. } => Layout::u8(),
-            Unit | UnitWithArguments => {
+            Unit => {
                 // no useful information to store
                 Layout::UNIT
             }
@@ -2273,7 +2273,6 @@ impl From<Symbol> for TagOrClosure {
 pub enum UnionVariant<'a> {
     Never,
     Unit,
-    UnitWithArguments,
     BoolUnion {
         ttrue: TagOrClosure,
         ffalse: TagOrClosure,
@@ -2663,17 +2662,11 @@ where
 
             // just one tag in the union (but with arguments) can be a struct
             let mut layouts = Vec::with_capacity_in(tags_vec.len(), arena);
-            let mut contains_zero_sized = false;
 
             for var in arguments {
                 match Layout::from_var(&mut env, var) {
                     Ok(layout) => {
-                        // Drop any zero-sized arguments like {}
-                        if !layout.is_dropped_because_empty() {
-                            layouts.push(layout);
-                        } else {
-                            contains_zero_sized = true;
-                        }
+                        layouts.push(layout);
                     }
                     Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                         // If we encounter an unbound type var (e.g. `Ok *`)
@@ -2696,11 +2689,7 @@ where
             });
 
             if layouts.is_empty() {
-                if contains_zero_sized {
-                    UnionVariant::UnitWithArguments
-                } else {
-                    UnionVariant::Unit
-                }
+                UnionVariant::Unit
             } else if opt_rec_var.is_some() {
                 UnionVariant::Wrapped(WrappedVariant::NonNullableUnwrapped {
                     tag_name: tag_name.into(),
@@ -2880,7 +2869,7 @@ where
 
     match variant {
         Never => Layout::VOID,
-        Unit | UnitWithArguments => Layout::UNIT,
+        Unit => Layout::UNIT,
         BoolUnion { .. } => Layout::bool(),
         ByteUnion(_) => Layout::u8(),
         Newtype {
