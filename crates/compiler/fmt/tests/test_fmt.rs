@@ -4277,6 +4277,21 @@ mod test_fmt {
     }
 
     #[test]
+    fn comment_between_multiline_ann_args() {
+        expr_formats_same(indoc!(
+            r#"
+                blah :
+                    Str,
+                    # comment
+                    (Str -> Str)
+                    -> Str
+
+                42
+            "#
+        ))
+    }
+
+    #[test]
     fn pipeline_apply_lambda_multiline() {
         expr_formats_same(indoc!(
             r#"
