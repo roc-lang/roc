@@ -286,7 +286,7 @@ impl<'a> LowLevelCall<'a> {
                     CallConv::Zig,
                 );
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
-                backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8_RANGE, 5, false);
+                backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8_RANGE, 6, false);
             }
             StrTrimLeft => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_LEFT),
             StrTrimRight => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_RIGHT),
