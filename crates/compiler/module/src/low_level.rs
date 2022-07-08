@@ -160,8 +160,6 @@ impl LowLevel {
 pub enum LowLevelWrapperType {
     /// This wrapper function contains no logic and we can remove it in code gen
     CanBeReplacedBy(LowLevel),
-    /// This wrapper function contains important logic and we cannot remove it in code gen
-    WrapperIsRequired,
     NotALowLevelWrapper,
 }
 
@@ -171,39 +169,39 @@ impl LowLevelWrapperType {
     }
 }
 
-macro_rules! more_macro_magic {
-    ($($lowlevel:ident <= $symbol:ident)+) => { more_macro_magic!{$($lowlevel <= $symbol),+} };
-    ($($lowlevel:ident <= $symbol:ident),*) => {
+/// We use a rust macro to ensure that every LowLevel gets handled
+macro_rules! map_symbol_to_lowlevel {
+    ($($lowlevel:ident <= $symbol:ident),* $(,)?) => {
 
         fn for_symbol_help(symbol: Symbol) -> LowLevelWrapperType {
             use $crate::low_level::LowLevelWrapperType::*;
 
+            // expands to a big (but non-exhaustive) match on symbols and maps them to a lowlevel
             match symbol {
                 $(
                 Symbol::$symbol => CanBeReplacedBy(LowLevel::$lowlevel),
                 )*
-
-                Symbol::LIST_MAP => WrapperIsRequired,
-                Symbol::LIST_MAP2 => WrapperIsRequired,
-                Symbol::LIST_MAP3 => WrapperIsRequired,
-                Symbol::LIST_MAP4 => WrapperIsRequired,
-                Symbol::DICT_WALK => WrapperIsRequired,
-
-                Symbol::LIST_SORT_WITH => WrapperIsRequired,
-                Symbol::DICT_GET => WrapperIsRequired,
 
                 _ => NotALowLevelWrapper,
             }
         }
 
         fn _enforce_exhaustiveness(lowlevel: LowLevel) -> Symbol {
+            // when adding a new lowlevel, this match will stop being exhaustive, and give a
+            // compiler error. Most likely, you are adding a new lowlevel that maps directly to a
+            // symbol. For instance, you want to have `List.foo` to stand for the `ListFoo`
+            // lowlevel. In that case, see below in the invocation of `map_symbol_to_lowlevel!`
+            //
+            // Below, we explicitly handle some exceptions to the pattern where a lowlevel maps
+            // directly to a symbol. If you are unsure if your lowlevel is an exception, assume
+            // that it isn't and just see if that works.
             match lowlevel {
                 $(
                 LowLevel::$lowlevel => Symbol::$symbol,
                 )*
 
-                // these are higher-order lowlevels, hence need the surrounding function to provide
-                // enough type information for code generation
+                // these are higher-order lowlevels. these need the surrounding
+                // function to provide enough type information for code generation
                 LowLevel::ListMap => unreachable!(),
                 LowLevel::ListMap2 => unreachable!(),
                 LowLevel::ListMap3 => unreachable!(),
@@ -211,11 +209,11 @@ macro_rules! more_macro_magic {
                 LowLevel::ListSortWith => unreachable!(),
                 LowLevel::DictWalk => unreachable!(),
 
-                // The BoxExpr operation is turned into mono Expr
+                // (un)boxing is handled in a custom way
                 LowLevel::BoxExpr => unreachable!(),
                 LowLevel::UnboxExpr => unreachable!(),
 
-                // these are implemented explicitly in for_symbol because they are polymorphic
+                // these functions return polymorphic values
                 LowLevel::NumIntCast => unreachable!(),
                 LowLevel::NumToFloatCast => unreachable!(),
                 LowLevel::NumToIntChecked => unreachable!(),
@@ -239,7 +237,10 @@ macro_rules! more_macro_magic {
     };
 }
 
-more_macro_magic! {
+// here is where we actually specify the mapping for the fast majority of cases that follow the
+// pattern of a symbol mapping directly to a lowlevel. In other words, most lowlevels (left) are generated
+// by only one specific symbol (right)
+map_symbol_to_lowlevel! {
     StrConcat <= STR_CONCAT,
     StrJoinWith <= STR_JOIN_WITH,
     StrIsEmpty <= STR_IS_EMPTY,
@@ -335,5 +336,5 @@ more_macro_magic! {
     And <= BOOL_AND,
     Or <= BOOL_OR,
     Not <= BOOL_NOT,
-    Unreachable <= LIST_UNREACHABLE
+    Unreachable <= LIST_UNREACHABLE,
 }
