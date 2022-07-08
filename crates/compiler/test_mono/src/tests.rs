@@ -1720,7 +1720,6 @@ fn call_function_in_empty_list_unbound() {
 }
 
 #[mono_test]
-#[ignore = "TODO"]
 fn instantiate_annotated_as_recursive_alias_toplevel() {
     indoc!(
         r#"

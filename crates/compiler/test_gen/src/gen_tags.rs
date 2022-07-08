@@ -1728,7 +1728,6 @@ fn issue_3261_non_nullable_unwrapped_recursive_union_at_index() {
 }
 
 #[test]
-#[ignore]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn instantiate_annotated_as_recursive_alias_toplevel() {
     assert_evals_to!(

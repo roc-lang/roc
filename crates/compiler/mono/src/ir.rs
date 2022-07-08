@@ -3790,14 +3790,14 @@ pub fn with_hole<'a>(
         }
 
         ZeroArgumentTag {
-            variant_var,
+            variant_var: _,
             name: tag_name,
             ext_var,
             closure_name,
         } => {
             let arena = env.arena;
 
-            let content = env.subs.get_content_without_compacting(variant_var);
+            let content = env.subs.get_content_without_compacting(variable);
 
             if let Content::Structure(FlatType::Func(arg_vars, _, ret_var)) = content {
                 let ret_var = *ret_var;
@@ -3811,7 +3811,7 @@ pub fn with_hole<'a>(
                     closure_name,
                     ext_var,
                     procs,
-                    variant_var,
+                    variable,
                     layout_cache,
                     assigned,
                     hole,
@@ -3819,7 +3819,7 @@ pub fn with_hole<'a>(
             } else {
                 convert_tag_union(
                     env,
-                    variant_var,
+                    variable,
                     assigned,
                     hole,
                     tag_name,
@@ -6073,7 +6073,7 @@ fn from_can_when<'a>(
                 let guard_stmt = with_hole(
                     env,
                     loc_expr.value,
-                    cond_var,
+                    Variable::BOOL,
                     procs,
                     layout_cache,
                     symbol,
