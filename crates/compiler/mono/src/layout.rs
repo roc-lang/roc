@@ -1071,6 +1071,21 @@ impl<'a> LambdaSet<'a> {
             Newtype {
                 arguments: layouts, ..
             } => Layout::struct_no_name_order(layouts.into_bump_slice()),
+            NewtypeByVoid {
+                sorted_tag_layouts: tags,
+            } => {
+                debug_assert!(tags.len() > 1);
+
+                // if the closed-over value is actually a layout, it should be wrapped in a 1-element record
+                debug_assert!(matches!(tags[0].0, TagOrClosure::Closure(_)));
+
+                let mut tag_arguments = Vec::with_capacity_in(tags.len(), arena);
+
+                for (_, tag_args) in tags.iter() {
+                    tag_arguments.push(&tag_args[0..]);
+                }
+                Layout::Union(UnionLayout::NonRecursive(tag_arguments.into_bump_slice()))
+            }
             Wrapped(variant) => {
                 use WrappedVariant::*;
 
@@ -2282,6 +2297,9 @@ pub enum UnionVariant<'a> {
         tag_name: TagOrClosure,
         arguments: Vec<'a, Layout<'a>>,
     },
+    NewtypeByVoid {
+        sorted_tag_layouts: Vec<'a, (TagOrClosure, &'a [Layout<'a>])>,
+    },
     Wrapped(WrappedVariant<'a>),
 }
 
@@ -2911,6 +2929,14 @@ where
             };
 
             answer1
+        }
+        NewtypeByVoid {
+            sorted_tag_layouts: tags,
+        } => {
+            let mut tag_layouts = Vec::with_capacity_in(tags.len(), env.arena);
+            tag_layouts.extend(tags.iter().map(|r| r.1));
+
+            Layout::Union(UnionLayout::NonRecursive(tag_layouts.into_bump_slice()))
         }
         Wrapped(variant) => {
             use WrappedVariant::*;

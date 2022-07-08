@@ -5369,6 +5369,64 @@ fn convert_tag_union<'a>(
             let iter = field_symbols_temp.into_iter().map(|(_, _, data)| data);
             assign_to_symbols(env, procs, layout_cache, iter, stmt)
         }
+        NewtypeByVoid { sorted_tag_layouts } => {
+            let (tag_id, _) = {
+                let (tag_id, (_, argument_layouts)) = sorted_tag_layouts
+                    .iter()
+                    .enumerate()
+                    .find(|(_, (key, _))| key.expect_tag_ref() == &tag_name)
+                    .expect("tag name is not in its own type");
+
+                debug_assert!(tag_id < 256);
+                (tag_id as TagIdIntType, *argument_layouts)
+            };
+
+            let field_symbols_temp = sorted_field_symbols(env, procs, layout_cache, args);
+
+            let field_symbols;
+
+            // we must derive the union layout from the whole_var, building it up
+            // from `layouts` would unroll recursive tag unions, and that leads to
+            // problems down the line because we hash layouts and an unrolled
+            // version is not the same as the minimal version.
+            let union_layout = match return_on_layout_error!(
+                env,
+                layout_cache.from_var(env.arena, variant_var, env.subs,)
+            ) {
+                Layout::Union(ul) => ul,
+                _ => unreachable!(),
+            };
+
+            field_symbols = {
+                let mut temp = Vec::with_capacity_in(field_symbols_temp.len(), arena);
+
+                temp.extend(field_symbols_temp.iter().map(|r| r.1));
+
+                temp.into_bump_slice()
+            };
+
+            let mut layouts: Vec<&'a [Layout<'a>]> =
+                Vec::with_capacity_in(sorted_tag_layouts.len(), env.arena);
+
+            for (_, arg_layouts) in sorted_tag_layouts.into_iter() {
+                layouts.push(arg_layouts);
+            }
+
+            let tag = Expr::Tag {
+                tag_layout: union_layout,
+                tag_id: tag_id as _,
+                arguments: field_symbols,
+            };
+
+            let stmt = Stmt::Let(assigned, tag, Layout::Union(union_layout), hole);
+            let iter = field_symbols_temp
+                .into_iter()
+                .map(|x| x.2 .0)
+                .rev()
+                .zip(field_symbols.iter().rev());
+
+            assign_to_symbols(env, procs, layout_cache, iter, stmt)
+        }
         Wrapped(variant) => {
             let (tag_id, _) = variant.tag_name_to_id(&tag_name);
 
@@ -5390,6 +5448,30 @@ fn convert_tag_union<'a>(
 
             use WrappedVariant::*;
             let (tag, union_layout) = match variant {
+                NonRecursive { sorted_tag_layouts } => {
+                    field_symbols = {
+                        let mut temp = Vec::with_capacity_in(field_symbols_temp.len(), arena);
+
+                        temp.extend(field_symbols_temp.iter().map(|r| r.1));
+
+                        temp.into_bump_slice()
+                    };
+
+                    let mut layouts: Vec<&'a [Layout<'a>]> =
+                        Vec::with_capacity_in(sorted_tag_layouts.len(), env.arena);
+
+                    for (_, arg_layouts) in sorted_tag_layouts.into_iter() {
+                        layouts.push(arg_layouts);
+                    }
+
+                    let tag = Expr::Tag {
+                        tag_layout: union_layout,
+                        tag_id: tag_id as _,
+                        arguments: field_symbols,
+                    };
+
+                    (tag, union_layout)
+                }
                 Recursive { sorted_tag_layouts } => {
                     debug_assert!(sorted_tag_layouts.len() > 1);
 
@@ -5429,30 +5511,6 @@ fn convert_tag_union<'a>(
 
                         temp.into_bump_slice()
                     };
-
-                    let tag = Expr::Tag {
-                        tag_layout: union_layout,
-                        tag_id: tag_id as _,
-                        arguments: field_symbols,
-                    };
-
-                    (tag, union_layout)
-                }
-                NonRecursive { sorted_tag_layouts } => {
-                    field_symbols = {
-                        let mut temp = Vec::with_capacity_in(field_symbols_temp.len(), arena);
-
-                        temp.extend(field_symbols_temp.iter().map(|r| r.1));
-
-                        temp.into_bump_slice()
-                    };
-
-                    let mut layouts: Vec<&'a [Layout<'a>]> =
-                        Vec::with_capacity_in(sorted_tag_layouts.len(), env.arena);
-
-                    for (_, arg_layouts) in sorted_tag_layouts.into_iter() {
-                        layouts.push(arg_layouts);
-                    }
 
                     let tag = Expr::Tag {
                         tag_layout: union_layout,
@@ -8347,6 +8405,97 @@ fn from_can_pattern_help<'a>(
                     Pattern::NewtypeDestructure {
                         tag_name: tag_name.clone(),
                         arguments: mono_args,
+                    }
+                }
+                NewtypeByVoid {
+                    sorted_tag_layouts: tags,
+                } => {
+                    let (tag_id, argument_layouts) = {
+                        let (tag_id, (_, argument_layouts)) = tags
+                            .iter()
+                            .enumerate()
+                            .find(|(_, (key, _))| key.expect_tag_ref() == tag_name)
+                            .expect("tag name is not in its own type");
+
+                        debug_assert!(tag_id < 256);
+                        (tag_id as TagIdIntType, *argument_layouts)
+                    };
+                    let number_of_tags = tags.len();
+                    let mut ctors = std::vec::Vec::with_capacity(number_of_tags);
+
+                    let arguments = {
+                        let mut temp = arguments.clone();
+
+                        temp.sort_by(|arg1, arg2| {
+                            let layout1 =
+                                layout_cache.from_var(env.arena, arg1.0, env.subs).unwrap();
+                            let layout2 =
+                                layout_cache.from_var(env.arena, arg2.0, env.subs).unwrap();
+
+                            let size1 = layout1.alignment_bytes(env.target_info);
+                            let size2 = layout2.alignment_bytes(env.target_info);
+
+                            size2.cmp(&size1)
+                        });
+
+                        temp
+                    };
+
+                    // we must derive the union layout from the whole_var, building it up
+                    // from `layouts` would unroll recursive tag unions, and that leads to
+                    // problems down the line because we hash layouts and an unrolled
+                    // version is not the same as the minimal version.
+                    let layout = match layout_cache.from_var(env.arena, *whole_var, env.subs) {
+                        Ok(Layout::Union(ul)) => ul,
+                        _ => unreachable!(),
+                    };
+
+                    debug_assert!(tags.len() > 1);
+
+                    for (i, (tag_name, args)) in tags.iter().enumerate() {
+                        ctors.push(Ctor {
+                            tag_id: TagId(i as _),
+                            name: CtorName::Tag(tag_name.expect_tag_ref().clone()),
+                            arity: args.len(),
+                        })
+                    }
+
+                    let union = roc_exhaustive::Union {
+                        render_as: RenderAs::Tag,
+                        alternatives: ctors,
+                    };
+
+                    let mut mono_args = Vec::with_capacity_in(arguments.len(), env.arena);
+
+                    debug_assert_eq!(
+                        arguments.len(),
+                        argument_layouts.len(),
+                        "The {:?} tag got {} arguments, but its layout expects {}!",
+                        tag_name,
+                        arguments.len(),
+                        argument_layouts.len(),
+                    );
+                    let it = argument_layouts.iter();
+
+                    for ((_, loc_pat), layout) in arguments.iter().zip(it) {
+                        mono_args.push((
+                            from_can_pattern_help(
+                                env,
+                                procs,
+                                layout_cache,
+                                &loc_pat.value,
+                                assignments,
+                            )?,
+                            *layout,
+                        ));
+                    }
+
+                    Pattern::AppliedTag {
+                        tag_name: tag_name.clone(),
+                        tag_id: tag_id as _,
+                        arguments: mono_args,
+                        union,
+                        layout,
                     }
                 }
                 Wrapped(variant) => {
