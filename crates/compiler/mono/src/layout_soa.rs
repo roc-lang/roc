@@ -144,7 +144,7 @@ impl FunctionLayout {
             Content::LambdaSet(lset) => Self::from_lambda_set(layouts, subs, *lset),
             Content::Structure(flat_type) => Self::from_flat_type(layouts, subs, flat_type),
             Content::Alias(_, _, actual, _) => Self::from_var_help(layouts, subs, *actual),
-            Content::RangedNumber(actual, _) => Self::from_var_help(layouts, subs, *actual),
+            Content::RangedNumber(_) => todo!(),
             Content::Error => Err(TypeError(())),
         }
     }
@@ -263,7 +263,7 @@ impl LambdaSet {
             Content::LambdaSet(lset) => Self::from_lambda_set(layouts, subs, *lset),
             Content::Structure(_flat_type) => unreachable!(),
             Content::Alias(_, _, actual, _) => Self::from_var_help(layouts, subs, *actual),
-            Content::RangedNumber(actual, _) => Self::from_var_help(layouts, subs, *actual),
+            Content::RangedNumber(_) => todo!(),
             Content::Error => Err(TypeError(())),
         }
     }
@@ -686,7 +686,7 @@ impl Layout {
                     }
                 }
             }
-            Content::RangedNumber(typ, _) => Self::from_var_help(layouts, subs, *typ),
+            Content::RangedNumber(_) => todo!(),
             Content::Error => Err(TypeError(())),
         }
     }

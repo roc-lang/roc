@@ -807,6 +807,15 @@ pub fn store_list<'a, 'ctx, 'env>(
         .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
         .unwrap();
 
+    struct_val = builder
+        .build_insert_value(
+            struct_val,
+            len,
+            Builtin::WRAPPER_CAPACITY,
+            "insert_capacity",
+        )
+        .unwrap();
+
     builder.build_bitcast(
         struct_val.into_struct_value(),
         super::convert::zig_list_type(env),

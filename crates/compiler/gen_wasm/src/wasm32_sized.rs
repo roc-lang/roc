@@ -1,4 +1,4 @@
-use roc_std::{RocDec, RocList, RocOrder, RocStr};
+use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr};
 
 pub trait Wasm32Sized: Sized {
     const SIZE_OF_WASM: usize;
@@ -39,6 +39,11 @@ impl Wasm32Sized for RocStr {
 impl<T: Wasm32Sized> Wasm32Sized for RocList<T> {
     const SIZE_OF_WASM: usize = 12;
     const ALIGN_OF_WASM: usize = 4;
+}
+
+impl<T: Wasm32Sized, E: Wasm32Sized> Wasm32Sized for RocResult<T, E> {
+    const ALIGN_OF_WASM: usize = max2(T::ALIGN_OF_WASM, E::ALIGN_OF_WASM);
+    const SIZE_OF_WASM: usize = max2(T::ACTUAL_WIDTH, E::ACTUAL_WIDTH) + 1;
 }
 
 impl<T: Wasm32Sized> Wasm32Sized for &'_ T {

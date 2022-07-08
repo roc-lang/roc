@@ -13,9 +13,7 @@ use crate::llvm::build_list::{
     list_replace_unsafe, list_sort_with, list_sublist, list_swap, list_symbol_to_c_abi,
     list_to_c_abi, list_with_capacity,
 };
-use crate::llvm::build_str::{
-    str_from_float, str_from_int, str_from_utf8, str_from_utf8_range, str_split,
-};
+use crate::llvm::build_str::{str_from_float, str_from_int, str_from_utf8, str_from_utf8_range};
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
     self, argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout,
@@ -41,7 +39,7 @@ use inkwell::types::{
 };
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValue, CallSiteValue, CallableValue, FloatValue, FunctionValue,
+    BasicMetadataValueEnum, BasicValue, CallSiteValue, FloatValue, FunctionValue,
     InstructionOpcode, InstructionValue, IntValue, PhiValue, PointerValue, StructValue,
 };
 use inkwell::OptimizationLevel;
@@ -67,7 +65,7 @@ use roc_mono::layout::{
 };
 use roc_std::RocDec;
 use roc_target::{PtrWidth, TargetInfo};
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryInto;
 use std::path::Path;
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
@@ -2781,30 +2779,8 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
                 match env.target_info.ptr_width() {
                     roc_target::PtrWidth::Bytes8 => {
-                        let func = env
-                            .module
-                            .get_function(bitcode::UTILS_EXPECT_FAILED)
-                            .unwrap();
-                        // TODO get the actual line info instead of
-                        // hardcoding as zero!
-                        let callable = CallableValue::try_from(func).unwrap();
-                        let start_line = context.i32_type().const_int(0, false);
-                        let end_line = context.i32_type().const_int(0, false);
-                        let start_col = context.i16_type().const_int(0, false);
-                        let end_col = context.i16_type().const_int(0, false);
-
-                        bd.build_call(
-                            callable,
-                            &[
-                                start_line.into(),
-                                end_line.into(),
-                                start_col.into(),
-                                end_col.into(),
-                            ],
-                            "call_expect_failed",
-                        );
-
-                        bd.build_unconditional_branch(then_block);
+                        // temporary native implementation
+                        throw_exception(env, "An expectation failed!");
                     }
                     roc_target::PtrWidth::Bytes4 => {
                         // temporary WASM implementation
@@ -3525,15 +3501,31 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
 
     let mut arguments_for_call = Vec::with_capacity_in(args.len(), env.arena);
 
-    let it = args.iter().zip(roc_function.get_type().get_param_types());
-    for (arg, fastcc_type) in it {
+    let it = args
+        .iter()
+        .zip(roc_function.get_type().get_param_types())
+        .zip(arguments);
+    for ((arg, fastcc_type), layout) in it {
         let arg_type = arg.get_type();
         if arg_type == fastcc_type {
             // the C and Fast calling conventions agree
             arguments_for_call.push(*arg);
         } else {
-            let cast = complex_bitcast_check_size(env, *arg, fastcc_type, "to_fastcc_type");
-            arguments_for_call.push(cast);
+            match layout {
+                Layout::Builtin(Builtin::List(_)) => {
+                    let loaded = env
+                        .builder
+                        .build_load(arg.into_pointer_value(), "load_list_pointer");
+                    let cast =
+                        complex_bitcast_check_size(env, loaded, fastcc_type, "to_fastcc_type_1");
+                    arguments_for_call.push(cast);
+                }
+                _ => {
+                    let cast =
+                        complex_bitcast_check_size(env, *arg, fastcc_type, "to_fastcc_type_1");
+                    arguments_for_call.push(cast);
+                }
+            }
         }
     }
 
@@ -3657,7 +3649,7 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
             // the C and Fast calling conventions agree
             *arg
         } else {
-            complex_bitcast_check_size(env, *arg, *fastcc_type, "to_fastcc_type")
+            complex_bitcast_check_size(env, *arg, *fastcc_type, "to_fastcc_type_2")
         }
     });
 
@@ -5394,7 +5386,10 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.split : Str, Str -> List Str
             debug_assert_eq!(args.len(), 2);
 
-            str_split(env, scope, args[0], args[1])
+            let string = load_symbol(scope, &args[0]);
+            let delimiter = load_symbol(scope, &args[1]);
+
+            call_list_bitcode_fn(env, &[string, delimiter], bitcode::STR_STR_SPLIT)
         }
         StrIsEmpty => {
             // Str.isEmpty : Str -> Str
@@ -6090,6 +6085,20 @@ fn run_low_level<'a, 'ctx, 'env>(
         PtrCast | RefCountInc | RefCountDec => {
             unreachable!("Not used in LLVM backend: {:?}", op);
         }
+
+        Unreachable => match RocReturn::from_layout(env, layout) {
+            RocReturn::Return => {
+                let basic_type = basic_type_from_layout(env, layout);
+                basic_type.const_zero()
+            }
+            RocReturn::ByPointer => {
+                let basic_type = basic_type_from_layout(env, layout);
+                let ptr = env.builder.build_alloca(basic_type, "unreachable_alloca");
+                env.builder.build_store(ptr, basic_type.const_zero());
+
+                ptr.into()
+            }
+        },
     }
 }
 

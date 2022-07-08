@@ -1,19 +1,18 @@
 interface Set
-    exposes
-        [
-            empty,
-            single,
-            walk,
-            insert,
-            len,
-            remove,
-            contains,
-            toList,
-            fromList,
-            union,
-            intersection,
-            difference,
-        ]
+    exposes [
+        empty,
+        single,
+        walk,
+        insert,
+        len,
+        remove,
+        contains,
+        toList,
+        fromList,
+        union,
+        intersection,
+        difference,
+    ]
     imports [List, Bool.{ Bool }, Dict.{ values }]
 
 ## An empty set.

@@ -311,7 +311,6 @@ pub const STR_COUNT_SEGMENTS: &str = "roc_builtins.str.count_segments";
 pub const STR_CONCAT: &str = "roc_builtins.str.concat";
 pub const STR_JOIN_WITH: &str = "roc_builtins.str.joinWith";
 pub const STR_STR_SPLIT: &str = "roc_builtins.str.str_split";
-pub const STR_STR_SPLIT_IN_PLACE: &str = "roc_builtins.str.str_split_in_place";
 pub const STR_TO_SCALARS: &str = "roc_builtins.str.to_scalars";
 pub const STR_COUNT_GRAPEHEME_CLUSTERS: &str = "roc_builtins.str.count_grapheme_clusters";
 pub const STR_COUNT_UTF8_BYTES: &str = "roc_builtins.str.count_utf8_bytes";
@@ -393,9 +392,6 @@ pub const UTILS_ALLOCATE_WITH_REFCOUNT: &str = "roc_builtins.utils.allocate_with
 pub const UTILS_INCREF: &str = "roc_builtins.utils.incref";
 pub const UTILS_DECREF: &str = "roc_builtins.utils.decref";
 pub const UTILS_DECREF_CHECK_NULL: &str = "roc_builtins.utils.decref_check_null";
-pub const UTILS_EXPECT_FAILED: &str = "roc_builtins.expect.expect_failed";
-pub const UTILS_GET_EXPECT_FAILURES: &str = "roc_builtins.expect.get_expect_failures";
-pub const UTILS_DEINIT_FAILURES: &str = "roc_builtins.expect.deinit_failures";
 
 pub const UTILS_LONGJMP: &str = "longjmp";
 pub const UTILS_SETJMP: &str = "setjmp";

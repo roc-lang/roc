@@ -1,24 +1,22 @@
 interface Dict
-    exposes
-        [
-            empty,
-            single,
-            get,
-            walk,
-            insert,
-            len,
-            remove,
-            contains,
-            keys,
-            values,
-            union,
-            intersection,
-            difference,
-        ]
-    imports
-        [
-            Bool.{ Bool },
-        ]
+    exposes [
+        empty,
+        single,
+        get,
+        walk,
+        insert,
+        len,
+        remove,
+        contains,
+        keys,
+        values,
+        union,
+        intersection,
+        difference,
+    ]
+    imports [
+        Bool.{ Bool },
+    ]
 
 ## A [dictionary](https://en.wikipedia.org/wiki/Associative_array) that lets you can associate keys with values.
 ##

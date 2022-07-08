@@ -1,0 +1,9 @@
+procedure Num.19 (#Attr.2, #Attr.3):
+    let Num.188 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.188;
+
+procedure Test.0 ():
+    let Test.2 : U64 = 9999999999999999999i64;
+    let Test.3 : U64 = 1i64;
+    let Test.1 : U64 = CallByName Num.19 Test.2 Test.3;
+    ret Test.1;

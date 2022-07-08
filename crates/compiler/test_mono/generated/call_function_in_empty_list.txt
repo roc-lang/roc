@@ -1,0 +1,18 @@
+procedure List.5 (#Attr.2, #Attr.3):
+    let List.279 : List {} = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.2 #Attr.3;
+    decref #Attr.2;
+    ret List.279;
+
+procedure Test.2 (Test.3):
+    let Test.7 : {} = Struct {};
+    let Test.6 : {} = CallByName Test.8 Test.7;
+    ret Test.6;
+
+procedure Test.8 (Test.9):
+    Error The `#UserApp.IdentId(8)` function could not be generated, likely due to a type error.
+
+procedure Test.0 ():
+    let Test.1 : List {} = Array [];
+    let Test.5 : {} = Struct {};
+    let Test.4 : List {} = CallByName List.5 Test.1 Test.5;
+    ret Test.4;

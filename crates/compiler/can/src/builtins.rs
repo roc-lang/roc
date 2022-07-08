@@ -1,7 +1,7 @@
 use crate::def::Def;
 use crate::expr::{self, AnnotatedMark, ClosureData, Expr::*, IntValue};
 use crate::expr::{Expr, Field, Recursive};
-use crate::num::{FloatBound, IntBound, IntWidth, NumBound};
+use crate::num::{FloatBound, IntBound, IntLitWidth, NumBound};
 use crate::pattern::Pattern;
 use roc_collections::all::SendMap;
 use roc_module::called_via::CalledVia;
@@ -107,6 +107,7 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         STR_TO_I16 => str_to_num,
         STR_TO_U8 => str_to_num,
         STR_TO_I8 => str_to_num,
+        LIST_UNREACHABLE => roc_unreachable,
         LIST_LEN => list_len,
         LIST_WITH_CAPACITY => list_with_capacity,
         LIST_GET_UNSAFE => list_get_unsafe,
@@ -1577,7 +1578,7 @@ fn str_to_num(symbol: Symbol, var_store: &mut VarStore) -> Def {
                             errorcode_var,
                             Variable::UNSIGNED8,
                             0,
-                            IntBound::Exact(IntWidth::U8),
+                            IntBound::Exact(IntLitWidth::U8),
                         ),
                     ),
                 ],
@@ -2175,7 +2176,7 @@ fn list_split(symbol: Symbol, var_store: &mut VarStore) -> Def {
         index_var,
         Variable::NATURAL,
         0,
-        IntBound::Exact(IntWidth::Nat),
+        IntBound::Exact(IntLitWidth::Nat),
     );
 
     let clos = Closure(ClosureData {
@@ -2357,6 +2358,11 @@ fn list_prepend(symbol: Symbol, var_store: &mut VarStore) -> Def {
         body,
         list_var,
     )
+}
+
+/// List.unreachable : [] -> a
+fn roc_unreachable(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_1(symbol, LowLevel::Unreachable, var_store)
 }
 
 /// List.map : List before, (before -> after) -> List after

@@ -1,47 +1,46 @@
 interface Str
-    exposes
-        [
-            Utf8Problem,
-            Utf8ByteProblem,
-            concat,
-            isEmpty,
-            joinWith,
-            split,
-            repeat,
-            countGraphemes,
-            countUtf8Bytes,
-            startsWithScalar,
-            toUtf8,
-            fromUtf8,
-            fromUtf8Range,
-            startsWith,
-            endsWith,
-            trim,
-            trimLeft,
-            trimRight,
-            toDec,
-            toF64,
-            toF32,
-            toNat,
-            toU128,
-            toI128,
-            toU64,
-            toI64,
-            toU32,
-            toI32,
-            toU16,
-            toI16,
-            toU8,
-            toI8,
-            toScalars,
-            splitFirst,
-            splitLast,
-            walkUtf8WithIndex,
-            reserve,
-            appendScalar,
-            walkScalars,
-            walkScalarsUntil,
-        ]
+    exposes [
+        Utf8Problem,
+        Utf8ByteProblem,
+        concat,
+        isEmpty,
+        joinWith,
+        split,
+        repeat,
+        countGraphemes,
+        countUtf8Bytes,
+        startsWithScalar,
+        toUtf8,
+        fromUtf8,
+        fromUtf8Range,
+        startsWith,
+        endsWith,
+        trim,
+        trimLeft,
+        trimRight,
+        toDec,
+        toF64,
+        toF32,
+        toNat,
+        toU128,
+        toI128,
+        toU64,
+        toI64,
+        toU32,
+        toI32,
+        toU16,
+        toI16,
+        toU8,
+        toI8,
+        toScalars,
+        splitFirst,
+        splitLast,
+        walkUtf8WithIndex,
+        reserve,
+        appendScalar,
+        walkScalars,
+        walkScalarsUntil,
+    ]
     imports [Bool.{ Bool }, Result.{ Result }]
 
 ## # Types
@@ -118,15 +117,14 @@ interface Str
 ## and you can use it as many times as you like inside a string. The name
 ## between the parentheses must refer to a `Str` value that is currently in
 ## scope, and it must be a name - it can't be an arbitrary expression like a function call.
-Utf8ByteProblem :
-    [
-        InvalidStartByte,
-        UnexpectedEndOfSequence,
-        ExpectedContinuation,
-        OverlongEncoding,
-        CodepointTooLarge,
-        EncodesSurrogateHalf,
-    ]
+Utf8ByteProblem : [
+    InvalidStartByte,
+    UnexpectedEndOfSequence,
+    ExpectedContinuation,
+    OverlongEncoding,
+    CodepointTooLarge,
+    EncodesSurrogateHalf,
+]
 
 Utf8Problem : { byteIndex : Nat, problem : Utf8ByteProblem }
 

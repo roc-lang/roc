@@ -74,7 +74,7 @@ impl<'a> Formattable for TypeDef<'a> {
                 buf.push_str(" :");
                 buf.spaces(1);
 
-                ann.format(buf, indent + INDENT)
+                ann.format(buf, indent)
             }
             Opaque {
                 header: TypeHeader { name, vars },
@@ -113,7 +113,7 @@ impl<'a> Formattable for TypeDef<'a> {
                     buf.indent(indent + INDENT);
                 }
 
-                ann.format(buf, indent + INDENT);
+                ann.format(buf, indent);
 
                 if let Some(derived) = derived {
                     if !make_multiline {

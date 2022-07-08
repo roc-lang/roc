@@ -16,7 +16,7 @@ main =
     Task.after
         Task.getInt
         \n ->
-            m = makeMap n# koka original n = 4_200_000
+            m = makeMap n # koka original n = 4_200_000
             val = fold (\_, v, r -> if v then r + 1 else r) m 0
 
             val

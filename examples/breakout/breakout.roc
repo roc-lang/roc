@@ -3,30 +3,30 @@ app "breakout"
     imports [pf.Game.{ Bounds, Elem, Event }]
     provides [program] { Model } to pf
 
-paddleWidth = 0.2# width of the paddle, as a % of screen width
-paddleHeight = 50# height of the paddle, in pixels
-paddleSpeed = 65# how many pixels the paddle moves per keypress
-blockHeight = 80# height of a block, in pixels
-blockBorder = 0.025# border of a block, as a % of its width
+paddleWidth = 0.2 # width of the paddle, as a % of screen width
+paddleHeight = 50 # height of the paddle, in pixels
+paddleSpeed = 65 # how many pixels the paddle moves per keypress
+blockHeight = 80 # height of a block, in pixels
+blockBorder = 0.025 # border of a block, as a % of its width
 ballSize = 55
 numRows = 4
 numCols = 8
 numBlocks = numRows * numCols
 
 Model : {
-        # Screen height and width
-        height : F32,
-        width : F32,
-        # Paddle X-coordinate
-        paddleX : F32,
-        # Ball coordinates
-        ballX : F32,
-        ballY : F32,
-        dBallX : F32,
-        # delta x - how much it moves per tick
-        dBallY : F32,
-        # delta y - how much it moves per tick
-    }
+    # Screen height and width
+    height : F32,
+    width : F32,
+    # Paddle X-coordinate
+    paddleX : F32,
+    # Ball coordinates
+    ballX : F32,
+    ballY : F32,
+    dBallX : F32,
+    # delta x - how much it moves per tick
+    dBallY : F32,
+    # delta y - how much it moves per tick
+}
 
 init : Bounds -> Model
 init = \{ width, height } -> {
