@@ -40,7 +40,7 @@ fn write_subs_for_module(module_id: ModuleId, filename: &str) {
         &arena,
         PathBuf::from(filename),
         source,
-        &src_dir,
+        src_dir,
         Default::default(),
         target_info,
         roc_reporting::report::RenderTarget::ColorTerminal,
