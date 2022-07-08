@@ -1,7 +1,7 @@
 procedure List.5 (#Attr.2, #Attr.3):
-    let List.283 : List {} = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.2 #Attr.3;
+    let List.292 : List {} = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.2 #Attr.3;
     decref #Attr.2;
-    ret List.283;
+    ret List.292;
 
 procedure Test.2 (Test.3):
     let Test.7 : {} = Struct {};
@@ -9,7 +9,7 @@ procedure Test.2 (Test.3):
     ret Test.6;
 
 procedure Test.8 (Test.9):
-    Error The `#UserApp.IdentId(8)` function could not be generated, likely due to a type error.
+    Error The `#UserApp.8` function could not be generated, likely due to a type error.
 
 procedure Test.0 ():
     let Test.1 : List {} = Array [];
