@@ -41,6 +41,7 @@ use roc_types::types::AliasCommon;
 use roc_types::types::AliasKind;
 use roc_types::types::AliasVar;
 use roc_types::types::LambdaSet;
+use roc_types::types::OptAbleType;
 use roc_types::types::{Alias, Type};
 use std::fmt::Debug;
 
@@ -2359,15 +2360,22 @@ fn make_tag_union_of_alias_recursive<'a>(
     let alias_args = alias
         .type_variables
         .iter()
-        .map(|l| (l.value.name.clone(), Type::Variable(l.value.var)))
-        .collect::<Vec<_>>();
+        .map(|l| Type::Variable(l.value.var));
+
+    let alias_opt_able_vars = alias.type_variables.iter().map(|l| OptAbleType {
+        typ: Type::Variable(l.value.var),
+        opt_ability: l.value.opt_bound_ability,
+    });
+
+    let lambda_set_vars = alias.lambda_set_variables.iter();
 
     let made_recursive = make_tag_union_recursive_help(
         env,
-        Loc::at(
-            alias.header_region(),
-            (alias_name, alias_args.iter().map(|ta| &ta.1)),
-        ),
+        Loc::at(alias.header_region(), alias_name),
+        alias_args,
+        alias_opt_able_vars,
+        lambda_set_vars,
+        alias.kind,
         alias.region,
         others,
         &mut alias.typ,
@@ -2416,7 +2424,11 @@ enum MakeTagUnionRecursive {
 /// When `Err` is returned, a problem will be added to `env`.
 fn make_tag_union_recursive_help<'a, 'b>(
     env: &mut Env<'a>,
-    recursive_alias: Loc<(Symbol, impl Iterator<Item = &'b Type>)>,
+    recursive_alias: Loc<Symbol>,
+    alias_args: impl Iterator<Item = Type>,
+    alias_opt_able_vars: impl Iterator<Item = OptAbleType>,
+    lambda_set_variables: impl Iterator<Item = &'b LambdaSet>,
+    alias_kind: AliasKind,
     region: Region,
     others: Vec<Symbol>,
     typ: &'b mut Type,
@@ -2425,21 +2437,33 @@ fn make_tag_union_recursive_help<'a, 'b>(
 ) -> MakeTagUnionRecursive {
     use MakeTagUnionRecursive::*;
 
-    let (symbol, args) = recursive_alias.value;
+    let symbol = recursive_alias.value;
     let alias_region = recursive_alias.region;
 
     match typ {
         Type::TagUnion(tags, ext) => {
             let recursion_variable = var_store.fresh();
-            let type_arguments: Vec<_> = args.into_iter().cloned().collect();
+            let type_arguments: Vec<_> = alias_args.collect();
 
             let mut pending_typ =
                 Type::RecursiveTagUnion(recursion_variable, tags.to_vec(), ext.clone());
-            let substitution_result = pending_typ.substitute_alias(
-                symbol,
-                &type_arguments,
-                &Type::Variable(recursion_variable),
-            );
+
+            let substitution = match alias_kind {
+                // Inline recursion var directly wherever the alias is used.
+                AliasKind::Structural => Type::Variable(recursion_variable),
+                // Wrap the recursion var in the opaque wherever it's used to avoid leaking the
+                // inner type out as structural.
+                AliasKind::Opaque => Type::Alias {
+                    symbol,
+                    type_arguments: alias_opt_able_vars.collect(),
+                    lambda_set_variables: lambda_set_variables.cloned().collect(),
+                    actual: Box::new(Type::Variable(recursion_variable)),
+                    kind: AliasKind::Opaque,
+                },
+            };
+
+            let substitution_result =
+                pending_typ.substitute_alias(symbol, &type_arguments, &substitution);
             match substitution_result {
                 Ok(()) => {
                     // We can substitute the alias presence for the variable exactly.
@@ -2464,19 +2488,25 @@ fn make_tag_union_recursive_help<'a, 'b>(
         Type::Alias {
             actual,
             type_arguments,
+            lambda_set_variables,
+            kind,
             ..
         } => {
             // NB: We need to collect the type arguments to shut off rustc's closure type
             // instantiator. Otherwise we get unfortunate errors like
             //   reached the recursion limit while instantiating `make_tag_union_recursive_help::<...n/src/def.rs:1879:65: 1879:77]>>`
             #[allow(clippy::needless_collect)]
-            let type_arguments: Vec<&Type> = type_arguments.iter().map(|ta| &ta.typ).collect();
-            let recursive_alias = Loc::at_zero((symbol, type_arguments.into_iter()));
+            let alias_args: Vec<Type> = type_arguments.iter().map(|ta| ta.typ.clone()).collect();
+            let recursive_alias = Loc::at_zero(symbol);
 
             // try to make `actual` recursive
             make_tag_union_recursive_help(
                 env,
                 recursive_alias,
+                alias_args.into_iter(),
+                type_arguments.iter().cloned(),
+                lambda_set_variables.iter(),
+                *kind,
                 region,
                 others,
                 actual,
