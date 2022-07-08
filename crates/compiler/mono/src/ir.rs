@@ -5369,7 +5369,7 @@ fn convert_tag_union<'a>(
             let iter = field_symbols_temp.into_iter().map(|(_, _, data)| data);
             assign_to_symbols(env, procs, layout_cache, iter, stmt)
         }
-        NewtypeByVoid { sorted_tag_layouts } => {
+        NewtypeByVoid { sorted_tag_layouts, .. } => {
             let (tag_id, _) = {
                 let (tag_id, (_, argument_layouts)) = sorted_tag_layouts
                     .iter()
@@ -8409,6 +8409,7 @@ fn from_can_pattern_help<'a>(
                 }
                 NewtypeByVoid {
                     sorted_tag_layouts: tags,
+                    ..
                 } => {
                     let (tag_id, argument_layouts) = {
                         let (tag_id, (_, argument_layouts)) = tags

@@ -1073,6 +1073,7 @@ impl<'a> LambdaSet<'a> {
             } => Layout::struct_no_name_order(layouts.into_bump_slice()),
             NewtypeByVoid {
                 sorted_tag_layouts: tags,
+                ..
             } => {
                 debug_assert!(tags.len() > 1);
 
@@ -2298,6 +2299,8 @@ pub enum UnionVariant<'a> {
         arguments: Vec<'a, Layout<'a>>,
     },
     NewtypeByVoid {
+        data_tag_name: TagOrClosure,
+        data_tag_id: TagIdIntType,
         sorted_tag_layouts: Vec<'a, (TagOrClosure, &'a [Layout<'a>])>,
     },
     Wrapped(WrappedVariant<'a>),
@@ -2932,6 +2935,7 @@ where
         }
         NewtypeByVoid {
             sorted_tag_layouts: tags,
+            ..
         } => {
             let mut tag_layouts = Vec::with_capacity_in(tags.len(), env.arena);
             tag_layouts.extend(tags.iter().map(|r| r.1));
