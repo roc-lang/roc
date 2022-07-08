@@ -100,7 +100,7 @@ insert = \@AssocList list, k, v ->
 # NOTE: This helper function might be moved into the List module someday:
 listFindIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]*
 listFindIndex = \list, matcher ->
-    foundIndex = List.walkUntil list 0 (\index, elem -> if matcher elem then Stop index else Continue (index + 1))
+    foundIndex = List.walkUntil list 0 (\index, elem -> if matcher elem then Break index else Continue (index + 1))
 
     if foundIndex < List.len list then
         Ok foundIndex
