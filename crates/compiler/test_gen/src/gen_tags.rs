@@ -1431,8 +1431,9 @@ fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped() {
             main = compound {}
             "#
         ),
-        2, // C
-        u8
+        (0, 2), // Err, C
+        ([u8; std::mem::size_of::<RocStr>()], u8),
+        |(err_tag, wrap_tag): ([u8; std::mem::size_of::<RocStr>()], u8)| (wrap_tag, err_tag[0])
     )
 }
 
@@ -1460,8 +1461,9 @@ fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped_nested() {
                 compound {}
             "#
         ),
-        2, // C
-        u8
+        (0, 2), // Err, C
+        ([u8; std::mem::size_of::<RocStr>()], u8),
+        |(err_tag, wrap_tag): ([u8; std::mem::size_of::<RocStr>()], u8)| (wrap_tag, err_tag[0])
     )
 }
 
