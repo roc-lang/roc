@@ -76,7 +76,7 @@ get = \dict, key ->
         True -> Ok result.value
         False -> Err KeyNotFound
 
-getLowlevel : Dict k v, k -> { flag : Bool, value : v } 
+getLowlevel : Dict k v, k -> { flag : Bool, value : v }
 
 walk : Dict k v, state, (state, k, v -> state) -> state
 insert : Dict k v, k, v -> Dict k v

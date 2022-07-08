@@ -516,20 +516,20 @@ bytesToU16 : List U8, Nat -> Result U16 [OutOfBounds]
 bytesToU16 = \bytes, index ->
     # we need at least 1 more byte
     offset = 1
-    
+
     if index + offset < List.len bytes then
         Ok (bytesToU16Lowlevel bytes index)
-    else 
+    else
         Err OutOfBounds
 
 bytesToU32 : List U8, Nat -> Result U32 [OutOfBounds]
 bytesToU32 = \bytes, index ->
     # we need at least 3 more bytes
     offset = 3
-    
+
     if index + offset < List.len bytes then
         Ok (bytesToU32Lowlevel bytes index)
-    else 
+    else
         Err OutOfBounds
 
 compare : Num a, Num a -> [LT, EQ, GT]
@@ -580,7 +580,7 @@ isZero = \x -> x == 0
 ##
 ## Examples of even numbers: 0, 2, 4, 6, 8, -2, -4, -6, -8
 isEven : Int a -> Bool
-isEven = \x -> Num.isMultipleOf x 2 
+isEven = \x -> Num.isMultipleOf x 2
 
 ## A number is odd if dividing it by 2 gives a remainder of 1.
 ##
@@ -594,7 +594,7 @@ isPositive = \x -> x > 0
 
 ## Negative numbers are less than `0`.
 isNegative : Num a -> Bool
-isNegative = \x -> x < 0 
+isNegative = \x -> x < 0
 
 toFrac : Num * -> Frac *
 
@@ -709,7 +709,7 @@ sin : Frac a -> Frac a
 cos : Frac a -> Frac a
 
 tan : Frac a -> Frac a
-tan = \x -> 
+tan = \x ->
     # `tan` is not available as an intrinsic in LLVM
     Num.div (Num.sin x) (Num.cos x)
 
@@ -753,7 +753,7 @@ sqrtChecked = \x ->
 log : Frac a -> Frac a
 
 logChecked : Frac a -> Result (Frac a) [LogNeedsPositive]*
-logChecked = \x -> 
+logChecked = \x ->
     if x <= 0.0 then
         Err LogNeedsPositive
     else
@@ -917,7 +917,7 @@ addChecked = \a, b ->
     else
         Ok result.a
 
-addCheckedLowlevel : Num a, Num a -> {b: Bool, a : Num a} 
+addCheckedLowlevel : Num a, Num a -> { b : Bool, a : Num a }
 
 subWrap : Int range, Int range -> Int range
 
@@ -943,7 +943,7 @@ subChecked = \a, b ->
     else
         Ok result.a
 
-subCheckedLowlevel : Num a, Num a -> {b: Bool, a : Num a} 
+subCheckedLowlevel : Num a, Num a -> { b : Bool, a : Num a }
 
 mulWrap : Int range, Int range -> Int range
 
@@ -967,7 +967,7 @@ mulChecked = \a, b ->
     else
         Ok result.a
 
-mulCheckedLowlevel : Num a, Num a -> {b: Bool, a : Num a} 
+mulCheckedLowlevel : Num a, Num a -> { b : Bool, a : Num a }
 
 ## The lowest number that can be stored in an [I8] without underflowing its
 ## available memory and crashing.

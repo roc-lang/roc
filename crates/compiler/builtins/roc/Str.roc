@@ -210,10 +210,9 @@ fromUtf8 = \bytes ->
     else
         Err (BadUtf8 result.dProblemCode result.aByteIndex)
 
-
 fromUtf8Range : List U8, { start : Nat, count : Nat } -> Result Str [BadUtf8 Utf8ByteProblem Nat, OutOfBounds]*
 fromUtf8Range = \bytes, config ->
-    if config.start + config.count <= List.len bytes then 
+    if config.start + config.count <= List.len bytes then
         result = fromUtf8RangeLowlevel bytes config
 
         if result.cIsOk then
@@ -224,14 +223,13 @@ fromUtf8Range = \bytes, config ->
         Err OutOfBounds
 
 FromUtf8Result : {
-    aByteIndex: Nat,
-    bString: Str,
-    cIsOk: Bool,
-    dProblemCode: Utf8ByteProblem,
+    aByteIndex : Nat,
+    bString : Str,
+    cIsOk : Bool,
+    dProblemCode : Utf8ByteProblem,
 }
-        
-fromUtf8RangeLowlevel : List U8, { start : Nat, count : Nat } -> FromUtf8Result 
 
+fromUtf8RangeLowlevel : List U8, { start : Nat, count : Nat } -> FromUtf8Result
 
 startsWith : Str, Str -> Bool
 endsWith : Str, Str -> Bool
@@ -437,7 +435,7 @@ walkScalarsUntilHelp = \string, state, step, index, length ->
     else
         state
 
-strToNum : Str -> { berrorcode: U8, aresult : Num * }
+strToNum : Str -> { berrorcode : U8, aresult : Num * }
 
 strToNumHelp : Str -> Result (Num a) [InvalidNumStr]*
 strToNumHelp = \string ->

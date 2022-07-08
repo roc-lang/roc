@@ -24,7 +24,7 @@ single : k -> Set k
 ## retrieved or removed from the [Set].
 insert : Set k, k -> Set k
 len : Set k -> Nat
-len = \set -> 
+len = \set ->
     set
         |> Set.toDict
         |> Dict.len
