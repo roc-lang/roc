@@ -89,15 +89,15 @@ pub fn load_and_monomorphize_from_str<'a>(
     }
 }
 
-pub fn load_and_monomorphize<'a>(
-    arena: &'a Bump,
+pub fn load_and_monomorphize(
+    arena: &Bump,
     filename: PathBuf,
     src_dir: PathBuf,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
     render: RenderTarget,
     threading: Threading,
-) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
+) -> Result<MonomorphizedModule<'_>, LoadingProblem<'_>> {
     use LoadResult::*;
 
     let load_start = LoadStart::from_path(arena, src_dir, filename, render)?;
@@ -116,15 +116,15 @@ pub fn load_and_monomorphize<'a>(
     }
 }
 
-pub fn load_and_typecheck<'a>(
-    arena: &'a Bump,
+pub fn load_and_typecheck(
+    arena: &Bump,
     filename: PathBuf,
     src_dir: PathBuf,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
     render: RenderTarget,
     threading: Threading,
-) -> Result<LoadedModule, LoadingProblem<'a>> {
+) -> Result<LoadedModule, LoadingProblem<'_>> {
     use LoadResult::*;
 
     let load_start = LoadStart::from_path(arena, src_dir, filename, render)?;

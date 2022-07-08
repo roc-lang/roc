@@ -73,12 +73,12 @@ fn promote_expr_to_module(src: &str) -> String {
 
 fn compiles_to_ir(test_name: &str, src: &str) {
     use bumpalo::Bump;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     let arena = &Bump::new();
 
     let filename = PathBuf::from("Test.roc");
-    let src_dir = Path::new("fake/test/path");
+    let src_dir = PathBuf::from("fake/test/path");
 
     let module_src;
     let temp;

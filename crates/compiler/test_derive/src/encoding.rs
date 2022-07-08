@@ -234,7 +234,7 @@ where
         &arena,
         encode_path().file_name().unwrap().into(),
         source,
-        encode_path().parent().unwrap(),
+        encode_path().parent().unwrap().to_path_buf(),
         Default::default(),
         target_info,
         roc_reporting::report::RenderTarget::ColorTerminal,
