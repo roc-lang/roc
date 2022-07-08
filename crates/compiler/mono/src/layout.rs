@@ -2511,6 +2511,7 @@ where
             let mut has_any_arguments = false;
 
             let mut nullable: Option<(TagIdIntType, TagOrClosure)> = None;
+            let mut voided_tag_ids = bitvec::vec::BitVec::<usize>::repeat(false, num_tags);
 
             // only recursive tag unions can be nullable
             let is_recursive = opt_rec_var.is_some();
@@ -2545,6 +2546,10 @@ where
                                         .get_root_key_without_compacting(opt_rec_var.unwrap())
                                 && is_recursive_tag_union(&layout);
 
+                            if layout == Layout::VOID {
+                                voided_tag_ids.set(answer.len(), true);
+                            }
+
                             if self_recursion {
                                 arg_layouts.push(Layout::RecursivePointer);
                             } else {
@@ -2573,6 +2578,15 @@ where
 
                 answer.push((tag_name.clone().into(), arg_layouts.into_bump_slice()));
             }
+
+            //            if num_tags == voided_tag_ids.count_ones() + 1 && !is_recursive {
+            //                let kept = answer.remove(voided_tag_ids.leading_ones());
+            //
+            //                return UnionVariant::NewtypeByVoid {
+            //                    tag_name: kept.0,
+            //                    arguments: Vec::from_iter_in(kept.1.iter().copied(), env.arena),
+            //                };
+            //            }
 
             match num_tags {
                 2 if !has_any_arguments => {
@@ -2708,6 +2722,7 @@ where
             let mut has_any_arguments = false;
 
             let mut nullable = None;
+            let mut voided_tag_ids = bitvec::vec::BitVec::<usize>::repeat(false, num_tags);
 
             // only recursive tag unions can be nullable
             let is_recursive = opt_rec_var.is_some();
@@ -2740,6 +2755,10 @@ where
                                     == subs.get_root_key_without_compacting(opt_rec_var.unwrap())
                                 && is_recursive_tag_union(&layout);
 
+                            if layout == Layout::VOID {
+                                voided_tag_ids.set(answer.len(), true);
+                            }
+
                             if self_recursion {
                                 arg_layouts.push(Layout::RecursivePointer);
                             } else {
@@ -2769,6 +2788,15 @@ where
 
                 answer.push((tag_name.into(), arg_layouts.into_bump_slice()));
             }
+
+            //            if num_tags == voided_tag_ids.count_ones() + 1 && !is_recursive {
+            //                let kept = answer.remove(voided_tag_ids.leading_ones());
+            //
+            //                return UnionVariant::NewtypeByVoid {
+            //                    tag_name: kept.0,
+            //                    arguments: Vec::from_iter_in(kept.1.iter().copied(), env.arena),
+            //                };
+            //            }
 
             match num_tags {
                 2 if !has_any_arguments => {
