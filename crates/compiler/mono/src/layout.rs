@@ -2600,14 +2600,16 @@ where
                 answer.push((tag_name.clone().into(), arg_layouts.into_bump_slice()));
             }
 
-            //            if num_tags == voided_tag_ids.count_ones() + 1 && !is_recursive {
-            //                let kept = answer.remove(voided_tag_ids.leading_ones());
-            //
-            //                return UnionVariant::NewtypeByVoid {
-            //                    tag_name: kept.0,
-            //                    arguments: Vec::from_iter_in(kept.1.iter().copied(), env.arena),
-            //                };
-            //            }
+            if num_tags == voided_tag_ids.count_ones() + 1 && !is_recursive {
+                let kept_tag_id = voided_tag_ids.leading_ones();
+                let kept = answer.get(kept_tag_id).unwrap();
+
+                return UnionVariant::NewtypeByVoid {
+                    data_tag_name: kept.0.clone(),
+                    data_tag_id: kept_tag_id as _,
+                    sorted_tag_layouts: answer,
+                };
+            }
 
             match num_tags {
                 2 if !has_any_arguments => {
@@ -2810,14 +2812,16 @@ where
                 answer.push((tag_name.into(), arg_layouts.into_bump_slice()));
             }
 
-            //            if num_tags == voided_tag_ids.count_ones() + 1 && !is_recursive {
-            //                let kept = answer.remove(voided_tag_ids.leading_ones());
-            //
-            //                return UnionVariant::NewtypeByVoid {
-            //                    tag_name: kept.0,
-            //                    arguments: Vec::from_iter_in(kept.1.iter().copied(), env.arena),
-            //                };
-            //            }
+            if num_tags == voided_tag_ids.count_ones() + 1 && !is_recursive {
+                let kept_tag_id = voided_tag_ids.leading_ones();
+                let kept = answer.get(kept_tag_id).unwrap();
+
+                return UnionVariant::NewtypeByVoid {
+                    data_tag_name: kept.0.clone(),
+                    data_tag_id: kept_tag_id as _,
+                    sorted_tag_layouts: answer,
+                };
+            }
 
             match num_tags {
                 2 if !has_any_arguments => {

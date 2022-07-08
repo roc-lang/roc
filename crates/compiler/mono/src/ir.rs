@@ -5369,7 +5369,9 @@ fn convert_tag_union<'a>(
             let iter = field_symbols_temp.into_iter().map(|(_, _, data)| data);
             assign_to_symbols(env, procs, layout_cache, iter, stmt)
         }
-        NewtypeByVoid { sorted_tag_layouts, .. } => {
+        NewtypeByVoid {
+            sorted_tag_layouts, ..
+        } => {
             let (tag_id, _) = {
                 let (tag_id, (_, argument_layouts)) = sorted_tag_layouts
                     .iter()
@@ -6621,6 +6623,23 @@ fn store_pattern_help<'a>(
                 );
             }
         },
+        Voided {
+            arguments,
+            layout,
+            tag_id,
+            ..
+        } => {
+            return store_tag_pattern(
+                env,
+                procs,
+                layout_cache,
+                outer_symbol,
+                *layout,
+                arguments,
+                *tag_id,
+                stmt,
+            );
+        }
         AppliedTag {
             arguments,
             layout,
@@ -8175,6 +8194,13 @@ pub enum Pattern<'a> {
         tag_name: TagName,
         arguments: Vec<'a, (Pattern<'a>, Layout<'a>)>,
     },
+    Voided {
+        tag_name: TagName,
+        tag_id: TagIdIntType,
+        arguments: Vec<'a, (Pattern<'a>, Layout<'a>)>,
+        layout: UnionLayout<'a>,
+        union: roc_exhaustive::Union,
+    },
     AppliedTag {
         tag_name: TagName,
         tag_id: TagIdIntType,
@@ -8281,7 +8307,6 @@ fn from_can_pattern_help<'a>(
             num_str,
             IntOrFloatValue::Int(*num),
         )),
-
         AppliedTag {
             whole_var,
             tag_name,
@@ -8409,8 +8434,11 @@ fn from_can_pattern_help<'a>(
                 }
                 NewtypeByVoid {
                     sorted_tag_layouts: tags,
+                    data_tag_name,
+                    data_tag_id,
                     ..
                 } => {
+                    dbg!(&tags);
                     let (tag_id, argument_layouts) = {
                         let (tag_id, (_, argument_layouts)) = tags
                             .iter()
@@ -8491,12 +8519,22 @@ fn from_can_pattern_help<'a>(
                         ));
                     }
 
-                    Pattern::AppliedTag {
-                        tag_name: tag_name.clone(),
-                        tag_id: tag_id as _,
-                        arguments: mono_args,
-                        union,
-                        layout,
+                    if tag_id == data_tag_id {
+                        Pattern::AppliedTag {
+                            tag_name: tag_name.clone(),
+                            tag_id: tag_id as _,
+                            arguments: mono_args,
+                            union,
+                            layout,
+                        }
+                    } else {
+                        Pattern::Voided {
+                            tag_name: tag_name.clone(),
+                            tag_id: tag_id as _,
+                            arguments: mono_args,
+                            union,
+                            layout,
+                        }
                     }
                 }
                 Wrapped(variant) => {
