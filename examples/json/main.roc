@@ -38,4 +38,4 @@ myparser =
   |> Parser.Core.oneOrMore
   |> Parser.Core.map (\vals -> Str.joinWith vals "")
   |> Parser.Core.sepBy (Parser.Core.scalar ',')
-  |> Parser.Core.betweenBraces
+  |> Parser.Core.between (Parser.Core.scalar '[') (Parser.Core.scalar ']')
