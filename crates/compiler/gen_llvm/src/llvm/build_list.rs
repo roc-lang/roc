@@ -146,24 +146,42 @@ pub fn list_get_unsafe<'a, 'ctx, 'env>(
     result
 }
 
-/// List.append : List elem, elem -> List elem
-pub fn list_append<'a, 'ctx, 'env>(
+/// List.reserve : List elem, Nat -> List elem
+pub fn list_reserve<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    original_wrapper: StructValue<'ctx>,
-    element: BasicValueEnum<'ctx>,
+    list: BasicValueEnum<'ctx>,
+    spare: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
     update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
     call_list_bitcode_fn(
         env,
         &[
-            list_to_c_abi(env, original_wrapper.into()).into(),
+            list_to_c_abi(env, list).into(),
             env.alignment_intvalue(element_layout),
-            pass_element_as_opaque(env, element, *element_layout),
+            spare,
             layout_width(env, element_layout),
             pass_update_mode(env, update_mode),
         ],
-        bitcode::LIST_APPEND,
+        bitcode::LIST_RESERVE,
+    )
+}
+
+/// List.appendUnsafe : List elem, elem -> List elem
+pub fn list_append_unsafe<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    original_wrapper: StructValue<'ctx>,
+    element: BasicValueEnum<'ctx>,
+    element_layout: &Layout<'a>,
+) -> BasicValueEnum<'ctx> {
+    call_list_bitcode_fn(
+        env,
+        &[
+            list_to_c_abi(env, original_wrapper.into()).into(),
+            pass_element_as_opaque(env, element, *element_layout),
+            layout_width(env, element_layout),
+        ],
+        bitcode::LIST_APPEND_UNSAFE,
     )
 }
 
@@ -807,6 +825,7 @@ pub fn store_list<'a, 'ctx, 'env>(
         .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
         .unwrap();
 
+    // Store the capacity
     struct_val = builder
         .build_insert_value(
             struct_val,

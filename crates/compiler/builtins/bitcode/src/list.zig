@@ -404,21 +404,41 @@ pub fn listMap4(
     }
 }
 
-pub fn listWithCapacity(capacity: usize, alignment: u32, element_width: usize) callconv(.C) RocList {
+pub fn listWithCapacity(
+    capacity: usize,
+    alignment: u32,
+    element_width: usize,
+) callconv(.C) RocList {
     var output = RocList.allocate(alignment, capacity, element_width);
     output.length = 0;
     return output;
 }
 
-pub fn listAppend(list: RocList, alignment: u32, element: Opaque, element_width: usize, update_mode: UpdateMode) callconv(.C) RocList {
+pub fn listReserve(
+    list: RocList,
+    alignment: u32,
+    spare: usize,
+    element_width: usize,
+    update_mode: UpdateMode,
+) callconv(.C) RocList {
     const old_length = list.len();
-    var output: RocList = undefined;
-    if (update_mode == .InPlace and list.capacity >= old_length + 1) {
-        output = list;
-        output.length += 1;
+    if ((update_mode == .InPlace or list.isUnique()) and list.capacity >= list.len() + spare) {
+        return list;
     } else {
-        output = list.reallocate(alignment, old_length + 1, element_width);
+        var output = list.reallocate(alignment, old_length + spare, element_width);
+        output.length = old_length;
+        return output;
     }
+}
+
+pub fn listAppendUnsafe(
+    list: RocList,
+    element: Opaque,
+    element_width: usize,
+) callconv(.C) RocList {
+    const old_length = list.len();
+    var output = list;
+    output.length += 1;
 
     if (output.bytes) |target| {
         if (element) |source| {
@@ -427,6 +447,11 @@ pub fn listAppend(list: RocList, alignment: u32, element: Opaque, element_width:
     }
 
     return output;
+}
+
+fn listAppend(list: RocList, alignment: u32, element: Opaque, element_width: usize, update_mode: UpdateMode) callconv(.C) RocList {
+    const with_capacity = listReserve(list, alignment, 1, element_width, update_mode);
+    return listAppendUnsafe(with_capacity, element, element_width);
 }
 
 pub fn listPrepend(list: RocList, alignment: u32, element: Opaque, element_width: usize) callconv(.C) RocList {

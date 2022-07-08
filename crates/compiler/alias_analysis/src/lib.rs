@@ -935,6 +935,20 @@ fn list_append(
     with_new_heap_cell(builder, block, new_bag)
 }
 
+fn list_clone(
+    builder: &mut FuncDefBuilder,
+    block: BlockId,
+    update_mode_var: UpdateModeVar,
+    list: ValueId,
+) -> Result<ValueId> {
+    let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+    let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+
+    let _unit = builder.add_update(block, update_mode_var, cell)?;
+
+    with_new_heap_cell(builder, block, bag)
+}
+
 fn lowlevel_spec(
     builder: &mut FuncDefBuilder,
     env: &Env,
@@ -1029,7 +1043,24 @@ fn lowlevel_spec(
 
             with_new_heap_cell(builder, block, bag)
         }
-        ListAppend => {
+        ListWithCapacity => {
+            // essentially an empty list, capacity is not relevant for morphic
+
+            match layout {
+                Layout::Builtin(Builtin::List(element_layout)) => {
+                    let type_id =
+                        layout_spec(builder, element_layout, &WhenRecursive::Unreachable)?;
+                    new_list(builder, block, type_id)
+                }
+                _ => unreachable!("empty array does not have a list layout"),
+            }
+        }
+        ListReserve => {
+            let list = env.symbols[&arguments[0]];
+
+            list_clone(builder, block, update_mode_var, list)
+        }
+        ListAppendUnsafe => {
             let list = env.symbols[&arguments[0]];
             let to_insert = env.symbols[&arguments[1]];
 

@@ -110,9 +110,10 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         LIST_UNREACHABLE => roc_unreachable,
         LIST_LEN => list_len,
         LIST_WITH_CAPACITY => list_with_capacity,
+        LIST_RESERVE => list_reserve,
+        LIST_APPEND_UNSAFE => list_append_unsafe,
         LIST_GET_UNSAFE => list_get_unsafe,
         LIST_REPLACE_UNSAFE => list_replace_unsafe,
-        LIST_APPEND => list_append,
         LIST_IS_EMPTY => list_is_empty,
         LIST_CONCAT => list_concat,
         LIST_PREPEND => list_prepend,
@@ -2069,6 +2070,14 @@ fn list_with_capacity(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_1(symbol, LowLevel::ListWithCapacity, var_store)
 }
 
+fn list_reserve(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::ListReserve, var_store)
+}
+
+fn list_append_unsafe(symbol: Symbol, var_store: &mut VarStore) -> Def {
+    lowlevel_2(symbol, LowLevel::ListAppendUnsafe, var_store)
+}
+
 /// List.getUnsafe : List elem, Int -> elem
 fn list_get_unsafe(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListGetUnsafe, var_store)
@@ -2314,50 +2323,9 @@ fn list_drop_at(symbol: Symbol, var_store: &mut VarStore) -> Def {
     lowlevel_2(symbol, LowLevel::ListDropAt, var_store)
 }
 
-/// List.append : List elem, elem -> List elem
-fn list_append(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let list_var = var_store.fresh();
-    let elem_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::ListAppend,
-        args: vec![
-            (list_var, Var(Symbol::ARG_1)),
-            (elem_var, Var(Symbol::ARG_2)),
-        ],
-        ret_var: list_var,
-    };
-
-    defn(
-        symbol,
-        vec![(list_var, Symbol::ARG_1), (elem_var, Symbol::ARG_2)],
-        var_store,
-        body,
-        list_var,
-    )
-}
-
 /// List.prepend : List elem, elem -> List elem
 fn list_prepend(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let list_var = var_store.fresh();
-    let elem_var = var_store.fresh();
-
-    let body = RunLowLevel {
-        op: LowLevel::ListPrepend,
-        args: vec![
-            (list_var, Var(Symbol::ARG_1)),
-            (elem_var, Var(Symbol::ARG_2)),
-        ],
-        ret_var: list_var,
-    };
-
-    defn(
-        symbol,
-        vec![(list_var, Symbol::ARG_1), (elem_var, Symbol::ARG_2)],
-        var_store,
-        body,
-        list_var,
-    )
+    lowlevel_2(symbol, LowLevel::ListPrepend, var_store)
 }
 
 /// List.unreachable : [] -> a

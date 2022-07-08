@@ -3425,7 +3425,9 @@ dependencies = [
  "criterion",
  "errno",
  "indoc",
+ "inkwell 0.1.0",
  "libc",
+ "libloading",
  "mimalloc",
  "pretty_assertions",
  "roc_build",
@@ -3436,6 +3438,7 @@ dependencies = [
  "roc_editor",
  "roc_error_macros",
  "roc_fmt",
+ "roc_gen_llvm",
  "roc_linker",
  "roc_load",
  "roc_module",
@@ -3447,10 +3450,12 @@ dependencies = [
  "roc_target",
  "roc_test_utils",
  "serial_test",
+ "signal-hook",
  "strum",
  "strum_macros",
  "target-lexicon",
  "tempfile",
+ "ven_pretty",
  "wasmer",
  "wasmer-wasi",
 ]
@@ -3871,6 +3876,7 @@ dependencies = [
  "roc_collections",
  "roc_gen_llvm",
  "roc_load",
+ "roc_module",
  "roc_mono",
  "roc_parse",
  "roc_repl_eval",
@@ -4375,6 +4381,25 @@ name = "shlex"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43b2853a4d09f215c24cc5489c992ce46052d359b5109343cbafbf26bc62f8a3"
+
+[[package]]
+name = "signal-hook"
+version = "0.3.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a253b5e89e2698464fc26b545c9edceb338e18a89effeeecfea192c3025be29d"
+dependencies = [
+ "libc",
+ "signal-hook-registry",
+]
+
+[[package]]
+name = "signal-hook-registry"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e51e73328dc4ac0c7ccbda3a494dfa03df1de2f46018127f60c693f2648455b0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "similar"
