@@ -1136,40 +1136,32 @@ impl<'a> LoadStart<'a> {
             );
 
             match res_loaded {
-                Ok((module_id, msg)) => match &msg {
-                    Msg::Header(ModuleHeader {
+                Ok((module_id, msg)) => {
+                    if let Msg::Header(ModuleHeader {
                         module_id: header_id,
                         module_name,
-                        module_path,
                         is_root_module,
                         ..
-                    }) => {
+                    }) = &msg
+                    {
                         debug_assert_eq!(*header_id, module_id);
                         debug_assert!(is_root_module);
 
-                        match &module_name {
-                            ModuleNameEnum::Interface(name) => {
-                                // Interface modules can have names like Foo.Bar.Baz,
-                                // in which case we need to adjust the src_dir to
-                                // remove the "Bar/Baz" directories in order to correctly
-                                // resolve this interface module's imports!
-                                let dirs_to_pop = name.as_str().matches('.').count();
+                        if let ModuleNameEnum::Interface(name) = module_name {
+                            // Interface modules can have names like Foo.Bar.Baz,
+                            // in which case we need to adjust the src_dir to
+                            // remove the "Bar/Baz" directories in order to correctly
+                            // resolve this interface module's imports!
+                            let dirs_to_pop = name.as_str().matches('.').count();
 
-                                if dirs_to_pop > 0 {
-                                    for _ in 0..dirs_to_pop {
-                                        src_dir.pop();
-                                    }
-
-                                    (module_id, msg)
-                                } else {
-                                    (module_id, msg)
-                                }
+                            for _ in 0..dirs_to_pop {
+                                src_dir.pop();
                             }
-                            _ => (module_id, msg),
                         }
                     }
-                    _ => (module_id, msg),
-                },
+
+                    (module_id, msg)
+                }
 
                 Err(LoadingProblem::ParsingFailed(problem)) => {
                     let module_ids = Arc::try_unwrap(arc_modules)
