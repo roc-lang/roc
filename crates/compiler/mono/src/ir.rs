@@ -2317,6 +2317,8 @@ fn from_can_let<'a>(
                         let (_specialization_mark, (var, specialized_symbol)) =
                             needed_specializations.next().unwrap();
 
+                        // Make sure rigid variables in the annotation are converted to flex variables.
+                        instantiate_rigids(env.subs, def.expr_var);
                         // Unify the expr_var with the requested specialization once.
                         let _res = env.unify(var, def.expr_var);
 
@@ -2332,6 +2334,9 @@ fn from_can_let<'a>(
                     }
                     _n => {
                         let mut stmt = rest;
+
+                        // Make sure rigid variables in the annotation are converted to flex variables.
+                        instantiate_rigids(env.subs, def.expr_var);
 
                         // Need to eat the cost and create a specialized version of the body for
                         // each specialization.
