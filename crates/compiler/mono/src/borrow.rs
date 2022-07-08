@@ -912,7 +912,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
 
         ListAppendUnsafe => arena.alloc_slice_copy(&[owned, owned]),
         ListReserve => arena.alloc_slice_copy(&[owned, irrelevant]),
-        ListSublist => arena.alloc_slice_copy(&[owned, irrelevant]),
+        ListSublist => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
         ListDropAt => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListSwap => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
 
@@ -934,8 +934,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         NumBytesToU32 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrStartsWith | StrEndsWith => arena.alloc_slice_copy(&[borrowed, borrowed]),
         StrStartsWithScalar => arena.alloc_slice_copy(&[borrowed, irrelevant]),
-        StrFromUtf8 => arena.alloc_slice_copy(&[owned]),
-        StrFromUtf8Range => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+        StrFromUtf8Range => arena.alloc_slice_copy(&[borrowed, irrelevant, irrelevant]),
         StrToUtf8 => arena.alloc_slice_copy(&[owned]),
         StrRepeat => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrFromInt | StrFromFloat => arena.alloc_slice_copy(&[irrelevant]),

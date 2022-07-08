@@ -1283,6 +1283,7 @@ define_builtins! {
         64 LIST_UNREACHABLE: "unreachable"
         65 LIST_RESERVE: "reserve"
         66 LIST_APPEND_UNSAFE: "appendUnsafe"
+        67 LIST_SUBLIST_LOWLEVEL: "sublistLowlevel"
     }
     6 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" // the Result.Result type alias

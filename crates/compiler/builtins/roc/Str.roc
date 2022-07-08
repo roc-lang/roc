@@ -199,11 +199,9 @@ toScalars : Str -> List U32
 ## >>> Str.toUtf8 "🐦"
 toUtf8 : Str -> List U8
 
-# fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8Problem]*
-# fromUtf8Range : List U8 -> Result Str [BadUtf8 Utf8Problem Nat, OutOfBounds]*
 fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]*
 fromUtf8 = \bytes ->
-    result = fromUtf8RangeLowlevel bytes { start: 0, count: List.len bytes }
+    result = fromUtf8RangeLowlevel bytes 0 (List.len bytes)
 
     if result.cIsOk then
         Ok result.bString
@@ -213,7 +211,7 @@ fromUtf8 = \bytes ->
 fromUtf8Range : List U8, { start : Nat, count : Nat } -> Result Str [BadUtf8 Utf8ByteProblem Nat, OutOfBounds]*
 fromUtf8Range = \bytes, config ->
     if config.start + config.count <= List.len bytes then
-        result = fromUtf8RangeLowlevel bytes config
+        result = fromUtf8RangeLowlevel bytes config.start config.count
 
         if result.cIsOk then
             Ok result.bString
@@ -229,7 +227,7 @@ FromUtf8Result : {
     dProblemCode : Utf8ByteProblem,
 }
 
-fromUtf8RangeLowlevel : List U8, { start : Nat, count : Nat } -> FromUtf8Result
+fromUtf8RangeLowlevel : List U8, Nat, Nat -> FromUtf8Result
 
 startsWith : Str, Str -> Bool
 endsWith : Str, Str -> Bool
