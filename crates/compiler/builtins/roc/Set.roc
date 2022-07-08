@@ -24,10 +24,19 @@ single : k -> Set k
 ## retrieved or removed from the [Set].
 insert : Set k, k -> Set k
 len : Set k -> Nat
+len = \set -> 
+    set
+        |> Set.toDict
+        |> Dict.len
 
 ## Drops the given element from the set.
 remove : Set k, k -> Set k
+
 contains : Set k, k -> Bool
+contains = \set, key ->
+    set
+        |> Set.toDict
+        |> Dict.contains key
 
 # toList = \set -> Dict.keys (toDict set)
 toList : Set k -> List k

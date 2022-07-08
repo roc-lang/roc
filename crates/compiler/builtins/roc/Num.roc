@@ -509,8 +509,28 @@ Dec : Num (FloatingPoint Decimal)
 toStr : Num * -> Str
 intCast : Int a -> Int b
 
+bytesToU16Lowlevel : List U8, Nat -> U16
+bytesToU32Lowlevel : List U8, Nat -> U32
+
 bytesToU16 : List U8, Nat -> Result U16 [OutOfBounds]
+bytesToU16 = \bytes, index ->
+    # we need at least 1 more byte
+    offset = 1
+    
+    if index + offset < List.len bytes then
+        Ok (bytesToU16Lowlevel bytes index)
+    else 
+        Err OutOfBounds
+
 bytesToU32 : List U8, Nat -> Result U32 [OutOfBounds]
+bytesToU32 = \bytes, index ->
+    # we need at least 3 more bytes
+    offset = 3
+    
+    if index + offset < List.len bytes then
+        Ok (bytesToU32Lowlevel bytes index)
+    else 
+        Err OutOfBounds
 
 compare : Num a, Num a -> [LT, EQ, GT]
 
@@ -554,22 +574,27 @@ isGte : Num a, Num a -> Bool
 
 ## Returns `True` if the number is `0`, and `False` otherwise.
 isZero : Num a -> Bool
+isZero = \x -> x == 0
 
 ## A number is even if dividing it by 2 gives a remainder of 0.
 ##
 ## Examples of even numbers: 0, 2, 4, 6, 8, -2, -4, -6, -8
 isEven : Int a -> Bool
+isEven = \x -> Num.isMultipleOf x 2 
 
 ## A number is odd if dividing it by 2 gives a remainder of 1.
 ##
 ## Examples of odd numbers: 1, 3, 5, 7, -1, -3, -5, -7
 isOdd : Int a -> Bool
+isOdd = \x -> Bool.not (Num.isMultipleOf x 2)
 
 ## Positive numbers are greater than `0`.
 isPositive : Num a -> Bool
+isPositive = \x -> x > 0
 
 ## Negative numbers are less than `0`.
 isNegative : Num a -> Bool
+isNegative = \x -> x < 0 
 
 toFrac : Num * -> Frac *
 
@@ -682,7 +707,11 @@ mul : Num a, Num a -> Num a
 
 sin : Frac a -> Frac a
 cos : Frac a -> Frac a
+
 tan : Frac a -> Frac a
+tan = \x -> 
+    # `tan` is not available as an intrinsic in LLVM
+    Num.div (Num.sin x) (Num.cos x)
 
 asin : Frac a -> Frac a
 acos : Frac a -> Frac a
@@ -713,9 +742,22 @@ atan : Frac a -> Frac a
 ##
 ## >>> Num.sqrt -4.0f64
 sqrt : Frac a -> Frac a
+
 sqrtChecked : Frac a -> Result (Frac a) [SqrtOfNegative]*
+sqrtChecked = \x ->
+    if x < 0.0 then
+        Err SqrtOfNegative
+    else
+        Ok (Num.sqrt x)
+
 log : Frac a -> Frac a
+
 logChecked : Frac a -> Result (Frac a) [LogNeedsPositive]*
+logChecked = \x -> 
+    if x <= 0.0 then
+        Err LogNeedsPositive
+    else
+        Ok (Num.log x)
 
 ## Divide one [Frac] by another.
 ##
@@ -748,9 +790,22 @@ logChecked : Frac a -> Result (Frac a) [LogNeedsPositive]*
 ## >>> Num.pi
 ## >>>     |> Num.div 2.0
 div : Frac a, Frac a -> Frac a
+
 divChecked : Frac a, Frac a -> Result (Frac a) [DivByZero]*
+divChecked = \a, b ->
+    if b == 0 then
+        Err DivByZero
+    else
+        Ok (Num.div a b)
+
 divCeil : Int a, Int a -> Int a
+
 divCeilChecked : Int a, Int a -> Result (Int a) [DivByZero]*
+divCeilChecked = \a, b ->
+    if b == 0 then
+        Err DivByZero
+    else
+        Ok (Num.divCeil a b)
 
 ## Divide two integers, truncating the result towards zero.
 ##
@@ -769,7 +824,13 @@ divCeilChecked : Int a, Int a -> Result (Int a) [DivByZero]*
 ## >>> Num.divTrunc 8 -3
 ##
 divTrunc : Int a, Int a -> Int a
+
 divTruncChecked : Int a, Int a -> Result (Int a) [DivByZero]*
+divTruncChecked = \a, b ->
+    if b == 0 then
+        Err DivByZero
+    else
+        Ok (Num.divTrunc a b)
 
 ## Obtain the remainder (truncating modulo) from the division of two integers.
 ##
@@ -783,7 +844,13 @@ divTruncChecked : Int a, Int a -> Result (Int a) [DivByZero]*
 ##
 ## >>> Num.rem -8 -3
 rem : Int a, Int a -> Int a
+
 remChecked : Int a, Int a -> Result (Int a) [DivByZero]*
+remChecked = \a, b ->
+    if b == 0 then
+        Err DivByZero
+    else
+        Ok (Num.rem a b)
 
 isMultipleOf : Int a, Int a -> Bool
 
@@ -842,6 +909,15 @@ addSaturated : Num a, Num a -> Num a
 ## This is the same as [Num.add] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
 addChecked : Num a, Num a -> Result (Num a) [Overflow]*
+addChecked = \a, b ->
+    result = addCheckedLowlevel a b
+
+    if result.b then
+        Err Overflow
+    else
+        Ok result.a
+
+addCheckedLowlevel : Num a, Num a -> {b: Bool, a : Num a} 
 
 subWrap : Int range, Int range -> Int range
 
@@ -859,6 +935,15 @@ subSaturated : Num a, Num a -> Num a
 ## This is the same as [Num.sub] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
 subChecked : Num a, Num a -> Result (Num a) [Overflow]*
+subChecked = \a, b ->
+    result = subCheckedLowlevel a b
+
+    if result.b then
+        Err Overflow
+    else
+        Ok result.a
+
+subCheckedLowlevel : Num a, Num a -> {b: Bool, a : Num a} 
 
 mulWrap : Int range, Int range -> Int range
 
@@ -874,6 +959,15 @@ mulSaturated : Num a, Num a -> Num a
 ## This is the same as [Num.mul] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
 mulChecked : Num a, Num a -> Result (Num a) [Overflow]*
+mulChecked = \a, b ->
+    result = mulCheckedLowlevel a b
+
+    if result.b then
+        Err Overflow
+    else
+        Ok result.a
+
+mulCheckedLowlevel : Num a, Num a -> {b: Bool, a : Num a} 
 
 ## The lowest number that can be stored in an [I8] without underflowing its
 ## available memory and crashing.

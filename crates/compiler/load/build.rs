@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use bumpalo::Bump;
-use roc_load_internal::file::Threading;
+use roc_load_internal::file::{LoadingProblem, Threading};
 use roc_module::symbol::ModuleId;
 
 const MODULES: &[(ModuleId, &str)] = &[
@@ -47,7 +47,16 @@ fn write_subs_for_module(module_id: ModuleId, filename: &str) {
         Threading::AllAvailable,
     );
 
-    let module = res_module.unwrap();
+    let module = match res_module {
+        Ok(v) => v,
+        Err(LoadingProblem::FormattedReport(report)) => {
+            panic!("{}", report);
+        }
+        Err(other) => {
+            panic!("build_file failed with error:\n{:?}", other);
+        }
+    };
+
     let subs = module.solved.inner();
     let exposed_vars_by_symbol: Vec<_> = module.exposed_to_host.into_iter().collect();
 

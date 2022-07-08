@@ -5575,13 +5575,22 @@ fn run_low_level<'a, 'ctx, 'env>(
             //
             // As a low-level, record is destructed
             // List.sublist : List elem, start : Nat, len : Nat -> List elem
-            debug_assert_eq!(args.len(), 3);
+            debug_assert_eq!(args.len(), 2);
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
             let original_wrapper = list.into_struct_value();
 
-            let start = load_symbol(scope, &args[1]);
-            let len = load_symbol(scope, &args[2]);
+            let record = load_symbol(scope, &args[1]).into_struct_value();
+
+            let len = env
+                .builder
+                .build_extract_value(record, 0, "get_len")
+                .unwrap();
+
+            let start = env
+                .builder
+                .build_extract_value(record, 1, "get_start")
+                .unwrap();
 
             let element_layout = list_element_layout!(list_layout);
             list_sublist(

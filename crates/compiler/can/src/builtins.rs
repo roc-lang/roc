@@ -28,6 +28,223 @@ macro_rules! macro_magic {
     };
 }
 
+struct DefMap;
+
+impl DefMap {
+    fn arity(n: usize) -> fn(Symbol, LowLevel, &mut VarStore) -> Def {
+        match n {
+            0 => lowlevel_0,
+            1 => lowlevel_1,
+            2 => lowlevel_2,
+            3 => lowlevel_3,
+            4 => lowlevel_4,
+            5 => lowlevel_5,
+            _ => unimplemented!(),
+        }
+    }
+}
+
+macro_rules! more_macro_magic {
+    ($($lowlevel:ident; $symbol:ident; $number_of_args:literal,)+) => { more_macro_magic!{$($lowlevel; $symbol; $number_of_args),+} };
+    ($($lowlevel:ident; $symbol:ident; $number_of_args:literal),*) => {
+        impl DefMap {
+            fn for_symbol(symbol: Symbol, var_store: &mut VarStore) -> Option<Def> {
+                match symbol {
+                $(
+                    Symbol::$symbol => Some((DefMap::arity($number_of_args))(Symbol::$symbol, LowLevel::$lowlevel, var_store)),
+
+                )*
+
+                    Symbol::NUM_TO_I8 => Some(lowlevel_1(Symbol::NUM_TO_I8, LowLevel::NumIntCast, var_store)),
+                    Symbol::NUM_TO_I16 => Some(lowlevel_1(Symbol::NUM_TO_I16, LowLevel::NumIntCast, var_store)),
+                    Symbol::NUM_TO_I32 => Some(lowlevel_1(Symbol::NUM_TO_I32, LowLevel::NumIntCast, var_store)),
+                    Symbol::NUM_TO_I64 => Some(lowlevel_1(Symbol::NUM_TO_I64, LowLevel::NumIntCast, var_store)),
+                    Symbol::NUM_TO_I128 => Some(lowlevel_1(Symbol::NUM_TO_I128, LowLevel::NumIntCast, var_store)),
+                    Symbol::NUM_TO_U8 => Some(lowlevel_1(Symbol::NUM_TO_U8, LowLevel::NumIntCast, var_store)),
+                    Symbol::NUM_TO_U16 => Some(lowlevel_1(Symbol::NUM_TO_U16, LowLevel::NumIntCast, var_store)),
+                    Symbol::NUM_TO_U32 => Some(lowlevel_1(Symbol::NUM_TO_U32, LowLevel::NumIntCast, var_store)),
+                    Symbol::NUM_TO_U64 => Some(lowlevel_1(Symbol::NUM_TO_U64, LowLevel::NumIntCast, var_store)),
+                    Symbol::NUM_TO_U128 => Some(lowlevel_1(Symbol::NUM_TO_U128, LowLevel::NumIntCast, var_store)),
+                    Symbol::NUM_TO_NAT => Some(lowlevel_1(Symbol::NUM_TO_NAT, LowLevel::NumIntCast, var_store)),
+
+                    Symbol::NUM_INT_CAST => Some(lowlevel_1(Symbol::NUM_INT_CAST, LowLevel::NumIntCast, var_store)),
+
+                    Symbol::NUM_TO_F32 => Some(lowlevel_1(Symbol::NUM_TO_F32, LowLevel::NumToFloatCast, var_store)),
+                    Symbol::NUM_TO_F64 => Some(lowlevel_1(Symbol::NUM_TO_F64, LowLevel::NumToFloatCast, var_store)),
+
+                    Symbol::NUM_TO_I8_CHECKED => Some(to_num_checked(Symbol::NUM_TO_I8_CHECKED, var_store, LowLevel::NumToIntChecked)),
+                    Symbol::NUM_TO_I16_CHECKED => Some(to_num_checked(Symbol::NUM_TO_I16_CHECKED, var_store, LowLevel::NumToIntChecked)),
+                    Symbol::NUM_TO_I32_CHECKED => Some(to_num_checked(Symbol::NUM_TO_I32_CHECKED, var_store, LowLevel::NumToIntChecked)),
+                    Symbol::NUM_TO_I64_CHECKED => Some(to_num_checked(Symbol::NUM_TO_I64_CHECKED, var_store, LowLevel::NumToIntChecked)),
+                    Symbol::NUM_TO_I128_CHECKED => Some(to_num_checked(Symbol::NUM_TO_I128_CHECKED, var_store, LowLevel::NumToIntChecked)),
+                    Symbol::NUM_TO_U8_CHECKED => Some(to_num_checked(Symbol::NUM_TO_U8_CHECKED, var_store, LowLevel::NumToIntChecked)),
+                    Symbol::NUM_TO_U16_CHECKED => Some(to_num_checked(Symbol::NUM_TO_U16_CHECKED, var_store, LowLevel::NumToIntChecked)),
+                    Symbol::NUM_TO_U32_CHECKED => Some(to_num_checked(Symbol::NUM_TO_U32_CHECKED, var_store, LowLevel::NumToIntChecked)),
+                    Symbol::NUM_TO_U64_CHECKED => Some(to_num_checked(Symbol::NUM_TO_U64_CHECKED, var_store, LowLevel::NumToIntChecked)),
+                    Symbol::NUM_TO_U128_CHECKED => Some(to_num_checked(Symbol::NUM_TO_U128_CHECKED, var_store, LowLevel::NumToIntChecked)),
+                    Symbol::NUM_TO_NAT_CHECKED => Some(to_num_checked(Symbol::NUM_TO_NAT_CHECKED, var_store, LowLevel::NumToIntChecked)),
+
+                    Symbol::NUM_TO_F32_CHECKED => Some(to_num_checked(Symbol::NUM_TO_F32_CHECKED, var_store, LowLevel::NumToFloatChecked)),
+                    Symbol::NUM_TO_F64_CHECKED => Some(to_num_checked(Symbol::NUM_TO_F64_CHECKED, var_store, LowLevel::NumToFloatChecked)),
+
+                    Symbol::NUM_DIV_FRAC => Some(lowlevel_2(Symbol::NUM_DIV_FRAC, LowLevel::NumDivUnchecked, var_store)),
+                    Symbol::NUM_DIV_TRUNC => Some(lowlevel_2(Symbol::NUM_DIV_TRUNC, LowLevel::NumDivUnchecked, var_store)),
+
+                    Symbol::DICT_EMPTY => Some(dict_empty(Symbol::DICT_EMPTY, var_store)),
+
+                    Symbol::SET_UNION => Some(lowlevel_2(Symbol::SET_UNION, LowLevel::DictUnion, var_store)),
+                    Symbol::SET_DIFFERENCE => Some(lowlevel_2(Symbol::SET_DIFFERENCE, LowLevel::DictDifference, var_store)),
+                    Symbol::SET_INTERSECTION => Some(lowlevel_2(Symbol::SET_INTERSECTION, LowLevel::DictIntersection, var_store)),
+
+                    Symbol::SET_TO_LIST => Some(lowlevel_1(Symbol::SET_TO_LIST, LowLevel::DictKeys, var_store)),
+                    Symbol::SET_REMOVE => Some(lowlevel_2(Symbol::SET_REMOVE, LowLevel::DictRemove, var_store)),
+                    Symbol::SET_INSERT => Some(set_insert(Symbol::SET_INSERT, var_store)),
+                    Symbol::SET_EMPTY => Some(set_empty(Symbol::SET_EMPTY, var_store)),
+                    Symbol::SET_SINGLE => Some(set_single(Symbol::SET_SINGLE, var_store)),
+
+                    _ => None,
+                }
+            }
+
+            fn _enforce_exhaustiveness(lowlevel: LowLevel) -> Symbol {
+                match lowlevel {
+                    $(
+                        LowLevel::$lowlevel => Symbol::$symbol,
+                    )*
+
+                    // these are implemented explicitly in for_symbol because they are polymorphic
+                    LowLevel::NumIntCast => unreachable!(),
+                    LowLevel::NumToFloatCast => unreachable!(),
+                    LowLevel::NumToIntChecked => unreachable!(),
+                    LowLevel::NumToFloatChecked => unreachable!(),
+                    LowLevel::NumDivUnchecked => unreachable!(),
+                    LowLevel::DictEmpty => unreachable!(),
+
+                    // these are used internally and not tied to a symbol
+                    LowLevel::Hash => unimplemented!(),
+                    LowLevel::PtrCast => unimplemented!(),
+                    LowLevel::RefCountInc => unimplemented!(),
+                    LowLevel::RefCountDec => unimplemented!(),
+
+                    // these are not implemented, not sure why
+                    LowLevel::StrFromInt => unimplemented!(),
+                    LowLevel::StrFromFloat => unimplemented!(),
+                    LowLevel::NumIsFinite => unimplemented!(),
+                }
+            }
+        }
+    };
+}
+
+more_macro_magic! {
+    StrConcat; STR_CONCAT; 2,
+    StrJoinWith; STR_JOIN_WITH; 2,
+    StrIsEmpty; STR_IS_EMPTY; 1,
+    StrStartsWith; STR_STARTS_WITH; 2,
+    StrStartsWithScalar; STR_STARTS_WITH_SCALAR; 2,
+    StrEndsWith; STR_ENDS_WITH; 2,
+    StrSplit; STR_SPLIT; 2,
+    StrCountGraphemes; STR_COUNT_GRAPHEMES; 1,
+    StrCountUtf8Bytes; STR_COUNT_UTF8_BYTES; 1,
+    StrFromUtf8; STR_FROM_UTF8; 1,
+    StrFromUtf8Range; STR_FROM_UTF8_RANGE_LOWLEVEL; 2,
+    StrToUtf8; STR_TO_UTF8; 1,
+    StrRepeat; STR_REPEAT; 2,
+    StrTrim; STR_TRIM; 1,
+    StrTrimLeft; STR_TRIM_LEFT; 1,
+    StrTrimRight; STR_TRIM_RIGHT; 1,
+    StrToScalars; STR_TO_SCALARS; 1,
+    StrGetUnsafe; STR_GET_UNSAFE; 2,
+    StrSubstringUnsafe; STR_SUBSTRING_UNSAFE; 3,
+    StrReserve; STR_RESERVE; 1,
+    StrAppendScalar; STR_APPEND_SCALAR_UNSAFE; 2,
+    StrGetScalarUnsafe; STR_GET_SCALAR_UNSAFE; 2,
+    StrToNum; STR_TO_NUM; 1,
+    ListLen; LIST_LEN; 1,
+    ListWithCapacity; LIST_WITH_CAPACITY; 1,
+    ListReserve; LIST_RESERVE; 2,
+    ListIsUnique; LIST_IS_UNIQUE; 1,
+    ListAppendUnsafe; LIST_APPEND_UNSAFE; 2,
+    ListPrepend; LIST_PREPEND; 2,
+    ListGetUnsafe; LIST_GET_UNSAFE; 2,
+    ListReplaceUnsafe; LIST_REPLACE_UNSAFE; 3,
+    ListConcat; LIST_CONCAT; 2,
+    ListMap; LIST_MAP; 2,
+    ListMap2; LIST_MAP2; 3,
+    ListMap3; LIST_MAP3; 4,
+    ListMap4; LIST_MAP4; 5,
+    ListSortWith; LIST_SORT_WITH; 2,
+    ListSublist; LIST_SUBLIST; 2,
+    ListDropAt; LIST_DROP_AT; 2,
+    ListSwap; LIST_SWAP; 3,
+    DictSize; DICT_LEN; 1,
+    DictInsert; DICT_INSERT; 3,
+    DictRemove; DICT_REMOVE; 2,
+    DictContains; DICT_CONTAINS; 2,
+    DictGetUnsafe; DICT_GET_LOWLEVEL; 2,
+    DictKeys; DICT_KEYS; 1,
+    DictValues; DICT_VALUES; 1,
+    DictUnion; DICT_UNION; 2,
+    DictIntersection; DICT_INTERSECTION; 2,
+    DictDifference; DICT_DIFFERENCE; 2,
+    DictWalk; DICT_WALK; 3,
+    SetFromList; SET_FROM_LIST; 1,
+    SetToDict; SET_TO_DICT; 1,
+    NumAdd; NUM_ADD; 2,
+    NumAddWrap; NUM_ADD_WRAP; 2,
+    NumAddChecked; NUM_ADD_CHECKED_LOWLEVEL; 2,
+    NumAddSaturated; NUM_ADD_SATURATED; 2,
+    NumSub; NUM_SUB; 2,
+    NumSubWrap; NUM_SUB_WRAP; 2,
+    NumSubChecked; NUM_SUB_CHECKED_LOWLEVEL; 2,
+    NumSubSaturated; NUM_SUB_SATURATED; 2,
+    NumMul; NUM_MUL; 2,
+    NumMulWrap; NUM_MUL_WRAP; 2,
+    NumMulSaturated; NUM_MUL_SATURATED; 2,
+    NumMulChecked; NUM_MUL_CHECKED_LOWLEVEL; 2,
+
+    NumGt; NUM_GT; 2,
+    NumGte; NUM_GTE; 2,
+    NumLt; NUM_LT; 2,
+    NumLte; NUM_LTE; 2,
+    NumCompare; NUM_COMPARE; 2,
+    NumDivCeilUnchecked; NUM_DIV_CEIL; 2,
+    NumRemUnchecked; NUM_REM; 2,
+    NumIsMultipleOf; NUM_IS_MULTIPLE_OF; 2,
+    NumAbs; NUM_ABS; 1,
+    NumNeg; NUM_NEG; 1,
+    NumSin; NUM_SIN; 1,
+    NumCos; NUM_COS; 1,
+    NumSqrtUnchecked; NUM_SQRT; 1,
+    NumLogUnchecked; NUM_LOG; 1,
+    NumRound; NUM_ROUND; 1,
+    NumToFrac; NUM_TO_FRAC; 1,
+    NumPow; NUM_POW; 2,
+    NumCeiling; NUM_CEILING; 1,
+    NumPowInt; NUM_POW_INT; 2,
+    NumFloor; NUM_FLOOR; 1,
+    NumAtan; NUM_ATAN; 1,
+    NumAcos; NUM_ACOS; 1,
+    NumAsin; NUM_ASIN; 1,
+    NumBytesToU16; NUM_BYTES_TO_U16_LOWLEVEL; 2,
+    NumBytesToU32; NUM_BYTES_TO_U32_LOWLEVEL; 2,
+    NumBitwiseAnd; NUM_BITWISE_AND; 2,
+    NumBitwiseXor; NUM_BITWISE_XOR; 2,
+    NumBitwiseOr; NUM_BITWISE_OR; 2,
+    NumShiftLeftBy; NUM_SHIFT_LEFT; 2,
+    NumShiftRightBy; NUM_SHIFT_RIGHT; 2,
+    NumShiftRightZfBy; NUM_SHIFT_RIGHT_ZERO_FILL; 2,
+    NumToStr; NUM_TO_STR; 1,
+    Eq; BOOL_EQ; 2,
+    NotEq; BOOL_NEQ; 2,
+    And; BOOL_AND; 2,
+    Or; BOOL_OR; 2,
+    Not; BOOL_NOT; 1,
+    BoxExpr; BOX_BOX_FUNCTION; 1,
+    UnboxExpr; BOX_UNBOX; 1,
+    Unreachable; LIST_UNREACHABLE; 1,
+}
+
 /// Some builtins cannot be constructed in code gen alone, and need to be defined
 /// as separate Roc defs. For example, List.get has this type:
 ///
@@ -64,6 +281,8 @@ pub fn builtin_dependencies(symbol: Symbol) -> &'static [Symbol] {
 /// Implementation for a builtin
 pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def> {
     debug_assert!(symbol.is_builtin());
+
+    return DefMap::for_symbol(symbol, var_store);
 
     macro_magic! { symbol; var_store;
         BOOL_EQ => bool_eq,
@@ -248,6 +467,18 @@ pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def>
         BOX_BOX_FUNCTION => box_box,
         BOX_UNBOX => box_unbox,
     }
+}
+
+fn lowlevel_0(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {
+    let ret_var = var_store.fresh();
+
+    let body = RunLowLevel {
+        op,
+        args: vec![],
+        ret_var,
+    };
+
+    defn(symbol, vec![], var_store, body, ret_var)
 }
 
 fn lowlevel_1(symbol: Symbol, op: LowLevel, var_store: &mut VarStore) -> Def {

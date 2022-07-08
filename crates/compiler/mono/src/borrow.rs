@@ -912,7 +912,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
 
         ListAppendUnsafe => arena.alloc_slice_copy(&[owned, owned]),
         ListReserve => arena.alloc_slice_copy(&[owned, irrelevant]),
-        ListSublist => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
+        ListSublist => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListDropAt => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListSwap => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
 
