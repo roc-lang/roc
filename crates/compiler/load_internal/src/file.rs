@@ -5021,7 +5021,26 @@ fn load_derived_partial_procs<'a>(
     let mut update_mode_ids = UpdateModeIds::new();
 
     let derives_to_add: Vec<_> = {
-        let derived_module = derived_module.lock().unwrap();
+        let mut derived_module = derived_module.lock().unwrap();
+
+        // TERRIBLE HACK remove me
+
+        // TODO HACK FIXME
+        dbg!(derived_module
+            .iter_all()
+            .map(|(_, (s, _, _))| *s)
+            .collect::<Vec<_>>());
+        //derived_module.refresh_stale_specializations(exposed_by_module);
+        derived_module.get_or_insert(
+            exposed_by_module,
+            roc_derive_key::DeriveKey::ToEncoder(
+                roc_derive_key::encoding::FlatEncodableKey::String,
+            ),
+        );
+        dbg!(derived_module
+            .iter_all()
+            .map(|(_, (s, _, _))| *s)
+            .collect::<Vec<_>>());
 
         derived_module
             .iter_all()

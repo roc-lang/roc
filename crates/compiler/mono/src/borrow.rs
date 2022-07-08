@@ -162,7 +162,6 @@ impl<'a> DeclarationToIndex<'a> {
                 }
             }
         }
-        dbg!(&self.elements);
         unreachable!(
             "symbol/layout {:?} {:#?} combo must be in DeclarationToIndex",
             needle_symbol, needle_layout

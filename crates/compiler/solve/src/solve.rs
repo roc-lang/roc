@@ -1817,18 +1817,13 @@ impl<'a> SubsProxy<'a> {
         lambda_set_var_in_derived: Variable,
         target_rank: Rank,
     ) -> Variable {
-        if self.home == ModuleId::DERIVED {
-            self.subs
-                .get_lambda_set(lambda_set_var_in_derived)
-                .ambient_function
-        } else {
-            let derived_module = self.derived_module.lock().unwrap();
-            derived_module.copy_lambda_set_ambient_function_to_subs(
-                lambda_set_var_in_derived,
-                self.subs,
-                target_rank,
-            )
-        }
+        let derived_module = self.derived_module.lock().unwrap();
+        derived_module.copy_lambda_set_ambient_function_to_subs(
+            lambda_set_var_in_derived,
+            self.home,
+            self.subs,
+            target_rank,
+        )
     }
 }
 

@@ -2932,16 +2932,7 @@ fn specialize_external<'a>(
     let snapshot = env.subs.snapshot();
     let cache_snapshot = layout_cache.snapshot();
 
-    let ann = roc_types::subs::SubsFmtContent(
-        env.subs
-            .get_content_without_compacting(partial_proc.annotation),
-        env.subs,
-    );
-    let spec =
-        roc_types::subs::SubsFmtContent(env.subs.get_content_without_compacting(fn_var), env.subs);
-    dbg!(ann, spec);
     let _unified = env.unify(partial_proc.annotation, fn_var);
-    dbg!("done");
 
     // This will not hold for programs with type errors
     // let is_valid = matches!(unified, roc_unify::unify::Unified::Success(_));
@@ -4758,12 +4749,6 @@ pub fn with_hole<'a>(
 
             match loc_expr.value {
                 roc_can::expr::Expr::Var(proc_name) if is_known(proc_name) => {
-                    dbg!(proc_name);
-                    dbg!(roc_types::subs::SubsFmtContent(
-                        env.subs.get_content_without_compacting(fn_var),
-                        &env.subs
-                    ));
-
                     // a call by a known name
                     call_by_name(
                         env,
@@ -7586,6 +7571,10 @@ fn call_by_name<'a>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     // Register a pending_specialization for this function
+    // dbg!(roc_types::subs::SubsFmtContent(
+    //     env.subs.get_content_without_compacting(fn_var),
+    //     env.subs
+    // ));
     match layout_cache.raw_from_var(env.arena, fn_var, env.subs) {
         Err(LayoutProblem::UnresolvedTypeVar(var)) => {
             let msg = format!(
@@ -7811,7 +7800,11 @@ fn call_by_name_help<'a>(
             assigned,
             hole,
         )
-    } else if env.is_imported_symbol(proc_name.name()) {
+    } else if env.is_imported_symbol(proc_name.name())
+        // TODO HACK FIXME
+        || (proc_name.name().module_id() == ModuleId::DERIVED
+            && !procs.partial_procs.contains_key(proc_name.name()))
+    {
         add_needed_external(procs, env, original_fn_var, proc_name);
 
         debug_assert_ne!(proc_name.name().module_id(), ModuleId::ATTR);
