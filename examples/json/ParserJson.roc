@@ -49,18 +49,9 @@ jsonWS = ignore (many jsonWSChar)
 
 jsonComma = map2 (scalar ',') jsonWS (\_, _ -> {})
 
-jsonNumArray : Parser RawStr (List JsonValue)
+jsonNumArray : Parser RawStr JsonValue
 jsonNumArray =
     jsonNum
     |> sepBy (scalar ',')
     |> between (scalar '[') (scalar ']')
-
-jsonNumArray2 : Parser RawStr [JsonArray (List JsonValue)]
-jsonNumArray2 =
-    jsonNumArray
-    |> map(\res -> (JsonArray res))
-
-jsonNumArray3 : Parser RawStr JsonValue
-jsonNumArray3 =
-    jsonNumArray2
-    |> map (\res -> @JsonValue res)
+    |> map (\res -> @JsonValue (JsonArray res))
