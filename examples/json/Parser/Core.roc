@@ -31,7 +31,8 @@ interface Parser.Core
   imports []
 
 
-RawStr : List U8
+
+
 Parser input a := (input -> Result {val: a, input: input} [ParsingFailure Str])
 
 # -- Generic parsers:
@@ -40,53 +41,16 @@ runPartial : Parser input a, input -> Result {val: a, input: input} [ParsingFail
 runPartial = \@Parser parser, input ->
   (parser input)
 
-## Runs a parser against the start of a list of scalars, allowing the parser to consume it only partially.
-runPartialRaw : Parser RawStr a, RawStr -> Result {val: a, input: RawStr} [ParsingFailure Str]
-runPartialRaw = \parser, input ->
-  runPartial parser input
-
-
-## Runs a parser against the start of a string, allowing the parser to consume it only partially.
-##
-## - If the parser succeeds, returns the resulting value as well as the leftover input.
-## - If the parser fails, returns `Err (ParsingFailure msg)`
-runPartialStr : Parser RawStr a, Str -> Result {val: a, input: Str} [ParsingFailure Str]
-runPartialStr = \parser, input ->
-  inputRaw = Str.toUtf8 input
-  {val: firstVal, input: restRaw} <- Result.after (runPartialRaw parser inputRaw)
-  # TODO: We're pretty certain that this is valid UTF8 at this point. Is there a better way than to resort to Result.withDefault?
-  rest = Result.withDefault (Str.fromUtf8 restRaw) ""
-  Ok {val: firstVal, input: rest}
-
-
-
-## Runs a parser against a string, requiring the parser to consume it fully.
-##
-## - If the parser succeeds, returns `Ok val`
-## - If the parser fails, returns `Err (ParsingFailure msg)`
-## - If the parser succeeds but does not consume the full string, returns `Err (ParsingIncomplete leftover)`
-runRaw : Parser RawStr a, RawStr -> Result a [ParsingFailure Str, ParsingIncomplete RawStr]
-runRaw = \parser, input ->
-  when (runPartialRaw parser input) is
+run : Parser input a, input, (input -> Bool) -> Result a [ParsingFailure Str, ParsingIncomplete input]
+run = \parser, input, isParsingCompleted ->
+  when (runPartial parser input) is
     Ok {val: val, input: leftover} ->
-      if List.len leftover == 0 then
+      if isParsingCompleted leftover then
         Ok val
       else
         Err (ParsingIncomplete leftover)
     Err (ParsingFailure msg) ->
       Err (ParsingFailure msg)
-
-runStr : Parser RawStr a, Str -> Result a [ParsingFailure Str, ParsingIncomplete Str]
-runStr = \parser, input ->
-  inputRaw = Str.toUtf8 input
-  when (runRaw parser inputRaw) is
-    Ok val ->
-      Ok val
-    Err (ParsingFailure msg) ->
-      Err (ParsingFailure msg)
-    Err (ParsingIncomplete leftoverRaw) ->
-      leftover = Result.withDefault (Str.fromUtf8 leftoverRaw) ""
-      Err (ParsingIncomplete leftover)
 
 fail : Str -> Parser * *
 fail = \msg ->
@@ -251,7 +215,55 @@ sepBy1 = \parser, separator ->
 sepBy : Parser input a, Parser input sep -> Parser input (List a)
 sepBy = \parser, separator ->
   alt (sepBy1 parser separator) (const [])
-# -- Specific parsers:
+# Specific string-based parsers:
+
+RawStr : List U8
+
+strFromRaw : RawStr -> Str
+strFromRaw = \rawStr ->
+  rawStr
+  |> Str.fromUtf8
+  |> Result.withDefault "Unexpected problem while turning a List U8 (that was originally a Str) back into a Str. This should never happen!"
+
+strToRaw : Str -> RawStr
+strToRaw = \str ->
+  str |> Str.toUtf8
+
+## Runs a parser against the start of a list of scalars, allowing the parser to consume it only partially.
+runPartialRaw : Parser RawStr a, RawStr -> Result {val: a, input: RawStr} [ParsingFailure Str]
+runPartialRaw = \parser, input ->
+  runPartial parser input
+
+## Runs a parser against the start of a string, allowing the parser to consume it only partially.
+##
+## - If the parser succeeds, returns the resulting value as well as the leftover input.
+## - If the parser fails, returns `Err (ParsingFailure msg)`
+runPartialStr : Parser RawStr a, Str -> Result {val: a, input: Str} [ParsingFailure Str]
+runPartialStr = \parser, input ->
+  parser
+  |> runPartialRaw (strToRaw input)
+  |> Result.map \{val: val, input: restRaw} ->
+    {val: val, input: (strFromRaw restRaw)}
+
+## Runs a parser against a string, requiring the parser to consume it fully.
+##
+## - If the parser succeeds, returns `Ok val`
+## - If the parser fails, returns `Err (ParsingFailure msg)`
+## - If the parser succeeds but does not consume the full string, returns `Err (ParsingIncomplete leftover)`
+runRaw : Parser RawStr a, RawStr -> Result a [ParsingFailure Str, ParsingIncomplete RawStr]
+runRaw = \parser, input ->
+  run parser input (\leftover -> List.len leftover == 0)
+
+runStr : Parser RawStr a, Str -> Result a [ParsingFailure Str, ParsingIncomplete Str]
+runStr = \parser, input ->
+  parser
+  |> runRaw (strToRaw input)
+  |> Result.mapErr \problem ->
+      when problem is
+        ParsingFailure msg ->
+          ParsingFailure msg
+        ParsingIncomplete leftoverRaw ->
+          ParsingIncomplete (strFromRaw leftoverRaw)
 
 codepoint : U8 -> Parser RawStr U8
 codepoint = \expectedCodePoint ->
@@ -283,7 +295,7 @@ stringRaw = \expectedString ->
 
 string : Str -> Parser RawStr Str
 string = \expectedString ->
-  (Str.toUtf8 expectedString)
+  (strToRaw expectedString)
   |> stringRaw
   |> map (\_val -> expectedString)
 

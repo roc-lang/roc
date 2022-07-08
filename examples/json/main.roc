@@ -30,7 +30,7 @@ fullTest = \parser, input ->
     Err (ParsingFailure problem) ->
       "Parse failure: \(problem)\n"
     Err (ParsingIncomplete leftover) ->
-      "Parse failure: Expected to reach end of input, but the following was still left: \(leftover)\n"
+      "Parse failure: Expected to reach end of input, but the following was still left: `\(leftover)`\n"
 
 myparser : Parser Parser.Core.RawStr (List Str)
 myparser =
