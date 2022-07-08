@@ -16,7 +16,7 @@ jobs:
       - name: llvm version
         run: llc --version | grep LLVM
       - name: run tests 
-        run: cargo test --locked # no --release yet until #3166 is fixed
+        run: cargo test --locked --release
       - name: write version to file
         run: ./ci/write_version.sh
       - name: build nightly release
