@@ -5005,6 +5005,20 @@ mod test_fmt {
     }
 
     #[test]
+    fn multiline_opaque_tag_union() {
+        expr_formats_same(indoc!(
+            r#"
+            A := [
+                B,
+                C,
+            ]
+
+            0
+            "#
+        ));
+    }
+
+    #[test]
     fn opaque_has_clause() {
         expr_formats_same(indoc!(
             r#"
