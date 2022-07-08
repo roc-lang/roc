@@ -132,6 +132,7 @@ digit =
           |> map (\_ -> digitNum)
   oneOf digitParsers
 
+# NOTE: Currently happily accepts leading zeroes
 digits : Parser RawStr (Int *)
 digits =
   oneOrMore digit
