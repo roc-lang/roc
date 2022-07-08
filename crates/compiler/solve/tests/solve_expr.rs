@@ -7101,4 +7101,42 @@ mod solve_expr {
             "F * {}* -> F * Str",
         );
     }
+
+    #[test]
+    fn wrap_recursive_opaque_negative_position() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                OList := [Nil, Cons {} OList]
+
+                lst : [Cons {} OList]*
+
+                olist : OList
+                olist = (\l -> @OList l) lst
+
+                olist
+                "#
+            ),
+            "OList",
+        );
+    }
+
+    #[test]
+    fn wrap_recursive_opaque_positive_position() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                OList := [Nil, Cons {} OList]
+
+                lst : [Cons {} OList]*
+
+                olist : OList
+                olist = @OList lst
+
+                olist
+                "#
+            ),
+            "OList",
+        );
+    }
 }
