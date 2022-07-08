@@ -13,7 +13,6 @@ use bumpalo::collections::Vec;
 use bumpalo::{self, Bump};
 
 use roc_collections::all::{MutMap, MutSet};
-use roc_module::low_level::LowLevelWrapperType;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{Proc, ProcLayout};
@@ -96,17 +95,10 @@ pub fn build_app_module<'a>(
         host_module.import.function_count() as u32 + host_module.code.preloaded_count;
 
     // Pre-pass over the procedure names & layouts
-    // Filter out procs we're going to inline & gather some data for lookups
-    let mut fn_index: u32 = fn_index_offset;
-    for ((sym, proc_layout), proc) in procedures.into_iter() {
-        if matches!(
-            LowLevelWrapperType::from_symbol(sym),
-            LowLevelWrapperType::CanBeReplacedBy(_)
-        ) {
-            continue;
-        }
+    // Create a lookup to tell us the final index of each proc in the output file
+    for (i, ((sym, proc_layout), proc)) in procedures.into_iter().enumerate() {
+        let fn_index = fn_index_offset + i as u32;
         procs.push(proc);
-
         if env.exposed_to_host.contains(&sym) {
             maybe_main_fn_index = Some(fn_index);
 
@@ -124,8 +116,6 @@ pub fn build_app_module<'a>(
             layout: proc_layout,
             source: ProcSource::Roc,
         });
-
-        fn_index += 1;
     }
 
     let mut backend = WasmBackend::new(
@@ -179,7 +169,8 @@ pub fn build_app_module<'a>(
         match source {
             Roc => { /* already generated */ }
             Helper => backend.build_proc(helper_iter.next().unwrap()),
-            HigherOrderWrapper(inner_idx) => backend.build_higher_order_wrapper(idx, *inner_idx),
+            HigherOrderMapper(inner_idx) => backend.build_higher_order_mapper(idx, *inner_idx),
+            HigherOrderCompare(inner_idx) => backend.build_higher_order_compare(idx, *inner_idx),
         }
     }
 
