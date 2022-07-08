@@ -335,6 +335,15 @@ strToRaw : Str -> RawStr
 strToRaw = \str ->
   str |> Str.toUtf8
 
+strFromScalar : U32 -> Str
+strFromScalar = \scalarVal ->
+  (Str.appendScalar "" (Num.intCast scalarVal))
+  |> Result.withDefault  "Unexpected problem while turning a U32 (that was probably originally a scalar constant) into a Str. This should never happen!"
+
+strFromCodepoint : U8 -> Str
+strFromCodepoint = \cp ->
+  strFromRaw [cp]
+
 ## Runs a parser against the start of a list of scalars, allowing the parser to consume it only partially.
 runPartialRaw : Parser RawStr a, RawStr -> Result {val: a, input: RawStr} [ParsingFailure Str]
 runPartialRaw = \parser, input ->
@@ -376,15 +385,15 @@ codepoint = \expectedCodePoint ->
   @Parser \input ->
     {before: start, others: inputRest} = List.split input 1
     if List.isEmpty start then
-        errorChar = Result.withDefault (Str.appendScalar "" (Num.intCast expectedCodePoint)) "?" # TODO: Introduce a cleaner way to do this with new builtins?
+        errorChar = strFromCodepoint expectedCodePoint
         Err (ParsingFailure "expected char `\(errorChar)` but input was empty")
     else
       if start == (List.single expectedCodePoint) then
         Ok {val: expectedCodePoint, input: inputRest}
       else
-        errorChar = Result.withDefault (Str.appendScalar "" (Num.intCast expectedCodePoint)) "?" # TODO: Introduce a cleaner way to do this with new builtins?
-        otherChar = Result.withDefault (Str.fromUtf8 start) "?"
-        inputStr = Result.withDefault (Str.fromUtf8 input) ""
+        errorChar = strFromCodepoint expectedCodePoint
+        otherChar = strFromRaw start
+        inputStr = strFromRaw input
         Err (ParsingFailure "expected char `\(errorChar)` but found `\(otherChar)`.\n While reading: `\(inputStr)`")
 
 stringRaw : List U8 -> Parser RawStr (List U8)
@@ -394,9 +403,9 @@ stringRaw = \expectedString ->
     if start == expectedString then
       Ok {val: expectedString, input: inputRest}
     else
-      errorString = Result.withDefault (Str.fromUtf8 expectedString) ""
-      otherString = Result.withDefault (Str.fromUtf8 start) "?"
-      inputString = Result.withDefault (Str.fromUtf8 input) ""
+      errorString = strFromRaw expectedString
+      otherString = strFromRaw start
+      inputString = strFromRaw input
       Err (ParsingFailure "expected string `\(errorString)` but found `\(otherString)`.\nWhile reading: \(inputString)")
 
 string : Str -> Parser RawStr Str
@@ -407,13 +416,11 @@ string = \expectedString ->
 
 scalar : U32 -> Parser RawStr U32
 scalar = \expectedScalar ->
-  ""
-  |> Str.appendScalar expectedScalar
-  |> Result.map (\str -> str |> string |> map (\_ -> expectedScalar))
-  |> Result.mapErr \_ ->
-    num = Num.toStr expectedScalar
-    fail "Invalid scalar value in scalar parser construction \(num)"
-  |> collapseResult
+  expectedScalar
+  |> strFromScalar
+  |> strToRaw
+  |> stringRaw
+  |> map (\_ -> expectedScalar)
 
 collapseResult : Result a a -> a
 collapseResult = \result ->
