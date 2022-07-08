@@ -5731,7 +5731,7 @@ fn convert_tag_union<'a>(
             "The `[]` type has no constructors, source var {:?}",
             variant_var
         ),
-        Unit | UnitWithArguments => Stmt::Let(assigned, Expr::Struct(&[]), Layout::UNIT, hole),
+        Unit => Stmt::Let(assigned, Expr::Struct(&[]), Layout::UNIT, hole),
         BoolUnion { ttrue, .. } => Stmt::Let(
             assigned,
             Expr::Literal(Literal::Bool(&tag_name == ttrue.expect_tag_ref())),
@@ -8808,7 +8808,7 @@ fn from_can_pattern_help<'a>(
                     "there is no pattern of type `[]`, union var {:?}",
                     *whole_var
                 ),
-                Unit | UnitWithArguments => Pattern::EnumLiteral {
+                Unit => Pattern::EnumLiteral {
                     tag_id: 0,
                     tag_name: tag_name.clone(),
                     union: Union {
