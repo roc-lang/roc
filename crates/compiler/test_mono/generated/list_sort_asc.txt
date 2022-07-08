@@ -1,11 +1,11 @@
 procedure List.28 (#Attr.2, #Attr.3):
-    let List.282 : List I64 = lowlevel ListSortWith { xs: `#Attr.#arg1` } #Attr.2 Num.46 #Attr.3;
+    let List.281 : List I64 = lowlevel ListSortWith { xs: `#Attr.#arg1` } #Attr.2 Num.46 #Attr.3;
     let Bool.9 : Int1 = lowlevel ListIsUnique #Attr.2;
     if Bool.9 then
-        ret List.282;
+        ret List.281;
     else
         decref #Attr.2;
-        ret List.282;
+        ret List.281;
 
 procedure List.54 (List.196):
     let List.280 : {} = Struct {};

@@ -14,7 +14,7 @@ use crate::wasm_module::{
     linking::SymInfo, linking::WasmObjectSymbol, Align, CodeBuilder, Export, ExportType, LocalId,
     Signature, ValueType, WasmModule,
 };
-use roc_std::{RocDec, RocList, RocOrder, RocStr};
+use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr};
 
 /// Type-driven wrapper generation
 pub trait Wasm32Result {
@@ -197,6 +197,17 @@ impl Wasm32Result for RocStr {
 impl<T: Wasm32Result> Wasm32Result for RocList<T> {
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
         build_wrapper_body_stack_memory(code_builder, main_function_index, 12)
+    }
+}
+
+impl<T: Wasm32Sized, E: Wasm32Sized> Wasm32Result for RocResult<T, E> {
+    fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
+        build_wrapper_body_stack_memory(
+            code_builder,
+            main_function_index,
+            Ord::max(T::ACTUAL_WIDTH, E::ACTUAL_WIDTH)
+                + Ord::max(T::ALIGN_OF_WASM, E::ALIGN_OF_WASM),
+        )
     }
 }
 

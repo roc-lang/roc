@@ -224,7 +224,7 @@ fn is_err() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn roc_result_ok() {
     assert_evals_to!(
         indoc!(
@@ -241,7 +241,7 @@ fn roc_result_ok() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn roc_result_err() {
     assert_evals_to!(
         indoc!(
@@ -258,7 +258,7 @@ fn roc_result_err() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn issue_2583_specialize_errors_behind_unified_branches() {
     assert_evals_to!(
         r#"
