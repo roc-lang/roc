@@ -9,7 +9,7 @@ procedure Test.2 (Test.3):
     ret Test.6;
 
 procedure Test.8 (Test.9):
-    Error The `#UserApp.8` function could not be generated, likely due to a type error.
+    Error The `#UserApp.IdentId(8)` function could not be generated, likely due to a type error.
 
 procedure Test.0 ():
     let Test.1 : List {} = Array [];

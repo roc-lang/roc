@@ -1,6 +1,6 @@
 procedure List.2 (List.77, List.78):
-    let List.298 : U64 = CallByName List.6 List.77;
-    let List.294 : Int1 = CallByName Num.22 List.78 List.298;
+    let List.297 : U64 = CallByName List.6 List.77;
+    let List.294 : Int1 = CallByName Num.22 List.78 List.297;
     if List.294 then
         let List.296 : {} = CallByName List.60 List.77 List.78;
         let List.295 : [C {}, C {}] = TagId(1) List.296;
@@ -11,12 +11,12 @@ procedure List.2 (List.77, List.78):
         ret List.292;
 
 procedure List.6 (#Attr.2):
-    let List.301 : U64 = lowlevel ListLen #Attr.2;
-    ret List.301;
+    let List.299 : U64 = lowlevel ListLen #Attr.2;
+    ret List.299;
 
 procedure List.60 (#Attr.2, #Attr.3):
-    let List.300 : {} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret List.300;
+    let List.298 : {} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.298;
 
 procedure Num.22 (#Attr.2, #Attr.3):
     let Num.257 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
