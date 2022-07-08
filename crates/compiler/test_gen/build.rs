@@ -8,7 +8,6 @@ use std::process::Command;
 use wasi_libc_sys::{WASI_COMPILER_RT_PATH, WASI_LIBC_PATH};
 
 const PLATFORM_FILENAME: &str = "wasm_test_platform";
-const OUT_DIR_VAR: &str = "TEST_GEN_OUT";
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -98,14 +97,13 @@ fn build_wasm_test_host() {
     source_path.set_extension("c");
     println!("cargo:rerun-if-changed={}", source_path.to_str().unwrap());
 
-    let out_dir = env::var("OUT_DIR").unwrap();
-    println!("cargo:rustc-env={}={}", OUT_DIR_VAR, out_dir);
+    let build_dir = "build";
 
     // Create an object file with relocations
-    let platform_path = build_wasm_platform(&out_dir, source_path.to_str().unwrap());
+    let platform_path = build_wasm_platform(build_dir, source_path.to_str().unwrap());
 
-    let mut outfile = PathBuf::from(out_dir).join(PLATFORM_FILENAME);
-    outfile.set_extension("o");
+    let mut outfile = PathBuf::from(build_dir).join(PLATFORM_FILENAME);
+    outfile.set_extension("wasm");
 
     Command::new(&zig_executable())
         .args([

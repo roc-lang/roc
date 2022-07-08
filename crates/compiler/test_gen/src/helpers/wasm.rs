@@ -15,10 +15,15 @@ use wasmer::WasmPtr;
 
 // Should manually match build.rs
 const PLATFORM_FILENAME: &str = "wasm_test_platform";
-const OUT_DIR_VAR: &str = "TEST_GEN_OUT";
 
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
 const INIT_REFCOUNT_NAME: &str = "init_refcount_test";
+
+macro_rules! host_bytes_path {
+    () => {
+        "../../build/wasm_test_platform.wasm"
+    };
+}
 
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app \"test\" provides [main] to \"./platform\"\n\nmain =\n");
@@ -39,12 +44,11 @@ pub fn compile_to_wasm_bytes<'a, T: Wasm32Result>(
     src: &str,
     test_wrapper_type_info: PhantomData<T>,
 ) -> Vec<u8> {
-    let platform_path = get_preprocessed_host_path();
-    let platform_bytes = std::fs::read(&platform_path).unwrap();
-    println!("Loading test host {}", platform_path.display());
+    let platform_bytes = include_bytes!(host_bytes_path!());
+    println!("Loading test host {}", host_bytes_path!());
 
     let compiled_bytes =
-        compile_roc_to_wasm_bytes(arena, &platform_bytes, src, test_wrapper_type_info);
+        compile_roc_to_wasm_bytes(arena, platform_bytes, src, test_wrapper_type_info);
 
     if DEBUG_SETTINGS.keep_test_binary {
         let build_dir_hash = src_hash(src);
@@ -52,13 +56,6 @@ pub fn compile_to_wasm_bytes<'a, T: Wasm32Result>(
     };
 
     compiled_bytes
-}
-
-fn get_preprocessed_host_path() -> PathBuf {
-    let out_dir = std::env::var(OUT_DIR_VAR).unwrap();
-    Path::new(&out_dir)
-        .join([PLATFORM_FILENAME, "o"].join("."))
-        .to_path_buf()
 }
 
 fn src_hash(src: &str) -> u64 {
@@ -126,7 +123,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
     let host_module = roc_gen_wasm::parse_host(env.arena, host_bytes).unwrap_or_else(|e| {
         panic!(
             "I ran into a problem with the host object file, {} at offset 0x{:x}:\n{}",
-            get_preprocessed_host_path().display(),
+            host_bytes_path!(),
             e.offset,
             e.message
         )
