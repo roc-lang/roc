@@ -111,14 +111,14 @@ alt = \left, right ->
           Err (ParsingFailure ("\(leftErr) or \(rightErr)"))
   @Parser fun
 
-applyOld : Parser input a, Parser input (a -> b) -> Parser input b
-applyOld = \valParser, funParser ->
-  combined = \input ->
-    {val: val, input: rest} <- Result.after (runPartial valParser input)
-    (runPartial funParser rest)
-    |> Result.map \{val: funVal, input: rest2} ->
-      {val: funVal val, input: rest2}
-  @Parser combined
+#  applyOld : Parser input a, Parser input (a -> b) -> Parser input b
+#  applyOld = \valParser, funParser ->
+#    combined = \input ->
+#      {val: val, input: rest} <- Result.after (runPartial valParser input)
+#      (runPartial funParser rest)
+#      |> Result.map \{val: funVal, input: rest2} ->
+#        {val: funVal val, input: rest2}
+#    @Parser combined
 
 ## Runs a parser building a function, then a parser building a value,
 ## and finally returns the result of calling the function with the value.
@@ -171,18 +171,18 @@ andThen = \firstParser, buildNextParser ->
 
 # NOTE: Using this implementation in an actual program,
 # currently causes a compile-time StackOverflow (c.f. https://github.com/rtfeldman/roc/issues/3444 )
-oneOfBroken : List (Parser input a) -> Parser input a
-oneOfBroken = \parsers ->
-  List.walkBackwards parsers (fail "Always fail") (\laterParser, earlierParser -> alt earlierParser laterParser)
+#  oneOfBroken : List (Parser input a) -> Parser input a
+#  oneOfBroken = \parsers ->
+#    List.walkBackwards parsers (fail "Always fail") (\laterParser, earlierParser -> alt earlierParser laterParser)
 
 # And this one as well
-oneOfBroken2 : List (Parser input a) -> Parser input a
-oneOfBroken2 = \parsers ->
-  if List.isEmpty parsers then
-    fail "(always fail)"
-  else
-    firstParser = List.get parsers (List.len parsers - 1) |> Result.withDefault (fail "this should never happen!!")
-    alt firstParser (oneOfBroken2 (List.dropLast parsers))
+#  oneOfBroken2 : List (Parser input a) -> Parser input a
+#  oneOfBroken2 = \parsers ->
+#    if List.isEmpty parsers then
+#      fail "(always fail)"
+#    else
+#      firstParser = List.get parsers (List.len parsers - 1) |> Result.withDefault (fail "this should never happen!!")
+#      alt firstParser (oneOfBroken2 (List.dropLast parsers))
 
 ## Try a bunch of different parsers.
 ##
@@ -321,6 +321,7 @@ sepBy1 = \parser, separator ->
 sepBy : Parser input a, Parser input sep -> Parser input (List a)
 sepBy = \parser, separator ->
   alt (sepBy1 parser separator) (const [])
+
 # Specific string-based parsers:
 
 RawStr : List U8
@@ -420,11 +421,3 @@ scalar = \expectedScalar ->
   |> strFromScalar
   |> string
   |> map (\_ -> expectedScalar)
-
-collapseResult : Result a a -> a
-collapseResult = \result ->
-  when result is
-    Ok val ->
-      val
-    Err val ->
-      val
