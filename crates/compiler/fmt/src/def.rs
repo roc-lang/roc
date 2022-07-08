@@ -95,8 +95,6 @@ impl<'a> Formattable for TypeDef<'a> {
                 let ann_is_where_clause =
                     matches!(ann.extract_spaces().item, TypeAnnotation::Where(..));
 
-                let ann_has_spaces_before = matches!(&ann.value, TypeAnnotation::SpaceBefore(..));
-
                 // Always put the has-derived clause on a newline if it is itself multiline, or
                 // the annotation has a where-has clause.
                 let derived_multiline = if let Some(derived) = derived {
@@ -106,12 +104,6 @@ impl<'a> Formattable for TypeDef<'a> {
                 };
 
                 let make_multiline = ann.is_multiline() || derived_multiline;
-
-                // If the annotation has spaces before, a newline will already be printed.
-                if make_multiline && !ann_has_spaces_before {
-                    buf.newline();
-                    buf.indent(indent + INDENT);
-                }
 
                 ann.format(buf, indent);
 
