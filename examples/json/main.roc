@@ -32,7 +32,7 @@ fullTest = \parser, input ->
     Err (ParsingIncomplete leftover) ->
       "Parse failure: Expected to reach end of input, but the following was still left: \(leftover)\n"
 
-myparser : Parser (List Str)
+myparser : Parser Parser.Core.RawStr (List Str)
 myparser =
   Parser.Core.oneOf [Parser.Core.string "a", Parser.Core.string "b"]
   |> Parser.Core.oneOrMore

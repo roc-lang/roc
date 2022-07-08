@@ -1,6 +1,7 @@
 interface Parser.Core
   exposes [
     Parser,
+    RawStr,
     runPartialRaw,
     runPartialStr,
     runRaw,
@@ -30,21 +31,26 @@ interface Parser.Core
   imports []
 
 
-Input : List U8
-Parser a := (Input -> Result {val: a, input: Input} [ParsingFailure Str])
+RawStr : List U8
+Parser input a := (input -> Result {val: a, input: input} [ParsingFailure Str])
 
 # -- Generic parsers:
 
-## Runs a parser against the start of a list of scalars, allowing the parser to consume it only partially.
-runPartialRaw : Parser a, Input -> Result {val: a, input: Input} [ParsingFailure Str]
-runPartialRaw = \@Parser parser, input ->
+runPartial : Parser input a, input -> Result {val: a, input: input} [ParsingFailure Str]
+runPartial = \@Parser parser, input ->
   (parser input)
+
+## Runs a parser against the start of a list of scalars, allowing the parser to consume it only partially.
+runPartialRaw : Parser RawStr a, RawStr -> Result {val: a, input: RawStr} [ParsingFailure Str]
+runPartialRaw = \parser, input ->
+  runPartial parser input
+
 
 ## Runs a parser against the start of a string, allowing the parser to consume it only partially.
 ##
 ## - If the parser succeeds, returns the resulting value as well as the leftover input.
 ## - If the parser fails, returns `Err (ParsingFailure msg)`
-runPartialStr : Parser a, Str -> Result {val: a, input: Str} [ParsingFailure Str]
+runPartialStr : Parser RawStr a, Str -> Result {val: a, input: Str} [ParsingFailure Str]
 runPartialStr = \parser, input ->
   inputRaw = Str.toUtf8 input
   {val: firstVal, input: restRaw} <- Result.after (runPartialRaw parser inputRaw)
@@ -59,7 +65,7 @@ runPartialStr = \parser, input ->
 ## - If the parser succeeds, returns `Ok val`
 ## - If the parser fails, returns `Err (ParsingFailure msg)`
 ## - If the parser succeeds but does not consume the full string, returns `Err (ParsingIncomplete leftover)`
-runRaw : Parser a, Input -> Result a [ParsingFailure Str, ParsingIncomplete Input]
+runRaw : Parser RawStr a, RawStr -> Result a [ParsingFailure Str, ParsingIncomplete RawStr]
 runRaw = \parser, input ->
   when (runPartialRaw parser input) is
     Ok {val: val, input: leftover} ->
@@ -70,7 +76,7 @@ runRaw = \parser, input ->
     Err (ParsingFailure msg) ->
       Err (ParsingFailure msg)
 
-runStr : Parser a, Str -> Result a [ParsingFailure Str, ParsingIncomplete Str]
+runStr : Parser RawStr a, Str -> Result a [ParsingFailure Str, ParsingIncomplete Str]
 runStr = \parser, input ->
   inputRaw = Str.toUtf8 input
   when (runRaw parser inputRaw) is
@@ -82,49 +88,49 @@ runStr = \parser, input ->
       leftover = Result.withDefault (Str.fromUtf8 leftoverRaw) ""
       Err (ParsingIncomplete leftover)
 
-fail : Str -> Parser *
+fail : Str -> Parser * *
 fail = \msg ->
   @Parser \_input -> Err (ParsingFailure msg)
 
-const : a -> Parser a
+const : a -> Parser * a
 const = \val ->
   @Parser \input ->
     Ok { val: val, input: input }
 
-alt : Parser a, Parser a -> Parser a
+alt : Parser input a, Parser input a -> Parser input a
 alt = \left, right ->
   fun = \input ->
-    when (runPartialRaw left input) is
+    when (runPartial left input) is
       Ok {val: val, input: rest} -> Ok {val: val, input: rest}
       Err (ParsingFailure leftErr) ->
-        when (runPartialRaw right input) is
+        when (runPartial right input) is
         Ok {val: val, input: rest} -> Ok {val: val, input: rest}
         Err (ParsingFailure rightErr) ->
           Err (ParsingFailure ("\(leftErr) or \(rightErr)"))
   @Parser fun
 
-andThen : Parser a, (a -> Parser b) -> Parser b
+andThen : Parser input a, (a -> Parser input b) -> Parser input b
 andThen = \firstParser, buildNextParser ->
   fun = \input ->
-    {val: firstVal, input: rest} <- Result.after (runPartialRaw firstParser input)
+    {val: firstVal, input: rest} <- Result.after (runPartial firstParser input)
     nextParser = (buildNextParser firstVal)
-    runPartialRaw nextParser rest
+    runPartial nextParser rest
   @Parser fun
 
-applyOld : Parser a, Parser (a -> b) -> Parser b
+applyOld : Parser input a, Parser input (a -> b) -> Parser input b
 applyOld = \valParser, funParser ->
   combined = \input ->
-    {val: val, input: rest} <- Result.after (runPartialRaw valParser input)
-    (runPartialRaw funParser rest)
+    {val: val, input: rest} <- Result.after (runPartial valParser input)
+    (runPartial funParser rest)
     |> Result.map \{val: funVal, input: rest2} ->
       {val: funVal val, input: rest2}
   @Parser combined
 
-apply : Parser (a -> b), Parser a -> Parser b
+apply : Parser input (a -> b), Parser input a -> Parser input b
 apply = \funParser, valParser ->
   combined = \input ->
-    {val: funVal, input: rest} <- Result.after (runPartialRaw funParser input)
-    (runPartialRaw valParser rest)
+    {val: funVal, input: rest} <- Result.after (runPartial funParser input)
+    (runPartial valParser rest)
     |> Result.map \{val: val, input: rest2} ->
       {val: funVal val, input: rest2}
   @Parser combined
@@ -132,20 +138,21 @@ apply = \funParser, valParser ->
 
 # NOTE: Using this implementation in an actual program,
 # currently causes a compile-time StackOverflow (c.f. https://github.com/rtfeldman/roc/issues/3444 )
-oneOfBroken : List (Parser a) -> Parser a
+oneOfBroken : List (Parser input a) -> Parser input a
 oneOfBroken = \parsers ->
   List.walkBackwards parsers (fail "Always fail") (\laterParser, earlierParser -> alt earlierParser laterParser)
 
-oneOfBroken2 : List (Parser a) -> Parser a
+oneOfBroken2 : List (Parser input a) -> Parser input a
 oneOfBroken2 = \parsers ->
   if List.isEmpty parsers then
     fail "(always fail)"
   else
     firstParser = List.get parsers (List.len parsers - 1) |> Result.withDefault (fail "this should never happen!!")
-    alt firstParser (oneOf (List.dropLast parsers))
+    alt firstParser (oneOfBroken2 (List.dropLast parsers))
 
-
-oneOf : List (Parser a) -> Parser a
+# NOTE: This implementation works, but is limited to parsing strings.
+# Blocked until issue #3444 is fixed.
+oneOf : List (Parser RawStr a) -> Parser RawStr a
 oneOf = \parsers ->
   @Parser \input ->
     List.walkUntil parsers (Err (ParsingFailure "(no possibilities)")) \_, parser ->
@@ -155,18 +162,18 @@ oneOf = \parsers ->
         Err problem ->
           Continue (Err problem)
 
-map : Parser a, (a -> b) -> Parser b
+map : Parser input a, (a -> b) -> Parser input b
 map = \simpleParser, transform ->
   const transform
   |> apply simpleParser
 
-map2 : Parser a, Parser b, (a, b -> c) -> Parser c
+map2 : Parser input a, Parser input b, (a, b -> c) -> Parser input c
 map2 = \parserA, parserB, transform ->
   const (\a -> \b -> transform a b)
   |> apply parserA
   |> apply parserB
 
-map3 : Parser a, Parser b, Parser c, (a, b, c-> d) -> Parser d
+map3 : Parser input a, Parser input b, Parser input c, (a, b, c-> d) -> Parser input d
 map3 = \parserA, parserB, parserC, transform ->
   const (\a -> \b -> \c -> transform a b c)
   |> apply parserA
@@ -176,49 +183,29 @@ map3 = \parserA, parserB, parserC, transform ->
 # ^ And this could be repeated for as high as we want, of course.
 
 
-lazy : ({} -> Parser a) -> Parser a
+lazy : ({} -> Parser input a) -> Parser input a
 lazy = \thunk ->
   andThen (const {}) thunk
 
-maybe : Parser a -> Parser (Result a [Nothing])
+maybe : Parser input a -> Parser input (Result a [Nothing])
 maybe = \parser ->
   alt (parser |> map (\val -> Ok val)) (const (Err Nothing))
 
-
-#  oneOrMore : Parser a -> Parser (List a)
-#  oneOrMore = \parser ->
-#    # parser |> andThen (many parser)
-#      parser
-#      |> andThen \val ->
-#          lazy (\{} -> many parser)
-#          |> map (\vals -> List.prepend vals val)
-
-#  many : Parser a -> Parser (List a)
-#  many = \parser ->
-  #  @Parser \input ->
-  #    result = runPartialRaw parser input
-  #    when result is
-  #      Ok {val: val, input: inputRest} ->
-  #        lazy (\{} ->
-  #          inputRest |> (many parser) |> map (\vals -> List.prepend vals val))
-  #      Err _ ->
-  #        Ok {val: [], input: input}
-  #  alt (oneOrMore parser) (const [])
-
+manyImpl : Parser input a, List a, input -> Result { input : input, val : List a } [ParsingFailure Str]
 manyImpl = \parser, vals, input ->
-  result = runPartialRaw parser input
+  result = runPartial parser input
   when result is
     Err _ ->
       Ok {val: vals, input: input}
     Ok {val: val, input: inputRest} ->
       manyImpl parser (List.append vals val) inputRest
 
-many : Parser a -> Parser (List a)
+many : Parser input a -> Parser input (List a)
 many = \parser ->
   @Parser \input ->
     manyImpl parser [] input
 
-oneOrMore : Parser a -> Parser (List a)
+oneOrMore : Parser input a -> Parser input (List a)
 oneOrMore = \parser ->
   const (\val -> \vals -> List.prepend vals val)
   |> apply parser
@@ -234,24 +221,24 @@ oneOrMore = \parser ->
   #  |> many
   #  |> map (\vals -> List.prepend vals val)
 
-#  betweenBraces : Parser a -> Parser a
+#  betweenBraces : Parser input a -> Parser input a
 #  betweenBraces = \parser ->
 #    string "["
 #    |> applyOld (parser |> map (\res -> \_ -> res))
 #    |> applyOld (string "]" |> map (\_ -> \res -> res))
 
-between : Parser open, Parser close, Parser a -> Parser a
+between : Parser input open, Parser input close, Parser input a -> Parser input a
 between = \open, close, parser ->
   const (\_ -> \val -> \_ -> val)
   |> apply open
   |> apply parser
   |> apply close
 
-betweenBraces : Parser a -> Parser a
+betweenBraces : Parser RawStr a -> Parser RawStr a
 betweenBraces = \parser ->
   between (scalar '[') (scalar ']') parser
 
-sepBy1 : Parser a, Parser sep -> Parser (List a)
+sepBy1 : Parser input a, Parser input sep -> Parser input (List a)
 sepBy1 = \parser, separator ->
   parserFollowedBySep =
     const (\_ -> \val -> val)
@@ -261,12 +248,12 @@ sepBy1 = \parser, separator ->
   |> apply parser
   |> apply (many parserFollowedBySep)
 
-sepBy : Parser a, Parser sep -> Parser (List a)
+sepBy : Parser input a, Parser input sep -> Parser input (List a)
 sepBy = \parser, separator ->
   alt (sepBy1 parser separator) (const [])
 # -- Specific parsers:
 
-codepoint : U8 -> Parser U8
+codepoint : U8 -> Parser RawStr U8
 codepoint = \expectedCodePoint ->
   @Parser \input ->
     {before: start, others: inputRest} = List.split input 1
@@ -282,7 +269,7 @@ codepoint = \expectedCodePoint ->
         inputStr = Result.withDefault (Str.fromUtf8 input) ""
         Err (ParsingFailure "expected char `\(errorChar)` but found `\(otherChar)`.\n While reading: `\(inputStr)`")
 
-stringRaw : List U8 -> Parser (List U8)
+stringRaw : List U8 -> Parser RawStr (List U8)
 stringRaw = \expectedString ->
   @Parser \input ->
     {before: start, others: inputRest} = List.split input (List.len expectedString)
@@ -294,13 +281,13 @@ stringRaw = \expectedString ->
       inputString = Result.withDefault (Str.fromUtf8 input) ""
       Err (ParsingFailure "expected string `\(errorString)` but found `\(otherString)`.\nWhile reading: \(inputString)")
 
-string : Str -> Parser Str
+string : Str -> Parser RawStr Str
 string = \expectedString ->
   (Str.toUtf8 expectedString)
   |> stringRaw
   |> map (\_val -> expectedString)
 
-scalar : U32 -> Parser U32
+scalar : U32 -> Parser RawStr U32
 scalar = \expectedScalar ->
   ""
   |> Str.appendScalar expectedScalar
