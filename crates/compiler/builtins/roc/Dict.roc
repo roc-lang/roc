@@ -68,13 +68,26 @@ interface Dict
 ## `fn dict1 == fn dict2` also being `True`, even if `fn` relies on the dictionary's ordering.
 ## An empty dictionary.
 empty : Dict k v
-single : k, v -> Dict k v
 get : Dict k v, k -> Result v [KeyNotFound]*
+get = \dict, key ->
+    result = getLowlevel dict key
+
+    when result.flag is
+        True -> Ok result.value
+        False -> Err KeyNotFound
+
+getLowlevel : Dict k v, k -> { flag : Bool, value : v }
+
 walk : Dict k v, state, (state, k, v -> state) -> state
 insert : Dict k v, k, v -> Dict k v
 len : Dict k v -> Nat
 remove : Dict k v, k -> Dict k v
 contains : Dict k v, k -> Bool
+
+single : k, v -> Dict k v
+single = \key, value ->
+    Dict.empty
+        |> Dict.insert key value
 
 ## Returns a [List] of the dictionary's keys.
 keys : Dict k v -> List k

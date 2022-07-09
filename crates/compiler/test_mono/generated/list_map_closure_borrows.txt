@@ -1,38 +1,38 @@
-procedure List.2 (List.77, List.78):
-    let List.288 : U64 = CallByName List.6 List.77;
-    let List.285 : Int1 = CallByName Num.22 List.78 List.288;
-    if List.285 then
-        let List.287 : Str = CallByName List.60 List.77 List.78;
-        let List.286 : [C {}, C Str] = TagId(1) List.287;
-        ret List.286;
+procedure List.2 (List.78, List.79):
+    let List.300 : U64 = CallByName List.6 List.78;
+    let List.297 : Int1 = CallByName Num.22 List.79 List.300;
+    if List.297 then
+        let List.299 : Str = CallByName List.60 List.78 List.79;
+        let List.298 : [C {}, C Str] = TagId(1) List.299;
+        ret List.298;
     else
-        let List.284 : {} = Struct {};
-        let List.283 : [C {}, C Str] = TagId(0) List.284;
-        ret List.283;
+        let List.296 : {} = Struct {};
+        let List.295 : [C {}, C Str] = TagId(0) List.296;
+        ret List.295;
 
 procedure List.5 (#Attr.2, #Attr.3):
-    let List.289 : List Str = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.3 #Attr.3;
-    ret List.289;
+    let List.301 : List Str = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.3 #Attr.3;
+    ret List.301;
 
 procedure List.6 (#Attr.2):
-    let List.291 : U64 = lowlevel ListLen #Attr.2;
-    ret List.291;
+    let List.303 : U64 = lowlevel ListLen #Attr.2;
+    ret List.303;
 
 procedure List.60 (#Attr.2, #Attr.3):
-    let List.290 : Str = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret List.290;
+    let List.302 : Str = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.302;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.188 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.188;
+    let Num.257 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.257;
 
 procedure Str.16 (#Attr.2, #Attr.3):
-    let Str.154 : Str = lowlevel StrRepeat #Attr.2 #Attr.3;
-    ret Str.154;
+    let Str.194 : Str = lowlevel StrRepeat #Attr.2 #Attr.3;
+    ret Str.194;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.155 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.155;
+    let Str.195 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.195;
 
 procedure Test.1 ():
     let Test.21 : Str = "lllllllllllllllllllllooooooooooong";

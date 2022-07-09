@@ -5020,6 +5020,20 @@ mod test_fmt {
     }
 
     #[test]
+    fn multiline_opaque_tag_union() {
+        expr_formats_same(indoc!(
+            r#"
+            A := [
+                B,
+                C,
+            ]
+
+            0
+            "#
+        ));
+    }
+
+    #[test]
     fn opaque_has_clause() {
         expr_formats_same(indoc!(
             r#"
@@ -5029,15 +5043,25 @@ mod test_fmt {
             "#
         ));
 
-        expr_formats_same(indoc!(
-            r#"
-            A :=
-                U8
-                has [Eq, Hash]
+        expr_formats_to(
+            indoc!(
+                r#"
+                A :=
+                    U8
+                    has [Eq, Hash]
 
-            0
-            "#
-        ));
+                0
+                "#
+            ),
+            indoc!(
+                r#"
+                A := U8
+                    has [Eq, Hash]
+
+                0
+                "#
+            ),
+        );
 
         expr_formats_to(
             indoc!(
@@ -5049,8 +5073,7 @@ mod test_fmt {
             ),
             indoc!(
                 r#"
-                A :=
-                    a | a has Hash
+                A := a | a has Hash
                     has [Eq, Hash]
 
                 0

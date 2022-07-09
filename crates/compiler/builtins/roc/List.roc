@@ -717,6 +717,10 @@ takeLast = \list, outputLength ->
 
 ## Drops n elements from the beginning of the list.
 drop : List elem, Nat -> List elem
+drop = \list, n ->
+    remaining = Num.subSaturated (List.len list) n
+
+    List.takeLast list remaining
 
 ## Drops the element at the given index from the list.
 ##
@@ -812,6 +816,10 @@ findIndex = \list, matcher ->
 ##
 ## Some languages have a function called **`slice`** which works similarly to this.
 sublist : List elem, { start : Nat, len : Nat } -> List elem
+sublist = \list, config ->
+    sublistLowlevel list config.start config.len
+
+sublistLowlevel : List elem, Nat, Nat -> List elem
 
 ## Intersperses `sep` between the elements of `list`
 ## >>> List.intersperse 9 [1, 2, 3]     # [1, 9, 2, 9, 3]
@@ -835,6 +843,13 @@ intersperse = \list, sep ->
 ## means if you give an index of 0, the `before` list will be empty and the
 ## `others` list will have the same elements as the original list.)
 split : List elem, Nat -> { before : List elem, others : List elem }
+split = \elements, userSplitIndex ->
+    length = List.len elements
+    splitIndex = if length > userSplitIndex then userSplitIndex else length
+    before = List.sublist elements { start: 0, len: splitIndex }
+    others = List.sublist elements { start: splitIndex, len: length - splitIndex }
+
+    { before, others }
 
 ## Primitive for iterating over a List, being able to decide at every element whether to continue
 iterate : List elem, s, (s, elem -> [Continue s, Break b]) -> [Continue s, Break b]
