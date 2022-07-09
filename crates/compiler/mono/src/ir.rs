@@ -9261,7 +9261,7 @@ fn union_lambda_set_to_switch<'a>(
         // code gen to proceed. We then assume that we hit another (more descriptive) error before
         // hitting this one
 
-        let msg = "a Lambda Set isempty. Most likely there is a type error in your program.";
+        let msg = "a Lambda Set is empty. Most likely there is a type error in your program.";
         return Stmt::RuntimeError(msg);
     }
 
