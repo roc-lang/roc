@@ -6,6 +6,7 @@ interface ParserStr
     runRaw,
     runPartialRaw,
     string,
+    stringRaw,
     codepoint,
     scalar,
     oneOf,
