@@ -200,35 +200,56 @@ where
     let arena = bumpalo::Bump::new();
 
     let wasm_bytes = crate::helpers::wasm::compile_to_wasm_bytes(&arena, src, phantom);
-    let instance = load_bytes_into_runtime(&wasm_bytes);
 
-    let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
+    use wasm3::error::Trap;
+    use wasm3::Environment;
+    use wasm3::Module;
 
-    let test_wrapper = instance.exports.get_function(TEST_WRAPPER_NAME).unwrap();
+    let env = Environment::new().expect("Unable to create environment");
+    let rt = env
+        .create_runtime(1024 * 60)
+        .expect("Unable to create runtime");
 
-    match test_wrapper.call(&[]) {
+    let module = Module::parse(&env, &wasm_bytes[..]).expect("Unable to parse module");
+
+    let mut module = rt.load_module(module).expect("Unable to load module");
+
+    module.link_wasi().unwrap();
+
+    let test_wrapper = module
+        .find_function::<(), i32>(TEST_WRAPPER_NAME)
+        .expect("Unable to find test wrapper function");
+
+    match test_wrapper.call() {
         Err(e) => {
-            if let Some(msg) = get_roc_panic_msg(&instance, memory) {
-                Err(format!("Roc failed with message: \"{}\"", msg))
-            } else {
-                Err(e.to_string())
-            }
-        }
-        Ok(result) => {
-            let address = result[0].unwrap_i32();
+            let (_, memory_size) = unsafe { std::mem::transmute::<_, (usize, usize)>(rt.memory()) };
+            let memory: &[u8] =
+                unsafe { std::slice::from_raw_parts(rt.memory() as _, memory_size) };
 
-            if false {
-                println!("test_wrapper returned 0x{:x}", address);
-                println!("Stack:");
-                crate::helpers::wasm::debug_memory_hex(memory, address, std::mem::size_of::<T>());
-            }
-            if false {
-                println!("Heap:");
-                // Manually provide address and size based on printf in wasm_test_platform.c
-                crate::helpers::wasm::debug_memory_hex(memory, 0x11440, 24);
-            }
-            let memory_bytes: &[u8] = unsafe { memory.data_unchecked() };
-            let output = <T as FromWasm32Memory>::decode(memory_bytes, address as u32);
+            //            if let Some(msg) = get_roc_panic_msg(&instance, memory) {
+            //                Err(format!("Roc failed with message: \"{}\"", msg))
+            //            } else {
+            //                Err(e.to_string())
+            //            }
+            panic!("{:?}", &e);
+        }
+        Ok(address) => {
+            //            if false {
+            //                println!("test_wrapper returned 0x{:x}", address);
+            //                println!("Stack:");
+            //                crate::helpers::wasm::debug_memory_hex(memory, address, std::mem::size_of::<T>());
+            //            }
+            //            if false {
+            //                println!("Heap:");
+            //                // Manually provide address and size based on printf in wasm_test_platform.c
+            //                crate::helpers::wasm::debug_memory_hex(memory, 0x11440, 24);
+            //            }
+
+            let (_, memory_size) = unsafe { std::mem::transmute::<_, (usize, usize)>(rt.memory()) };
+            let memory: &[u8] =
+                unsafe { std::slice::from_raw_parts(rt.memory() as _, memory_size) };
+
+            let output = <T as FromWasm32Memory>::decode(memory, address as u32);
 
             Ok(output)
         }
