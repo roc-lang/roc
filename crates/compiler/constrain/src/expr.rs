@@ -1981,13 +1981,13 @@ fn constrain_typed_def(
     );
 
     def_pattern_state.constraints.push(constraints.equal_types(
-        expr_type,
+        expr_type.clone(),
         annotation_expected,
         Category::Storage(std::file!(), std::line!()),
         Region::span_across(&annotation.region, &def.loc_expr.region),
     ));
 
-    // when a def is annotated, and it's body is a closure, treat this
+    // when a def is annotated, and its body is a closure, treat this
     // as a named function (in elm terms) for error messages.
     //
     // This means we get errors like "the first argument of `f` is weird"
@@ -2114,7 +2114,7 @@ fn constrain_typed_def(
                 AnnotationSource::TypedBody {
                     region: annotation.region,
                 },
-                signature.clone(),
+                expr_type,
             );
 
             let ret_constraint = constrain_expr(
@@ -2124,14 +2124,7 @@ fn constrain_typed_def(
                 &def.loc_expr.value,
                 annotation_expected,
             );
-            let ret_constraint = attach_resolution_constraints(constraints, env, ret_constraint);
-
-            let cons = [
-                ret_constraint,
-                // Store type into AST vars. We use Store so errors aren't reported twice
-                constraints.store(signature, expr_var, std::file!(), std::line!()),
-            ];
-            let expr_con = constraints.and_constraint(cons);
+            let expr_con = attach_resolution_constraints(constraints, env, ret_constraint);
 
             constrain_def_make_constraint(
                 constraints,

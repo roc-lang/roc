@@ -4024,7 +4024,8 @@ mod solve_expr {
                     { x, y }
                 "#
             ),
-            "{ x : I64, y ? Bool }* -> { x : I64, y : Bool }",
+            // TODO: when structural types unify with alias, they should take the alias name
+            "{ x : I64, y ? [False, True] }* -> { x : I64, y : Bool }",
         );
     }
 
