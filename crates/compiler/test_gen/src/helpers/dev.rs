@@ -1,10 +1,12 @@
 use libloading::Library;
 use roc_build::link::{link, LinkType};
 use roc_builtins::bitcode;
-use roc_collections::all::MutMap;
 use roc_load::Threading;
 use roc_region::all::LineInfo;
 use tempfile::tempdir;
+
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+use roc_collections::all::MutMap;
 
 #[allow(unused_imports)]
 use roc_mono::ir::pretty_print_ir_symbols;
