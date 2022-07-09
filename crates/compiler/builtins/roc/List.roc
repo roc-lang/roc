@@ -816,6 +816,10 @@ findIndex = \list, matcher ->
 ##
 ## Some languages have a function called **`slice`** which works similarly to this.
 sublist : List elem, { start : Nat, len : Nat } -> List elem
+sublist = \list, config ->
+    sublistLowlevel list config.start config.len
+
+sublistLowlevel : List elem, Nat, Nat -> List elem
 
 ## Intersperses `sep` between the elements of `list`
 ## >>> List.intersperse 9 [1, 2, 3]     # [1, 9, 2, 9, 3]

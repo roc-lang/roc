@@ -4024,7 +4024,8 @@ mod solve_expr {
                     { x, y }
                 "#
             ),
-            "{ x : I64, y ? Bool }* -> { x : I64, y : Bool }",
+            // TODO: when structural types unify with alias, they should take the alias name
+            "{ x : I64, y ? [False, True] }* -> { x : I64, y : Bool }",
         );
     }
 
@@ -7099,6 +7100,44 @@ mod solve_expr {
                 "#
             ),
             "F * {}* -> F * Str",
+        );
+    }
+
+    #[test]
+    fn wrap_recursive_opaque_negative_position() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                OList := [Nil, Cons {} OList]
+
+                lst : [Cons {} OList]*
+
+                olist : OList
+                olist = (\l -> @OList l) lst
+
+                olist
+                "#
+            ),
+            "OList",
+        );
+    }
+
+    #[test]
+    fn wrap_recursive_opaque_positive_position() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                OList := [Nil, Cons {} OList]
+
+                lst : [Cons {} OList]*
+
+                olist : OList
+                olist = @OList lst
+
+                olist
+                "#
+            ),
+            "OList",
         );
     }
 }

@@ -1726,3 +1726,89 @@ fn issue_3261_non_nullable_unwrapped_recursive_union_at_index() {
         RocStr
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn instantiate_annotated_as_recursive_alias_toplevel() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Value : [Nil, Array (List Value)]
+
+            foo : [Nil]*
+            foo = Nil
+
+            it : Value
+            it = foo
+
+            main =
+                when it is
+                    Nil -> 123i64
+                    _ -> -1i64
+            "#
+        ),
+        123,
+        i64
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn instantiate_annotated_as_recursive_alias_polymorphic_expr() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main =
+                Value : [Nil, Array (List Value)]
+
+                foo : [Nil]*
+                foo = Nil
+
+                it : Value
+                it = foo
+
+                when it is
+                    Nil -> 123i64
+                    _ -> -1i64
+            "#
+        ),
+        123,
+        i64
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main =
+                Value : [Nil, Array (List Value)]
+
+                foo : [Nil]*
+                foo = Nil
+
+                v1 : Value
+                v1 = foo
+
+                Value2 : [Nil, B U16, Array (List Value)]
+
+                v2 : Value2
+                v2 = foo
+
+                when {v1, v2} is
+                    {v1: Nil, v2: Nil} -> 123i64
+                    {v1: _, v2: _} -> -1i64
+            "#
+        ),
+        123,
+        i64
+    )
+}

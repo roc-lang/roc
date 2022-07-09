@@ -786,6 +786,7 @@ fn unify_opaque<M: MetaCollector>(
         Alias(_, _, other_real_var, AliasKind::Structural) => {
             unify_pool(subs, pool, ctx.first, *other_real_var, ctx.mode)
         }
+        RecursionVar { structure, .. } => unify_pool(subs, pool, ctx.first, *structure, ctx.mode),
         Alias(other_symbol, other_args, other_real_var, AliasKind::Opaque) => {
             // Opaques types are only equal if the opaque symbols are equal!
             if symbol == *other_symbol {
@@ -2583,19 +2584,14 @@ fn unify_recursion<M: MetaCollector>(
             },
         ),
 
-        // _opaque has an underscore because it's unused in --release builds
-        Alias(_opaque, _, _, AliasKind::Opaque) => {
-            mismatch!(
-                "RecursionVar {:?} cannot be equal to opaque {:?}",
-                ctx.first,
-                _opaque
-            )
+        Alias(_, _, actual, AliasKind::Structural) => {
+            // look at the type the alias stands for
+            unify_pool(subs, pool, ctx.first, *actual, ctx.mode)
         }
 
-        Alias(_, _, actual, _) => {
-            // look at the type the alias stands for
-
-            unify_pool(subs, pool, ctx.first, *actual, ctx.mode)
+        Alias(_, _, _, AliasKind::Opaque) => {
+            // look at the type the recursion var stands for
+            unify_pool(subs, pool, structure, ctx.second, ctx.mode)
         }
 
         RangedNumber(..) => mismatch!(

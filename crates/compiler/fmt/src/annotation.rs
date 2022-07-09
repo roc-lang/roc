@@ -207,9 +207,11 @@ impl<'a> Formattable for TypeAnnotation<'a> {
 
         match self {
             Function(arguments, result) => {
-                let write_parens = parens != Parens::NotNeeded;
+                let needs_parens = parens != Parens::NotNeeded;
 
-                if write_parens {
+                buf.indent(indent);
+
+                if needs_parens {
                     buf.push('(')
                 }
 
@@ -256,7 +258,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                     indent,
                 );
 
-                if write_parens {
+                if needs_parens {
                     buf.push(')')
                 }
             }
