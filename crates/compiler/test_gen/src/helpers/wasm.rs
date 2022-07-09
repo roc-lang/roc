@@ -13,14 +13,12 @@ use std::rc::Rc;
 use std::sync::Mutex;
 use wasmer::WasmPtr;
 
-// Should manually match build.rs
-const PLATFORM_FILENAME: &str = "wasm_test_platform";
-
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
 const INIT_REFCOUNT_NAME: &str = "init_refcount_test";
 
 macro_rules! host_bytes_path {
     () => {
+        // Should manually match build.rs. include_bytes! requires a string literal.
         "../../build/wasm_test_platform.wasm"
     };
 }
@@ -215,17 +213,20 @@ where
     let panic_msg_for_closure = panic_msg.clone();
 
     module.link_wasi().unwrap();
-    module
-        .link_closure(
-            "env",
-            "send_panic_msg_to_rust",
-            move |_call_context, args: (i32, i32)| {
-                let mut w = panic_msg_for_closure.lock().unwrap();
-                *w = Some(args);
-                Ok(())
-            },
-        )
-        .expect("Unable to link roc_panic handler");
+    let try_link_panic = module.link_closure(
+        "env",
+        "send_panic_msg_to_rust",
+        move |_call_context, args: (i32, i32)| {
+            let mut w = panic_msg_for_closure.lock().unwrap();
+            *w = Some(args);
+            Ok(())
+        },
+    );
+    match try_link_panic {
+        Ok(()) => {}
+        Err(wasm3::error::Error::FunctionNotFound) => {}
+        Err(e) => panic!("{:?}", e),
+    }
 
     let test_wrapper = module
         .find_function::<(), i32>(TEST_WRAPPER_NAME)
