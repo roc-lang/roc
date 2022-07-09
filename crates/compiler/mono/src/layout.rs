@@ -1072,21 +1072,8 @@ impl<'a> LambdaSet<'a> {
                 arguments: layouts, ..
             } => Layout::struct_no_name_order(layouts.into_bump_slice()),
             NewtypeByVoid {
-                sorted_tag_layouts: tags,
-                ..
-            } => {
-                debug_assert!(tags.len() > 1);
-
-                // if the closed-over value is actually a layout, it should be wrapped in a 1-element record
-                debug_assert!(matches!(tags[0].0, TagOrClosure::Closure(_)));
-
-                let mut tag_arguments = Vec::with_capacity_in(tags.len(), arena);
-
-                for (_, tag_args) in tags.iter() {
-                    tag_arguments.push(&tag_args[0..]);
-                }
-                Layout::Union(UnionLayout::NonRecursive(tag_arguments.into_bump_slice()))
-            }
+                data_tag_arguments, ..
+            } => Layout::struct_no_name_order(data_tag_arguments.into_bump_slice()),
             Wrapped(variant) => {
                 use WrappedVariant::*;
 
@@ -2301,7 +2288,7 @@ pub enum UnionVariant<'a> {
     NewtypeByVoid {
         data_tag_name: TagOrClosure,
         data_tag_id: TagIdIntType,
-        sorted_tag_layouts: Vec<'a, (TagOrClosure, &'a [Layout<'a>])>,
+        data_tag_arguments: Vec<'a, Layout<'a>>,
     },
     Wrapped(WrappedVariant<'a>),
 }
@@ -2607,7 +2594,7 @@ where
                 return UnionVariant::NewtypeByVoid {
                     data_tag_name: kept.0.clone(),
                     data_tag_id: kept_tag_id as _,
-                    sorted_tag_layouts: answer,
+                    data_tag_arguments: Vec::from_iter_in(kept.1.iter().copied(), env.arena),
                 };
             }
 
@@ -2819,7 +2806,7 @@ where
                 return UnionVariant::NewtypeByVoid {
                     data_tag_name: kept.0.clone(),
                     data_tag_id: kept_tag_id as _,
-                    sorted_tag_layouts: answer,
+                    data_tag_arguments: Vec::from_iter_in(kept.1.iter().copied(), env.arena),
                 };
             }
 
@@ -2938,13 +2925,13 @@ where
             answer1
         }
         NewtypeByVoid {
-            sorted_tag_layouts: tags,
-            ..
+            data_tag_arguments, ..
         } => {
-            let mut tag_layouts = Vec::with_capacity_in(tags.len(), env.arena);
-            tag_layouts.extend(tags.iter().map(|r| r.1));
-
-            Layout::Union(UnionLayout::NonRecursive(tag_layouts.into_bump_slice()))
+            if data_tag_arguments.len() == 1 {
+                data_tag_arguments[0]
+            } else {
+                Layout::struct_no_name_order(data_tag_arguments.into_bump_slice())
+            }
         }
         Wrapped(variant) => {
             use WrappedVariant::*;
