@@ -2,7 +2,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const math = std.math;
 const utils = @import("utils.zig");
-const expect = @import("expect.zig");
 
 const ROC_BUILTINS = "roc_builtins";
 const NUM = "num";
@@ -40,7 +39,8 @@ comptime {
     exportListFn(list.listMap2, "map2");
     exportListFn(list.listMap3, "map3");
     exportListFn(list.listMap4, "map4");
-    exportListFn(list.listAppend, "append");
+    exportListFn(list.listAppendUnsafe, "append_unsafe");
+    exportListFn(list.listReserve, "reserve");
     exportListFn(list.listPrepend, "prepend");
     exportListFn(list.listWithCapacity, "with_capacity");
     exportListFn(list.listSortWith, "sort_with");
@@ -184,9 +184,6 @@ comptime {
     exportUtilsFn(utils.decrefC, "decref");
     exportUtilsFn(utils.decrefCheckNullC, "decref_check_null");
     exportUtilsFn(utils.allocateWithRefcountC, "allocate_with_refcount");
-    exportExpectFn(expect.expectFailedC, "expect_failed");
-    exportExpectFn(expect.getExpectFailuresC, "get_expect_failures");
-    exportExpectFn(expect.deinitFailuresC, "deinit_failures");
 
     @export(utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .Weak });
 
@@ -238,10 +235,6 @@ fn exportDecFn(comptime func: anytype, comptime func_name: []const u8) void {
 
 fn exportUtilsFn(comptime func: anytype, comptime func_name: []const u8) void {
     exportBuiltinFn(func, "utils." ++ func_name);
-}
-
-fn exportExpectFn(comptime func: anytype, comptime func_name: []const u8) void {
-    exportBuiltinFn(func, "expect." ++ func_name);
 }
 
 // Custom panic function, as builtin Zig version errors during LLVM verification

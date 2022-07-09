@@ -65,16 +65,6 @@ fn roc_function<'a, 'b>(
     run_roc_dylib!(arena.alloc(lib), main_fn_name, &Input, Output, errors)
 }
 
-fn rust_main(argument: &RocList<i64>, output: &mut RocCallResult<i64>) {
-    let mut answer = 0;
-
-    for x in argument.iter() {
-        answer += x;
-    }
-
-    *output = RocCallResult::new(answer);
-}
-
 fn create_input_list() -> RocList<i64> {
     let numbers = Vec::from_iter(0..1_000);
 
@@ -84,8 +74,8 @@ fn create_input_list() -> RocList<i64> {
 pub fn criterion_benchmark(c: &mut Criterion) {
     let arena = Bump::new();
 
-    let list_map_with_index_main = roc_function(&arena, ROC_LIST_MAP_WITH_INDEX);
     let list_map_main = roc_function(&arena, ROC_LIST_MAP);
+    let list_map_with_index_main = roc_function(&arena, ROC_LIST_MAP_WITH_INDEX);
 
     let input = &*arena.alloc(create_input_list());
 
@@ -102,15 +92,6 @@ pub fn criterion_benchmark(c: &mut Criterion) {
             let mut main_result = RocCallResult::default();
 
             list_map_with_index_main(black_box(input), &mut main_result);
-        })
-    });
-
-    let input = &*arena.alloc(create_input_list());
-    c.bench_function("rust", |b| {
-        b.iter(|| {
-            let mut main_result = RocCallResult::default();
-
-            rust_main(black_box(input), &mut main_result);
         })
     });
 }

@@ -52,6 +52,7 @@ interface List
         dropIf,
         sortAsc,
         sortDesc,
+        reserve,
     ]
     imports [
         Bool.{ Bool },
@@ -243,6 +244,17 @@ set = \list, index, value ->
 ## >>> [0, 1, 2]
 ## >>>     |> List.append 3
 append : List a, a -> List a
+append = \list, element ->
+    list
+        |> List.reserve 1
+        |> List.appendUnsafe element
+
+## Writes the element after the current last element unconditionally.
+## In other words, it is assumed that
+##
+## - the list is owned (i.e. can be updated in-place
+## - the list has at least one element of spare capacity
+appendUnsafe : List a, a -> List a
 
 ## Add a single element to the beginning of a list.
 ##
@@ -261,6 +273,9 @@ len : List a -> Nat
 
 ## Create a list with space for at least capacity elements
 withCapacity : Nat -> List a
+
+## Enlarge the list for at least capacity additional elements
+reserve : List a, Nat -> List a
 
 ## Put two lists together.
 ##
@@ -298,7 +313,7 @@ repeat = \value, count ->
 repeatHelp : a, Nat, List a -> List a
 repeatHelp = \value, count, accum ->
     if count > 0 then
-        repeatHelp value (count - 1) (List.append accum value)
+        repeatHelp value (count - 1) (List.appendUnsafe accum value)
     else
         accum
 
@@ -574,7 +589,7 @@ mapWithIndexHelp = \src, dest, func, index, length ->
     if index < length then
         elem = getUnsafe src index
         mappedElem = func elem index
-        newDest = append dest mappedElem
+        newDest = List.appendUnsafe dest mappedElem
 
         mapWithIndexHelp src newDest func (index + 1) length
     else
@@ -599,7 +614,7 @@ rangeHelp = \accum, start, end ->
     if end <= start then
         accum
     else
-        rangeHelp (List.append accum start) (start + 1) end
+        rangeHelp (List.appendUnsafe accum start) (start + 1) end
 
 ## Sort with a custom comparison function
 sortWith : List a, (a, a -> [LT, EQ, GT]) -> List a
@@ -702,6 +717,10 @@ takeLast = \list, outputLength ->
 
 ## Drops n elements from the beginning of the list.
 drop : List elem, Nat -> List elem
+drop = \list, n ->
+    remaining = Num.subSaturated (List.len list) n
+
+    List.takeLast list remaining
 
 ## Drops the element at the given index from the list.
 ##
@@ -797,6 +816,10 @@ findIndex = \list, matcher ->
 ##
 ## Some languages have a function called **`slice`** which works similarly to this.
 sublist : List elem, { start : Nat, len : Nat } -> List elem
+sublist = \list, config ->
+    sublistLowlevel list config.start config.len
+
+sublistLowlevel : List elem, Nat, Nat -> List elem
 
 ## Intersperses `sep` between the elements of `list`
 ## >>> List.intersperse 9 [1, 2, 3]     # [1, 9, 2, 9, 3]
@@ -804,7 +827,11 @@ intersperse : List elem, elem -> List elem
 intersperse = \list, sep ->
     capacity = 2 * List.len list
     init = List.withCapacity capacity
-    newList = List.walk list init (\acc, elem -> acc |> List.append elem |> List.append sep)
+    newList =
+        List.walk list init \acc, elem ->
+            acc
+                |> List.appendUnsafe elem
+                |> List.appendUnsafe sep
 
     List.dropLast newList
 
@@ -816,6 +843,13 @@ intersperse = \list, sep ->
 ## means if you give an index of 0, the `before` list will be empty and the
 ## `others` list will have the same elements as the original list.)
 split : List elem, Nat -> { before : List elem, others : List elem }
+split = \elements, userSplitIndex ->
+    length = List.len elements
+    splitIndex = if length > userSplitIndex then userSplitIndex else length
+    before = List.sublist elements { start: 0, len: splitIndex }
+    others = List.sublist elements { start: splitIndex, len: length - splitIndex }
+
+    { before, others }
 
 ## Primitive for iterating over a List, being able to decide at every element whether to continue
 iterate : List elem, s, (s, elem -> [Continue s, Break b]) -> [Continue s, Break b]

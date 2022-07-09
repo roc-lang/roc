@@ -84,7 +84,7 @@ impl SubsHeader {
     fn from_subs(subs: &Subs, exposed_vars_by_symbol: usize) -> Self {
         // TODO what do we do with problems? they should
         // be reported and then removed from Subs I think
-        debug_assert!(subs.problems.is_empty());
+        debug_assert!(subs.problems.is_empty(), "{:?}", &subs.problems);
 
         Self {
             utable: subs.utable.len() as u64,

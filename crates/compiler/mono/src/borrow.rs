@@ -910,9 +910,8 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListMap4 => arena.alloc_slice_copy(&[owned, owned, owned, owned, function, closure_data]),
         ListSortWith => arena.alloc_slice_copy(&[owned, function, closure_data]),
 
-        // TODO when we have lists with capacity (if ever)
-        // List.append should own its first argument
-        ListAppend => arena.alloc_slice_copy(&[owned, owned]),
+        ListAppendUnsafe => arena.alloc_slice_copy(&[owned, owned]),
+        ListReserve => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListSublist => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
         ListDropAt => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListSwap => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
@@ -935,8 +934,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         NumBytesToU32 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrStartsWith | StrEndsWith => arena.alloc_slice_copy(&[borrowed, borrowed]),
         StrStartsWithScalar => arena.alloc_slice_copy(&[borrowed, irrelevant]),
-        StrFromUtf8 => arena.alloc_slice_copy(&[owned]),
-        StrFromUtf8Range => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+        StrFromUtf8Range => arena.alloc_slice_copy(&[borrowed, irrelevant, irrelevant]),
         StrToUtf8 => arena.alloc_slice_copy(&[owned]),
         StrRepeat => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrFromInt | StrFromFloat => arena.alloc_slice_copy(&[irrelevant]),

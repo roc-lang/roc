@@ -8,6 +8,8 @@ use roc_build::link::{LinkType, LinkingStrategy};
 use roc_error_macros::{internal_error, user_error};
 use roc_load::{LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
+use roc_repl_cli::expect_mono_module_to_dylib;
+use roc_target::TargetInfo;
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
@@ -34,6 +36,7 @@ pub const CMD_DOCS: &str = "docs";
 pub const CMD_CHECK: &str = "check";
 pub const CMD_VERSION: &str = "version";
 pub const CMD_FORMAT: &str = "format";
+pub const CMD_TEST: &str = "test";
 
 pub const FLAG_DEBUG: &str = "debug";
 pub const FLAG_DEV: &str = "dev";
@@ -161,6 +164,25 @@ pub fn build_app<'a>() -> Command<'a> {
                     .default_value(DEFAULT_ROC_FILENAME),
             )
         )
+        .subcommand(Command::new(CMD_TEST)
+            .about("Run all top-level `expect`s in a root module and any modules it imports.")
+            .arg(flag_optimize.clone())
+            .arg(flag_max_threads.clone())
+            .arg(flag_opt_size.clone())
+            .arg(flag_dev.clone())
+            .arg(flag_debug.clone())
+            .arg(flag_time.clone())
+            .arg(flag_linker.clone())
+            .arg(flag_precompiled.clone())
+            .arg(flag_valgrind.clone())
+            .arg(
+                Arg::new(ROC_FILE)
+                    .help("The .roc file for the root module")
+                    .allow_invalid_utf8(true)
+                    .required(true),
+            )
+            .arg(args_for_app.clone())
+        )
         .subcommand(Command::new(CMD_REPL)
             .about("Launch the interactive Read Eval Print Loop (REPL)")
         )
@@ -256,6 +278,134 @@ pub enum BuildConfig {
 pub enum FormatMode {
     Format,
     CheckOnly,
+}
+
+pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
+    let arena = Bump::new();
+    let filename = matches.value_of_os(ROC_FILE).unwrap();
+    let opt_level = match (
+        matches.is_present(FLAG_OPTIMIZE),
+        matches.is_present(FLAG_OPT_SIZE),
+        matches.is_present(FLAG_DEV),
+    ) {
+        (true, false, false) => OptLevel::Optimize,
+        (false, true, false) => OptLevel::Size,
+        (false, false, true) => OptLevel::Development,
+        (false, false, false) => OptLevel::Normal,
+        _ => user_error!("build can be only one of `--dev`, `--optimize`, or `--opt-size`"),
+    };
+
+    let threading = match matches
+        .value_of(FLAG_MAX_THREADS)
+        .and_then(|s| s.parse::<usize>().ok())
+    {
+        None => Threading::AllAvailable,
+        Some(0) => user_error!("cannot build with at most 0 threads"),
+        Some(1) => Threading::Single,
+        Some(n) => Threading::AtMost(n),
+    };
+
+    let path = Path::new(filename);
+
+    // Spawn the root task
+    let path = path.canonicalize().unwrap_or_else(|err| {
+        use io::ErrorKind::*;
+
+        match err.kind() {
+            NotFound => {
+                let path_string = path.to_string_lossy();
+
+                // TODO these should use roc_reporting to display nicer error messages.
+                match matches.value_source(ROC_FILE) {
+                    Some(ValueSource::DefaultValue) => {
+                        eprintln!(
+                            "\nNo `.roc` file was specified, and the current directory does not contain a {} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n",
+                            DEFAULT_ROC_FILENAME
+                        )
+                    }
+                    _ => eprintln!("\nThis file was not found: {}\n\nYou can run `roc help` for more information on how to provide a .roc file.\n", path_string),
+                }
+
+                process::exit(1);
+            }
+            _ => {
+                todo!("TODO Gracefully handle opening {:?} - {:?}", path, err);
+            }
+        }
+    });
+
+    unsafe {
+        let name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
+        let cstring = CString::new(name).unwrap();
+        let shared_fd =
+            libc::shm_open(cstring.as_ptr().cast(), libc::O_RDWR | libc::O_CREAT, 0o666);
+
+        libc::ftruncate(shared_fd, 1024);
+
+        let _shared_ptr = libc::mmap(
+            std::ptr::null_mut(),
+            4096,
+            libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            shared_fd,
+            0,
+        );
+    }
+
+    let src_dir = path.parent().unwrap().canonicalize().unwrap();
+
+    // let target_valgrind = matches.is_present(FLAG_VALGRIND);
+
+    let arena = &arena;
+    let target = &triple;
+    let opt_level = opt_level;
+    let target_info = TargetInfo::from(target);
+
+    // Step 1: compile the app and generate the .o file
+    let subs_by_module = Default::default();
+
+    let loaded = roc_load::load_and_monomorphize(
+        arena,
+        path,
+        src_dir.as_path(),
+        subs_by_module,
+        target_info,
+        // TODO: expose this from CLI?
+        roc_reporting::report::RenderTarget::ColorTerminal,
+        threading,
+    )
+    .unwrap();
+
+    let (lib, expects) =
+        expect_mono_module_to_dylib(arena, target.clone(), loaded, opt_level).unwrap();
+
+    use roc_gen_llvm::run_jit_function;
+
+    let mut failures = 0;
+    let passed = expects.len();
+
+    for expect in expects {
+        print!("test {expect}... ");
+        let result = run_jit_function!(lib, expect, bool, |v: bool| v);
+
+        match result {
+            true => println!("ok"),
+            false => {
+                failures += 1;
+                println!("failed")
+            }
+        }
+    }
+
+    println!();
+
+    if failures > 0 {
+        println!("test result: failed. {passed} passed; {failures} failed;");
+        Ok(1)
+    } else {
+        println!("test result: ok. {passed} passed; {failures} failed;");
+        Ok(0)
+    }
 }
 
 pub fn build(
