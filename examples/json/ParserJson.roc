@@ -63,6 +63,6 @@ jsonComma = map2 (scalar ',') jsonWS (\_, _ -> {})
 jsonNumArray : Parser RawStr JsonValue
 jsonNumArray =
     jsonNum
-    |> sepBy (scalar ',')
+    |> sepBy jsonComma
     |> between (scalar '[') (scalar ']')
     |> map (\res -> @JsonValue (JsonArray res))
