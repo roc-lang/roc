@@ -73,25 +73,42 @@ runStr = \parser, input ->
         ParsingIncomplete leftoverRaw ->
           ParsingIncomplete (strFromRaw leftoverRaw)
 
-codepoint : U8 -> Parser RawStr U8
-codepoint = \expectedCodePoint ->
-  # fail "x"
+codepointSatisfies : (U8 -> Bool) -> Parser RawStr U8
+codepointSatisfies = \check ->
   buildPrimitiveParser \input ->
     {before: start, others: inputRest} = List.split input 1
-    if List.isEmpty start then
-        errorChar = strFromCodepoint expectedCodePoint
-        Err (ParsingFailure "expected char `\(errorChar)` but input was empty")
-        # Ok {val: 0, input: inputRest}
-    else
-      if start == (List.single expectedCodePoint) then
-        Ok {val: expectedCodePoint, input: inputRest}
-      else
-        errorChar = strFromCodepoint expectedCodePoint
-        otherChar = strFromRaw start
-        inputStr = strFromRaw input
-        Err (ParsingFailure "expected char `\(errorChar)` but found `\(otherChar)`.\n While reading: `\(inputStr)`")
-        # Ok {val: 0, input: inputRest}
+    when List.get start 0 is
+      Err OutOfBounds ->
+        Err (ParsingFailure "expected a codepoint satisfying a condition, but input was empty.")
+      Ok startCodepoint ->
+        if (check startCodepoint) then
+          Ok {val: startCodepoint, input: inputRest}
+        else
+          otherChar = strFromCodepoint startCodepoint
+          inputStr = strFromRaw input
+          Err (ParsingFailure "expected a codepoint satisfying a condition but found `\(otherChar)`.\n While reading: `\(inputStr)`")
 
+# Implemented manually instead of on top of codepointSatisfies
+# because of better error messages
+codepoint : U8 -> Parser RawStr U8
+codepoint = \expectedCodePoint ->
+  buildPrimitiveParser \input ->
+    {before: start, others: inputRest} = List.split input 1
+    when List.get start 0 is
+      Err OutOfBounds ->
+        errorChar = strFromCodepoint expectedCodePoint
+        Err (ParsingFailure "expected char `\(errorChar)` but input was empty.")
+      Ok startCodepoint ->
+        if startCodepoint == expectedCodePoint then
+          Ok {val: expectedCodePoint, input: inputRest}
+        else
+          errorChar = strFromCodepoint expectedCodePoint
+          otherChar = strFromRaw start
+          inputStr = strFromRaw input
+          Err (ParsingFailure "expected char `\(errorChar)` but found `\(otherChar)`.\n While reading: `\(inputStr)`")
+
+# Implemented manually instead of a sequence of codepoints
+# because of efficiency and better error messages
 stringRaw : List U8 -> Parser RawStr (List U8)
 stringRaw = \expectedString ->
   buildPrimitiveParser \input ->
