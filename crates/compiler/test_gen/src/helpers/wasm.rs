@@ -11,7 +11,7 @@ use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Mutex;
-use wasmer::{Memory, WasmPtr};
+use wasmer::WasmPtr;
 
 // Should manually match build.rs
 const PLATFORM_FILENAME: &str = "wasm_test_platform";
@@ -19,7 +19,6 @@ const OUT_DIR_VAR: &str = "TEST_GEN_OUT";
 
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
 const INIT_REFCOUNT_NAME: &str = "init_refcount_test";
-const PANIC_MSG_NAME: &str = "panic_msg";
 
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app \"test\" provides [main] to \"./platform\"\n\nmain =\n");
@@ -273,31 +272,6 @@ where
             Ok(output)
         }
     }
-}
-
-/// Our test roc_panic stores a pointer to its message in a global variable so we can find it.
-fn get_roc_panic_msg(instance: &wasmer::Instance, memory: &Memory) -> Option<String> {
-    let memory_bytes = unsafe { memory.data_unchecked() };
-
-    // We need to dereference twice!
-    // The Wasm Global only points at the memory location of the C global value
-    let panic_msg_global = instance.exports.get_global(PANIC_MSG_NAME).unwrap();
-    let global_addr = panic_msg_global.get().unwrap_i32() as usize;
-    let global_ptr = memory_bytes[global_addr..].as_ptr() as *const u32;
-
-    // Dereference again to find the bytes of the message string
-    let msg_addr = unsafe { *global_ptr };
-    if msg_addr == 0 {
-        return None;
-    }
-    let msg_index = msg_addr as usize;
-    let msg_len = memory_bytes[msg_index..]
-        .iter()
-        .position(|c| *c == 0)
-        .unwrap();
-    let msg_bytes = memory_bytes[msg_index..][..msg_len].to_vec();
-    let msg = unsafe { String::from_utf8_unchecked(msg_bytes) };
-    Some(msg)
 }
 
 #[allow(dead_code)]
