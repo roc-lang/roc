@@ -6,3 +6,5 @@ hosted Effect
 putLine : Str -> Effect {}
 
 getLine : Effect Str
+
+sendRequest : Request response -> Effect response
