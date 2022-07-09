@@ -203,7 +203,6 @@ where
 
     let wasm_bytes = crate::helpers::wasm::compile_to_wasm_bytes(&arena, src, phantom);
 
-    use wasm3::error::Trap;
     use wasm3::Environment;
     use wasm3::Module;
 
@@ -244,7 +243,8 @@ where
                     let (_, memory_size) = std::mem::transmute::<_, (usize, usize)>(memory_ptr);
                     std::slice::from_raw_parts(memory_ptr as _, memory_size)
                 };
-                let msg_bytes = &memory[msg_ptr as usize..][msg_len as usize..];
+
+                let msg_bytes = &memory[msg_ptr as usize..][..msg_len as usize];
                 let msg = std::str::from_utf8(msg_bytes).unwrap();
 
                 Err(format!("Roc failed with message: \"{}\"", msg))
@@ -253,20 +253,20 @@ where
             }
         }
         Ok(address) => {
-            //            if false {
-            //                println!("test_wrapper returned 0x{:x}", address);
-            //                println!("Stack:");
-            //                crate::helpers::wasm::debug_memory_hex(memory, address, std::mem::size_of::<T>());
-            //            }
-            //            if false {
-            //                println!("Heap:");
-            //                // Manually provide address and size based on printf in wasm_test_platform.c
-            //                crate::helpers::wasm::debug_memory_hex(memory, 0x11440, 24);
-            //            }
-
             let (_, memory_size) = unsafe { std::mem::transmute::<_, (usize, usize)>(rt.memory()) };
             let memory: &[u8] =
                 unsafe { std::slice::from_raw_parts(rt.memory() as _, memory_size) };
+
+            if false {
+                println!("test_wrapper returned 0x{:x}", address);
+                println!("Stack:");
+                crate::helpers::wasm::debug_memory_hex(memory, address, std::mem::size_of::<T>());
+            }
+            if false {
+                println!("Heap:");
+                // Manually provide address and size based on printf in wasm_test_platform.c
+                crate::helpers::wasm::debug_memory_hex(memory, 0x11440, 24);
+            }
 
             let output = <T as FromWasm32Memory>::decode(memory, address as u32);
 
@@ -366,11 +366,9 @@ where
 
 /// Print out hex bytes of the test result, and a few words on either side
 /// Can be handy for debugging misalignment issues etc.
-pub fn debug_memory_hex(memory: &Memory, address: i32, size: usize) {
-    let memory_words: &[u32] = unsafe {
-        let memory_bytes = memory.data_unchecked();
-        std::mem::transmute(memory_bytes)
-    };
+pub fn debug_memory_hex(memory_bytes: &[u8], address: i32, size: usize) {
+    let memory_words: &[u32] =
+        unsafe { std::slice::from_raw_parts(memory_bytes.as_ptr().cast(), memory_bytes.len() / 4) };
 
     let extra_words = 2;
     let result_start = (address as usize) / 4;
