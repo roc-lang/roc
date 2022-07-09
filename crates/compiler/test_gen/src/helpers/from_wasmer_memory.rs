@@ -95,8 +95,10 @@ impl<T: FromWasmerMemory + Clone> FromWasmerMemory for RocList<T> {
     }
 }
 
-impl<T: FromWasmerMemory + Wasm32Sized, E: FromWasmerMemory + Wasm32Sized> FromWasmerMemory
-    for RocResult<T, E>
+impl<T, E> FromWasmerMemory for RocResult<T, E>
+where
+    T: FromWasmerMemory + Wasm32Sized,
+    E: FromWasmerMemory + Wasm32Sized,
 {
     fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
         let tag_offset = Ord::max(T::ACTUAL_WIDTH, E::ACTUAL_WIDTH);

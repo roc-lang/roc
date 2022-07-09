@@ -1,0 +1,5 @@
+procedure Test.0 ():
+    let Test.9 : [<rnu><null>, C List *self] = TagId(1) ;
+    let Test.10 : [C List [<rnu><null>, C List *self], C U16, C ] = TagId(2) ;
+    let Test.12 : {[<rnu><null>, C List *self], [C List [<rnu><null>, C List *self], C U16, C ]} = Struct {Test.9, Test.10};
+    ret Test.12;

@@ -1684,6 +1684,21 @@ fn choose_u128_layout() {
 }
 
 #[mono_test]
+fn recursive_call_capturing_function() {
+    indoc!(
+        r#"
+        a = \b ->
+            c : U32 -> U32
+            c = \d ->
+                if True then d else c (d+b)
+            c 0
+
+        a 6
+        "#
+    )
+}
+
+#[mono_test]
 fn call_function_in_empty_list() {
     indoc!(
         r#"
@@ -1700,6 +1715,68 @@ fn call_function_in_empty_list_unbound() {
         r#"
         lst = []
         List.map lst \f -> f {}
+        "#
+    )
+}
+
+#[mono_test]
+fn instantiate_annotated_as_recursive_alias_toplevel() {
+    indoc!(
+        r#"
+        app "test" provides [it] to "./platform"
+
+        Value : [Nil, Array (List Value)]
+
+        foo : [Nil]*
+        foo = Nil
+
+        it : Value
+        it = foo
+        "#
+    )
+}
+
+#[mono_test]
+fn instantiate_annotated_as_recursive_alias_polymorphic_expr() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            Value : [Nil, Array (List Value)]
+
+            foo : [Nil]*
+            foo = Nil
+
+            it : Value
+            it = foo
+
+            it
+        "#
+    )
+}
+
+#[mono_test]
+fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            Value : [Nil, Array (List Value)]
+
+            foo : [Nil]*
+            foo = Nil
+
+            v1 : Value
+            v1 = foo
+
+            Value2 : [Nil, B U16, Array (List Value)]
+
+            v2 : Value2
+            v2 = foo
+
+            {v1, v2}
         "#
     )
 }

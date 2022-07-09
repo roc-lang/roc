@@ -8,12 +8,12 @@ use crate::llvm::build_dict::{
 };
 use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
-    self, allocate_list, empty_polymorphic_list, list_append, list_concat, list_drop_at,
+    self, allocate_list, empty_polymorphic_list, list_append_unsafe, list_concat, list_drop_at,
     list_get_unsafe, list_len, list_map, list_map2, list_map3, list_map4, list_prepend,
-    list_replace_unsafe, list_sort_with, list_sublist, list_swap, list_symbol_to_c_abi,
-    list_to_c_abi, list_with_capacity,
+    list_replace_unsafe, list_reserve, list_sort_with, list_sublist, list_swap,
+    list_symbol_to_c_abi, list_to_c_abi, list_with_capacity, pass_update_mode,
 };
-use crate::llvm::build_str::{str_from_float, str_from_int, str_from_utf8, str_from_utf8_range};
+use crate::llvm::build_str::{str_from_float, str_from_int};
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
     self, argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout,
@@ -5358,18 +5358,31 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             str_from_float(env, scope, args[0])
         }
-        StrFromUtf8 => {
-            // Str.fromUtf8 : List U8 -> Result Str Utf8Problem
-            debug_assert_eq!(args.len(), 1);
-
-            str_from_utf8(env, scope, args[0], update_mode)
-        }
         StrFromUtf8Range => {
-            debug_assert_eq!(args.len(), 2);
+            debug_assert_eq!(args.len(), 3);
 
-            let count_and_start = load_symbol(scope, &args[1]).into_struct_value();
+            let list = args[0];
+            let start = load_symbol(scope, &args[1]);
+            let count = load_symbol(scope, &args[2]);
 
-            str_from_utf8_range(env, scope, args[0], count_and_start)
+            let result_type = env.module.get_struct_type("str.FromUtf8Result").unwrap();
+            let result_ptr = env
+                .builder
+                .build_alloca(result_type, "alloca_utf8_validate_bytes_result");
+
+            call_void_bitcode_fn(
+                env,
+                &[
+                    result_ptr.into(),
+                    list_symbol_to_c_abi(env, scope, list).into(),
+                    start,
+                    count,
+                    pass_update_mode(env, update_mode),
+                ],
+                bitcode::STR_FROM_UTF8_RANGE,
+            );
+
+            crate::llvm::build_str::decode_from_utf8_result(env, result_ptr).into()
         }
         StrToUtf8 => {
             // Str.fromInt : Str -> List U8
@@ -5513,14 +5526,24 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             list_concat(env, first_list, second_list, element_layout)
         }
-        ListAppend => {
-            // List.append : List elem, elem -> List elem
+        ListAppendUnsafe => {
+            // List.appendUnsafe : List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);
 
             let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            list_append(env, original_wrapper, elem, elem_layout, update_mode)
+            list_append_unsafe(env, original_wrapper, elem, elem_layout)
+        }
+        ListReserve => {
+            // List.reserve : List elem, Nat -> List elem
+            debug_assert_eq!(args.len(), 2);
+
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let element_layout = list_element_layout!(list_layout);
+            let spare = load_symbol(scope, &args[1]);
+
+            list_reserve(env, list, spare, element_layout, update_mode)
         }
         ListSwap => {
             // List.swap : List elem, Nat, Nat -> List elem
@@ -5543,10 +5566,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             )
         }
         ListSublist => {
-            // List.sublist : List elem, { start : Nat, len : Nat } -> List elem
-            //
-            // As a low-level, record is destructed
-            // List.sublist : List elem, start : Nat, len : Nat -> List elem
             debug_assert_eq!(args.len(), 3);
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);

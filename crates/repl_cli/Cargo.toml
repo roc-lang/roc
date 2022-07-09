@@ -36,6 +36,8 @@ roc_std = {path = "../roc_std", default-features = false}
 roc_target = {path = "../compiler/roc_target"}
 roc_types = {path = "../compiler/types"}
 
+roc_module = { path = "../compiler/module" }
+
 [lib]
 name = "roc_repl_cli"
 path = "src/lib.rs"
