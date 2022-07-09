@@ -5,6 +5,7 @@ use roc_gen_wasm::wasm32_result::Wasm32Result;
 use roc_gen_wasm::wasm_module::{Export, ExportType};
 use roc_gen_wasm::{DEBUG_SETTINGS, MEMORY_NAME};
 use roc_load::Threading;
+use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
@@ -214,22 +215,16 @@ where
 
     let mut module = rt.load_module(module).expect("Unable to load module");
 
-    let mut panic_msg: Option<String> = None;
+    let panic_msg = Cell::<Option<(i32, i32)>>::new(None);
 
     module.link_wasi().unwrap();
     module
         .link_closure(
             "env",
             "send_panic_msg_to_rust",
-            |call_context, (msg_ptr, msg_len): (i32, i32)| {
-                let memory: &[u8] = unsafe {
-                    let memory_ptr: *const [u8] = call_context.memory();
-                    let (_, memory_size) = std::mem::transmute::<_, (usize, usize)>(memory_ptr);
-                    std::slice::from_raw_parts(memory_ptr as _, memory_size)
-                };
-                let msg_bytes = &memory[msg_ptr as usize..][msg_len as usize..];
-                let msg = std::str::from_utf8(msg_bytes).unwrap();
-                panic_msg = Some(msg.into());
+            |_call_context, args: (i32, i32)| {
+                let swappy = Cell::new(Some(args));
+                panic_msg.swap(&swappy);
                 Ok(())
             },
         )
@@ -241,7 +236,15 @@ where
 
     match test_wrapper.call() {
         Err(e) => {
-            if let Some(msg) = panic_msg {
+            if let Some((msg_ptr, msg_len)) = panic_msg.into_inner() {
+                let memory: &[u8] = unsafe {
+                    let memory_ptr: *const [u8] = rt.memory();
+                    let (_, memory_size) = std::mem::transmute::<_, (usize, usize)>(memory_ptr);
+                    std::slice::from_raw_parts(memory_ptr as _, memory_size)
+                };
+                let msg_bytes = &memory[msg_ptr as usize..][msg_len as usize..];
+                let msg = std::str::from_utf8(msg_bytes).unwrap();
+
                 Err(format!("Roc failed with message: \"{}\"", msg))
             } else {
                 Err(format!("{}", e))
