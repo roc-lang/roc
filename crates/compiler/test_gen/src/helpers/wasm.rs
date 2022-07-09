@@ -5,11 +5,12 @@ use roc_gen_wasm::wasm32_result::Wasm32Result;
 use roc_gen_wasm::wasm_module::{Export, ExportType};
 use roc_gen_wasm::{DEBUG_SETTINGS, MEMORY_NAME};
 use roc_load::Threading;
-use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::sync::Mutex;
 use wasmer::{Memory, WasmPtr};
 
 // Should manually match build.rs
@@ -215,16 +216,17 @@ where
 
     let mut module = rt.load_module(module).expect("Unable to load module");
 
-    let panic_msg = Cell::<Option<(i32, i32)>>::new(None);
+    let panic_msg: Rc<Mutex<Option<(i32, i32)>>> = Default::default();
+    let panic_msg_for_closure = panic_msg.clone();
 
     module.link_wasi().unwrap();
     module
         .link_closure(
             "env",
             "send_panic_msg_to_rust",
-            |_call_context, args: (i32, i32)| {
-                let swappy = Cell::new(Some(args));
-                panic_msg.swap(&swappy);
+            move |_call_context, args: (i32, i32)| {
+                let mut w = panic_msg_for_closure.lock().unwrap();
+                *w = Some(args);
                 Ok(())
             },
         )
@@ -236,7 +238,7 @@ where
 
     match test_wrapper.call() {
         Err(e) => {
-            if let Some((msg_ptr, msg_len)) = panic_msg.into_inner() {
+            if let Some((msg_ptr, msg_len)) = *panic_msg.lock().unwrap() {
                 let memory: &[u8] = unsafe {
                     let memory_ptr: *const [u8] = rt.memory();
                     let (_, memory_size) = std::mem::transmute::<_, (usize, usize)>(memory_ptr);
