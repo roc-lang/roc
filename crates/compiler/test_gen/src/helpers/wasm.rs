@@ -33,11 +33,11 @@ fn promote_expr_to_module(src: &str) -> String {
 }
 
 #[allow(dead_code)]
-pub fn compile_and_load<'a, T: Wasm32Result>(
+pub fn compile_to_wasm_bytes<'a, T: Wasm32Result>(
     arena: &'a bumpalo::Bump,
     src: &str,
     test_wrapper_type_info: PhantomData<T>,
-) -> wasmer::Instance {
+) -> Vec<u8> {
     let platform_path = get_preprocessed_host_path();
     let platform_bytes = std::fs::read(&platform_path).unwrap();
     println!("Loading test host {}", platform_path.display());
@@ -50,7 +50,7 @@ pub fn compile_and_load<'a, T: Wasm32Result>(
         save_wasm_file(&compiled_bytes, build_dir_hash)
     };
 
-    load_bytes_into_runtime(&compiled_bytes)
+    compiled_bytes
 }
 
 fn get_preprocessed_host_path() -> PathBuf {
@@ -199,7 +199,8 @@ where
 {
     let arena = bumpalo::Bump::new();
 
-    let instance = crate::helpers::wasm::compile_and_load(&arena, src, phantom);
+    let wasm_bytes = crate::helpers::wasm::compile_to_wasm_bytes(&arena, src, phantom);
+    let instance = load_bytes_into_runtime(&wasm_bytes);
 
     let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
@@ -270,7 +271,8 @@ where
 {
     let arena = bumpalo::Bump::new();
 
-    let instance = crate::helpers::wasm::compile_and_load(&arena, src, phantom);
+    let wasm_bytes = crate::helpers::wasm::compile_to_wasm_bytes(&arena, src, phantom);
+    let instance = load_bytes_into_runtime(&wasm_bytes);
 
     let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
 
