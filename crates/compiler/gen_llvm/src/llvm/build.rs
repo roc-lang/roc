@@ -3630,7 +3630,7 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
         // Drop the "return pointer" if it exists on the roc function
         // and the c function does not return via pointer
         (RocReturn::ByPointer, CCReturn::Return) => {
-            // Roc current puts the return pointer at the end of the argument list.
+            // Roc currently puts the return pointer at the end of the argument list.
             // As such, we drop the last element here instead of the first.
             (&params[..], &param_types[..param_types.len() - 1])
         }
