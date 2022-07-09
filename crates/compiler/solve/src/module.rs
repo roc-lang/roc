@@ -6,9 +6,10 @@ use roc_can::module::RigidVariables;
 use roc_collections::all::MutMap;
 use roc_collections::VecMap;
 use roc_derive_key::GlobalDerivedSymbols;
+use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_types::solved_types::Solved;
-use roc_types::subs::{ExposedTypesStorageSubs, StorageSubs, Subs, Variable};
+use roc_types::subs::{Content, ExposedTypesStorageSubs, FlatType, StorageSubs, Subs, Variable};
 use roc_types::types::Alias;
 
 #[derive(Debug)]
@@ -100,10 +101,29 @@ pub fn exposed_types_storage_subs(
     for (_, member_specialization) in solved_specializations.iter() {
         for (_, &specialization_lset_var) in member_specialization.specialization_lambda_sets.iter()
         {
-            let new_var = storage_subs
-                .import_variable_from(subs, specialization_lset_var)
+            let specialization_lset_ambient_function_var = subs
+                .get_lambda_set(specialization_lset_var)
+                .ambient_function;
+
+            // Import the ambient function of this specialization lambda set; that will import the
+            // lambda set as well. The ambient function is needed for the lambda set compaction
+            // algorithm.
+            let imported_lset_ambient_function_var = storage_subs
+                .import_variable_from(subs, specialization_lset_ambient_function_var)
                 .variable;
-            stored_specialization_lambda_set_vars.insert(specialization_lset_var, new_var);
+
+            let imported_lset_var = match storage_subs
+                .as_inner()
+                .get_content_without_compacting(imported_lset_ambient_function_var)
+            {
+                Content::Structure(FlatType::Func(_, lambda_set_var, _)) => *lambda_set_var,
+                content => internal_error!(
+                    "ambient lambda set function import is not a function, found: {:?}",
+                    roc_types::subs::SubsFmtContent(content, storage_subs.as_inner())
+                ),
+            };
+            stored_specialization_lambda_set_vars
+                .insert(specialization_lset_var, imported_lset_var);
         }
     }
 

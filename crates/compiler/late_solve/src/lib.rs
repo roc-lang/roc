@@ -9,7 +9,7 @@ use roc_collections::MutMap;
 use roc_derive_key::GlobalDerivedSymbols;
 use roc_module::symbol::ModuleId;
 use roc_solve::solve::{compact_lambda_sets_of_vars, Phase, Pools};
-use roc_types::subs::Content;
+use roc_types::subs::{Content, FlatType, LambdaSet};
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, Variable};
 use roc_unify::unify::{unify as unify_unify, Mode, Unified};
 
@@ -91,7 +91,7 @@ impl Phase for LatePhase<'_> {
     }
 
     #[inline(always)]
-    fn copy_lambda_set_var_to_home_subs(
+    fn copy_lambda_set_ambient_function_to_home_subs(
         &self,
         external_lambda_set_var: Variable,
         external_module_id: ModuleId,
@@ -99,11 +99,12 @@ impl Phase for LatePhase<'_> {
     ) -> Variable {
         match (external_module_id == self.home, self.abilities) {
             (true, _) | (false, AbilitiesView::Module(_)) => {
-                debug_assert!(matches!(
-                    target_subs.get_content_without_compacting(external_lambda_set_var),
-                    Content::LambdaSet(..)
-                ));
-                external_lambda_set_var
+                // The lambda set (and hence its ambient function) should be available in the
+                // current subs.
+                let LambdaSet {
+                    ambient_function, ..
+                } = target_subs.get_lambda_set(external_lambda_set_var);
+                ambient_function
             }
             (false, AbilitiesView::World(wa)) => {
                 let mut world = wa.world.write().unwrap();
@@ -113,17 +114,27 @@ impl Phase for LatePhase<'_> {
                     .stored_specialization_lambda_set_vars
                     .get(&external_lambda_set_var)
                     .unwrap();
+                let LambdaSet {
+                    ambient_function, ..
+                } = module_types
+                    .storage_subs
+                    .as_inner()
+                    .get_lambda_set(storage_lambda_set_var);
+
                 let copied = module_types
                     .storage_subs
-                    .export_variable_to(target_subs, storage_lambda_set_var);
-                let our_lambda_set_var = copied.variable;
+                    // TODO: I think this is always okay, but revisit later when we're in a more
+                    // stable position to see if we can get rid of the bookkeeping done as a result
+                    // of this.
+                    .export_variable_to_directly_to_use_site(target_subs, ambient_function);
+                let our_ambient_function_var = copied.variable;
 
                 debug_assert!(matches!(
-                    target_subs.get_content_without_compacting(our_lambda_set_var),
-                    Content::LambdaSet(..)
+                    target_subs.get_content_without_compacting(our_ambient_function_var),
+                    Content::Structure(FlatType::Func(..))
                 ));
 
-                our_lambda_set_var
+                our_ambient_function_var
             }
         }
     }
@@ -152,7 +163,7 @@ pub fn unify(
 
             let late_phase = LatePhase { home, abilities };
 
-            compact_lambda_sets_of_vars(
+            let must_implement_constraints = compact_lambda_sets_of_vars(
                 subs,
                 arena,
                 &mut pools,
@@ -160,6 +171,11 @@ pub fn unify(
                 &late_phase,
                 derived_symbols,
             );
+            // At this point we can't do anything with must-implement constraints, since we're no
+            // longer solving. We must assume that they were totally caught during solving.
+            // After we land https://github.com/rtfeldman/roc/issues/3207 this concern should totally
+            // go away.
+            let _ = must_implement_constraints;
             // Pools are only used to keep track of variable ranks for generalization purposes.
             // Since we break generalization during monomorphization, `pools` is irrelevant
             // here. We only need it for `compact_lambda_sets_of_vars`, which is also used in a

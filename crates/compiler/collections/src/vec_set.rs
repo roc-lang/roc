@@ -13,6 +13,12 @@ impl<T> Default for VecSet<T> {
     }
 }
 
+impl<T> VecSet<T> {
+    pub fn into_vec(self) -> Vec<T> {
+        self.elements
+    }
+}
+
 impl<T: PartialEq> VecSet<T> {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
