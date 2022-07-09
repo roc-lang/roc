@@ -271,29 +271,31 @@ fn issue_2583_specialize_errors_behind_unified_branches() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn roc_result_after() {
+fn roc_result_after_on_ok() {
     assert_evals_to!(indoc!(
         r#"
-            result : Result I64 Str
-            result =
-              Result.after (Ok 1) \num ->
-                if num < 0 then Err "negative!" else Ok -num
+            input : Result I64 Str
+            input = Ok 1
 
-            result
+            Result.after input \num ->
+                if num < 0 then Err "negative!" else Ok -num
             "#),
         RocResult::ok(-1),
         RocResult<i64, RocStr>
     );
+}
 
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn roc_result_after_on_err() {
     assert_evals_to!(indoc!(
         r#"
-            result : Result I64 Str
-            result =
-              Result.after (Err "already a string") \num ->
-                if num < 0 then Err "negative!" else Ok -num
+            input : Result I64 Str
+            input = (Err "already a string")
 
-            result
-            "#),
+            Result.after input \num ->
+                if num < 0 then Err "negative!" else Ok -num
+        "#),
         RocResult::err(RocStr::from("already a string")),
         RocResult<i64, RocStr>
     );
