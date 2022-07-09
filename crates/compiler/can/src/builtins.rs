@@ -133,7 +133,7 @@ map_symbol_to_lowlevel_and_arity! {
     StrToScalars; STR_TO_SCALARS; 1,
     StrGetUnsafe; STR_GET_UNSAFE; 2,
     StrSubstringUnsafe; STR_SUBSTRING_UNSAFE; 3,
-    StrReserve; STR_RESERVE; 1,
+    StrReserve; STR_RESERVE; 2,
     StrAppendScalar; STR_APPEND_SCALAR_UNSAFE; 2,
     StrGetScalarUnsafe; STR_GET_SCALAR_UNSAFE; 2,
     StrToNum; STR_TO_NUM; 1,
