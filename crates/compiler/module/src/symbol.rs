@@ -998,6 +998,8 @@ define_builtins! {
         28 DEV_TMP3: "#dev_tmp3"
         29 DEV_TMP4: "#dev_tmp4"
         30 DEV_TMP5: "#dev_tmp5"
+
+        31 ATTR_INVALID: "#attr_invalid"
     }
     // Fake module for storing derived function symbols
     1 DERIVED: "#Derived" => {
@@ -1144,6 +1146,11 @@ define_builtins! {
         138 NUM_TO_F64_CHECKED: "toF64Checked"
         139 NUM_MAX_F64: "maxF64"
         140 NUM_MIN_F64: "minF64"
+        141 NUM_ADD_CHECKED_LOWLEVEL: "addCheckedLowlevel"
+        142 NUM_SUB_CHECKED_LOWLEVEL: "subCheckedLowlevel"
+        143 NUM_MUL_CHECKED_LOWLEVEL: "mulCheckedLowlevel"
+        144 NUM_BYTES_TO_U16_LOWLEVEL: "bytesToU16Lowlevel"
+        145 NUM_BYTES_TO_U32_LOWLEVEL: "bytesToU32Lowlevel"
     }
     3 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" // the Bool.Bool type alias
@@ -1206,6 +1213,8 @@ define_builtins! {
         44 STR_GET_SCALAR_UNSAFE: "getScalarUnsafe"
         45 STR_WALK_SCALARS: "walkScalars"
         46 STR_WALK_SCALARS_UNTIL: "walkScalarsUntil"
+        47 STR_TO_NUM: "strToNum"
+        48 STR_FROM_UTF8_RANGE_LOWLEVEL: "fromUtf8RangeLowlevel"
     }
     5 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
@@ -1272,6 +1281,10 @@ define_builtins! {
         61 LIST_REPLACE_UNSAFE: "replaceUnsafe"
         62 LIST_WITH_CAPACITY: "withCapacity"
         63 LIST_ITERATE: "iterate"
+        64 LIST_UNREACHABLE: "unreachable"
+        65 LIST_RESERVE: "reserve"
+        66 LIST_APPEND_UNSAFE: "appendUnsafe"
+        67 LIST_SUBLIST_LOWLEVEL: "sublistLowlevel"
     }
     6 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" // the Result.Result type alias
@@ -1285,6 +1298,7 @@ define_builtins! {
         6 RESULT_AFTER: "after"
         7 RESULT_IS_OK: "isOk"
         8 RESULT_IS_ERR: "isErr"
+        9 RESULT_AFTER_ERR: "afterErr"
     }
     7 DICT: "Dict" => {
         0 DICT_DICT: "Dict" imported // the Dict.Dict type alias
@@ -1304,6 +1318,8 @@ define_builtins! {
         12 DICT_UNION: "union"
         13 DICT_INTERSECTION: "intersection"
         14 DICT_DIFFERENCE: "difference"
+
+        15 DICT_GET_LOWLEVEL: "getLowlevel"
     }
     8 SET: "Set" => {
         0 SET_SET: "Set" imported // the Set.Set type alias

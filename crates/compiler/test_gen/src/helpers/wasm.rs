@@ -364,7 +364,7 @@ macro_rules! assert_evals_to {
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        $crate::helpers::wasm::assert_evals_to!($src, $expected, $ty, $transform, false);
+        $crate::helpers::wasm::assert_evals_to!($src, $expected, $ty, $transform, false)
     };
 
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems: expr) => {{

@@ -1461,7 +1461,7 @@ fn adjust_rank_content(
             rank
         }
 
-        RangedNumber(typ, _vars) => adjust_rank(subs, young_mark, visit_mark, group_rank, *typ),
+        RangedNumber(_vars) => group_rank,
     }
 }
 
@@ -1637,9 +1637,7 @@ fn instantiate_rigids_help(
             }
         }
 
-        RangedNumber(typ, _vars) => {
-            instantiate_rigids_help(subs, max_rank, pools, typ);
-        }
+        RangedNumber(_vars) => {}
     }
 
     var
@@ -1946,9 +1944,8 @@ fn deep_copy_var_help(
             copy
         }
 
-        RangedNumber(typ, vars) => {
-            let new_real_type = deep_copy_var_help(subs, max_rank, pools, typ);
-            let new_content = RangedNumber(new_real_type, vars);
+        RangedNumber(vars) => {
+            let new_content = RangedNumber(vars);
 
             subs.set(copy, make_descriptor(new_content));
 

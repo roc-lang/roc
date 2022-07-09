@@ -1,47 +1,46 @@
 interface Str
-    exposes
-        [
-            Utf8Problem,
-            Utf8ByteProblem,
-            concat,
-            isEmpty,
-            joinWith,
-            split,
-            repeat,
-            countGraphemes,
-            countUtf8Bytes,
-            startsWithScalar,
-            toUtf8,
-            fromUtf8,
-            fromUtf8Range,
-            startsWith,
-            endsWith,
-            trim,
-            trimLeft,
-            trimRight,
-            toDec,
-            toF64,
-            toF32,
-            toNat,
-            toU128,
-            toI128,
-            toU64,
-            toI64,
-            toU32,
-            toI32,
-            toU16,
-            toI16,
-            toU8,
-            toI8,
-            toScalars,
-            splitFirst,
-            splitLast,
-            walkUtf8WithIndex,
-            reserve,
-            appendScalar,
-            walkScalars,
-            walkScalarsUntil,
-        ]
+    exposes [
+        Utf8Problem,
+        Utf8ByteProblem,
+        concat,
+        isEmpty,
+        joinWith,
+        split,
+        repeat,
+        countGraphemes,
+        countUtf8Bytes,
+        startsWithScalar,
+        toUtf8,
+        fromUtf8,
+        fromUtf8Range,
+        startsWith,
+        endsWith,
+        trim,
+        trimLeft,
+        trimRight,
+        toDec,
+        toF64,
+        toF32,
+        toNat,
+        toU128,
+        toI128,
+        toU64,
+        toI64,
+        toU32,
+        toI32,
+        toU16,
+        toI16,
+        toU8,
+        toI8,
+        toScalars,
+        splitFirst,
+        splitLast,
+        walkUtf8WithIndex,
+        reserve,
+        appendScalar,
+        walkScalars,
+        walkScalarsUntil,
+    ]
     imports [Bool.{ Bool }, Result.{ Result }]
 
 ## # Types
@@ -118,15 +117,14 @@ interface Str
 ## and you can use it as many times as you like inside a string. The name
 ## between the parentheses must refer to a `Str` value that is currently in
 ## scope, and it must be a name - it can't be an arbitrary expression like a function call.
-Utf8ByteProblem :
-    [
-        InvalidStartByte,
-        UnexpectedEndOfSequence,
-        ExpectedContinuation,
-        OverlongEncoding,
-        CodepointTooLarge,
-        EncodesSurrogateHalf,
-    ]
+Utf8ByteProblem : [
+    InvalidStartByte,
+    UnexpectedEndOfSequence,
+    ExpectedContinuation,
+    OverlongEncoding,
+    CodepointTooLarge,
+    EncodesSurrogateHalf,
+]
 
 Utf8Problem : { byteIndex : Nat, problem : Utf8ByteProblem }
 
@@ -201,10 +199,35 @@ toScalars : Str -> List U32
 ## >>> Str.toUtf8 "🐦"
 toUtf8 : Str -> List U8
 
-# fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8Problem]*
-# fromUtf8Range : List U8 -> Result Str [BadUtf8 Utf8Problem Nat, OutOfBounds]*
 fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]*
+fromUtf8 = \bytes ->
+    result = fromUtf8RangeLowlevel bytes 0 (List.len bytes)
+
+    if result.cIsOk then
+        Ok result.bString
+    else
+        Err (BadUtf8 result.dProblemCode result.aByteIndex)
+
 fromUtf8Range : List U8, { start : Nat, count : Nat } -> Result Str [BadUtf8 Utf8ByteProblem Nat, OutOfBounds]*
+fromUtf8Range = \bytes, config ->
+    if config.start + config.count <= List.len bytes then
+        result = fromUtf8RangeLowlevel bytes config.start config.count
+
+        if result.cIsOk then
+            Ok result.bString
+        else
+            Err (BadUtf8 result.dProblemCode result.aByteIndex)
+    else
+        Err OutOfBounds
+
+FromUtf8Result : {
+    aByteIndex : Nat,
+    bString : Str,
+    cIsOk : Bool,
+    dProblemCode : Utf8ByteProblem,
+}
+
+fromUtf8RangeLowlevel : List U8, Nat, Nat -> FromUtf8Result
 
 startsWith : Str, Str -> Bool
 endsWith : Str, Str -> Bool
@@ -216,19 +239,33 @@ trimLeft : Str -> Str
 trimRight : Str -> Str
 
 toDec : Str -> Result Dec [InvalidNumStr]*
+toDec = \string -> strToNumHelp string
 toF64 : Str -> Result F64 [InvalidNumStr]*
+toF64 = \string -> strToNumHelp string
 toF32 : Str -> Result F32 [InvalidNumStr]*
+toF32 = \string -> strToNumHelp string
 toNat : Str -> Result Nat [InvalidNumStr]*
+toNat = \string -> strToNumHelp string
 toU128 : Str -> Result U128 [InvalidNumStr]*
+toU128 = \string -> strToNumHelp string
 toI128 : Str -> Result I128 [InvalidNumStr]*
+toI128 = \string -> strToNumHelp string
 toU64 : Str -> Result U64 [InvalidNumStr]*
+toU64 = \string -> strToNumHelp string
 toI64 : Str -> Result I64 [InvalidNumStr]*
+toI64 = \string -> strToNumHelp string
 toU32 : Str -> Result U32 [InvalidNumStr]*
+toU32 = \string -> strToNumHelp string
 toI32 : Str -> Result I32 [InvalidNumStr]*
+toI32 = \string -> strToNumHelp string
 toU16 : Str -> Result U16 [InvalidNumStr]*
+toU16 = \string -> strToNumHelp string
 toI16 : Str -> Result I16 [InvalidNumStr]*
+toI16 = \string -> strToNumHelp string
 toU8 : Str -> Result U8 [InvalidNumStr]*
+toU8 = \string -> strToNumHelp string
 toI8 : Str -> Result I8 [InvalidNumStr]*
+toI8 = \string -> strToNumHelp string
 
 ## Gets the byte at the given index, without performing a bounds check
 getUnsafe : Str, Nat -> U8
@@ -395,3 +432,15 @@ walkScalarsUntilHelp = \string, state, step, index, length ->
                 newState
     else
         state
+
+strToNum : Str -> { berrorcode : U8, aresult : Num * }
+
+strToNumHelp : Str -> Result (Num a) [InvalidNumStr]*
+strToNumHelp = \string ->
+    result : { berrorcode : U8, aresult : Num a }
+    result = strToNum string
+
+    if result.berrorcode == 0 then
+        Ok result.aresult
+    else
+        Err InvalidNumStr

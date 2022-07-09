@@ -36,7 +36,8 @@ pub enum ProcSource {
     Roc,
     Helper,
     /// Wrapper function for higher-order calls from Zig to Roc
-    HigherOrderWrapper(usize),
+    HigherOrderMapper(usize),
+    HigherOrderCompare(usize),
 }
 
 #[derive(Debug)]
@@ -463,7 +464,7 @@ impl<'a> WasmBackend<'a> {
         self.module.names.append_function(wasm_fn_index, name);
     }
 
-    /// Build a wrapper around a Roc procedure so that it can be called from our higher-order Zig builtins.
+    /// Build a wrapper around a Roc procedure so that it can be called from Zig builtins List.map*
     ///
     /// The generic Zig code passes *pointers* to all of the argument values (e.g. on the heap in a List).
     /// Numbers up to 64 bits are passed by value, so we need to load them from the provided pointer.
@@ -471,7 +472,7 @@ impl<'a> WasmBackend<'a> {
     ///
     /// NOTE: If the builtins expected the return pointer first and closure data last, we could eliminate the wrapper
     /// when all args are pass-by-reference and non-zero size. But currently we need it to swap those around.
-    pub fn build_higher_order_wrapper(
+    pub fn build_higher_order_mapper(
         &mut self,
         wrapper_lookup_idx: usize,
         inner_lookup_idx: usize,
@@ -515,44 +516,22 @@ impl<'a> WasmBackend<'a> {
         for (i, wrapper_arg) in wrapper_arg_layouts.iter().enumerate() {
             let is_closure_data = i == 0; // Skip closure data (first for wrapper, last for inner)
             let is_return_pointer = i == wrapper_arg_layouts.len() - 1; // Skip return pointer (may not be an arg for inner. And if it is, swaps from end to start)
-            if is_closure_data || is_return_pointer || wrapper_arg.stack_size(TARGET_INFO) == 0 {
+            if is_closure_data || is_return_pointer {
                 continue;
             }
-            n_inner_wasm_args += 1;
 
-            // Load wrapper argument. They're all pointers.
-            self.code_builder.get_local(LocalId(i as u32));
-
-            // Dereference any primitive-valued arguments
-            match wrapper_arg {
-                Layout::Boxed(inner_arg) => match inner_arg {
-                    Layout::Builtin(Builtin::Int(IntWidth::U8 | IntWidth::I8)) => {
-                        self.code_builder.i32_load8_u(Bytes1, 0);
-                    }
-                    Layout::Builtin(Builtin::Int(IntWidth::U16 | IntWidth::I16)) => {
-                        self.code_builder.i32_load16_u(Bytes2, 0);
-                    }
-                    Layout::Builtin(Builtin::Int(IntWidth::U32 | IntWidth::I32)) => {
-                        self.code_builder.i32_load(Bytes4, 0);
-                    }
-                    Layout::Builtin(Builtin::Int(IntWidth::U64 | IntWidth::I64)) => {
-                        self.code_builder.i64_load(Bytes8, 0);
-                    }
-                    Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
-                        self.code_builder.f32_load(Bytes4, 0);
-                    }
-                    Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
-                        self.code_builder.f64_load(Bytes8, 0);
-                    }
-                    Layout::Builtin(Builtin::Bool) => {
-                        self.code_builder.i32_load8_u(Bytes1, 0);
-                    }
-                    _ => {
-                        // Any other layout is a pointer, which we've already loaded. Nothing to do!
-                    }
-                },
-                x => internal_error!("Higher-order wrapper: expected a Box layout, got {:?}", x),
+            let inner_layout = match wrapper_arg {
+                Layout::Boxed(inner) => inner,
+                x => internal_error!("Expected a Boxed layout, got {:?}", x),
+            };
+            if inner_layout.stack_size(TARGET_INFO) == 0 {
+                continue;
             }
+
+            // Load the argument pointer. If it's a primitive value, dereference it too.
+            n_inner_wasm_args += 1;
+            self.code_builder.get_local(LocalId(i as u32));
+            self.dereference_boxed_value(inner_layout);
         }
 
         // If the inner function has closure data, it's the last arg of the inner fn
@@ -592,6 +571,90 @@ impl<'a> WasmBackend<'a> {
 
         self.append_proc_debug_name(wrapper_name);
         self.reset();
+    }
+
+    /// Build a wrapper around a Roc comparison proc so that it can be called from higher-order Zig builtins.
+    /// Comparison procedure signature is: closure_data, a, b -> Order (u8)
+    ///
+    /// The generic Zig code passes *pointers* to all of the argument values (e.g. on the heap in a List).
+    /// Numbers up to 64 bits are passed by value, so we need to load them from the provided pointer.
+    /// Everything else is passed by reference, so we can just pass the pointer through.
+    pub fn build_higher_order_compare(
+        &mut self,
+        wrapper_lookup_idx: usize,
+        inner_lookup_idx: usize,
+    ) {
+        use ValueType::*;
+
+        let ProcLookupData {
+            name: wrapper_name,
+            layout: wrapper_proc_layout,
+            ..
+        } = self.proc_lookup[wrapper_lookup_idx];
+        let closure_data_layout = wrapper_proc_layout.arguments[0];
+        let value_layout = wrapper_proc_layout.arguments[1];
+
+        let mut n_inner_args = 2;
+        if closure_data_layout.stack_size(TARGET_INFO) > 0 {
+            self.code_builder.get_local(LocalId(0));
+            n_inner_args += 1;
+        }
+
+        let inner_layout = match value_layout {
+            Layout::Boxed(inner) => inner,
+            x => internal_error!("Expected a Boxed layout, got {:?}", x),
+        };
+        self.code_builder.get_local(LocalId(1));
+        self.dereference_boxed_value(inner_layout);
+        self.code_builder.get_local(LocalId(2));
+        self.dereference_boxed_value(inner_layout);
+
+        // Call the wrapped inner function
+        let inner_wasm_fn_index = self.fn_index_offset + inner_lookup_idx as u32;
+        self.code_builder
+            .call(inner_wasm_fn_index, n_inner_args, true);
+
+        // Write empty function header (local variables array with zero length)
+        self.code_builder.build_fn_header_and_footer(&[], 0, None);
+
+        self.module.add_function_signature(Signature {
+            param_types: bumpalo::vec![in self.env.arena; I32; 3],
+            ret_type: Some(ValueType::I32),
+        });
+
+        self.append_proc_debug_name(wrapper_name);
+        self.reset();
+    }
+
+    fn dereference_boxed_value(&mut self, inner: &Layout) {
+        use Align::*;
+
+        match inner {
+            Layout::Builtin(Builtin::Int(IntWidth::U8 | IntWidth::I8)) => {
+                self.code_builder.i32_load8_u(Bytes1, 0);
+            }
+            Layout::Builtin(Builtin::Int(IntWidth::U16 | IntWidth::I16)) => {
+                self.code_builder.i32_load16_u(Bytes2, 0);
+            }
+            Layout::Builtin(Builtin::Int(IntWidth::U32 | IntWidth::I32)) => {
+                self.code_builder.i32_load(Bytes4, 0);
+            }
+            Layout::Builtin(Builtin::Int(IntWidth::U64 | IntWidth::I64)) => {
+                self.code_builder.i64_load(Bytes8, 0);
+            }
+            Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                self.code_builder.f32_load(Bytes4, 0);
+            }
+            Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                self.code_builder.f64_load(Bytes8, 0);
+            }
+            Layout::Builtin(Builtin::Bool) => {
+                self.code_builder.i32_load8_u(Bytes1, 0);
+            }
+            _ => {
+                // Any other layout is a pointer, which we've already loaded. Nothing to do!
+            }
+        }
     }
 
     /**********************************************************
@@ -1532,7 +1595,8 @@ impl<'a> WasmBackend<'a> {
 
         // Store the tag ID (if any)
         if stores_tag_id_as_data {
-            let id_offset = data_offset + data_size - data_alignment;
+            let id_offset =
+                data_offset + union_layout.data_size_without_tag_id(TARGET_INFO).unwrap();
 
             let id_align = union_layout.tag_id_builtin().alignment_bytes(TARGET_INFO);
             let id_align = Align::from(id_align);
@@ -1615,8 +1679,7 @@ impl<'a> WasmBackend<'a> {
         };
 
         if union_layout.stores_tag_id_as_data(TARGET_INFO) {
-            let (data_size, data_alignment) = union_layout.data_size_and_alignment(TARGET_INFO);
-            let id_offset = data_size - data_alignment;
+            let id_offset = union_layout.data_size_without_tag_id(TARGET_INFO).unwrap();
 
             let id_align = union_layout.tag_id_builtin().alignment_bytes(TARGET_INFO);
             let id_align = Align::from(id_align);

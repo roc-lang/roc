@@ -5,7 +5,7 @@ use roc_problem::can::Problem;
 use roc_problem::can::RuntimeError::*;
 use roc_problem::can::{FloatErrorKind, IntErrorKind};
 use roc_region::all::Region;
-pub use roc_types::num::{FloatBound, FloatWidth, IntBound, IntWidth, NumBound, SignDemand};
+pub use roc_types::num::{FloatBound, FloatWidth, IntBound, IntLitWidth, NumBound, SignDemand};
 use roc_types::subs::VarStore;
 
 use std::str;
@@ -174,7 +174,7 @@ pub fn finish_parsing_float(raw: &str) -> Result<(&str, f64, FloatBound), (&str,
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum ParsedWidth {
-    Int(IntWidth),
+    Int(IntLitWidth),
     Float(FloatWidth),
 }
 
@@ -188,17 +188,17 @@ fn parse_literal_suffix(num_str: &str) -> (Option<ParsedWidth>, &str) {
     }
 
     parse_num_suffix! {
-        "u8",   ParsedWidth::Int(IntWidth::U8)
-        "u16",  ParsedWidth::Int(IntWidth::U16)
-        "u32",  ParsedWidth::Int(IntWidth::U32)
-        "u64",  ParsedWidth::Int(IntWidth::U64)
-        "u128", ParsedWidth::Int(IntWidth::U128)
-        "i8",   ParsedWidth::Int(IntWidth::I8)
-        "i16",  ParsedWidth::Int(IntWidth::I16)
-        "i32",  ParsedWidth::Int(IntWidth::I32)
-        "i64",  ParsedWidth::Int(IntWidth::I64)
-        "i128", ParsedWidth::Int(IntWidth::I128)
-        "nat",  ParsedWidth::Int(IntWidth::Nat)
+        "u8",   ParsedWidth::Int(IntLitWidth::U8)
+        "u16",  ParsedWidth::Int(IntLitWidth::U16)
+        "u32",  ParsedWidth::Int(IntLitWidth::U32)
+        "u64",  ParsedWidth::Int(IntLitWidth::U64)
+        "u128", ParsedWidth::Int(IntLitWidth::U128)
+        "i8",   ParsedWidth::Int(IntLitWidth::I8)
+        "i16",  ParsedWidth::Int(IntLitWidth::I16)
+        "i32",  ParsedWidth::Int(IntLitWidth::I32)
+        "i64",  ParsedWidth::Int(IntLitWidth::I64)
+        "i128", ParsedWidth::Int(IntLitWidth::I128)
+        "nat",  ParsedWidth::Int(IntLitWidth::Nat)
         "dec",  ParsedWidth::Float(FloatWidth::Dec)
         "f32",  ParsedWidth::Float(FloatWidth::F32)
         "f64",  ParsedWidth::Float(FloatWidth::F64)
@@ -256,9 +256,9 @@ fn from_str_radix(src: &str, radix: u32) -> Result<ParsedNumResult, IntErrorKind
         IntValue::I128(bytes) => {
             let num = i128::from_ne_bytes(bytes);
 
-            (lower_bound_of_int(num), num < 0)
+            (lower_bound_of_int_literal(num), num < 0)
         }
-        IntValue::U128(_) => (IntWidth::U128, false),
+        IntValue::U128(_) => (IntLitWidth::U128, false),
     };
 
     match opt_exact_bound {
@@ -314,8 +314,8 @@ fn from_str_radix(src: &str, radix: u32) -> Result<ParsedNumResult, IntErrorKind
     }
 }
 
-fn lower_bound_of_int(result: i128) -> IntWidth {
-    use IntWidth::*;
+fn lower_bound_of_int_literal(result: i128) -> IntLitWidth {
+    use IntLitWidth::*;
     if result >= 0 {
         // Positive
         let result = result as u128;
@@ -323,12 +323,16 @@ fn lower_bound_of_int(result: i128) -> IntWidth {
             I128
         } else if result > I64.max_value() {
             U64
-        } else if result > U32.max_value() {
+        } else if result > F64.max_value() {
             I64
+        } else if result > U32.max_value() {
+            F64
         } else if result > I32.max_value() {
             U32
-        } else if result > U16.max_value() {
+        } else if result > F32.max_value() {
             I32
+        } else if result > U16.max_value() {
+            F32
         } else if result > I16.max_value() {
             U16
         } else if result > U8.max_value() {
@@ -342,10 +346,14 @@ fn lower_bound_of_int(result: i128) -> IntWidth {
         // Negative
         if result < I64.min_value() {
             I128
-        } else if result < I32.min_value() {
+        } else if result < F64.min_value() {
             I64
-        } else if result < I16.min_value() {
+        } else if result < I32.min_value() {
+            F64
+        } else if result < F32.min_value() {
             I32
+        } else if result < I16.min_value() {
+            F32
         } else if result < I8.min_value() {
             I16
         } else {

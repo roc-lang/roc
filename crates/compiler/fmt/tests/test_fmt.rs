@@ -200,6 +200,31 @@ mod test_fmt {
     }
 
     #[test]
+    fn comment_with_trailing_space() {
+        expr_formats_to(
+            &format!(
+                indoc!(
+                    r#"
+            # first comment{space}
+            x = 0 # second comment{space}
+
+            x
+            "#
+                ),
+                space = " ",
+            ),
+            indoc!(
+                r#"
+            # first comment
+            x = 0 # second comment
+
+            x
+            "#
+            ),
+        );
+    }
+
+    #[test]
     fn def_with_inline_comment() {
         expr_formats_same(indoc!(
             r#"
@@ -3517,34 +3542,6 @@ mod test_fmt {
     }
 
     #[test]
-    fn when_with_moving_comments() {
-        expr_formats_to(
-            indoc!(
-                r#"
-                when b is
-                    1 ->
-                        1 # when 1
-
-                    # fall through
-                    _ ->
-                        2
-                "#
-            ),
-            indoc!(
-                r#"
-                when b is
-                    1 ->
-                        1
-                    # when 1
-                    # fall through
-                    _ ->
-                        2
-                "#
-            ),
-        );
-    }
-
-    #[test]
     fn multi_line_when_condition_1() {
         expr_formats_same(indoc!(
             r#"
@@ -3959,6 +3956,108 @@ mod test_fmt {
     }
 
     #[test]
+    fn multiline_binop_with_comments() {
+        expr_formats_same(indoc!(
+            r#"
+            x = 1
+                + 1 # comment 1
+                - 1 # comment 2
+                * 1 # comment 3
+
+            x
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            x = 1
+                + 1 # comment 1
+                * 1 # comment 2
+
+            x
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            x = 1
+                + 1 # comment
+
+            x
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            x = 1
+                * 1
+                + 1 # comment
+
+            x
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            x = 1
+                - 1
+                * 1
+                + 1
+
+            x
+            "#
+        ));
+    }
+
+    #[test]
+    fn multiline_binop_if_with_comments() {
+        expr_formats_same(indoc!(
+            r#"
+            if
+                x
+                    + 1 # comment 1
+                    > 0 # comment 2
+            then
+                y
+                    * 2 # comment 3
+                    < 1 # comment 4
+            else
+                42
+            "#
+        ));
+    }
+
+    #[test]
+    fn multiline_binop_when_with_comments() {
+        expr_formats_same(indoc!(
+            r#"
+            when
+                x
+                    + 1 # comment 1
+                    > 0 # comment 2
+            is
+                y ->
+                    3
+                        * 2 # comment 3
+                        < 1 # comment 4
+                z ->
+                    4
+                        / 5 # comment 5
+                        < 1 # comment 6
+                46 # first pattern comment
+                    | 95 # alternative comment 1
+                    | 126 # alternative comment 2
+                    | 150 -> # This comment goes after the ->
+                    # This comment is for the expr
+                    Str.appendScalar output (Num.toU32 byte)
+                        |> Result.withDefault "" # this will never fail
+                _ ->
+                    42
+            "#
+        ));
+    }
+
+    #[test]
     fn precedence_conflict_greater_than() {
         expr_formats_same(indoc!(
             r#"
@@ -4178,6 +4277,21 @@ mod test_fmt {
     }
 
     #[test]
+    fn comment_between_multiline_ann_args() {
+        expr_formats_same(indoc!(
+            r#"
+                blah :
+                    Str,
+                    # comment
+                    (Str -> Str)
+                    -> Str
+
+                42
+            "#
+        ))
+    }
+
+    #[test]
     fn pipeline_apply_lambda_multiline() {
         expr_formats_same(indoc!(
             r#"
@@ -4266,7 +4380,7 @@ mod test_fmt {
             indoc!(
                 r#"
             interface Foo exposes [] imports []
-            a = 42# Yay greetings
+            a = 42 # Yay greetings
             "#
             ),
         );
@@ -4307,17 +4421,15 @@ mod test_fmt {
         module_formats_same(indoc!(
             r#"
                 interface Foo
-                    exposes
-                        [
-                            Stuff,
-                            Things,
-                            somethingElse,
-                        ]
-                    imports
-                        [
-                            Blah,
-                            Baz.{ stuff, things },
-                        ]"#
+                    exposes [
+                        Stuff,
+                        Things,
+                        somethingElse,
+                    ]
+                    imports [
+                        Blah,
+                        Baz.{ stuff, things },
+                    ]"#
         ));
     }
 
@@ -4338,6 +4450,37 @@ mod test_fmt {
             packages {} \
             imports [Task.{ Task }] \
             provides [mainForHost]",
+        );
+    }
+
+    #[test]
+    fn module_defs_with_comments() {
+        module_formats_to(
+            &format!(
+                indoc!(
+                    r#"
+                    interface Foo
+                        exposes []
+                        imports []
+
+                    # comment 1{space}
+                    def = "" # comment 2{space}
+                    # comment 3{space}
+                "#
+                ),
+                space = " "
+            ),
+            indoc!(
+                r#"
+                    interface Foo
+                        exposes []
+                        imports []
+
+                    # comment 1
+                    def = "" # comment 2
+                    # comment 3
+                "#
+            ),
         );
     }
 
@@ -4387,23 +4530,20 @@ mod test_fmt {
         module_formats_same(indoc!(
             r#"
                 hosted Foo
-                    exposes
-                        [
-                            Stuff,
-                            Things,
-                            somethingElse,
-                        ]
-                    imports
-                        [
-                            Blah,
-                            Baz.{ stuff, things },
-                        ]
-                    generates Bar with
-                        [
-                            map,
-                            after,
-                            loop,
-                        ]"#
+                    exposes [
+                        Stuff,
+                        Things,
+                        somethingElse,
+                    ]
+                    imports [
+                        Blah,
+                        Baz.{ stuff, things },
+                    ]
+                    generates Bar with [
+                        map,
+                        after,
+                        loop,
+                    ]"#
         ));
     }
 
@@ -4522,11 +4662,11 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r#"
             Expr : [
-                    Add Expr Expr,
-                    Mul Expr Expr,
-                    Val I64,
-                    Var I64,
-                ]
+                Add Expr Expr,
+                Mul Expr Expr,
+                Val I64,
+                Var I64,
+            ]
 
             Expr"#
         ));
@@ -4880,6 +5020,20 @@ mod test_fmt {
     }
 
     #[test]
+    fn multiline_opaque_tag_union() {
+        expr_formats_same(indoc!(
+            r#"
+            A := [
+                B,
+                C,
+            ]
+
+            0
+            "#
+        ));
+    }
+
+    #[test]
     fn opaque_has_clause() {
         expr_formats_same(indoc!(
             r#"
@@ -4889,15 +5043,25 @@ mod test_fmt {
             "#
         ));
 
-        expr_formats_same(indoc!(
-            r#"
-            A :=
-                U8
-                has [Eq, Hash]
+        expr_formats_to(
+            indoc!(
+                r#"
+                A :=
+                    U8
+                    has [Eq, Hash]
 
-            0
-            "#
-        ));
+                0
+                "#
+            ),
+            indoc!(
+                r#"
+                A := U8
+                    has [Eq, Hash]
+
+                0
+                "#
+            ),
+        );
 
         expr_formats_to(
             indoc!(
@@ -4909,8 +5073,7 @@ mod test_fmt {
             ),
             indoc!(
                 r#"
-                A :=
-                    a | a has Hash
+                A := a | a has Hash
                     has [Eq, Hash]
 
                 0

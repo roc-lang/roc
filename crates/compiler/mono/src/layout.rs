@@ -8,6 +8,7 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
 use roc_problem::can::RuntimeError;
 use roc_target::{PtrWidth, TargetInfo};
+use roc_types::num::NumericRange;
 use roc_types::subs::{
     self, Content, FlatType, Label, RecordFields, Subs, UnionTags, UnsortedUnionLabels, Variable,
 };
@@ -81,7 +82,9 @@ impl<'a> RawFunctionLayout<'a> {
             }
             LambdaSet(lset) => Self::layout_from_lambda_set(env, lset),
             Structure(flat_type) => Self::layout_from_flat_type(env, flat_type),
-            RangedNumber(typ, _) => Self::from_var(env, typ),
+            RangedNumber(..) => Ok(Self::ZeroArgumentThunk(Layout::new_help(
+                env, var, content,
+            )?)),
 
             // Ints
             Alias(Symbol::NUM_I128, args, _, _) => {
@@ -1205,6 +1208,16 @@ pub fn is_unresolved_var(subs: &Subs, var: Variable) -> bool {
     )
 }
 
+#[inline(always)]
+pub fn is_any_float_range(subs: &Subs, var: Variable) -> bool {
+    use {roc_types::num::IntLitWidth::*, Content::*, NumericRange::*};
+    let content = subs.get_content_without_compacting(var);
+    matches!(
+        content,
+        RangedNumber(NumAtLeastEitherSign(I8) | NumAtLeastSigned(I8)),
+    )
+}
+
 impl<'a> Layout<'a> {
     pub const VOID: Self = Layout::Union(UnionLayout::NonRecursive(&[]));
     pub const UNIT: Self = Layout::Struct {
@@ -1252,7 +1265,8 @@ impl<'a> Layout<'a> {
                     }
 
                     Symbol::NUM_FRAC | Symbol::NUM_FLOATINGPOINT
-                        if is_unresolved_var(env.subs, actual_var) =>
+                        if is_unresolved_var(env.subs, actual_var)
+                            || is_any_float_range(env.subs, actual_var) =>
                     {
                         // default to f64
                         return Ok(Layout::f64());
@@ -1262,10 +1276,45 @@ impl<'a> Layout<'a> {
                 }
             }
 
-            RangedNumber(typ, _) => Self::from_var(env, typ),
+            RangedNumber(range) => Self::layout_from_ranged_number(env, range),
 
             Error => Err(LayoutProblem::Erroneous),
         }
+    }
+
+    fn layout_from_ranged_number(
+        env: &mut Env<'a, '_>,
+        range: NumericRange,
+    ) -> Result<Self, LayoutProblem> {
+        use roc_types::num::IntLitWidth;
+
+        // If we chose the default int layout then the real var might have been `Num *`, or
+        // similar. In this case fix-up width if we need to. Choose I64 if the range says
+        // that the number will fit, otherwise choose the next-largest number layout.
+        //
+        // We don't pass the range down because `RangedNumber`s are somewhat rare, they only
+        // appear due to number literals, so no need to increase parameter list sizes.
+        let num_layout = match range {
+            NumericRange::IntAtLeastSigned(w) | NumericRange::NumAtLeastSigned(w) => {
+                [IntLitWidth::I64, IntLitWidth::I128]
+                    .iter()
+                    .find(|candidate| candidate.is_superset(&w, true))
+                    .expect("if number doesn't fit, should have been a type error")
+            }
+            NumericRange::IntAtLeastEitherSign(w) | NumericRange::NumAtLeastEitherSign(w) => [
+                IntLitWidth::I64,
+                IntLitWidth::U64,
+                IntLitWidth::I128,
+                IntLitWidth::U128,
+            ]
+            .iter()
+            .find(|candidate| candidate.is_superset(&w, false))
+            .expect("if number doesn't fit, should have been a type error"),
+        };
+        Ok(Layout::int_literal_width_to_int(
+            *num_layout,
+            env.target_info,
+        ))
     }
 
     /// Returns Err(()) if given an error, or Ok(Layout) if given a non-erroneous Structure.
@@ -1723,6 +1772,32 @@ impl<'a> Layout<'a> {
 
     pub fn default_float() -> Layout<'a> {
         Layout::f64()
+    }
+
+    pub fn int_literal_width_to_int(
+        width: roc_types::num::IntLitWidth,
+        target_info: TargetInfo,
+    ) -> Layout<'a> {
+        use roc_types::num::IntLitWidth::*;
+        match width {
+            U8 => Layout::u8(),
+            U16 => Layout::u16(),
+            U32 => Layout::u32(),
+            U64 => Layout::u64(),
+            U128 => Layout::u128(),
+            I8 => Layout::i8(),
+            I16 => Layout::i16(),
+            I32 => Layout::i32(),
+            I64 => Layout::i64(),
+            I128 => Layout::i128(),
+            Nat => Layout::usize(target_info),
+            // f32 int literal bounded by +/- 2^24, so fit it into an i32
+            F32 => Layout::i32(),
+            // f64 int literal bounded by +/- 2^53, so fit it into an i32
+            F64 => Layout::i64(),
+            // dec int literal bounded by i128, so fit it into an i128
+            Dec => Layout::i128(),
+        }
     }
 }
 

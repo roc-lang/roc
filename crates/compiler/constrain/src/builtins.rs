@@ -1,7 +1,7 @@
 use arrayvec::ArrayVec;
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::expected::Expected::{self, *};
-use roc_can::num::{FloatBound, FloatWidth, IntBound, IntWidth, NumBound, SignDemand};
+use roc_can::num::{FloatBound, FloatWidth, IntBound, IntLitWidth, NumBound, SignDemand};
 use roc_module::symbol::Symbol;
 use roc_region::all::Region;
 use roc_types::num::NumericRange;
@@ -10,47 +10,54 @@ use roc_types::types::Type::{self, *};
 use roc_types::types::{AliasKind, Category};
 use roc_types::types::{OptAbleType, Reason};
 
-#[must_use]
 #[inline(always)]
 pub fn add_numeric_bound_constr(
     constraints: &mut Constraints,
     num_constraints: &mut impl Extend<Constraint>,
-    num_type: Type,
+    num_var: Variable,
+    precision_var: Variable,
     bound: impl TypedNumericBound,
     region: Region,
     category: Category,
 ) -> Type {
     let range = bound.numeric_bound();
-    let total_num_type = num_type;
 
-    use roc_types::num::{float_width_to_variable, int_width_to_variable};
+    use roc_types::num::{float_width_to_variable, int_lit_width_to_variable};
 
     match range {
         NumericBound::None => {
-            // no additional constraints
-            total_num_type
+            // no additional constraints, just a Num *
+            num_num(Variable(num_var))
         }
         NumericBound::FloatExact(width) => {
             let actual_type = Variable(float_width_to_variable(width));
             let expected = Expected::ForReason(Reason::NumericLiteralSuffix, actual_type, region);
             let because_suffix =
-                constraints.equal_types(total_num_type.clone(), expected, category, region);
+                constraints.equal_types(Variable(num_var), expected, category, region);
 
             num_constraints.extend([because_suffix]);
 
-            total_num_type
+            Variable(num_var)
         }
         NumericBound::IntExact(width) => {
-            let actual_type = Variable(int_width_to_variable(width));
+            let actual_type = Variable(int_lit_width_to_variable(width));
             let expected = Expected::ForReason(Reason::NumericLiteralSuffix, actual_type, region);
             let because_suffix =
-                constraints.equal_types(total_num_type.clone(), expected, category, region);
+                constraints.equal_types(Variable(num_var), expected, category, region);
 
             num_constraints.extend([because_suffix]);
 
-            total_num_type
+            Variable(num_var)
         }
-        NumericBound::Range(range) => RangedNumber(Box::new(total_num_type), range),
+        NumericBound::Range(range) => {
+            let actual_type = Variable(precision_var);
+            let expected = Expected::NoExpectation(RangedNumber(range));
+            let constr = constraints.equal_types(actual_type, expected, category, region);
+
+            num_constraints.extend([constr]);
+
+            num_num(Variable(num_var))
+        }
     }
 }
 
@@ -70,7 +77,8 @@ pub fn int_literal(
     let num_type = add_numeric_bound_constr(
         constraints,
         &mut constrs,
-        Variable(num_var),
+        num_var,
+        precision_var,
         bound,
         region,
         Category::Num,
@@ -106,7 +114,8 @@ pub fn float_literal(
     let num_type = add_numeric_bound_constr(
         constraints,
         &mut constrs,
-        Variable(num_var),
+        num_var,
+        precision_var,
         bound,
         region,
         Category::Float,
@@ -134,13 +143,12 @@ pub fn num_literal(
     region: Region,
     bound: NumBound,
 ) -> Constraint {
-    let open_number_type = crate::builtins::num_num(Type::Variable(num_var));
-
     let mut constrs = ArrayVec::<_, 2>::new();
     let num_type = add_numeric_bound_constr(
         constraints,
         &mut constrs,
-        open_number_type,
+        num_var,
+        num_var,
         bound,
         region,
         Category::Num,
@@ -330,6 +338,6 @@ impl TypedNumericBound for NumBound {
 pub enum NumericBound {
     None,
     FloatExact(FloatWidth),
-    IntExact(IntWidth),
+    IntExact(IntLitWidth),
     Range(NumericRange),
 }

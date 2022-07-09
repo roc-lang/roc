@@ -1,6 +1,9 @@
 interface Stdin
     exposes [line]
-    imports [pf.Effect, Task]
+    imports [pf.Effect, Task.{ Task }, InternalTask]
 
-line : Task.Task Str *
-line = Effect.after Effect.getLine Task.succeed# TODO FIXME Effect.getLine should suffice
+line : Task Str * [Read [Stdin]*]*
+line =
+    Effect.getLine
+        |> Effect.map Ok
+        |> InternalTask.fromEffect

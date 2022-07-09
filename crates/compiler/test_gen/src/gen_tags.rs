@@ -1182,7 +1182,7 @@ fn applied_tag_function() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn applied_tag_function_result() {
     assert_evals_to!(
         indoc!(
@@ -1221,7 +1221,7 @@ fn applied_tag_function_linked_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn applied_tag_function_pair() {
     assert_evals_to!(
         indoc!(
@@ -1260,7 +1260,7 @@ fn tag_must_be_its_own_type() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn recursive_tag_union_into_flat_tag_union() {
     // Comprehensive test for correctness in cli/tests/repl_eval
     assert_evals_to!(
@@ -1431,8 +1431,9 @@ fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped() {
             main = compound {}
             "#
         ),
-        2, // C
-        u8
+        (0, 2), // Err, C
+        ([u8; std::mem::size_of::<RocStr>()], u8),
+        |(err_tag, wrap_tag): ([u8; std::mem::size_of::<RocStr>()], u8)| (wrap_tag, err_tag[0])
     )
 }
 
@@ -1460,8 +1461,9 @@ fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped_nested() {
                 compound {}
             "#
         ),
-        2, // C
-        u8
+        (0, 2), // Err, C
+        ([u8; std::mem::size_of::<RocStr>()], u8),
+        |(err_tag, wrap_tag): ([u8; std::mem::size_of::<RocStr>()], u8)| (wrap_tag, err_tag[0])
     )
 }
 
@@ -1535,7 +1537,7 @@ fn issue_2458_deep_recursion_var() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn issue_1162() {
     assert_evals_to!(
         indoc!(
@@ -1705,7 +1707,7 @@ fn issue_2900_unreachable_pattern() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn issue_3261_non_nullable_unwrapped_recursive_union_at_index() {
     assert_evals_to!(
         indoc!(
@@ -1722,5 +1724,91 @@ fn issue_3261_non_nullable_unwrapped_recursive_union_at_index() {
         ),
         RocStr::from("outer"),
         RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn instantiate_annotated_as_recursive_alias_toplevel() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Value : [Nil, Array (List Value)]
+
+            foo : [Nil]*
+            foo = Nil
+
+            it : Value
+            it = foo
+
+            main =
+                when it is
+                    Nil -> 123i64
+                    _ -> -1i64
+            "#
+        ),
+        123,
+        i64
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn instantiate_annotated_as_recursive_alias_polymorphic_expr() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main =
+                Value : [Nil, Array (List Value)]
+
+                foo : [Nil]*
+                foo = Nil
+
+                it : Value
+                it = foo
+
+                when it is
+                    Nil -> 123i64
+                    _ -> -1i64
+            "#
+        ),
+        123,
+        i64
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main =
+                Value : [Nil, Array (List Value)]
+
+                foo : [Nil]*
+                foo = Nil
+
+                v1 : Value
+                v1 = foo
+
+                Value2 : [Nil, B U16, Array (List Value)]
+
+                v2 : Value2
+                v2 = foo
+
+                when {v1, v2} is
+                    {v1: Nil, v2: Nil} -> 123i64
+                    {v1: _, v2: _} -> -1i64
+            "#
+        ),
+        123,
+        i64
     )
 }

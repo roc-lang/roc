@@ -8,14 +8,12 @@ use crate::llvm::build_dict::{
 };
 use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
-    self, allocate_list, empty_polymorphic_list, list_append, list_concat, list_drop_at,
+    self, allocate_list, empty_polymorphic_list, list_append_unsafe, list_concat, list_drop_at,
     list_get_unsafe, list_len, list_map, list_map2, list_map3, list_map4, list_prepend,
-    list_replace_unsafe, list_sort_with, list_sublist, list_swap, list_symbol_to_c_abi,
-    list_to_c_abi, list_with_capacity,
+    list_replace_unsafe, list_reserve, list_sort_with, list_sublist, list_swap,
+    list_symbol_to_c_abi, list_to_c_abi, list_with_capacity, pass_update_mode,
 };
-use crate::llvm::build_str::{
-    str_from_float, str_from_int, str_from_utf8, str_from_utf8_range, str_split,
-};
+use crate::llvm::build_str::{str_from_float, str_from_int};
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
     self, argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout,
@@ -41,7 +39,7 @@ use inkwell::types::{
 };
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValue, CallSiteValue, CallableValue, FloatValue, FunctionValue,
+    BasicMetadataValueEnum, BasicValue, CallSiteValue, FloatValue, FunctionValue,
     InstructionOpcode, InstructionValue, IntValue, PhiValue, PointerValue, StructValue,
 };
 use inkwell::OptimizationLevel;
@@ -67,7 +65,7 @@ use roc_mono::layout::{
 };
 use roc_std::RocDec;
 use roc_target::{PtrWidth, TargetInfo};
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryInto;
 use std::path::Path;
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
@@ -2781,30 +2779,8 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
                 match env.target_info.ptr_width() {
                     roc_target::PtrWidth::Bytes8 => {
-                        let func = env
-                            .module
-                            .get_function(bitcode::UTILS_EXPECT_FAILED)
-                            .unwrap();
-                        // TODO get the actual line info instead of
-                        // hardcoding as zero!
-                        let callable = CallableValue::try_from(func).unwrap();
-                        let start_line = context.i32_type().const_int(0, false);
-                        let end_line = context.i32_type().const_int(0, false);
-                        let start_col = context.i16_type().const_int(0, false);
-                        let end_col = context.i16_type().const_int(0, false);
-
-                        bd.build_call(
-                            callable,
-                            &[
-                                start_line.into(),
-                                end_line.into(),
-                                start_col.into(),
-                                end_col.into(),
-                            ],
-                            "call_expect_failed",
-                        );
-
-                        bd.build_unconditional_branch(then_block);
+                        // temporary native implementation
+                        throw_exception(env, "An expectation failed!");
                     }
                     roc_target::PtrWidth::Bytes4 => {
                         // temporary WASM implementation
@@ -3525,15 +3501,31 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
 
     let mut arguments_for_call = Vec::with_capacity_in(args.len(), env.arena);
 
-    let it = args.iter().zip(roc_function.get_type().get_param_types());
-    for (arg, fastcc_type) in it {
+    let it = args
+        .iter()
+        .zip(roc_function.get_type().get_param_types())
+        .zip(arguments);
+    for ((arg, fastcc_type), layout) in it {
         let arg_type = arg.get_type();
         if arg_type == fastcc_type {
             // the C and Fast calling conventions agree
             arguments_for_call.push(*arg);
         } else {
-            let cast = complex_bitcast_check_size(env, *arg, fastcc_type, "to_fastcc_type");
-            arguments_for_call.push(cast);
+            match layout {
+                Layout::Builtin(Builtin::List(_)) => {
+                    let loaded = env
+                        .builder
+                        .build_load(arg.into_pointer_value(), "load_list_pointer");
+                    let cast =
+                        complex_bitcast_check_size(env, loaded, fastcc_type, "to_fastcc_type_1");
+                    arguments_for_call.push(cast);
+                }
+                _ => {
+                    let cast =
+                        complex_bitcast_check_size(env, *arg, fastcc_type, "to_fastcc_type_1");
+                    arguments_for_call.push(cast);
+                }
+            }
         }
     }
 
@@ -3657,7 +3649,7 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
             // the C and Fast calling conventions agree
             *arg
         } else {
-            complex_bitcast_check_size(env, *arg, *fastcc_type, "to_fastcc_type")
+            complex_bitcast_check_size(env, *arg, *fastcc_type, "to_fastcc_type_2")
         }
     });
 
@@ -4163,6 +4155,89 @@ pub fn build_procedures_return_main<'a, 'ctx, 'env>(
     );
 
     promote_to_main_function(env, mod_solutions, entry_point.symbol, entry_point.layout)
+}
+
+pub fn build_procedures_expose_expects<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    opt_level: OptLevel,
+    procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
+    entry_point: EntryPoint<'a>,
+) -> Vec<'a, &'a str> {
+    use bumpalo::collections::CollectIn;
+
+    // this is not entirely accurate: it will treat every top-level bool value (turned into a
+    // zero-argument thunk) as an expect.
+    let expects: Vec<_> = procedures
+        .keys()
+        .filter_map(|(symbol, proc_layout)| {
+            if proc_layout.arguments.is_empty() && proc_layout.result == Layout::bool() {
+                Some(*symbol)
+            } else {
+                None
+            }
+        })
+        .collect_in(env.arena);
+
+    let mod_solutions = build_procedures_help(
+        env,
+        opt_level,
+        procedures,
+        entry_point,
+        Some(Path::new("/tmp/test.ll")),
+    );
+
+    let captures_niche = CapturesNiche::no_niche();
+
+    let top_level = ProcLayout {
+        arguments: &[],
+        result: Layout::bool(),
+        captures_niche,
+    };
+
+    let mut expect_names = Vec::with_capacity_in(expects.len(), env.arena);
+
+    for symbol in expects.iter().copied() {
+        let it = top_level.arguments.iter().copied();
+        let bytes =
+            roc_alias_analysis::func_name_bytes_help(symbol, it, captures_niche, &top_level.result);
+        let func_name = FuncName(&bytes);
+        let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
+
+        let mut it = func_solutions.specs();
+        let func_spec = it.next().unwrap();
+        debug_assert!(
+            it.next().is_none(),
+            "we expect only one specialization of this symbol"
+        );
+
+        // NOTE fake layout; it is only used for debug prints
+        let roc_main_fn = function_value_by_func_spec(
+            env,
+            *func_spec,
+            symbol,
+            &[],
+            captures_niche,
+            &Layout::UNIT,
+        );
+
+        let name = roc_main_fn.get_name().to_str().unwrap();
+
+        let expect_name = &format!("Expect_{}", name);
+        let expect_name = env.arena.alloc_str(expect_name);
+        expect_names.push(&*expect_name);
+
+        // Add main to the module.
+        let _ = expose_function_to_host_help_c_abi(
+            env,
+            name,
+            roc_main_fn,
+            top_level.arguments,
+            top_level.result,
+            &format!("Expect_{}", name),
+        );
+    }
+
+    expect_names
 }
 
 fn build_procedures_help<'a, 'ctx, 'env>(
@@ -5279,18 +5354,31 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             str_from_float(env, scope, args[0])
         }
-        StrFromUtf8 => {
-            // Str.fromUtf8 : List U8 -> Result Str Utf8Problem
-            debug_assert_eq!(args.len(), 1);
-
-            str_from_utf8(env, scope, args[0], update_mode)
-        }
         StrFromUtf8Range => {
-            debug_assert_eq!(args.len(), 2);
+            debug_assert_eq!(args.len(), 3);
 
-            let count_and_start = load_symbol(scope, &args[1]).into_struct_value();
+            let list = args[0];
+            let start = load_symbol(scope, &args[1]);
+            let count = load_symbol(scope, &args[2]);
 
-            str_from_utf8_range(env, scope, args[0], count_and_start)
+            let result_type = env.module.get_struct_type("str.FromUtf8Result").unwrap();
+            let result_ptr = env
+                .builder
+                .build_alloca(result_type, "alloca_utf8_validate_bytes_result");
+
+            call_void_bitcode_fn(
+                env,
+                &[
+                    result_ptr.into(),
+                    list_symbol_to_c_abi(env, scope, list).into(),
+                    start,
+                    count,
+                    pass_update_mode(env, update_mode),
+                ],
+                bitcode::STR_FROM_UTF8_RANGE,
+            );
+
+            crate::llvm::build_str::decode_from_utf8_result(env, result_ptr).into()
         }
         StrToUtf8 => {
             // Str.fromInt : Str -> List U8
@@ -5311,7 +5399,10 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.split : Str, Str -> List Str
             debug_assert_eq!(args.len(), 2);
 
-            str_split(env, scope, args[0], args[1])
+            let string = load_symbol(scope, &args[0]);
+            let delimiter = load_symbol(scope, &args[1]);
+
+            call_list_bitcode_fn(env, &[string, delimiter], bitcode::STR_STR_SPLIT)
         }
         StrIsEmpty => {
             // Str.isEmpty : Str -> Str
@@ -5431,14 +5522,24 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             list_concat(env, first_list, second_list, element_layout)
         }
-        ListAppend => {
-            // List.append : List elem, elem -> List elem
+        ListAppendUnsafe => {
+            // List.appendUnsafe : List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);
 
             let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            list_append(env, original_wrapper, elem, elem_layout, update_mode)
+            list_append_unsafe(env, original_wrapper, elem, elem_layout)
+        }
+        ListReserve => {
+            // List.reserve : List elem, Nat -> List elem
+            debug_assert_eq!(args.len(), 2);
+
+            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let element_layout = list_element_layout!(list_layout);
+            let spare = load_symbol(scope, &args[1]);
+
+            list_reserve(env, list, spare, element_layout, update_mode)
         }
         ListSwap => {
             // List.swap : List elem, Nat, Nat -> List elem
@@ -5461,10 +5562,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             )
         }
         ListSublist => {
-            // List.sublist : List elem, { start : Nat, len : Nat } -> List elem
-            //
-            // As a low-level, record is destructed
-            // List.sublist : List elem, start : Nat, len : Nat -> List elem
             debug_assert_eq!(args.len(), 3);
 
             let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
@@ -6007,6 +6104,20 @@ fn run_low_level<'a, 'ctx, 'env>(
         PtrCast | RefCountInc | RefCountDec => {
             unreachable!("Not used in LLVM backend: {:?}", op);
         }
+
+        Unreachable => match RocReturn::from_layout(env, layout) {
+            RocReturn::Return => {
+                let basic_type = basic_type_from_layout(env, layout);
+                basic_type.const_zero()
+            }
+            RocReturn::ByPointer => {
+                let basic_type = basic_type_from_layout(env, layout);
+                let ptr = env.builder.build_alloca(basic_type, "unreachable_alloca");
+                env.builder.build_store(ptr, basic_type.const_zero());
+
+                ptr.into()
+            }
+        },
     }
 }
 

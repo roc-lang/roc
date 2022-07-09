@@ -1572,7 +1572,7 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    Foo "happy" 2020
+                    Foo "happy" 12
                 "#
             ),
             "[Foo Str (Num *)]*",
@@ -2531,7 +2531,7 @@ mod solve_expr {
                     { numIdentity, x : numIdentity 42, y }
                 "#
             ),
-            "{ numIdentity : Num a -> Num a, x : Num b, y : Float * }",
+            "{ numIdentity : Num a -> Num a, x : Num *, y : Float * }",
         );
     }
 
@@ -3951,7 +3951,7 @@ mod solve_expr {
                     negatePoint { x: 1, y: 2.1, z: 0x3 }
                 "#
             ),
-            "{ x : Num a, y : Float *, z : Int * }",
+            "{ x : Num *, y : Float *, z : Int * }",
         );
     }
 
@@ -3968,7 +3968,7 @@ mod solve_expr {
                     { a, b }
                 "#
             ),
-            "{ a : { x : Num a, y : Float *, z : c }, b : { blah : Str, x : Num b, y : Float *, z : d } }",
+            "{ a : { x : Num *, y : Float *, z : c }, b : { blah : Str, x : Num *, y : Float *, z : a } }",
         );
     }
 
@@ -4024,7 +4024,8 @@ mod solve_expr {
                     { x, y }
                 "#
             ),
-            "{ x : I64, y ? Bool }* -> { x : I64, y : Bool }",
+            // TODO: when structural types unify with alias, they should take the alias name
+            "{ x : I64, y ? [False, True] }* -> { x : I64, y : Bool }",
         );
     }
 
@@ -7048,6 +7049,95 @@ mod solve_expr {
                 "#
             ),
             &["fun : {} -[[thunk(5) [A Str]*, thunk(5) { a : Str }]]-> Str",]
+        );
+    }
+
+    #[test]
+    fn check_phantom_type() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                F a b := b
+
+                foo : F Str Str -> F U8 Str
+
+                x : F Str Str
+
+                foo x
+                "#
+            ),
+            "F U8 Str",
+        );
+    }
+
+    #[test]
+    fn infer_phantom_type_flow() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                F a b := b
+
+                foo : _ -> F U8 Str
+                foo = \it -> it
+
+                foo
+                "#
+            ),
+            "F U8 Str -> F U8 Str",
+        );
+    }
+
+    #[test]
+    fn infer_unbound_phantom_type_star() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                F a b := b
+
+                foo = \@F {} -> @F ""
+
+                foo
+                "#
+            ),
+            "F * {}* -> F * Str",
+        );
+    }
+
+    #[test]
+    fn wrap_recursive_opaque_negative_position() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                OList := [Nil, Cons {} OList]
+
+                lst : [Cons {} OList]*
+
+                olist : OList
+                olist = (\l -> @OList l) lst
+
+                olist
+                "#
+            ),
+            "OList",
+        );
+    }
+
+    #[test]
+    fn wrap_recursive_opaque_positive_position() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                OList := [Nil, Cons {} OList]
+
+                lst : [Cons {} OList]*
+
+                olist : OList
+                olist = @OList lst
+
+                olist
+                "#
+            ),
+            "OList",
         );
     }
 }

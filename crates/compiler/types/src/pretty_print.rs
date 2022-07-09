@@ -381,9 +381,10 @@ fn find_names_needed(
                 );
             }
         }
-        &RangedNumber(typ, _) => {
+        RangedNumber(_) => {
+            subs.set_content(variable, FlexVar(None));
             find_names_needed(
-                typ,
+                variable,
                 subs,
                 roots,
                 root_appearances,
@@ -644,7 +645,7 @@ fn write_content<'a>(
                                     subs,
                                     buf,
                                     parens,
-                                    false,
+                                    write_parens,
                                 );
                             }
                             Symbol::NUM_FLOATINGPOINT => write_float(
@@ -783,14 +784,23 @@ fn write_content<'a>(
 
             buf.push(']');
         }
-        RangedNumber(typ, _range_vars) => write_content(
-            env,
-            ctx,
-            subs.get_content_without_compacting(*typ),
-            subs,
-            buf,
-            parens,
-        ),
+        RangedNumber(range) => {
+            buf.push_str("Range(");
+            for (i, &var) in range.variable_slice().iter().enumerate() {
+                if i > 0 {
+                    buf.push_str(", ");
+                }
+                write_content(
+                    env,
+                    ctx,
+                    subs.get_content_without_compacting(var),
+                    subs,
+                    buf,
+                    Parens::Unnecessary,
+                );
+            }
+            buf.push(')');
+        }
         Error => buf.push_str("<type mismatch>"),
     }
 }
@@ -829,21 +839,23 @@ fn write_integer<'a>(
 
     macro_rules! derive_num_writes {
         ($($lit:expr, $tag:path)*) => {
-            write_parens!(
-                write_parens,
-                buf,
-                match content {
-                    $(
-                    &Alias($tag, _, _, _) => {
-                        buf.push_str($lit)
-                    },
-                    )*
-                    actual => {
-                        buf.push_str("Int ");
-                        write_content(env, ctx, actual, subs, buf, parens);
-                    }
+            match content {
+                $(
+                &Alias($tag, _, _, _) => {
+                    buf.push_str($lit)
+                },
+                )*
+                actual => {
+                    write_parens!(
+                        write_parens,
+                        buf,
+                        {
+                            buf.push_str("Int ");
+                            write_content(env, ctx, actual, subs, buf, parens);
+                        }
+                    )
                 }
-            )
+            }
         }
     }
 

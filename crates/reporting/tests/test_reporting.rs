@@ -3375,6 +3375,21 @@ mod test_reporting {
     -170_141_183_460_469_231_731_687_303_715_884_105_728.
 
     Tip: Learn more about number literals at TODO
+
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd argument to `add` is not what I expect:
+
+    14│      x + y + h + l + minlit + maxlit
+                                      ^^^^^^
+
+    This `maxlit` value is a:
+
+        U128
+
+    But `add` needs the 2nd argument to be:
+
+        I128 or Dec
     "###
     );
 
@@ -7197,7 +7212,7 @@ All branches in an `if` must have the same type!
 
     This argument is a number of type:
 
-        I8, I16, I32, I64, I128, F32, F64, or Dec
+        I8, I16, F32, I32, F64, I64, I128, or Dec
 
     But `get` needs the 2nd argument to be:
 
@@ -7223,7 +7238,7 @@ All branches in an `if` must have the same type!
 
     This `a` value is a:
 
-        I64, I128, F32, F64, or Dec
+        F64, I64, I128, or Dec
 
     But `get` needs the 2nd argument to be:
 
@@ -7250,7 +7265,7 @@ All branches in an `if` must have the same type!
 
     This `b` value is a:
 
-        I64, I128, F32, F64, or Dec
+        F64, I64, I128, or Dec
 
     But `get` needs the 2nd argument to be:
 
@@ -7278,7 +7293,7 @@ All branches in an `if` must have the same type!
 
     The `when` condition is a number of type:
 
-        I8, I16, I32, I64, I128, F32, F64, or Dec
+        I8, I16, F32, I32, F64, I64, I128, or Dec
 
     But the branch patterns have type:
 
@@ -9368,5 +9383,167 @@ All branches in an `if` must have the same type!
 
             a -> Str
         "###
+    );
+
+    test_report!(
+        same_phantom_types_unify,
+        indoc!(
+            r#"
+            F a b := b
+
+            foo : F Str Str -> {}
+
+            x : F Str Str
+
+            foo x
+            "#
+        ),
+        @r"" // okay
+    );
+
+    test_report!(
+        different_phantom_types,
+        indoc!(
+            r#"
+            F a b := b
+
+            foo : F Str Str -> {}
+
+            x : F U8 Str
+
+            foo x
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 1st argument to `foo` is not what I expect:
+
+    10│      foo x
+                 ^
+
+    This `x` value is a:
+
+        F U8 Str
+
+    But `foo` needs the 1st argument to be:
+
+        F Str Str
+    "###
+    );
+
+    test_report!(
+        #[ignore = "TODO This should be a type error"]
+        phantom_type_bound_to_ability_not_implementing,
+        indoc!(
+            r#"
+            app "test" provides [x] to "./platform"
+
+            Foo has foo : a -> a | a has Foo
+
+            F a b := b | a has Foo
+
+            Hash := {}
+
+            x : F Hash {}
+            "#
+        ),
+        @r###"
+        "###
+    );
+
+    test_report!(
+        int_literals_cannot_fit_in_same_type,
+        indoc!(
+            r#"
+            0x80000000000000000000000000000000 == -0x80000000000000000000000000000000
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd argument to `isEq` is not what I expect:
+
+    4│      0x80000000000000000000000000000000 == -0x80000000000000000000000000000000
+                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    This argument is an integer of type:
+
+        I128
+
+    But `isEq` needs the 2nd argument to be:
+
+        U128
+    "###
+    );
+
+    test_report!(
+        num_literals_cannot_fit_in_same_type,
+        indoc!(
+            r#"
+            170141183460469231731687303715884105728 == -170141183460469231731687303715884105728
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd argument to `isEq` is not what I expect:
+
+    4│      170141183460469231731687303715884105728 == -170141183460469231731687303715884105728
+                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    This argument is a number of type:
+
+        I128 or Dec
+
+    But `isEq` needs the 2nd argument to be:
+
+        U128
+    "###
+    );
+
+    test_report!(
+        recursive_alias_cannot_leak_into_recursive_opaque,
+        indoc!(
+            r#"
+            OList := [Nil, Cons {} OList]
+
+            AList : [Nil, Cons {} AList]
+
+            alist : AList
+
+            olist : OList
+            olist =
+                when alist is
+                    Nil -> @OList Nil
+                    Cons _ lst -> lst
+
+            olist
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the 2nd branch of this `when` expression:
+
+    10│       olist : OList
+    11│       olist =
+    12│>          when alist is
+    13│>              Nil -> @OList Nil
+    14│>              Cons _ lst -> lst
+
+    This `lst` value is a:
+
+        [Cons {} ∞, Nil] as ∞
+
+    But the type annotation on `olist` says it should be:
+
+        OList
+
+    Tip: Type comparisons between an opaque type are only ever equal if
+    both types are the same opaque type. Did you mean to create an opaque
+    type by wrapping it? If I have an opaque type Age := U32 I can create
+    an instance of this opaque type by doing @Age 23.
+    "###
     );
 }

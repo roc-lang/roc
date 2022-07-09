@@ -173,7 +173,7 @@ fn when_two_element_tag_first() {
     assert_evals_to!(
         indoc!(
             r#"
-            x : [A (Int *), B (Int *)]
+            x : [A (Int a), B (Int a)]
             x = A 0x2
 
             when x is
@@ -192,7 +192,7 @@ fn when_two_element_tag_second() {
     assert_evals_to!(
         indoc!(
             r#"
-            x : [A (Int *), B (Int *)]
+            x : [A (Int a), B (Int a)]
             x = B 0x3
 
             when x is
@@ -981,7 +981,7 @@ fn overflow_frees_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = "Roc failed with message: ")]
 fn undefined_variable() {
     assert_evals_to!(
@@ -999,7 +999,7 @@ fn undefined_variable() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = "Roc failed with message: ")]
 fn annotation_without_body() {
     assert_evals_to!(
@@ -1039,7 +1039,7 @@ fn simple_closure() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn nested_closure() {
     assert_evals_to!(
         indoc!(
@@ -1121,7 +1121,7 @@ fn specialize_closure() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn io_poc_effect() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -1152,7 +1152,7 @@ fn io_poc_effect() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn io_poc_desugared() {
     assert_evals_to!(
         indoc!(
@@ -1374,7 +1374,7 @@ fn linked_list_singleton() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn recursive_function_with_rigid() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -1401,7 +1401,7 @@ fn recursive_function_with_rigid() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn rbtree_insert() {
     assert_non_opt_evals_to!(
         indoc!(
@@ -2020,7 +2020,7 @@ fn hof_conditional() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(
     expected = "Roc failed with message: \"Shadowing { original_region: @55-56, shadow: @88-89 Ident"
 )]
@@ -2497,7 +2497,7 @@ fn backpassing_result() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = "Shadowing { original_region: @55-56, shadow: @72-73 Ident")]
 fn function_malformed_pattern() {
     assert_evals_to!(
@@ -2589,7 +2589,7 @@ fn module_thunk_is_function() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = "Roc failed with message: ")]
 fn hit_unresolved_type_variable() {
     assert_evals_to!(
@@ -2732,7 +2732,7 @@ fn lambda_set_byte() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn lambda_set_struct_byte() {
     assert_evals_to!(
         indoc!(
@@ -2791,7 +2791,7 @@ fn lambda_set_enum_byte_byte() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_walk_until() {
     // see https://github.com/rtfeldman/roc/issues/1576
     assert_evals_to!(
@@ -2872,7 +2872,7 @@ fn int_literal_not_specialized_no_annotation() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn unresolved_tvar_when_capture_is_unused() {
     // see https://github.com/rtfeldman/roc/issues/1585
     assert_evals_to!(
@@ -2899,7 +2899,7 @@ fn unresolved_tvar_when_capture_is_unused() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = "Roc failed with message: ")]
 fn value_not_exposed_hits_panic() {
     assert_evals_to!(
@@ -2969,7 +2969,7 @@ fn mix_function_and_closure_level_of_indirection() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[cfg_attr(debug_assertions, ignore)] // this test stack-overflows the compiler in debug mode
 fn do_pass_bool_byte_closure_layout() {
     // see https://github.com/rtfeldman/roc/pull/1706
@@ -3172,7 +3172,7 @@ fn alias_defined_out_of_order() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn recursively_build_effect() {
     assert_evals_to!(
         indoc!(
@@ -3243,7 +3243,7 @@ fn polymophic_expression_captured_inside_closure() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn issue_2322() {
     assert_evals_to!(
         indoc!(
@@ -3481,7 +3481,7 @@ fn mutual_recursion_top_level_defs() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn polymorphic_lambda_captures_polymorphic_value() {
     assert_evals_to!(
         indoc!(
@@ -3500,7 +3500,7 @@ fn polymorphic_lambda_captures_polymorphic_value() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn lambda_capture_niche_u64_vs_u8_capture() {
     assert_evals_to!(
         indoc!(
@@ -3527,7 +3527,7 @@ fn lambda_capture_niche_u64_vs_u8_capture() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn lambda_capture_niches_with_other_lambda_capture() {
     assert_evals_to!(
         indoc!(
@@ -3560,7 +3560,7 @@ fn lambda_capture_niches_with_other_lambda_capture() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn lambda_capture_niches_with_non_capturing_function() {
     assert_evals_to!(
         indoc!(
@@ -3593,7 +3593,7 @@ fn lambda_capture_niches_with_non_capturing_function() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn lambda_capture_niches_have_captured_function_in_closure() {
     assert_evals_to!(
         indoc!(
@@ -3622,5 +3622,24 @@ fn lambda_capture_niches_have_captured_function_in_closure() {
         ),
         (RocStr::from("s1"), RocStr::from("fun f")),
         (RocStr, RocStr)
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn recursive_call_capturing_function() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            a = \b ->
+                c = \d ->
+                    if d == 7 then d else c (d + b)
+                c 1
+
+            a 6
+            "#
+        ),
+        7,
+        i64
     )
 }

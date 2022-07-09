@@ -1,35 +1,33 @@
 interface Encode
-    exposes
-        [
-            Encoder,
-            Encoding,
-            toEncoder,
-            EncoderFormatting,
-            u8,
-            u16,
-            u32,
-            u64,
-            u128,
-            i8,
-            i16,
-            i32,
-            i64,
-            i128,
-            f32,
-            f64,
-            dec,
-            bool,
-            string,
-            list,
-            record,
-            tag,
-            custom,
-            appendWith,
-            append,
-            toBytes,
-        ]
-    imports
-        []
+    exposes [
+        Encoder,
+        Encoding,
+        toEncoder,
+        EncoderFormatting,
+        u8,
+        u16,
+        u32,
+        u64,
+        u128,
+        i8,
+        i16,
+        i32,
+        i64,
+        i128,
+        f32,
+        f64,
+        dec,
+        bool,
+        string,
+        list,
+        record,
+        tag,
+        custom,
+        appendWith,
+        append,
+        toBytes,
+    ]
+    imports []
 
 Encoder fmt := List U8, fmt -> List U8 | fmt has EncoderFormatting
 

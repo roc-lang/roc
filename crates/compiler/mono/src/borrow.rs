@@ -884,6 +884,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
     // - arguments that we may want to update destructively must be Owned
     // - other refcounted arguments are Borrowed
     match op {
+        Unreachable => arena.alloc_slice_copy(&[irrelevant]),
         ListLen | StrIsEmpty | StrToScalars | StrCountGraphemes | StrCountUtf8Bytes => {
             arena.alloc_slice_copy(&[borrowed])
         }
@@ -892,7 +893,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         StrGetUnsafe | ListGetUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         ListConcat => arena.alloc_slice_copy(&[owned, owned]),
         StrConcat => arena.alloc_slice_copy(&[owned, borrowed]),
-        StrSubstringUnsafe => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
+        StrSubstringUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant, irrelevant]),
         StrReserve => arena.alloc_slice_copy(&[owned, irrelevant]),
         StrAppendScalar => arena.alloc_slice_copy(&[owned, irrelevant]),
         StrGetScalarUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),
@@ -909,9 +910,8 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         ListMap4 => arena.alloc_slice_copy(&[owned, owned, owned, owned, function, closure_data]),
         ListSortWith => arena.alloc_slice_copy(&[owned, function, closure_data]),
 
-        // TODO when we have lists with capacity (if ever)
-        // List.append should own its first argument
-        ListAppend => arena.alloc_slice_copy(&[owned, owned]),
+        ListAppendUnsafe => arena.alloc_slice_copy(&[owned, owned]),
+        ListReserve => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListSublist => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
         ListDropAt => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListSwap => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
@@ -932,10 +932,9 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         }
         NumBytesToU16 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         NumBytesToU32 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
-        StrStartsWith | StrEndsWith => arena.alloc_slice_copy(&[owned, borrowed]),
+        StrStartsWith | StrEndsWith => arena.alloc_slice_copy(&[borrowed, borrowed]),
         StrStartsWithScalar => arena.alloc_slice_copy(&[borrowed, irrelevant]),
-        StrFromUtf8 => arena.alloc_slice_copy(&[owned]),
-        StrFromUtf8Range => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+        StrFromUtf8Range => arena.alloc_slice_copy(&[borrowed, irrelevant, irrelevant]),
         StrToUtf8 => arena.alloc_slice_copy(&[owned]),
         StrRepeat => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrFromInt | StrFromFloat => arena.alloc_slice_copy(&[irrelevant]),

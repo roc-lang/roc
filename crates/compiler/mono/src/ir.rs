@@ -15,9 +15,10 @@ use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::{
     ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
+    ROC_PRINT_RUNTIME_ERROR_GEN,
 };
 use roc_derive_key::GlobalDerivedSymbols;
-use roc_error_macros::todo_abilities;
+use roc_error_macros::{internal_error, todo_abilities};
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
@@ -2316,6 +2317,8 @@ fn from_can_let<'a>(
                         let (_specialization_mark, (var, specialized_symbol)) =
                             needed_specializations.next().unwrap();
 
+                        // Make sure rigid variables in the annotation are converted to flex variables.
+                        instantiate_rigids(env.subs, def.expr_var);
                         // Unify the expr_var with the requested specialization once.
                         let _res = env.unify(var, def.expr_var);
 
@@ -2331,6 +2334,9 @@ fn from_can_let<'a>(
                     }
                     _n => {
                         let mut stmt = rest;
+
+                        // Make sure rigid variables in the annotation are converted to flex variables.
+                        instantiate_rigids(env.subs, def.expr_var);
 
                         // Need to eat the cost and create a specialized version of the body for
                         // each specialization.
@@ -2807,22 +2813,26 @@ fn generate_runtime_error_function<'a>(
     )
     .unwrap();
 
-    eprintln!(
-        "emitted runtime error function {:?} for layout {:?}",
-        &msg, layout
-    );
+    dbg_do!(ROC_PRINT_RUNTIME_ERROR_GEN, {
+        eprintln!(
+            "emitted runtime error function {:?} for layout {:?}",
+            &msg, layout
+        );
+    });
 
     let runtime_error = Stmt::RuntimeError(msg.into_bump_str());
 
     let (args, ret_layout) = match layout {
         RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout) => {
-            let mut args = Vec::with_capacity_in(arg_layouts.len(), env.arena);
+            let real_arg_layouts = lambda_set.extend_argument_list(env.arena, arg_layouts);
+            let mut args = Vec::with_capacity_in(real_arg_layouts.len(), env.arena);
 
             for arg in arg_layouts {
                 args.push((*arg, env.unique_symbol()));
             }
-
-            args.push((Layout::LambdaSet(lambda_set), Symbol::ARG_CLOSURE));
+            if real_arg_layouts.len() != arg_layouts.len() {
+                args.push((Layout::LambdaSet(lambda_set), Symbol::ARG_CLOSURE));
+            }
 
             (args.into_bump_slice(), *ret_layout)
         }
@@ -2878,6 +2888,15 @@ fn specialize_external<'a>(
     let specialized =
         build_specialized_proc_from_var(env, layout_cache, lambda_name, pattern_symbols, fn_var)?;
 
+    let recursivity = if partial_proc.is_self_recursive {
+        SelfRecursive::SelfRecursive(JoinPointId(env.unique_symbol()))
+    } else {
+        SelfRecursive::NotSelfRecursive
+    };
+
+    let body = partial_proc.body.clone();
+    let body_var = partial_proc.body_var;
+
     // determine the layout of aliases/rigids exposed to the host
     let host_exposed_layouts = if host_exposed_variables.is_empty() {
         HostExposedLayouts::NotHostExposed
@@ -2922,6 +2941,7 @@ fn specialize_external<'a>(
 
                     let body = match_on_lambda_set(
                         env,
+                        procs,
                         lambda_set,
                         Symbol::ARG_CLOSURE,
                         argument_symbols.into_bump_slice(),
@@ -2965,15 +2985,7 @@ fn specialize_external<'a>(
         }
     };
 
-    let recursivity = if partial_proc.is_self_recursive {
-        SelfRecursive::SelfRecursive(JoinPointId(env.unique_symbol()))
-    } else {
-        SelfRecursive::NotSelfRecursive
-    };
-
-    let body = partial_proc.body.clone();
-
-    let mut specialized_body = from_can(env, partial_proc.body_var, body, procs, layout_cache);
+    let mut specialized_body = from_can(env, body_var, body, procs, layout_cache);
 
     match specialized {
         SpecializedLayout::FunctionPointerBody {
@@ -3610,66 +3622,22 @@ fn specialize_naked_symbol<'a>(
     )
 }
 
-fn try_make_literal<'a>(
-    env: &mut Env<'a, '_>,
-    can_expr: &roc_can::expr::Expr,
-) -> Option<Literal<'a>> {
+fn try_make_literal<'a>(can_expr: &roc_can::expr::Expr, layout: Layout<'a>) -> Option<Literal<'a>> {
     use roc_can::expr::Expr::*;
 
     match can_expr {
-        Int(_, precision, _, int, _bound) => {
-            match num_argument_to_int_or_float(env.subs, env.target_info, *precision, false) {
-                IntOrFloat::Int(_) => Some(match *int {
-                    IntValue::I128(n) => Literal::Int(n),
-                    IntValue::U128(n) => Literal::U128(n),
-                }),
-                _ => unreachable!("unexpected float precision for integer"),
-            }
+        Int(_, _, int_str, int, _bound) => {
+            Some(make_num_literal(layout, int_str, IntOrFloatValue::Int(*int)).to_expr_literal())
         }
 
-        Float(_, precision, float_str, float, _bound) => {
-            match num_argument_to_int_or_float(env.subs, env.target_info, *precision, true) {
-                IntOrFloat::Float(_) => Some(Literal::Float(*float)),
-                IntOrFloat::DecimalFloatType => {
-                    let dec = match RocDec::from_str(float_str) {
-                        Some(d) => d,
-                        None => panic!(
-                            r"Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message",
-                            float_str
-                        ),
-                    };
-
-                    Some(Literal::Decimal(dec.to_ne_bytes()))
-                }
-                _ => unreachable!("unexpected float precision for integer"),
-            }
-        }
+        Float(_, _, float_str, float, _bound) => Some(
+            make_num_literal(layout, float_str, IntOrFloatValue::Float(*float)).to_expr_literal(),
+        ),
 
         // TODO investigate lifetime trouble
         // Str(string) => Some(Literal::Str(env.arena.alloc(string))),
-        Num(var, num_str, num, _bound) => {
-            // first figure out what kind of number this is
-            match num_argument_to_int_or_float(env.subs, env.target_info, *var, false) {
-                IntOrFloat::Int(_) => Some(match *num {
-                    IntValue::I128(n) => Literal::Int(n),
-                    IntValue::U128(n) => Literal::U128(n),
-                }),
-                IntOrFloat::Float(_) => Some(match *num {
-                    IntValue::I128(n) => Literal::Float(i128::from_ne_bytes(n) as f64),
-                    IntValue::U128(n) => Literal::Float(u128::from_ne_bytes(n) as f64),
-                }),
-                IntOrFloat::DecimalFloatType => {
-                    let dec = match RocDec::from_str(num_str) {
-                        Some(d) => d,
-                        None => panic!(
-                            r"Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message",
-                            num_str
-                        ),
-                    };
-
-                    Some(Literal::Decimal(dec.to_ne_bytes()))
-                }
-            }
+        Num(_, num_str, num, _bound) => {
+            Some(make_num_literal(layout, num_str, IntOrFloatValue::Int(*num)).to_expr_literal())
         }
         _ => None,
     }
@@ -3689,44 +3657,35 @@ pub fn with_hole<'a>(
     let arena = env.arena;
 
     match can_expr {
-        Int(_, precision, _, int, _bound) => {
-            match num_argument_to_int_or_float(env.subs, env.target_info, precision, false) {
-                IntOrFloat::Int(precision) => Stmt::Let(
-                    assigned,
-                    Expr::Literal(match int {
-                        IntValue::I128(n) => Literal::Int(n),
-                        IntValue::U128(n) => Literal::U128(n),
-                    }),
-                    Layout::Builtin(Builtin::Int(precision)),
-                    hole,
-                ),
-                _ => unreachable!("unexpected float precision for integer"),
-            }
-        }
+        Int(_, _, int_str, int, _bound) => assign_num_literal_expr(
+            env,
+            layout_cache,
+            assigned,
+            variable,
+            &int_str,
+            IntOrFloatValue::Int(int),
+            hole,
+        ),
 
-        Float(_, precision, float_str, float, _bound) => {
-            match num_argument_to_int_or_float(env.subs, env.target_info, precision, true) {
-                IntOrFloat::Float(precision) => Stmt::Let(
-                    assigned,
-                    Expr::Literal(Literal::Float(float)),
-                    Layout::Builtin(Builtin::Float(precision)),
-                    hole,
-                ),
-                IntOrFloat::DecimalFloatType => {
-                    let dec = match RocDec::from_str(&float_str) {
-                            Some(d) => d,
-                            None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", float_str),
-                        };
-                    Stmt::Let(
-                        assigned,
-                        Expr::Literal(Literal::Decimal(dec.to_ne_bytes())),
-                        Layout::Builtin(Builtin::Decimal),
-                        hole,
-                    )
-                }
-                _ => unreachable!("unexpected float precision for integer"),
-            }
-        }
+        Float(_, _, float_str, float, _bound) => assign_num_literal_expr(
+            env,
+            layout_cache,
+            assigned,
+            variable,
+            &float_str,
+            IntOrFloatValue::Float(float),
+            hole,
+        ),
+
+        Num(_, num_str, num, _bound) => assign_num_literal_expr(
+            env,
+            layout_cache,
+            assigned,
+            variable,
+            &num_str,
+            IntOrFloatValue::Int(num),
+            hole,
+        ),
 
         Str(string) => Stmt::Let(
             assigned,
@@ -3741,42 +3700,6 @@ pub fn with_hole<'a>(
             Layout::int_width(IntWidth::I32),
             hole,
         ),
-
-        Num(var, num_str, num, _bound) => {
-            // first figure out what kind of number this is
-            match num_argument_to_int_or_float(env.subs, env.target_info, var, false) {
-                IntOrFloat::Int(precision) => Stmt::Let(
-                    assigned,
-                    Expr::Literal(match num {
-                        IntValue::I128(n) => Literal::Int(n),
-                        IntValue::U128(n) => Literal::U128(n),
-                    }),
-                    Layout::int_width(precision),
-                    hole,
-                ),
-                IntOrFloat::Float(precision) => Stmt::Let(
-                    assigned,
-                    Expr::Literal(match num {
-                        IntValue::I128(n) => Literal::Float(i128::from_ne_bytes(n) as f64),
-                        IntValue::U128(n) => Literal::Float(u128::from_ne_bytes(n) as f64),
-                    }),
-                    Layout::float_width(precision),
-                    hole,
-                ),
-                IntOrFloat::DecimalFloatType => {
-                    let dec = match RocDec::from_str(&num_str) {
-                            Some(d) => d,
-                            None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", num_str),
-                        };
-                    Stmt::Let(
-                        assigned,
-                        Expr::Literal(Literal::Decimal(dec.to_ne_bytes())),
-                        Layout::Builtin(Builtin::Decimal),
-                        hole,
-                    )
-                }
-            }
-        }
         LetNonRec(def, cont) => from_can_let(
             env,
             procs,
@@ -3867,14 +3790,14 @@ pub fn with_hole<'a>(
         }
 
         ZeroArgumentTag {
-            variant_var,
+            variant_var: _,
             name: tag_name,
             ext_var,
             closure_name,
         } => {
             let arena = env.arena;
 
-            let content = env.subs.get_content_without_compacting(variant_var);
+            let content = env.subs.get_content_without_compacting(variable);
 
             if let Content::Structure(FlatType::Func(arg_vars, _, ret_var)) = content {
                 let ret_var = *ret_var;
@@ -3888,7 +3811,7 @@ pub fn with_hole<'a>(
                     closure_name,
                     ext_var,
                     procs,
-                    variant_var,
+                    variable,
                     layout_cache,
                     assigned,
                     hole,
@@ -3896,7 +3819,7 @@ pub fn with_hole<'a>(
             } else {
                 convert_tag_union(
                     env,
-                    variant_var,
+                    variable,
                     assigned,
                     hole,
                     tag_name,
@@ -4281,8 +4204,12 @@ pub fn with_hole<'a>(
 
             let mut symbol_exprs = Vec::with_capacity_in(loc_elems.len(), env.arena);
 
+            let elem_layout = layout_cache
+                .from_var(env.arena, elem_var, env.subs)
+                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+
             for arg_expr in loc_elems.into_iter() {
-                if let Some(literal) = try_make_literal(env, &arg_expr.value) {
+                if let Some(literal) = try_make_literal(&arg_expr.value, elem_layout) {
                     elements.push(ListLiteralElement::Literal(literal));
                 } else {
                     let symbol = possible_reuse_symbol_or_specialize(
@@ -4299,10 +4226,6 @@ pub fn with_hole<'a>(
                 }
             }
             let arg_symbols = arg_symbols.into_bump_slice();
-
-            let elem_layout = layout_cache
-                .from_var(env.arena, elem_var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
             let expr = Expr::Array {
                 elem_layout,
@@ -4801,6 +4724,7 @@ pub fn with_hole<'a>(
 
                                     result = match_on_lambda_set(
                                         env,
+                                        procs,
                                         lambda_set,
                                         closure_data_symbol,
                                         arg_symbols,
@@ -4841,6 +4765,7 @@ pub fn with_hole<'a>(
 
                                     result = match_on_lambda_set(
                                         env,
+                                        procs,
                                         lambda_set,
                                         closure_data_symbol,
                                         arg_symbols,
@@ -4898,6 +4823,7 @@ pub fn with_hole<'a>(
 
                                     result = match_on_lambda_set(
                                         env,
+                                        procs,
                                         lambda_set,
                                         closure_data_symbol,
                                         arg_symbols,
@@ -6147,7 +6073,7 @@ fn from_can_when<'a>(
                 let guard_stmt = with_hole(
                     env,
                     loc_expr.value,
-                    cond_var,
+                    Variable::BOOL,
                     procs,
                     layout_cache,
                     symbol,
@@ -7574,6 +7500,7 @@ fn call_by_name<'a>(
 
                     let result = match_on_lambda_set(
                         env,
+                        procs,
                         lambda_set,
                         closure_data_symbol,
                         arg_symbols,
@@ -7724,23 +7651,19 @@ fn call_by_name_help<'a>(
             "see call_by_name for background (scroll down a bit), function is {:?}",
             proc_name,
         );
-
-        let field_symbols = field_symbols.into_bump_slice();
-
-        let call = self::Call {
-            call_type: CallType::ByName {
-                name: proc_name,
-                ret_layout,
-                arg_layouts: argument_layouts,
-                specialization_id: env.next_call_specialization_id(),
-            },
-            arguments: field_symbols,
-        };
-
-        let result = build_call(env, call, assigned, *ret_layout, hole);
-
-        let iter = loc_args.into_iter().rev().zip(field_symbols.iter().rev());
-        assign_to_symbols(env, procs, layout_cache, iter, result)
+        call_specialized_proc(
+            env,
+            procs,
+            proc_name,
+            lambda_set,
+            RawFunctionLayout::Function(argument_layouts, lambda_set, ret_layout),
+            top_level_layout,
+            field_symbols.into_bump_slice(),
+            loc_args,
+            layout_cache,
+            assigned,
+            hole,
+        )
     } else if env.is_imported_symbol(proc_name.name()) {
         add_needed_external(procs, env, original_fn_var, proc_name);
 
@@ -7817,52 +7740,21 @@ fn call_by_name_help<'a>(
                     proc_name,
                 );
 
-                let has_captures = argument_layouts.len() != top_level_layout.arguments.len();
-                let closure_argument = env.unique_symbol();
-
-                if has_captures {
-                    field_symbols.push(closure_argument);
-                }
-
                 let field_symbols = field_symbols.into_bump_slice();
 
-                let call = self::Call {
-                    call_type: CallType::ByName {
-                        name: proc_name,
-                        ret_layout,
-                        arg_layouts: top_level_layout.arguments,
-                        specialization_id: env.next_call_specialization_id(),
-                    },
-                    arguments: field_symbols,
-                };
-
-                let result = build_call(env, call, assigned, *ret_layout, hole);
-
-                // NOTE: the zip omits the closure symbol, if it exists,
-                // because loc_args then is shorter than field_symbols
-                debug_assert!([0, 1].contains(&(field_symbols.len() - loc_args.len())));
-                let iter = loc_args.into_iter().zip(field_symbols.iter()).rev();
-                let result = assign_to_symbols(env, procs, layout_cache, iter, result);
-
-                if has_captures {
-                    let partial_proc = procs.partial_procs.get_symbol(proc_name.name()).unwrap();
-
-                    let captured = match partial_proc.captured_symbols {
-                        CapturedSymbols::None => &[],
-                        CapturedSymbols::Captured(slice) => slice,
-                    };
-
-                    construct_closure_data(
-                        env,
-                        lambda_set,
-                        proc_name,
-                        captured.iter(),
-                        closure_argument,
-                        env.arena.alloc(result),
-                    )
-                } else {
-                    result
-                }
+                call_specialized_proc(
+                    env,
+                    procs,
+                    proc_name,
+                    lambda_set,
+                    RawFunctionLayout::Function(argument_layouts, lambda_set, ret_layout),
+                    top_level_layout,
+                    field_symbols,
+                    loc_args,
+                    layout_cache,
+                    assigned,
+                    hole,
+                )
             }
             PendingSpecializations::Making => {
                 let opt_partial_proc = procs.partial_procs.symbol_to_id(proc_name.name());
@@ -7888,13 +7780,26 @@ fn call_by_name_help<'a>(
                             partial_proc,
                         ) {
                             Ok((proc, layout)) => {
+                                let proc_name = proc.name;
+                                let function_layout = ProcLayout::from_raw(
+                                    env.arena,
+                                    layout,
+                                    proc_name.captures_niche(),
+                                );
+                                procs.specialized.insert_specialized(
+                                    proc_name.name(),
+                                    function_layout,
+                                    proc,
+                                );
+
                                 // now we just call our freshly-specialized function
                                 call_specialized_proc(
                                     env,
                                     procs,
-                                    proc,
+                                    proc_name,
                                     lambda_set,
                                     layout,
+                                    function_layout,
                                     field_symbols,
                                     loc_args,
                                     layout_cache,
@@ -7909,12 +7814,25 @@ fn call_by_name_help<'a>(
                                     attempted_layout,
                                 );
 
+                                let proc_name = proc.name;
+                                let function_layout = ProcLayout::from_raw(
+                                    env.arena,
+                                    attempted_layout,
+                                    proc_name.captures_niche(),
+                                );
+                                procs.specialized.insert_specialized(
+                                    proc_name.name(),
+                                    function_layout,
+                                    proc,
+                                );
+
                                 call_specialized_proc(
                                     env,
                                     procs,
-                                    proc,
+                                    proc_name,
                                     lambda_set,
                                     attempted_layout,
+                                    function_layout,
                                     field_symbols,
                                     loc_args,
                                     layout_cache,
@@ -8063,22 +7981,16 @@ fn call_by_name_module_thunk<'a>(
 fn call_specialized_proc<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
-    proc: Proc<'a>,
+    proc_name: LambdaName<'a>,
     lambda_set: LambdaSet<'a>,
     layout: RawFunctionLayout<'a>,
+    function_layout: ProcLayout<'a>,
     field_symbols: &'a [Symbol],
     loc_args: std::vec::Vec<(Variable, Loc<roc_can::expr::Expr>)>,
     layout_cache: &mut LayoutCache<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    let proc_name = proc.name;
-    let function_layout = ProcLayout::from_raw(env.arena, layout, proc_name.captures_niche());
-
-    procs
-        .specialized
-        .insert_specialized(proc_name.name(), function_layout, proc);
-
     if field_symbols.is_empty() {
         debug_assert!(loc_args.is_empty());
 
@@ -8134,6 +8046,7 @@ fn call_specialized_proc<'a>(
 
                 let new_hole = match_on_lambda_set(
                     env,
+                    procs,
                     lambda_set,
                     closure_data_symbol,
                     field_symbols,
@@ -8275,40 +8188,20 @@ fn from_can_pattern_help<'a>(
         Underscore => Ok(Pattern::Underscore),
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
         AbilityMemberSpecialization { ident, .. } => Ok(Pattern::Identifier(*ident)),
-        IntLiteral(_, precision_var, _, int, _bound) => {
-            match num_argument_to_int_or_float(env.subs, env.target_info, *precision_var, false) {
-                IntOrFloat::Int(precision) => match *int {
-                    IntValue::I128(n) | IntValue::U128(n) => Ok(Pattern::IntLiteral(n, precision)),
-                },
-                other => {
-                    panic!(
-                        "Invalid precision for int pattern: {:?} has {:?}",
-                        can_pattern, other
-                    )
-                }
-            }
-        }
-        FloatLiteral(_, precision_var, float_str, float, _bound) => {
-            // TODO: Can I reuse num_argument_to_int_or_float here if I pass in true?
-            match num_argument_to_int_or_float(env.subs, env.target_info, *precision_var, true) {
-                IntOrFloat::Int(_) => {
-                    panic!("Invalid precision for float pattern {:?}", precision_var)
-                }
-                IntOrFloat::Float(precision) => {
-                    Ok(Pattern::FloatLiteral(f64::to_bits(*float), precision))
-                }
-                IntOrFloat::DecimalFloatType => {
-                    let dec = match RocDec::from_str(float_str) {
-                        Some(d) => d,
-                        None => panic!(
-                            r"Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message",
-                            float_str
-                        ),
-                    };
-                    Ok(Pattern::DecimalLiteral(dec.to_ne_bytes()))
-                }
-            }
-        }
+        IntLiteral(var, _, int_str, int, _bound) => Ok(make_num_literal_pattern(
+            env,
+            layout_cache,
+            *var,
+            int_str,
+            IntOrFloatValue::Int(*int),
+        )),
+        FloatLiteral(var, _, float_str, float, _bound) => Ok(make_num_literal_pattern(
+            env,
+            layout_cache,
+            *var,
+            float_str,
+            IntOrFloatValue::Float(*float),
+        )),
         StrLiteral(v) => Ok(Pattern::StrLiteral(v.clone())),
         SingleQuote(c) => Ok(Pattern::IntLiteral(
             (*c as i128).to_ne_bytes(),
@@ -8328,30 +8221,13 @@ fn from_can_pattern_help<'a>(
             // TODO(opaques) should be `RuntimeError::OpaqueNotDefined`
             Err(RuntimeError::UnsupportedPattern(loc_ident.region))
         }
-        NumLiteral(var, num_str, num, _bound) => {
-            match num_argument_to_int_or_float(env.subs, env.target_info, *var, false) {
-                IntOrFloat::Int(precision) => Ok(match num {
-                    IntValue::I128(num) | IntValue::U128(num) => {
-                        Pattern::IntLiteral(*num, precision)
-                    }
-                }),
-                IntOrFloat::Float(precision) => {
-                    // TODO: this may be lossy
-                    let num = match *num {
-                        IntValue::I128(n) => f64::to_bits(i128::from_ne_bytes(n) as f64),
-                        IntValue::U128(n) => f64::to_bits(u128::from_ne_bytes(n) as f64),
-                    };
-                    Ok(Pattern::FloatLiteral(num, precision))
-                }
-                IntOrFloat::DecimalFloatType => {
-                    let dec = match RocDec::from_str(num_str) {
-                            Some(d) => d,
-                            None => panic!("Invalid decimal for float literal = {}. TODO: Make this a nice, user-friendly error message", num_str),
-                        };
-                    Ok(Pattern::DecimalLiteral(dec.to_ne_bytes()))
-                }
-            }
-        }
+        NumLiteral(var, num_str, num, _bound) => Ok(make_num_literal_pattern(
+            env,
+            layout_cache,
+            *var,
+            num_str,
+            IntOrFloatValue::Int(*num),
+        )),
 
         AppliedTag {
             whole_var,
@@ -8962,77 +8838,99 @@ fn from_can_record_destruct<'a>(
     })
 }
 
-#[derive(Debug)]
-pub enum IntOrFloat {
-    Int(IntWidth),
-    Float(FloatWidth),
-    DecimalFloatType,
+enum IntOrFloatValue {
+    Int(IntValue),
+    Float(f64),
 }
 
-/// Given the `a` in `Num a`, determines whether it's an int or a float
-pub fn num_argument_to_int_or_float(
-    subs: &Subs,
-    target_info: TargetInfo,
-    var: Variable,
-    known_to_be_float: bool,
-) -> IntOrFloat {
-    match subs.get_content_without_compacting(var) {
-        Content::FlexVar(_) | Content::RigidVar(_) if known_to_be_float => {
-            IntOrFloat::Float(FloatWidth::F64)
-        }
-        Content::FlexVar(_) | Content::RigidVar(_) => IntOrFloat::Int(IntWidth::I64), // We default (Num *) to I64
+enum NumLiteral {
+    Int([u8; 16], IntWidth),
+    U128([u8; 16]),
+    Float(f64, FloatWidth),
+    Decimal([u8; 16]),
+}
 
-        Content::Alias(Symbol::NUM_INTEGER, args, _, _) => {
-            debug_assert!(args.len() == 1);
-
-            // Recurse on the second argument
-            let var = subs[args.all_variables().into_iter().next().unwrap()];
-            num_argument_to_int_or_float(subs, target_info, var, false)
-        }
-
-        other @ Content::Alias(symbol, args, _, _) => {
-            if let Some(int_width) = IntWidth::try_from_symbol(*symbol) {
-                return IntOrFloat::Int(int_width);
-            }
-
-            if let Some(float_width) = FloatWidth::try_from_symbol(*symbol) {
-                return IntOrFloat::Float(float_width);
-            }
-
-            match *symbol {
-                Symbol::NUM_FLOATINGPOINT => {
-                    debug_assert!(args.len() == 1);
-
-                    // Recurse on the second argument
-                    let var = subs[args.all_variables().into_iter().next().unwrap()];
-                    num_argument_to_int_or_float(subs, target_info, var, true)
-                }
-
-                Symbol::NUM_DECIMAL => IntOrFloat::DecimalFloatType,
-
-                Symbol::NUM_NAT | Symbol::NUM_NATURAL => {
-                    let int_width = match target_info.ptr_width() {
-                        roc_target::PtrWidth::Bytes4 => IntWidth::U32,
-                        roc_target::PtrWidth::Bytes8 => IntWidth::U64,
-                    };
-
-                    IntOrFloat::Int(int_width)
-                }
-
-                _ => panic!(
-                    "Unrecognized Num type argument for var {:?} with Content: {:?}",
-                    var, other
-                ),
-            }
-        }
-
-        other => {
-            panic!(
-                "Unrecognized Num type argument for var {:?} with Content: {:?}",
-                var, other
-            );
+impl NumLiteral {
+    fn to_expr_literal(&self) -> Literal<'static> {
+        match *self {
+            NumLiteral::Int(n, _) => Literal::Int(n),
+            NumLiteral::U128(n) => Literal::U128(n),
+            NumLiteral::Float(n, _) => Literal::Float(n),
+            NumLiteral::Decimal(n) => Literal::Decimal(n),
         }
     }
+    fn to_pattern(&self) -> Pattern<'static> {
+        match *self {
+            NumLiteral::Int(n, w) => Pattern::IntLiteral(n, w),
+            NumLiteral::U128(_) => todo!(),
+            NumLiteral::Float(n, w) => Pattern::FloatLiteral(f64::to_bits(n), w),
+            NumLiteral::Decimal(n) => Pattern::DecimalLiteral(n),
+        }
+    }
+}
+
+fn make_num_literal(layout: Layout<'_>, num_str: &str, num_value: IntOrFloatValue) -> NumLiteral {
+    match layout {
+        Layout::Builtin(Builtin::Int(width)) => match num_value {
+            IntOrFloatValue::Int(IntValue::I128(n)) => NumLiteral::Int(n, width),
+            IntOrFloatValue::Int(IntValue::U128(n)) => NumLiteral::U128(n),
+            IntOrFloatValue::Float(..) => {
+                internal_error!("Float value where int was expected, should have been a type error")
+            }
+        },
+        Layout::Builtin(Builtin::Float(width)) => match num_value {
+            IntOrFloatValue::Float(n) => NumLiteral::Float(n, width),
+            IntOrFloatValue::Int(int_value) => match int_value {
+                IntValue::I128(n) => NumLiteral::Float(i128::from_ne_bytes(n) as f64, width),
+                IntValue::U128(n) => NumLiteral::Float(u128::from_ne_bytes(n) as f64, width),
+            },
+        },
+        Layout::Builtin(Builtin::Decimal) => {
+            let dec = match RocDec::from_str(num_str) {
+                Some(d) => d,
+                None => internal_error!(
+                    "Invalid decimal for float literal = {}. This should be a type error!",
+                    num_str
+                ),
+            };
+            NumLiteral::Decimal(dec.to_ne_bytes())
+        }
+        layout => internal_error!(
+            "Found a non-num layout where a number was expected: {:?}",
+            layout
+        ),
+    }
+}
+
+fn assign_num_literal_expr<'a>(
+    env: &mut Env<'a, '_>,
+    layout_cache: &mut LayoutCache<'a>,
+    assigned: Symbol,
+    variable: Variable,
+    num_str: &str,
+    num_value: IntOrFloatValue,
+    hole: &'a Stmt<'a>,
+) -> Stmt<'a> {
+    let layout = layout_cache
+        .from_var(env.arena, variable, env.subs)
+        .unwrap();
+    let literal = make_num_literal(layout, num_str, num_value).to_expr_literal();
+
+    Stmt::Let(assigned, Expr::Literal(literal), layout, hole)
+}
+
+fn make_num_literal_pattern<'a>(
+    env: &mut Env<'a, '_>,
+    layout_cache: &mut LayoutCache<'a>,
+    variable: Variable,
+    num_str: &str,
+    num_value: IntOrFloatValue,
+) -> Pattern<'a> {
+    let layout = layout_cache
+        .from_var(env.arena, variable, env.subs)
+        .unwrap();
+    let literal = make_num_literal(layout, num_str, num_value);
+    literal.to_pattern()
 }
 
 type ToLowLevelCallArguments<'a> = (
@@ -9222,6 +9120,7 @@ where
 #[allow(clippy::too_many_arguments)]
 fn match_on_lambda_set<'a>(
     env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
     lambda_set: LambdaSet<'a>,
     closure_data_symbol: Symbol,
     argument_symbols: &'a [Symbol],
@@ -9265,7 +9164,22 @@ fn match_on_lambda_set<'a>(
             field_layouts,
             field_order_hash,
         } => {
-            let function_symbol = lambda_set.iter_set().next().unwrap();
+            let function_symbol = match lambda_set.iter_set().next() {
+                Some(function_symbol) => function_symbol,
+                None => {
+                    // Lambda set is empty, so this function is never called; synthesize a function
+                    // that always yields a runtime error.
+                    let name = env.unique_symbol();
+                    let function_layout =
+                        RawFunctionLayout::Function(argument_layouts, lambda_set, return_layout);
+                    let proc = generate_runtime_error_function(env, name, function_layout);
+                    let top_level =
+                        ProcLayout::from_raw(env.arena, function_layout, CapturesNiche::no_niche());
+
+                    procs.specialized.insert_specialized(name, top_level, proc);
+                    LambdaName::no_niche(name)
+                }
+            };
 
             let closure_info = match field_layouts {
                 [] => ClosureInfo::DoesNotCapture,

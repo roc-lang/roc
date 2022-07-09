@@ -3,7 +3,7 @@ use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
-        AbilityMember, AssignedField, Collection, CommentOrNewline, Def, Derived, Expr, Has,
+        AbilityMember, AssignedField, Collection, CommentOrNewline, Def, Defs, Derived, Expr, Has,
         HasClause, Module, Pattern, Spaced, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef,
         TypeHeader, ValueDef, WhenBranch,
     },
@@ -32,8 +32,27 @@ pub fn fmt_default_spaces<'a, 'buf>(
     }
 }
 
+/// Like fmt_spaces, but disallows two consecutive newlines.
+pub fn fmt_spaces_no_blank_lines<'a, 'buf, I>(buf: &mut Buf<'buf>, spaces: I, indent: u16)
+where
+    I: Iterator<Item = &'a CommentOrNewline<'a>>,
+{
+    fmt_spaces_max_consecutive_newlines(buf, spaces, 1, indent)
+}
+
 pub fn fmt_spaces<'a, 'buf, I>(buf: &mut Buf<'buf>, spaces: I, indent: u16)
 where
+    I: Iterator<Item = &'a CommentOrNewline<'a>>,
+{
+    fmt_spaces_max_consecutive_newlines(buf, spaces, 2, indent)
+}
+
+fn fmt_spaces_max_consecutive_newlines<'a, 'buf, I>(
+    buf: &mut Buf<'buf>,
+    spaces: I,
+    max_consecutive_newlines: usize,
+    indent: u16,
+) where
     I: Iterator<Item = &'a CommentOrNewline<'a>>,
 {
     use self::CommentOrNewline::*;
@@ -41,17 +60,16 @@ where
     // Only ever print two newlines back to back.
     // (Two newlines renders as one blank line.)
     let mut consecutive_newlines = 0;
-
     let mut encountered_comment = false;
 
     for space in spaces {
         match space {
             Newline => {
-                if !encountered_comment && (consecutive_newlines < 2) {
+                if !encountered_comment && (consecutive_newlines < max_consecutive_newlines) {
                     buf.newline();
 
                     // Don't bother incrementing it if we're already over the limit.
-                    // There's no upside, and it might eventually overflow,
+                    // There's no upside, and it might eventually overflow.
                     consecutive_newlines += 1;
                 }
             }
@@ -125,6 +143,12 @@ pub fn fmt_comments_only<'a, 'buf, I>(
 }
 
 fn fmt_comment<'buf>(buf: &mut Buf<'buf>, comment: &str) {
+    // The '#' in a comment should always be preceded by a newline or a space,
+    // unless it's the very beginning of the buffer.
+    if !buf.is_empty() && !buf.ends_with_space() && !buf.ends_with_newline() {
+        buf.spaces(1);
+    }
+
     buf.push('#');
     if !comment.starts_with(' ') {
         buf.spaces(1);
@@ -158,6 +182,12 @@ where
 }
 
 fn fmt_docs<'buf>(buf: &mut Buf<'buf>, docs: &str) {
+    // The "##" in a doc comment should always be preceded by a newline or a space,
+    // unless it's the very beginning of the buffer.
+    if !buf.is_empty() && !buf.ends_with_space() && !buf.ends_with_newline() {
+        buf.spaces(1);
+    }
+
     buf.push_str("##");
     if !docs.is_empty() {
         buf.spaces(1);
@@ -183,24 +213,32 @@ impl<'a> RemoveSpaces<'a> for Ast<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         Ast {
             module: self.module.remove_spaces(arena),
-            defs: {
-                let mut defs = self.defs.clone();
-
-                for type_def in defs.type_defs.iter_mut() {
-                    *type_def = type_def.remove_spaces(arena);
-                }
-
-                for value_def in defs.value_defs.iter_mut() {
-                    *value_def = value_def.remove_spaces(arena);
-                }
-
-                for region_def in defs.regions.iter_mut() {
-                    *region_def = region_def.remove_spaces(arena);
-                }
-
-                defs
-            },
+            defs: self.defs.remove_spaces(arena),
         }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for Defs<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        let mut defs = self.clone();
+
+        defs.spaces.clear();
+        defs.space_before.clear();
+        defs.space_after.clear();
+
+        for type_def in defs.type_defs.iter_mut() {
+            *type_def = type_def.remove_spaces(arena);
+        }
+
+        for value_def in defs.value_defs.iter_mut() {
+            *value_def = value_def.remove_spaces(arena);
+        }
+
+        for region_def in defs.regions.iter_mut() {
+            *region_def = region_def.remove_spaces(arena);
+        }
+
+        defs
     }
 }
 
