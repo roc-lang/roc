@@ -30,11 +30,11 @@ pub fn helper(
     _leak: bool,
     lazy_literals: bool,
 ) -> (String, Vec<roc_problem::can::Problem>, Library) {
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     let dir = tempdir().unwrap();
     let filename = PathBuf::from("Test.roc");
-    let src_dir = Path::new("fake/test/path");
+    let src_dir = PathBuf::from("fake/test/path");
     let app_o_file = dir.path().join("app.o");
 
     let module_src;
