@@ -8187,9 +8187,6 @@ pub enum Pattern<'a> {
     Voided {
         tag_name: TagName,
         tag_id: TagIdIntType,
-        arguments: Vec<'a, (Pattern<'a>, Layout<'a>)>,
-        layout: UnionLayout<'a>,
-        union: roc_exhaustive::Union,
     },
     AppliedTag {
         tag_name: TagName,
@@ -8226,7 +8223,7 @@ pub struct WhenBranch<'a> {
 }
 
 impl<'a> Pattern<'a> {
-    /// This pattern contains a pattern match on Void (i.e. [], the empty tag union) 
+    /// This pattern contains a pattern match on Void (i.e. [], the empty tag union)
     /// such branches are not reachable at runtime
     pub fn is_voided(&self) -> bool {
         let mut stack: std::vec::Vec<&Pattern> = vec![self];
@@ -8465,7 +8462,7 @@ fn from_can_pattern_help<'a>(
                 }
                 NewtypeByVoid {
                     sorted_tag_layouts: tags,
-                    data_tag_name,
+                    data_tag_name: _,
                     data_tag_id,
                     ..
                 } => {
@@ -8562,9 +8559,6 @@ fn from_can_pattern_help<'a>(
                         Pattern::Voided {
                             tag_name: tag_name.clone(),
                             tag_id: tag_id as _,
-                            arguments: mono_args,
-                            union,
-                            layout,
                         }
                     }
                 }
