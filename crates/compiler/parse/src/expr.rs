@@ -1,6 +1,6 @@
 use crate::ast::{
-    AssignedField, Collection, CommentOrNewline, Def, Defs, Derived, Expr, ExtractSpaces, Has,
-    Pattern, Spaceable, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    AssignedField, Collection, CommentOrNewline, Defs, Derived, Expr, ExtractSpaces, Has, Pattern,
+    Spaceable, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     space0_after_e, space0_around_ee, space0_before_e, space0_before_optional_after, space0_e,
@@ -999,7 +999,9 @@ fn finish_parsing_alias_or_opaque<'a>(
         .validate_is_type_def(arena, loc_op, kind)
         .map_err(|fail| (MadeProgress, fail, state.clone()))?;
 
-    let (loc_def, state) = match &expr.value {
+    let mut defs = Defs::default();
+
+    let state = match &expr.value {
         Expr::Tag(name) => {
             let mut type_arguments = Vec::with_capacity_in(arguments.len(), arena);
 
@@ -1012,7 +1014,7 @@ fn finish_parsing_alias_or_opaque<'a>(
                 }
             }
 
-            let (loc_def, state) = match kind {
+            match kind {
                 AliasOrOpaque::Alias => {
                     let (_, signature, state) =
                         alias_signature_with_space_before(indented_more).parse(arena, state)?;
@@ -1029,7 +1031,9 @@ fn finish_parsing_alias_or_opaque<'a>(
                         ann: signature,
                     };
 
-                    (Loc::at(def_region, Def::Type(def)), state)
+                    defs.push_type_def(def, def_region, &[], &[]);
+
+                    state
                 }
 
                 AliasOrOpaque::Opaque => {
@@ -1049,11 +1053,11 @@ fn finish_parsing_alias_or_opaque<'a>(
                         derived,
                     };
 
-                    (Loc::at(def_region, Def::Type(def)), state)
-                }
-            };
+                    defs.push_type_def(def, def_region, &[], &[]);
 
-            (&*arena.alloc(loc_def), state)
+                    state
+                }
+            }
         }
 
         _ => {
@@ -1082,9 +1086,12 @@ fn finish_parsing_alias_or_opaque<'a>(
 
                             let def_region = Region::span_across(&call.region, &ann_type.region);
 
-                            let alias = ValueDef::Annotation(Loc::at(expr_region, good), ann_type);
+                            let value_def =
+                                ValueDef::Annotation(Loc::at(expr_region, good), ann_type);
 
-                            (&*arena.alloc(Loc::at(def_region, alias.into())), state)
+                            defs.push_value_def(value_def, def_region, &[], &[]);
+
+                            state
                         }
                     }
                 }
@@ -1101,16 +1108,6 @@ fn finish_parsing_alias_or_opaque<'a>(
             }
         }
     };
-
-    let mut defs = Defs::default();
-
-    match loc_def.value {
-        Def::Type(type_def) => defs.push_type_def(type_def, loc_def.region, &[], &[]),
-        Def::Value(value_def) => defs.push_value_def(value_def, loc_def.region, &[], &[]),
-        Def::SpaceBefore(_, _) => todo!(),
-        Def::SpaceAfter(_, _) => todo!(),
-        Def::NotYetImplemented(_) => todo!(),
-    }
 
     parse_defs_expr(options, start_column, defs, arena, state)
 }

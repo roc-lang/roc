@@ -3,7 +3,6 @@
 #![allow(unused_imports)]
 #![allow(unused_variables)]
 use bumpalo::Bump;
-use roc_can::operator::desugar_def;
 use roc_collections::all::{default_hasher, ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
