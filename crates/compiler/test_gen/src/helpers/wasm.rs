@@ -214,7 +214,26 @@ where
 
     let mut module = rt.load_module(module).expect("Unable to load module");
 
+    let mut panic_msg: Option<String> = None;
+
     module.link_wasi().unwrap();
+    module
+        .link_closure(
+            "env",
+            "send_panic_msg_to_rust",
+            |call_context, (msg_ptr, msg_len): (i32, i32)| {
+                let memory: &[u8] = unsafe {
+                    let memory_ptr: *const [u8] = call_context.memory();
+                    let (_, memory_size) = std::mem::transmute::<_, (usize, usize)>(memory_ptr);
+                    std::slice::from_raw_parts(memory_ptr as _, memory_size)
+                };
+                let msg_bytes = &memory[msg_ptr as usize..][msg_len as usize..];
+                let msg = std::str::from_utf8(msg_bytes).unwrap();
+                panic_msg = Some(msg.into());
+                Ok(())
+            },
+        )
+        .expect("Unable to link roc_panic handler");
 
     let test_wrapper = module
         .find_function::<(), i32>(TEST_WRAPPER_NAME)
@@ -222,16 +241,11 @@ where
 
     match test_wrapper.call() {
         Err(e) => {
-            let (_, memory_size) = unsafe { std::mem::transmute::<_, (usize, usize)>(rt.memory()) };
-            let memory: &[u8] =
-                unsafe { std::slice::from_raw_parts(rt.memory() as _, memory_size) };
-
-            //            if let Some(msg) = get_roc_panic_msg(&instance, memory) {
-            //                Err(format!("Roc failed with message: \"{}\"", msg))
-            //            } else {
-            //                Err(e.to_string())
-            //            }
-            panic!("{:?}", &e);
+            if let Some(msg) = panic_msg {
+                Err(format!("Roc failed with message: \"{}\"", msg))
+            } else {
+                Err(format!("{}", e))
+            }
         }
         Ok(address) => {
             //            if false {
