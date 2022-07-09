@@ -334,7 +334,7 @@ fn flatten<'a>(
     path_patterns: &mut Vec<(Vec<PathInstruction>, Pattern<'a>)>,
 ) {
     match path_pattern.1 {
-        Pattern::Voided { .. } => {}
+        Pattern::Voided { .. } => unreachable!(),
 
         Pattern::AppliedTag {
             union,
@@ -562,18 +562,7 @@ fn test_at_path<'a>(
                     arguments: arguments.to_vec(),
                 },
 
-                Voided {
-                    tag_name,
-                    tag_id,
-                    arguments,
-                    union,
-                    ..
-                } => IsCtor {
-                    tag_id: *tag_id,
-                    ctor_name: CtorName::Tag(tag_name.clone()),
-                    union: union.clone(),
-                    arguments: arguments.to_vec(),
-                },
+                Voided { .. } => unreachable!(),
 
                 OpaqueUnwrap { opaque, argument } => {
                     let union = Union {
@@ -784,7 +773,7 @@ fn to_relevant_branch_help<'a>(
             _ => None,
         },
 
-        Voided { .. } => None,
+        Voided { .. } => unreachable!(),
 
         AppliedTag {
             tag_name,

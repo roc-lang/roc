@@ -6107,45 +6107,49 @@ fn from_can_when<'a>(
     let arena = env.arena;
     let it = opt_branches
         .into_iter()
-        .map(|(pattern, opt_guard, can_expr)| {
-            let branch_stmt = match join_point {
-                None => from_can(env, expr_var, can_expr, procs, layout_cache),
-                Some(id) => {
-                    let symbol = env.unique_symbol();
-                    let arguments = bumpalo::vec![in env.arena; symbol].into_bump_slice();
-                    let jump = env.arena.alloc(Stmt::Jump(id, arguments));
-
-                    with_hole(env, can_expr, expr_var, procs, layout_cache, symbol, jump)
-                }
-            };
-
-            use crate::decision_tree::Guard;
-            if let Some(loc_expr) = opt_guard {
-                let id = JoinPointId(env.unique_symbol());
-                let symbol = env.unique_symbol();
-                let jump = env.arena.alloc(Stmt::Jump(id, env.arena.alloc([symbol])));
-
-                let guard_stmt = with_hole(
-                    env,
-                    loc_expr.value,
-                    cond_var,
-                    procs,
-                    layout_cache,
-                    symbol,
-                    jump,
-                );
-
-                (
-                    pattern.clone(),
-                    Guard::Guard {
-                        id,
-                        pattern,
-                        stmt: guard_stmt,
-                    },
-                    branch_stmt,
-                )
+        .filter_map(|(pattern, opt_guard, can_expr)| {
+            if pattern.is_voided() {
+                None
             } else {
-                (pattern, Guard::NoGuard, branch_stmt)
+                let branch_stmt = match join_point {
+                    None => from_can(env, expr_var, can_expr, procs, layout_cache),
+                    Some(id) => {
+                        let symbol = env.unique_symbol();
+                        let arguments = bumpalo::vec![in env.arena; symbol].into_bump_slice();
+                        let jump = env.arena.alloc(Stmt::Jump(id, arguments));
+
+                        with_hole(env, can_expr, expr_var, procs, layout_cache, symbol, jump)
+                    }
+                };
+
+                use crate::decision_tree::Guard;
+                if let Some(loc_expr) = opt_guard {
+                    let id = JoinPointId(env.unique_symbol());
+                    let symbol = env.unique_symbol();
+                    let jump = env.arena.alloc(Stmt::Jump(id, env.arena.alloc([symbol])));
+
+                    let guard_stmt = with_hole(
+                        env,
+                        loc_expr.value,
+                        cond_var,
+                        procs,
+                        layout_cache,
+                        symbol,
+                        jump,
+                    );
+
+                    Some((
+                        pattern.clone(),
+                        Guard::Guard {
+                            id,
+                            pattern,
+                            stmt: guard_stmt,
+                        },
+                        branch_stmt,
+                    ))
+                } else {
+                    Some((pattern, Guard::NoGuard, branch_stmt))
+                }
             }
         });
     let mono_branches = Vec::from_iter_in(it, arena);
@@ -6623,22 +6627,8 @@ fn store_pattern_help<'a>(
                 );
             }
         },
-        Voided {
-            arguments,
-            layout,
-            tag_id,
-            ..
-        } => {
-            return store_tag_pattern(
-                env,
-                procs,
-                layout_cache,
-                outer_symbol,
-                *layout,
-                arguments,
-                *tag_id,
-                stmt,
-            );
+        Voided { .. } => {
+            return StorePattern::NotProductive(stmt);
         }
         AppliedTag {
             arguments,
@@ -8233,6 +8223,47 @@ pub struct WhenBranch<'a> {
     pub patterns: Vec<'a, Pattern<'a>>,
     pub value: Expr<'a>,
     pub guard: Option<Stmt<'a>>,
+}
+
+impl<'a> Pattern<'a> {
+    /// This pattern contains a pattern match on Void (i.e. [], the empty tag union) 
+    /// such branches are not reachable at runtime
+    pub fn is_voided(&self) -> bool {
+        let mut stack: std::vec::Vec<&Pattern> = vec![self];
+
+        while let Some(pattern) = stack.pop() {
+            match pattern {
+                Pattern::Identifier(_)
+                | Pattern::Underscore
+                | Pattern::IntLiteral(_, _)
+                | Pattern::FloatLiteral(_, _)
+                | Pattern::DecimalLiteral(_)
+                | Pattern::BitLiteral { .. }
+                | Pattern::EnumLiteral { .. }
+                | Pattern::StrLiteral(_) => { /* terminal */ }
+                Pattern::RecordDestructure(destructs, _) => {
+                    for destruct in destructs {
+                        match &destruct.typ {
+                            DestructType::Required(_) => { /* do nothing */ }
+                            DestructType::Guard(pattern) => {
+                                stack.push(pattern);
+                            }
+                        }
+                    }
+                }
+                Pattern::NewtypeDestructure { arguments, .. } => {
+                    stack.extend(arguments.iter().map(|(t, _)| t))
+                }
+                Pattern::Voided { .. } => return true,
+                Pattern::AppliedTag { arguments, .. } => {
+                    stack.extend(arguments.iter().map(|(t, _)| t))
+                }
+                Pattern::OpaqueUnwrap { argument, .. } => stack.push(&argument.0),
+            }
+        }
+
+        false
+    }
 }
 
 #[allow(clippy::type_complexity)]
