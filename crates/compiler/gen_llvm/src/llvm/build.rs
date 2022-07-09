@@ -3629,7 +3629,11 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
     let (params, param_types) = match (&roc_return, &cc_return) {
         // Drop the "return pointer" if it exists on the roc function
         // and the c function does not return via pointer
-        (RocReturn::ByPointer, CCReturn::Return) => (&params[..], &param_types[1..]),
+        (RocReturn::ByPointer, CCReturn::Return) => {
+            // Roc currently puts the return pointer at the end of the argument list.
+            // As such, we drop the last element here instead of the first.
+            (&params[..], &param_types[..param_types.len() - 1])
+        }
         // Drop the return pointer the other way, if the C function returns by pointer but Roc
         // doesn't
         (RocReturn::Return, CCReturn::ByPointer) => (&params[1..], &param_types[..]),
