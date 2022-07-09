@@ -3,7 +3,7 @@ use crate::helpers::from_wasm32_memory::FromWasm32Memory;
 use roc_collections::all::MutSet;
 use roc_gen_wasm::wasm32_result::Wasm32Result;
 use roc_gen_wasm::wasm_module::{Export, ExportType};
-use roc_gen_wasm::{DEBUG_SETTINGS, MEMORY_NAME};
+use roc_gen_wasm::DEBUG_SETTINGS;
 use roc_load::Threading;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -11,7 +11,6 @@ use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Mutex;
-use wasmer::WasmPtr;
 
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
 const INIT_REFCOUNT_NAME: &str = "init_refcount_test";
@@ -169,25 +168,6 @@ fn save_wasm_file(app_module_bytes: &[u8], build_dir_hash: u64) {
     );
 }
 
-fn load_bytes_into_runtime(bytes: &[u8]) -> wasmer::Instance {
-    use wasmer::{Module, Store};
-    use wasmer_wasi::WasiState;
-
-    let store = Store::default();
-    let wasmer_module = Module::new(&store, bytes).unwrap();
-
-    // First, we create the `WasiEnv`
-    let mut wasi_env = WasiState::new("hello").finalize().unwrap();
-
-    // Then, we get the import object related to our WASI
-    // and attach it to the Wasm instance.
-    let import_object = wasi_env
-        .import_object(&wasmer_module)
-        .unwrap_or_else(|_| wasmer::imports!());
-
-    wasmer::Instance::new(&wasmer_module, &import_object).unwrap()
-}
-
 #[allow(dead_code)]
 pub fn assert_evals_to_help<T>(src: &str, phantom: PhantomData<T>) -> Result<T, String>
 where
@@ -284,46 +264,88 @@ where
     let arena = bumpalo::Bump::new();
 
     let wasm_bytes = crate::helpers::wasm::compile_to_wasm_bytes(&arena, src, phantom);
-    let instance = load_bytes_into_runtime(&wasm_bytes);
 
-    let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
+    use wasm3::Environment;
+    use wasm3::Module;
+
+    let env = Environment::new().expect("Unable to create environment");
+    let rt = env
+        .create_runtime(1024 * 60)
+        .expect("Unable to create runtime");
+
+    let module = Module::parse(&env, &wasm_bytes[..]).expect("Unable to parse module");
+
+    let mut module = rt.load_module(module).expect("Unable to load module");
+
+    let panic_msg: Rc<Mutex<Option<(i32, i32)>>> = Default::default();
+    let panic_msg_for_closure = panic_msg.clone();
+
+    module.link_wasi().unwrap();
+    let try_link_panic = module.link_closure(
+        "env",
+        "send_panic_msg_to_rust",
+        move |_call_context, args: (i32, i32)| {
+            let mut w = panic_msg_for_closure.lock().unwrap();
+            *w = Some(args);
+            Ok(())
+        },
+    );
+    match try_link_panic {
+        Ok(()) => {}
+        Err(wasm3::error::Error::FunctionNotFound) => {}
+        Err(e) => panic!("{:?}", e),
+    }
 
     let expected_len = num_refcounts as i32;
-    let init_refcount_test = instance.exports.get_function(INIT_REFCOUNT_NAME).unwrap();
-    let init_result = init_refcount_test.call(&[wasmer::Value::I32(expected_len)]);
-    let refcount_vector_addr = match init_result {
+    let init_refcount_test = module
+        .find_function::<i32, i32>(INIT_REFCOUNT_NAME)
+        .expect("Unable to find refcount test init function");
+    let init_result = init_refcount_test.call(expected_len);
+    let mut refcount_vector_offset = match init_result {
         Err(e) => return Err(format!("{:?}", e)),
-        Ok(result) => result[0].unwrap_i32(),
+        Ok(addr) => addr as usize,
     };
 
     // Run the test
-    let test_wrapper = instance.exports.get_function(TEST_WRAPPER_NAME).unwrap();
-    match test_wrapper.call(&[]) {
-        Err(e) => return Err(format!("{:?}", e)),
-        Ok(_) => {}
-    }
+    let test_wrapper = module
+        .find_function::<(), i32>(TEST_WRAPPER_NAME)
+        .expect("Unable to find test wrapper function");
+    test_wrapper.call().map_err(|e| format!("{:?}", e))?;
 
-    // Check we got the right number of refcounts
-    let refcount_vector_len: WasmPtr<i32> = WasmPtr::new(refcount_vector_addr as u32);
-    let actual_len = refcount_vector_len.deref(memory).unwrap().get();
+    let memory: &[u8] = unsafe {
+        let memory_ptr: *const [u8] = rt.memory();
+        let (_, memory_size) = std::mem::transmute::<_, (usize, usize)>(memory_ptr);
+        std::slice::from_raw_parts(memory_ptr as _, memory_size)
+    };
+
+    let mut refcount_vector_len_bytes = [0u8; 4];
+    refcount_vector_len_bytes.copy_from_slice(&memory[refcount_vector_offset..][..4]);
+    let actual_len = i32::from_le_bytes(refcount_vector_len_bytes);
+
     if actual_len != expected_len {
-        panic!("Expected {} refcounts but got {}", expected_len, actual_len);
+        return Err(format!(
+            "Expected {} refcounts but got {}",
+            expected_len, actual_len
+        ));
     }
 
     // Read the actual refcount values
-    let refcount_ptr_array: WasmPtr<WasmPtr<i32>, wasmer::Array> =
-        WasmPtr::new(4 + refcount_vector_addr as u32);
-    let refcount_ptrs = refcount_ptr_array
-        .deref(memory, 0, num_refcounts as u32)
-        .unwrap();
-
     let mut refcounts = Vec::with_capacity(num_refcounts);
-    for i in 0..num_refcounts {
-        let rc_ptr = refcount_ptrs[i].get();
-        let rc = if rc_ptr.offset() == 0 {
+    for _ in 0..num_refcounts {
+        refcount_vector_offset += 4;
+
+        // The vector contains refcount pointers
+        let mut rc_ptr_bytes = [0u8; 4];
+        rc_ptr_bytes.copy_from_slice(&memory[refcount_vector_offset..][..4]);
+        let rc_ptr = u32::from_le_bytes(rc_ptr_bytes) as usize;
+
+        let rc = if rc_ptr == 0 {
             RefCount::Deallocated
         } else {
-            let rc_encoded: i32 = rc_ptr.deref(memory).unwrap().get();
+            let mut rc_bytes = [0u8; 4];
+            rc_bytes.copy_from_slice(&memory[rc_ptr..][..4]);
+            let rc_encoded = i32::from_le_bytes(rc_bytes);
+
             if rc_encoded == 0 {
                 RefCount::Constant
             } else {

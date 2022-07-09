@@ -46,13 +46,6 @@ indoc = "1.0.3"
 criterion = { git = "https://github.com/Anton-4/criterion.rs" }
 wasm3 = "0.3.1"
 
-# Wasmer singlepass compiler only works on x86_64.
-[target.'cfg(target_arch = "x86_64")'.dev-dependencies]
-wasmer = { version = "2.2.1", default-features = false, features = ["singlepass", "universal"] }
-
-[target.'cfg(not(target_arch = "x86_64"))'.dev-dependencies]
-wasmer = { version = "2.2.1", default-features = false, features = ["cranelift", "universal"] }
-
 [features]
 default = ["gen-llvm"]
 gen-llvm = []
