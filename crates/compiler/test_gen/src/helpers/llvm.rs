@@ -1,4 +1,4 @@
-use crate::helpers::from_wasmer_memory::FromWasmerMemory;
+use crate::helpers::from_wasm32_memory::FromWasm32Memory;
 use inkwell::module::Module;
 use libloading::Library;
 use roc_build::link::llvm_module_to_dylib;
@@ -475,7 +475,7 @@ fn fake_wasm_main_function(_: u32, _: u32) -> u32 {
 #[allow(dead_code)]
 pub fn assert_wasm_evals_to_help<T>(src: &str, ignore_problems: bool) -> Result<T, String>
 where
-    T: FromWasmerMemory,
+    T: FromWasm32Memory,
 {
     let arena = bumpalo::Bump::new();
     let context = inkwell::context::Context::create();
@@ -501,8 +501,9 @@ where
         Ok(result) => {
             let address = result[0].unwrap_i32();
 
-            let output = <T as crate::helpers::llvm::FromWasmerMemory>::decode(
-                memory,
+            let memory_bytes: &[u8] = unsafe { memory.data_unchecked() };
+            let output = <T as crate::helpers::llvm::FromWasm32Memory>::decode(
+                memory_bytes,
                 // skip the RocCallResult tag id
                 address as u32 + 8,
             );
