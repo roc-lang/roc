@@ -8,9 +8,27 @@ use roc_collections::VecMap;
 use roc_derive_key::GlobalDerivedSymbols;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
-use roc_types::solved_types::Solved;
 use roc_types::subs::{Content, ExposedTypesStorageSubs, FlatType, StorageSubs, Subs, Variable};
 use roc_types::types::Alias;
+
+/// A marker that a given Subs has been solved.
+/// The only way to obtain a Solved<Subs> is by running the solver on it.
+#[derive(Clone, Debug)]
+pub struct Solved<T>(pub T);
+
+impl<T> Solved<T> {
+    pub fn inner(&self) -> &'_ T {
+        &self.0
+    }
+
+    pub fn inner_mut(&mut self) -> &'_ mut T {
+        &mut self.0
+    }
+
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
 
 #[derive(Debug)]
 pub struct SolvedModule {

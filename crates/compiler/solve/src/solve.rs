@@ -2,6 +2,7 @@ use crate::ability::{
     resolve_ability_specialization, type_implementing_specialization, AbilityImplError,
     DeferredObligations, PendingDerivesTable, RequestedDeriveKey, Resolved, Unfulfilled,
 };
+use crate::module::Solved;
 use bumpalo::Bump;
 use roc_can::abilities::{AbilitiesStore, MemberSpecialization};
 use roc_can::constraint::Constraint::{self, *};
@@ -18,7 +19,6 @@ use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_problem::can::CycleEntry;
 use roc_region::all::{Loc, Region};
-use roc_types::solved_types::Solved;
 use roc_types::subs::{
     self, AliasVariables, Content, Descriptor, FlatType, GetSubsSlice, LambdaSet, Mark,
     OptVariable, Rank, RecordFields, Subs, SubsIndex, SubsSlice, UlsOfVar, UnionLabels,
