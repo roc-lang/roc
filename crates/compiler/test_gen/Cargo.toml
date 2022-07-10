@@ -50,7 +50,7 @@ default = ["gen-llvm"]
 gen-llvm = []
 gen-dev = []
 gen-wasm = []
-wasm-cli-run = []
+gen-llvm-wasm = ["gen-llvm"]
 
 [[bench]]
 name = "list_map"

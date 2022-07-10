@@ -596,7 +596,7 @@ macro_rules! assert_evals_to {
     }};
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems: expr) => {{
         // same as above, except with ignore_problems.
-        #[cfg(feature = "wasm-cli-run")]
+        #[cfg(feature = "gen-llvm-wasm")]
         $crate::helpers::llvm::assert_wasm_evals_to!(
             $src,
             $expected,
@@ -617,7 +617,7 @@ macro_rules! assert_evals_to {
 
 macro_rules! expect_runtime_error_panic {
     ($src:expr) => {{
-        #[cfg(feature = "wasm-cli-run")]
+        #[cfg(feature = "gen-llvm-wasm")]
         $crate::helpers::llvm::assert_wasm_evals_to!(
             $src,
             false, // fake value/type for eval
