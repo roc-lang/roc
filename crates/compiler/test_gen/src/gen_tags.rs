@@ -533,14 +533,12 @@ fn if_guard_vanilla() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore]
 fn when_on_single_value_tag() {
-    // this fails because the switched-on symbol is not defined
     assert_evals_to!(
         indoc!(
             r#"
             when Identity 0 is
-                Identity 0 -> 0
+                Identity 0 -> 6
                 Identity s -> s
             "#
         ),
@@ -1047,9 +1045,7 @@ fn alignment_in_multi_tag_pattern_match() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore]
 fn phantom_polymorphic() {
-    // see https://github.com/rtfeldman/roc/issues/786 and below
     assert_evals_to!(
         indoc!(
             r"#
@@ -1073,11 +1069,7 @@ fn phantom_polymorphic() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore]
 fn phantom_polymorphic_record() {
-    // see https://github.com/rtfeldman/roc/issues/786
-    // also seemed to hit an issue where we check whether `add`
-    // has a Closure layout while the type is not fully specialized yet
     assert_evals_to!(
         indoc!(
             r#"
