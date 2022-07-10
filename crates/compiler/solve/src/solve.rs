@@ -2142,7 +2142,6 @@ fn compact_lambda_set<P: Phase>(
                         );
                         }
                         (_, Some(specialization)) => {
-                            dbg!(opaque_home);
                             let specialized_lambda_set = *specialization
                                 .specialization_lambda_sets
                                 .get(&r)
