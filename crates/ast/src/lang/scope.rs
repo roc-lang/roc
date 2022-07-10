@@ -5,6 +5,7 @@
 use std::fmt;
 
 use crate::ast_error::ASTResult;
+use crate::builtin_aliases::{self, BuiltinAlias, FreeVars, SolvedType};
 use crate::mem_pool::pool::Pool;
 use crate::mem_pool::pool_str::PoolStr;
 use crate::mem_pool::pool_vec::PoolVec;
@@ -17,11 +18,7 @@ use roc_module::symbol::{
 };
 use roc_problem::can::RuntimeError;
 use roc_region::all::{Loc, Region};
-use roc_types::{
-    builtin_aliases,
-    solved_types::{BuiltinAlias, FreeVars, SolvedType},
-    subs::{VarId, VarStore, Variable},
-};
+use roc_types::subs::{VarId, VarStore, Variable};
 
 use super::core::types::{Alias, Type2, TypeId};
 use super::env::Env;
