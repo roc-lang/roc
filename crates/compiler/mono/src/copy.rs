@@ -620,6 +620,7 @@ fn deep_copy_type_vars<'a>(
                 solved,
                 recursion_var,
                 unspecialized,
+                ambient_function,
             }) => {
                 let new_rec_var = recursion_var.map(|var| descend_var!(var));
                 for variables_slice_index in solved.variables() {
@@ -630,6 +631,7 @@ fn deep_copy_type_vars<'a>(
                     let Uls(var, _, _) = subs[uls_index];
                     descend_var!(var);
                 }
+                let new_ambient_function = descend_var!(ambient_function);
 
                 perform_clone!({
                     let new_variable_slices =
@@ -657,6 +659,7 @@ fn deep_copy_type_vars<'a>(
                         solved: new_solved,
                         recursion_var: new_rec_var,
                         unspecialized: new_unspecialized,
+                        ambient_function: new_ambient_function,
                     })
                 })
             }

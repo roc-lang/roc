@@ -1,10 +1,10 @@
 procedure Num.94 (#Attr.2):
-    let Num.188 : Str = lowlevel NumToStr #Attr.2;
-    ret Num.188;
+    let Num.257 : Str = lowlevel NumToStr #Attr.2;
+    ret Num.257;
 
 procedure Num.94 (#Attr.2):
-    let Num.189 : Str = lowlevel NumToStr #Attr.2;
-    ret Num.189;
+    let Num.258 : Str = lowlevel NumToStr #Attr.2;
+    ret Num.258;
 
 procedure Test.1 (Test.4):
     let Test.16 : [C U8, C U64] = TagId(1) Test.4;

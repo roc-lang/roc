@@ -5125,12 +5125,12 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
             }
             RootIsInterface => {
                 let doc = alloc.stack([
-                                alloc.reflow(r"The input file is an interface module, but only app modules can be ran."),
-                                alloc.concat([
-                                    alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
-                                    alloc.reflow(r"but won't output any executable."),
-                               ])
-                           ]);
+                    alloc.reflow(r"The input file is an interface module, but only app modules can be run."),
+                    alloc.concat([
+                        alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
+                        alloc.reflow(r"but won't output any executable."),
+                    ])
+                ]);
 
                 Report {
                     filename: "UNKNOWN.roc".into(),
@@ -5141,12 +5141,12 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
             }
             RootIsHosted => {
                 let doc = alloc.stack([
-                                alloc.reflow(r"The input file is a hosted module, but only app modules can be ran."),
-                                alloc.concat([
-                                    alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
-                                    alloc.reflow(r"but won't output any executable."),
-                               ])
-                           ]);
+                    alloc.reflow(r"The input file is a hosted module, but only app modules can be run."),
+                    alloc.concat([
+                        alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
+                        alloc.reflow(r"but won't output any executable."),
+                    ])
+                ]);
 
                 Report {
                     filename: "UNKNOWN.roc".into(),
@@ -5157,12 +5157,12 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
             }
             RootIsPlatformModule => {
                 let doc = alloc.stack([
-                                alloc.reflow(r"The input file is a package config file, but only app modules can be ran."),
-                                alloc.concat([
-                                    alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
-                                    alloc.reflow(r"but won't output any executable."),
-                               ])
-                           ]);
+                    alloc.reflow(r"The input file is a package config file, but only app modules can be run."),
+                    alloc.concat([
+                        alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
+                        alloc.reflow(r"but won't output any executable."),
+                    ])
+                ]);
 
                 Report {
                     filename: "UNKNOWN.roc".into(),

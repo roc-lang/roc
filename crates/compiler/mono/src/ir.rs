@@ -2317,6 +2317,8 @@ fn from_can_let<'a>(
                         let (_specialization_mark, (var, specialized_symbol)) =
                             needed_specializations.next().unwrap();
 
+                        // Make sure rigid variables in the annotation are converted to flex variables.
+                        instantiate_rigids(env.subs, def.expr_var);
                         // Unify the expr_var with the requested specialization once.
                         let _res = env.unify(var, def.expr_var);
 
@@ -2332,6 +2334,9 @@ fn from_can_let<'a>(
                     }
                     _n => {
                         let mut stmt = rest;
+
+                        // Make sure rigid variables in the annotation are converted to flex variables.
+                        instantiate_rigids(env.subs, def.expr_var);
 
                         // Need to eat the cost and create a specialized version of the body for
                         // each specialization.
@@ -3785,14 +3790,14 @@ pub fn with_hole<'a>(
         }
 
         ZeroArgumentTag {
-            variant_var,
+            variant_var: _,
             name: tag_name,
             ext_var,
             closure_name,
         } => {
             let arena = env.arena;
 
-            let content = env.subs.get_content_without_compacting(variant_var);
+            let content = env.subs.get_content_without_compacting(variable);
 
             if let Content::Structure(FlatType::Func(arg_vars, _, ret_var)) = content {
                 let ret_var = *ret_var;
@@ -3806,7 +3811,7 @@ pub fn with_hole<'a>(
                     closure_name,
                     ext_var,
                     procs,
-                    variant_var,
+                    variable,
                     layout_cache,
                     assigned,
                     hole,
@@ -3814,7 +3819,7 @@ pub fn with_hole<'a>(
             } else {
                 convert_tag_union(
                     env,
-                    variant_var,
+                    variable,
                     assigned,
                     hole,
                     tag_name,
@@ -5124,6 +5129,7 @@ fn late_resolve_ability_specialization<'a>(
             solved,
             unspecialized,
             recursion_var: _,
+            ambient_function: _,
         } = env.subs.get_lambda_set(*lambda_set);
 
         debug_assert!(unspecialized.is_empty());
@@ -6068,7 +6074,7 @@ fn from_can_when<'a>(
                 let guard_stmt = with_hole(
                     env,
                     loc_expr.value,
-                    cond_var,
+                    Variable::BOOL,
                     procs,
                     layout_cache,
                     symbol,
@@ -8952,6 +8958,7 @@ where
     ToLowLevelCall: Fn(ToLowLevelCallArguments<'a>) -> Call<'a> + Copy,
 {
     match lambda_set.runtime_representation() {
+        Layout::VOID => empty_lambda_set_error(),
         Layout::Union(union_layout) => {
             let closure_tag_id_symbol = env.unique_symbol();
 
@@ -9111,6 +9118,11 @@ where
     }
 }
 
+fn empty_lambda_set_error() -> Stmt<'static> {
+    let msg = "a Lambda Set is empty. Most likely there is a type error in your program.";
+    Stmt::RuntimeError(msg)
+}
+
 /// Use the lambda set to figure out how to make a call-by-name
 #[allow(clippy::too_many_arguments)]
 fn match_on_lambda_set<'a>(
@@ -9125,6 +9137,7 @@ fn match_on_lambda_set<'a>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     match lambda_set.runtime_representation() {
+        Layout::VOID => empty_lambda_set_error(),
         Layout::Union(union_layout) => {
             let closure_tag_id_symbol = env.unique_symbol();
 
@@ -9254,9 +9267,7 @@ fn union_lambda_set_to_switch<'a>(
         // there is really nothing we can do here. We generate a runtime error here which allows
         // code gen to proceed. We then assume that we hit another (more descriptive) error before
         // hitting this one
-
-        let msg = "a Lambda Set isempty. Most likely there is a type error in your program.";
-        return Stmt::RuntimeError(msg);
+        return empty_lambda_set_error();
     }
 
     let join_point_id = JoinPointId(env.unique_symbol());

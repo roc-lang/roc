@@ -15,7 +15,6 @@ pub enum LowLevel {
     StrCountGraphemes,
     StrCountUtf8Bytes,
     StrFromInt,
-    StrFromUtf8,
     StrFromUtf8Range,
     StrToUtf8,
     StrRepeat,
@@ -161,141 +160,181 @@ impl LowLevel {
 pub enum LowLevelWrapperType {
     /// This wrapper function contains no logic and we can remove it in code gen
     CanBeReplacedBy(LowLevel),
-    /// This wrapper function contains important logic and we cannot remove it in code gen
-    WrapperIsRequired,
     NotALowLevelWrapper,
 }
 
 impl LowLevelWrapperType {
     pub fn from_symbol(symbol: Symbol) -> LowLevelWrapperType {
-        use LowLevel::*;
-        use LowLevelWrapperType::*;
-
-        match symbol {
-            Symbol::STR_CONCAT => CanBeReplacedBy(StrConcat),
-            Symbol::STR_GET_UNSAFE => CanBeReplacedBy(StrGetUnsafe),
-            Symbol::STR_TO_SCALARS => CanBeReplacedBy(StrToScalars),
-            Symbol::STR_JOIN_WITH => CanBeReplacedBy(StrJoinWith),
-            Symbol::STR_IS_EMPTY => CanBeReplacedBy(StrIsEmpty),
-            Symbol::STR_STARTS_WITH => CanBeReplacedBy(StrStartsWith),
-            Symbol::STR_STARTS_WITH_SCALAR => CanBeReplacedBy(StrStartsWithScalar),
-            Symbol::STR_ENDS_WITH => CanBeReplacedBy(StrEndsWith),
-            Symbol::STR_SPLIT => CanBeReplacedBy(StrSplit),
-            Symbol::STR_COUNT_GRAPHEMES => CanBeReplacedBy(StrCountGraphemes),
-            Symbol::STR_COUNT_UTF8_BYTES => CanBeReplacedBy(StrCountUtf8Bytes),
-            Symbol::STR_FROM_UTF8 => WrapperIsRequired,
-            Symbol::STR_FROM_UTF8_RANGE => WrapperIsRequired,
-            Symbol::STR_TO_UTF8 => CanBeReplacedBy(StrToUtf8),
-            Symbol::STR_REPEAT => CanBeReplacedBy(StrRepeat),
-            Symbol::STR_RESERVE => CanBeReplacedBy(StrReserve),
-            Symbol::STR_APPEND_SCALAR_UNSAFE => CanBeReplacedBy(StrAppendScalar),
-            Symbol::STR_TRIM => CanBeReplacedBy(StrTrim),
-            Symbol::STR_TRIM_LEFT => CanBeReplacedBy(StrTrimLeft),
-            Symbol::STR_TRIM_RIGHT => CanBeReplacedBy(StrTrimRight),
-            Symbol::STR_TO_DEC => WrapperIsRequired,
-            Symbol::STR_TO_F64 => WrapperIsRequired,
-            Symbol::STR_TO_F32 => WrapperIsRequired,
-            Symbol::STR_TO_NAT => WrapperIsRequired,
-            Symbol::STR_TO_U128 => WrapperIsRequired,
-            Symbol::STR_TO_I128 => WrapperIsRequired,
-            Symbol::STR_TO_U64 => WrapperIsRequired,
-            Symbol::STR_TO_I64 => WrapperIsRequired,
-            Symbol::STR_TO_U32 => WrapperIsRequired,
-            Symbol::STR_TO_I32 => WrapperIsRequired,
-            Symbol::STR_TO_U16 => WrapperIsRequired,
-            Symbol::STR_TO_I16 => WrapperIsRequired,
-            Symbol::STR_TO_U8 => WrapperIsRequired,
-            Symbol::STR_TO_I8 => WrapperIsRequired,
-            Symbol::LIST_LEN => CanBeReplacedBy(ListLen),
-            Symbol::LIST_GET => WrapperIsRequired,
-            Symbol::LIST_REPLACE => WrapperIsRequired,
-            Symbol::LIST_CONCAT => CanBeReplacedBy(ListConcat),
-            Symbol::LIST_APPEND_UNSAFE => CanBeReplacedBy(ListAppendUnsafe),
-            Symbol::LIST_PREPEND => CanBeReplacedBy(ListPrepend),
-            Symbol::LIST_MAP => WrapperIsRequired,
-            Symbol::LIST_MAP2 => WrapperIsRequired,
-            Symbol::LIST_MAP3 => WrapperIsRequired,
-            Symbol::LIST_MAP4 => WrapperIsRequired,
-            Symbol::LIST_SORT_WITH => WrapperIsRequired,
-            Symbol::LIST_SUBLIST => WrapperIsRequired,
-            Symbol::LIST_DROP_AT => CanBeReplacedBy(ListDropAt),
-            Symbol::LIST_SWAP => CanBeReplacedBy(ListSwap),
-            Symbol::LIST_ANY => WrapperIsRequired,
-            Symbol::LIST_ALL => WrapperIsRequired,
-            Symbol::LIST_FIND => WrapperIsRequired,
-            Symbol::DICT_LEN => CanBeReplacedBy(DictSize),
-            Symbol::DICT_EMPTY => CanBeReplacedBy(DictEmpty),
-            Symbol::DICT_INSERT => CanBeReplacedBy(DictInsert),
-            Symbol::DICT_REMOVE => CanBeReplacedBy(DictRemove),
-            Symbol::DICT_CONTAINS => CanBeReplacedBy(DictContains),
-            Symbol::DICT_GET => WrapperIsRequired,
-            Symbol::DICT_KEYS => CanBeReplacedBy(DictKeys),
-            Symbol::DICT_VALUES => CanBeReplacedBy(DictValues),
-            Symbol::DICT_UNION => CanBeReplacedBy(DictUnion),
-            Symbol::DICT_INTERSECTION => CanBeReplacedBy(DictIntersection),
-            Symbol::DICT_DIFFERENCE => CanBeReplacedBy(DictDifference),
-            Symbol::DICT_WALK => WrapperIsRequired,
-            Symbol::SET_FROM_LIST => CanBeReplacedBy(SetFromList),
-            Symbol::NUM_ADD => CanBeReplacedBy(NumAdd),
-            Symbol::NUM_ADD_WRAP => CanBeReplacedBy(NumAddWrap),
-            Symbol::NUM_ADD_CHECKED => WrapperIsRequired,
-            Symbol::NUM_ADD_SATURATED => CanBeReplacedBy(NumAddSaturated),
-            Symbol::NUM_SUB => CanBeReplacedBy(NumSub),
-            Symbol::NUM_SUB_WRAP => CanBeReplacedBy(NumSubWrap),
-            Symbol::NUM_SUB_CHECKED => WrapperIsRequired,
-            Symbol::NUM_SUB_SATURATED => CanBeReplacedBy(NumSubSaturated),
-            Symbol::NUM_MUL => CanBeReplacedBy(NumMul),
-            Symbol::NUM_MUL_WRAP => CanBeReplacedBy(NumMulWrap),
-            Symbol::NUM_MUL_SATURATED => CanBeReplacedBy(NumMulSaturated),
-            Symbol::NUM_MUL_CHECKED => WrapperIsRequired,
-            Symbol::NUM_GT => CanBeReplacedBy(NumGt),
-            Symbol::NUM_GTE => CanBeReplacedBy(NumGte),
-            Symbol::NUM_LT => CanBeReplacedBy(NumLt),
-            Symbol::NUM_LTE => CanBeReplacedBy(NumLte),
-            Symbol::NUM_COMPARE => CanBeReplacedBy(NumCompare),
-            Symbol::NUM_DIV_FRAC => CanBeReplacedBy(NumDivUnchecked),
-            Symbol::NUM_DIV_FRAC_CHECKED => WrapperIsRequired,
-            Symbol::NUM_DIV_CEIL => CanBeReplacedBy(NumDivCeilUnchecked),
-            Symbol::NUM_DIV_CEIL_CHECKED => WrapperIsRequired,
-            Symbol::NUM_REM => CanBeReplacedBy(NumRemUnchecked),
-            Symbol::NUM_REM_CHECKED => WrapperIsRequired,
-            Symbol::NUM_IS_MULTIPLE_OF => CanBeReplacedBy(NumIsMultipleOf),
-            Symbol::NUM_ABS => CanBeReplacedBy(NumAbs),
-            Symbol::NUM_NEG => CanBeReplacedBy(NumNeg),
-            Symbol::NUM_SIN => CanBeReplacedBy(NumSin),
-            Symbol::NUM_COS => CanBeReplacedBy(NumCos),
-            Symbol::NUM_SQRT => CanBeReplacedBy(NumSqrtUnchecked),
-            Symbol::NUM_SQRT_CHECKED => WrapperIsRequired,
-            Symbol::NUM_LOG => CanBeReplacedBy(NumLogUnchecked),
-            Symbol::NUM_LOG_CHECKED => WrapperIsRequired,
-            Symbol::NUM_ROUND => CanBeReplacedBy(NumRound),
-            Symbol::NUM_TO_FRAC => CanBeReplacedBy(NumToFrac),
-            Symbol::NUM_POW => CanBeReplacedBy(NumPow),
-            Symbol::NUM_CEILING => CanBeReplacedBy(NumCeiling),
-            Symbol::NUM_POW_INT => CanBeReplacedBy(NumPowInt),
-            Symbol::NUM_FLOOR => CanBeReplacedBy(NumFloor),
-            Symbol::NUM_TO_STR => CanBeReplacedBy(NumToStr),
-            // => CanBeReplacedBy(NumIsFinite),
-            Symbol::NUM_ATAN => CanBeReplacedBy(NumAtan),
-            Symbol::NUM_ACOS => CanBeReplacedBy(NumAcos),
-            Symbol::NUM_ASIN => CanBeReplacedBy(NumAsin),
-            Symbol::NUM_BYTES_TO_U16 => WrapperIsRequired,
-            Symbol::NUM_BYTES_TO_U32 => WrapperIsRequired,
-            Symbol::NUM_BITWISE_AND => CanBeReplacedBy(NumBitwiseAnd),
-            Symbol::NUM_BITWISE_XOR => CanBeReplacedBy(NumBitwiseXor),
-            Symbol::NUM_BITWISE_OR => CanBeReplacedBy(NumBitwiseOr),
-            Symbol::NUM_SHIFT_LEFT => CanBeReplacedBy(NumShiftLeftBy),
-            Symbol::NUM_SHIFT_RIGHT => CanBeReplacedBy(NumShiftRightBy),
-            Symbol::NUM_SHIFT_RIGHT_ZERO_FILL => CanBeReplacedBy(NumShiftRightZfBy),
-            Symbol::NUM_INT_CAST => CanBeReplacedBy(NumIntCast),
-            Symbol::BOOL_EQ => CanBeReplacedBy(Eq),
-            Symbol::BOOL_NEQ => CanBeReplacedBy(NotEq),
-            Symbol::BOOL_AND => CanBeReplacedBy(And),
-            Symbol::BOOL_OR => CanBeReplacedBy(Or),
-            Symbol::BOOL_NOT => CanBeReplacedBy(Not),
-            // => CanBeReplacedBy(Hash),
-            // => CanBeReplacedBy(ExpectTrue),
-            _ => NotALowLevelWrapper,
-        }
+        for_symbol_help(symbol)
     }
+}
+
+/// We use a rust macro to ensure that every LowLevel gets handled
+macro_rules! map_symbol_to_lowlevel {
+    ($($lowlevel:ident <= $symbol:ident),* $(,)?) => {
+
+        fn for_symbol_help(symbol: Symbol) -> LowLevelWrapperType {
+            use $crate::low_level::LowLevelWrapperType::*;
+
+            // expands to a big (but non-exhaustive) match on symbols and maps them to a lowlevel
+            match symbol {
+                $(
+                Symbol::$symbol => CanBeReplacedBy(LowLevel::$lowlevel),
+                )*
+
+                _ => NotALowLevelWrapper,
+            }
+        }
+
+        fn _enforce_exhaustiveness(lowlevel: LowLevel) -> Symbol {
+            // when adding a new lowlevel, this match will stop being exhaustive, and give a
+            // compiler error. Most likely, you are adding a new lowlevel that maps directly to a
+            // symbol. For instance, you want to have `List.foo` to stand for the `ListFoo`
+            // lowlevel. In that case, see below in the invocation of `map_symbol_to_lowlevel!`
+            //
+            // Below, we explicitly handle some exceptions to the pattern where a lowlevel maps
+            // directly to a symbol. If you are unsure if your lowlevel is an exception, assume
+            // that it isn't and just see if that works.
+            match lowlevel {
+                $(
+                LowLevel::$lowlevel => Symbol::$symbol,
+                )*
+
+                // these are higher-order lowlevels. these need the surrounding
+                // function to provide enough type information for code generation
+                LowLevel::ListMap => unreachable!(),
+                LowLevel::ListMap2 => unreachable!(),
+                LowLevel::ListMap3 => unreachable!(),
+                LowLevel::ListMap4 => unreachable!(),
+                LowLevel::ListSortWith => unreachable!(),
+                LowLevel::DictWalk => unreachable!(),
+
+                // (un)boxing is handled in a custom way
+                LowLevel::BoxExpr => unreachable!(),
+                LowLevel::UnboxExpr => unreachable!(),
+
+                // these functions return polymorphic values
+                LowLevel::NumIntCast => unreachable!(),
+                LowLevel::NumToFloatCast => unreachable!(),
+                LowLevel::NumToIntChecked => unreachable!(),
+                LowLevel::NumToFloatChecked => unreachable!(),
+                LowLevel::NumDivUnchecked => unreachable!(),
+                LowLevel::DictEmpty => unreachable!(),
+
+                // these are used internally and not tied to a symbol
+                LowLevel::Hash => unimplemented!(),
+                LowLevel::PtrCast => unimplemented!(),
+                LowLevel::RefCountInc => unimplemented!(),
+                LowLevel::RefCountDec => unimplemented!(),
+
+                // these are not implemented, not sure why
+                LowLevel::StrFromInt => unimplemented!(),
+                LowLevel::StrFromFloat => unimplemented!(),
+                LowLevel::NumIsFinite => unimplemented!(),
+
+            }
+        }
+    };
+}
+
+// here is where we actually specify the mapping for the fast majority of cases that follow the
+// pattern of a symbol mapping directly to a lowlevel. In other words, most lowlevels (left) are generated
+// by only one specific symbol (right)
+map_symbol_to_lowlevel! {
+    StrConcat <= STR_CONCAT,
+    StrJoinWith <= STR_JOIN_WITH,
+    StrIsEmpty <= STR_IS_EMPTY,
+    StrStartsWith <= STR_STARTS_WITH,
+    StrStartsWithScalar <= STR_STARTS_WITH_SCALAR,
+    StrEndsWith <= STR_ENDS_WITH,
+    StrSplit <= STR_SPLIT,
+    StrCountGraphemes <= STR_COUNT_GRAPHEMES,
+    StrCountUtf8Bytes <= STR_COUNT_UTF8_BYTES,
+    StrFromUtf8Range <= STR_FROM_UTF8_RANGE_LOWLEVEL,
+    StrToUtf8 <= STR_TO_UTF8,
+    StrRepeat <= STR_REPEAT,
+    StrTrim <= STR_TRIM,
+    StrTrimLeft <= STR_TRIM_LEFT,
+    StrTrimRight <= STR_TRIM_RIGHT,
+    StrToScalars <= STR_TO_SCALARS,
+    StrGetUnsafe <= STR_GET_UNSAFE,
+    StrSubstringUnsafe <= STR_SUBSTRING_UNSAFE,
+    StrReserve <= STR_RESERVE,
+    StrAppendScalar <= STR_APPEND_SCALAR_UNSAFE,
+    StrGetScalarUnsafe <= STR_GET_SCALAR_UNSAFE,
+    StrToNum <= STR_TO_NUM,
+    ListLen <= LIST_LEN,
+    ListWithCapacity <= LIST_WITH_CAPACITY,
+    ListReserve <= LIST_RESERVE,
+    ListIsUnique <= LIST_IS_UNIQUE,
+    ListAppendUnsafe <= LIST_APPEND_UNSAFE,
+    ListPrepend <= LIST_PREPEND,
+    ListGetUnsafe <= LIST_GET_UNSAFE,
+    ListReplaceUnsafe <= LIST_REPLACE_UNSAFE,
+    ListConcat <= LIST_CONCAT,
+    ListSublist <= LIST_SUBLIST_LOWLEVEL,
+    ListDropAt <= LIST_DROP_AT,
+    ListSwap <= LIST_SWAP,
+    DictSize <= DICT_LEN,
+    DictInsert <= DICT_INSERT,
+    DictRemove <= DICT_REMOVE,
+    DictContains <= DICT_CONTAINS,
+    DictGetUnsafe <= DICT_GET_LOWLEVEL,
+    DictKeys <= DICT_KEYS,
+    DictValues <= DICT_VALUES,
+    DictUnion <= DICT_UNION,
+    DictIntersection <= DICT_INTERSECTION,
+    DictDifference <= DICT_DIFFERENCE,
+    SetFromList <= SET_FROM_LIST,
+    SetToDict <= SET_TO_DICT,
+    NumAdd <= NUM_ADD,
+    NumAddWrap <= NUM_ADD_WRAP,
+    NumAddChecked <= NUM_ADD_CHECKED_LOWLEVEL,
+    NumAddSaturated <= NUM_ADD_SATURATED,
+    NumSub <= NUM_SUB,
+    NumSubWrap <= NUM_SUB_WRAP,
+    NumSubChecked <= NUM_SUB_CHECKED_LOWLEVEL,
+    NumSubSaturated <= NUM_SUB_SATURATED,
+    NumMul <= NUM_MUL,
+    NumMulWrap <= NUM_MUL_WRAP,
+    NumMulSaturated <= NUM_MUL_SATURATED,
+    NumMulChecked <= NUM_MUL_CHECKED_LOWLEVEL,
+    NumGt <= NUM_GT,
+    NumGte <= NUM_GTE,
+    NumLt <= NUM_LT,
+    NumLte <= NUM_LTE,
+    NumCompare <= NUM_COMPARE,
+    NumDivCeilUnchecked <= NUM_DIV_CEIL,
+    NumRemUnchecked <= NUM_REM,
+    NumIsMultipleOf <= NUM_IS_MULTIPLE_OF,
+    NumAbs <= NUM_ABS,
+    NumNeg <= NUM_NEG,
+    NumSin <= NUM_SIN,
+    NumCos <= NUM_COS,
+    NumSqrtUnchecked <= NUM_SQRT,
+    NumLogUnchecked <= NUM_LOG,
+    NumRound <= NUM_ROUND,
+    NumToFrac <= NUM_TO_FRAC,
+    NumPow <= NUM_POW,
+    NumCeiling <= NUM_CEILING,
+    NumPowInt <= NUM_POW_INT,
+    NumFloor <= NUM_FLOOR,
+    NumAtan <= NUM_ATAN,
+    NumAcos <= NUM_ACOS,
+    NumAsin <= NUM_ASIN,
+    NumBytesToU16 <= NUM_BYTES_TO_U16_LOWLEVEL,
+    NumBytesToU32 <= NUM_BYTES_TO_U32_LOWLEVEL,
+    NumBitwiseAnd <= NUM_BITWISE_AND,
+    NumBitwiseXor <= NUM_BITWISE_XOR,
+    NumBitwiseOr <= NUM_BITWISE_OR,
+    NumShiftLeftBy <= NUM_SHIFT_LEFT,
+    NumShiftRightBy <= NUM_SHIFT_RIGHT,
+    NumShiftRightZfBy <= NUM_SHIFT_RIGHT_ZERO_FILL,
+    NumToStr <= NUM_TO_STR,
+    Eq <= BOOL_EQ,
+    NotEq <= BOOL_NEQ,
+    And <= BOOL_AND,
+    Or <= BOOL_OR,
+    Not <= BOOL_NOT,
+    Unreachable <= LIST_UNREACHABLE,
 }

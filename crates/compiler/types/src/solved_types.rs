@@ -187,6 +187,7 @@ pub fn to_type(
             Type::ClosureTag {
                 name: *name,
                 captures: new_args,
+                ambient_function: var_store.fresh(),
             }
         }
         FunctionOrTagUnion(tag_name, symbol, ext) => {

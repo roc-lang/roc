@@ -326,7 +326,6 @@ pub const STR_TO_DECIMAL: &str = "roc_builtins.str.to_decimal";
 pub const STR_EQUAL: &str = "roc_builtins.str.equal";
 pub const STR_SUBSTRING_UNSAFE: &str = "roc_builtins.str.substring_unsafe";
 pub const STR_TO_UTF8: &str = "roc_builtins.str.to_utf8";
-pub const STR_FROM_UTF8: &str = "roc_builtins.str.from_utf8";
 pub const STR_FROM_UTF8_RANGE: &str = "roc_builtins.str.from_utf8_range";
 pub const STR_REPEAT: &str = "roc_builtins.str.repeat";
 pub const STR_TRIM: &str = "roc_builtins.str.trim";

@@ -1,17 +1,14 @@
-use crate::llvm::bitcode::{call_bitcode_fn, call_str_bitcode_fn, call_void_bitcode_fn};
+use crate::llvm::bitcode::{call_bitcode_fn, call_str_bitcode_fn};
 use crate::llvm::build::{Env, Scope};
-use crate::llvm::build_list::pass_update_mode;
 use inkwell::builder::Builder;
 use inkwell::values::{BasicValueEnum, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
-use morphic_lib::UpdateMode;
 use roc_builtins::bitcode::{self, IntWidth};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
 use roc_target::PtrWidth;
 
 use super::build::{create_entry_block_alloca, load_symbol};
-use super::build_list::list_symbol_to_c_abi;
 
 pub static CHAR_LAYOUT: Layout = Layout::u8();
 
@@ -70,7 +67,7 @@ pub fn str_from_int<'a, 'ctx, 'env>(
     call_str_bitcode_fn(env, &[value.into()], &bitcode::STR_FROM_INT[int_width])
 }
 
-fn decode_from_utf8_result<'a, 'ctx, 'env>(
+pub fn decode_from_utf8_result<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     pointer: PointerValue<'ctx>,
 ) -> StructValue<'ctx> {
@@ -104,67 +101,6 @@ fn decode_from_utf8_result<'a, 'ctx, 'env>(
                 .into_struct_value()
         }
     }
-}
-
-/// Str.fromUtf8 : List U8, { count : Nat, start : Nat } -> { a : Bool, b : Str, c : Nat, d : I8 }
-pub fn str_from_utf8_range<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
-    list: Symbol,
-    count_and_start: StructValue<'ctx>,
-) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-
-    let result_type = env.module.get_struct_type("str.FromUtf8Result").unwrap();
-    let result_ptr = builder.build_alloca(result_type, "alloca_utf8_validate_bytes_result");
-
-    let count = env
-        .builder
-        .build_extract_value(count_and_start, 0, "get_count")
-        .unwrap();
-
-    let start = env
-        .builder
-        .build_extract_value(count_and_start, 1, "get_start")
-        .unwrap();
-
-    call_void_bitcode_fn(
-        env,
-        &[
-            result_ptr.into(),
-            list_symbol_to_c_abi(env, scope, list).into(),
-            count,
-            start,
-        ],
-        bitcode::STR_FROM_UTF8_RANGE,
-    );
-
-    decode_from_utf8_result(env, result_ptr).into()
-}
-
-/// Str.fromUtf8 : List U8 -> { a : Bool, b : Str, c : Nat, d : I8 }
-pub fn str_from_utf8<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
-    list: Symbol,
-    update_mode: UpdateMode,
-) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
-
-    let result_type = env.module.get_struct_type("str.FromUtf8Result").unwrap();
-    let result_ptr = builder.build_alloca(result_type, "alloca_utf8_validate_bytes_result");
-
-    call_void_bitcode_fn(
-        env,
-        &[
-            result_ptr.into(),
-            list_symbol_to_c_abi(env, scope, list).into(),
-            pass_update_mode(env, update_mode),
-        ],
-        bitcode::STR_FROM_UTF8,
-    );
-
-    decode_from_utf8_result(env, result_ptr).into()
 }
 
 /// Str.fromFloat : Int -> Str
