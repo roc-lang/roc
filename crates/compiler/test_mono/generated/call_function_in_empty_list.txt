@@ -5,14 +5,10 @@ procedure List.5 (#Attr.2, #Attr.3):
 
 procedure Test.2 (Test.3):
     let Test.7 : {} = Struct {};
-    let Test.6 : {} = CallByName Test.8 Test.7;
-    ret Test.6;
-
-procedure Test.8 (Test.9):
-    Error The `#UserApp.IdentId(8)` function could not be generated, likely due to a type error.
+    Error a Lambda Set is empty. Most likely there is a type error in your program.
 
 procedure Test.0 ():
-    let Test.1 : List {} = Array [];
+    let Test.1 : List [] = Array [];
     let Test.5 : {} = Struct {};
     let Test.4 : List {} = CallByName List.5 Test.1 Test.5;
     ret Test.4;
