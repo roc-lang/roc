@@ -350,16 +350,18 @@ fn compile_to_wasm_bytes<'a>(
     let (_main_fn_name, _delayed_errors, llvm_module) =
         create_llvm_module(arena, src, config, context, &target);
 
-    let wasm_file = llvm_module_to_wasm_file(llvm_module);
+    let temp_dir = tempfile::tempdir().unwrap();
+    let wasm_file = llvm_module_to_wasm_file(&temp_dir, llvm_module);
     std::fs::read(wasm_file).unwrap()
 }
 
-fn llvm_module_to_wasm_file(llvm_module: &inkwell::module::Module) -> PathBuf {
+fn llvm_module_to_wasm_file(
+    temp_dir: &tempfile::TempDir,
+    llvm_module: &inkwell::module::Module,
+) -> PathBuf {
     use inkwell::targets::{InitializationConfig, Target, TargetTriple};
 
-    let dir = tempfile::tempdir().unwrap();
-    let dir_path = dir.path();
-    // let zig_global_cache_path = std::path::PathBuf::from("/home/folkertdev/roc/wasm/mess");
+    let dir_path = temp_dir.path();
 
     let test_a_path = dir_path.join("test.a");
     let test_wasm_path = dir_path.join("libmain.wasm");
@@ -389,14 +391,16 @@ fn llvm_module_to_wasm_file(llvm_module: &inkwell::module::Module) -> PathBuf {
         .write_to_file(llvm_module, file_type, &test_a_path)
         .unwrap();
 
+    let mut wasm_test_platform = std::env::current_dir().unwrap();
+    wasm_test_platform.push("build/wasm_test_platform.wasm");
+
     use std::process::Command;
 
     Command::new(&crate::helpers::zig_executable())
         .current_dir(dir_path)
         .args(&[
             "wasm-ld",
-            "/home/folkertdev/roc/wasm/libmain.a",
-            "/home/folkertdev/roc/wasm/libc.a",
+            wasm_test_platform.to_str().unwrap(),
             test_a_path.to_str().unwrap(),
             "-o",
             test_wasm_path.to_str().unwrap(),
