@@ -5347,7 +5347,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let string = load_symbol(scope, &args[0]);
 
-            let result = call_bitcode_fn(env, &[string], intrinsic);
+            let result = call_bitcode_fn_fixing_for_convention(env, &[string], layout, intrinsic);
 
             // zig passes the result as a packed integer sometimes, instead of a struct. So we cast
             let expected_type = basic_type_from_layout(env, layout);
