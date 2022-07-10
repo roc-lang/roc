@@ -2464,7 +2464,6 @@ fn expanded_result() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore]
 fn backpassing_result() {
     assert_evals_to!(
         indoc!(

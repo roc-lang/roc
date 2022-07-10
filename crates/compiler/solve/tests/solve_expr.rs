@@ -7324,4 +7324,21 @@ mod solve_expr {
             "OList",
         );
     }
+
+    #[test]
+    fn rosetree_with_result_is_legal_recursive_type() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Rose a : [Rose (Result (List (Rose a)) I64)]
+
+                x : Rose I64
+                x = Rose (Ok [])
+
+                x
+                "#
+            ),
+            "Rose I64",
+        );
+    }
 }

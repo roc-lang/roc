@@ -542,10 +542,7 @@ fn eq_different_rosetrees() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore]
 fn rosetree_with_tag() {
-    // currently stack overflows in type checking
-
     assert_evals_to!(
         indoc!(
             r#"
