@@ -27,9 +27,11 @@ export fn host_unused() i32 {
     return 0x400 | js_unused() | js_called_directly_from_roc();
 }
 
+var host_result: i32 = 0;
 
-// Result is an extern global so the test can read it from the Wasm module
-extern var host_result: i32;
+export fn read_host_result() i32 {
+    return host_result;
+}
 
 pub fn main() !void {
     const host = host_called_directly_from_main();

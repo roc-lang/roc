@@ -185,9 +185,10 @@ where
         .create_runtime(1024 * 60)
         .expect("Unable to create runtime");
 
-    let module = Module::parse(&env, &wasm_bytes[..]).expect("Unable to parse module");
-
-    let mut module = rt.load_module(module).expect("Unable to load module");
+    let parsed_module = Module::parse(&env, &wasm_bytes[..]).expect("Unable to parse module");
+    let mut module = rt
+        .load_module(parsed_module)
+        .expect("Unable to load module");
 
     let panic_msg: Rc<Mutex<Option<(i32, i32)>>> = Default::default();
     let panic_msg_for_closure = panic_msg.clone();
