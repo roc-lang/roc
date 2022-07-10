@@ -3434,7 +3434,7 @@ mod solve_expr {
                 Dict.insert
                 "#
             ),
-            "Dict a b, a, b -> Dict a b",
+            "Dict k v, k, v -> Dict k v",
         );
     }
 
@@ -3446,7 +3446,7 @@ mod solve_expr {
                 Num.toFrac
                 "#
             ),
-            "Num * -> Float *",
+            "Num * -> Float a",
         );
     }
 
@@ -3470,7 +3470,7 @@ mod solve_expr {
                 Num.ceiling
                 "#
             ),
-            "Float * -> Int *",
+            "Float * -> Int a",
         );
     }
 
@@ -3482,7 +3482,7 @@ mod solve_expr {
                 Num.floor
                 "#
             ),
-            "Float * -> Int *",
+            "Float * -> Int a",
         );
     }
 
@@ -4037,7 +4037,7 @@ mod solve_expr {
                 List.walkBackwards
                 "#
             ),
-            "List a, b, (b, a -> b) -> b",
+            "List elem, state, (state, elem -> state) -> state",
         );
     }
 
@@ -4065,7 +4065,7 @@ mod solve_expr {
                 List.dropAt
                 "#
             ),
-            "List a, Nat -> List a",
+            "List elem, Nat -> List elem",
         );
     }
 
@@ -4101,7 +4101,7 @@ mod solve_expr {
                 List.takeFirst
                 "#
             ),
-            "List a, Nat -> List a",
+            "List elem, Nat -> List elem",
         );
     }
 
@@ -4113,7 +4113,7 @@ mod solve_expr {
                 List.takeLast
                 "#
             ),
-            "List a, Nat -> List a",
+            "List elem, Nat -> List elem",
         );
     }
 
@@ -4125,7 +4125,7 @@ mod solve_expr {
                 List.sublist
                 "#
             ),
-            "List a, { len : Nat, start : Nat } -> List a",
+            "List elem, { len : Nat, start : Nat } -> List elem",
         );
     }
 
@@ -4133,7 +4133,7 @@ mod solve_expr {
     fn list_split() {
         infer_eq_without_problem(
             indoc!("List.split"),
-            "List a, Nat -> { before : List a, others : List a }",
+            "List elem, Nat -> { before : List elem, others : List elem }",
         );
     }
 
@@ -4145,7 +4145,7 @@ mod solve_expr {
                 List.dropLast
                 "#
             ),
-            "List a -> List a",
+            "List elem -> List elem",
         );
     }
 
@@ -4157,7 +4157,7 @@ mod solve_expr {
                 List.intersperse
                 "#
             ),
-            "List a, a -> List a",
+            "List elem, elem -> List elem",
         );
     }
     #[test]
@@ -5517,7 +5517,7 @@ mod solve_expr {
                 }
                 "#
             ),
-            r#"{ toI128 : Int * -> I128, toI16 : Int * -> I16, toI32 : Int * -> I32, toI64 : Int * -> I64, toI8 : Int * -> I8, toNat : Int * -> Nat, toU128 : Int * -> U128, toU16 : Int * -> U16, toU32 : Int * -> U32, toU64 : Int * -> U64, toU8 : Int * -> U8 }"#,
+            r#"{ toI128 : Int * -> I128, toI16 : Int a -> I16, toI32 : Int b -> I32, toI64 : Int c -> I64, toI8 : Int d -> I8, toNat : Int e -> Nat, toU128 : Int f -> U128, toU16 : Int g -> U16, toU32 : Int h -> U32, toU64 : Int i -> U64, toU8 : Int j -> U8 }"#,
         )
     }
 
@@ -5532,7 +5532,7 @@ mod solve_expr {
                 }
                 "#
             ),
-            r#"{ toF32 : Num * -> F32, toF64 : Num * -> F64 }"#,
+            r#"{ toF32 : Num * -> F32, toF64 : Num a -> F64 }"#,
         )
     }
 

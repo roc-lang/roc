@@ -5,7 +5,6 @@ use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
 use roc_builtins::roc::module_source;
-use roc_builtins::std::borrow_stdlib;
 use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedSpecializations};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::expr::Declarations;
@@ -14,7 +13,7 @@ use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
 };
 use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
-use roc_constrain::module::{constrain_builtin_imports, constrain_module};
+use roc_constrain::module::constrain_module;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::{
@@ -977,7 +976,6 @@ enum BuildTask<'a> {
     Solve {
         module: Module,
         ident_ids: IdentIds,
-        imported_builtins: Vec<Symbol>,
         exposed_for_module: ExposedForModule,
         module_timing: ModuleTiming,
         constraints: Constraints,
@@ -3758,18 +3756,10 @@ impl<'a> BuildTask<'a> {
         let exposed_for_module =
             ExposedForModule::new(module.referenced_values.iter(), exposed_by_module);
 
-        let imported_builtins = module
-            .referenced_values
-            .iter()
-            .filter(|s| s.is_builtin())
-            .copied()
-            .collect();
-
         // Next, solve this module in the background.
         Self::Solve {
             module,
             ident_ids,
-            imported_builtins,
             exposed_for_module,
             constraints,
             constraint,
@@ -3903,12 +3893,11 @@ pub fn add_imports(
 
 #[allow(clippy::complexity)]
 fn run_solve_solve(
-    imported_builtins: Vec<Symbol>,
     exposed_for_module: ExposedForModule,
     mut constraints: Constraints,
     constraint: ConstraintSoa,
     pending_derives: PendingDerives,
-    mut var_store: VarStore,
+    var_store: VarStore,
     module: Module,
     derived_symbols: GlobalDerivedSymbols,
 ) -> (
@@ -3926,8 +3915,8 @@ fn run_solve_solve(
         ..
     } = module;
 
-    let (mut rigid_vars, mut def_types) =
-        constrain_builtin_imports(borrow_stdlib(), imported_builtins, &mut var_store);
+    let mut rigid_vars: Vec<Variable> = Vec::new();
+    let mut def_types: Vec<(Symbol, Loc<roc_types::types::Type>)> = Vec::new();
 
     let mut subs = Subs::new_from_varstore(var_store);
 
@@ -4006,7 +3995,6 @@ fn run_solve<'a>(
     module: Module,
     ident_ids: IdentIds,
     mut module_timing: ModuleTiming,
-    imported_builtins: Vec<Symbol>,
     exposed_for_module: ExposedForModule,
     constraints: Constraints,
     constraint: ConstraintSoa,
@@ -4028,7 +4016,6 @@ fn run_solve<'a>(
         if module_id.is_builtin() {
             match cached_subs.lock().remove(&module_id) {
                 None => run_solve_solve(
-                    imported_builtins,
                     exposed_for_module,
                     constraints,
                     constraint,
@@ -4051,7 +4038,6 @@ fn run_solve<'a>(
             }
         } else {
             run_solve_solve(
-                imported_builtins,
                 exposed_for_module,
                 constraints,
                 constraint,
@@ -4863,7 +4849,6 @@ fn run_task<'a>(
         Solve {
             module,
             module_timing,
-            imported_builtins,
             exposed_for_module,
             constraints,
             constraint,
@@ -4878,7 +4863,6 @@ fn run_task<'a>(
             module,
             ident_ids,
             module_timing,
-            imported_builtins,
             exposed_for_module,
             constraints,
             constraint,
