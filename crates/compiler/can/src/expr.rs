@@ -2394,7 +2394,27 @@ fn get_lookup_symbols(expr: &Expr, var_store: &mut VarStore) -> Vec<(Symbol, Var
     symbols
 }
 
-pub fn convert_toplevel_expect(mut loc_expr: Loc<Expr>) -> Loc<Expr> {
+/// Here we transform
+///
+/// >    expect
+/// >        a = 1
+/// >        b = 2
+/// >
+/// >        a == b
+///
+/// into
+///
+/// >    a = 1
+/// >    b = 2
+/// >
+/// >    expect a == b
+/// >
+/// >    emptyrecord
+///
+/// This is supposed to happen just before monomorphization:
+/// all type errors and such are generated from the user source,
+/// but this transformation means that we don't need special codegen for toplevel expects
+pub fn toplevel_expect_to_inline_expect(mut loc_expr: Loc<Expr>) -> Loc<Expr> {
     enum StoredDef {
         NonRecursive(Region, Box<Def>),
         Recursive(Region, Vec<Def>, IllegalCycleMark),

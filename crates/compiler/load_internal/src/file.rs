@@ -4817,7 +4817,7 @@ fn build_pending_specializations<'a>(
                     );
                 }
 
-                let body = roc_can::expr::convert_toplevel_expect(body);
+                let body = roc_can::expr::toplevel_expect_to_inline_expect(body);
 
                 let proc = PartialProc {
                     annotation: expr_var,
