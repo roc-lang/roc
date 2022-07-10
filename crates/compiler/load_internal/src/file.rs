@@ -4766,6 +4766,8 @@ fn build_pending_specializations<'a>(
                 // mark this symbol as a top-level thunk before any other work on the procs
                 module_thunks.push(symbol);
 
+                let expr_var = Variable::EMPTY_RECORD;
+
                 let is_host_exposed = true;
 
                 // If this is an exposed symbol, we need to
@@ -4804,6 +4806,8 @@ fn build_pending_specializations<'a>(
                         expr_var,
                     );
                 }
+
+                let body = roc_can::expr::convert_toplevel_expect(body);
 
                 let proc = PartialProc {
                     annotation: expr_var,

@@ -4190,7 +4190,7 @@ pub fn build_procedures_expose_expects<'a, 'ctx, 'env>(
     let expects: Vec<_> = procedures
         .keys()
         .filter_map(|(symbol, proc_layout)| {
-            if proc_layout.arguments.is_empty() && proc_layout.result == Layout::bool() {
+            if proc_layout.arguments.is_empty() && proc_layout.result == Layout::UNIT {
                 Some(*symbol)
             } else {
                 None
@@ -4210,7 +4210,7 @@ pub fn build_procedures_expose_expects<'a, 'ctx, 'env>(
 
     let top_level = ProcLayout {
         arguments: &[],
-        result: Layout::bool(),
+        result: Layout::UNIT,
         captures_niche,
     };
 

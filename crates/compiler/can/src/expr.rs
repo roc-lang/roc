@@ -10,7 +10,7 @@ use crate::num::{
 use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
-use roc_collections::soa::Index;
+use roc_collections::soa::{Index, Slice};
 use roc_collections::{SendMap, VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
@@ -2392,4 +2392,57 @@ fn get_lookup_symbols(expr: &Expr, var_store: &mut VarStore) -> Vec<(Symbol, Var
     }
 
     symbols
+}
+
+pub fn convert_toplevel_expect(mut loc_expr: Loc<Expr>) -> Loc<Expr> {
+    enum StoredDef {
+        NonRecursive(Region, Box<Def>),
+        Recursive(Region, Vec<Def>, IllegalCycleMark),
+    }
+
+    let mut stack = vec![];
+    let mut lookups_in_cond = vec![];
+
+    loop {
+        match loc_expr.value {
+            Expr::LetNonRec(boxed_def, remainder) => {
+                lookups_in_cond.extend(boxed_def.pattern_vars.iter().map(|(a, b)| (*a, *b)));
+
+                stack.push(StoredDef::NonRecursive(loc_expr.region, boxed_def));
+                loc_expr = *remainder;
+            }
+            Expr::LetRec(defs, remainder, mark) => {
+                for def in &defs {
+                    lookups_in_cond.extend(def.pattern_vars.iter().map(|(a, b)| (*a, *b)));
+                }
+
+                stack.push(StoredDef::Recursive(loc_expr.region, defs, mark));
+                loc_expr = *remainder;
+            }
+            _ => break,
+        }
+    }
+
+    let expect_region = loc_expr.region;
+    let expect = Expr::Expect {
+        loc_condition: Box::new(loc_expr),
+        loc_continuation: Box::new(Loc::at_zero(Expr::EmptyRecord)),
+        lookups_in_cond,
+    };
+
+    let mut loc_expr = Loc::at(expect_region, expect);
+
+    for stored in stack {
+        match stored {
+            StoredDef::NonRecursive(region, boxed_def) => {
+                loc_expr = Loc::at(region, Expr::LetNonRec(boxed_def, Box::new(loc_expr)));
+            }
+            StoredDef::Recursive(region, defs, illegal_cycle_mark) => {
+                let let_rec = Expr::LetRec(defs, Box::new(loc_expr), illegal_cycle_mark);
+                loc_expr = Loc::at(region, let_rec);
+            }
+        }
+    }
+
+    loc_expr
 }
