@@ -1,6 +1,12 @@
 interface Path
     exposes [
-        Path, PathComponent, WindowsRoot, toComponents, walkComponents, fromStr, fromBytes
+        Path,
+        PathComponent,
+        WindowsRoot,
+        toComponents,
+        walkComponents,
+        fromStr,
+        fromBytes,
     ]
     imports []
 
@@ -38,7 +44,6 @@ Path := [
     # 2. If I'm converting the Path to a Str, doing that conversion on a Path that was
     #    created from a RocStr needs no further processing. However, if it came from the OS,
     #    then we need to know what charset to assume it had, in order to decode it properly.
-
     # These come from the OS (e.g. when reading a directory, calling `canonicalize`,
     # or reading an environment variable - which, incidentally, are nul-terminated),
     # so we know they are both nul-terminated and do not contain interior nuls.
@@ -169,16 +174,15 @@ compare = \@Path p1, @Path p2 ->
                 FromStr str2 -> str1 == str2
 
 ## ## Path Components
-
 PathComponent : [
     ParentDir, # e.g. ".." on UNIX or Windows
     CurrentDir, # e.g. "." on UNIX
     Named Str, # e.g. "stuff" on UNIX
     DirSep Str, # e.g. "/" on UNIX, "\" or "/" on Windows. Or, sometimes, "¥" on Windows - see
-                # https://docs.microsoft.com/en-us/windows/win32/intl/character-sets-used-in-file-names
-                #
-                # This is included as an option so if you're transforming part of a path,
-                # you can write back whatever separator was originally used.
+    # https://docs.microsoft.com/en-us/windows/win32/intl/character-sets-used-in-file-names
+    #
+    # This is included as an option so if you're transforming part of a path,
+    # you can write back whatever separator was originally used.
 ]
 
 ## Note that a root of Slash (`/`) has different meanings on UNIX and on Windows.
@@ -196,7 +200,7 @@ WindowsRoot : []
 ## Returns the root of the path.
 root : Path -> PathRoot
 
-components : Path -> { root: PathRoot, components: List PathComponent }
+components : Path -> { root : PathRoot, components : List PathComponent }
 
 ## Walk over the path's [components].
 walk :
@@ -213,7 +217,6 @@ dropLast : Path -> Path
 
 # TODO see https://doc.rust-lang.org/std/path/struct.Path.html#method.join for
 # the definition of the term "adjoin" - should we use that term?
-
 append : Path, Path -> Path
 append = \@Path prefix, @Path suffix ->
     content =
@@ -221,8 +224,8 @@ append = \@Path prefix, @Path suffix ->
             NoInteriorNul prefixBytes ->
                 when suffix is
                     NoInteriorNul suffixBytes ->
+                        # Neither prefix nor suffix had interior nuls, so the answer won't either
                         List.append prefixBytes suffixBytes
-                            # Neither prefix nor suffix had interior nuls, so the answer won't either.
                             |> NoInteriorNul
 
                     ArbitraryBytes suffixBytes ->
@@ -254,6 +257,7 @@ append = \@Path prefix, @Path suffix ->
                     FromStr suffixStr ->
                         Str.append prefixStr suffixStr
                             |> FromStr
+
     @Path content
 
 appendStr : Path, Str -> Path
@@ -311,6 +315,7 @@ endsWith = \@Path path, @Path prefix ->
 
                 FromStr suffixStr ->
                     strLen = Str.byteCount suffixStr
+
                     if strLen == List.len pathBytes then
                         # Grab the last N bytes of the list, where N = byte length of string.
                         bytesSuffix = List.takeAt pathBytes (strLen - 1) strLen
@@ -329,10 +334,8 @@ endsWith = \@Path path, @Path prefix ->
                     Str.endsWith pathStr suffixStr
 
 # TODO https://doc.rust-lang.org/std/path/struct.Path.html#method.strip_prefix
-
 # TODO idea: what if it's File.openRead and File.openWrite? And then e.g. File.metadata,
 # File.isDir, etc.
-
 ## If the last component of this path has no `.`, appends `.` followed by the given string.
 ## Otherwise, replaces everything after the last `.` with the given string.
 ##
