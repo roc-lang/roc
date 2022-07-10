@@ -37,7 +37,10 @@ pub fn main() !void {
     const host = host_called_directly_from_main();
     const js = js_called_directly_from_main();
     const app = roc__app_proc_1_exposed();
-    host_result = host | js | app;
+
+    // Make sure read_host_result is not eliminated! We know it's zero.
+    const avoid_dead_code_elim = read_host_result();
+    host_result = host | js | app | avoid_dead_code_elim;
 
     if (@import("builtin").target.cpu.arch != .wasm32) {
         const stdout = @import("std").io.getStdOut().writer();
