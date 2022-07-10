@@ -13,27 +13,37 @@ pub struct SolvedLambdaSet(pub SolvedType);
 #[derive(Debug, Clone)]
 pub enum SolvedType {
     /// A function. The types of its arguments, then the type of its return value.
+    #[allow(unused)]
     Func(Vec<SolvedType>, Box<SolvedType>, Box<SolvedType>),
     /// Applying a type to some arguments (e.g. Map.Map String Int)
+    #[allow(unused)]
     Apply(Symbol, Vec<SolvedType>),
     /// A bound type variable, e.g. `a` in `(a -> a)`
+    #[allow(unused)]
     Rigid(Lowercase),
     Flex(VarId),
+    #[allow(unused)]
     Wildcard,
     /// Inline type alias, e.g. `as List a` in `[Cons a (List a), Nil] as List a`
+    #[allow(unused)]
     Record {
         fields: Vec<(Lowercase, RecordField<SolvedType>)>,
         /// The row type variable in an open record, e.g. the `r` in `{ name: Str }r`.
         /// This is None if it's a closed record annotation like `{ name: Str }`.
         ext: Box<SolvedType>,
     },
+    #[allow(unused)]
     EmptyRecord,
     TagUnion(Vec<(TagName, Vec<SolvedType>)>, Box<SolvedType>),
+    #[allow(unused)]
     LambdaTag(Symbol, Vec<SolvedType>),
+    #[allow(unused)]
     FunctionOrTagUnion(TagName, Symbol, Box<SolvedType>),
+    #[allow(unused)]
     RecursiveTagUnion(VarId, Vec<(TagName, Vec<SolvedType>)>, Box<SolvedType>),
     EmptyTagUnion,
     /// A type from an Invalid module
+    #[allow(unused)]
     Erroneous(Problem),
 
     Alias(
@@ -44,6 +54,7 @@ pub enum SolvedType {
         AliasKind,
     ),
 
+    #[allow(unused)]
     HostExposedAlias {
         name: Symbol,
         arguments: Vec<SolvedType>,
@@ -53,6 +64,7 @@ pub enum SolvedType {
     },
 
     /// A type error
+    #[allow(unused)]
     Error,
 }
 
@@ -475,35 +487,9 @@ fn floatingpoint_alias_content(range: SolvedType) -> SolvedType {
     range
 }
 
-// FRAC
-
-#[inline(always)]
-pub fn frac_type(range: SolvedType) -> SolvedType {
-    SolvedType::Alias(
-        Symbol::NUM_FRAC,
-        vec![(range.clone())],
-        vec![],
-        Box::new(frac_alias_content(range)),
-        AliasKind::Structural,
-    )
-}
-
 #[inline(always)]
 fn frac_alias_content(range: SolvedType) -> SolvedType {
     num_type(floatingpoint_type(range))
-}
-
-// F64
-
-#[inline(always)]
-pub fn f64_type() -> SolvedType {
-    SolvedType::Alias(
-        Symbol::NUM_F64,
-        vec![],
-        vec![],
-        Box::new(f64_alias_content()),
-        AliasKind::Structural,
-    )
 }
 
 #[inline(always)]
@@ -511,35 +497,9 @@ fn f64_alias_content() -> SolvedType {
     frac_alias_content(binary64_type())
 }
 
-// F32
-
-#[inline(always)]
-pub fn f32_type() -> SolvedType {
-    SolvedType::Alias(
-        Symbol::NUM_F32,
-        vec![],
-        vec![],
-        Box::new(f32_alias_content()),
-        AliasKind::Structural,
-    )
-}
-
 #[inline(always)]
 fn f32_alias_content() -> SolvedType {
     frac_alias_content(binary32_type())
-}
-
-// Nat
-
-#[inline(always)]
-pub fn nat_type() -> SolvedType {
-    SolvedType::Alias(
-        Symbol::NUM_NAT,
-        vec![],
-        vec![],
-        Box::new(nat_alias_content()),
-        AliasKind::Structural,
-    )
 }
 
 #[inline(always)]
@@ -547,35 +507,9 @@ fn nat_alias_content() -> SolvedType {
     int_alias_content(natural_type())
 }
 
-// I128
-
-#[inline(always)]
-pub fn i128_type() -> SolvedType {
-    SolvedType::Alias(
-        Symbol::NUM_I128,
-        vec![],
-        vec![],
-        Box::new(i128_alias_content()),
-        AliasKind::Structural,
-    )
-}
-
 #[inline(always)]
 fn i128_alias_content() -> SolvedType {
     int_alias_content(signed128_type())
-}
-
-// I128
-
-#[inline(always)]
-pub fn u128_type() -> SolvedType {
-    SolvedType::Alias(
-        Symbol::NUM_U128,
-        vec![],
-        vec![],
-        Box::new(u128_alias_content()),
-        AliasKind::Structural,
-    )
 }
 
 #[inline(always)]
@@ -583,35 +517,9 @@ fn u128_alias_content() -> SolvedType {
     int_alias_content(unsigned128_type())
 }
 
-// U64
-
-#[inline(always)]
-pub fn u64_type() -> SolvedType {
-    SolvedType::Alias(
-        Symbol::NUM_U64,
-        vec![],
-        vec![],
-        Box::new(u64_alias_content()),
-        AliasKind::Structural,
-    )
-}
-
 #[inline(always)]
 fn u64_alias_content() -> SolvedType {
     int_alias_content(unsigned64_type())
-}
-
-// I64
-
-#[inline(always)]
-pub fn i64_type() -> SolvedType {
-    SolvedType::Alias(
-        Symbol::NUM_I64,
-        vec![],
-        vec![],
-        Box::new(i64_alias_content()),
-        AliasKind::Structural,
-    )
 }
 
 #[inline(always)]
@@ -619,35 +527,9 @@ fn i64_alias_content() -> SolvedType {
     int_alias_content(signed64_type())
 }
 
-// U32
-
-#[inline(always)]
-pub fn u32_type() -> SolvedType {
-    SolvedType::Alias(
-        Symbol::NUM_U32,
-        vec![],
-        vec![],
-        Box::new(u32_alias_content()),
-        AliasKind::Structural,
-    )
-}
-
 #[inline(always)]
 fn u32_alias_content() -> SolvedType {
     int_alias_content(unsigned32_type())
-}
-
-// I32
-
-#[inline(always)]
-pub fn i32_type() -> SolvedType {
-    SolvedType::Alias(
-        Symbol::NUM_I32,
-        vec![],
-        vec![],
-        Box::new(i32_alias_content()),
-        AliasKind::Structural,
-    )
 }
 
 #[inline(always)]
@@ -655,53 +537,14 @@ fn i32_alias_content() -> SolvedType {
     int_alias_content(signed32_type())
 }
 
-// U16
-
-#[inline(always)]
-pub fn u16_type() -> SolvedType {
-    SolvedType::Alias(
-        Symbol::NUM_U16,
-        vec![],
-        vec![],
-        Box::new(u16_alias_content()),
-        AliasKind::Structural,
-    )
-}
-
 #[inline(always)]
 fn u16_alias_content() -> SolvedType {
     int_alias_content(unsigned16_type())
 }
 
-// I16
-
-#[inline(always)]
-pub fn i16_type() -> SolvedType {
-    SolvedType::Alias(
-        Symbol::NUM_I16,
-        vec![],
-        vec![],
-        Box::new(i16_alias_content()),
-        AliasKind::Structural,
-    )
-}
-
 #[inline(always)]
 fn i16_alias_content() -> SolvedType {
     int_alias_content(signed16_type())
-}
-
-// U8
-
-#[inline(always)]
-pub fn u8_type() -> SolvedType {
-    SolvedType::Alias(
-        Symbol::NUM_U8,
-        vec![],
-        vec![],
-        Box::new(u8_alias_content()),
-        AliasKind::Structural,
-    )
 }
 
 #[inline(always)]
@@ -712,32 +555,8 @@ fn u8_alias_content() -> SolvedType {
 // I8
 
 #[inline(always)]
-pub fn i8_type() -> SolvedType {
-    SolvedType::Alias(
-        Symbol::NUM_I8,
-        vec![],
-        vec![],
-        Box::new(i8_alias_content()),
-        AliasKind::Structural,
-    )
-}
-
-#[inline(always)]
 fn i8_alias_content() -> SolvedType {
     int_alias_content(signed8_type())
-}
-
-// INT
-
-#[inline(always)]
-pub fn int_type(range: SolvedType) -> SolvedType {
-    SolvedType::Alias(
-        Symbol::NUM_INT,
-        vec![(range.clone())],
-        vec![],
-        Box::new(int_alias_content(range)),
-        AliasKind::Structural,
-    )
 }
 
 #[inline(always)]
@@ -976,19 +795,6 @@ fn decimal_alias_content() -> SolvedType {
     SolvedType::EmptyTagUnion
 }
 
-// Dec
-
-#[inline(always)]
-pub fn dec_type() -> SolvedType {
-    SolvedType::Alias(
-        Symbol::NUM_DEC,
-        vec![],
-        vec![],
-        Box::new(dec_alias_content()),
-        AliasKind::Structural,
-    )
-}
-
 #[inline(always)]
 fn dec_alias_content() -> SolvedType {
     frac_alias_content(decimal_type())
@@ -1005,17 +811,6 @@ pub fn decimal_type() -> SolvedType {
     )
 }
 
-#[inline(always)]
-pub fn bool_type() -> SolvedType {
-    SolvedType::Alias(
-        Symbol::BOOL_BOOL,
-        vec![],
-        vec![],
-        Box::new(bool_alias_content()),
-        AliasKind::Structural,
-    )
-}
-
 fn bool_alias_content() -> SolvedType {
     SolvedType::TagUnion(
         vec![
@@ -1023,92 +818,6 @@ fn bool_alias_content() -> SolvedType {
             (TagName("True".into()), vec![]),
         ],
         Box::new(SolvedType::EmptyTagUnion),
-    )
-}
-
-#[inline(always)]
-pub fn ordering_type() -> SolvedType {
-    // [LT, EQ, GT]
-    SolvedType::TagUnion(
-        vec![
-            (TagName("EQ".into()), vec![]),
-            (TagName("GT".into()), vec![]),
-            (TagName("LT".into()), vec![]),
-        ],
-        Box::new(SolvedType::EmptyTagUnion),
-    )
-}
-
-#[inline(always)]
-pub fn result_type(a: SolvedType, e: SolvedType) -> SolvedType {
-    SolvedType::Alias(
-        Symbol::RESULT_RESULT,
-        vec![a.clone(), e.clone()],
-        vec![],
-        Box::new(result_alias_content(a, e)),
-        AliasKind::Structural,
-    )
-}
-
-#[inline(always)]
-pub fn box_type(a: SolvedType) -> SolvedType {
-    SolvedType::Apply(Symbol::BOX_BOX_TYPE, vec![a])
-}
-
-#[inline(always)]
-fn result_alias_content(a: SolvedType, e: SolvedType) -> SolvedType {
-    SolvedType::TagUnion(
-        vec![
-            (TagName("Err".into()), vec![e]),
-            (TagName("Ok".into()), vec![a]),
-        ],
-        Box::new(SolvedType::EmptyTagUnion),
-    )
-}
-
-#[inline(always)]
-pub fn list_type(a: SolvedType) -> SolvedType {
-    SolvedType::Apply(Symbol::LIST_LIST, vec![a])
-}
-
-#[inline(always)]
-pub fn str_type() -> SolvedType {
-    SolvedType::Apply(Symbol::STR_STR, Vec::new())
-}
-
-#[inline(always)]
-pub fn str_utf8_problem_type() -> SolvedType {
-    SolvedType::Alias(
-        Symbol::STR_UT8_PROBLEM,
-        vec![],
-        vec![],
-        Box::new(str_utf8_problem_alias_content()),
-        AliasKind::Structural,
-    )
-}
-
-#[inline(always)]
-pub fn str_utf8_problem_alias_content() -> SolvedType {
-    SolvedType::Record {
-        fields: vec![
-            ("byteIndex".into(), RecordField::Required(nat_type())),
-            (
-                "problem".into(),
-                RecordField::Required(str_utf8_byte_problem_type()),
-            ),
-        ],
-        ext: Box::new(SolvedType::EmptyRecord),
-    }
-}
-
-#[inline(always)]
-pub fn str_utf8_byte_problem_type() -> SolvedType {
-    SolvedType::Alias(
-        Symbol::STR_UT8_BYTE_PROBLEM,
-        vec![],
-        vec![],
-        Box::new(str_utf8_byte_problem_alias_content()),
-        AliasKind::Structural,
     )
 }
 
@@ -1129,14 +838,4 @@ pub fn str_utf8_byte_problem_alias_content() -> SolvedType {
         ],
         Box::new(SolvedType::EmptyTagUnion),
     )
-}
-
-#[inline(always)]
-pub fn set_type(a: SolvedType) -> SolvedType {
-    SolvedType::Apply(Symbol::SET_SET, vec![a])
-}
-
-#[inline(always)]
-pub fn dict_type(key: SolvedType, value: SolvedType) -> SolvedType {
-    SolvedType::Apply(Symbol::DICT_DICT, vec![key, value])
 }
