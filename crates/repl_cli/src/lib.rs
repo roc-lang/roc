@@ -201,6 +201,7 @@ pub fn expect_mono_module_to_dylib<'a>(
     let target_info = TargetInfo::from(&target);
 
     let MonomorphizedModule {
+        toplevel_expects,
         procedures,
         entry_point,
         interns,
@@ -241,6 +242,7 @@ pub fn expect_mono_module_to_dylib<'a>(
     let expects = roc_gen_llvm::llvm::build::build_procedures_expose_expects(
         &env,
         opt_level,
+        &toplevel_expects,
         procedures,
         entry_point,
     );

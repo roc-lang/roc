@@ -10,7 +10,7 @@ use crate::num::{
 use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
-use roc_collections::soa::{Index, Slice};
+use roc_collections::soa::Index;
 use roc_collections::{SendMap, VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;

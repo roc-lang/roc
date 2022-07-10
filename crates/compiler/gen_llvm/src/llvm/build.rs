@@ -4180,24 +4180,10 @@ pub fn build_procedures_return_main<'a, 'ctx, 'env>(
 pub fn build_procedures_expose_expects<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
+    expects: &[Symbol],
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     entry_point: EntryPoint<'a>,
 ) -> Vec<'a, &'a str> {
-    use bumpalo::collections::CollectIn;
-
-    // this is not entirely accurate: it will treat every top-level bool value (turned into a
-    // zero-argument thunk) as an expect.
-    let expects: Vec<_> = procedures
-        .keys()
-        .filter_map(|(symbol, proc_layout)| {
-            if proc_layout.arguments.is_empty() && proc_layout.result == Layout::UNIT {
-                Some(*symbol)
-            } else {
-                None
-            }
-        })
-        .collect_in(env.arena);
-
     let mod_solutions = build_procedures_help(
         env,
         opt_level,
