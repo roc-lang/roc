@@ -5,6 +5,7 @@ interface Json
     ]
     imports [
         List,
+        Str,
         Encode.{
             Encoder,
             custom,
