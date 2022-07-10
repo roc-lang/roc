@@ -9120,7 +9120,7 @@ where
 
 fn empty_lambda_set_error() -> Stmt<'static> {
     let msg = "a Lambda Set is empty. Most likely there is a type error in your program.";
-    return Stmt::RuntimeError(msg);
+    Stmt::RuntimeError(msg)
 }
 
 /// Use the lambda set to figure out how to make a call-by-name
