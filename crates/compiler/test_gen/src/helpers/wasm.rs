@@ -178,6 +178,16 @@ where
 
     let wasm_bytes = crate::helpers::wasm::compile_to_wasm_bytes(&arena, src, phantom);
 
+    run_wasm_test_bytes::<T>(TEST_WRAPPER_NAME, wasm_bytes)
+}
+
+pub(crate) fn run_wasm_test_bytes<T>(
+    test_wrapper_name: &str,
+    wasm_bytes: Vec<u8>,
+) -> Result<T, String>
+where
+    T: FromWasm32Memory + Wasm32Result,
+{
     let env = Environment::new().expect("Unable to create environment");
     let rt = env
         .create_runtime(1024 * 60)
@@ -189,7 +199,7 @@ where
     link_module(&mut module, panic_msg.clone());
 
     let test_wrapper = module
-        .find_function::<(), i32>(TEST_WRAPPER_NAME)
+        .find_function::<(), i32>(test_wrapper_name)
         .expect("Unable to find test wrapper function");
 
     match test_wrapper.call() {

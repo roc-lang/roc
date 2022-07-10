@@ -1,8 +1,5 @@
 use std::path::PathBuf;
-use std::rc::Rc;
-use std::sync::Mutex;
 
-use crate::helpers::from_wasm32_memory::FromWasm32Memory;
 use inkwell::module::Module;
 use libloading::Library;
 use roc_build::link::llvm_module_to_dylib;
@@ -16,8 +13,16 @@ use roc_region::all::LineInfo;
 use roc_reporting::report::RenderTarget;
 use target_lexicon::Triple;
 
+#[cfg(feature = "gen-llvm-wasm")]
+use crate::helpers::from_wasm32_memory::FromWasm32Memory;
+
+#[cfg(feature = "gen-llvm-wasm")]
+use roc_gen_wasm::wasm32_result::Wasm32Result;
+
+#[cfg(feature = "gen-llvm-wasm")]
 const TEST_WRAPPER_NAME: &str = "$Test.wasm_test_wrapper";
 
+#[allow(dead_code)]
 pub const OPT_LEVEL: OptLevel = if cfg!(debug_assertions) {
     OptLevel::Normal
 } else {
@@ -337,6 +342,7 @@ fn annotate_with_debug_info<'ctx>(
     inkwell::module::Module::parse_bitcode_from_path(&app_bc_file, context).unwrap()
 }
 
+#[allow(dead_code)]
 fn wasm32_target_tripple() -> Triple {
     use target_lexicon::{Architecture, BinaryFormat};
 
@@ -348,6 +354,7 @@ fn wasm32_target_tripple() -> Triple {
     triple
 }
 
+#[allow(dead_code)]
 fn compile_to_wasm_bytes<'a>(
     arena: &'a bumpalo::Bump,
     config: HelperConfig,
@@ -364,6 +371,7 @@ fn compile_to_wasm_bytes<'a>(
     std::fs::read(wasm_file).unwrap()
 }
 
+#[allow(dead_code)]
 fn llvm_module_to_wasm_file(
     temp_dir: &tempfile::TempDir,
     llvm_module: &inkwell::module::Module,
@@ -428,39 +436,11 @@ fn fake_wasm_main_function(_: u32, _: u32) -> u32 {
     panic!("wasm entered the main function; this should never happen!")
 }
 
-fn get_memory(rt: &wasm3::Runtime) -> &[u8] {
-    unsafe {
-        let memory_ptr: *const [u8] = rt.memory();
-        let (_, memory_size) = std::mem::transmute::<_, (usize, usize)>(memory_ptr);
-        std::slice::from_raw_parts(memory_ptr as _, memory_size)
-    }
-}
-
-fn link_module(module: &mut wasm3::Module, panic_msg: Rc<Mutex<Option<(i32, i32)>>>) {
-    module.link_wasi().unwrap();
-    let try_link_panic = module.link_closure(
-        "env",
-        "send_panic_msg_to_rust",
-        move |_call_context, args: (i32, i32)| {
-            let mut w = panic_msg.lock().unwrap();
-            *w = Some(args);
-            Ok(())
-        },
-    );
-    match try_link_panic {
-        Ok(()) => {}
-        Err(wasm3::error::Error::FunctionNotFound) => {}
-        Err(e) => panic!("{:?}", e),
-    }
-}
-
-#[allow(dead_code)]
+#[cfg(feature = "gen-llvm-wasm")]
 pub fn assert_wasm_evals_to_help<T>(src: &str, ignore_problems: bool) -> Result<T, String>
 where
-    T: FromWasm32Memory,
+    T: FromWasm32Memory + Wasm32Result,
 {
-    use wasm3::{Environment, Module};
-
     let arena = bumpalo::Bump::new();
     let context = inkwell::context::Context::create();
 
@@ -473,40 +453,7 @@ where
 
     let wasm_bytes = compile_to_wasm_bytes(&arena, config, src, &context);
 
-    let env = Environment::new().expect("Unable to create environment");
-    let rt = env
-        .create_runtime(1024 * 60)
-        .expect("Unable to create runtime");
-
-    let parsed = Module::parse(&env, &wasm_bytes[..]).expect("Unable to parse module");
-    let mut module = rt.load_module(parsed).expect("Unable to load module");
-    let panic_msg: Rc<Mutex<Option<(i32, i32)>>> = Default::default();
-    link_module(&mut module, panic_msg.clone());
-
-    let test_wrapper = module
-        .find_function::<(), i32>(TEST_WRAPPER_NAME)
-        .expect("Unable to find test wrapper function");
-
-    match test_wrapper.call() {
-        Err(e) => {
-            if let Some((msg_ptr, msg_len)) = *panic_msg.lock().unwrap() {
-                let memory: &[u8] = get_memory(&rt);
-                let msg_bytes = &memory[msg_ptr as usize..][..msg_len as usize];
-                let msg = std::str::from_utf8(msg_bytes).unwrap();
-
-                Err(format!("Roc failed with message: \"{}\"", msg))
-            } else {
-                Err(format!("{}", e))
-            }
-        }
-        Ok(address) => {
-            let memory: &[u8] = get_memory(&rt);
-
-            let output = <T as FromWasm32Memory>::decode(memory, address as u32);
-
-            Ok(output)
-        }
-    }
+    crate::helpers::wasm::run_wasm_test_bytes::<T>(TEST_WRAPPER_NAME, wasm_bytes)
 }
 
 #[allow(unused_macros)]
