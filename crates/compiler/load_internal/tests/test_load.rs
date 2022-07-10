@@ -422,7 +422,7 @@ fn test_load_and_typecheck() {
             "intTest" => "I64",
             "constantNum" => "Num *",
             "divisionTest" => "F64",
-            "divDep1ByDep2" => "Float *",
+            "divDep1ByDep2" => "Float a",
             "fromDep2" => "Float *",
         },
     );

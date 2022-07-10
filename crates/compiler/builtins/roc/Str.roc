@@ -41,7 +41,7 @@ interface Str
         walkScalars,
         walkScalarsUntil,
     ]
-    imports [Bool.{ Bool }, Result.{ Result }]
+    imports [Bool.{ Bool }, Result.{ Result }, List]
 
 ## # Types
 ##

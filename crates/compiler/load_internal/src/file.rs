@@ -5,7 +5,6 @@ use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
 use roc_builtins::roc::module_source;
-use roc_builtins::std::borrow_stdlib;
 use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedSpecializations};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::expr::Declarations;
@@ -14,7 +13,7 @@ use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
 };
 use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
-use roc_constrain::module::{constrain_builtin_imports, constrain_module};
+use roc_constrain::module::constrain_module;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::{
@@ -977,7 +976,6 @@ enum BuildTask<'a> {
     Solve {
         module: Module,
         ident_ids: IdentIds,
-        imported_builtins: Vec<Symbol>,
         exposed_for_module: ExposedForModule,
         module_timing: ModuleTiming,
         constraints: Constraints,
@@ -2046,6 +2044,12 @@ fn update<'a>(
                 header
                     .exposed_imports
                     .insert(Ident::from("Bool"), (Symbol::BOOL_BOOL, Region::zero()));
+            }
+
+            if header.module_id == ModuleId::NUM {
+                header
+                    .exposed_imports
+                    .insert(Ident::from("List"), (Symbol::LIST_LIST, Region::zero()));
             }
 
             if !header.module_id.is_builtin() {
@@ -3785,18 +3789,10 @@ impl<'a> BuildTask<'a> {
         let exposed_for_module =
             ExposedForModule::new(module.referenced_values.iter(), exposed_by_module);
 
-        let imported_builtins = module
-            .referenced_values
-            .iter()
-            .filter(|s| s.is_builtin())
-            .copied()
-            .collect();
-
         // Next, solve this module in the background.
         Self::Solve {
             module,
             ident_ids,
-            imported_builtins,
             exposed_for_module,
             constraints,
             constraint,
@@ -3811,6 +3807,45 @@ impl<'a> BuildTask<'a> {
     }
 }
 
+fn synth_import(subs: &mut Subs, content: roc_types::subs::Content) -> Variable {
+    use roc_types::subs::{Descriptor, Mark, OptVariable, Rank};
+    subs.fresh(Descriptor {
+        content,
+        rank: Rank::import(),
+        mark: Mark::NONE,
+        copy: OptVariable::NONE,
+    })
+}
+
+fn synth_list_len_type(subs: &mut Subs) -> Variable {
+    use roc_types::subs::{Content, FlatType, LambdaSet, OptVariable, SubsSlice, UnionLabels};
+
+    // List.len : List a -> Nat
+    let a = synth_import(subs, Content::FlexVar(None));
+    let a_slice = SubsSlice::extend_new(&mut subs.variables, [a]);
+    let list_a = synth_import(
+        subs,
+        Content::Structure(FlatType::Apply(Symbol::LIST_LIST, a_slice)),
+    );
+    let fn_var = synth_import(subs, Content::Error);
+    let solved_list_len = UnionLabels::insert_into_subs(subs, [(Symbol::LIST_LEN, [])]);
+    let clos_list_len = synth_import(
+        subs,
+        Content::LambdaSet(LambdaSet {
+            solved: solved_list_len,
+            recursion_var: OptVariable::NONE,
+            unspecialized: SubsSlice::default(),
+            ambient_function: fn_var,
+        }),
+    );
+    let fn_args_slice = SubsSlice::extend_new(&mut subs.variables, [list_a]);
+    subs.set_content(
+        fn_var,
+        Content::Structure(FlatType::Func(fn_args_slice, clos_list_len, Variable::NAT)),
+    );
+    fn_var
+}
+
 pub fn add_imports(
     my_module: ModuleId,
     subs: &mut Subs,
@@ -3819,6 +3854,8 @@ pub fn add_imports(
     def_types: &mut Vec<(Symbol, Loc<roc_types::types::Type>)>,
     rigid_vars: &mut Vec<Variable>,
 ) -> (Vec<Variable>, AbilitiesStore) {
+    use roc_types::types::Type;
+
     let mut import_variables = Vec::new();
 
     let mut cached_symbol_vars = VecMap::default();
@@ -3846,7 +3883,7 @@ pub fn add_imports(
 
                     def_types.push((
                         $symbol,
-                        Loc::at_zero(roc_types::types::Type::Variable(copied_import.variable)),
+                        Loc::at_zero(Type::Variable(copied_import.variable)),
                     ));
 
                     // not a typo; rigids are turned into flex during type inference, but when imported we must
@@ -3871,6 +3908,17 @@ pub fn add_imports(
 
     for symbol in exposed_for_module.imported_values {
         import_var_for_symbol!(subs, exposed_for_module.exposed_by_module, symbol, continue);
+    }
+
+    // Patch used symbols from circular dependencies.
+    if my_module == ModuleId::NUM {
+        // Num needs List.len, but List imports Num.
+        let list_len_type = synth_list_len_type(subs);
+        def_types.push((
+            Symbol::LIST_LEN,
+            Loc::at_zero(Type::Variable(list_len_type)),
+        ));
+        import_variables.push(list_len_type);
     }
 
     // TODO: see if we can reduce the amount of specializations we need to import.
@@ -3930,12 +3978,11 @@ pub fn add_imports(
 
 #[allow(clippy::complexity)]
 fn run_solve_solve(
-    imported_builtins: Vec<Symbol>,
     exposed_for_module: ExposedForModule,
     mut constraints: Constraints,
     constraint: ConstraintSoa,
     pending_derives: PendingDerives,
-    mut var_store: VarStore,
+    var_store: VarStore,
     module: Module,
     derived_symbols: GlobalDerivedSymbols,
 ) -> (
@@ -3953,8 +4000,8 @@ fn run_solve_solve(
         ..
     } = module;
 
-    let (mut rigid_vars, mut def_types) =
-        constrain_builtin_imports(borrow_stdlib(), imported_builtins, &mut var_store);
+    let mut rigid_vars: Vec<Variable> = Vec::new();
+    let mut def_types: Vec<(Symbol, Loc<roc_types::types::Type>)> = Vec::new();
 
     let mut subs = Subs::new_from_varstore(var_store);
 
@@ -4033,7 +4080,6 @@ fn run_solve<'a>(
     module: Module,
     ident_ids: IdentIds,
     mut module_timing: ModuleTiming,
-    imported_builtins: Vec<Symbol>,
     exposed_for_module: ExposedForModule,
     constraints: Constraints,
     constraint: ConstraintSoa,
@@ -4055,7 +4101,6 @@ fn run_solve<'a>(
         if module_id.is_builtin() {
             match cached_subs.lock().remove(&module_id) {
                 None => run_solve_solve(
-                    imported_builtins,
                     exposed_for_module,
                     constraints,
                     constraint,
@@ -4078,7 +4123,6 @@ fn run_solve<'a>(
             }
         } else {
             run_solve_solve(
-                imported_builtins,
                 exposed_for_module,
                 constraints,
                 constraint,
@@ -4890,7 +4934,6 @@ fn run_task<'a>(
         Solve {
             module,
             module_timing,
-            imported_builtins,
             exposed_for_module,
             constraints,
             constraint,
@@ -4905,7 +4948,6 @@ fn run_task<'a>(
             module,
             ident_ids,
             module_timing,
-            imported_builtins,
             exposed_for_module,
             constraints,
             constraint,

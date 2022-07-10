@@ -403,7 +403,7 @@ fn list_contains() {
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn list_sum() {
-    expect_success("List.sum []", "0 : Num *");
+    expect_success("List.sum []", "0 : Num a");
     expect_success("List.sum [1, 2, 3]", "6 : Num *");
     expect_success("List.sum [1.1, 2.2, 3.3]", "6.6 : Float *");
 }
@@ -417,7 +417,7 @@ fn list_first() {
     );
     expect_success(
         "List.first []",
-        "Err ListWasEmpty : Result * [ListWasEmpty]*",
+        "Err ListWasEmpty : Result a [ListWasEmpty]*",
     );
 }
 
@@ -431,7 +431,7 @@ fn list_last() {
 
     expect_success(
         "List.last []",
-        "Err ListWasEmpty : Result * [ListWasEmpty]*",
+        "Err ListWasEmpty : Result a [ListWasEmpty]*",
     );
 }
 
