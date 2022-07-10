@@ -2019,6 +2019,12 @@ fn update<'a>(
                     .insert(Ident::from("Bool"), (Symbol::BOOL_BOOL, Region::zero()));
             }
 
+            if header.module_id == ModuleId::NUM {
+                header
+                    .exposed_imports
+                    .insert(Ident::from("List"), (Symbol::LIST_LIST, Region::zero()));
+            }
+
             if !header.module_id.is_builtin() {
                 header
                     .package_qualified_imported_modules
@@ -3774,6 +3780,45 @@ impl<'a> BuildTask<'a> {
     }
 }
 
+fn synth_import(subs: &mut Subs, content: roc_types::subs::Content) -> Variable {
+    use roc_types::subs::{Descriptor, Mark, OptVariable, Rank};
+    subs.fresh(Descriptor {
+        content,
+        rank: Rank::import(),
+        mark: Mark::NONE,
+        copy: OptVariable::NONE,
+    })
+}
+
+fn synth_list_len_type(subs: &mut Subs) -> Variable {
+    use roc_types::subs::{Content, FlatType, LambdaSet, OptVariable, SubsSlice, UnionLabels};
+
+    // List.len : List a -> Nat
+    let a = synth_import(subs, Content::FlexVar(None));
+    let a_slice = SubsSlice::extend_new(&mut subs.variables, [a]);
+    let list_a = synth_import(
+        subs,
+        Content::Structure(FlatType::Apply(Symbol::LIST_LIST, a_slice)),
+    );
+    let fn_var = synth_import(subs, Content::Error);
+    let solved_list_len = UnionLabels::insert_into_subs(subs, [(Symbol::LIST_LEN, [])]);
+    let clos_list_len = synth_import(
+        subs,
+        Content::LambdaSet(LambdaSet {
+            solved: solved_list_len,
+            recursion_var: OptVariable::NONE,
+            unspecialized: SubsSlice::default(),
+            ambient_function: fn_var,
+        }),
+    );
+    let fn_args_slice = SubsSlice::extend_new(&mut subs.variables, [list_a]);
+    subs.set_content(
+        fn_var,
+        Content::Structure(FlatType::Func(fn_args_slice, clos_list_len, Variable::NAT)),
+    );
+    fn_var
+}
+
 pub fn add_imports(
     my_module: ModuleId,
     subs: &mut Subs,
@@ -3782,6 +3827,8 @@ pub fn add_imports(
     def_types: &mut Vec<(Symbol, Loc<roc_types::types::Type>)>,
     rigid_vars: &mut Vec<Variable>,
 ) -> (Vec<Variable>, AbilitiesStore) {
+    use roc_types::types::Type;
+
     let mut import_variables = Vec::new();
 
     let mut cached_symbol_vars = VecMap::default();
@@ -3809,7 +3856,7 @@ pub fn add_imports(
 
                     def_types.push((
                         $symbol,
-                        Loc::at_zero(roc_types::types::Type::Variable(copied_import.variable)),
+                        Loc::at_zero(Type::Variable(copied_import.variable)),
                     ));
 
                     // not a typo; rigids are turned into flex during type inference, but when imported we must
@@ -3834,6 +3881,17 @@ pub fn add_imports(
 
     for symbol in exposed_for_module.imported_values {
         import_var_for_symbol!(subs, exposed_for_module.exposed_by_module, symbol, continue);
+    }
+
+    // Patch used symbols from circular dependencies.
+    if my_module == ModuleId::NUM {
+        // Num needs List.len, but List imports Num.
+        let list_len_type = synth_list_len_type(subs);
+        def_types.push((
+            Symbol::LIST_LEN,
+            Loc::at_zero(Type::Variable(list_len_type)),
+        ));
+        import_variables.push(list_len_type);
     }
 
     // TODO: see if we can reduce the amount of specializations we need to import.
