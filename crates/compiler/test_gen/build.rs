@@ -11,7 +11,7 @@ const PLATFORM_FILENAME: &str = "wasm_test_platform";
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    if feature_is_enabled("gen-wasm") {
+    if feature_is_enabled("gen-wasm") || feature_is_enabled("gen-llvm-wasm") {
         build_wasm_test_host();
         build_wasm_linking_test_host();
     }
