@@ -4,7 +4,7 @@
     A bare-bones Roc "platform" for REPL code, providing heap allocation for builtins.
 */
 
-// Enable/disable printf debugging. Leave disabled to avoid bloating .wasm files and slowing down Wasmer tests.
+// Enable/disable printf debugging. Leave disabled to avoid bloating .wasm files and slowing down tests.
 #define ENABLE_PRINTF 0
 
 //--------------------------

@@ -40,7 +40,6 @@ libc = "0.2.106"
 inkwell = { path = "../../vendor/inkwell" }
 target-lexicon = "0.12.3"
 libloading = "0.7.1"
-wasmer-wasi = "2.2.1"
 tempfile = "3.2.0"
 indoc = "1.0.3"
 criterion = { git = "https://github.com/Anton-4/criterion.rs" }

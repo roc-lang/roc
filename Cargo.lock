@@ -4774,7 +4774,6 @@ dependencies = [
  "tempfile",
  "wasi_libc_sys",
  "wasm3",
- "wasmer-wasi",
 ]
 
 [[package]]
