@@ -8958,6 +8958,7 @@ where
     ToLowLevelCall: Fn(ToLowLevelCallArguments<'a>) -> Call<'a> + Copy,
 {
     match lambda_set.runtime_representation() {
+        Layout::VOID => empty_lambda_set_error(),
         Layout::Union(union_layout) => {
             let closure_tag_id_symbol = env.unique_symbol();
 
@@ -9117,6 +9118,11 @@ where
     }
 }
 
+fn empty_lambda_set_error() -> Stmt<'static> {
+    let msg = "a Lambda Set is empty. Most likely there is a type error in your program.";
+    Stmt::RuntimeError(msg)
+}
+
 /// Use the lambda set to figure out how to make a call-by-name
 #[allow(clippy::too_many_arguments)]
 fn match_on_lambda_set<'a>(
@@ -9131,6 +9137,7 @@ fn match_on_lambda_set<'a>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     match lambda_set.runtime_representation() {
+        Layout::VOID => empty_lambda_set_error(),
         Layout::Union(union_layout) => {
             let closure_tag_id_symbol = env.unique_symbol();
 
@@ -9260,9 +9267,7 @@ fn union_lambda_set_to_switch<'a>(
         // there is really nothing we can do here. We generate a runtime error here which allows
         // code gen to proceed. We then assume that we hit another (more descriptive) error before
         // hitting this one
-
-        let msg = "a Lambda Set isempty. Most likely there is a type error in your program.";
-        return Stmt::RuntimeError(msg);
+        return empty_lambda_set_error();
     }
 
     let join_point_id = JoinPointId(env.unique_symbol());
