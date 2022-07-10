@@ -240,26 +240,5 @@ macro_rules! assert_evals_to {
     };
 }
 
-#[allow(unused_macros)]
-macro_rules! assert_expect_failed {
-    ($src:expr, $expected:expr, $ty:ty, $failures:expr) => {{
-        use bumpalo::Bump;
-        use roc_gen_dev::run_jit_function_raw;
-        let stdlib = roc_builtins::std::standard_stdlib();
-
-        let arena = Bump::new();
-        let (main_fn_name, errors, lib) =
-            $crate::helpers::dev::helper(&arena, $src, stdlib, true, true);
-
-        let transform = |success| {
-            let expected = $expected;
-            assert_eq!(&success, &expected);
-        };
-        run_jit_function_raw!(lib, main_fn_name, $ty, transform, errors);
-    }};
-}
-
 #[allow(unused_imports)]
 pub(crate) use assert_evals_to;
-#[allow(unused_imports)]
-pub(crate) use assert_expect_failed;
