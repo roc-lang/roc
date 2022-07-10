@@ -1980,9 +1980,16 @@ impl<'a> Stmt<'a> {
                 .append(alloc.hardline())
                 .append(cont.to_doc(alloc)),
 
-            Expect { condition, .. } => alloc
+            Expect {
+                condition,
+                remainder,
+                ..
+            } => alloc
                 .text("expect ")
-                .append(symbol_to_doc(alloc, *condition)),
+                .append(symbol_to_doc(alloc, *condition))
+                .append(";")
+                .append(alloc.hardline())
+                .append(remainder.to_doc(alloc)),
 
             Ret(symbol) => alloc
                 .text("ret ")
