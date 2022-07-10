@@ -1067,7 +1067,7 @@ pub fn load_and_typecheck_str<'a>(
     arena: &'a Bump,
     filename: PathBuf,
     source: &'a str,
-    src_dir: &Path,
+    src_dir: PathBuf,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
     render: RenderTarget,
@@ -1075,7 +1075,7 @@ pub fn load_and_typecheck_str<'a>(
 ) -> Result<LoadedModule, LoadingProblem<'a>> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_str(arena, filename, source)?;
+    let load_start = LoadStart::from_str(arena, filename, source, src_dir)?;
 
     // this function is used specifically in the case
     // where we want to regenerate the cached data
@@ -1084,7 +1084,6 @@ pub fn load_and_typecheck_str<'a>(
     match load(
         arena,
         load_start,
-        src_dir,
         exposed_types,
         Phase::SolveTypes,
         target_info,
@@ -1108,11 +1107,13 @@ pub struct LoadStart<'a> {
     ident_ids_by_module: SharedIdentIdsByModule,
     root_id: ModuleId,
     root_msg: Msg<'a>,
+    src_dir: PathBuf,
 }
 
 impl<'a> LoadStart<'a> {
     pub fn from_path(
         arena: &'a Bump,
+        mut src_dir: PathBuf,
         filename: PathBuf,
         render: RenderTarget,
     ) -> Result<Self, LoadingProblem<'a>> {
@@ -1135,7 +1136,32 @@ impl<'a> LoadStart<'a> {
             );
 
             match res_loaded {
-                Ok(good) => good,
+                Ok((module_id, msg)) => {
+                    if let Msg::Header(ModuleHeader {
+                        module_id: header_id,
+                        module_name,
+                        is_root_module,
+                        ..
+                    }) = &msg
+                    {
+                        debug_assert_eq!(*header_id, module_id);
+                        debug_assert!(is_root_module);
+
+                        if let ModuleNameEnum::Interface(name) = module_name {
+                            // Interface modules can have names like Foo.Bar.Baz,
+                            // in which case we need to adjust the src_dir to
+                            // remove the "Bar/Baz" directories in order to correctly
+                            // resolve this interface module's imports!
+                            let dirs_to_pop = name.as_str().matches('.').count();
+
+                            for _ in 0..dirs_to_pop {
+                                src_dir.pop();
+                            }
+                        }
+                    }
+
+                    (module_id, msg)
+                }
 
                 Err(LoadingProblem::ParsingFailed(problem)) => {
                     let module_ids = Arc::try_unwrap(arc_modules)
@@ -1166,6 +1192,7 @@ impl<'a> LoadStart<'a> {
         Ok(LoadStart {
             arc_modules,
             ident_ids_by_module,
+            src_dir,
             root_id,
             root_msg,
         })
@@ -1175,6 +1202,7 @@ impl<'a> LoadStart<'a> {
         arena: &'a Bump,
         filename: PathBuf,
         src: &'a str,
+        src_dir: PathBuf,
     ) -> Result<Self, LoadingProblem<'a>> {
         let arc_modules = Arc::new(Mutex::new(PackageModuleIds::default()));
         let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
@@ -1196,6 +1224,7 @@ impl<'a> LoadStart<'a> {
 
         Ok(LoadStart {
             arc_modules,
+            src_dir,
             ident_ids_by_module,
             root_id,
             root_msg,
@@ -1269,7 +1298,6 @@ pub enum Threading {
 pub fn load<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
-    src_dir: &Path,
     exposed_types: ExposedByModule,
     goal_phase: Phase,
     target_info: TargetInfo,
@@ -1305,7 +1333,6 @@ pub fn load<'a>(
         Threads::Single => load_single_threaded(
             arena,
             load_start,
-            src_dir,
             exposed_types,
             goal_phase,
             target_info,
@@ -1315,7 +1342,6 @@ pub fn load<'a>(
         Threads::Many(threads) => load_multi_threaded(
             arena,
             load_start,
-            src_dir,
             exposed_types,
             goal_phase,
             target_info,
@@ -1331,7 +1357,6 @@ pub fn load<'a>(
 pub fn load_single_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
-    src_dir: &Path,
     exposed_types: ExposedByModule,
     goal_phase: Phase,
     target_info: TargetInfo,
@@ -1343,6 +1368,7 @@ pub fn load_single_threaded<'a>(
         ident_ids_by_module,
         root_id,
         root_msg,
+        src_dir,
         ..
     } = load_start;
 
@@ -1394,7 +1420,7 @@ pub fn load_single_threaded<'a>(
             stealers,
             &worker_msg_rx,
             &msg_tx,
-            src_dir,
+            &src_dir,
             target_info,
         );
 
@@ -1532,7 +1558,6 @@ fn state_thread_step<'a>(
 fn load_multi_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
-    src_dir: &Path,
     exposed_types: ExposedByModule,
     goal_phase: Phase,
     target_info: TargetInfo,
@@ -1545,6 +1570,7 @@ fn load_multi_threaded<'a>(
         ident_ids_by_module,
         root_id,
         root_msg,
+        src_dir,
         ..
     } = load_start;
 
@@ -1622,8 +1648,9 @@ fn load_multi_threaded<'a>(
 
                 // We only want to move a *reference* to the main task queue's
                 // injector in the thread, not the injector itself
-                // (since other threads need to reference it too).
+                // (since other threads need to reference it too). Same with src_dir.
                 let injector = &injector;
+                let src_dir = &src_dir;
 
                 // Record this thread's handle so the main thread can join it later.
                 let res_join_handle = thread_scope

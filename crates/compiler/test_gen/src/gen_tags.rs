@@ -9,7 +9,8 @@ use crate::helpers::wasm::assert_evals_to;
 
 #[cfg(test)]
 use indoc::indoc;
-#[cfg(test)]
+
+#[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
 use roc_std::{RocList, RocStr};
 
 #[test]

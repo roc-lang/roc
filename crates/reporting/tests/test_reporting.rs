@@ -86,7 +86,7 @@ mod test_reporting {
             let result = roc_load::load_and_typecheck(
                 arena,
                 full_file_path,
-                dir.path(),
+                dir.path().to_path_buf(),
                 exposed_types,
                 roc_target::TargetInfo::default_x86_64(),
                 RenderTarget::Generic,

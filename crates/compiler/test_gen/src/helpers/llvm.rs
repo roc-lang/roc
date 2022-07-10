@@ -39,12 +39,12 @@ fn create_llvm_module<'a>(
     context: &'a inkwell::context::Context,
     target: &Triple,
 ) -> (&'static str, String, &'a Module<'a>) {
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     let target_info = roc_target::TargetInfo::from(target);
 
     let filename = PathBuf::from("Test.roc");
-    let src_dir = Path::new("fake/test/path");
+    let src_dir = PathBuf::from("fake/test/path");
 
     let module_src;
     let temp;

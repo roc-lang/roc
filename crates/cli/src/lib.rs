@@ -367,7 +367,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let loaded = roc_load::load_and_monomorphize(
         arena,
         path,
-        src_dir.as_path(),
+        src_dir,
         subs_by_module,
         target_info,
         // TODO: expose this from CLI?
