@@ -2347,8 +2347,7 @@ mod test_fmt {
             indoc!(
                 r#"
                 f : {
-                    x : Int *,
-                    # comment 1
+                    x : Int *, # comment 1
                     # comment 2
                 }
 
@@ -4588,7 +4587,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn multiline_tag_union_annotation() {
+    fn multiline_tag_union_annotation_no_comments() {
         expr_formats_same(indoc!(
             r#"
             b : [
@@ -4694,8 +4693,7 @@ mod test_fmt {
                 b : [
                     True,
                     # comment 1
-                    False,
-                    # comment 2
+                    False, # comment 2
                     # comment 3
                 ]
 
@@ -5077,6 +5075,38 @@ mod test_fmt {
                     has [Eq, Hash]
 
                 0
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn comments_in_multiline_tag_union_annotation() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                    UnionAnn : [
+                        Foo, # comment 1
+                        Bar, # comment 2
+                        Baz, # comment 3
+                             # comment 4 line 1
+                             # comment 4 line 2
+                    ]
+
+                    0
+                "#
+            ),
+            indoc!(
+                r#"
+                    UnionAnn : [
+                        Foo, # comment 1
+                        Bar, # comment 2
+                        Baz, # comment 3
+                        # comment 4 line 1
+                        # comment 4 line 2
+                    ]
+
+                    0
                 "#
             ),
         );
