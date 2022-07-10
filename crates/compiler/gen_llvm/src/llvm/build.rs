@@ -766,6 +766,122 @@ fn promote_to_main_function<'a, 'ctx, 'env>(
     (main_fn_name, main_fn)
 }
 
+fn promote_to_wasm_test_wrapper<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    mod_solutions: &'a ModSolutions,
+    symbol: Symbol,
+    top_level: ProcLayout<'a>,
+) -> (&'static str, FunctionValue<'ctx>) {
+    // generates roughly
+    //
+    // fn $Test.wasm_test_wrapper() -> *T {
+    //     result = roc_main();
+    //     ptr = roc_malloc(size_of::<T>)
+    //     *ptr = result
+    //     ret ptr;
+    // }
+
+    let main_fn_name = "$Test.wasm_test_wrapper";
+
+    let it = top_level.arguments.iter().copied();
+    let bytes = roc_alias_analysis::func_name_bytes_help(
+        symbol,
+        it,
+        CapturesNiche::no_niche(),
+        &top_level.result,
+    );
+    let func_name = FuncName(&bytes);
+    let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
+
+    let mut it = func_solutions.specs();
+    let func_spec = it.next().unwrap();
+    debug_assert!(
+        it.next().is_none(),
+        "we expect only one specialization of this symbol"
+    );
+
+    // NOTE fake layout; it is only used for debug prints
+    let roc_main_fn = function_value_by_func_spec(
+        env,
+        *func_spec,
+        symbol,
+        &[],
+        CapturesNiche::no_niche(),
+        &Layout::UNIT,
+    );
+
+    let main_fn = {
+        let c_function_spec = {
+            match roc_main_fn.get_type().get_return_type() {
+                Some(return_type) => {
+                    let output_type = return_type.ptr_type(AddressSpace::Generic);
+                    FunctionSpec::cconv(env, CCReturn::Return, Some(output_type.into()), &[])
+                }
+                None => todo!(),
+            }
+        };
+
+        let c_function = add_func(
+            env.context,
+            env.module,
+            main_fn_name,
+            c_function_spec,
+            Linkage::External,
+        );
+
+        let subprogram = env.new_subprogram(main_fn_name);
+        c_function.set_subprogram(subprogram);
+
+        // STEP 2: build the exposed function's body
+        let builder = env.builder;
+        let context = env.context;
+
+        let entry = context.append_basic_block(c_function, "entry");
+        builder.position_at_end(entry);
+
+        // call the main roc function
+        let roc_main_fn_result = call_roc_function(env, roc_main_fn, &top_level.result, &[]);
+
+        // reserve space for the result on the heap
+        // pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
+        let (size, alignment) = top_level.result.stack_size_and_alignment(env.target_info);
+        let roc_alloc = env.module.get_function("roc_alloc").unwrap();
+
+        let call = builder.build_call(
+            roc_alloc,
+            &[
+                env.ptr_int().const_int(size as _, false).into(),
+                env.context
+                    .i32_type()
+                    .const_int(alignment as _, false)
+                    .into(),
+            ],
+            "result_ptr",
+        );
+
+        call.set_call_convention(C_CALL_CONV);
+        let void_ptr = call.try_as_basic_value().left().unwrap();
+
+        let ptr = builder.build_pointer_cast(
+            void_ptr.into_pointer_value(),
+            c_function
+                .get_type()
+                .get_return_type()
+                .unwrap()
+                .into_pointer_type(),
+            "cast_ptr",
+        );
+
+        builder.build_store(ptr, roc_main_fn_result);
+
+        builder.build_return(Some(&ptr));
+
+        c_function
+    };
+
+    (main_fn_name, main_fn)
+}
+
 fn int_with_precision<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     value: i128,
@@ -4158,6 +4274,23 @@ pub fn build_procedures<'a, 'ctx, 'env>(
     debug_output_file: Option<&Path>,
 ) {
     build_procedures_help(env, opt_level, procedures, entry_point, debug_output_file);
+}
+
+pub fn build_wasm_test_wrapper<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    opt_level: OptLevel,
+    procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
+    entry_point: EntryPoint<'a>,
+) -> (&'static str, FunctionValue<'ctx>) {
+    let mod_solutions = build_procedures_help(
+        env,
+        opt_level,
+        procedures,
+        entry_point,
+        Some(Path::new("/tmp/test.ll")),
+    );
+
+    promote_to_wasm_test_wrapper(env, mod_solutions, entry_point.symbol, entry_point.layout)
 }
 
 pub fn build_procedures_return_main<'a, 'ctx, 'env>(

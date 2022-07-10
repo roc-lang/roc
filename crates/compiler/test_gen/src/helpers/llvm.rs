@@ -16,7 +16,7 @@ use roc_region::all::LineInfo;
 use roc_reporting::report::RenderTarget;
 use target_lexicon::Triple;
 
-const TEST_WRAPPER_NAME: &str = "test_wrapper";
+const TEST_WRAPPER_NAME: &str = "$Test.wasm_test_wrapper";
 
 pub const OPT_LEVEL: OptLevel = if cfg!(debug_assertions) {
     OptLevel::Normal
@@ -223,12 +223,21 @@ fn create_llvm_module<'a>(
     // platform to provide them.
     add_default_roc_externs(&env);
 
-    let (main_fn_name, main_fn) = roc_gen_llvm::llvm::build::build_procedures_return_main(
-        &env,
-        config.opt_level,
-        procedures,
-        entry_point,
-    );
+    let (main_fn_name, main_fn) = match config.mode {
+        LlvmBackendMode::Binary => unreachable!(),
+        LlvmBackendMode::WasmGenTest => roc_gen_llvm::llvm::build::build_wasm_test_wrapper(
+            &env,
+            config.opt_level,
+            procedures,
+            entry_point,
+        ),
+        LlvmBackendMode::GenTest => roc_gen_llvm::llvm::build::build_procedures_return_main(
+            &env,
+            config.opt_level,
+            procedures,
+            entry_point,
+        ),
+    };
 
     env.dibuilder.finalize();
 
@@ -415,32 +424,6 @@ fn llvm_module_to_wasm_file(
 }
 
 #[allow(dead_code)]
-fn wasm_roc_panic(address: u32, tag_id: u32) {
-    match tag_id {
-        0 => {
-            let mut string = "";
-
-            //            MEMORY.with(|f| {
-            //                let memory = f.borrow().unwrap();
-            //
-            //                let memory_bytes: &[u8] = unsafe { memory.data_unchecked() };
-            //                let index = address as usize;
-            //                let slice = &memory_bytes[index..];
-            //                let c_ptr: *const u8 = slice.as_ptr();
-            //
-            //                use std::ffi::CStr;
-            //                use std::os::raw::c_char;
-            //                let slice = unsafe { CStr::from_ptr(c_ptr as *const c_char) };
-            //                string = slice.to_str().unwrap();
-            //            });
-
-            panic!("Roc failed with message: {:?}", string)
-        }
-        _ => todo!(),
-    }
-}
-
-#[allow(dead_code)]
 fn fake_wasm_main_function(_: u32, _: u32) -> u32 {
     panic!("wasm entered the main function; this should never happen!")
 }
@@ -450,6 +433,24 @@ fn get_memory(rt: &wasm3::Runtime) -> &[u8] {
         let memory_ptr: *const [u8] = rt.memory();
         let (_, memory_size) = std::mem::transmute::<_, (usize, usize)>(memory_ptr);
         std::slice::from_raw_parts(memory_ptr as _, memory_size)
+    }
+}
+
+fn link_module(module: &mut wasm3::Module, panic_msg: Rc<Mutex<Option<(i32, i32)>>>) {
+    module.link_wasi().unwrap();
+    let try_link_panic = module.link_closure(
+        "env",
+        "send_panic_msg_to_rust",
+        move |_call_context, args: (i32, i32)| {
+            let mut w = panic_msg.lock().unwrap();
+            *w = Some(args);
+            Ok(())
+        },
+    );
+    match try_link_panic {
+        Ok(()) => {}
+        Err(wasm3::error::Error::FunctionNotFound) => {}
+        Err(e) => panic!("{:?}", e),
     }
 }
 
@@ -480,7 +481,7 @@ where
     let parsed = Module::parse(&env, &wasm_bytes[..]).expect("Unable to parse module");
     let mut module = rt.load_module(parsed).expect("Unable to load module");
     let panic_msg: Rc<Mutex<Option<(i32, i32)>>> = Default::default();
-    // link_module(&mut module, panic_msg.clone());
+    link_module(&mut module, panic_msg.clone());
 
     let test_wrapper = module
         .find_function::<(), i32>(TEST_WRAPPER_NAME)
@@ -501,17 +502,6 @@ where
         Ok(address) => {
             let memory: &[u8] = get_memory(&rt);
 
-            //            if false {
-            //                println!("test_wrapper returned 0x{:x}", address);
-            //                println!("Stack:");
-            //                crate::helpers::wasm::debug_memory_hex(memory, address, std::mem::size_of::<T>());
-            //            }
-            //            if false {
-            //                println!("Heap:");
-            //                // Manually provide address and size based on printf in wasm_test_platform.c
-            //                crate::helpers::wasm::debug_memory_hex(memory, 0x11440, 24);
-            //            }
-
             let output = <T as FromWasm32Memory>::decode(memory, address as u32);
 
             Ok(output)
@@ -523,7 +513,7 @@ where
 macro_rules! assert_wasm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
         match $crate::helpers::llvm::assert_wasm_evals_to_help::<$ty>($src, $ignore_problems) {
-            Err(msg) => panic!("Wasm test failed: {:?}", msg),
+            Err(msg) => panic!("Wasm test failed: {}", msg),
             Ok(actual) => {
                 assert_eq!($transform(actual), $expected, "Wasm test failed")
             }
