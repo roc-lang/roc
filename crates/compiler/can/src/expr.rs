@@ -2396,20 +2396,24 @@ fn get_lookup_symbols(expr: &Expr, var_store: &mut VarStore) -> Vec<(Symbol, Var
 
 /// Here we transform
 ///
-/// >    expect
-/// >        a = 1
-/// >        b = 2
-/// >
-/// >        a == b
+/// ```ignore
+/// expect
+///     a = 1
+///     b = 2
+///
+///     a == b
+/// ```
 ///
 /// into
 ///
-/// >    a = 1
-/// >    b = 2
-/// >
-/// >    expect a == b
-/// >
-/// >    emptyrecord
+/// ```ignore
+/// a = 1
+/// b = 2
+///
+/// expect a == b
+///
+/// {}
+/// ```
 ///
 /// This is supposed to happen just before monomorphization:
 /// all type errors and such are generated from the user source,
