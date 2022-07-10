@@ -1,3 +1,7 @@
+use std::path::PathBuf;
+use std::rc::Rc;
+use std::sync::Mutex;
+
 use crate::helpers::from_wasm32_memory::FromWasm32Memory;
 use inkwell::module::Module;
 use libloading::Library;
@@ -11,6 +15,8 @@ use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
 use roc_reporting::report::RenderTarget;
 use target_lexicon::Triple;
+
+const TEST_WRAPPER_NAME: &str = "test_wrapper";
 
 pub const OPT_LEVEL: OptLevel = if cfg!(debug_assertions) {
     OptLevel::Normal
@@ -39,7 +45,7 @@ fn create_llvm_module<'a>(
     context: &'a inkwell::context::Context,
     target: &Triple,
 ) -> (&'static str, String, &'a Module<'a>) {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     let target_info = roc_target::TargetInfo::from(target);
 
@@ -333,18 +339,22 @@ fn wasm32_target_tripple() -> Triple {
     triple
 }
 
-#[allow(dead_code)]
-pub fn helper_wasm<'a>(
+fn compile_to_wasm_bytes<'a>(
     arena: &'a bumpalo::Bump,
     config: HelperConfig,
     src: &str,
     context: &'a inkwell::context::Context,
-) -> wasmer::Instance {
+) -> Vec<u8> {
     let target = wasm32_target_tripple();
 
     let (_main_fn_name, _delayed_errors, llvm_module) =
         create_llvm_module(arena, src, config, context, &target);
 
+    let wasm_file = llvm_module_to_wasm_file(llvm_module);
+    std::fs::read(wasm_file).unwrap()
+}
+
+fn llvm_module_to_wasm_file(llvm_module: &inkwell::module::Module) -> PathBuf {
     use inkwell::targets::{InitializationConfig, Target, TargetTriple};
 
     let dir = tempfile::tempdir().unwrap();
@@ -397,42 +407,7 @@ pub fn helper_wasm<'a>(
         .status()
         .unwrap();
 
-    // now, do wasmer stuff
-
-    use wasmer::{Function, Instance, Module, Store};
-
-    let store = Store::default();
-    let module = Module::from_file(&store, &test_wasm_path).unwrap();
-
-    // First, we create the `WasiEnv`
-    use wasmer_wasi::WasiState;
-    let mut wasi_env = WasiState::new("hello")
-        // .args(&["world"])
-        // .env("KEY", "Value")
-        .finalize()
-        .unwrap();
-
-    // Then, we get the import object related to our WASI
-    // and attach it to the Wasm instance.
-    let mut import_object = wasi_env
-        .import_object(&module)
-        .unwrap_or_else(|_| wasmer::imports!());
-
-    {
-        let mut exts = wasmer::Exports::new();
-
-        let main_function = Function::new_native(&store, fake_wasm_main_function);
-        let ext = wasmer::Extern::Function(main_function);
-        exts.insert("main", ext);
-
-        let main_function = Function::new_native(&store, wasm_roc_panic);
-        let ext = wasmer::Extern::Function(main_function);
-        exts.insert("roc_panic", ext);
-
-        import_object.register("env", exts);
-    }
-
-    Instance::new(&module, &import_object).unwrap()
+    test_wasm_path
 }
 
 #[allow(dead_code)]
@@ -441,19 +416,19 @@ fn wasm_roc_panic(address: u32, tag_id: u32) {
         0 => {
             let mut string = "";
 
-            MEMORY.with(|f| {
-                let memory = f.borrow().unwrap();
-
-                let memory_bytes: &[u8] = unsafe { memory.data_unchecked() };
-                let index = address as usize;
-                let slice = &memory_bytes[index..];
-                let c_ptr: *const u8 = slice.as_ptr();
-
-                use std::ffi::CStr;
-                use std::os::raw::c_char;
-                let slice = unsafe { CStr::from_ptr(c_ptr as *const c_char) };
-                string = slice.to_str().unwrap();
-            });
+            //            MEMORY.with(|f| {
+            //                let memory = f.borrow().unwrap();
+            //
+            //                let memory_bytes: &[u8] = unsafe { memory.data_unchecked() };
+            //                let index = address as usize;
+            //                let slice = &memory_bytes[index..];
+            //                let c_ptr: *const u8 = slice.as_ptr();
+            //
+            //                use std::ffi::CStr;
+            //                use std::os::raw::c_char;
+            //                let slice = unsafe { CStr::from_ptr(c_ptr as *const c_char) };
+            //                string = slice.to_str().unwrap();
+            //            });
 
             panic!("Roc failed with message: {:?}", string)
         }
@@ -461,15 +436,17 @@ fn wasm_roc_panic(address: u32, tag_id: u32) {
     }
 }
 
-use std::cell::RefCell;
-
-thread_local! {
-    pub static MEMORY: RefCell<Option<&'static wasmer::Memory>> = RefCell::new(None);
-}
-
 #[allow(dead_code)]
 fn fake_wasm_main_function(_: u32, _: u32) -> u32 {
     panic!("wasm entered the main function; this should never happen!")
+}
+
+fn get_memory(rt: &wasm3::Runtime) -> &[u8] {
+    unsafe {
+        let memory_ptr: *const [u8] = rt.memory();
+        let (_, memory_size) = std::mem::transmute::<_, (usize, usize)>(memory_ptr);
+        std::slice::from_raw_parts(memory_ptr as _, memory_size)
+    }
 }
 
 #[allow(dead_code)]
@@ -477,6 +454,8 @@ pub fn assert_wasm_evals_to_help<T>(src: &str, ignore_problems: bool) -> Result<
 where
     T: FromWasm32Memory,
 {
+    use wasm3::{Environment, Module};
+
     let arena = bumpalo::Bump::new();
     let context = inkwell::context::Context::create();
 
@@ -487,26 +466,49 @@ where
         opt_level: OPT_LEVEL,
     };
 
-    let instance = crate::helpers::llvm::helper_wasm(&arena, config, src, &context);
-    let memory = instance.exports.get_memory("memory").unwrap();
+    let wasm_bytes = compile_to_wasm_bytes(&arena, config, src, &context);
 
-    crate::helpers::llvm::MEMORY.with(|f| {
-        *f.borrow_mut() = Some(unsafe { std::mem::transmute(memory) });
-    });
+    let env = Environment::new().expect("Unable to create environment");
+    let rt = env
+        .create_runtime(1024 * 60)
+        .expect("Unable to create runtime");
 
-    let test_wrapper = instance.exports.get_function("test_wrapper").unwrap();
+    let parsed = Module::parse(&env, &wasm_bytes[..]).expect("Unable to parse module");
+    let mut module = rt.load_module(parsed).expect("Unable to load module");
+    let panic_msg: Rc<Mutex<Option<(i32, i32)>>> = Default::default();
+    // link_module(&mut module, panic_msg.clone());
 
-    match test_wrapper.call(&[]) {
-        Err(e) => Err(format!("call to `test_wrapper`: {:?}", e)),
-        Ok(result) => {
-            let address = result[0].unwrap_i32();
+    let test_wrapper = module
+        .find_function::<(), i32>(TEST_WRAPPER_NAME)
+        .expect("Unable to find test wrapper function");
 
-            let memory_bytes: &[u8] = unsafe { memory.data_unchecked() };
-            let output = <T as crate::helpers::llvm::FromWasm32Memory>::decode(
-                memory_bytes,
-                // skip the RocCallResult tag id
-                address as u32 + 8,
-            );
+    match test_wrapper.call() {
+        Err(e) => {
+            if let Some((msg_ptr, msg_len)) = *panic_msg.lock().unwrap() {
+                let memory: &[u8] = get_memory(&rt);
+                let msg_bytes = &memory[msg_ptr as usize..][..msg_len as usize];
+                let msg = std::str::from_utf8(msg_bytes).unwrap();
+
+                Err(format!("Roc failed with message: \"{}\"", msg))
+            } else {
+                Err(format!("{}", e))
+            }
+        }
+        Ok(address) => {
+            let memory: &[u8] = get_memory(&rt);
+
+            //            if false {
+            //                println!("test_wrapper returned 0x{:x}", address);
+            //                println!("Stack:");
+            //                crate::helpers::wasm::debug_memory_hex(memory, address, std::mem::size_of::<T>());
+            //            }
+            //            if false {
+            //                println!("Heap:");
+            //                // Manually provide address and size based on printf in wasm_test_platform.c
+            //                crate::helpers::wasm::debug_memory_hex(memory, 0x11440, 24);
+            //            }
+
+            let output = <T as FromWasm32Memory>::decode(memory, address as u32);
 
             Ok(output)
         }
@@ -519,7 +521,6 @@ macro_rules! assert_wasm_evals_to {
         match $crate::helpers::llvm::assert_wasm_evals_to_help::<$ty>($src, $ignore_problems) {
             Err(msg) => panic!("Wasm test failed: {:?}", msg),
             Ok(actual) => {
-                #[allow(clippy::bool_assert_comparison)]
                 assert_eq!($transform(actual), $expected, "Wasm test failed")
             }
         }
