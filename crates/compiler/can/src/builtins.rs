@@ -244,21 +244,6 @@ map_symbol_to_lowlevel_and_arity! {
 /// lookup (if the bounds check passed). That internal function is hardcoded in code gen,
 /// which works fine because it doesn't involve any open tag unions.
 
-/// Does a builtin depend on any other builtins?
-///
-/// NOTE: you are supposed to give all symbols that are relied on,
-/// even those that are relied on transitively!
-pub fn builtin_dependencies(symbol: Symbol) -> &'static [Symbol] {
-    match symbol {
-        Symbol::LIST_SORT_ASC => &[Symbol::LIST_SORT_WITH, Symbol::NUM_COMPARE],
-        Symbol::LIST_SORT_DESC => &[Symbol::LIST_SORT_WITH],
-        Symbol::LIST_PRODUCT => &[Symbol::LIST_WALK, Symbol::NUM_MUL],
-        Symbol::LIST_SUM => &[Symbol::LIST_WALK, Symbol::NUM_ADD],
-        Symbol::LIST_SET => &[Symbol::LIST_REPLACE],
-        _ => &[],
-    }
-}
-
 /// Implementation for a builtin
 pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def> {
     debug_assert!(symbol.is_builtin());
