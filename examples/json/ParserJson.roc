@@ -1,6 +1,7 @@
 interface ParserJson
   exposes [
   JsonValue,
+  jsonNum,
   jsonNumArray,
   jsonValueToStrDebug,
   ]

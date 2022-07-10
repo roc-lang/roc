@@ -35,9 +35,11 @@ fullTest = \parser, input ->
 myparser : Parser RawStr (List Str)
 myparser =
   # ParserCore.oneOf [ParserStr.string "a", ParserStr.string "b"]
-  ParserJson.jsonNumArray
+  # ParserJson.jsonNumArray
   # |> ParserCore.oneOrMore
   # |> ParserCore.map (\vals -> Str.joinWith vals "")
-  |> ParserCore.map ParserJson.jsonValueToStrDebug # (Num.toStr)
+  # |> ParserCore.map ParserJson.jsonValueToStrDebug # (Num.toStr)
+  ParserStr.digits
+  |> ParserCore.map Num.toStr
   |> ParserCore.sepBy1 (ParserStr.scalar ',')
   |> ParserCore.between (ParserStr.scalar '[') (ParserStr.scalar ']')
