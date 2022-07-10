@@ -164,6 +164,16 @@ impl<'a, 'ctx> Scope<'a, 'ctx> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum LlvmBackendMode {
+    /// Assumes primitives (roc_alloc, roc_panic, etc) are provided by the host
+    Binary,
+    /// Creates a test wrapper around the main roc function to catch and report panics.
+    /// Provides a testing implementation of primitives (roc_alloc, roc_panic, etc)
+    GenTest,
+    WasmGenTest,
+}
+
 pub struct Env<'a, 'ctx, 'env> {
     pub arena: &'a Bump,
     pub context: &'ctx Context,
@@ -173,7 +183,7 @@ pub struct Env<'a, 'ctx, 'env> {
     pub module: &'ctx Module<'ctx>,
     pub interns: Interns,
     pub target_info: TargetInfo,
-    pub is_gen_test: bool,
+    pub mode: LlvmBackendMode,
     pub exposed_to_host: MutSet<Symbol>,
 }
 
@@ -3319,7 +3329,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
     return_layout: Layout<'a>,
     c_function_name: &str,
 ) -> FunctionValue<'ctx> {
-    // NOTE we ingore env.is_gen_test here
+    // NOTE we ingore env.mode here
 
     let mut cc_argument_types = Vec::with_capacity_in(arguments.len(), env.arena);
     for layout in arguments {
@@ -3411,8 +3421,8 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
 
     let arguments_for_call = &arguments_for_call.into_bump_slice();
 
-    let call_result = {
-        if env.is_gen_test {
+    let call_result = match env.mode {
+        LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest => {
             debug_assert_eq!(args.len(), roc_function.get_params().len());
 
             let roc_wrapper_function = make_exception_catcher(env, roc_function, return_layout);
@@ -3425,7 +3435,8 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
 
             let wrapped_layout = roc_result_layout(env.arena, return_layout, env.target_info);
             call_roc_function(env, roc_function, &wrapped_layout, arguments_for_call)
-        } else {
+        }
+        LlvmBackendMode::Binary => {
             call_roc_function(env, roc_function, &return_layout, arguments_for_call)
         }
     };
@@ -3695,15 +3706,19 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
     return_layout: Layout<'a>,
     c_function_name: &str,
 ) -> FunctionValue<'ctx> {
-    if env.is_gen_test {
-        return expose_function_to_host_help_c_abi_gen_test(
-            env,
-            ident_string,
-            roc_function,
-            arguments,
-            return_layout,
-            c_function_name,
-        );
+    match env.mode {
+        LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest => {
+            return expose_function_to_host_help_c_abi_gen_test(
+                env,
+                ident_string,
+                roc_function,
+                arguments,
+                return_layout,
+                c_function_name,
+            )
+        }
+
+        LlvmBackendMode::Binary => {}
     }
 
     // a generic version that writes the result into a passed *u8 pointer
@@ -3749,11 +3764,12 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
 
     debug_info_init!(env, size_function);
 
-    let return_type = if env.is_gen_test {
-        roc_result_type(env, roc_function.get_type().get_return_type().unwrap()).into()
-    } else {
-        // roc_function.get_type().get_return_type().unwrap()
-        basic_type_from_layout(env, &return_layout)
+    let return_type = match env.mode {
+        LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest => {
+            roc_result_type(env, roc_function.get_type().get_return_type().unwrap()).into()
+        }
+
+        LlvmBackendMode::Binary => basic_type_from_layout(env, &return_layout),
     };
 
     let size: BasicValueEnum = return_type.size_of().unwrap().into();
@@ -4494,39 +4510,44 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
         }
     }
 
-    if env.is_gen_test {
-        let call_result = set_jump_and_catch_long_jump(
-            env,
-            function_value,
-            evaluator,
-            &evaluator_arguments,
-            *return_layout,
-        );
+    match env.mode {
+        LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest => {
+            let call_result = set_jump_and_catch_long_jump(
+                env,
+                function_value,
+                evaluator,
+                &evaluator_arguments,
+                *return_layout,
+            );
 
-        builder.build_store(output, call_result);
-    } else {
-        let call_result = call_roc_function(env, evaluator, return_layout, &evaluator_arguments);
-
-        if return_layout.is_passed_by_reference(env.target_info) {
-            let align_bytes = return_layout.alignment_bytes(env.target_info);
-
-            if align_bytes > 0 {
-                let size = env
-                    .ptr_int()
-                    .const_int(return_layout.stack_size(env.target_info) as u64, false);
-
-                env.builder
-                    .build_memcpy(
-                        output,
-                        align_bytes,
-                        call_result.into_pointer_value(),
-                        align_bytes,
-                        size,
-                    )
-                    .unwrap();
-            }
-        } else {
             builder.build_store(output, call_result);
+        }
+
+        LlvmBackendMode::Binary => {
+            let call_result =
+                call_roc_function(env, evaluator, return_layout, &evaluator_arguments);
+
+            if return_layout.is_passed_by_reference(env.target_info) {
+                let align_bytes = return_layout.alignment_bytes(env.target_info);
+
+                if align_bytes > 0 {
+                    let size = env
+                        .ptr_int()
+                        .const_int(return_layout.stack_size(env.target_info) as u64, false);
+
+                    env.builder
+                        .build_memcpy(
+                            output,
+                            align_bytes,
+                            call_result.into_pointer_value(),
+                            align_bytes,
+                            size,
+                        )
+                        .unwrap();
+                }
+            } else {
+                builder.build_store(output, call_result);
+            }
         }
     };
 

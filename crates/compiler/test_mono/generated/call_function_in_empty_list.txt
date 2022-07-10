@@ -5,7 +5,6 @@ procedure List.5 (#Attr.2, #Attr.3):
 
 procedure Test.2 (Test.3):
     let Test.7 : {} = Struct {};
-    let Test.8 : U8 = GetTagId Test.3;
     Error a Lambda Set is empty. Most likely there is a type error in your program.
 
 procedure Test.0 ():

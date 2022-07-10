@@ -6,7 +6,7 @@ pub use helpers::platform_functions::*;
 
 use bumpalo::Bump;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use roc_gen_llvm::{run_roc::RocCallResult, run_roc_dylib};
+use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult, run_roc_dylib};
 use roc_mono::ir::OptLevel;
 use roc_std::RocList;
 
@@ -50,7 +50,7 @@ fn roc_function<'a, 'b>(
     source: &str,
 ) -> libloading::Symbol<'a, Main<&'b Input, Output>> {
     let config = helpers::llvm::HelperConfig {
-        is_gen_test: true,
+        mode: LlvmBackendMode::GenTest,
         ignore_problems: false,
         add_debug_info: true,
         opt_level: OptLevel::Optimize,
