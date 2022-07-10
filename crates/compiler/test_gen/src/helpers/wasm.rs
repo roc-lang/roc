@@ -11,6 +11,7 @@ use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Mutex;
+use wasm3::{Environment, Module, Runtime};
 
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
 const INIT_REFCOUNT_NAME: &str = "init_refcount_test";
@@ -177,37 +178,15 @@ where
 
     let wasm_bytes = crate::helpers::wasm::compile_to_wasm_bytes(&arena, src, phantom);
 
-    use wasm3::Environment;
-    use wasm3::Module;
-
     let env = Environment::new().expect("Unable to create environment");
     let rt = env
         .create_runtime(1024 * 60)
         .expect("Unable to create runtime");
 
-    let parsed_module = Module::parse(&env, &wasm_bytes[..]).expect("Unable to parse module");
-    let mut module = rt
-        .load_module(parsed_module)
-        .expect("Unable to load module");
-
+    let parsed = Module::parse(&env, &wasm_bytes[..]).expect("Unable to parse module");
+    let mut module = rt.load_module(parsed).expect("Unable to load module");
     let panic_msg: Rc<Mutex<Option<(i32, i32)>>> = Default::default();
-    let panic_msg_for_closure = panic_msg.clone();
-
-    module.link_wasi().unwrap();
-    let try_link_panic = module.link_closure(
-        "env",
-        "send_panic_msg_to_rust",
-        move |_call_context, args: (i32, i32)| {
-            let mut w = panic_msg_for_closure.lock().unwrap();
-            *w = Some(args);
-            Ok(())
-        },
-    );
-    match try_link_panic {
-        Ok(()) => {}
-        Err(wasm3::error::Error::FunctionNotFound) => {}
-        Err(e) => panic!("{:?}", e),
-    }
+    link_module(&mut module, panic_msg.clone());
 
     let test_wrapper = module
         .find_function::<(), i32>(TEST_WRAPPER_NAME)
@@ -216,12 +195,7 @@ where
     match test_wrapper.call() {
         Err(e) => {
             if let Some((msg_ptr, msg_len)) = *panic_msg.lock().unwrap() {
-                let memory: &[u8] = unsafe {
-                    let memory_ptr: *const [u8] = rt.memory();
-                    let (_, memory_size) = std::mem::transmute::<_, (usize, usize)>(memory_ptr);
-                    std::slice::from_raw_parts(memory_ptr as _, memory_size)
-                };
-
+                let memory: &[u8] = get_memory(&rt);
                 let msg_bytes = &memory[msg_ptr as usize..][..msg_len as usize];
                 let msg = std::str::from_utf8(msg_bytes).unwrap();
 
@@ -231,9 +205,7 @@ where
             }
         }
         Ok(address) => {
-            let (_, memory_size) = unsafe { std::mem::transmute::<_, (usize, usize)>(rt.memory()) };
-            let memory: &[u8] =
-                unsafe { std::slice::from_raw_parts(rt.memory() as _, memory_size) };
+            let memory: &[u8] = get_memory(&rt);
 
             if false {
                 println!("test_wrapper returned 0x{:x}", address);
@@ -266,46 +238,21 @@ where
 
     let wasm_bytes = crate::helpers::wasm::compile_to_wasm_bytes(&arena, src, phantom);
 
-    use wasm3::Environment;
-    use wasm3::Module;
-
     let env = Environment::new().expect("Unable to create environment");
     let rt = env
         .create_runtime(1024 * 60)
         .expect("Unable to create runtime");
-
-    let module = Module::parse(&env, &wasm_bytes[..]).expect("Unable to parse module");
-
-    let mut module = rt.load_module(module).expect("Unable to load module");
+    let parsed = Module::parse(&env, wasm_bytes).expect("Unable to parse module");
+    let mut module = rt.load_module(parsed).expect("Unable to load module");
 
     let panic_msg: Rc<Mutex<Option<(i32, i32)>>> = Default::default();
-    let panic_msg_for_closure = panic_msg.clone();
-
-    module.link_wasi().unwrap();
-    let try_link_panic = module.link_closure(
-        "env",
-        "send_panic_msg_to_rust",
-        move |_call_context, args: (i32, i32)| {
-            let mut w = panic_msg_for_closure.lock().unwrap();
-            *w = Some(args);
-            Ok(())
-        },
-    );
-    match try_link_panic {
-        Ok(()) => {}
-        Err(wasm3::error::Error::FunctionNotFound) => {}
-        Err(e) => panic!("{:?}", e),
-    }
+    link_module(&mut module, panic_msg.clone());
 
     let expected_len = num_refcounts as i32;
     let init_refcount_test = module
         .find_function::<i32, i32>(INIT_REFCOUNT_NAME)
         .expect("Unable to find refcount test init function");
-    let init_result = init_refcount_test.call(expected_len);
-    let mut refcount_vector_offset = match init_result {
-        Err(e) => return Err(format!("{:?}", e)),
-        Ok(addr) => addr as usize,
-    };
+    let mut refcount_vector_offset = init_refcount_test.call(expected_len).unwrap() as usize;
 
     // Run the test
     let test_wrapper = module
@@ -313,16 +260,10 @@ where
         .expect("Unable to find test wrapper function");
     test_wrapper.call().map_err(|e| format!("{:?}", e))?;
 
-    let memory: &[u8] = unsafe {
-        let memory_ptr: *const [u8] = rt.memory();
-        let (_, memory_size) = std::mem::transmute::<_, (usize, usize)>(memory_ptr);
-        std::slice::from_raw_parts(memory_ptr as _, memory_size)
-    };
+    let memory: &[u8] = get_memory(&rt);
 
-    let mut refcount_vector_len_bytes = [0u8; 4];
-    refcount_vector_len_bytes.copy_from_slice(&memory[refcount_vector_offset..][..4]);
-    let actual_len = i32::from_le_bytes(refcount_vector_len_bytes);
-
+    // Read the length of the vector in the C host
+    let actual_len = read_i32(memory, refcount_vector_offset);
     if actual_len != expected_len {
         return Err(format!(
             "Expected {} refcounts but got {}",
@@ -330,23 +271,17 @@ where
         ));
     }
 
-    // Read the actual refcount values
+    // Read the refcounts
     let mut refcounts = Vec::with_capacity(num_refcounts);
     for _ in 0..num_refcounts {
+        // Get the next RC pointer from the host's vector
         refcount_vector_offset += 4;
-
-        // The vector contains refcount pointers
-        let mut rc_ptr_bytes = [0u8; 4];
-        rc_ptr_bytes.copy_from_slice(&memory[refcount_vector_offset..][..4]);
-        let rc_ptr = u32::from_le_bytes(rc_ptr_bytes) as usize;
-
+        let rc_ptr = read_i32(memory, refcount_vector_offset) as usize;
         let rc = if rc_ptr == 0 {
             RefCount::Deallocated
         } else {
-            let mut rc_bytes = [0u8; 4];
-            rc_bytes.copy_from_slice(&memory[rc_ptr..][..4]);
-            let rc_encoded = i32::from_le_bytes(rc_bytes);
-
+            // Dereference the RC pointer and decode its value from the negative number format
+            let rc_encoded = read_i32(memory, rc_ptr);
             if rc_encoded == 0 {
                 RefCount::Constant
             } else {
@@ -357,6 +292,38 @@ where
         refcounts.push(rc);
     }
     Ok(refcounts)
+}
+
+fn get_memory(rt: &Runtime) -> &[u8] {
+    unsafe {
+        let memory_ptr: *const [u8] = rt.memory();
+        let (_, memory_size) = std::mem::transmute::<_, (usize, usize)>(memory_ptr);
+        std::slice::from_raw_parts(memory_ptr as _, memory_size)
+    }
+}
+
+fn read_i32(memory: &[u8], ptr: usize) -> i32 {
+    let mut bytes = [0u8; 4];
+    bytes.copy_from_slice(&memory[ptr..][..4]);
+    i32::from_le_bytes(bytes)
+}
+
+fn link_module(module: &mut Module, panic_msg: Rc<Mutex<Option<(i32, i32)>>>) {
+    module.link_wasi().unwrap();
+    let try_link_panic = module.link_closure(
+        "env",
+        "send_panic_msg_to_rust",
+        move |_call_context, args: (i32, i32)| {
+            let mut w = panic_msg.lock().unwrap();
+            *w = Some(args);
+            Ok(())
+        },
+    );
+    match try_link_panic {
+        Ok(()) => {}
+        Err(wasm3::error::Error::FunctionNotFound) => {}
+        Err(e) => panic!("{:?}", e),
+    }
 }
 
 /// Print out hex bytes of the test result, and a few words on either side
