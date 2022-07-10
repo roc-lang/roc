@@ -7,7 +7,7 @@ use roc_module::symbol::{ModuleId, Symbol};
 use roc_reporting::report::RenderTarget;
 use roc_target::TargetInfo;
 use roc_types::subs::{Subs, Variable};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub use roc_load_internal::docs;
 pub use roc_load_internal::file::{
@@ -18,7 +18,6 @@ pub use roc_load_internal::file::{
 fn load<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
-    src_dir: &Path,
     exposed_types: ExposedByModule,
     goal_phase: Phase,
     target_info: TargetInfo,
@@ -30,7 +29,6 @@ fn load<'a>(
     roc_load_internal::file::load(
         arena,
         load_start,
-        src_dir,
         exposed_types,
         goal_phase,
         target_info,
@@ -44,7 +42,6 @@ fn load<'a>(
 pub fn load_single_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
-    src_dir: &Path,
     exposed_types: ExposedByModule,
     goal_phase: Phase,
     target_info: TargetInfo,
@@ -55,7 +52,6 @@ pub fn load_single_threaded<'a>(
     roc_load_internal::file::load_single_threaded(
         arena,
         load_start,
-        src_dir,
         exposed_types,
         goal_phase,
         target_info,
@@ -69,7 +65,7 @@ pub fn load_and_monomorphize_from_str<'a>(
     arena: &'a Bump,
     filename: PathBuf,
     src: &'a str,
-    src_dir: &Path,
+    src_dir: PathBuf,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
     render: RenderTarget,
@@ -77,12 +73,11 @@ pub fn load_and_monomorphize_from_str<'a>(
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_str(arena, filename, src)?;
+    let load_start = LoadStart::from_str(arena, filename, src, src_dir)?;
 
     match load(
         arena,
         load_start,
-        src_dir,
         exposed_types,
         Phase::MakeSpecializations,
         target_info,
@@ -94,23 +89,22 @@ pub fn load_and_monomorphize_from_str<'a>(
     }
 }
 
-pub fn load_and_monomorphize<'a>(
-    arena: &'a Bump,
+pub fn load_and_monomorphize(
+    arena: &Bump,
     filename: PathBuf,
-    src_dir: &Path,
+    src_dir: PathBuf,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
     render: RenderTarget,
     threading: Threading,
-) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
+) -> Result<MonomorphizedModule<'_>, LoadingProblem<'_>> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, filename, render)?;
+    let load_start = LoadStart::from_path(arena, src_dir, filename, render)?;
 
     match load(
         arena,
         load_start,
-        src_dir,
         exposed_types,
         Phase::MakeSpecializations,
         target_info,
@@ -122,23 +116,22 @@ pub fn load_and_monomorphize<'a>(
     }
 }
 
-pub fn load_and_typecheck<'a>(
-    arena: &'a Bump,
+pub fn load_and_typecheck(
+    arena: &Bump,
     filename: PathBuf,
-    src_dir: &Path,
+    src_dir: PathBuf,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
     render: RenderTarget,
     threading: Threading,
-) -> Result<LoadedModule, LoadingProblem<'a>> {
+) -> Result<LoadedModule, LoadingProblem<'_>> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, filename, render)?;
+    let load_start = LoadStart::from_path(arena, src_dir, filename, render)?;
 
     match load(
         arena,
         load_start,
-        src_dir,
         exposed_types,
         Phase::SolveTypes,
         target_info,
@@ -154,14 +147,14 @@ pub fn load_and_typecheck_str<'a>(
     arena: &'a Bump,
     filename: PathBuf,
     source: &'a str,
-    src_dir: &Path,
+    src_dir: PathBuf,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
     render: RenderTarget,
 ) -> Result<LoadedModule, LoadingProblem<'a>> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_str(arena, filename, source)?;
+    let load_start = LoadStart::from_str(arena, filename, source, src_dir)?;
 
     // NOTE: this function is meant for tests, and so we use single-threaded
     // solving so we don't use too many threads per-test. That gives higher
@@ -169,7 +162,6 @@ pub fn load_and_typecheck_str<'a>(
     match load_single_threaded(
         arena,
         load_start,
-        src_dir,
         exposed_types,
         Phase::SolveTypes,
         target_info,

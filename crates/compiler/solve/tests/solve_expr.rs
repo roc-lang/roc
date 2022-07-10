@@ -98,7 +98,7 @@ mod solve_expr {
                 arena,
                 file_path,
                 module_src,
-                dir.path(),
+                dir.path().to_path_buf(),
                 exposed_types,
                 roc_target::TargetInfo::default_x86_64(),
                 roc_reporting::report::RenderTarget::Generic,
@@ -6575,7 +6575,7 @@ mod solve_expr {
                 A := {}
                 id1 = \@A {} -> @A {}
                 #^^^{-1}
-                
+
                 id2 = \@A {} -> id1 (@A {})
                 #^^^{-1}        ^^^
 
@@ -6922,7 +6922,7 @@ mod solve_expr {
                      Ok u -> [Pair u (List.drop inp 1)]
                      _ -> []
 
-                main = any 
+                main = any
                 "#
             ),
             "Parser U8",
@@ -7322,6 +7322,23 @@ mod solve_expr {
                 "#
             ),
             "OList",
+        );
+    }
+
+    #[test]
+    fn rosetree_with_result_is_legal_recursive_type() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Rose a : [Rose (Result (List (Rose a)) I64)]
+
+                x : Rose I64
+                x = Rose (Ok [])
+
+                x
+                "#
+            ),
+            "Rose I64",
         );
     }
 }

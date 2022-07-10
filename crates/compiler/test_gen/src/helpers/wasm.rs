@@ -69,7 +69,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
     _test_wrapper_type_info: PhantomData<T>,
 ) -> Vec<u8> {
     let filename = PathBuf::from("Test.roc");
-    let src_dir = Path::new("fake/test/path");
+    let src_dir = PathBuf::from("fake/test/path");
 
     let module_src;
     let temp;

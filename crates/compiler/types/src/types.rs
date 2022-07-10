@@ -1482,6 +1482,8 @@ impl Type {
             Type::Apply(Symbol::LIST_LIST | Symbol::SET_SET, _, _) => false,
             Type::Apply(..) => internal_error!("cannot chase an Apply!"),
             Type::Alias { .. } => internal_error!("should be dealiased"),
+            // Must be conservative here because we don't know what the alias expands to yet
+            Type::DelayedAlias(..) => false,
             // Non-composite types are trivially narrow
             _ => true,
         }

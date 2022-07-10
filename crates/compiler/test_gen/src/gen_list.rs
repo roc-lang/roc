@@ -1622,7 +1622,6 @@ fn first_int_list() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore]
 fn first_wildcard_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -1671,7 +1670,6 @@ fn last_int_list() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore]
 fn last_wildcard_empty_list() {
     assert_evals_to!(
         indoc!(
@@ -1720,7 +1718,6 @@ fn get_empty_list() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore]
 fn get_wildcard_empty_list() {
     assert_evals_to!(
         indoc!(

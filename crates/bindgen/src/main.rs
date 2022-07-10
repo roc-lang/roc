@@ -56,7 +56,7 @@ pub fn main() {
         }
     };
 
-    match load_types(input_path.clone(), &cwd, Threading::AllAvailable) {
+    match load_types(input_path.clone(), cwd, Threading::AllAvailable) {
         Ok(types_and_targets) => {
             let mut file = File::create(output_path.clone()).unwrap_or_else(|err| {
                 eprintln!(

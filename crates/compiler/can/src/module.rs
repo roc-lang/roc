@@ -415,16 +415,6 @@ pub fn canonicalize_module_defs<'a>(
     referenced_values.extend(env.qualified_value_lookups.iter().copied());
     referenced_types.extend(env.qualified_type_lookups.iter().copied());
 
-    // add any builtins used by other builtins
-    let transitive_builtins: Vec<Symbol> = referenced_values
-        .iter()
-        .filter(|s| s.is_builtin())
-        .flat_map(|s| crate::builtins::builtin_dependencies(*s))
-        .copied()
-        .collect();
-
-    referenced_values.extend(transitive_builtins);
-
     // NOTE previously we inserted builtin defs into the list of defs here
     // this is now done later, in file.rs.
 

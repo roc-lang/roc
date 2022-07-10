@@ -10,7 +10,7 @@ use crate::helpers::wasm::{assert_evals_to, expect_runtime_error_panic};
 // use crate::assert_wasm_evals_to as assert_evals_to;
 use indoc::indoc;
 
-#[cfg(test)]
+#[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
 use roc_std::{RocList, RocStr};
 
 #[test]
