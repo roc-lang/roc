@@ -4,12 +4,19 @@ use libloading::Library;
 use roc_build::link::llvm_module_to_dylib;
 use roc_build::program::FunctionIterator;
 use roc_collections::all::MutSet;
+use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_load::Threading;
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
 use roc_reporting::report::RenderTarget;
 use target_lexicon::Triple;
+
+pub const OPT_LEVEL: OptLevel = if cfg!(debug_assertions) {
+    OptLevel::Normal
+} else {
+    OptLevel::Optimize
+};
 
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app \"test\" provides [main] to \"./platform\"\n\nmain =\n");
@@ -28,11 +35,9 @@ fn promote_expr_to_module(src: &str) -> String {
 fn create_llvm_module<'a>(
     arena: &'a bumpalo::Bump,
     src: &str,
-    is_gen_test: bool,
-    ignore_problems: bool,
+    config: HelperConfig,
     context: &'a inkwell::context::Context,
     target: &Triple,
-    opt_level: OptLevel,
 ) -> (&'static str, String, &'a Module<'a>) {
     use std::path::{Path, PathBuf};
 
@@ -149,7 +154,7 @@ fn create_llvm_module<'a>(
         println!("{}", lines.join("\n"));
 
         // only crash at this point if there were no delayed_errors
-        if delayed_errors.is_empty() && !ignore_problems {
+        if delayed_errors.is_empty() && !config.ignore_problems {
             assert_eq!(0, 1, "Mistakes were made");
         }
     }
@@ -159,7 +164,7 @@ fn create_llvm_module<'a>(
 
     let module = arena.alloc(module);
     let (module_pass, function_pass) =
-        roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
+        roc_gen_llvm::llvm::build::construct_optimization_passes(module, config.opt_level);
 
     let (dibuilder, compile_unit) = roc_gen_llvm::llvm::build::Env::new_debug_info(module);
 
@@ -200,7 +205,7 @@ fn create_llvm_module<'a>(
         interns,
         module,
         target_info,
-        is_gen_test,
+        mode: config.mode,
         // important! we don't want any procedures to get the C calling convention
         exposed_to_host: MutSet::default(),
     };
@@ -214,7 +219,7 @@ fn create_llvm_module<'a>(
 
     let (main_fn_name, main_fn) = roc_gen_llvm::llvm::build::build_procedures_return_main(
         &env,
-        opt_level,
+        config.opt_level,
         procedures,
         entry_point,
     );
@@ -248,7 +253,7 @@ fn create_llvm_module<'a>(
 
 #[derive(Debug, Clone, Copy)]
 pub struct HelperConfig {
-    pub is_gen_test: bool,
+    pub mode: LlvmBackendMode,
     pub ignore_problems: bool,
     pub add_debug_info: bool,
     pub opt_level: OptLevel,
@@ -264,15 +269,8 @@ pub fn helper<'a>(
 ) -> (&'static str, String, Library) {
     let target = target_lexicon::Triple::host();
 
-    let (main_fn_name, delayed_errors, module) = create_llvm_module(
-        arena,
-        src,
-        config.is_gen_test,
-        config.ignore_problems,
-        context,
-        &target,
-        config.opt_level,
-    );
+    let (main_fn_name, delayed_errors, module) =
+        create_llvm_module(arena, src, config, context, &target);
 
     let res_lib = if config.add_debug_info {
         let module = annotate_with_debug_info(module, context);
@@ -338,29 +336,14 @@ fn wasm32_target_tripple() -> Triple {
 #[allow(dead_code)]
 pub fn helper_wasm<'a>(
     arena: &'a bumpalo::Bump,
+    config: HelperConfig,
     src: &str,
-    _is_gen_test: bool,
-    ignore_problems: bool,
     context: &'a inkwell::context::Context,
 ) -> wasmer::Instance {
     let target = wasm32_target_tripple();
 
-    let opt_level = if cfg!(debug_assertions) {
-        OptLevel::Normal
-    } else {
-        OptLevel::Optimize
-    };
-
-    let is_gen_test = false;
-    let (_main_fn_name, _delayed_errors, llvm_module) = create_llvm_module(
-        arena,
-        src,
-        is_gen_test,
-        ignore_problems,
-        context,
-        &target,
-        opt_level,
-    );
+    let (_main_fn_name, _delayed_errors, llvm_module) =
+        create_llvm_module(arena, src, config, context, &target);
 
     use inkwell::targets::{InitializationConfig, Target, TargetTriple};
 
@@ -497,10 +480,14 @@ where
     let arena = bumpalo::Bump::new();
     let context = inkwell::context::Context::create();
 
-    let is_gen_test = true;
-    let instance =
-        crate::helpers::llvm::helper_wasm(&arena, src, is_gen_test, ignore_problems, &context);
+    let config = HelperConfig {
+        mode: LlvmBackendMode::WasmGenTest,
+        add_debug_info: false,
+        ignore_problems,
+        opt_level: OPT_LEVEL,
+    };
 
+    let instance = crate::helpers::llvm::helper_wasm(&arena, config, src, &context);
     let memory = instance.exports.get_memory("memory").unwrap();
 
     crate::helpers::llvm::MEMORY.with(|f| {
@@ -557,23 +544,17 @@ macro_rules! assert_llvm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
         use bumpalo::Bump;
         use inkwell::context::Context;
+        use roc_gen_llvm::llvm::build::LlvmBackendMode;
         use roc_gen_llvm::run_jit_function;
-        use roc_mono::ir::OptLevel;
 
         let arena = Bump::new();
         let context = Context::create();
 
-        let opt_level = if cfg!(debug_assertions) {
-            OptLevel::Normal
-        } else {
-            OptLevel::Optimize
-        };
-
         let config = $crate::helpers::llvm::HelperConfig {
-            is_gen_test: true,
+            mode: LlvmBackendMode::GenTest,
             add_debug_info: false,
             ignore_problems: $ignore_problems,
-            opt_level,
+            opt_level: $crate::helpers::llvm::OPT_LEVEL,
         };
 
         let (main_fn_name, errors, lib) =
@@ -633,43 +614,6 @@ macro_rules! assert_evals_to {
     }};
 }
 
-#[allow(unused_macros)]
-macro_rules! assert_expect_failed {
-    ($src:expr, $expected:expr, $ty:ty) => {
-        use bumpalo::Bump;
-        use inkwell::context::Context;
-        use roc_gen_llvm::run_jit_function;
-
-        let arena = Bump::new();
-        let context = Context::create();
-
-        let is_gen_test = true;
-        let (main_fn_name, errors, lib) =
-            $crate::helpers::llvm::helper(&arena, $src, is_gen_test, false, &context);
-
-        let transform = |success| {
-            let expected = $expected;
-            assert_eq!(&success, &expected, "LLVM test failed");
-        };
-
-        run_jit_function!(lib, main_fn_name, $ty, transform, errors)
-    };
-
-    ($src:expr, $expected:expr, $ty:ty) => {
-        $crate::helpers::llvm::assert_llvm_evals_to!(
-            $src,
-            $expected,
-            $ty,
-            $crate::helpers::llvm::identity,
-            false
-        );
-    };
-
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform, false);
-    };
-}
-
 macro_rules! expect_runtime_error_panic {
     ($src:expr) => {{
         #[cfg(feature = "wasm-cli-run")]
@@ -719,8 +663,6 @@ macro_rules! assert_non_opt_evals_to {
 
 #[allow(unused_imports)]
 pub(crate) use assert_evals_to;
-#[allow(unused_imports)]
-pub(crate) use assert_expect_failed;
 #[allow(unused_imports)]
 pub(crate) use assert_llvm_evals_to;
 #[allow(unused_imports)]
