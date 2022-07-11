@@ -19,7 +19,7 @@ use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 use roc_target::TargetInfo;
 
-use super::bitcode::{call_list_bitcode_fn_n, BitcodeReturns};
+use super::bitcode::{call_list_bitcode_fn, BitcodeReturns};
 use super::build::store_roc_value;
 
 #[repr(transparent)]
@@ -443,7 +443,7 @@ pub fn dict_keys<'a, 'ctx, 'env>(
 
     let inc_key_fn = build_inc_wrapper(env, layout_ids, key_layout);
 
-    call_list_bitcode_fn_n(
+    call_list_bitcode_fn(
         env,
         &[],
         &[
@@ -685,7 +685,7 @@ pub fn dict_values<'a, 'ctx, 'env>(
 
     let inc_value_fn = build_inc_wrapper(env, layout_ids, value_layout);
 
-    call_list_bitcode_fn_n(
+    call_list_bitcode_fn(
         env,
         &[],
         &[
@@ -725,7 +725,7 @@ pub fn set_from_list<'a, 'ctx, 'env>(
 
     let dec_key_fn = build_dec_wrapper(env, layout_ids, key_layout);
 
-    call_list_bitcode_fn_n(
+    call_list_bitcode_fn(
         env,
         &[list.into_struct_value()],
         &[

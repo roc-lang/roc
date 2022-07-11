@@ -8,6 +8,7 @@ use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
 use roc_target::PtrWidth;
 
+use super::bitcode::BitcodeReturns;
 use super::build::{create_entry_block_alloca, load_symbol};
 
 pub static CHAR_LAYOUT: Layout = Layout::u8();
@@ -64,7 +65,13 @@ pub fn str_from_int<'a, 'ctx, 'env>(
     value: IntValue<'ctx>,
     int_width: IntWidth,
 ) -> BasicValueEnum<'ctx> {
-    call_str_bitcode_fn(env, &[value.into()], &bitcode::STR_FROM_INT[int_width])
+    call_str_bitcode_fn(
+        env,
+        &[],
+        &[value.into()],
+        BitcodeReturns::Str,
+        &bitcode::STR_FROM_INT[int_width],
+    )
 }
 
 pub fn decode_from_utf8_result<'a, 'ctx, 'env>(
@@ -101,17 +108,6 @@ pub fn decode_from_utf8_result<'a, 'ctx, 'env>(
                 .into_struct_value()
         }
     }
-}
-
-/// Str.fromFloat : Int -> Str
-pub fn str_from_float<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
-    int_symbol: Symbol,
-) -> BasicValueEnum<'ctx> {
-    let float = load_symbol(scope, &int_symbol);
-
-    call_str_bitcode_fn(env, &[float], bitcode::STR_FROM_FLOAT)
 }
 
 /// Str.equal : Str, Str -> Bool

@@ -23,10 +23,106 @@ use super::build::create_entry_block_alloca;
 
 use std::convert::TryInto;
 
+enum BitcodeReturnValue<'ctx> {
+    List(PointerValue<'ctx>),
+    Str(PointerValue<'ctx>),
+    Basic,
+}
+
+impl<'ctx> BitcodeReturnValue<'ctx> {
+    fn call_and_load_64bit<'a, 'env>(
+        &self,
+        env: &Env<'a, 'ctx, 'env>,
+        arguments: &[BasicValueEnum<'ctx>],
+        fn_name: &str,
+    ) -> BasicValueEnum<'ctx> {
+        match self {
+            BitcodeReturnValue::List(result) => {
+                call_void_bitcode_fn(env, arguments, fn_name);
+                env.builder.build_load(*result, "load_list")
+            }
+            BitcodeReturnValue::Str(result) => {
+                call_void_bitcode_fn(env, arguments, fn_name);
+
+                // we keep a string in the alloca
+                (*result).into()
+            }
+            BitcodeReturnValue::Basic => call_bitcode_fn(env, arguments, fn_name),
+        }
+    }
+}
+
 pub(crate) enum BitcodeReturns {
     List,
     Str,
     Basic,
+}
+
+impl BitcodeReturns {
+    fn additional_arguments(&self) -> usize {
+        match self {
+            BitcodeReturns::List | BitcodeReturns::Str => 1,
+            BitcodeReturns::Basic => 0,
+        }
+    }
+
+    fn return_value_64bit<'a, 'ctx, 'env>(
+        &self,
+        env: &Env<'a, 'ctx, 'env>,
+        arguments: &mut bumpalo::collections::Vec<'a, BasicValueEnum<'ctx>>,
+    ) -> BitcodeReturnValue<'ctx> {
+        match self {
+            BitcodeReturns::List => {
+                let list_type = super::convert::zig_list_type(env);
+
+                let parent = env
+                    .builder
+                    .get_insert_block()
+                    .and_then(|b| b.get_parent())
+                    .unwrap();
+
+                let result =
+                    create_entry_block_alloca(env, parent, list_type.into(), "list_alloca");
+
+                arguments.push(result.into());
+
+                BitcodeReturnValue::List(result)
+            }
+            BitcodeReturns::Str => {
+                let str_type = super::convert::zig_str_type(env);
+
+                let parent = env
+                    .builder
+                    .get_insert_block()
+                    .and_then(|b| b.get_parent())
+                    .unwrap();
+
+                let result = create_entry_block_alloca(env, parent, str_type.into(), "str_alloca");
+
+                arguments.push(result.into());
+
+                BitcodeReturnValue::Str(result)
+            }
+            BitcodeReturns::Basic => BitcodeReturnValue::Basic,
+        }
+    }
+
+    fn call_and_load_32bit<'a, 'ctx, 'env>(
+        &self,
+        env: &Env<'a, 'ctx, 'env>,
+        arguments: &[BasicValueEnum<'ctx>],
+        fn_name: &str,
+    ) -> BasicValueEnum<'ctx> {
+        let value = call_bitcode_fn(env, arguments, fn_name);
+
+        match self {
+            BitcodeReturns::List => {
+                receive_zig_roc_list_32bit(env, value.into_struct_value()).into()
+            }
+            BitcodeReturns::Str => receive_zig_roc_str_32bit(env, value.into_struct_value()).into(),
+            BitcodeReturns::Basic => value,
+        }
+    }
 }
 
 pub fn call_bitcode_fn<'a, 'ctx, 'env>(
@@ -45,13 +141,10 @@ pub fn call_bitcode_fn<'a, 'ctx, 'env>(
         })
 }
 
-/// Converts the { i64, i32 } struct that zig returns into `list.RocList = type { i8*, i32, i32 }`
-fn translate_32_bit_roc_list<'a, 'ctx, 'env>(
+fn ptr_len_cap<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     value: StructValue<'ctx>,
-) -> StructValue<'ctx> {
-    let list_type = super::convert::zig_list_type(env);
-
+) -> (PointerValue<'ctx>, IntValue<'ctx>, IntValue<'ctx>) {
     let ptr_and_len = env
         .builder
         .build_extract_value(value, 0, "get_list_cap")
@@ -85,26 +178,86 @@ fn translate_32_bit_roc_list<'a, 'ctx, 'env>(
     let cap = env
         .builder
         .build_extract_value(value, 1, "get_list_cap")
-        .unwrap();
+        .unwrap()
+        .into_int_value();
+
+    (ptr, len, cap)
+}
+
+/// Converts the { i64, i32 } struct that zig returns into `list.RocList = type { i8*, i32, i32 }`
+fn receive_zig_roc_list_32bit<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    value: StructValue<'ctx>,
+) -> StructValue<'ctx> {
+    let list_type = super::convert::zig_list_type(env);
+
+    let (ptr, len, cap) = ptr_len_cap(env, value);
 
     struct_from_fields(
         env,
         list_type,
-        [(0, ptr.into()), (1, len.into()), (2, cap)].into_iter(),
+        [(0, ptr.into()), (1, len.into()), (2, cap.into())].into_iter(),
     )
 }
 
-pub(crate) fn call_str_bitcode_fn_n<'a, 'ctx, 'env>(
-    _env: &Env<'a, 'ctx, 'env>,
-    _strings: &[BasicValueEnum<'ctx>],
-    _other_arguments: &[BasicValueEnum<'ctx>],
-    _returns: BitcodeReturns,
-    _fn_name: &str,
-) -> BasicValueEnum<'ctx> {
-    todo!()
+/// Converts the { i64, i32 } struct that zig returns into `list.RocList = type { i8*, i32, i32 }`
+fn receive_zig_roc_str_32bit<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    value: StructValue<'ctx>,
+) -> StructValue<'ctx> {
+    let str_type = super::convert::zig_str_type(env);
+
+    let (ptr, len, cap) = ptr_len_cap(env, value);
+
+    struct_from_fields(
+        env,
+        str_type,
+        [(0, ptr.into()), (1, len.into()), (2, cap.into())].into_iter(),
+    )
 }
 
-pub(crate) fn call_list_bitcode_fn_n<'a, 'ctx, 'env>(
+pub(crate) fn call_str_bitcode_fn<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    strings: &[BasicValueEnum<'ctx>],
+    other_arguments: &[BasicValueEnum<'ctx>],
+    returns: BitcodeReturns,
+    fn_name: &str,
+) -> BasicValueEnum<'ctx> {
+    use bumpalo::collections::Vec;
+
+    match env.target_info.ptr_width() {
+        roc_target::PtrWidth::Bytes4 => {
+            let mut arguments: Vec<BasicValueEnum> =
+                Vec::with_capacity_in(other_arguments.len() + 2 * strings.len(), env.arena);
+
+            for string in strings {
+                let (a, b) = pass_list_or_string_to_zig_32bit(env, string.into_struct_value());
+                arguments.push(a.into());
+                arguments.push(b.into());
+            }
+
+            arguments.extend(other_arguments);
+
+            returns.call_and_load_32bit(env, &arguments, fn_name)
+        }
+        roc_target::PtrWidth::Bytes8 => {
+            let capacity = other_arguments.len() + strings.len() + returns.additional_arguments();
+            let mut arguments: Vec<BasicValueEnum> = Vec::with_capacity_in(capacity, env.arena);
+
+            let return_value = returns.return_value_64bit(env, &mut arguments);
+
+            for string in strings {
+                arguments.push(pass_string_to_zig_64bit(env, *string).into());
+            }
+
+            arguments.extend(other_arguments);
+
+            return_value.call_and_load_64bit(env, &arguments, fn_name)
+        }
+    }
+}
+
+pub(crate) fn call_list_bitcode_fn<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     lists: &[StructValue<'ctx>],
     other_arguments: &[BasicValueEnum<'ctx>],
@@ -113,53 +266,26 @@ pub(crate) fn call_list_bitcode_fn_n<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     use bumpalo::collections::Vec;
 
-    let list_type = super::convert::zig_list_type(env);
-
     match env.target_info.ptr_width() {
         roc_target::PtrWidth::Bytes4 => {
             let mut arguments: Vec<BasicValueEnum> =
                 Vec::with_capacity_in(other_arguments.len() + 2 * lists.len(), env.arena);
 
             for list in lists {
-                let (a, b) = pass_list_to_zig_32bit(env, *list);
+                let (a, b) = pass_list_or_string_to_zig_32bit(env, *list);
                 arguments.push(a.into());
                 arguments.push(b.into());
             }
 
             arguments.extend(other_arguments);
 
-            let value = call_bitcode_fn(env, &arguments, fn_name);
-
-            match returns {
-                BitcodeReturns::List => {
-                    translate_32_bit_roc_list(env, value.into_struct_value()).into()
-                }
-                BitcodeReturns::Str => todo!(),
-                BitcodeReturns::Basic => value,
-            }
+            returns.call_and_load_32bit(env, &arguments, fn_name)
         }
         roc_target::PtrWidth::Bytes8 => {
-            let mut arguments: Vec<BasicValueEnum> =
-                Vec::with_capacity_in(other_arguments.len() + 1 + lists.len(), env.arena);
+            let capacity = other_arguments.len() + lists.len() + returns.additional_arguments();
+            let mut arguments: Vec<BasicValueEnum> = Vec::with_capacity_in(capacity, env.arena);
 
-            let parent = env
-                .builder
-                .get_insert_block()
-                .and_then(|b| b.get_parent())
-                .unwrap();
-
-            let return_alloca = match returns {
-                BitcodeReturns::List => {
-                    let result =
-                        create_entry_block_alloca(env, parent, list_type.into(), "list_alloca");
-
-                    arguments.push(result.into());
-
-                    Some(result)
-                }
-                BitcodeReturns::Str => todo!(),
-                BitcodeReturns::Basic => None,
-            };
+            let return_value = returns.return_value_64bit(env, &mut arguments);
 
             for list in lists {
                 arguments.push(pass_list_to_zig_64bit(env, (*list).into()).into());
@@ -167,49 +293,7 @@ pub(crate) fn call_list_bitcode_fn_n<'a, 'ctx, 'env>(
 
             arguments.extend(other_arguments);
 
-            match return_alloca {
-                Some(result) => {
-                    call_void_bitcode_fn(env, &arguments, fn_name);
-                    env.builder.build_load(result, "load_list")
-                }
-                None => call_bitcode_fn(env, &arguments, fn_name),
-            }
-        }
-    }
-}
-
-pub fn call_str_bitcode_fn<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    args: &[BasicValueEnum<'ctx>],
-    fn_name: &str,
-) -> BasicValueEnum<'ctx> {
-    use bumpalo::collections::Vec;
-
-    let parent = env
-        .builder
-        .get_insert_block()
-        .and_then(|b| b.get_parent())
-        .unwrap();
-
-    let str_type = super::convert::zig_str_type(env);
-
-    match env.target_info.ptr_width() {
-        roc_target::PtrWidth::Bytes4 => {
-            // 3 machine words actually fit into 2 registers
-            call_bitcode_fn(env, args, fn_name)
-        }
-        roc_target::PtrWidth::Bytes8 => {
-            let result =
-                create_entry_block_alloca(env, parent, str_type.into(), "return_str_alloca");
-            let mut arguments: Vec<BasicValueEnum> =
-                Vec::with_capacity_in(args.len() + 1, env.arena);
-
-            arguments.push(result.into());
-            arguments.extend(args);
-
-            call_void_bitcode_fn(env, &arguments, fn_name);
-
-            result.into()
+            return_value.call_and_load_64bit(env, &arguments, fn_name)
         }
     }
 }
@@ -243,13 +327,31 @@ fn pass_list_to_zig_64bit<'a, 'ctx, 'env>(
     list_alloca
 }
 
-fn pass_list_to_zig_32bit<'a, 'ctx, 'env>(
+fn pass_string_to_zig_64bit<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    list: StructValue<'ctx>,
+    string: BasicValueEnum<'ctx>,
+) -> PointerValue<'ctx> {
+    let parent = env
+        .builder
+        .get_insert_block()
+        .and_then(|b| b.get_parent())
+        .unwrap();
+
+    let string_type = super::convert::zig_str_type(env);
+    let string_alloca = create_entry_block_alloca(env, parent, string_type.into(), "string_alloca");
+
+    env.builder.build_store(string_alloca, string);
+
+    string_alloca
+}
+
+fn pass_list_or_string_to_zig_32bit<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    list_or_string: StructValue<'ctx>,
 ) -> (IntValue<'ctx>, IntValue<'ctx>) {
     let ptr = env
         .builder
-        .build_extract_value(list, Builtin::WRAPPER_PTR, "list_ptr")
+        .build_extract_value(list_or_string, Builtin::WRAPPER_PTR, "list_ptr")
         .unwrap()
         .into_pointer_value();
 
@@ -259,13 +361,13 @@ fn pass_list_to_zig_32bit<'a, 'ctx, 'env>(
 
     let len = env
         .builder
-        .build_extract_value(list, Builtin::WRAPPER_LEN, "list_len")
+        .build_extract_value(list_or_string, Builtin::WRAPPER_LEN, "list_len")
         .unwrap()
         .into_int_value();
 
     let cap = env
         .builder
-        .build_extract_value(list, Builtin::WRAPPER_CAPACITY, "list_cap")
+        .build_extract_value(list_or_string, Builtin::WRAPPER_CAPACITY, "list_cap")
         .unwrap()
         .into_int_value();
 

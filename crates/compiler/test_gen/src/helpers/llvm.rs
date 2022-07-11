@@ -546,6 +546,7 @@ macro_rules! assert_evals_to {
             $ignore_problems
         );
 
+        #[cfg(not(feature = "gen-llvm-wasm"))]
         $crate::helpers::llvm::assert_llvm_evals_to!(
             $src,
             $expected,
@@ -556,6 +557,7 @@ macro_rules! assert_evals_to {
     }};
 }
 
+#[allow(unused_macros)]
 macro_rules! expect_runtime_error_panic {
     ($src:expr) => {{
         #[cfg(feature = "gen-llvm-wasm")]
@@ -567,6 +569,7 @@ macro_rules! expect_runtime_error_panic {
             true // ignore problems
         );
 
+        #[cfg(not(feature = "gen-llvm-wasm"))]
         $crate::helpers::llvm::assert_llvm_evals_to!(
             $src,
             false, // fake value/type for eval

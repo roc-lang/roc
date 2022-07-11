@@ -15,7 +15,7 @@ use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
-use super::bitcode::call_list_bitcode_fn_n;
+use super::bitcode::call_list_bitcode_fn;
 use super::build::{create_entry_block_alloca, load_roc_value, load_symbol, store_roc_value};
 
 fn call_list_bitcode_fn_1<'a, 'ctx, 'env>(
@@ -24,7 +24,7 @@ fn call_list_bitcode_fn_1<'a, 'ctx, 'env>(
     other_arguments: &[BasicValueEnum<'ctx>],
     fn_name: &str,
 ) -> BasicValueEnum<'ctx> {
-    call_list_bitcode_fn_n(env, &[list], other_arguments, BitcodeReturns::List, fn_name)
+    call_list_bitcode_fn(env, &[list], other_arguments, BitcodeReturns::List, fn_name)
 }
 
 pub fn list_symbol_to_c_abi<'a, 'ctx, 'env>(
@@ -100,7 +100,7 @@ pub fn list_with_capacity<'a, 'ctx, 'env>(
     capacity: IntValue<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    call_list_bitcode_fn_n(
+    call_list_bitcode_fn(
         env,
         &[],
         &[
@@ -416,7 +416,7 @@ pub fn list_map2<'a, 'ctx, 'env>(
     let dec_a = build_dec_wrapper(env, layout_ids, element1_layout);
     let dec_b = build_dec_wrapper(env, layout_ids, element2_layout);
 
-    call_list_bitcode_fn_n(
+    call_list_bitcode_fn(
         env,
         &[list1.into_struct_value(), list2.into_struct_value()],
         &[
@@ -452,7 +452,7 @@ pub fn list_map3<'a, 'ctx, 'env>(
     let dec_b = build_dec_wrapper(env, layout_ids, element2_layout);
     let dec_c = build_dec_wrapper(env, layout_ids, element3_layout);
 
-    call_list_bitcode_fn_n(
+    call_list_bitcode_fn(
         env,
         &[
             list1.into_struct_value(),
@@ -497,7 +497,7 @@ pub fn list_map4<'a, 'ctx, 'env>(
     let dec_c = build_dec_wrapper(env, layout_ids, element3_layout);
     let dec_d = build_dec_wrapper(env, layout_ids, element4_layout);
 
-    call_list_bitcode_fn_n(
+    call_list_bitcode_fn(
         env,
         &[
             list1.into_struct_value(),
@@ -533,7 +533,7 @@ pub fn list_concat<'a, 'ctx, 'env>(
     list2: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    call_list_bitcode_fn_n(
+    call_list_bitcode_fn(
         env,
         &[list1.into_struct_value(), list2.into_struct_value()],
         &[

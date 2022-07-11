@@ -45,7 +45,7 @@ fn debug() -> bool {
     false
 }
 
-const SIZE: usize = 16;
+const SIZE: usize = 50;
 
 #[derive(Debug, Clone, Copy, Hash)]
 struct TagUnionId(u64);
