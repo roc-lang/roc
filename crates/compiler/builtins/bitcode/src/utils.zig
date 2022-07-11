@@ -151,6 +151,7 @@ pub fn increfC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
 
 pub fn decrefC(
     bytes_or_null: ?[*]isize,
+    size: usize,
     alignment: u32,
 ) callconv(.C) void {
     // IMPORTANT: bytes_or_null is this case is expected to be a pointer to the refcount
@@ -159,16 +160,17 @@ pub fn decrefC(
     // this is of course unsafe, but we trust what we get from the llvm side
     var bytes = @ptrCast([*]isize, bytes_or_null);
 
-    return @call(.{ .modifier = always_inline }, decref_ptr_to_refcount, .{ bytes, alignment });
+    return @call(.{ .modifier = always_inline }, decref_ptr_to_refcount, .{ bytes, size, alignment });
 }
 
 pub fn decrefCheckNullC(
     bytes_or_null: ?[*]u8,
+    size: usize,
     alignment: u32,
 ) callconv(.C) void {
     if (bytes_or_null) |bytes| {
         const isizes: [*]isize = @ptrCast([*]isize, @alignCast(@sizeOf(isize), bytes));
-        return @call(.{ .modifier = always_inline }, decref_ptr_to_refcount, .{ isizes - 1, alignment });
+        return @call(.{ .modifier = always_inline }, decref_ptr_to_refcount, .{ isizes - 1, size, alignment });
     }
 }
 

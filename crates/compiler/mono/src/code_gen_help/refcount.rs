@@ -519,14 +519,11 @@ fn modify_refcount<'a>(
                     op: LowLevel::RefCountDec,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
-                arguments: root.arena.alloc([rc_ptr, alignment_sym]),
+                arguments: root.arena.alloc([rc_ptr, size, alignment_sym]),
             });
             let zig_call_stmt = Stmt::Let(zig_call_result, zig_call_expr, LAYOUT_UNIT, following);
 
-            alignment_stmt(root.arena.alloc(
-                //
-                zig_call_stmt,
-            ))
+            alignment_stmt(root.arena.alloc(zig_call_stmt))
         }
 
         _ => unreachable!(),
