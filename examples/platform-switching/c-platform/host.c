@@ -14,7 +14,7 @@ void* roc_realloc(void* ptr, size_t new_size, size_t old_size,
 
 void roc_dealloc(void* ptr, size_t size, size_t alignment) { free(ptr); }
 
-void roc_panic(void* ptr, unsigned int alignment) {
+void roc_panic(void* ptr, unsigned int tag_id) {
   char* msg = (char*)ptr;
   fprintf(stderr,
           "Application crashed with message\n\n    %s\n\nShutting down\n", msg);

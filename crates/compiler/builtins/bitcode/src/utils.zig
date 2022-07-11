@@ -79,8 +79,8 @@ pub fn dealloc(c_ptr: [*]u8, size: usize, alignment: usize) void {
 }
 
 // must export this explicitly because right now it is not used from zig code
-pub fn panic(c_ptr: *const anyopaque, alignment: u32) callconv(.C) void {
-    return @call(.{ .modifier = always_inline }, roc_panic, .{ c_ptr, alignment });
+pub fn panic(c_ptr: *const anyopaque, tag_id: u32) callconv(.C) void {
+    return @call(.{ .modifier = always_inline }, roc_panic, .{ c_ptr, tag_id });
 }
 
 pub fn memcpy(dst: [*]u8, src: [*]u8, size: usize) void {
@@ -89,9 +89,9 @@ pub fn memcpy(dst: [*]u8, src: [*]u8, size: usize) void {
 
 // indirection because otherwise zig creates an alias to the panic function which our LLVM code
 // does not know how to deal with
-pub fn test_panic(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
+pub fn test_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
     _ = c_ptr;
-    _ = alignment;
+    _ = tag_id;
     // const cstr = @ptrCast([*:0]u8, c_ptr);
 
     // const stderr = std.io.getStdErr().writer();

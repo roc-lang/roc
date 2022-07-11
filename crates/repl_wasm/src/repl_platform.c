@@ -52,7 +52,7 @@ void roc_dealloc(void *ptr, size_t size, size_t alignment)
 
 //--------------------------
 
-void roc_panic(void *ptr, unsigned int alignment)
+void roc_panic(void *ptr, unsigned int tag_id)
 {
 #if ENABLE_PRINTF
     char *msg = (char *)ptr;
