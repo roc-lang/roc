@@ -23,6 +23,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     # zig builtins wasm tests
     RUN apt -y install build-essential
     RUN cargo install wasmer-cli --features "singlepass"
+    RUN cargo install bindgen
     # llvm
     RUN apt -y install lsb-release software-properties-common gnupg
     RUN wget https://apt.llvm.org/llvm.sh

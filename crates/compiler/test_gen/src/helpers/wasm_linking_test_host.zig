@@ -27,15 +27,20 @@ export fn host_unused() i32 {
     return 0x400 | js_unused() | js_called_directly_from_roc();
 }
 
+var host_result: i32 = 0;
 
-// Result is an extern global so the test can read it from the Wasm module
-extern var host_result: i32;
+export fn read_host_result() i32 {
+    return host_result;
+}
 
 pub fn main() !void {
     const host = host_called_directly_from_main();
     const js = js_called_directly_from_main();
     const app = roc__app_proc_1_exposed();
-    host_result = host | js | app;
+
+    // Make sure read_host_result is not eliminated! We know it's zero.
+    const avoid_dead_code_elim = read_host_result();
+    host_result = host | js | app | avoid_dead_code_elim;
 
     if (@import("builtin").target.cpu.arch != .wasm32) {
         const stdout = @import("std").io.getStdOut().writer();

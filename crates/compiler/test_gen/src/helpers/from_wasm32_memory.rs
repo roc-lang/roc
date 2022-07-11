@@ -2,13 +2,13 @@ use roc_gen_wasm::wasm32_sized::Wasm32Sized;
 use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr};
 use std::convert::TryInto;
 
-pub trait FromWasmerMemory: Wasm32Sized {
-    fn decode(memory: &wasmer::Memory, offset: u32) -> Self;
+pub trait FromWasm32Memory: Wasm32Sized {
+    fn decode(memory_bytes: &[u8], offset: u32) -> Self;
 }
 
 macro_rules! from_wasm_memory_primitive_decode {
     ($type_name:ident) => {
-        fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
+        fn decode(memory_bytes: &[u8], offset: u32) -> Self {
             use core::mem::MaybeUninit;
 
             let mut output: MaybeUninit<Self> = MaybeUninit::uninit();
@@ -18,7 +18,6 @@ macro_rules! from_wasm_memory_primitive_decode {
             let raw_ptr = ptr as *mut u8;
             let slice = unsafe { std::slice::from_raw_parts_mut(raw_ptr, width) };
 
-            let memory_bytes: &[u8] = unsafe { memory.data_unchecked() };
             let index = offset as usize;
             let wasm_slice = &memory_bytes[index..][..width];
 
@@ -32,7 +31,7 @@ macro_rules! from_wasm_memory_primitive_decode {
 macro_rules! from_wasm_memory_primitive {
     ($($type_name:ident ,)+) => {
         $(
-            impl FromWasmerMemory for $type_name {
+            impl FromWasm32Memory for $type_name {
                 from_wasm_memory_primitive_decode!($type_name);
             }
         )*
@@ -43,13 +42,12 @@ from_wasm_memory_primitive!(
     u8, i8, u16, i16, u32, i32, char, u64, i64, u128, i128, f32, f64, bool, RocDec, RocOrder,
 );
 
-impl FromWasmerMemory for () {
-    fn decode(_: &wasmer::Memory, _: u32) -> Self {}
+impl FromWasm32Memory for () {
+    fn decode(_: &[u8], _: u32) -> Self {}
 }
 
-impl FromWasmerMemory for RocStr {
-    fn decode(memory: &wasmer::Memory, addr: u32) -> Self {
-        let memory_bytes = unsafe { memory.data_unchecked() };
+impl FromWasm32Memory for RocStr {
+    fn decode(memory_bytes: &[u8], addr: u32) -> Self {
         let index = addr as usize;
 
         let mut str_bytes = [0; 12];
@@ -74,9 +72,9 @@ impl FromWasmerMemory for RocStr {
     }
 }
 
-impl<T: FromWasmerMemory + Clone> FromWasmerMemory for RocList<T> {
-    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
-        let bytes = <u64 as FromWasmerMemory>::decode(memory, offset);
+impl<T: FromWasm32Memory + Clone> FromWasm32Memory for RocList<T> {
+    fn decode(memory: &[u8], offset: u32) -> Self {
+        let bytes = <u64 as FromWasm32Memory>::decode(memory, offset);
 
         let length = (bytes >> 32) as u32;
         let elements = bytes as u32;
@@ -84,7 +82,7 @@ impl<T: FromWasmerMemory + Clone> FromWasmerMemory for RocList<T> {
         let mut items = Vec::with_capacity(length as usize);
 
         for i in 0..length {
-            let item = <T as FromWasmerMemory>::decode(
+            let item = <T as FromWasm32Memory>::decode(
                 memory,
                 elements + i * <T as Wasm32Sized>::SIZE_OF_WASM as u32,
             );
@@ -95,29 +93,29 @@ impl<T: FromWasmerMemory + Clone> FromWasmerMemory for RocList<T> {
     }
 }
 
-impl<T, E> FromWasmerMemory for RocResult<T, E>
+impl<T, E> FromWasm32Memory for RocResult<T, E>
 where
-    T: FromWasmerMemory + Wasm32Sized,
-    E: FromWasmerMemory + Wasm32Sized,
+    T: FromWasm32Memory + Wasm32Sized,
+    E: FromWasm32Memory + Wasm32Sized,
 {
-    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
+    fn decode(memory: &[u8], offset: u32) -> Self {
         let tag_offset = Ord::max(T::ACTUAL_WIDTH, E::ACTUAL_WIDTH);
-        let tag = <u8 as FromWasmerMemory>::decode(memory, offset + tag_offset as u32);
+        let tag = <u8 as FromWasm32Memory>::decode(memory, offset + tag_offset as u32);
         if tag == 1 {
-            let value = <T as FromWasmerMemory>::decode(memory, offset);
+            let value = <T as FromWasm32Memory>::decode(memory, offset);
             RocResult::ok(value)
         } else {
-            let payload = <E as FromWasmerMemory>::decode(memory, offset);
+            let payload = <E as FromWasm32Memory>::decode(memory, offset);
             RocResult::err(payload)
         }
     }
 }
 
-impl<T: FromWasmerMemory> FromWasmerMemory for &'_ T {
-    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
-        let elements = <u32 as FromWasmerMemory>::decode(memory, offset);
+impl<T: FromWasm32Memory> FromWasm32Memory for &'_ T {
+    fn decode(memory: &[u8], offset: u32) -> Self {
+        let elements = <u32 as FromWasm32Memory>::decode(memory, offset);
 
-        let actual = <T as FromWasmerMemory>::decode(memory, elements);
+        let actual = <T as FromWasm32Memory>::decode(memory, elements);
 
         let b = Box::new(actual);
 
@@ -125,9 +123,8 @@ impl<T: FromWasmerMemory> FromWasmerMemory for &'_ T {
     }
 }
 
-impl<T: FromWasmerMemory + Clone, const N: usize> FromWasmerMemory for [T; N] {
-    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
-        let memory_bytes: &[u8] = unsafe { memory.data_unchecked() };
+impl<T: FromWasm32Memory + Clone, const N: usize> FromWasm32Memory for [T; N] {
+    fn decode(memory_bytes: &[u8], offset: u32) -> Self {
         let index = offset as usize;
 
         debug_assert!(memory_bytes.len() >= index + (N * <T as Wasm32Sized>::SIZE_OF_WASM));
@@ -140,29 +137,29 @@ impl<T: FromWasmerMemory + Clone, const N: usize> FromWasmerMemory for [T; N] {
     }
 }
 
-impl FromWasmerMemory for usize {
-    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
-        <u32 as FromWasmerMemory>::decode(memory, offset) as usize
+impl FromWasm32Memory for usize {
+    fn decode(memory: &[u8], offset: u32) -> Self {
+        <u32 as FromWasm32Memory>::decode(memory, offset) as usize
     }
 }
 
-impl<T: FromWasmerMemory, U: FromWasmerMemory> FromWasmerMemory for (T, U) {
-    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
+impl<T: FromWasm32Memory, U: FromWasm32Memory> FromWasm32Memory for (T, U) {
+    fn decode(memory: &[u8], offset: u32) -> Self {
         debug_assert!(
             T::ALIGN_OF_WASM >= U::ALIGN_OF_WASM,
             "this function does not handle alignment"
         );
 
-        let t = <T as FromWasmerMemory>::decode(memory, offset);
+        let t = <T as FromWasm32Memory>::decode(memory, offset);
 
-        let u = <U as FromWasmerMemory>::decode(memory, offset + T::ACTUAL_WIDTH as u32);
+        let u = <U as FromWasm32Memory>::decode(memory, offset + T::ACTUAL_WIDTH as u32);
 
         (t, u)
     }
 }
 
-impl<T: FromWasmerMemory, U: FromWasmerMemory, V: FromWasmerMemory> FromWasmerMemory for (T, U, V) {
-    fn decode(memory: &wasmer::Memory, offset: u32) -> Self {
+impl<T: FromWasm32Memory, U: FromWasm32Memory, V: FromWasm32Memory> FromWasm32Memory for (T, U, V) {
+    fn decode(memory: &[u8], offset: u32) -> Self {
         debug_assert!(
             T::ALIGN_OF_WASM >= U::ALIGN_OF_WASM,
             "this function does not handle alignment"
@@ -173,11 +170,11 @@ impl<T: FromWasmerMemory, U: FromWasmerMemory, V: FromWasmerMemory> FromWasmerMe
             "this function does not handle alignment"
         );
 
-        let t = <T as FromWasmerMemory>::decode(memory, offset);
+        let t = <T as FromWasm32Memory>::decode(memory, offset);
 
-        let u = <U as FromWasmerMemory>::decode(memory, offset + T::ACTUAL_WIDTH as u32);
+        let u = <U as FromWasm32Memory>::decode(memory, offset + T::ACTUAL_WIDTH as u32);
 
-        let v = <V as FromWasmerMemory>::decode(
+        let v = <V as FromWasm32Memory>::decode(
             memory,
             offset + T::ACTUAL_WIDTH as u32 + U::ACTUAL_WIDTH as u32,
         );
