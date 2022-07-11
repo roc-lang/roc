@@ -1875,7 +1875,8 @@ impl<'a> WasmBackend<'a> {
             self.code_builder.i32_add();
         }
 
-        // Provide a constant for the alignment argument
+        // Provide a constant for the alignment argument.
+        // This is a `usize`, which on wasm32 is a 32-bit integer.
         self.code_builder.i32_const(alignment_bytes as i32);
 
         // Call the foreign function. (Zig and C calling conventions are the same for this signature)

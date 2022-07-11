@@ -31,18 +31,19 @@ extern fn free(c_ptr: [*]align(@alignOf(u128)) u8) callconv(.C) void;
 extern fn memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
 extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void;
 
-export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*anyopaque {
+export fn roc_alloc(size: usize, alignment: usize) callconv(.C) ?*anyopaque {
     _ = alignment;
     return malloc(size);
 }
 
-export fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*anyopaque {
+export fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: usize) callconv(.C) ?*anyopaque {
     _ = old_size;
     _ = alignment;
     return realloc(@alignCast(16, @ptrCast([*]u8, c_ptr)), new_size);
 }
 
-export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
+export fn roc_dealloc(c_ptr: *anyopaque, size: usize, alignment: usize) callconv(.C) void {
+    _ = size;
     _ = alignment;
     free(@alignCast(16, @ptrCast([*]u8, c_ptr)));
 }

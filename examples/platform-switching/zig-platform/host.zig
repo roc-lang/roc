@@ -29,7 +29,7 @@ extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void;
 
 const DEBUG: bool = false;
 
-export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*anyopaque {
+export fn roc_alloc(size: usize, alignment: usize) callconv(.C) ?*anyopaque {
     if (DEBUG) {
         var ptr = malloc(size);
         const stdout = std.io.getStdOut().writer();
@@ -40,7 +40,7 @@ export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*anyopaque {
     }
 }
 
-export fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*anyopaque {
+export fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: usize) callconv(.C) ?*anyopaque {
     if (DEBUG) {
         const stdout = std.io.getStdOut().writer();
         stdout.print("realloc: {d} (alignment {d}, old_size {d})\n", .{ c_ptr, alignment, old_size }) catch unreachable;
@@ -49,10 +49,10 @@ export fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, align
     return realloc(@alignCast(Align, @ptrCast([*]u8, c_ptr)), new_size);
 }
 
-export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
+export fn roc_dealloc(c_ptr: *anyopaque, size: usize, alignment: usize) callconv(.C) void {
     if (DEBUG) {
         const stdout = std.io.getStdOut().writer();
-        stdout.print("dealloc: {d} (alignment {d})\n", .{ c_ptr, alignment }) catch unreachable;
+        stdout.print("dealloc: {d} (size {d}, alignment {d})\n", .{ c_ptr, size, alignment }) catch unreachable;
     }
 
     free(@alignCast(Align, @ptrCast([*]u8, c_ptr)));

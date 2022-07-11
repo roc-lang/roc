@@ -5,13 +5,13 @@
 #include <string.h>
 #include <unistd.h>
 
-void* roc_alloc(size_t size, unsigned int alignment) { return malloc(size); }
+void* roc_alloc(size_t size, size_t alignment) { return malloc(size); }
 
-void* roc_realloc(void* ptr, size_t new_size, size_t old_size, unsigned int alignment) {
+void* roc_realloc(void* ptr, size_t new_size, size_t old_size, size_t alignment) {
   return realloc(ptr, new_size);
 }
 
-void roc_dealloc(void* ptr, unsigned int alignment) { free(ptr); }
+void roc_dealloc(void* ptr, size_t size, size_t alignment) { free(ptr); }
 
 void roc_panic(void* ptr, unsigned int alignment) {
   char* msg = (char*)ptr;

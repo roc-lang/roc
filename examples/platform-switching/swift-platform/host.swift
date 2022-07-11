@@ -1,7 +1,7 @@
 import Foundation
 
 @_cdecl("roc_alloc")
-func rocAlloc(size: Int, _alignment: UInt) -> UInt  {
+func rocAlloc(size: Int, _alignment: UInt) -> UInt {
     guard let ptr = malloc(size) else {
         return 0
     }
@@ -9,7 +9,7 @@ func rocAlloc(size: Int, _alignment: UInt) -> UInt  {
 }
 
 @_cdecl("roc_dealloc")
-func rocDealloc(ptr: UInt, _alignment: UInt)  {
+func rocDealloc(ptr: UInt, _size: UInt, _alignment: UInt) {
     free(UnsafeMutableRawPointer(bitPattern: ptr))
 }
 
@@ -40,7 +40,7 @@ func getStrLen(rocStr: RocStr) -> Int {
 
 func getSwiftString(rocStr: RocStr) -> String {
     let length = getStrLen(rocStr: rocStr)
-    
+
     if isSmallString(rocStr: rocStr) {
         let data: Data = withUnsafePointer(to: rocStr) { ptr in
             Data(bytes: ptr, count: length)
@@ -56,7 +56,7 @@ func getSwiftString(rocStr: RocStr) -> String {
 func main() -> UInt8 {
     var rocStr = RocStr()
     roc__mainForHost_1_exposed_generic(&rocStr)
-    
+
     print(getSwiftString(rocStr: rocStr), terminator: "")
     return 0
 }

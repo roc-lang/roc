@@ -23,8 +23,8 @@ pub struct RocList<T> {
 
 impl<T> RocList<T> {
     #[inline(always)]
-    fn alloc_alignment() -> u32 {
-        mem::align_of::<T>().max(mem::align_of::<Storage>()) as u32
+    fn alloc_alignment() -> usize {
+        mem::align_of::<T>().max(mem::align_of::<Storage>())
     }
 
     pub fn empty() -> Self {
@@ -207,7 +207,11 @@ where
                             // The new allocation is referencing them, so instead of incrementing them all
                             // all just to decrement them again here, we neither increment nor decrement them.
                             unsafe {
-                                roc_dealloc(self.ptr_to_allocation(), Self::alloc_alignment());
+                                roc_dealloc(
+                                    self.ptr_to_allocation(),
+                                    Self::alloc_bytes(self.len()),
+                                    Self::alloc_alignment(),
+                                );
                             }
                         } else {
                             // Write the storage back.
@@ -451,7 +455,11 @@ impl<T> Drop for RocList<T> {
                         }
 
                         // Release the memory.
-                        roc_dealloc(self.ptr_to_allocation(), Self::alloc_alignment());
+                        roc_dealloc(
+                            self.ptr_to_allocation(),
+                            Self::alloc_bytes(self.len()),
+                            Self::alloc_alignment(),
+                        );
                     }
                 } else {
                     // Write the storage back.

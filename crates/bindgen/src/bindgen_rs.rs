@@ -656,7 +656,7 @@ pub struct {name} {{
                             format!(
                                 r#"
         let size = core::mem::size_of::<{union_name}>();
-        let align = core::mem::align_of::<{union_name}>() as u32;
+        let align = core::mem::align_of::<{union_name}>();
 
         unsafe {{
             let ptr = roc_std::roc_alloc_refcounted::<{union_name}>();
@@ -821,7 +821,7 @@ pub struct {name} {{
                 // Dealloc the pointer
                 let alignment = core::mem::align_of::<Self>().max(core::mem::align_of::<roc_std::Storage>());
 
-                unsafe {{ crate::roc_dealloc(storage.as_ptr().cast(), alignment as u32); }}
+                unsafe {{ crate::roc_dealloc(storage.as_ptr().cast(), size, alignment); }}
             }} else {{
                 // Write the storage back.
                 storage.set(new_storage);
@@ -1441,7 +1441,7 @@ pub struct {name} {{
         //
         //     unsafe {
         //         let pointer =
-        //             roc_alloc(size, align as u32) as *mut core::mem::ManuallyDrop<roc_std::RocStr>;
+        //             roc_alloc(size, align) as *mut core::mem::ManuallyDrop<roc_std::RocStr>;
         //
         //         *pointer = core::mem::ManuallyDrop::new(payload);
         //
@@ -1463,7 +1463,7 @@ pub struct {name} {{
         unsafe {{
             // Store the payload at `self_align` bytes after the allocation,
             // to leave room for the refcount.
-            let alloc_ptr = crate::roc_alloc(size, payload_align as u32);
+            let alloc_ptr = crate::roc_alloc(size, payload_align);
             let payload_ptr = alloc_ptr.cast::<u8>().add(self_align).cast::<core::mem::ManuallyDrop<{payload_type_name}>>();
 
             *payload_ptr = payload;
@@ -1595,6 +1595,8 @@ pub struct {name} {{
             r#"fn drop(&mut self) {{
         // We only need to do any work if there's actually a heap-allocated payload.
         if let Some(storage) = self.storage() {{
+            let self_align = core::mem::align_of::<Self>();
+            let size = self_align + core::mem::size_of::<{payload_type_name}>();
             let mut new_storage = storage.get();
 
             // Decrement the refcount
@@ -1610,7 +1612,7 @@ pub struct {name} {{
                 let alignment = core::mem::align_of::<Self>().max(core::mem::align_of::<roc_std::Storage>());
 
                 unsafe {{
-                    crate::roc_dealloc(storage.as_ptr().cast(), alignment as u32);
+                    crate::roc_dealloc(storage.as_ptr().cast(), size, alignment);
                 }}
             }} else {{
                 // Write the storage back.

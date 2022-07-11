@@ -76,7 +76,7 @@ impl Types {
     }
 
     /// Contrast this with the size_ignoring_alignment method
-    pub fn size_rounded_to_alignment(&self, id: TypeId) -> u32 {
+    pub fn size_rounded_to_alignment(&self, id: TypeId) -> usize {
         let size_ignoring_alignment = self.size_ignoring_alignment(id);
         let alignment = self.align(id);
 

@@ -33,14 +33,14 @@ where
 
         closure(bytes.as_mut_ptr() as *mut E)
     } else {
-        let align = core::mem::align_of::<E>() as u32;
+        let align = core::mem::align_of::<E>();
         // The string is too long to stack-allocate, so
         // do a heap allocation and then free it afterwards.
         let ptr = unsafe { roc_alloc(length, align) } as *mut E;
         let answer = closure(ptr);
 
         // Free the heap allocation.
-        unsafe { roc_dealloc(ptr.cast(), align) };
+        unsafe { roc_dealloc(ptr.cast(), length, align) };
 
         answer
     }
@@ -472,7 +472,11 @@ impl RocStr {
                                 // it tries to use the refcount - which we just overwrote
                                 // with string bytes.
                                 mem::forget(self);
-                                crate::roc_dealloc(ptr.cast(), mem::align_of::<E>() as u32);
+                                crate::roc_dealloc(
+                                    ptr.cast(),
+                                    available_bytes,
+                                    mem::align_of::<E>(),
+                                );
 
                                 answer
                             } else {

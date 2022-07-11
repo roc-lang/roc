@@ -20,7 +20,7 @@ impl<T> RocBox<T> {
         let alignment = Self::alloc_alignment();
         let bytes = mem::size_of::<T>() + alignment;
 
-        let ptr = unsafe { roc_alloc(bytes, alignment as u32) };
+        let ptr = unsafe { roc_alloc(bytes, alignment) };
 
         if ptr.is_null() {
             todo!("Call roc_panic with the info that an allocation failed.");
@@ -146,6 +146,9 @@ impl<T> Drop for RocBox<T> {
         let needs_dealloc = new_storage.decrease();
 
         if needs_dealloc {
+            let alignment = Self::alloc_alignment();
+            let bytes = mem::size_of::<T>() + alignment;
+
             unsafe {
                 // Drop the stored contents.
                 let contents_ptr = contents.as_ptr();
@@ -157,7 +160,8 @@ impl<T> Drop for RocBox<T> {
                 // Release the memory.
                 roc_dealloc(
                     contents.as_ptr().cast::<u8>().sub(alignment).cast(),
-                    alignment as u32,
+                    bytes,
+                    alignment,
                 );
             }
         } else if !new_storage.is_readonly() {

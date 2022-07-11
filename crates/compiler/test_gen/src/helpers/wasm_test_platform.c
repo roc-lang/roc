@@ -52,7 +52,7 @@ size_t *alloc_ptr_to_rc_ptr(void *ptr, unsigned int alignment)
 
 //--------------------------
 
-void *roc_alloc(size_t size, unsigned int alignment)
+void *roc_alloc(size_t size, size_t alignment)
 {
     void *allocated = malloc(size);
 
@@ -84,7 +84,7 @@ void *roc_alloc(size_t size, unsigned int alignment)
 //--------------------------
 
 void *roc_realloc(void *ptr, size_t new_size, size_t old_size,
-                  unsigned int alignment)
+                  size_t alignment)
 {
 #if ENABLE_PRINTF
     printf("roc_realloc reallocated %p from %d to %d with alignment %zd\n",
@@ -95,7 +95,7 @@ void *roc_realloc(void *ptr, size_t new_size, size_t old_size,
 
 //--------------------------
 
-void roc_dealloc(void *ptr, unsigned int alignment)
+void roc_dealloc(void *ptr, size_t size, size_t alignment)
 {
     if (rc_pointers)
     {

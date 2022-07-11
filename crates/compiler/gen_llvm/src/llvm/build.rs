@@ -294,7 +294,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     pub fn call_alloc(
         &self,
         number_of_bytes: IntValue<'ctx>,
-        alignment: u32,
+        alignment: usize,
     ) -> PointerValue<'ctx> {
         let function = self.module.get_function("roc_alloc").unwrap();
         let alignment = self.alignment_const(alignment);
@@ -313,12 +313,19 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         // TODO check if alloc returned null; if so, runtime error for OOM!
     }
 
-    pub fn call_dealloc(&self, ptr: PointerValue<'ctx>, alignment: u32) -> InstructionValue<'ctx> {
+    pub fn call_dealloc(
+        &self,
+        ptr: PointerValue<'ctx>,
+        size: usize,
+        alignment: usize,
+    ) -> InstructionValue<'ctx> {
         let function = self.module.get_function("roc_dealloc").unwrap();
         let alignment = self.alignment_const(alignment);
-        let call =
-            self.builder
-                .build_call(function, &[ptr.into(), alignment.into()], "roc_dealloc");
+        let call = self.builder.build_call(
+            function,
+            &[ptr.into(), size.into(), alignment.into()],
+            "roc_dealloc",
+        );
 
         call.set_call_convention(C_CALL_CONV);
 

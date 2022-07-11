@@ -7,14 +7,14 @@ pub fn WithOverflow(comptime T: type) type {
 }
 
 // If allocation fails, this must cxa_throw - it must not return a null pointer!
-extern fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*anyopaque;
+extern fn roc_alloc(size: usize, alignment: usize) callconv(.C) ?*anyopaque;
 
 // This should never be passed a null pointer.
 // If allocation fails, this must cxa_throw - it must not return a null pointer!
-extern fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*anyopaque;
+extern fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: usize) callconv(.C) ?*anyopaque;
 
 // This should never be passed a null pointer.
-extern fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void;
+extern fn roc_dealloc(c_ptr: *anyopaque, size: usize, alignment: usize) callconv(.C) void;
 
 // Signals to the host that the program has panicked
 extern fn roc_panic(c_ptr: *const anyopaque, tag_id: u32) callconv(.C) void;
@@ -34,18 +34,18 @@ comptime {
     }
 }
 
-fn testing_roc_alloc(size: usize, _: u32) callconv(.C) ?*anyopaque {
+fn testing_roc_alloc(size: usize, _: usize) callconv(.C) ?*anyopaque {
     return @ptrCast(?*anyopaque, std.testing.allocator.alloc(u8, size) catch unreachable);
 }
 
-fn testing_roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, _: u32) callconv(.C) ?*anyopaque {
+fn testing_roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, _: usize) callconv(.C) ?*anyopaque {
     const ptr = @ptrCast([*]u8, @alignCast(2 * @alignOf(usize), c_ptr));
     const slice = ptr[0..old_size];
 
     return @ptrCast(?*anyopaque, std.testing.allocator.realloc(slice, new_size) catch unreachable);
 }
 
-fn testing_roc_dealloc(c_ptr: *anyopaque, _: u32) callconv(.C) void {
+fn testing_roc_dealloc(c_ptr: *anyopaque, _: usize, _: usize) callconv(.C) void {
     const ptr = @ptrCast([*]u8, @alignCast(2 * @alignOf(usize), c_ptr));
 
     std.testing.allocator.destroy(ptr);
@@ -66,16 +66,16 @@ fn testing_roc_memcpy(dest: *anyopaque, src: *anyopaque, bytes: usize) callconv(
     return dest;
 }
 
-pub fn alloc(size: usize, alignment: u32) ?[*]u8 {
+pub fn alloc(size: usize, alignment: usize) ?[*]u8 {
     return @ptrCast(?[*]u8, @call(.{ .modifier = always_inline }, roc_alloc, .{ size, alignment }));
 }
 
-pub fn realloc(c_ptr: [*]u8, new_size: usize, old_size: usize, alignment: u32) [*]u8 {
+pub fn realloc(c_ptr: [*]u8, new_size: usize, old_size: usize, alignment: usize) [*]u8 {
     return @ptrCast([*]u8, @call(.{ .modifier = always_inline }, roc_realloc, .{ c_ptr, new_size, old_size, alignment }));
 }
 
-pub fn dealloc(c_ptr: [*]u8, alignment: u32) void {
-    return @call(.{ .modifier = always_inline }, roc_dealloc, .{ c_ptr, alignment });
+pub fn dealloc(c_ptr: [*]u8, size: usize, alignment: usize) void {
+    return @call(.{ .modifier = always_inline }, roc_dealloc, .{ c_ptr, size, alignment });
 }
 
 // must export this explicitly because right now it is not used from zig code

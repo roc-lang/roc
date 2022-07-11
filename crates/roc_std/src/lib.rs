@@ -24,14 +24,14 @@ pub use storage::Storage;
 // A list of C functions that are being imported
 #[cfg(feature = "platform")]
 extern "C" {
-    pub fn roc_alloc(size: usize, alignment: u32) -> *mut c_void;
+    pub fn roc_alloc(size: usize, alignment: usize) -> *mut c_void;
     pub fn roc_realloc(
         ptr: *mut c_void,
         new_size: usize,
         old_size: usize,
-        alignment: u32,
+        alignment: usize,
     ) -> *mut c_void;
-    pub fn roc_dealloc(ptr: *mut c_void, alignment: u32);
+    pub fn roc_dealloc(ptr: *mut c_void, size: usize, alignment: usize);
     pub fn roc_panic(c_ptr: *mut c_void, tag_id: u32);
     pub fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void;
     pub fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut c_void;
@@ -52,7 +52,7 @@ extern "C" {
 /// This is only marked unsafe to typecheck without warnings in the rest of the code here.
 #[cfg(not(feature = "platform"))]
 #[no_mangle]
-pub unsafe extern "C" fn roc_alloc(_size: usize, _alignment: u32) -> *mut c_void {
+pub unsafe extern "C" fn roc_alloc(_size: usize, _alignment: usize) -> *mut c_void {
     unimplemented!("It is not valid to call roc alloc from within the compiler. Please use the \"platform\" feature if this is a platform.")
 }
 
@@ -64,7 +64,7 @@ pub unsafe extern "C" fn roc_realloc(
     _ptr: *mut c_void,
     _new_size: usize,
     _old_size: usize,
-    _alignment: u32,
+    _alignment: usize,
 ) -> *mut c_void {
     unimplemented!("It is not valid to call roc realloc from within the compiler. Please use the \"platform\" feature if this is a platform.")
 }
@@ -73,7 +73,7 @@ pub unsafe extern "C" fn roc_realloc(
 /// This is only marked unsafe to typecheck without warnings in the rest of the code here.
 #[cfg(not(feature = "platform"))]
 #[no_mangle]
-pub unsafe extern "C" fn roc_dealloc(_ptr: *mut c_void, _alignment: u32) {
+pub unsafe extern "C" fn roc_dealloc(_ptr: *mut c_void, _size: usize, _alignment: usize) {
     unimplemented!("It is not valid to call roc dealloc from within the compiler. Please use the \"platform\" feature if this is a platform.")
 }
 
@@ -112,7 +112,7 @@ fn roc_alloc_refcounted_help(mut size: usize, mut align: usize) -> *mut u8 {
     align = align.max(core::mem::size_of::<crate::Storage>());
 
     unsafe {
-        let allocation_ptr = roc_alloc(size, align as _) as *mut u8;
+        let allocation_ptr = roc_alloc(size, align) as *mut u8;
         let data_ptr = allocation_ptr.add(prefix);
         let storage_ptr = (data_ptr as *mut crate::Storage).sub(1);
 
