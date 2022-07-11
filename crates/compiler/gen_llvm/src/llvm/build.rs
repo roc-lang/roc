@@ -276,12 +276,8 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         })
     }
 
-    pub fn alignment_type(&self) -> IntType<'ctx> {
-        self.context.i32_type()
-    }
-
-    pub fn alignment_const(&self, alignment: u32) -> IntValue<'ctx> {
-        self.alignment_type().const_int(alignment as u64, false)
+    pub fn alignment_const(&self, alignment: usize) -> IntValue<'ctx> {
+        self.ptr_int().const_int(alignment as u64, false)
     }
 
     pub fn alignment_intvalue(&self, element_layout: &Layout<'a>) -> BasicValueEnum<'ctx> {

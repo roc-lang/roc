@@ -780,11 +780,11 @@ pub fn dictWalk(
     accum_width: usize,
     output: Opaque,
 ) callconv(.C) void {
-    const alignment_u32 = alignment.toU32();
+    const alignment_usize = @intCast(usize, alignment.toU32());
     // allocate space to write the result of the stepper into
     // experimentally aliasing the accum and output pointers is not a good idea
     // TODO handle alloc failing!
-    const bytes_ptr: [*]u8 = utils.alloc(accum_width, alignment_u32) orelse unreachable;
+    const bytes_ptr: [*]u8 = utils.alloc(accum_width, alignment_usize) orelse unreachable;
     var b1 = output orelse unreachable;
     var b2 = bytes_ptr;
 
@@ -811,5 +811,5 @@ pub fn dictWalk(
     }
 
     @memcpy(output orelse unreachable, b2, accum_width);
-    utils.dealloc(bytes_ptr, alignment_u32);
+    utils.dealloc(bytes_ptr, accum_width, alignment_usize);
 }

@@ -185,11 +185,12 @@ pub fn decref(
 
     const isizes: [*]isize = @ptrCast([*]isize, @alignCast(@alignOf(isize), bytes));
 
-    decref_ptr_to_refcount(isizes - 1, alignment);
+    decref_ptr_to_refcount(isizes - 1, data_bytes, alignment);
 }
 
 inline fn decref_ptr_to_refcount(
     refcount_ptr: [*]isize,
+    size: usize,
     alignment: u32,
 ) void {
     if (RC_TYPE == Refcount.none) return;
@@ -198,7 +199,11 @@ inline fn decref_ptr_to_refcount(
         Refcount.normal => {
             const refcount: isize = refcount_ptr[0];
             if (refcount == REFCOUNT_ONE_ISIZE) {
-                dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
+                dealloc(
+                    @ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)),
+                    size,
+                    @intCast(usize, alignment)
+                );
             } else if (refcount < REFCOUNT_MAX_ISIZE) {
                 refcount_ptr[0] = refcount - 1;
             }
@@ -207,7 +212,11 @@ inline fn decref_ptr_to_refcount(
             if (refcount_ptr[0] < REFCOUNT_MAX_ISIZE) {
                 var last = @atomicRmw(isize, &refcount_ptr[0], std.builtin.AtomicRmwOp.Sub, 1, Monotonic);
                 if (last == REFCOUNT_ONE_ISIZE) {
-                    dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
+                    dealloc(
+                        @ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)),
+                        size,
+                        alignment
+                    );
                 }
             }
         },
@@ -227,7 +236,7 @@ pub fn allocateWithRefcount(
     element_alignment: u32,
 ) [*]u8 {
     const ptr_width = @sizeOf(usize);
-    const alignment = std.math.max(ptr_width, element_alignment);
+    const alignment = std.math.max(ptr_width, @intCast(usize, element_alignment));
     const length = alignment + data_bytes;
 
     var new_bytes: [*]u8 = alloc(length, alignment) orelse unreachable;
@@ -263,7 +272,7 @@ pub fn unsafeReallocate(
     // TODO handle out of memory
     // NOTE realloc will dealloc the original allocation
     const old_allocation = source_ptr - align_width;
-    const new_allocation = realloc(old_allocation, new_width, old_width, alignment);
+    const new_allocation = realloc(old_allocation, new_width, old_width, @intCast(usize, alignment));
 
     const new_source = @ptrCast([*]u8, new_allocation) + align_width;
     return new_source;
