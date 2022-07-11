@@ -1,6 +1,6 @@
 use crate::llvm::bitcode::{
-    call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_list_bitcode_fn,
-    call_str_bitcode_fn, call_void_bitcode_fn,
+    call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_list_bitcode_fn_n,
+    call_str_bitcode_fn, call_str_bitcode_fn_n, call_void_bitcode_fn, BitcodeReturns,
 };
 use crate::llvm::build_dict::{
     self, dict_contains, dict_difference, dict_empty, dict_get, dict_insert, dict_intersection,
@@ -11,7 +11,7 @@ use crate::llvm::build_list::{
     self, allocate_list, empty_polymorphic_list, list_append_unsafe, list_concat, list_drop_at,
     list_get_unsafe, list_len, list_map, list_map2, list_map3, list_map4, list_prepend,
     list_replace_unsafe, list_reserve, list_sort_with, list_sublist, list_swap,
-    list_symbol_to_c_abi, list_to_c_abi, list_with_capacity, pass_update_mode,
+    list_symbol_to_c_abi, list_with_capacity, pass_update_mode,
 };
 use crate::llvm::build_str::{str_from_float, str_from_int};
 use crate::llvm::compare::{generic_eq, generic_neq};
@@ -5432,7 +5432,13 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let string = load_symbol(scope, &args[0]);
 
-            call_list_bitcode_fn(env, &[string], bitcode::STR_TO_SCALARS)
+            call_str_bitcode_fn_n(
+                env,
+                &[string],
+                &[],
+                BitcodeReturns::List,
+                bitcode::STR_TO_SCALARS,
+            )
         }
         StrStartsWith => {
             // Str.startsWith : Str, Str -> Bool
@@ -5543,7 +5549,14 @@ fn run_low_level<'a, 'ctx, 'env>(
             debug_assert_eq!(args.len(), 1);
 
             let string = load_symbol(scope, &args[0]);
-            call_list_bitcode_fn(env, &[string], bitcode::STR_TO_UTF8)
+
+            call_str_bitcode_fn_n(
+                env,
+                &[string],
+                &[],
+                BitcodeReturns::List,
+                bitcode::STR_TO_UTF8,
+            )
         }
         StrRepeat => {
             // Str.repeat : Str, Nat -> Str
@@ -5551,7 +5564,14 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let string = load_symbol(scope, &args[0]);
             let count = load_symbol(scope, &args[1]);
-            call_str_bitcode_fn(env, &[string, count], bitcode::STR_REPEAT)
+
+            call_str_bitcode_fn_n(
+                env,
+                &[string],
+                &[count],
+                BitcodeReturns::Str,
+                bitcode::STR_REPEAT,
+            )
         }
         StrSplit => {
             // Str.split : Str, Str -> List Str
@@ -5560,7 +5580,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             let string = load_symbol(scope, &args[0]);
             let delimiter = load_symbol(scope, &args[1]);
 
-            call_list_bitcode_fn(env, &[string, delimiter], bitcode::STR_STR_SPLIT)
+            call_str_bitcode_fn_n(
+                env,
+                &[string, delimiter],
+                &[],
+                BitcodeReturns::List,
+                bitcode::STR_STR_SPLIT,
+            )
         }
         StrIsEmpty => {
             // Str.isEmpty : Str -> Str
@@ -5812,10 +5838,15 @@ fn run_low_level<'a, 'ctx, 'env>(
             // List.isUnique : List a -> Bool
             debug_assert_eq!(args.len(), 1);
 
-            let list = load_symbol(scope, &args[0]);
-            let list = list_to_c_abi(env, list).into();
+            let list = load_symbol(scope, &args[0]).into_struct_value();
 
-            call_bitcode_fn(env, &[list], bitcode::LIST_IS_UNIQUE)
+            call_list_bitcode_fn_n(
+                env,
+                &[list],
+                &[],
+                BitcodeReturns::Basic,
+                bitcode::LIST_IS_UNIQUE,
+            )
         }
         NumToStr => {
             // Num.toStr : Num a -> Str
@@ -5880,21 +5911,25 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         NumBytesToU16 => {
             debug_assert_eq!(args.len(), 2);
-            let list = load_symbol(scope, &args[0]);
+            let list = load_symbol(scope, &args[0]).into_struct_value();
             let position = load_symbol(scope, &args[1]);
-            call_bitcode_fn(
+            call_list_bitcode_fn_n(
                 env,
-                &[list_to_c_abi(env, list).into(), position],
+                &[list],
+                &[position],
+                BitcodeReturns::Basic,
                 bitcode::NUM_BYTES_TO_U16,
             )
         }
         NumBytesToU32 => {
             debug_assert_eq!(args.len(), 2);
-            let list = load_symbol(scope, &args[0]);
+            let list = load_symbol(scope, &args[0]).into_struct_value();
             let position = load_symbol(scope, &args[1]);
-            call_bitcode_fn(
+            call_list_bitcode_fn_n(
                 env,
-                &[list_to_c_abi(env, list).into(), position],
+                &[list],
+                &[position],
+                BitcodeReturns::Basic,
                 bitcode::NUM_BYTES_TO_U32,
             )
         }

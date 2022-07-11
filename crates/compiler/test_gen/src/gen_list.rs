@@ -2990,3 +2990,37 @@ fn call_function_in_empty_list_unbound() {
         RocList<()>
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_capacity_does_not_change_length() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : List I64
+            x = List.withCapacity 4 
+
+            List.len x
+            "#
+        ),
+        0,
+        usize
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_reserve_does_not_change_length() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : List I64
+            x = [] |> List.reserve 4 
+
+            List.len x
+            "#
+        ),
+        0,
+        usize
+    )
+}

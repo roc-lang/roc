@@ -19,9 +19,8 @@ use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 use roc_target::TargetInfo;
 
-use super::bitcode::call_list_bitcode_fn;
+use super::bitcode::{call_list_bitcode_fn_n, BitcodeReturns};
 use super::build::store_roc_value;
-use super::build_list::list_to_c_abi;
 
 #[repr(transparent)]
 struct Alignment(u8);
@@ -444,8 +443,9 @@ pub fn dict_keys<'a, 'ctx, 'env>(
 
     let inc_key_fn = build_inc_wrapper(env, layout_ids, key_layout);
 
-    call_list_bitcode_fn(
+    call_list_bitcode_fn_n(
         env,
+        &[],
         &[
             pass_dict_c_abi(env, dict),
             alignment_iv.into(),
@@ -453,6 +453,7 @@ pub fn dict_keys<'a, 'ctx, 'env>(
             value_width.into(),
             inc_key_fn.as_global_value().as_pointer_value().into(),
         ],
+        BitcodeReturns::List,
         bitcode::DICT_KEYS,
     )
 }
@@ -684,8 +685,9 @@ pub fn dict_values<'a, 'ctx, 'env>(
 
     let inc_value_fn = build_inc_wrapper(env, layout_ids, value_layout);
 
-    call_list_bitcode_fn(
+    call_list_bitcode_fn_n(
         env,
+        &[],
         &[
             pass_dict_c_abi(env, dict),
             alignment_iv.into(),
@@ -693,6 +695,7 @@ pub fn dict_values<'a, 'ctx, 'env>(
             value_width.into(),
             inc_value_fn.as_global_value().as_pointer_value().into(),
         ],
+        BitcodeReturns::List,
         bitcode::DICT_VALUES,
     )
 }
@@ -722,10 +725,10 @@ pub fn set_from_list<'a, 'ctx, 'env>(
 
     let dec_key_fn = build_dec_wrapper(env, layout_ids, key_layout);
 
-    call_void_bitcode_fn(
+    call_list_bitcode_fn_n(
         env,
+        &[list.into_struct_value()],
         &[
-            list_to_c_abi(env, list).into(),
             alignment_iv.into(),
             key_width.into(),
             value_width.into(),
@@ -734,6 +737,7 @@ pub fn set_from_list<'a, 'ctx, 'env>(
             dec_key_fn.as_global_value().as_pointer_value().into(),
             result_alloca.into(),
         ],
+        BitcodeReturns::List,
         bitcode::SET_FROM_LIST,
     );
 
