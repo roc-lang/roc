@@ -163,6 +163,7 @@ impl Symbol {
 /// `Foo.bar`
 impl fmt::Debug for Symbol {
     #[cfg(debug_assertions)]
+    #[allow(clippy::print_in_format_impl)]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if PRETTY_PRINT_DEBUG_SYMBOLS {
             let module_id = self.module_id();
