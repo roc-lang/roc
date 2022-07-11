@@ -41,10 +41,9 @@ use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SyntaxError};
 use roc_region::all::{LineInfo, Loc, Region};
 use roc_reporting::report::RenderTarget;
-use roc_solve::module::SolvedModule;
+use roc_solve::module::{Solved, SolvedModule};
 use roc_solve::solve;
 use roc_target::TargetInfo;
-use roc_types::solved_types::Solved;
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, VarStore, Variable};
 use roc_types::types::{Alias, AliasKind};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
@@ -4875,7 +4874,7 @@ fn build_pending_specializations<'a>(
 
     Msg::FoundSpecializations {
         module_id: home,
-        solved_subs: roc_types::solved_types::Solved(subs),
+        solved_subs: Solved(subs),
         ident_ids,
         layout_cache,
         procs_base,
