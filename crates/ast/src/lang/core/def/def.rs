@@ -16,7 +16,7 @@ use roc_collections::all::{default_hasher, ImMap, MutMap, MutSet, SendMap};
 use roc_error_macros::{todo_abilities, todo_opaques};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{self, Defs, TypeDef, TypeHeader, ValueDef as AstValueDef};
+use roc_parse::ast::{self, CommentOrNewline, Defs, TypeDef, TypeHeader, ValueDef as AstValueDef};
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
@@ -124,13 +124,25 @@ pub enum PendingDef<'a> {
     InvalidAlias,
 }
 
+pub enum AstDef<'a> {
+    Type(TypeDef<'a>),
+    Value(AstValueDef<'a>),
+
+    // Blank Space (e.g. comments, spaces, newlines) before or after a def.
+    // We preserve this for the formatter; canonicalization ignores it.
+    SpaceBefore(&'a AstDef<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a AstDef<'a>, &'a [CommentOrNewline<'a>]),
+
+    NotYetImplemented(&'static str),
+}
+
 fn to_pending_def<'a>(
     env: &mut Env<'a>,
-    def: &'a ast::Def<'a>,
+    def: &'a AstDef<'a>,
     scope: &mut Scope,
     pattern_type: PatternType,
 ) -> Option<(Output, PendingDef<'a>)> {
-    use roc_parse::ast::Def::*;
+    use AstDef::*;
 
     match def {
         Value(AstValueDef::Annotation(loc_pattern, loc_ann)) => {
@@ -824,8 +836,8 @@ pub fn canonicalize_defs<'a>(
     // once we've finished assembling the entire scope.
     for loc_def in loc_defs.defs() {
         let def = match loc_def {
-            Ok(type_def) => roc_parse::ast::Def::Type(type_def.clone()),
-            Err(value_def) => roc_parse::ast::Def::Value(value_def.clone()),
+            Ok(type_def) => AstDef::Type(type_def.clone()),
+            Err(value_def) => AstDef::Value(value_def.clone()),
         };
 
         match to_pending_def(env, env.arena.alloc(def), &mut scope, pattern_type) {
