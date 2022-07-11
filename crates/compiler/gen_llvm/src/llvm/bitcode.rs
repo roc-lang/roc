@@ -328,21 +328,11 @@ fn pass_list_to_zig_64bit<'a, 'ctx, 'env>(
 }
 
 fn pass_string_to_zig_64bit<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+    _env: &Env<'a, 'ctx, 'env>,
     string: BasicValueEnum<'ctx>,
 ) -> PointerValue<'ctx> {
-    let parent = env
-        .builder
-        .get_insert_block()
-        .and_then(|b| b.get_parent())
-        .unwrap();
-
-    let string_type = super::convert::zig_str_type(env);
-    let string_alloca = create_entry_block_alloca(env, parent, string_type.into(), "string_alloca");
-
-    env.builder.build_store(string_alloca, string);
-
-    string_alloca
+    // we must pass strings by-pointer, and that is already how they are stored
+    string.into_pointer_value()
 }
 
 fn pass_list_or_string_to_zig_32bit<'a, 'ctx, 'env>(

@@ -5429,8 +5429,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             let list = list_symbol_to_c_abi(env, scope, args[0]);
             let string = load_symbol(scope, &args[1]);
 
-            // call_str_bitcode_fn(env, &[list.into(), string], bitcode::STR_JOIN_WITH)
-            todo!()
+            call_list_bitcode_fn(
+                env,
+                &[],
+                &[list.into(), string],
+                BitcodeReturns::Str,
+                bitcode::STR_JOIN_WITH,
+            )
         }
         StrToScalars => {
             // Str.toScalars : Str -> List U32
@@ -5615,8 +5620,14 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             // the builtin will always return an u64
             let string = load_symbol(scope, &args[0]);
-            let length =
-                call_bitcode_fn(env, &[string], bitcode::STR_NUMBER_OF_BYTES).into_int_value();
+            let length = call_str_bitcode_fn(
+                env,
+                &[string],
+                &[],
+                BitcodeReturns::Basic,
+                bitcode::STR_NUMBER_OF_BYTES,
+            )
+            .into_int_value();
 
             // cast to the appropriate usize of the current build
             let byte_count =
@@ -5636,7 +5647,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             debug_assert_eq!(args.len(), 1);
 
             let string = load_symbol(scope, &args[0]);
-            call_bitcode_fn(env, &[string], bitcode::STR_COUNT_GRAPEHEME_CLUSTERS)
+            call_str_bitcode_fn(
+                env,
+                &[string],
+                &[],
+                BitcodeReturns::Basic,
+                bitcode::STR_COUNT_GRAPEHEME_CLUSTERS,
+            )
         }
         StrGetScalarUnsafe => {
             // Str.getScalarUnsafe : Str, Nat -> { bytesParsed : Nat, scalar : U32 }
@@ -5644,14 +5661,26 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let string = load_symbol(scope, &args[0]);
             let index = load_symbol(scope, &args[1]);
-            call_bitcode_fn(env, &[string, index], bitcode::STR_GET_SCALAR_UNSAFE)
+            call_str_bitcode_fn(
+                env,
+                &[string],
+                &[index],
+                BitcodeReturns::Basic,
+                bitcode::STR_GET_SCALAR_UNSAFE,
+            )
         }
         StrCountUtf8Bytes => {
             // Str.countGraphemes : Str -> Nat
             debug_assert_eq!(args.len(), 1);
 
             let string = load_symbol(scope, &args[0]);
-            call_bitcode_fn(env, &[string], bitcode::STR_COUNT_UTF8_BYTES)
+            call_str_bitcode_fn(
+                env,
+                &[string],
+                &[],
+                BitcodeReturns::Basic,
+                bitcode::STR_COUNT_UTF8_BYTES,
+            )
         }
         StrSubstringUnsafe => {
             // Str.substringUnsafe : Str, Nat, Nat -> Str
