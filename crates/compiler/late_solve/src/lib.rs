@@ -164,6 +164,7 @@ impl Phase for LatePhase<'_> {
 
 /// Unifies two variables and performs lambda set compaction.
 /// Ranks and other ability demands are disregarded.
+#[allow(clippy::too_many_arguments)]
 pub fn unify(
     home: ModuleId,
     arena: &Bump,

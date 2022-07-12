@@ -2037,6 +2037,7 @@ pub fn compact_lambda_sets_of_vars<P: Phase>(
 }
 
 #[must_use]
+#[allow(clippy::too_many_arguments)]
 fn compact_lambda_set<P: Phase>(
     subs: &mut Subs,
     derived_module: &SharedDerivedModule,
@@ -2191,6 +2192,7 @@ fn make_specialization_decision(subs: &Subs, var: Variable) -> SpecializeDecisio
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn get_specialization_lambda_set_ambient_function<P: Phase>(
     subs: &mut Subs,
     derived_module: &SharedDerivedModule,

@@ -1358,7 +1358,7 @@ impl<'a, 'i> Env<'a, 'i> {
             self.subs,
             &self.abilities,
             self.derived_module,
-            &self.exposed_by_module,
+            self.exposed_by_module,
             left,
             right,
         )
