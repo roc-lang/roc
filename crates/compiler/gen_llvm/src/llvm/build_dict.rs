@@ -725,10 +725,10 @@ pub fn set_from_list<'a, 'ctx, 'env>(
 
     let dec_key_fn = build_dec_wrapper(env, layout_ids, key_layout);
 
-    call_list_bitcode_fn(
+    call_void_bitcode_fn(
         env,
-        &[list.into_struct_value()],
         &[
+            super::bitcode::pass_list_to_zig_64bit(env, list).into(),
             alignment_iv.into(),
             key_width.into(),
             value_width.into(),
@@ -737,7 +737,6 @@ pub fn set_from_list<'a, 'ctx, 'env>(
             dec_key_fn.as_global_value().as_pointer_value().into(),
             result_alloca.into(),
         ],
-        BitcodeReturns::List,
         bitcode::SET_FROM_LIST,
     );
 

@@ -309,7 +309,7 @@ pub fn call_void_bitcode_fn<'a, 'ctx, 'env>(
         .unwrap_or_else(|| panic!("LLVM error: Tried to call void bitcode function, but got return value from bitcode function, {:?}", fn_name))
 }
 
-fn pass_list_to_zig_64bit<'a, 'ctx, 'env>(
+pub(crate) fn pass_list_to_zig_64bit<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     list: BasicValueEnum<'ctx>,
 ) -> PointerValue<'ctx> {
