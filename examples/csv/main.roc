@@ -4,14 +4,16 @@ app "main"
     provides [main] to pf
 
 main =
-  input = "0123456789ABCDEFGHIJKLMN"
+  # input = "0" # <- Leaks 54 bytes of memory
+  # input = "0123456789ABCDEFGHIJKLM" # <- Leaks 76 bytes of memory
+  input = "0123456789ABCDEFGHIJKLMN" # <- Use after free
   when input |> Str.toUtf8 |> manyImpl anyChar []  is
     Ok result ->
       val = result.val |> strFromRaw
       leftover = result.input |> strFromRaw
-      "Parse success: \(val) (leftover string: \(leftover))\n"
+      "Success: \(val) (leftover string: \(leftover))\n"
     Err (ParsingFailure problem) ->
-      "Parse failure: \(problem)\n"
+      "Failure: \(problem)\n"
 
 manyImpl = \input, parser, vals ->
   result = (parser input)
