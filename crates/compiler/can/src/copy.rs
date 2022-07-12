@@ -1,4 +1,4 @@
-use roc_can::{
+use crate::{
     def::Def,
     expr::{AccessorData, ClosureData, Expr, Field, WhenBranch},
 };
@@ -864,10 +864,12 @@ fn deep_copy_type_vars<'a, C: CopyEnv>(
 
 #[cfg(test)]
 mod test {
-    use crate::copy::{deep_copy_type_vars_into_expr, AcrossSubs};
+    use crate::{
+        copy::{deep_copy_type_vars_into_expr, AcrossSubs},
+        expr::Expr,
+    };
 
     use super::{deep_copy_expr_across_subs, deep_copy_type_vars};
-    use roc_can::expr::Expr;
     use roc_error_macros::internal_error;
     use roc_module::{ident::TagName, symbol::Symbol};
     use roc_region::all::Loc;
