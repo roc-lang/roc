@@ -12,6 +12,7 @@ use roc_types::{
 };
 
 trait CopyEnv {
+    #[inline(always)]
     fn clear_source_copy(&mut self, var: Variable) {
         self.mut_source().modify(var, |descriptor| {
             if let Some(_) = descriptor.copy.into_variable() {
@@ -22,22 +23,27 @@ trait CopyEnv {
         })
     }
 
+    #[inline(always)]
     fn source_root_var(&self, var: Variable) -> Variable {
         self.source().get_root_key_without_compacting(var)
     }
 
+    #[inline(always)]
     fn source_desc(&self, var: Variable) -> Descriptor {
         self.source().get_without_compacting(var)
     }
 
+    #[inline(always)]
     fn set_source_copy(&mut self, var: Variable, copy: OptVariable) {
         self.mut_source().set_copy(var, copy)
     }
 
+    #[inline(always)]
     fn get_copy(&self, var: Variable) -> OptVariable {
         self.source().get_copy(var)
     }
 
+    #[inline(always)]
     fn target_fresh(&mut self, descriptor: Descriptor) -> Variable {
         self.target().fresh(descriptor)
     }
@@ -63,34 +69,42 @@ trait CopyEnv {
 }
 
 impl CopyEnv for Subs {
+    #[inline(always)]
     fn mut_source(&mut self) -> &mut Subs {
         self
     }
 
+    #[inline(always)]
     fn source(&self) -> &Subs {
         self
     }
 
+    #[inline(always)]
     fn target(&mut self) -> &mut Subs {
         self
     }
 
+    #[inline(always)]
     fn clone_name(&mut self, name: SubsIndex<Lowercase>) -> SubsIndex<Lowercase> {
         name
     }
 
+    #[inline(always)]
     fn clone_tag_name(&mut self, tag_name: SubsIndex<TagName>) -> SubsIndex<TagName> {
         tag_name
     }
 
+    #[inline(always)]
     fn clone_field_names(&mut self, field_names: SubsSlice<Lowercase>) -> SubsSlice<Lowercase> {
         field_names
     }
 
+    #[inline(always)]
     fn clone_tag_names(&mut self, tag_names: SubsSlice<TagName>) -> SubsSlice<TagName> {
         tag_names
     }
 
+    #[inline(always)]
     fn clone_record_fields(
         &mut self,
         record_fields: SubsSlice<RecordField<()>>,
@@ -105,26 +119,32 @@ struct AcrossSubs<'a> {
 }
 
 impl<'a> CopyEnv for AcrossSubs<'a> {
+    #[inline(always)]
     fn mut_source(&mut self) -> &mut Subs {
         self.source
     }
 
+    #[inline(always)]
     fn source(&self) -> &Subs {
         self.source
     }
 
+    #[inline(always)]
     fn target(&mut self) -> &mut Subs {
         self.target
     }
 
+    #[inline(always)]
     fn clone_name(&mut self, name: SubsIndex<Lowercase>) -> SubsIndex<Lowercase> {
         SubsIndex::push_new(&mut self.target.field_names, self.source[name].clone())
     }
 
+    #[inline(always)]
     fn clone_tag_name(&mut self, tag_name: SubsIndex<TagName>) -> SubsIndex<TagName> {
         SubsIndex::push_new(&mut self.target.tag_names, self.source[tag_name].clone())
     }
 
+    #[inline(always)]
     fn clone_field_names(&mut self, field_names: SubsSlice<Lowercase>) -> SubsSlice<Lowercase> {
         SubsSlice::extend_new(
             &mut self.target.field_names,
@@ -132,6 +152,7 @@ impl<'a> CopyEnv for AcrossSubs<'a> {
         )
     }
 
+    #[inline(always)]
     fn clone_tag_names(&mut self, tag_names: SubsSlice<TagName>) -> SubsSlice<TagName> {
         SubsSlice::extend_new(
             &mut self.target.tag_names,
@@ -139,6 +160,7 @@ impl<'a> CopyEnv for AcrossSubs<'a> {
         )
     }
 
+    #[inline(always)]
     fn clone_record_fields(
         &mut self,
         record_fields: SubsSlice<RecordField<()>>,
