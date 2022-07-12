@@ -11,7 +11,9 @@ interface Dict
         contains,
         keys,
         values,
-        insertAll, keepShared, removeAll,
+        insertAll,
+        keepShared,
+        removeAll,
     ]
     imports [
         Bool.{ Bool },
@@ -116,9 +118,15 @@ remove = \@Dict list, key ->
 
 contains : Dict k v, k -> Bool
 contains = \@Dict list, needle ->
-    when List.find list (\Pair key _val -> key == needle) is
-        Ok _ -> True
-        Err _ -> False
+    step = \_, Pair key _val ->
+        if key == needle then
+            Break {}
+        else
+            Continue {}
+
+    when List.iterate list {} step is
+        Continue _ -> False
+        Break _ -> True
 
 single : k, v -> Dict k v
 single = \key, value ->
