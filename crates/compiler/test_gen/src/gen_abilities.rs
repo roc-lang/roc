@@ -545,7 +545,6 @@ fn encode_derived_tag_two_payloads_string() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[ignore]
 fn encode_derived_nested_tag_string() {
     assert_evals_to!(
         indoc!(
