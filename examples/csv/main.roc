@@ -3,35 +3,23 @@ app "main"
     imports []
     provides [main] to pf
 
-main = partialTest deconstructedParser "0123456789ABCDEFGHIJKLMN"
-
-
-RawStr : List U8
-
-partialTest = \parser, input ->
-  when input |> strToRaw |> parser  is
+main =
+  input = "0123456789ABCDEFGHIJKLMN"
+  when input |> Str.toUtf8 |> manyImpl anyChar []  is
     Ok result ->
-      # val = result.val |> Str.joinWith("\r\n")
-      val = result.val
-      leftover = result.input
+      val = result.val |> strFromRaw
+      leftover = result.input |> strFromRaw
       "Parse success: \(val) (leftover string: \(leftover))\n"
     Err (ParsingFailure problem) ->
       "Parse failure: \(problem)\n"
 
-deconstructedParser =
-  \input ->
-    manyImpl (anyChar) [] input
-    |> Result.map \field ->
-      res = field.val |> strFromRaw
-      {val: res, input: field.input |> strFromRaw }
-
-manyImpl = \parser, vals, input ->
+manyImpl = \input, parser, vals ->
   result = (parser input)
   when result is
     Err _ ->
       Ok {val: vals, input: input}
     Ok {val: val, input: inputRest} ->
-      manyImpl parser (List.append vals val) inputRest
+      manyImpl inputRest parser (List.append vals val)
 
 anyChar =
   \input ->
@@ -42,11 +30,7 @@ anyChar =
       Ok startCodepoint ->
         Ok {val: startCodepoint, input: inputRest}
 
-strToRaw : Str -> RawStr
-strToRaw = \str ->
-  str |> Str.toUtf8
-
-strFromRaw : RawStr -> Str
+strFromRaw : List U8 -> Str
 strFromRaw = \rawStr ->
   rawStr
   |> Str.fromUtf8
