@@ -9051,39 +9051,6 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        unbound_type_in_record_does_not_implement_encoding,
-        indoc!(
-            r#"
-            app "test" imports [Encode] provides [main] to "./platform"
-
-            main = \x -> Encode.toEncoder { x: x }
-            "#
-        ),
-        @r#"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-        This expression has a type that does not implement the abilities it's expected to:
-
-        3│  main = \x -> Encode.toEncoder { x: x }
-                                          ^^^^^^^^
-
-        Roc can't generate an implementation of the `Encode.Encoding` ability
-        for
-
-            { x : a }
-
-        In particular, an implementation for
-
-            a
-
-        cannot be generated.
-
-        Tip: This type variable is not bound to `Encoding`. Consider adding a
-        `has` clause to bind the type variable, like `| a has Encode.Encoding`
-        "#
-    );
-
-    test_report!(
         nested_opaque_does_not_implement_encoding,
         indoc!(
             r#"
