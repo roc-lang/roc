@@ -447,3 +447,50 @@ fn encode_derived_record_one_field_string() {
         RocStr
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn encode_derived_record_two_fields_strings() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ toEncoder }, Json]
+                provides [main] to "./platform"
+
+            main =
+                rcd = {a: "foo", b: "bar"}
+                result = Str.fromUtf8 (Encode.toBytes rcd Json.format)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"{"a":"foo","b":"bar",}"#),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn encode_derived_nested_record_string() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ toEncoder }, Json]
+                provides [main] to "./platform"
+
+            main =
+                rcd = {a: {b: "bar"}}
+                encoded = Encode.toBytes rcd Json.format
+                result = Str.fromUtf8 encoded
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"{"a":{"b":"bar",},}"#),
+        RocStr
+    )
+}
