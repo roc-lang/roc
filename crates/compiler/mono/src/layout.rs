@@ -1235,9 +1235,7 @@ impl<'a> Layout<'a> {
         use roc_types::subs::Content::*;
         match content {
             FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar(var)),
-            FlexAbleVar(_, _) | RigidAbleVar(_, _) => {
-                todo_abilities!("Not reachable yet")
-            }
+            FlexAbleVar(_, _) | RigidAbleVar(_, _) => todo_abilities!("Not reachable yet"),
             RecursionVar { structure, .. } => {
                 let structure_content = env.subs.get_content_without_compacting(structure);
                 Self::new_help(env, structure, *structure_content)

@@ -2651,21 +2651,9 @@ fn specialize_suspended<'a>(
                     v
                 }
                 None => {
-                    if env.home == ModuleId::DERIVED_SYNTH
-                        && name.name().module_id() == ModuleId::DERIVED_SYNTH
-                    {
-                        // TODO: This can happen when we find another symbol to derive, but haven't
-                        // yet derived it. We don't need this branch if we make deriving closer to
-                        // mono and have derived impls assembled into procs here, rather than in
-                        // load.
-                        // But for now, just mark as an external specialization and we'll
-                        // specialize it in a subsequent pass of mono.
-                        add_needed_external(procs, env, var, name);
-                    } else {
-                        // TODO this assumes the specialization is done by another module
-                        // make sure this does not become a problem down the road!
-                        debug_assert!(name.name().module_id() != name.name().module_id());
-                    }
+                    // TODO this assumes the specialization is done by another module
+                    // make sure this does not become a problem down the road!
+                    debug_assert!(name.name().module_id() != name.name().module_id());
                     continue;
                 }
             }

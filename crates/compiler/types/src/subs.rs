@@ -873,13 +873,7 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
         FlatType::Apply(name, arguments) => {
             let slice = subs.get_subs_slice(*arguments);
 
-            write!(f, "Apply({:?} ", name)?;
-            for var in slice {
-                let content = subs.get_content_without_compacting(*var);
-                write!(f, ", <{:?}>{:?}", *var, SubsFmtContent(content, subs))?;
-            }
-            write!(f, ")")
-            // write!(f, "Apply({:?}, {:?})", name, slice)
+            write!(f, "Apply({:?}, {:?})", name, slice)
         }
         FlatType::Func(arguments, lambda_set, result) => {
             let slice = subs.get_subs_slice(*arguments);

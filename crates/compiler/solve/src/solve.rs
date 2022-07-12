@@ -2103,7 +2103,7 @@ fn compact_lambda_set<P: Phase>(
         }
     };
 
-    let specialized_lambda_set = get_specialization_lambda_set_ambient_function(
+    let specialization_ambient_function_var = get_specialization_lambda_set_ambient_function(
         subs,
         derived_module,
         phase,
@@ -2114,7 +2114,7 @@ fn compact_lambda_set<P: Phase>(
         target_rank,
     );
 
-    let t_f2 = match specialized_lambda_set {
+    let t_f2 = match specialization_ambient_function_var {
         Ok(lset) => lset,
         Err(()) => {
             // Do nothing other than to remove the concrete lambda to drop from the lambda set,
