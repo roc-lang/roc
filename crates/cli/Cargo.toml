@@ -64,7 +64,6 @@ bumpalo = { version = "3.8.0", features = ["collections"] }
 mimalloc = { version = "0.1.26", default-features = false }
 libc = "0.2.106"
 errno = "0.2.8"
-signal-hook = "0.3.14"
 ven_pretty = { path = "../vendor/pretty" }
 
 target-lexicon = "0.12.3"
