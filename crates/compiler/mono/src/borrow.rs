@@ -934,7 +934,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         NumBytesToU32 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrStartsWith | StrEndsWith => arena.alloc_slice_copy(&[borrowed, borrowed]),
         StrStartsWithScalar => arena.alloc_slice_copy(&[borrowed, irrelevant]),
-        StrFromUtf8Range => arena.alloc_slice_copy(&[borrowed, irrelevant, irrelevant]),
+        StrFromUtf8Range => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
         StrToUtf8 => arena.alloc_slice_copy(&[owned]),
         StrRepeat => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrFromInt | StrFromFloat => arena.alloc_slice_copy(&[irrelevant]),
