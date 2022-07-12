@@ -2041,6 +2041,8 @@ fn unify_shared_tags_new<M: MetaCollector>(
     let mut matching_tags = Vec::default();
     let num_shared_tags = shared_tags.len();
 
+    let mut total_outcome = Outcome::default();
+
     for (name, (actual_vars, expected_vars)) in shared_tags {
         let mut matching_vars = Vec::with_capacity(actual_vars.len());
 
@@ -2095,6 +2097,8 @@ fn unify_shared_tags_new<M: MetaCollector>(
             } else if outcome.mismatches.is_empty() {
                 matching_vars.push(actual);
             }
+
+            total_outcome.union(outcome);
         }
 
         // only do this check after unification so the error message has more info
@@ -2145,7 +2149,11 @@ fn unify_shared_tags_new<M: MetaCollector>(
             }
         };
 
-        unify_shared_tags_merge_new(subs, ctx, new_tags, new_ext_var, recursion_var)
+        let merge_outcome =
+            unify_shared_tags_merge_new(subs, ctx, new_tags, new_ext_var, recursion_var);
+
+        total_outcome.union(merge_outcome);
+        total_outcome
     } else {
         mismatch!(
             "Problem with Tag Union\nThere should be {:?} matching tags, but I only got \n{:?}",

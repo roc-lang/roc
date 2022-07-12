@@ -494,3 +494,27 @@ fn encode_derived_nested_record_string() {
         RocStr
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn encode_derived_tag_one_payload_string() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ toEncoder }, Json]
+                provides [main] to "./platform"
+
+            main =
+                x : [A Str]
+                x = A "foo"
+                result = Str.fromUtf8 (Encode.toBytes x Json.format)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"{"A":["foo",]}"#),
+        RocStr
+    )
+}

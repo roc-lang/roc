@@ -1850,7 +1850,6 @@ fn encode_derived_nested_record_string() {
 }
 
 #[mono_test]
-#[ignore = "TODO make this work (one ULS var is missing)"]
 fn encode_derived_tag_one_field_string() {
     indoc!(
         r#"
