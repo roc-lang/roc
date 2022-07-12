@@ -15,7 +15,7 @@ trait CopyEnv {
     #[inline(always)]
     fn clear_source_copy(&mut self, var: Variable) {
         self.mut_source().modify(var, |descriptor| {
-            if let Some(_) = descriptor.copy.into_variable() {
+            if descriptor.copy.into_variable().is_some() {
                 descriptor.copy = OptVariable::NONE;
             } else {
                 debug_assert!(false, "{:?} marked as copied but it wasn't", var);
@@ -193,7 +193,7 @@ pub fn deep_copy_expr_across_subs(
 
 /// Deep copies all type variables in [`expr`].
 /// Returns [`None`] if the expression does not need to be copied.
-fn deep_copy_type_vars_into_expr_help<'a, C: CopyEnv>(
+fn deep_copy_type_vars_into_expr_help<C: CopyEnv>(
     env: &mut C,
     var: Variable,
     expr: &Expr,
@@ -219,7 +219,7 @@ fn deep_copy_type_vars_into_expr_help<'a, C: CopyEnv>(
 
     return Some((copy_expr_var, copied_expr));
 
-    fn help<'a, C: CopyEnv>(env: &mut C, expr: &Expr, copied: &mut Vec<Variable>) -> Expr {
+    fn help<C: CopyEnv>(env: &mut C, expr: &Expr, copied: &mut Vec<Variable>) -> Expr {
         use Expr::*;
 
         macro_rules! sub {
@@ -563,7 +563,7 @@ fn deep_copy_type_vars_into_expr_help<'a, C: CopyEnv>(
 /// Deep copies the type variables in [`var`], returning a map of original -> new type variable for
 /// all type variables copied.
 #[inline]
-fn deep_copy_type_vars<'a, C: CopyEnv>(
+fn deep_copy_type_vars<C: CopyEnv>(
     env: &mut C,
     copied: &mut Vec<Variable>,
     var: Variable,
