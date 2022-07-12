@@ -158,6 +158,7 @@ pub fn deep_copy_type_vars_into_expr(
     deep_copy_type_vars_into_expr_help(subs, var, expr)
 }
 
+#[allow(unused)] // TODO to be removed when this is used for the derivers
 pub fn deep_copy_expr_across_subs(
     source: &mut Subs,
     target: &mut Subs,
@@ -815,6 +816,7 @@ fn deep_copy_type_vars<'a, C: CopyEnv>(
                         let copy_var = env.get_copy(var).into_variable().unwrap_or(var);
 
                         env.target()[target_index] = Uls(copy_var, sym, region);
+                        env.target().uls_of_var.add(copy_var, copy);
                     }
 
                     LambdaSet(subs::LambdaSet {
@@ -840,16 +842,19 @@ fn deep_copy_type_vars<'a, C: CopyEnv>(
 
 #[cfg(test)]
 mod test {
-    use crate::copy::deep_copy_type_vars_into_expr;
+    use crate::copy::{deep_copy_type_vars_into_expr, AcrossSubs};
 
     use super::{deep_copy_expr_across_subs, deep_copy_type_vars};
     use roc_can::expr::Expr;
     use roc_error_macros::internal_error;
     use roc_module::{ident::TagName, symbol::Symbol};
     use roc_region::all::Loc;
-    use roc_types::subs::{
-        Content, Content::*, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, SubsIndex,
-        Variable,
+    use roc_types::{
+        subs::{
+            self, Content, Content::*, Descriptor, FlatType, Mark, OptVariable, Rank, Subs,
+            SubsIndex, SubsSlice, Variable,
+        },
+        types::Uls,
     };
 
     #[cfg(test)]
@@ -1110,5 +1115,53 @@ mod test {
             }
             e => panic!("{:?}", e),
         }
+    }
+
+    #[test]
+    fn copy_across_subs_preserve_uls_of_var() {
+        let mut source = Subs::new();
+        let mut target = Subs::new();
+
+        let a = new_var(&mut source, FlexVar(None));
+        let uls = SubsSlice::extend_new(
+            &mut source.unspecialized_lambda_sets,
+            vec![Uls(a, Symbol::UNDERSCORE, 3)],
+        );
+        let lambda_set_var = new_var(
+            &mut source,
+            LambdaSet(subs::LambdaSet {
+                solved: Default::default(),
+                recursion_var: OptVariable::NONE,
+                unspecialized: uls,
+                ambient_function: Variable::NULL,
+            }),
+        );
+
+        source.uls_of_var.add(a, lambda_set_var);
+
+        assert!(target.uls_of_var.is_empty());
+
+        let mut env = AcrossSubs {
+            source: &mut source,
+            target: &mut target,
+        };
+        let mut copied = vec![];
+        let copy_uls = deep_copy_type_vars(&mut env, &mut copied, lambda_set_var);
+        let copy_a = deep_copy_type_vars(&mut env, &mut copied, a);
+
+        assert!(matches!(
+            target.get_content_without_compacting(copy_a),
+            Content::FlexVar(None)
+        ));
+        assert!(matches!(
+            target.get_content_without_compacting(copy_uls),
+            Content::LambdaSet(..)
+        ));
+
+        let uls_of_var: Vec<_> = target
+            .remove_dependent_unspecialized_lambda_sets(copy_a)
+            .collect();
+        assert_eq!(uls_of_var.len(), 1);
+        assert_eq!(uls_of_var[0], copy_uls);
     }
 }
