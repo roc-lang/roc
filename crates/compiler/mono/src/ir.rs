@@ -1325,7 +1325,6 @@ impl<'a, 'i> Env<'a, 'i> {
     }
 
     pub fn is_imported_symbol(&self, symbol: Symbol) -> bool {
-        dbg!(self.home, symbol);
         let sym_module = symbol.module_id();
         sym_module != self.home
             && !(self.home == ModuleId::DERIVED_GEN && sym_module == ModuleId::DERIVED_SYNTH)
@@ -2708,9 +2707,6 @@ pub fn specialize_all<'a>(
     match pending_specializations {
         PendingSpecializations::Making => {}
         PendingSpecializations::Finding(suspended) => {
-            if env.home == ModuleId::DERIVED_SYNTH {
-                // dbg!(&suspended);
-            }
             specialize_suspended(env, &mut procs, layout_cache, suspended)
         }
     }
@@ -2785,7 +2781,6 @@ fn specialize_external_help<'a>(
     variable: Variable,
     host_exposed_aliases: &[(Symbol, Variable)],
 ) {
-    dbg!(env.home);
     let partial_proc_id = match procs.partial_procs.symbol_to_id(name.name()) {
         Some(v) => v,
         None => {
@@ -2889,7 +2884,6 @@ fn specialize_external<'a>(
     host_exposed_variables: &[(Symbol, Variable)],
     partial_proc_id: PartialProcId,
 ) -> Result<Proc<'a>, LayoutProblem> {
-    dbg!(("spec ", lambda_name));
     let partial_proc = procs.partial_procs.get_id(partial_proc_id);
     let captured_symbols = partial_proc.captured_symbols;
 
@@ -7470,10 +7464,6 @@ fn call_by_name<'a>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     // Register a pending_specialization for this function
-    // dbg!(roc_types::subs::SubsFmtContent(
-    //     env.subs.get_content_without_compacting(fn_var),
-    //     env.subs
-    // ));
     match layout_cache.raw_from_var(env.arena, fn_var, env.subs) {
         Err(LayoutProblem::UnresolvedTypeVar(var)) => {
             let msg = format!(
