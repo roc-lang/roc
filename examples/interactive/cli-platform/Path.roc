@@ -65,8 +65,6 @@ Path := [
     FromStr Str,
 ]
 
-## ## Creating and transforming
-
 ## Note that the path may not be valid depending on the filesystem where it is used.
 ## For example, paths containing `:` are valid on ext4 and NTFS filesystems, but not
 ## on FAT ones. So if you have multiple disks on the same machine, but they have
