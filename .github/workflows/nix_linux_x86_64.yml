@@ -1,0 +1,23 @@
+on: [pull_request]
+
+name: Nix linux x86_64 cargo test
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_BACKTRACE: 1
+
+jobs:
+  nix-linux-x86:
+    name: nix-linux-x86
+    runs-on: [self-hosted, i7-6700K]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          clean: "true"
+
+      - name: execute tests with --release
+        run: nix develop -c cargo test --locked --release
