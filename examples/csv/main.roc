@@ -8,11 +8,11 @@ app "main"
 # with hard-coded input.
 
 
-# main = fullTest csvParser "10,20\n\"An escaped field!\",30\n"
-# main = partialTest fieldParser "\"An escaped field with some <- double quotes\""
+main = fullTest csvParser "10,20\n\"An escaped field!\",30\n"
+# main = partialTest fieldParser "\"An escaped field with some \"\"<- double quotes\""
 # main = fullTest fieldContentsParser "My very cool,\"\"\r\n string"
 # main = partialTest betweenParser "\"this is a test\"\" to see\""
-main = partialTest manyParser "this is a very long string\"\""
+# main = partialTest manyParser "this is a very long string\"\""
 
 partialTest = \parser, input ->
   when Parser.Str.runPartialStr parser input is
@@ -28,8 +28,8 @@ fullTest = \parser, input ->
   when Parser.Str.runStr parser input is
     Ok result ->
       # val = result |> Str.joinWith(", ")
-      # val = result |> Str.joinWith("\r\n")
-      val = result
+      val = result |> Str.joinWith("\r\n")
+      # val = result
       "Parse success: \(val)\n"
     Err (ParsingFailure problem) ->
       "Parse failure: \(problem)\n"
