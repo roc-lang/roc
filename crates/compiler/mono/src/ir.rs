@@ -80,18 +80,15 @@ macro_rules! return_on_layout_error_help {
     ($env:expr, $error:expr, $context_msg:expr) => {{
         match $error {
             LayoutProblem::UnresolvedTypeVar(_) => {
-                return Stmt::RuntimeError($env.arena.alloc(format!(
-                    "UnresolvedTypeVar {} at {}",
-                    file!(),
-                    $context_msg,
-                )));
+                return Stmt::RuntimeError(
+                    $env.arena
+                        .alloc(format!("UnresolvedTypeVar: {}", $context_msg,)),
+                );
             }
             LayoutProblem::Erroneous => {
-                return Stmt::RuntimeError($env.arena.alloc(format!(
-                    "Erroneous {} at {}",
-                    file!(),
-                    $context_msg,
-                )));
+                return Stmt::RuntimeError(
+                    $env.arena.alloc(format!("Erroneous: {}", $context_msg,)),
+                );
             }
         }
     }};
@@ -4598,12 +4595,10 @@ pub fn with_hole<'a>(
                     );
 
                     if let Err(runtime_error) = inserted {
-                        return Stmt::RuntimeError(env.arena.alloc(format!(
-                            "RuntimeError {} line {} {:?}",
-                            file!(),
-                            line!(),
-                            runtime_error,
-                        )));
+                        return Stmt::RuntimeError(
+                            env.arena
+                                .alloc(format!("RuntimeError: {:?}", runtime_error,)),
+                        );
                     } else {
                         drop(inserted);
                     }
@@ -5321,16 +5316,14 @@ fn convert_tag_union<'a>(
         Ok(cached) => cached,
         Err(LayoutProblem::UnresolvedTypeVar(_)) => {
             return Stmt::RuntimeError(env.arena.alloc(format!(
-                "UnresolvedTypeVar {} line {}",
-                file!(),
-                line!()
+                "Unresolved type variable for tag {}",
+                tag_name.0.as_str()
             )))
         }
         Err(LayoutProblem::Erroneous) => {
             return Stmt::RuntimeError(env.arena.alloc(format!(
-                "Erroneous {} line {}",
-                file!(),
-                line!()
+                "Tag {} was part of a type error!",
+                tag_name.0.as_str()
             )));
         }
     };
@@ -5613,9 +5606,7 @@ fn tag_union_to_function<'a>(
         }
 
         Err(runtime_error) => Stmt::RuntimeError(env.arena.alloc(format!(
-            "RuntimeError {} line {} {:?}",
-            file!(),
-            line!(),
+            "Could not produce tag function due to a runtime error: {:?}",
             runtime_error,
         ))),
     }
