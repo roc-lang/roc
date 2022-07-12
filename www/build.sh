@@ -19,7 +19,9 @@ wget https://github.com/rtfeldman/elm-css/files/8849069/roc-source-code.zip
 # TODO: When roc repo is public, download it from nightly builds.
 wget https://github.com/brian-carroll/mock-repl/archive/refs/heads/deploy.zip
 unzip deploy.zip
-mv mock-repl-deploy/* repl/
+# Explicitly list the filenames, failing the build if they're not found
+mv mock-repl-deploy/roc_repl_wasm.js repl/
+mv mock-repl-deploy/roc_repl_wasm_bg.wasm repl/
 rmdir mock-repl-deploy
 rm deploy.zip
 
