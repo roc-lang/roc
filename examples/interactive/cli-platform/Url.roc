@@ -115,6 +115,7 @@ append = \@Url urlStr, suffixUnencoded ->
                 |> Str.concat "?"
                 |> Str.concat after
                 |> @Url
+
         Err NotFound ->
             # There wasn't a query, but there might still be a fragment
             when Str.splitFirst urlStr "#" is
@@ -132,6 +133,7 @@ append = \@Url urlStr, suffixUnencoded ->
                         |> Str.concat "#"
                         |> Str.concat after
                         |> @Url
+
                 Err NotFound ->
                     # No query and no fragment, so just append it
                     @Url (appendHelp urlStr suffix)
@@ -146,6 +148,7 @@ appendHelp = \prefix, suffix ->
                 Ok { after } ->
                     # TODO `expect before == ""`
                     Str.concat prefix after
+
                 Err NotFound ->
                     # This should never happen, because we already verified
                     # that the suffix startsWith "/"
@@ -207,6 +210,7 @@ percentEncode = \input ->
                     # These special characters can all be unescaped in paths
                     Str.appendScalar output (Num.toU32 byte)
                         |> Result.withDefault "" # this will never fail
+
                 _ ->
                     # This needs encoding in a path
                     suffix =
@@ -238,6 +242,7 @@ appendParam = \@Url urlStr, key, value ->
                 # The fragment is almost certainly going to be a small string,
                 # so this interpolation should happen on the stack.
                 { withoutFragment: before, afterQuery: "#\(after)" }
+
             Err NotFound ->
                 { withoutFragment: urlStr, afterQuery: "" }
 
@@ -281,6 +286,7 @@ withQuery = \@Url urlStr, queryStr ->
                 # The fragment is almost certainly going to be a small string,
                 # so this interpolation should happen on the stack.
                 { withoutFragment: before, afterQuery: "#\(after)" }
+
             Err NotFound ->
                 { withoutFragment: urlStr, afterQuery: "" }
 
@@ -389,6 +395,7 @@ withFragment = \@Url urlStr, fragmentStr ->
             else
                 # Replace the URL's old fragment with this one, discarding `after`
                 @Url "\(before)#\(fragmentStr)"
+
         Err NotFound ->
             if Str.isEmpty fragmentStr then
                 # If the given fragment is empty, leave the URL as having no fragment
