@@ -10,7 +10,7 @@ use roc_collections::MutMap;
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
 use roc_module::symbol::ModuleId;
-use roc_solve::solve::{compact_lambda_sets_of_vars, Phase, Pools, SubsProxy};
+use roc_solve::solve::{compact_lambda_sets_of_vars, Phase, Pools};
 use roc_types::subs::{Content, FlatType, LambdaSet};
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, Variable};
 use roc_unify::unify::{unify as unify_unify, Mode, Unified};
@@ -174,21 +174,12 @@ pub fn unify(
     left: Variable,
     right: Variable,
 ) -> Result<(), UnificationFailed> {
-    let unified = if home == ModuleId::DERIVED {
-        // TODO: can we be smarter so more stuff can happen in parallel without us having to lock
-        // and steal from the derived module here?
-        let mut derived_module = derived_module.lock().unwrap();
-
-        let mut stolen = derived_module.steal();
-
-        let unified = unify_unify(&mut stolen.subs, left, right, Mode::EQ);
-
-        derived_module.return_stolen(stolen);
-
-        unified
-    } else {
-        unify_unify(subs, left, right, Mode::EQ)
-    };
+    debug_assert_ne!(
+        home,
+        ModuleId::DERIVED_SYNTH,
+        "derived module can only unify its subs in its own context!"
+    );
+    let unified = unify_unify(subs, left, right, Mode::EQ);
 
     match unified {
         Unified::Success {
@@ -201,9 +192,9 @@ pub fn unify(
 
             let late_phase = LatePhase { home, abilities };
 
-            let mut subs_proxy = SubsProxy::new(home, subs, derived_module);
             let must_implement_constraints = compact_lambda_sets_of_vars(
-                &mut subs_proxy,
+                subs,
+                derived_module,
                 arena,
                 &mut pools,
                 lambda_sets_to_specialize,

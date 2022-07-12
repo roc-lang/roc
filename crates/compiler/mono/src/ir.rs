@@ -18,7 +18,7 @@ use roc_debug_flags::{
     ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
     ROC_PRINT_RUNTIME_ERROR_GEN,
 };
-use roc_derive::{SharedDerivedModule, StolenFromDerived};
+use roc_derive::SharedDerivedModule;
 use roc_error_macros::{internal_error, todo_abilities};
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
@@ -1322,38 +1322,22 @@ impl<'a, 'i> Env<'a, 'i> {
     }
 
     pub fn is_imported_symbol(&self, symbol: Symbol) -> bool {
-        symbol.module_id() != self.home
+        dbg!(self.home, symbol);
+        let sym_module = symbol.module_id();
+        sym_module != self.home
+            && !(self.home == ModuleId::DERIVED_GEN && sym_module == ModuleId::DERIVED_SYNTH)
     }
 
     /// Unifies two variables and performs lambda set compaction.
     /// Use this rather than [roc_unify::unify] directly!
     fn unify(&mut self, left: Variable, right: Variable) -> Result<(), UnificationFailed> {
-        if self.home == ModuleId::DERIVED {
-            // When specializing derives, we steal the Derived module's ident ids from
-            // `derived_module` for use in the usual mono pass. But during unification we
-            // temporarily return them, so that derived ability symbols are resolved properly in
-            // lambda sets.
-            //
-            // IMPORTANT: when this happens, this should be the only thread running, otherwise we
-            // may hit a race between the time we return the stolen subs/ident ids and the time we
-            // retrieve them again. Currently we enforce this in the load build graph; the derived
-            // module always monomorphizes after all other modules, and hence proceeds only by
-            // itself.
-            // TODO: can we be smarter so more stuff can happen in parallel?
-            let mut derived_ident_ids = IdentIds::default();
-            std::mem::swap(&mut derived_ident_ids, self.ident_ids);
-            let mut derived_subs = Subs::default();
-            std::mem::swap(&mut derived_subs, self.subs);
+        debug_assert_ne!(
+            self.home,
+            ModuleId::DERIVED_SYNTH,
+            "should never be monomorphizing the derived synth module!"
+        );
 
-            let mut derived_module = self.derived_module.lock().unwrap();
-
-            derived_module.return_stolen(StolenFromDerived {
-                subs: derived_subs,
-                ident_ids: derived_ident_ids,
-            });
-        }
-
-        let result = roc_late_solve::unify(
+        roc_late_solve::unify(
             self.home,
             self.arena,
             self.subs,
@@ -1362,24 +1346,7 @@ impl<'a, 'i> Env<'a, 'i> {
             &self.exposed_by_module,
             left,
             right,
-        );
-
-        if self.home == ModuleId::DERIVED {
-            debug_assert!(
-                self.ident_ids.is_empty(),
-                "no ident ids should have been added while they were returned to derived_module"
-            );
-
-            let mut derived_module = self.derived_module.lock().unwrap();
-            let StolenFromDerived {
-                ident_ids: mut real_derived_ident_ids,
-                subs: mut real_derived_subs,
-            } = derived_module.steal();
-            std::mem::swap(&mut real_derived_ident_ids, self.ident_ids);
-            std::mem::swap(&mut real_derived_subs, self.subs);
-        }
-
-        result
+        )
     }
 }
 
@@ -2669,7 +2636,8 @@ fn specialize_suspended<'a>(
                     v
                 }
                 None => {
-                    if env.home == ModuleId::DERIVED && name.name().module_id() == ModuleId::DERIVED
+                    if env.home == ModuleId::DERIVED_SYNTH
+                        && name.name().module_id() == ModuleId::DERIVED_SYNTH
                     {
                         // TODO: This can happen when we find another symbol to derive, but haven't
                         // yet derived it. We don't need this branch if we make deriving closer to
@@ -2744,7 +2712,7 @@ pub fn specialize_all<'a>(
     match pending_specializations {
         PendingSpecializations::Making => {}
         PendingSpecializations::Finding(suspended) => {
-            if env.home == ModuleId::DERIVED {
+            if env.home == ModuleId::DERIVED_SYNTH {
                 // dbg!(&suspended);
             }
             specialize_suspended(env, &mut procs, layout_cache, suspended)
@@ -2821,6 +2789,7 @@ fn specialize_external_help<'a>(
     variable: Variable,
     host_exposed_aliases: &[(Symbol, Variable)],
 ) {
+    dbg!(env.home);
     let partial_proc_id = match procs.partial_procs.symbol_to_id(name.name()) {
         Some(v) => v,
         None => {
@@ -7802,7 +7771,7 @@ fn call_by_name_help<'a>(
         )
     } else if env.is_imported_symbol(proc_name.name())
         // TODO HACK FIXME
-        || (proc_name.name().module_id() == ModuleId::DERIVED
+        || (proc_name.name().module_id() == ModuleId::DERIVED_SYNTH
             && !procs.partial_procs.contains_key(proc_name.name()))
     {
         add_needed_external(procs, env, original_fn_var, proc_name);

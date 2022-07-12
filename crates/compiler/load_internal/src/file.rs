@@ -20,7 +20,7 @@ use roc_debug_flags::{
     ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
     ROC_PRINT_LOAD_LOG,
 };
-use roc_derive::{SharedDerivedModule, StolenFromDerived};
+use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
 use roc_late_solve::{AbilitiesView, WorldAbilities};
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
@@ -131,7 +131,6 @@ struct ModuleCache<'a> {
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
     late_specializations: MutMap<ModuleId, LateSpecializationsModule<'a>>,
     external_specializations_requested: MutMap<ModuleId, Vec<ExternalSpecializations<'a>>>,
-    derives_module_metadata: Option<DerivesModuleMetadata<'a>>,
 
     /// Various information
     imports: MutMap<ModuleId, MutSet<ModuleId>>,
@@ -180,7 +179,6 @@ impl Default for ModuleCache<'_> {
             found_specializations: Default::default(),
             late_specializations: Default::default(),
             external_specializations_requested: Default::default(),
-            derives_module_metadata: Default::default(),
             imports: Default::default(),
             top_level_thunks: Default::default(),
             documentation: Default::default(),
@@ -433,43 +431,37 @@ fn start_phase<'a>(
                 }
             }
             Phase::MakeSpecializations => {
-                let specializations_we_must_make = state
+                let mut specializations_we_must_make = state
                     .module_cache
                     .external_specializations_requested
                     .remove(&module_id)
                     .unwrap_or_default();
 
-                let (ident_ids, subs, procs_base, layout_cache, module_timing) =
-                    if module_id == ModuleId::DERIVED {
-                        // The module for derives is treated specially - we keep it isolated, as it
-                        // is only needed for making specializations.
-                        let DerivesModuleMetadata {
-                            mut layout_cache,
-                            mut procs_base,
-                            mut module_timing,
-                        } = state
-                            .module_cache
-                            .derives_module_metadata
-                            .take()
-                            .unwrap_or_else(|| DerivesModuleMetadata::new(state.target_info));
+                if module_id == ModuleId::DERIVED_GEN {
+                    // The derived gen module must also fulfill also specializations asked of the
+                    // derived synth module.
+                    let derived_synth_specializations = state
+                        .module_cache
+                        .external_specializations_requested
+                        .remove(&ModuleId::DERIVED_SYNTH)
+                        .unwrap_or_default();
+                    specializations_we_must_make.extend(derived_synth_specializations)
+                }
 
-                        load_derived_partial_procs(
-                            module_id,
-                            arena,
-                            &state.derived_module,
-                            &mut module_timing,
-                            &mut layout_cache,
-                            state.target_info,
-                            &state.exposed_to_host,
-                            &state.exposed_types,
-                            &mut procs_base,
-                            &mut state.world_abilities,
-                        );
-
-                        let StolenFromDerived { ident_ids, subs } =
-                            state.derived_module.lock().unwrap().steal();
-
-                        (ident_ids, subs, procs_base, layout_cache, module_timing)
+                let (mut ident_ids, mut subs, mut procs_base, layout_cache, mut module_timing) =
+                    if state.make_specializations_pass.current_pass() == 1
+                        && module_id == ModuleId::DERIVED_GEN
+                    {
+                        // This is the first time the derived module is introduced into the load
+                        // graph. It has no abilities of its own or anything, just generate fresh
+                        // information for it.
+                        (
+                            IdentIds::default(),
+                            Subs::default(),
+                            ProcsBase::default(),
+                            LayoutCache::new(state.target_info),
+                            ModuleTiming::new(SystemTime::now()),
+                        )
                     } else if state.make_specializations_pass.current_pass() == 1 {
                         let found_specializations = state
                             .module_cache
@@ -517,6 +509,21 @@ fn start_phase<'a>(
 
                         (ident_ids, subs, procs_base, layout_cache, module_timing)
                     };
+
+                if module_id == ModuleId::DERIVED_GEN {
+                    load_derived_partial_procs(
+                        module_id,
+                        arena,
+                        &mut subs,
+                        &mut ident_ids,
+                        &state.derived_module,
+                        &mut module_timing,
+                        state.target_info,
+                        &state.exposed_types,
+                        &mut procs_base,
+                        &mut state.world_abilities,
+                    );
+                }
 
                 let derived_module = SharedDerivedModule::clone(&state.derived_module);
 
@@ -651,23 +658,6 @@ struct LateSpecializationsModule<'a> {
     module_timing: ModuleTiming,
     layout_cache: LayoutCache<'a>,
     procs_base: ProcsBase<'a>,
-}
-
-#[derive(Debug)]
-struct DerivesModuleMetadata<'a> {
-    layout_cache: LayoutCache<'a>,
-    procs_base: ProcsBase<'a>,
-    module_timing: ModuleTiming,
-}
-
-impl DerivesModuleMetadata<'_> {
-    fn new(target_info: TargetInfo) -> Self {
-        Self {
-            layout_cache: LayoutCache::new(target_info),
-            procs_base: ProcsBase::default(),
-            module_timing: ModuleTiming::new(SystemTime::now()),
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -2443,35 +2433,16 @@ fn update<'a>(
             let _ = layout_cache;
 
             state.procedures.extend(procedures);
-            if module_id == ModuleId::DERIVED {
-                // The derives module is treated specially - put the data back and return the ident
-                // IDs to `derived_module` so other modules can use it in their monomorphization
-                // if needed.
-                state
-                    .derived_module
-                    .lock()
-                    .unwrap()
-                    .return_stolen(StolenFromDerived { ident_ids, subs });
-
-                debug_assert!(state.module_cache.derives_module_metadata.is_none());
-
-                state.module_cache.derives_module_metadata = Some(DerivesModuleMetadata {
+            state.module_cache.late_specializations.insert(
+                module_id,
+                LateSpecializationsModule {
+                    ident_ids,
+                    module_timing,
+                    subs,
                     layout_cache,
                     procs_base,
-                    module_timing,
-                });
-            } else {
-                state.module_cache.late_specializations.insert(
-                    module_id,
-                    LateSpecializationsModule {
-                        ident_ids,
-                        module_timing,
-                        subs,
-                        layout_cache,
-                        procs_base,
-                    },
-                );
-            }
+                },
+            );
 
             let work = state
                 .dependencies
@@ -2707,14 +2678,15 @@ fn finish_specialization(
         .into_module_ids();
 
     let mut all_ident_ids = state.constrained_ident_ids;
-    // Steal the derived symbols and put them in the global ident ids. Since we're done, we won't
-    // need them again.
-    let StolenFromDerived {
-        ident_ids: derived_ident_ids,
-        subs: _,
-    } = state.derived_module.lock().unwrap().steal();
-    ModuleId::DERIVED.register_debug_idents(&derived_ident_ids);
-    all_ident_ids.insert(ModuleId::DERIVED, derived_ident_ids);
+
+    // Associate the ident IDs from the derived synth module
+    let derived_synth_ident_ids = Arc::try_unwrap(state.derived_module)
+        .unwrap_or_else(|_| internal_error!("Outstanding references to the derived module"))
+        .into_inner()
+        .unwrap()
+        .decompose();
+    ModuleId::DERIVED_SYNTH.register_debug_idents(&derived_synth_ident_ids);
+    all_ident_ids.insert(ModuleId::DERIVED_SYNTH, derived_synth_ident_ids);
 
     let interns = Interns {
         module_ids,
@@ -2832,16 +2804,16 @@ fn finish(
         .into_inner()
         .into_module_ids();
 
-    // Steal the derived symbols and put them in the global ident ids. Since we're done, we won't
-    // need them again.
-    let StolenFromDerived {
-        ident_ids: derived_ident_ids,
-        subs: _,
-    } = state.derived_module.lock().unwrap().steal();
-    ModuleId::DERIVED.register_debug_idents(&derived_ident_ids);
+    // Associate the ident IDs from the derived synth module
+    let derived_synth_ident_ids = Arc::try_unwrap(state.derived_module)
+        .unwrap_or_else(|_| internal_error!("Outstanding references to the derived module"))
+        .into_inner()
+        .unwrap()
+        .decompose();
+    ModuleId::DERIVED_SYNTH.register_debug_idents(&derived_synth_ident_ids);
     state
         .constrained_ident_ids
-        .insert(ModuleId::DERIVED, derived_ident_ids);
+        .insert(ModuleId::DERIVED_SYNTH, derived_synth_ident_ids);
 
     let interns = Interns {
         module_ids,
@@ -5003,16 +4975,16 @@ fn build_pending_specializations<'a>(
 fn load_derived_partial_procs<'a>(
     home: ModuleId,
     arena: &'a Bump,
+    subs: &mut Subs,
+    ident_ids: &mut IdentIds,
     derived_module: &SharedDerivedModule,
     module_timing: &mut ModuleTiming,
-    layout_cache: &mut LayoutCache<'a>,
     target_info: TargetInfo,
-    exposed_to_host: &ExposedToHost,
     exposed_by_module: &ExposedByModule,
     procs_base: &mut ProcsBase<'a>,
     world_abilities: &mut WorldAbilities,
 ) {
-    debug_assert_eq!(home, ModuleId::DERIVED);
+    debug_assert_eq!(home, ModuleId::DERIVED_GEN);
 
     let load_derived_procs_start = SystemTime::now();
 
@@ -5020,56 +4992,22 @@ fn load_derived_partial_procs<'a>(
 
     let mut update_mode_ids = UpdateModeIds::new();
 
-    let derives_to_add: Vec<_> = {
+    let derives_to_add = {
         let mut derived_module = derived_module.lock().unwrap();
 
-        // TERRIBLE HACK remove me
-
-        // TODO HACK FIXME
-        dbg!(derived_module
-            .iter_all()
-            .map(|(_, (s, _, _))| *s)
-            .collect::<Vec<_>>());
-        //derived_module.refresh_stale_specializations(exposed_by_module);
-        derived_module.get_or_insert(
-            exposed_by_module,
-            roc_derive_key::DeriveKey::ToEncoder(
-                roc_derive_key::encoding::FlatEncodableKey::String,
-            ),
-        );
-        dbg!(derived_module
-            .iter_all()
-            .map(|(_, (s, _, _))| *s)
-            .collect::<Vec<_>>());
-
-        derived_module
-            .iter_all()
-            .filter(|(_, (symbol, _, _))| !procs_base.partial_procs.contains_key(symbol))
-            // TODO: get rid of the clone below
-            .map(|(_, (symbol, def, _))| (*symbol, def.clone()))
-            .collect()
+        derived_module.iter_load_for_gen_module(subs, |symbol| {
+            !procs_base.partial_procs.contains_key(&symbol)
+        })
     };
-
-    // dbg!(&derives_to_add);
 
     // TODO: we can be even lazier here if we move `add_def_to_module` to happen in mono. Also, the
     // timings would be more accurate.
-    for (derived_symbol, derived_def) in derives_to_add.into_iter() {
-        // TODO: can we steal and return once before and after the loop?
-        //
-        // IMPORTANT: when this happens, this should be the only thread running, otherwise we
-        // may hit a race between the time we return the stolen subs/ident ids and the time we
-        // retrieve them again. Currently we enforce this in the load build graph.
-        let StolenFromDerived {
-            mut subs,
-            mut ident_ids,
-        } = derived_module.lock().unwrap().steal();
-
+    for (derived_symbol, derived_expr) in derives_to_add.into_iter() {
         let mut mono_env = roc_mono::ir::Env {
             arena,
-            subs: &mut subs,
+            subs,
             home,
-            ident_ids: &mut ident_ids,
+            ident_ids,
             target_info,
             update_mode_ids: &mut update_mode_ids,
             // call_specialization_counter=0 is reserved
@@ -5082,7 +5020,7 @@ fn load_derived_partial_procs<'a>(
             derived_module,
         };
 
-        let partial_proc = match derived_def.loc_expr.value {
+        let partial_proc = match derived_expr {
             roc_can::expr::Expr::Closure(roc_can::expr::ClosureData {
                 function_type,
                 arguments,
@@ -5103,17 +5041,12 @@ fn load_derived_partial_procs<'a>(
                     return_type,
                 )
             }
-            _ => internal_error!(),
+            _ => internal_error!("Expected only functions to be derived"),
         };
 
         procs_base
             .partial_procs
             .insert(derived_symbol, partial_proc);
-
-        derived_module
-            .lock()
-            .unwrap()
-            .return_stolen(StolenFromDerived { subs, ident_ids });
     }
 
     if !new_module_thunks.is_empty() {
