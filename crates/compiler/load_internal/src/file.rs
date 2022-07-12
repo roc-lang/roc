@@ -2680,7 +2680,7 @@ fn finish_specialization(
     let mut all_ident_ids = state.constrained_ident_ids;
 
     // Associate the ident IDs from the derived synth module
-    let derived_synth_ident_ids = Arc::try_unwrap(state.derived_module)
+    let (_, derived_synth_ident_ids) = Arc::try_unwrap(state.derived_module)
         .unwrap_or_else(|_| internal_error!("Outstanding references to the derived module"))
         .into_inner()
         .unwrap()
@@ -2805,7 +2805,7 @@ fn finish(
         .into_module_ids();
 
     // Associate the ident IDs from the derived synth module
-    let derived_synth_ident_ids = Arc::try_unwrap(state.derived_module)
+    let (_, derived_synth_ident_ids) = Arc::try_unwrap(state.derived_module)
         .unwrap_or_else(|_| internal_error!("Outstanding references to the derived module"))
         .into_inner()
         .unwrap()
