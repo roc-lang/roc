@@ -1,5 +1,3 @@
-use bumpalo::collections::Vec;
-use bumpalo::Bump;
 use roc_can::{
     def::Def,
     expr::{AccessorData, ClosureData, Expr, Field, WhenBranch},
@@ -65,18 +63,16 @@ impl CopyEnv for Subs {
 }
 
 pub fn deep_copy_type_vars_into_expr(
-    arena: &Bump,
     subs: &mut Subs,
     var: Variable,
     expr: &Expr,
 ) -> Option<(Variable, Expr)> {
-    deep_copy_type_vars_into_expr_help(arena, subs, var, expr)
+    deep_copy_type_vars_into_expr_help(subs, var, expr)
 }
 
 /// Deep copies all type variables in [`expr`].
 /// Returns [`None`] if the expression does not need to be copied.
 fn deep_copy_type_vars_into_expr_help<'a, C: CopyEnv>(
-    arena: &'a Bump,
     env: &mut C,
     var: Variable,
     expr: &Expr,
@@ -84,15 +80,15 @@ fn deep_copy_type_vars_into_expr_help<'a, C: CopyEnv>(
     // Always deal with the root, so that aliases propagate correctly.
     let expr_var = env.source_root_var(var);
 
-    let mut copied = Vec::with_capacity_in(16, arena);
+    let mut copied = Vec::with_capacity(16);
 
-    let copy_expr_var = deep_copy_type_vars(arena, env, &mut copied, expr_var);
+    let copy_expr_var = deep_copy_type_vars(env, &mut copied, expr_var);
 
     if copied.is_empty() {
         return None;
     }
 
-    let copied_expr = help(arena, env, expr, &mut copied);
+    let copied_expr = help(env, expr, &mut copied);
 
     // we have tracked all visited variables, and can now traverse them
     // in one go (without looking at the UnificationTable) and clear the copy field
@@ -102,23 +98,18 @@ fn deep_copy_type_vars_into_expr_help<'a, C: CopyEnv>(
 
     return Some((copy_expr_var, copied_expr));
 
-    fn help<'a, C: CopyEnv>(
-        arena: &'a Bump,
-        env: &mut C,
-        expr: &Expr,
-        copied: &mut Vec<Variable>,
-    ) -> Expr {
+    fn help<'a, C: CopyEnv>(env: &mut C, expr: &Expr, copied: &mut Vec<Variable>) -> Expr {
         use Expr::*;
 
         macro_rules! sub {
             ($var:expr) => {{
-                deep_copy_type_vars(arena, env, copied, $var)
+                deep_copy_type_vars(env, copied, $var)
             }};
         }
 
         macro_rules! go_help {
             ($expr:expr) => {{
-                help(arena, env, $expr, copied)
+                help(env, $expr, copied)
             }};
         }
 
@@ -452,7 +443,6 @@ fn deep_copy_type_vars_into_expr_help<'a, C: CopyEnv>(
 /// all type variables copied.
 #[inline]
 fn deep_copy_type_vars<'a, C: CopyEnv>(
-    arena: &'a Bump,
     env: &mut C,
     copied: &mut Vec<Variable>,
     var: Variable,
@@ -460,18 +450,13 @@ fn deep_copy_type_vars<'a, C: CopyEnv>(
     // Always deal with the root, so that unified variables are treated the same.
     let var = env.source_root_var(var);
 
-    let cloned_var = help(arena, env, copied, var);
+    let cloned_var = help(env, copied, var);
 
     return cloned_var;
 
     #[must_use]
     #[inline]
-    fn help<C: CopyEnv>(
-        arena: &Bump,
-        env: &mut C,
-        visited: &mut Vec<Variable>,
-        var: Variable,
-    ) -> Variable {
+    fn help<C: CopyEnv>(env: &mut C, visited: &mut Vec<Variable>, var: Variable) -> Variable {
         use roc_types::subs::Content::*;
         use roc_types::subs::FlatType::*;
 
@@ -505,14 +490,14 @@ fn deep_copy_type_vars<'a, C: CopyEnv>(
             ($slice:expr) => {
                 for var_index in $slice {
                     let var = env.source()[var_index];
-                    let _ = help(arena, env, visited, var);
+                    let _ = help(env, visited, var);
                 }
             };
         }
 
         macro_rules! descend_var {
             ($var:expr) => {{
-                help(arena, env, visited, $var)
+                help(env, visited, $var)
             }};
         }
 
@@ -747,8 +732,6 @@ mod test {
     use crate::copy::deep_copy_type_vars_into_expr;
 
     use super::deep_copy_type_vars;
-    use bumpalo::collections::Vec;
-    use bumpalo::Bump;
     use roc_can::expr::Expr;
     use roc_error_macros::internal_error;
     use roc_module::{ident::TagName, symbol::Symbol};
@@ -771,14 +754,13 @@ mod test {
     #[test]
     fn copy_flex_var() {
         let mut subs = Subs::new();
-        let arena = Bump::new();
 
         let field_name = SubsIndex::push_new(&mut subs.field_names, "a".into());
         let var = new_var(&mut subs, FlexVar(Some(field_name)));
 
-        let mut copied = Vec::new_in(&arena);
+        let mut copied = vec![];
 
-        let copy = deep_copy_type_vars(&arena, &mut subs, &mut copied, var);
+        let copy = deep_copy_type_vars(&mut subs, &mut copied, var);
 
         assert_ne!(var, copy);
 
@@ -793,14 +775,13 @@ mod test {
     #[test]
     fn copy_rigid_var() {
         let mut subs = Subs::new();
-        let arena = Bump::new();
 
         let field_name = SubsIndex::push_new(&mut subs.field_names, "a".into());
         let var = new_var(&mut subs, RigidVar(field_name));
 
-        let mut copied = Vec::new_in(&arena);
+        let mut copied = vec![];
 
-        let copy = deep_copy_type_vars(&arena, &mut subs, &mut copied, var);
+        let copy = deep_copy_type_vars(&mut subs, &mut copied, var);
 
         assert_ne!(var, copy);
 
@@ -815,14 +796,13 @@ mod test {
     #[test]
     fn copy_flex_able_var() {
         let mut subs = Subs::new();
-        let arena = Bump::new();
 
         let field_name = SubsIndex::push_new(&mut subs.field_names, "a".into());
         let var = new_var(&mut subs, FlexAbleVar(Some(field_name), Symbol::UNDERSCORE));
 
-        let mut copied = Vec::new_in(&arena);
+        let mut copied = vec![];
 
-        let copy = deep_copy_type_vars(&arena, &mut subs, &mut copied, var);
+        let copy = deep_copy_type_vars(&mut subs, &mut copied, var);
 
         assert_ne!(var, copy);
 
@@ -837,14 +817,13 @@ mod test {
     #[test]
     fn copy_rigid_able_var() {
         let mut subs = Subs::new();
-        let arena = Bump::new();
 
         let field_name = SubsIndex::push_new(&mut subs.field_names, "a".into());
         let var = new_var(&mut subs, RigidAbleVar(field_name, Symbol::UNDERSCORE));
 
-        let mut copied = Vec::new_in(&arena);
+        let mut copied = vec![];
 
-        let copy = deep_copy_type_vars(&arena, &mut subs, &mut copied, var);
+        let copy = deep_copy_type_vars(&mut subs, &mut copied, var);
 
         assert_ne!(var, copy);
         match subs.get_content_without_compacting(var) {
@@ -858,7 +837,6 @@ mod test {
     #[test]
     fn copy_deep_expr() {
         let mut subs = Subs::new();
-        let arena = Bump::new();
 
         let a = SubsIndex::push_new(&mut subs.field_names, "a".into());
         let b = SubsIndex::push_new(&mut subs.field_names, "b".into());
@@ -880,7 +858,7 @@ mod test {
             )],
         };
 
-        let (var, expr) = deep_copy_type_vars_into_expr(&arena, &mut subs, var1, &expr).unwrap();
+        let (var, expr) = deep_copy_type_vars_into_expr(&mut subs, var1, &expr).unwrap();
 
         match expr {
             Expr::Tag {
