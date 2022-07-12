@@ -8,7 +8,7 @@ app "main"
 # with hard-coded input.
 
 
-main = fullTest csvParser "10,20\n\"An escaped field!\",30\n"
+main = fullTest csvParser "10,20\n\"An escaped field!\"\"\n,,,\",30\n"
 # main = partialTest fieldParser "\"An escaped field with some \"\"<- double quotes\""
 # main = fullTest fieldContentsParser "My very cool,\"\"\r\n string"
 # main = partialTest betweenParser "\"this is a test\"\" to see\""
