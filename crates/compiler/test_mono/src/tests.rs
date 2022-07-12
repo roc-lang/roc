@@ -1816,6 +1816,40 @@ fn encode_derived_record_one_field_string() {
 }
 
 #[mono_test]
+fn encode_derived_record_two_field_strings() {
+    indoc!(
+        r#"
+        app "test"
+            imports [Encode.{ toEncoder }, Json]
+            provides [main] to "./platform"
+
+        main =
+            result = Str.fromUtf8 (Encode.toBytes {a: "foo", b: "bar"} Json.format)
+            when result is
+                Ok s -> s
+                _ -> "<bad>"
+        "#
+    )
+}
+
+#[mono_test]
+fn encode_derived_nested_record_string() {
+    indoc!(
+        r#"
+        app "test"
+            imports [Encode.{ toEncoder }, Json]
+            provides [main] to "./platform"
+
+        main =
+            result = Str.fromUtf8 (Encode.toBytes {a: {b: "bar"}} Json.format)
+            when result is
+                Ok s -> s
+                _ -> "<bad>"
+        "#
+    )
+}
+
+#[mono_test]
 #[ignore = "TODO make this work (one ULS var is missing)"]
 fn encode_derived_tag_one_field_string() {
     indoc!(

@@ -70,7 +70,7 @@ impl MakeSpecializationsDependents {
         entry.succ.extend(succ.into_iter());
 
         // The module for derives implicitly depends on every other module
-        entry.succ.insert(ModuleId::DERIVED);
+        entry.succ.insert(ModuleId::DERIVED_GEN);
     }
 }
 
@@ -80,7 +80,7 @@ impl Default for MakeSpecializationsDependents {
 
         // The module for derives is always at the base as the last module to specialize
         map.insert(
-            ModuleId::DERIVED,
+            ModuleId::DERIVED_GEN,
             MakeSpecializationInfo {
                 succ: Default::default(),
                 // NB: invariant - the derived module depends on every other module, and
@@ -114,7 +114,7 @@ impl<'a> Dependencies<'a> {
         if goal_phase >= Phase::MakeSpecializations {
             // Module for deriving is always implicitly loaded into the work graph, but it only
             // comes into play for make specializations.
-            deps.add_to_status_for_phase(ModuleId::DERIVED, Phase::MakeSpecializations);
+            deps.add_to_status_for_phase(ModuleId::DERIVED_GEN, Phase::MakeSpecializations);
         }
 
         deps
@@ -158,7 +158,7 @@ impl<'a> Dependencies<'a> {
             if goal_phase >= MakeSpecializations {
                 self.add_dependency(dep, module_id, Phase::MakeSpecializations);
                 // The module for derives implicitly depends on every other module
-                self.add_dependency(ModuleId::DERIVED, module_id, Phase::MakeSpecializations);
+                self.add_dependency(ModuleId::DERIVED_GEN, module_id, Phase::MakeSpecializations);
 
                 // `dep` depends on `module_id` making specializations first
                 self.make_specializations_dependents.mark_has_pred(dep);

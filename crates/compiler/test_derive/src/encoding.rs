@@ -40,7 +40,7 @@ use roc_types::{
     types::{AliasKind, RecordField},
 };
 
-const DERIVED_MODULE: ModuleId = ModuleId::DERIVED;
+const DERIVED_MODULE: ModuleId = ModuleId::DERIVED_SYNTH;
 
 fn encode_path() -> PathBuf {
     let repo_root = std::env::var("ROC_WORKSPACE_DIR").expect("are you running with `cargo test`?");

@@ -1,7 +1,7 @@
 procedure List.28 (#Attr.2, #Attr.3):
     let List.297 : List I64 = lowlevel ListSortWith { xs: `#Attr.#arg1` } #Attr.2 Num.46 #Attr.3;
-    let Bool.9 : Int1 = lowlevel ListIsUnique #Attr.2;
-    if Bool.9 then
+    let #Derived_gen.0 : Int1 = lowlevel ListIsUnique #Attr.2;
+    if #Derived_gen.0 then
         ret List.297;
     else
         decref #Attr.2;
