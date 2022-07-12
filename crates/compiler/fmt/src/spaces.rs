@@ -3,7 +3,7 @@ use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
-        AbilityMember, AssignedField, Collection, CommentOrNewline, Def, Defs, Derived, Expr, Has,
+        AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Derived, Expr, Has,
         HasClause, Module, Pattern, Spaced, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef,
         TypeHeader, ValueDef, WhenBranch,
     },
@@ -541,17 +541,6 @@ impl<'a> RemoveSpaces<'a> for ValueDef<'a> {
                 body_expr: arena.alloc(body_expr.remove_spaces(arena)),
             },
             Expect(a) => Expect(arena.alloc(a.remove_spaces(arena))),
-        }
-    }
-}
-
-impl<'a> RemoveSpaces<'a> for Def<'a> {
-    fn remove_spaces(&self, arena: &'a Bump) -> Self {
-        match *self {
-            Def::Type(def) => Def::Type(def.remove_spaces(arena)),
-            Def::Value(def) => Def::Value(def.remove_spaces(arena)),
-            Def::NotYetImplemented(a) => Def::NotYetImplemented(a),
-            Def::SpaceBefore(a, _) | Def::SpaceAfter(a, _) => a.remove_spaces(arena),
         }
     }
 }

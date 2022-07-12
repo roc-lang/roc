@@ -1127,11 +1127,13 @@ fn resolve_lambda_set(subs: &Subs, mut var: Variable) -> ResolvedLambdaSet {
                 solved,
                 recursion_var: _,
                 unspecialized,
+                ambient_function: _,
             }) => {
                 debug_assert!(
                     unspecialized.is_empty(),
-                    "unspecialized lambda sets left over during resolution: {:?}",
+                    "unspecialized lambda sets left over during resolution: {:?}, {:?}",
                     roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(var), subs),
+                    subs.uls_of_var
                 );
                 roc_types::pretty_print::push_union(subs, solved, &mut set);
                 return ResolvedLambdaSet::Set(set);
@@ -1966,6 +1968,7 @@ fn layout_from_lambda_set<'a>(
         solved,
         recursion_var,
         unspecialized,
+        ambient_function: _,
     } = lset;
 
     if !unspecialized.is_empty() {

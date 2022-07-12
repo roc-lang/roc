@@ -5,7 +5,6 @@ use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
 use roc_builtins::roc::module_source;
-use roc_builtins::std::borrow_stdlib;
 use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedSpecializations};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::expr::Declarations;
@@ -14,7 +13,7 @@ use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
 };
 use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
-use roc_constrain::module::{constrain_builtin_imports, constrain_module};
+use roc_constrain::module::constrain_module;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::{
@@ -42,10 +41,9 @@ use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SyntaxError};
 use roc_region::all::{LineInfo, Loc, Region};
 use roc_reporting::report::RenderTarget;
-use roc_solve::module::SolvedModule;
+use roc_solve::module::{Solved, SolvedModule};
 use roc_solve::solve;
 use roc_target::TargetInfo;
-use roc_types::solved_types::Solved;
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, VarStore, Variable};
 use roc_types::types::{Alias, AliasKind};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
@@ -628,6 +626,7 @@ pub struct MonomorphizedModule<'a> {
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+    pub toplevel_expects: Vec<Symbol>,
     pub entry_point: EntryPoint<'a>,
     pub exposed_to_host: ExposedToHost,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
@@ -710,6 +709,7 @@ enum Msg<'a> {
         solved_subs: Solved<Subs>,
         module_timing: ModuleTiming,
         abilities_store: AbilitiesStore,
+        toplevel_expects: std::vec::Vec<Symbol>,
     },
     MadeSpecializations {
         module_id: ModuleId,
@@ -797,6 +797,7 @@ struct State<'a> {
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies<'a>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+    pub toplevel_expects: Vec<Symbol>,
     pub exposed_to_host: ExposedToHost,
 
     /// This is the "final" list of IdentIds, after canonicalization and constraint gen
@@ -863,6 +864,7 @@ impl<'a> State<'a> {
             module_cache: ModuleCache::default(),
             dependencies: Dependencies::default(),
             procedures: MutMap::default(),
+            toplevel_expects: Vec::new(),
             exposed_to_host: ExposedToHost::default(),
             exposed_types,
             arc_modules,
@@ -977,7 +979,6 @@ enum BuildTask<'a> {
     Solve {
         module: Module,
         ident_ids: IdentIds,
-        imported_builtins: Vec<Symbol>,
         exposed_for_module: ExposedForModule,
         module_timing: ModuleTiming,
         constraints: Constraints,
@@ -1067,7 +1068,7 @@ pub fn load_and_typecheck_str<'a>(
     arena: &'a Bump,
     filename: PathBuf,
     source: &'a str,
-    src_dir: &Path,
+    src_dir: PathBuf,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
     render: RenderTarget,
@@ -1075,7 +1076,7 @@ pub fn load_and_typecheck_str<'a>(
 ) -> Result<LoadedModule, LoadingProblem<'a>> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_str(arena, filename, source)?;
+    let load_start = LoadStart::from_str(arena, filename, source, src_dir)?;
 
     // this function is used specifically in the case
     // where we want to regenerate the cached data
@@ -1084,7 +1085,6 @@ pub fn load_and_typecheck_str<'a>(
     match load(
         arena,
         load_start,
-        src_dir,
         exposed_types,
         Phase::SolveTypes,
         target_info,
@@ -1108,11 +1108,13 @@ pub struct LoadStart<'a> {
     ident_ids_by_module: SharedIdentIdsByModule,
     root_id: ModuleId,
     root_msg: Msg<'a>,
+    src_dir: PathBuf,
 }
 
 impl<'a> LoadStart<'a> {
     pub fn from_path(
         arena: &'a Bump,
+        mut src_dir: PathBuf,
         filename: PathBuf,
         render: RenderTarget,
     ) -> Result<Self, LoadingProblem<'a>> {
@@ -1135,7 +1137,32 @@ impl<'a> LoadStart<'a> {
             );
 
             match res_loaded {
-                Ok(good) => good,
+                Ok((module_id, msg)) => {
+                    if let Msg::Header(ModuleHeader {
+                        module_id: header_id,
+                        module_name,
+                        is_root_module,
+                        ..
+                    }) = &msg
+                    {
+                        debug_assert_eq!(*header_id, module_id);
+                        debug_assert!(is_root_module);
+
+                        if let ModuleNameEnum::Interface(name) = module_name {
+                            // Interface modules can have names like Foo.Bar.Baz,
+                            // in which case we need to adjust the src_dir to
+                            // remove the "Bar/Baz" directories in order to correctly
+                            // resolve this interface module's imports!
+                            let dirs_to_pop = name.as_str().matches('.').count();
+
+                            for _ in 0..dirs_to_pop {
+                                src_dir.pop();
+                            }
+                        }
+                    }
+
+                    (module_id, msg)
+                }
 
                 Err(LoadingProblem::ParsingFailed(problem)) => {
                     let module_ids = Arc::try_unwrap(arc_modules)
@@ -1166,6 +1193,7 @@ impl<'a> LoadStart<'a> {
         Ok(LoadStart {
             arc_modules,
             ident_ids_by_module,
+            src_dir,
             root_id,
             root_msg,
         })
@@ -1175,6 +1203,7 @@ impl<'a> LoadStart<'a> {
         arena: &'a Bump,
         filename: PathBuf,
         src: &'a str,
+        src_dir: PathBuf,
     ) -> Result<Self, LoadingProblem<'a>> {
         let arc_modules = Arc::new(Mutex::new(PackageModuleIds::default()));
         let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
@@ -1196,6 +1225,7 @@ impl<'a> LoadStart<'a> {
 
         Ok(LoadStart {
             arc_modules,
+            src_dir,
             ident_ids_by_module,
             root_id,
             root_msg,
@@ -1269,7 +1299,6 @@ pub enum Threading {
 pub fn load<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
-    src_dir: &Path,
     exposed_types: ExposedByModule,
     goal_phase: Phase,
     target_info: TargetInfo,
@@ -1305,7 +1334,6 @@ pub fn load<'a>(
         Threads::Single => load_single_threaded(
             arena,
             load_start,
-            src_dir,
             exposed_types,
             goal_phase,
             target_info,
@@ -1315,7 +1343,6 @@ pub fn load<'a>(
         Threads::Many(threads) => load_multi_threaded(
             arena,
             load_start,
-            src_dir,
             exposed_types,
             goal_phase,
             target_info,
@@ -1331,7 +1358,6 @@ pub fn load<'a>(
 pub fn load_single_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
-    src_dir: &Path,
     exposed_types: ExposedByModule,
     goal_phase: Phase,
     target_info: TargetInfo,
@@ -1343,6 +1369,7 @@ pub fn load_single_threaded<'a>(
         ident_ids_by_module,
         root_id,
         root_msg,
+        src_dir,
         ..
     } = load_start;
 
@@ -1394,7 +1421,7 @@ pub fn load_single_threaded<'a>(
             stealers,
             &worker_msg_rx,
             &msg_tx,
-            src_dir,
+            &src_dir,
             target_info,
         );
 
@@ -1532,7 +1559,6 @@ fn state_thread_step<'a>(
 fn load_multi_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
-    src_dir: &Path,
     exposed_types: ExposedByModule,
     goal_phase: Phase,
     target_info: TargetInfo,
@@ -1545,6 +1571,7 @@ fn load_multi_threaded<'a>(
         ident_ids_by_module,
         root_id,
         root_msg,
+        src_dir,
         ..
     } = load_start;
 
@@ -1622,8 +1649,9 @@ fn load_multi_threaded<'a>(
 
                 // We only want to move a *reference* to the main task queue's
                 // injector in the thread, not the injector itself
-                // (since other threads need to reference it too).
+                // (since other threads need to reference it too). Same with src_dir.
                 let injector = &injector;
+                let src_dir = &src_dir;
 
                 // Record this thread's handle so the main thread can join it later.
                 let res_join_handle = thread_scope
@@ -2021,6 +2049,12 @@ fn update<'a>(
                     .insert(Ident::from("Bool"), (Symbol::BOOL_BOOL, Region::zero()));
             }
 
+            if header.module_id == ModuleId::NUM {
+                header
+                    .exposed_imports
+                    .insert(Ident::from("List"), (Symbol::LIST_LIST, Region::zero()));
+            }
+
             if !header.module_id.is_builtin() {
                 header
                     .package_qualified_imported_modules
@@ -2294,10 +2328,13 @@ fn update<'a>(
             layout_cache,
             module_timing,
             abilities_store,
+            toplevel_expects,
         } => {
             log!("found specializations for {:?}", module_id);
 
             let subs = solved_subs.into_inner();
+
+            state.toplevel_expects.extend(toplevel_expects);
 
             state
                 .module_cache
@@ -2600,6 +2637,7 @@ fn finish_specialization(
     };
 
     let State {
+        toplevel_expects,
         procedures,
         module_cache,
         output_path,
@@ -2688,6 +2726,7 @@ fn finish_specialization(
         entry_point,
         sources,
         timings: state.timings,
+        toplevel_expects,
     })
 }
 
@@ -3758,18 +3797,10 @@ impl<'a> BuildTask<'a> {
         let exposed_for_module =
             ExposedForModule::new(module.referenced_values.iter(), exposed_by_module);
 
-        let imported_builtins = module
-            .referenced_values
-            .iter()
-            .filter(|s| s.is_builtin())
-            .copied()
-            .collect();
-
         // Next, solve this module in the background.
         Self::Solve {
             module,
             ident_ids,
-            imported_builtins,
             exposed_for_module,
             constraints,
             constraint,
@@ -3784,6 +3815,45 @@ impl<'a> BuildTask<'a> {
     }
 }
 
+fn synth_import(subs: &mut Subs, content: roc_types::subs::Content) -> Variable {
+    use roc_types::subs::{Descriptor, Mark, OptVariable, Rank};
+    subs.fresh(Descriptor {
+        content,
+        rank: Rank::import(),
+        mark: Mark::NONE,
+        copy: OptVariable::NONE,
+    })
+}
+
+fn synth_list_len_type(subs: &mut Subs) -> Variable {
+    use roc_types::subs::{Content, FlatType, LambdaSet, OptVariable, SubsSlice, UnionLabels};
+
+    // List.len : List a -> Nat
+    let a = synth_import(subs, Content::FlexVar(None));
+    let a_slice = SubsSlice::extend_new(&mut subs.variables, [a]);
+    let list_a = synth_import(
+        subs,
+        Content::Structure(FlatType::Apply(Symbol::LIST_LIST, a_slice)),
+    );
+    let fn_var = synth_import(subs, Content::Error);
+    let solved_list_len = UnionLabels::insert_into_subs(subs, [(Symbol::LIST_LEN, [])]);
+    let clos_list_len = synth_import(
+        subs,
+        Content::LambdaSet(LambdaSet {
+            solved: solved_list_len,
+            recursion_var: OptVariable::NONE,
+            unspecialized: SubsSlice::default(),
+            ambient_function: fn_var,
+        }),
+    );
+    let fn_args_slice = SubsSlice::extend_new(&mut subs.variables, [list_a]);
+    subs.set_content(
+        fn_var,
+        Content::Structure(FlatType::Func(fn_args_slice, clos_list_len, Variable::NAT)),
+    );
+    fn_var
+}
+
 pub fn add_imports(
     my_module: ModuleId,
     subs: &mut Subs,
@@ -3792,6 +3862,8 @@ pub fn add_imports(
     def_types: &mut Vec<(Symbol, Loc<roc_types::types::Type>)>,
     rigid_vars: &mut Vec<Variable>,
 ) -> (Vec<Variable>, AbilitiesStore) {
+    use roc_types::types::Type;
+
     let mut import_variables = Vec::new();
 
     let mut cached_symbol_vars = VecMap::default();
@@ -3819,7 +3891,7 @@ pub fn add_imports(
 
                     def_types.push((
                         $symbol,
-                        Loc::at_zero(roc_types::types::Type::Variable(copied_import.variable)),
+                        Loc::at_zero(Type::Variable(copied_import.variable)),
                     ));
 
                     // not a typo; rigids are turned into flex during type inference, but when imported we must
@@ -3844,6 +3916,17 @@ pub fn add_imports(
 
     for symbol in exposed_for_module.imported_values {
         import_var_for_symbol!(subs, exposed_for_module.exposed_by_module, symbol, continue);
+    }
+
+    // Patch used symbols from circular dependencies.
+    if my_module == ModuleId::NUM {
+        // Num needs List.len, but List imports Num.
+        let list_len_type = synth_list_len_type(subs);
+        def_types.push((
+            Symbol::LIST_LEN,
+            Loc::at_zero(Type::Variable(list_len_type)),
+        ));
+        import_variables.push(list_len_type);
     }
 
     // TODO: see if we can reduce the amount of specializations we need to import.
@@ -3903,12 +3986,11 @@ pub fn add_imports(
 
 #[allow(clippy::complexity)]
 fn run_solve_solve(
-    imported_builtins: Vec<Symbol>,
     exposed_for_module: ExposedForModule,
     mut constraints: Constraints,
     constraint: ConstraintSoa,
     pending_derives: PendingDerives,
-    mut var_store: VarStore,
+    var_store: VarStore,
     module: Module,
     derived_symbols: GlobalDerivedSymbols,
 ) -> (
@@ -3926,8 +4008,8 @@ fn run_solve_solve(
         ..
     } = module;
 
-    let (mut rigid_vars, mut def_types) =
-        constrain_builtin_imports(borrow_stdlib(), imported_builtins, &mut var_store);
+    let mut rigid_vars: Vec<Variable> = Vec::new();
+    let mut def_types: Vec<(Symbol, Loc<roc_types::types::Type>)> = Vec::new();
 
     let mut subs = Subs::new_from_varstore(var_store);
 
@@ -4006,7 +4088,6 @@ fn run_solve<'a>(
     module: Module,
     ident_ids: IdentIds,
     mut module_timing: ModuleTiming,
-    imported_builtins: Vec<Symbol>,
     exposed_for_module: ExposedForModule,
     constraints: Constraints,
     constraint: ConstraintSoa,
@@ -4028,7 +4109,6 @@ fn run_solve<'a>(
         if module_id.is_builtin() {
             match cached_subs.lock().remove(&module_id) {
                 None => run_solve_solve(
-                    imported_builtins,
                     exposed_for_module,
                     constraints,
                     constraint,
@@ -4051,7 +4131,6 @@ fn run_solve<'a>(
             }
         } else {
             run_solve_solve(
-                imported_builtins,
                 exposed_for_module,
                 constraints,
                 constraint,
@@ -4490,13 +4569,14 @@ fn build_pending_specializations<'a>(
     mut module_timing: ModuleTiming,
     mut layout_cache: LayoutCache<'a>,
     target_info: TargetInfo,
-    exposed_to_host: ExposedToHost, // TODO remove
+    exposed_to_host: ExposedToHost,
     abilities_store: AbilitiesStore,
     derived_symbols: GlobalDerivedSymbols,
 ) -> Msg<'a> {
     let find_specializations_start = SystemTime::now();
 
     let mut module_thunks = bumpalo::collections::Vec::new_in(arena);
+    let mut toplevel_expects = std::vec::Vec::new();
 
     let mut procs_base = ProcsBase {
         partial_procs: BumpMap::default(),
@@ -4739,6 +4819,8 @@ fn build_pending_specializations<'a>(
                 // mark this symbol as a top-level thunk before any other work on the procs
                 module_thunks.push(symbol);
 
+                let expr_var = Variable::EMPTY_RECORD;
+
                 let is_host_exposed = true;
 
                 // If this is an exposed symbol, we need to
@@ -4778,6 +4860,8 @@ fn build_pending_specializations<'a>(
                     );
                 }
 
+                let body = roc_can::expr::toplevel_expect_to_inline_expect(body);
+
                 let proc = PartialProc {
                     annotation: expr_var,
                     // This is a 0-arity thunk, so it has no arguments.
@@ -4790,6 +4874,7 @@ fn build_pending_specializations<'a>(
                     is_self_recursive: false,
                 };
 
+                toplevel_expects.push(symbol);
                 procs_base.partial_procs.insert(symbol, proc);
             }
         }
@@ -4804,12 +4889,13 @@ fn build_pending_specializations<'a>(
 
     Msg::FoundSpecializations {
         module_id: home,
-        solved_subs: roc_types::solved_types::Solved(subs),
+        solved_subs: Solved(subs),
         ident_ids,
         layout_cache,
         procs_base,
         module_timing,
         abilities_store,
+        toplevel_expects,
     }
 }
 
@@ -4863,7 +4949,6 @@ fn run_task<'a>(
         Solve {
             module,
             module_timing,
-            imported_builtins,
             exposed_for_module,
             constraints,
             constraint,
@@ -4878,7 +4963,6 @@ fn run_task<'a>(
             module,
             ident_ids,
             module_timing,
-            imported_builtins,
             exposed_for_module,
             constraints,
             constraint,
@@ -5098,12 +5182,12 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
             }
             RootIsInterface => {
                 let doc = alloc.stack([
-                                alloc.reflow(r"The input file is an interface module, but only app modules can be ran."),
-                                alloc.concat([
-                                    alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
-                                    alloc.reflow(r"but won't output any executable."),
-                               ])
-                           ]);
+                    alloc.reflow(r"The input file is an interface module, but only app modules can be run."),
+                    alloc.concat([
+                        alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
+                        alloc.reflow(r"but won't output any executable."),
+                    ])
+                ]);
 
                 Report {
                     filename: "UNKNOWN.roc".into(),
@@ -5114,12 +5198,12 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
             }
             RootIsHosted => {
                 let doc = alloc.stack([
-                                alloc.reflow(r"The input file is a hosted module, but only app modules can be ran."),
-                                alloc.concat([
-                                    alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
-                                    alloc.reflow(r"but won't output any executable."),
-                               ])
-                           ]);
+                    alloc.reflow(r"The input file is a hosted module, but only app modules can be run."),
+                    alloc.concat([
+                        alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
+                        alloc.reflow(r"but won't output any executable."),
+                    ])
+                ]);
 
                 Report {
                     filename: "UNKNOWN.roc".into(),
@@ -5130,12 +5214,12 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
             }
             RootIsPlatformModule => {
                 let doc = alloc.stack([
-                                alloc.reflow(r"The input file is a package config file, but only app modules can be ran."),
-                                alloc.concat([
-                                    alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
-                                    alloc.reflow(r"but won't output any executable."),
-                               ])
-                           ]);
+                    alloc.reflow(r"The input file is a package config file, but only app modules can be run."),
+                    alloc.concat([
+                        alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
+                        alloc.reflow(r"but won't output any executable."),
+                    ])
+                ]);
 
                 Report {
                     filename: "UNKNOWN.roc".into(),

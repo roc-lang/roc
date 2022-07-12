@@ -123,17 +123,12 @@ void roc_dealloc(void *ptr, unsigned int alignment)
 
 //--------------------------
 
-// Allow the test to probe the panic message
-extern char* panic_msg;
+extern void send_panic_msg_to_rust(char* msg, int len);
 
 void roc_panic(char *msg, unsigned int tag_id)
 {
-    panic_msg = msg;
-
-    // Note: no dynamic string formatting
-    fputs("Application crashed with message\n\n    ", stderr);
-    fputs(msg, stderr);
-    fputs("\n\nShutting down\n", stderr);
+    int len = strlen(msg);
+    send_panic_msg_to_rust(msg, len);
     exit(101);
 }
 

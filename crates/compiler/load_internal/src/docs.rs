@@ -200,7 +200,9 @@ fn generate_entry_docs<'a>(
 
                 ValueDef::Body(_, _) => (),
 
-                ValueDef::Expect(c) => todo!("documentation for tests {:?}", c),
+                ValueDef::Expect(_) => {
+                    // Don't generate docs for `expect`s
+                }
             },
             Ok(type_index) => match &defs.type_defs[type_index.index()] {
                 TypeDef::Alias {

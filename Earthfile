@@ -1,4 +1,4 @@
-FROM rust:1.60.0-slim-bullseye # make sure to update rust-toolchain.toml too so that everything uses the same rust version
+FROM rust:1.61.0-slim-bullseye # make sure to update rust-toolchain.toml too so that everything uses the same rust version
 WORKDIR /earthbuild
 
 prep-debian:
@@ -23,6 +23,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     # zig builtins wasm tests
     RUN apt -y install build-essential
     RUN cargo install wasmer-cli --features "singlepass"
+    RUN cargo install bindgen
     # llvm
     RUN apt -y install lsb-release software-properties-common gnupg
     RUN wget https://apt.llvm.org/llvm.sh
@@ -53,7 +54,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
 
 copy-dirs:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
-    COPY --dir crates repl_www examples Cargo.toml Cargo.lock version.txt www ./
+    COPY --dir crates examples Cargo.toml Cargo.lock version.txt www ./
 
 test-zig:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt

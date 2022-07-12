@@ -10,12 +10,15 @@ pub fn load_module(src_file: &Path, threading: Threading) -> LoadedModule {
     let loaded = roc_load::load_and_typecheck(
         &arena,
         src_file.to_path_buf(),
-        src_file.parent().unwrap_or_else(|| {
-            panic!(
-                "src_file {:?} did not have a parent directory but I need to have one.",
-                src_file
-            )
-        }),
+        src_file
+            .parent()
+            .unwrap_or_else(|| {
+                panic!(
+                    "src_file {:?} did not have a parent directory but I need to have one.",
+                    src_file
+                )
+            })
+            .to_path_buf(),
         subs_by_module,
         TargetInfo::default_x86_64(),
         roc_reporting::report::RenderTarget::ColorTerminal,

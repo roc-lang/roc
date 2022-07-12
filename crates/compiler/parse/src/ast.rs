@@ -425,54 +425,6 @@ impl<'a> Defs<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Def<'a> {
-    Type(TypeDef<'a>),
-    Value(ValueDef<'a>),
-
-    // Blank Space (e.g. comments, spaces, newlines) before or after a def.
-    // We preserve this for the formatter; canonicalization ignores it.
-    SpaceBefore(&'a Def<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a Def<'a>, &'a [CommentOrNewline<'a>]),
-
-    NotYetImplemented(&'static str),
-}
-
-impl<'a> Def<'a> {
-    pub fn unroll_spaces_before(&self) -> (&'a [CommentOrNewline<'a>], &Def) {
-        let (spaces, def): (&'a [_], &Def) = match self {
-            Def::SpaceBefore(def, spaces) => (spaces, def),
-            def => (&[], def),
-        };
-        debug_assert!(!matches!(def, Def::SpaceBefore(_, _)));
-        (spaces, def)
-    }
-
-    pub fn unroll_def(&self) -> Result<&TypeDef<'a>, &ValueDef<'a>> {
-        let mut def = self;
-        loop {
-            match def {
-                Def::Type(type_def) => return Ok(type_def),
-                Def::Value(value_def) => return Err(value_def),
-                Def::SpaceBefore(def1, _) | Def::SpaceAfter(def1, _) => def = def1,
-                Def::NotYetImplemented(s) => todo!("{}", s),
-            }
-        }
-    }
-}
-
-impl<'a> From<TypeDef<'a>> for Def<'a> {
-    fn from(def: TypeDef<'a>) -> Self {
-        Self::Type(def)
-    }
-}
-
-impl<'a> From<ValueDef<'a>> for Def<'a> {
-    fn from(def: ValueDef<'a>) -> Self {
-        Self::Value(def)
-    }
-}
-
 /// Should always be a zero-argument `Apply`; we'll check this in canonicalization
 pub type AbilityName<'a> = Loc<TypeAnnotation<'a>>;
 
@@ -1003,15 +955,6 @@ impl<'a> Spaceable<'a> for Tag<'a> {
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
         Tag::SpaceAfter(self, spaces)
-    }
-}
-
-impl<'a> Spaceable<'a> for Def<'a> {
-    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        Def::SpaceBefore(self, spaces)
-    }
-    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        Def::SpaceAfter(self, spaces)
     }
 }
 

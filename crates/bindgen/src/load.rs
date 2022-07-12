@@ -4,13 +4,13 @@ use roc_load::{LoadedModule, Threading};
 use roc_reporting::report::RenderTarget;
 use roc_target::{Architecture, TargetInfo};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use strum::IntoEnumIterator;
 use target_lexicon::Triple;
 
 pub fn load_types(
     full_file_path: PathBuf,
-    dir: &Path,
+    dir: PathBuf,
     threading: Threading,
 ) -> Result<Vec<(Types, TargetInfo)>, io::Error> {
     let target_info = (&Triple::host()).into();

@@ -1,10 +1,12 @@
 use libloading::Library;
 use roc_build::link::{link, LinkType};
 use roc_builtins::bitcode;
-use roc_collections::all::MutMap;
 use roc_load::Threading;
 use roc_region::all::LineInfo;
 use tempfile::tempdir;
+
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+use roc_collections::all::MutMap;
 
 #[allow(unused_imports)]
 use roc_mono::ir::pretty_print_ir_symbols;
@@ -30,11 +32,11 @@ pub fn helper(
     _leak: bool,
     lazy_literals: bool,
 ) -> (String, Vec<roc_problem::can::Problem>, Library) {
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     let dir = tempdir().unwrap();
     let filename = PathBuf::from("Test.roc");
-    let src_dir = Path::new("fake/test/path");
+    let src_dir = PathBuf::from("fake/test/path");
     let app_o_file = dir.path().join("app.o");
 
     let module_src;
@@ -240,26 +242,5 @@ macro_rules! assert_evals_to {
     };
 }
 
-#[allow(unused_macros)]
-macro_rules! assert_expect_failed {
-    ($src:expr, $expected:expr, $ty:ty, $failures:expr) => {{
-        use bumpalo::Bump;
-        use roc_gen_dev::run_jit_function_raw;
-        let stdlib = roc_builtins::std::standard_stdlib();
-
-        let arena = Bump::new();
-        let (main_fn_name, errors, lib) =
-            $crate::helpers::dev::helper(&arena, $src, stdlib, true, true);
-
-        let transform = |success| {
-            let expected = $expected;
-            assert_eq!(&success, &expected);
-        };
-        run_jit_function_raw!(lib, main_fn_name, $ty, transform, errors);
-    }};
-}
-
 #[allow(unused_imports)]
 pub(crate) use assert_evals_to;
-#[allow(unused_imports)]
-pub(crate) use assert_expect_failed;

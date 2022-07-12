@@ -277,6 +277,7 @@ impl LambdaSet {
             solved,
             recursion_var: _,
             unspecialized: _,
+            ambient_function: _,
         } = lset;
 
         // TODO: handle unspecialized
@@ -700,6 +701,7 @@ impl Layout {
             solved,
             recursion_var,
             unspecialized: _,
+            ambient_function: _,
         } = lset;
 
         // TODO: handle unspecialized lambda set

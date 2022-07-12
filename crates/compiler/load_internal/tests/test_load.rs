@@ -30,23 +30,22 @@ use roc_target::TargetInfo;
 use roc_types::pretty_print::name_and_print_var;
 use roc_types::pretty_print::DebugPrint;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-fn load_and_typecheck<'a>(
-    arena: &'a Bump,
+fn load_and_typecheck(
+    arena: &Bump,
     filename: PathBuf,
-    src_dir: &Path,
+    src_dir: PathBuf,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
-) -> Result<LoadedModule, LoadingProblem<'a>> {
+) -> Result<LoadedModule, LoadingProblem> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, filename, RenderTarget::Generic)?;
+    let load_start = LoadStart::from_path(arena, src_dir, filename, RenderTarget::Generic)?;
 
     match roc_load_internal::file::load(
         arena,
         load_start,
-        src_dir,
         exposed_types,
         Phase::SolveTypes,
         target_info,
@@ -167,7 +166,7 @@ fn multiple_modules_help<'a>(
         load_and_typecheck(
             arena,
             full_file_path,
-            dir.path(),
+            dir.path().to_path_buf(),
             Default::default(),
             TARGET_INFO,
         )
@@ -184,13 +183,7 @@ fn load_fixture(
     let src_dir = fixtures_dir().join(dir_name);
     let filename = src_dir.join(format!("{}.roc", module_name));
     let arena = Bump::new();
-    let loaded = load_and_typecheck(
-        &arena,
-        filename,
-        src_dir.as_path(),
-        subs_by_module,
-        TARGET_INFO,
-    );
+    let loaded = load_and_typecheck(&arena, filename, src_dir, subs_by_module, TARGET_INFO);
     let mut loaded_module = match loaded {
         Ok(x) => x,
         Err(roc_load_internal::file::LoadingProblem::FormattedReport(report)) => {
@@ -346,13 +339,7 @@ fn interface_with_deps() {
     let src_dir = fixtures_dir().join("interface_with_deps");
     let filename = src_dir.join("Primary.roc");
     let arena = Bump::new();
-    let loaded = load_and_typecheck(
-        &arena,
-        filename,
-        src_dir.as_path(),
-        subs_by_module,
-        TARGET_INFO,
-    );
+    let loaded = load_and_typecheck(&arena, filename, src_dir, subs_by_module, TARGET_INFO);
 
     let mut loaded_module = loaded.expect("Test module failed to load");
     let home = loaded_module.module_id;
@@ -435,7 +422,7 @@ fn test_load_and_typecheck() {
             "intTest" => "I64",
             "constantNum" => "Num *",
             "divisionTest" => "F64",
-            "divDep1ByDep2" => "Float *",
+            "divDep1ByDep2" => "Float a",
             "fromDep2" => "Float *",
         },
     );

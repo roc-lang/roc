@@ -268,3 +268,65 @@ fn issue_2583_specialize_errors_behind_unified_branches() {
         RocResult<i64, bool>
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn roc_result_after_on_ok() {
+    assert_evals_to!(indoc!(
+        r#"
+            input : Result I64 Str
+            input = Ok 1
+
+            Result.after input \num ->
+                if num < 0 then Err "negative!" else Ok -num
+            "#),
+        RocResult::ok(-1),
+        RocResult<i64, RocStr>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn roc_result_after_on_err() {
+    assert_evals_to!(indoc!(
+        r#"
+            input : Result I64 Str
+            input = (Err "already a string")
+
+            Result.after input \num ->
+                if num < 0 then Err "negative!" else Ok -num
+        "#),
+        RocResult::err(RocStr::from("already a string")),
+        RocResult<i64, RocStr>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn roc_result_after_err() {
+    assert_evals_to!(indoc!(
+        r#"
+            result : Result Str I64
+            result =
+              Result.afterErr (Ok "already a string") \num ->
+                if num < 0 then Ok "negative!" else Err -num
+
+            result
+            "#),
+        RocResult::ok(RocStr::from("already a string")),
+        RocResult<RocStr, i64>
+    );
+
+    assert_evals_to!(indoc!(
+        r#"
+            result : Result Str I64
+            result =
+              Result.afterErr (Err 100) \num ->
+                if num < 0 then Ok "negative!" else Err -num
+
+            result
+            "#),
+        RocResult::err(-100),
+        RocResult<RocStr, i64>
+    );
+}

@@ -6,7 +6,7 @@ pub use helpers::platform_functions::*;
 
 use bumpalo::Bump;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use roc_gen_llvm::{run_roc::RocCallResult, run_roc_dylib};
+use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult, run_roc_dylib};
 use roc_mono::ir::OptLevel;
 use roc_std::RocList;
 
@@ -50,7 +50,7 @@ fn roc_function<'a, 'b>(
     source: &str,
 ) -> libloading::Symbol<'a, Main<&'b Input, Output>> {
     let config = helpers::llvm::HelperConfig {
-        is_gen_test: true,
+        mode: LlvmBackendMode::GenTest,
         ignore_problems: false,
         add_debug_info: true,
         opt_level: OptLevel::Optimize,
@@ -65,16 +65,6 @@ fn roc_function<'a, 'b>(
     run_roc_dylib!(arena.alloc(lib), main_fn_name, &Input, Output, errors)
 }
 
-fn rust_main(argument: &RocList<i64>, output: &mut RocCallResult<i64>) {
-    let mut answer = 0;
-
-    for x in argument.iter() {
-        answer += x;
-    }
-
-    *output = RocCallResult::new(answer);
-}
-
 fn create_input_list() -> RocList<i64> {
     let numbers = Vec::from_iter(0..1_000);
 
@@ -84,8 +74,8 @@ fn create_input_list() -> RocList<i64> {
 pub fn criterion_benchmark(c: &mut Criterion) {
     let arena = Bump::new();
 
-    let list_map_with_index_main = roc_function(&arena, ROC_LIST_MAP_WITH_INDEX);
     let list_map_main = roc_function(&arena, ROC_LIST_MAP);
+    let list_map_with_index_main = roc_function(&arena, ROC_LIST_MAP_WITH_INDEX);
 
     let input = &*arena.alloc(create_input_list());
 
@@ -102,15 +92,6 @@ pub fn criterion_benchmark(c: &mut Criterion) {
             let mut main_result = RocCallResult::default();
 
             list_map_with_index_main(black_box(input), &mut main_result);
-        })
-    });
-
-    let input = &*arena.alloc(create_input_list());
-    c.bench_function("rust", |b| {
-        b.iter(|| {
-            let mut main_result = RocCallResult::default();
-
-            rust_main(black_box(input), &mut main_result);
         })
     });
 }

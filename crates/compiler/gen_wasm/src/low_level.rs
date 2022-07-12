@@ -264,16 +264,19 @@ impl<'a> LowLevelCall<'a> {
             }
             StrFromInt => self.num_to_str(backend),
             StrFromFloat => self.num_to_str(backend),
-            StrFromUtf8 => {
+            StrFromUtf8Range => {
                 /*
                 Low-level op returns a struct with all the data for both Ok and Err.
                 Roc AST wrapper converts this to a tag union, with app-dependent tag IDs.
 
-                fromUtf8C(output: *FromUtf8Result, arg: RocList, update_mode: UpdateMode) callconv(.C) void
                     output: *FromUtf8Result   i32
                     arg: RocList              i64, i32
+                    start                     i32
+                    count                     i32
                     update_mode: UpdateMode   i32
                 */
+
+                // loads arg, start, count
                 backend.storage.load_symbols_for_call(
                     backend.env.arena,
                     &mut backend.code_builder,
@@ -283,9 +286,8 @@ impl<'a> LowLevelCall<'a> {
                     CallConv::Zig,
                 );
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
-                backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8, 4, false);
+                backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8_RANGE, 6, false);
             }
-            StrFromUtf8Range => self.load_args_and_call_zig(backend, bitcode::STR_FROM_UTF8_RANGE),
             StrTrimLeft => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_LEFT),
             StrTrimRight => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_RIGHT),
             StrToUtf8 => self.load_args_and_call_zig(backend, bitcode::STR_TO_UTF8),
@@ -488,22 +490,27 @@ impl<'a> LowLevelCall<'a> {
 
                 backend.call_host_fn_after_loading_args(bitcode::LIST_CONCAT, 7, false);
             }
-            ListAppend => {
-                // List.append : List elem, elem -> List elem
+
+            ListReserve => {
+                // List.reserve : List elem, Nat -> List elem
 
                 let list: Symbol = self.arguments[0];
-                let elem: Symbol = self.arguments[1];
+                let spare: Symbol = self.arguments[1];
 
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout);
                 let (elem_width, elem_align) = elem_layout.stack_size_and_alignment(TARGET_INFO);
-                let (elem_local, elem_offset, _) =
-                    ensure_symbol_is_in_memory(backend, elem, *elem_layout, backend.env.arena);
+                let (spare_local, spare_offset, _) = ensure_symbol_is_in_memory(
+                    backend,
+                    spare,
+                    Layout::usize(TARGET_INFO),
+                    backend.env.arena,
+                );
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
                 //  list: RocList              i64, i32
                 //  alignment: u32             i32
-                //  element: Opaque            i32
+                //  spare: usize               i32
                 //  element_width: usize       i32
                 //  update_mode: UpdateMode    i32
 
@@ -519,6 +526,46 @@ impl<'a> LowLevelCall<'a> {
 
                 backend.code_builder.i32_const(elem_align as i32);
 
+                backend.code_builder.get_local(spare_local);
+                if spare_offset > 0 {
+                    backend.code_builder.i32_const(spare_offset as i32);
+                    backend.code_builder.i32_add();
+                }
+
+                backend.code_builder.i32_const(elem_width as i32);
+
+                backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
+
+                backend.call_host_fn_after_loading_args(bitcode::LIST_RESERVE, 7, false);
+            }
+
+            ListAppendUnsafe => {
+                // List.append : List elem, elem -> List elem
+
+                let list: Symbol = self.arguments[0];
+                let elem: Symbol = self.arguments[1];
+
+                let elem_layout = unwrap_list_elem_layout(self.ret_layout);
+                let elem_width = elem_layout.stack_size(TARGET_INFO);
+                let (elem_local, elem_offset, _) =
+                    ensure_symbol_is_in_memory(backend, elem, *elem_layout, backend.env.arena);
+
+                // Zig arguments              Wasm types
+                //  (return pointer)           i32
+                //  list: RocList              i64, i32
+                //  element: Opaque            i32
+                //  element_width: usize       i32
+
+                // return pointer and list
+                backend.storage.load_symbols_for_call(
+                    backend.env.arena,
+                    &mut backend.code_builder,
+                    &[list],
+                    self.ret_symbol,
+                    &WasmLayout::new(&self.ret_layout),
+                    CallConv::Zig,
+                );
+
                 backend.code_builder.get_local(elem_local);
                 if elem_offset > 0 {
                     backend.code_builder.i32_const(elem_offset as i32);
@@ -526,9 +573,8 @@ impl<'a> LowLevelCall<'a> {
                 }
 
                 backend.code_builder.i32_const(elem_width as i32);
-                backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_APPEND, 7, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_APPEND_UNSAFE, 4, false);
             }
             ListPrepend => {
                 // List.prepend : List elem, elem -> List elem
