@@ -4387,6 +4387,60 @@ pub fn with_hole<'a>(
             }
         }
 
+        OpaqueWrapFunction(wrap_fn_data) => {
+            let opaque_var = wrap_fn_data.opaque_var;
+            let arg_symbol = env.unique_symbol();
+
+            let ClosureData {
+                name,
+                function_type,
+                arguments,
+                loc_body,
+                ..
+            } = wrap_fn_data.to_closure_data(arg_symbol);
+
+            match procs.insert_anonymous(
+                env,
+                LambdaName::no_niche(name),
+                function_type,
+                arguments,
+                *loc_body,
+                CapturedSymbols::None,
+                opaque_var,
+                layout_cache,
+            ) {
+                Ok(_) => {
+                    let raw_layout = return_on_layout_error!(
+                        env,
+                        layout_cache.raw_from_var(env.arena, function_type, env.subs),
+                        "Expr::OpaqueWrapFunction"
+                    );
+
+                    match raw_layout {
+                        RawFunctionLayout::Function(_, lambda_set, _) => {
+                            let lambda_name =
+                                find_lambda_name(env, layout_cache, lambda_set, name, &[]);
+                            construct_closure_data(
+                                env,
+                                lambda_set,
+                                lambda_name,
+                                &[],
+                                assigned,
+                                hole,
+                            )
+                        }
+                        RawFunctionLayout::ZeroArgumentThunk(_) => {
+                            internal_error!("should not be a thunk!")
+                        }
+                    }
+                }
+
+                Err(_error) => Stmt::RuntimeError(
+                    "TODO convert anonymous function error to a RuntimeError string",
+                ),
+            }
+        }
+
         Update {
             record_var,
             symbol: structure,
