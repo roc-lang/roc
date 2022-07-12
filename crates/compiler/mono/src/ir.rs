@@ -2393,7 +2393,7 @@ fn from_can_let<'a>(
                         for (_specialization_mark, (var, specialized_symbol)) in
                             needed_specializations
                         {
-                            use crate::copy::deep_copy_type_vars_into_expr;
+                            use roc_can::copy::deep_copy_type_vars_into_expr;
 
                             let (new_def_expr_var, specialized_expr) = deep_copy_type_vars_into_expr(
                             env.subs,
