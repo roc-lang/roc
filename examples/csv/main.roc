@@ -1,18 +1,12 @@
 app "main"
     packages { pf: "platform/main.roc" }
-    imports [Parser.Core.{Parser}, Parser.Str.{RawStr}, Parser.CSV.{CSV}]
+    imports []
     provides [main] to pf
 
-# Until issue https://github.com/rtfeldman/roc/issues/3438 is fixed,
-# use the simple 'hello world' platform for testing
-# with hard-coded input.
-
-
-# main = fullTest csvParser "10,20\n\"An escaped field!\",30\n"
-# main = partialTest fieldParser "\"An escaped field with some <- double quotes\""
-# main = fullTest fieldContentsParser "My very cool,\"\"\r\n string"
-# main = partialTest betweenParser "\"this is a test\"\" to see\""
 main = partialTest deconstructedParser "0123456789ABCDEFGHIJKLMN"
+
+
+RawStr : List U8
 
 partialTest = \parser, input ->
   when input |> strToRaw |> parser  is
@@ -24,26 +18,12 @@ partialTest = \parser, input ->
     Err (ParsingFailure problem) ->
       "Parse failure: \(problem)\n"
 
-fullTest = \parser, input ->
-  when Parser.Str.runStr parser input is
-    Ok result ->
-      # val = result |> Str.joinWith(", ")
-      # val = result |> Str.joinWith("\r\n")
-      val = result
-      "Parse success: \(val)\n"
-    Err (ParsingFailure problem) ->
-      "Parse failure: \(problem)\n"
-    Err (ParsingIncomplete leftover) ->
-      "Parse failure: Expected to reach end of input, but the following was still left: `\(leftover)`\n"
-
 deconstructedParser =
   \input ->
     manyImpl (anyChar) [] input
-    |> Result.map (\field ->
+    |> Result.map \field ->
       res = field.val |> strFromRaw
       {val: res, input: field.input |> strFromRaw }
-
-    )
 
 manyImpl = \parser, vals, input ->
   result = (parser input)
@@ -71,8 +51,3 @@ strFromRaw = \rawStr ->
   rawStr
   |> Str.fromUtf8
   |> Result.withDefault "Unexpected problem while turning a List U8 (that was originally a Str) back into a Str. This should never happen!"
-
-
-strFromCodepoint : U8 -> Str
-strFromCodepoint = \cp ->
-  strFromRaw [cp]
