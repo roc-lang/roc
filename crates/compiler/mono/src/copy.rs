@@ -12,34 +12,10 @@ use roc_types::{
     types::Uls,
 };
 
-/// Deep copies all type variables in [`expr`].
-/// Returns [`None`] if the expression does not need to be copied.
-pub fn deep_copy_type_vars_into_expr<'a>(
-    arena: &'a Bump,
-    subs: &mut Subs,
-    var: Variable,
-    expr: &Expr,
-) -> Option<(Variable, Expr)> {
-    // Always deal with the root, so that aliases propagate correctly.
-    let expr_var = subs.get_root_key_without_compacting(var);
-
-    let mut copied = Vec::with_capacity_in(16, arena);
-
-    let copy_expr_var = deep_copy_type_vars(arena, subs, &mut copied, expr_var);
-
-    if copied.is_empty() {
-        return None;
-    }
-
-    let copied_expr = help(arena, subs, expr, &mut copied);
-
-    // we have tracked all visited variables, and can now traverse them
-    // in one go (without looking at the UnificationTable) and clear the copy field
-    let mut result = Vec::with_capacity_in(copied.len(), arena);
-    for var in copied {
-        subs.modify(var, |descriptor| {
-            if let Some(copy) = descriptor.copy.into_variable() {
-                result.push((var, copy));
+trait CopyEnv {
+    fn clear_source_copy(&mut self, var: Variable) {
+        self.mut_source().modify(var, |descriptor| {
+            if let Some(_) = descriptor.copy.into_variable() {
                 descriptor.copy = OptVariable::NONE;
             } else {
                 debug_assert!(false, "{:?} marked as copied but it wasn't", var);
@@ -47,20 +23,102 @@ pub fn deep_copy_type_vars_into_expr<'a>(
         })
     }
 
+    fn source_root_var(&self, var: Variable) -> Variable {
+        self.source().get_root_key_without_compacting(var)
+    }
+
+    fn source_desc(&self, var: Variable) -> Descriptor {
+        self.source().get_without_compacting(var)
+    }
+
+    fn set_source_copy(&mut self, var: Variable, copy: OptVariable) {
+        self.mut_source().set_copy(var, copy)
+    }
+
+    fn get_copy(&self, var: Variable) -> OptVariable {
+        self.source().get_copy(var)
+    }
+
+    fn target_fresh(&mut self, descriptor: Descriptor) -> Variable {
+        self.target().fresh(descriptor)
+    }
+
+    fn mut_source(&mut self) -> &mut Subs;
+
+    fn source(&self) -> &Subs;
+
+    fn target(&mut self) -> &mut Subs;
+}
+
+impl CopyEnv for Subs {
+    fn mut_source(&mut self) -> &mut Subs {
+        self
+    }
+
+    fn source(&self) -> &Subs {
+        self
+    }
+
+    fn target(&mut self) -> &mut Subs {
+        self
+    }
+}
+
+pub fn deep_copy_type_vars_into_expr(
+    arena: &Bump,
+    subs: &mut Subs,
+    var: Variable,
+    expr: &Expr,
+) -> Option<(Variable, Expr)> {
+    deep_copy_type_vars_into_expr_help(arena, subs, var, expr)
+}
+
+/// Deep copies all type variables in [`expr`].
+/// Returns [`None`] if the expression does not need to be copied.
+fn deep_copy_type_vars_into_expr_help<'a, C: CopyEnv>(
+    arena: &'a Bump,
+    env: &mut C,
+    var: Variable,
+    expr: &Expr,
+) -> Option<(Variable, Expr)> {
+    // Always deal with the root, so that aliases propagate correctly.
+    let expr_var = env.source_root_var(var);
+
+    let mut copied = Vec::with_capacity_in(16, arena);
+
+    let copy_expr_var = deep_copy_type_vars(arena, env, &mut copied, expr_var);
+
+    if copied.is_empty() {
+        return None;
+    }
+
+    let copied_expr = help(arena, env, expr, &mut copied);
+
+    // we have tracked all visited variables, and can now traverse them
+    // in one go (without looking at the UnificationTable) and clear the copy field
+    for var in copied {
+        env.clear_source_copy(var);
+    }
+
     return Some((copy_expr_var, copied_expr));
 
-    fn help(arena: &Bump, subs: &mut Subs, expr: &Expr, copied: &mut Vec<Variable>) -> Expr {
+    fn help<'a, C: CopyEnv>(
+        arena: &'a Bump,
+        env: &mut C,
+        expr: &Expr,
+        copied: &mut Vec<Variable>,
+    ) -> Expr {
         use Expr::*;
 
         macro_rules! sub {
             ($var:expr) => {{
-                deep_copy_type_vars(arena, subs, copied, $var)
+                deep_copy_type_vars(arena, env, copied, $var)
             }};
         }
 
         macro_rules! go_help {
             ($expr:expr) => {{
-                help(arena, subs, $expr, copied)
+                help(arena, env, $expr, copied)
             }};
         }
 
@@ -393,29 +451,34 @@ pub fn deep_copy_type_vars_into_expr<'a>(
 /// Deep copies the type variables in [`var`], returning a map of original -> new type variable for
 /// all type variables copied.
 #[inline]
-fn deep_copy_type_vars<'a>(
+fn deep_copy_type_vars<'a, C: CopyEnv>(
     arena: &'a Bump,
-    subs: &mut Subs,
+    env: &mut C,
     copied: &mut Vec<Variable>,
     var: Variable,
 ) -> Variable {
     // Always deal with the root, so that unified variables are treated the same.
-    let var = subs.get_root_key_without_compacting(var);
+    let var = env.source_root_var(var);
 
-    let cloned_var = help(arena, subs, copied, var);
+    let cloned_var = help(arena, env, copied, var);
 
     return cloned_var;
 
     #[must_use]
     #[inline]
-    fn help(arena: &Bump, subs: &mut Subs, visited: &mut Vec<Variable>, var: Variable) -> Variable {
+    fn help<C: CopyEnv>(
+        arena: &Bump,
+        env: &mut C,
+        visited: &mut Vec<Variable>,
+        var: Variable,
+    ) -> Variable {
         use roc_types::subs::Content::*;
         use roc_types::subs::FlatType::*;
 
         // Always deal with the root, so that unified variables are treated the same.
-        let var = subs.get_root_key_without_compacting(var);
+        let var = env.source_root_var(var);
 
-        let desc = subs.get(var);
+        let desc = env.source_desc(var);
 
         // Unlike `deep_copy_var` in solve, here we are cloning *all* flex and rigid vars.
         // So we only want to short-circuit if we've already done the cloning work for a particular
@@ -433,33 +496,35 @@ fn deep_copy_type_vars<'a>(
             copy: OptVariable::NONE,
         };
 
-        let copy = subs.fresh(copy_descriptor);
-        subs.set_copy(var, copy.into());
+        let copy = env.target_fresh(copy_descriptor);
+        env.set_source_copy(var, copy.into());
 
         visited.push(var);
 
         macro_rules! descend_slice {
             ($slice:expr) => {
                 for var_index in $slice {
-                    let var = subs[var_index];
-                    let _ = help(arena, subs, visited, var);
+                    let var = env.source()[var_index];
+                    let _ = help(arena, env, visited, var);
                 }
             };
         }
 
         macro_rules! descend_var {
             ($var:expr) => {{
-                help(arena, subs, visited, $var)
+                help(arena, env, visited, $var)
             }};
         }
 
         macro_rules! clone_var_slice {
             ($slice:expr) => {{
-                let new_arguments = VariableSubsSlice::reserve_into_subs(subs, $slice.len());
+                let new_arguments =
+                    VariableSubsSlice::reserve_into_subs(env.target(), $slice.len());
                 for (target_index, var_index) in (new_arguments.indices()).zip($slice) {
-                    let var = subs[var_index];
-                    let copy_var = subs.get_copy(var).into_variable().unwrap_or(var);
-                    subs.variables[target_index] = copy_var;
+                    let var = env.source()[var_index];
+                    let copy_var = env.get_copy(var).into_variable().unwrap_or(var);
+
+                    env.target().variables[target_index] = copy_var;
                 }
                 new_arguments
             }};
@@ -533,18 +598,18 @@ fn deep_copy_type_vars<'a>(
                     let new_ext_var = descend_var!(ext_var);
 
                     for variables_slice_index in tags.variables() {
-                        let variables_slice = subs[variables_slice_index];
+                        let variables_slice = env.source()[variables_slice_index];
                         descend_slice!(variables_slice);
                     }
 
                     perform_clone!({
                         let new_variable_slices =
-                            SubsSlice::reserve_variable_slices(subs, tags.len());
+                            SubsSlice::reserve_variable_slices(env.target(), tags.len());
                         let it = (new_variable_slices.indices()).zip(tags.variables());
                         for (target_index, index) in it {
-                            let slice = subs[index];
+                            let slice = env.source()[index];
                             let new_variables = clone_var_slice!(slice);
-                            subs.variable_slices[target_index] = new_variables;
+                            env.target().variable_slices[target_index] = new_variables;
                         }
 
                         let new_union_tags =
@@ -558,18 +623,19 @@ fn deep_copy_type_vars<'a>(
                     let new_rec_var = descend_var!(rec_var);
 
                     for variables_slice_index in tags.variables() {
-                        let variables_slice = subs[variables_slice_index];
+                        let variables_slice = env.source()[variables_slice_index];
                         descend_slice!(variables_slice);
                     }
 
                     perform_clone!({
                         let new_variable_slices =
-                            SubsSlice::reserve_variable_slices(subs, tags.len());
+                            SubsSlice::reserve_variable_slices(env.target(), tags.len());
                         let it = (new_variable_slices.indices()).zip(tags.variables());
                         for (target_index, index) in it {
-                            let slice = subs[index];
+                            let slice = env.source()[index];
                             let new_variables = clone_var_slice!(slice);
-                            subs.variable_slices[target_index] = new_variables;
+
+                            env.target().variable_slices[target_index] = new_variables;
                         }
 
                         let new_union_tags =
@@ -621,35 +687,38 @@ fn deep_copy_type_vars<'a>(
             }) => {
                 let new_rec_var = recursion_var.map(|var| descend_var!(var));
                 for variables_slice_index in solved.variables() {
-                    let variables_slice = subs[variables_slice_index];
+                    let variables_slice = env.source()[variables_slice_index];
                     descend_slice!(variables_slice);
                 }
                 for uls_index in unspecialized {
-                    let Uls(var, _, _) = subs[uls_index];
+                    let Uls(var, _, _) = env.source()[uls_index];
                     descend_var!(var);
                 }
                 let new_ambient_function = descend_var!(ambient_function);
 
                 perform_clone!({
                     let new_variable_slices =
-                        SubsSlice::reserve_variable_slices(subs, solved.len());
+                        SubsSlice::reserve_variable_slices(env.target(), solved.len());
                     let it = (new_variable_slices.indices()).zip(solved.variables());
                     for (target_index, index) in it {
-                        let slice = subs[index];
+                        let slice = env.source()[index];
                         let new_variables = clone_var_slice!(slice);
-                        subs.variable_slices[target_index] = new_variables;
+
+                        env.target().variable_slices[target_index] = new_variables;
                     }
 
                     let new_solved =
                         UnionLambdas::from_slices(solved.labels(), new_variable_slices);
 
-                    let new_unspecialized = SubsSlice::reserve_uls_slice(subs, unspecialized.len());
+                    let new_unspecialized =
+                        SubsSlice::reserve_uls_slice(env.target(), unspecialized.len());
                     for (target_index, uls_index) in
                         (new_unspecialized.into_iter()).zip(unspecialized.into_iter())
                     {
-                        let Uls(var, sym, region) = subs[uls_index];
-                        let copy_var = subs.get_copy(var).into_variable().unwrap_or(var);
-                        subs[target_index] = Uls(copy_var, sym, region);
+                        let Uls(var, sym, region) = env.source()[uls_index];
+                        let copy_var = env.get_copy(var).into_variable().unwrap_or(var);
+
+                        env.target()[target_index] = Uls(copy_var, sym, region);
                     }
 
                     LambdaSet(subs::LambdaSet {
@@ -667,7 +736,7 @@ fn deep_copy_type_vars<'a>(
             Error => Error,
         };
 
-        subs.set_content(copy, new_content);
+        env.target().set_content(copy, new_content);
 
         copy
     }
