@@ -54,7 +54,7 @@ install-zig-llvm-valgrind-clippy-rustfmt:
 
 copy-dirs:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
-    COPY --dir crates repl_www examples Cargo.toml Cargo.lock version.txt www ./
+    COPY --dir crates examples Cargo.toml Cargo.lock version.txt www ./
 
 test-zig:
     FROM +install-zig-llvm-valgrind-clippy-rustfmt
