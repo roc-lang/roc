@@ -102,10 +102,6 @@ impl DerivedModule {
 
         let ident_id = if cfg!(debug_assertions) || cfg!(feature = "debug-derived-symbols") {
             let debug_name = key.debug_name();
-            // debug_assert!(
-            //     self.derived_ident_ids.get_id(&debug_name).is_none(),
-            //     "duplicate debug name for different derive key"
-            // );
             let ident_id = self.derived_ident_ids.get_or_insert(&debug_name);
 
             // This is expensive, but yields much better symbols when debugging.
@@ -114,7 +110,6 @@ impl DerivedModule {
 
             ident_id
         } else {
-            // TODO this is WRONG when we're re-instantiating the derived impl
             self.derived_ident_ids.gen_unique()
         };
 

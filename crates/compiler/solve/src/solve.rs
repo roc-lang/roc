@@ -2157,31 +2157,14 @@ fn make_specialization_decision(subs: &Subs, var: Variable) -> SpecializeDecisio
             // This is a structural type, find the name of the derived ability function it
             // should use.
             match roc_derive_key::Derived::encoding(subs, var) {
-                Ok(derived) => {
-                    match derived {
-                        roc_derive_key::Derived::Immediate(_) => {
-                            todo!("deal with lambda set extraction from immediates")
-                        }
-                        roc_derive_key::Derived::Key(derive_key) => {
-                            SpecializeDecision::Specialize(Derived(derive_key))
-                        }
+                Ok(derived) => match derived {
+                    roc_derive_key::Derived::Immediate(_) => {
+                        todo!("deal with lambda set extraction from immediates")
                     }
-
-                    // let specialization_symbol_slice =
-                    //     UnionLabels::insert_into_subs(subs, vec![(specialization_symbol, vec![])]);
-                    // let lambda_set_for_derived = subs.fresh(Descriptor {
-                    //     content: LambdaSet(subs::LambdaSet {
-                    //         solved: specialization_symbol_slice,
-                    //         recursion_var: OptVariable::NONE,
-                    //         unspecialized: SubsSlice::default(),
-                    //     }),
-                    //     rank: target_rank,
-                    //     mark: Mark::NONE,
-                    //     copy: OptVariable::NONE,
-                    // });
-
-                    // specialized_to_unify_with.push(lambda_set_for_derived);
-                }
+                    roc_derive_key::Derived::Key(derive_key) => {
+                        SpecializeDecision::Specialize(Derived(derive_key))
+                    }
+                },
                 Err(DeriveError::UnboundVar) => {
                     // not specialized yet, but that also means that it can't possibly be derivable
                     // at this point?
