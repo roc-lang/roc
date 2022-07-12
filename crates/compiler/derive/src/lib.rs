@@ -150,7 +150,7 @@ impl DerivedModule {
         &self,
         lambda_set_var: Variable,
         target: &mut Subs,
-        target_rank: Rank,
+        _target_rank: Rank,
     ) -> Variable {
         let ambient_function_var = self.subs.get_lambda_set(lambda_set_var).ambient_function;
 
@@ -198,8 +198,19 @@ impl DerivedModule {
             .collect()
     }
 
-    pub fn decompose(self) -> IdentIds {
-        self.derived_ident_ids
+    /// # Safety
+    ///
+    /// Prefer using a fresh Derived module with [`Derived::default`]. Use this only in testing.
+    pub unsafe fn from_components(subs: Subs, ident_ids: IdentIds) -> Self {
+        Self {
+            map: Default::default(),
+            subs,
+            derived_ident_ids: ident_ids,
+        }
+    }
+
+    pub fn decompose(self) -> (Subs, IdentIds) {
+        (self.subs, self.derived_ident_ids)
     }
 }
 

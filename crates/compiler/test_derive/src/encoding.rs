@@ -22,12 +22,12 @@ use roc_can::{
 use roc_collections::VecSet;
 use roc_constrain::expr::constrain_decls;
 use roc_debug_flags::dbg_do;
-use roc_derive::{synth_var, DerivedModule, StolenFromDerived};
+use roc_derive::{synth_var, DerivedModule};
 use roc_derive_key::{DeriveKey, Derived};
 use roc_load_internal::file::{add_imports, default_aliases, LoadedModule, Threading};
 use roc_module::{
     ident::TagName,
-    symbol::{Interns, ModuleId, Symbol},
+    symbol::{IdentIds, Interns, ModuleId, Symbol},
 };
 use roc_region::all::LineInfo;
 use roc_reporting::report::{type_problem, RocDocAllocator};
@@ -244,12 +244,12 @@ where
     )
     .unwrap();
 
-    let mut derived_module = DerivedModule::default();
+    let mut subs = Subs::new();
+    let ident_ids = IdentIds::default();
+    let source_var = synth_input(&mut subs);
+    let key = get_key(&subs, source_var);
 
-    let mut stolen = derived_module.steal();
-    let source_var = synth_input(&mut stolen.subs);
-    let key = get_key(&stolen.subs, source_var);
-    derived_module.return_stolen(stolen);
+    let mut derived_module = unsafe { DerivedModule::from_components(subs, ident_ids) };
 
     let mut exposed_by_module = ExposedByModule::default();
     exposed_by_module.insert(
@@ -260,13 +260,12 @@ where
         },
     );
 
-    let (derived_symbol, derived_def, specialization_lsets) =
+    let (_derived_symbol, derived_def, specialization_lsets) =
         derived_module.get_or_insert(&exposed_by_module, key);
-    let derived_symbol = *derived_symbol;
     let specialization_lsets = specialization_lsets.clone();
     let derived_def = derived_def.clone();
 
-    let StolenFromDerived { ident_ids, subs } = derived_module.steal();
+    let (subs, ident_ids) = derived_module.decompose();
 
     interns.all_ident_ids.insert(DERIVED_MODULE, ident_ids);
     DERIVED_MODULE.register_debug_idents(interns.all_ident_ids.get(&DERIVED_MODULE).unwrap());
