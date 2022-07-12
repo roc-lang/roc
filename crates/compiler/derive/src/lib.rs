@@ -133,11 +133,6 @@ impl DerivedModule {
     pub fn iter_all(
         &self,
     ) -> impl Iterator<Item = (&DeriveKey, &(Symbol, Def, SpecializationLambdaSets))> {
-        #[cfg(debug_assertions)]
-        {
-            debug_assert!(!self.stolen);
-        }
-
         self.map.iter()
     }
 
@@ -145,11 +140,6 @@ impl DerivedModule {
     /// module; other modules should use [`Self::get_or_insert`] to generate a symbol for a derived
     /// ability member usage.
     pub fn gen_unique(&mut self) -> Symbol {
-        #[cfg(debug_assertions)]
-        {
-            debug_assert!(!self.stolen);
-        }
-
         let ident_id = self.derived_ident_ids.gen_unique();
         Symbol::new(DERIVED_SYNTH, ident_id)
     }
