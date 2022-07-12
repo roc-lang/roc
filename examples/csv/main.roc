@@ -15,7 +15,7 @@ app "main"
 main = partialTest deconstructedParser "0123456789ABCDEFGHIJKLMN"
 
 partialTest = \parser, input ->
-  when Parser.Str.runPartialStr parser input is
+  when input |> strToRaw |> parser  is
     Ok result ->
       # val = result.val |> Str.joinWith("\r\n")
       val = result.val
@@ -37,14 +37,42 @@ fullTest = \parser, input ->
       "Parse failure: Expected to reach end of input, but the following was still left: `\(leftover)`\n"
 
 deconstructedParser =
-  Parser.Core.buildPrimitiveParser (\input ->
-    manyImpl (Parser.Str.codepointSatisfies (\_ -> True)) [] input)
-  |> Parser.Core.map (\field -> field |> Str.fromUtf8 |> Result.withDefault "Should not happen")
+  \input ->
+    manyImpl (anyChar) [] input
+    |> Result.map (\field ->
+      res = field.val |> strFromRaw
+      {val: res, input: field.input |> strFromRaw }
+
+    )
 
 manyImpl = \parser, vals, input ->
-  result = Parser.Core.runPartial parser input
+  result = (parser input)
   when result is
     Err _ ->
       Ok {val: vals, input: input}
     Ok {val: val, input: inputRest} ->
       manyImpl parser (List.append vals val) inputRest
+
+anyChar =
+  \input ->
+    {before: start, others: inputRest} = List.split input 1
+    when List.get start 0 is
+      Err OutOfBounds ->
+        Err (ParsingFailure "expected any char, but input was empty.")
+      Ok startCodepoint ->
+        Ok {val: startCodepoint, input: inputRest}
+
+strToRaw : Str -> RawStr
+strToRaw = \str ->
+  str |> Str.toUtf8
+
+strFromRaw : RawStr -> Str
+strFromRaw = \rawStr ->
+  rawStr
+  |> Str.fromUtf8
+  |> Result.withDefault "Unexpected problem while turning a List U8 (that was originally a Str) back into a Str. This should never happen!"
+
+
+strFromCodepoint : U8 -> Str
+strFromCodepoint = \cp ->
+  strFromRaw [cp]
