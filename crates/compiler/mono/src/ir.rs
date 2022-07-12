@@ -1324,7 +1324,23 @@ impl<'a, 'i> Env<'a, 'i> {
     pub fn is_imported_symbol(&self, symbol: Symbol) -> bool {
         let sym_module = symbol.module_id();
         sym_module != self.home
+            // The Derived_gen module takes responsibility for code-generating symbols in the
+            // Derived_synth module.
             && !(self.home == ModuleId::DERIVED_GEN && sym_module == ModuleId::DERIVED_SYNTH)
+    }
+
+    /// While specializing the Derived_gen module, derived implementation symbols from the
+    /// Derived_synth module may be discovered. These implementations may not have yet been loaded
+    /// into the Derived_gen module, because we only load them before making specializations, and
+    /// not during mono itself (yet).
+    ///
+    /// When this procedure returns `true`, the symbol should be marked as an external specialization,
+    /// so that a subsequent specializations pass loads the derived implementation into Derived_gen
+    /// and then code-generates appropriately.
+    pub fn is_unloaded_derived_symbol(&self, symbol: Symbol, procs: &Procs<'a>) -> bool {
+        self.home == ModuleId::DERIVED_GEN
+            && symbol.module_id() == ModuleId::DERIVED_SYNTH
+            && !procs.partial_procs.contains_key(symbol)
     }
 
     /// Unifies two variables and performs lambda set compaction.
@@ -7760,9 +7776,7 @@ fn call_by_name_help<'a>(
             hole,
         )
     } else if env.is_imported_symbol(proc_name.name())
-        // TODO HACK FIXME
-        || (proc_name.name().module_id() == ModuleId::DERIVED_SYNTH
-            && !procs.partial_procs.contains_key(proc_name.name()))
+        || env.is_unloaded_derived_symbol(proc_name.name(), procs)
     {
         add_needed_external(procs, env, original_fn_var, proc_name);
 
