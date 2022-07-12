@@ -11,7 +11,7 @@ use std::str;
 use tempfile::tempdir;
 
 /// To debug the zig code with debug prints, we need to disable the wasm code gen
-const DEBUG: bool = false;
+const DEBUG: bool = true;
 
 fn zig_executable() -> String {
     match std::env::var("ROC_ZIG") {

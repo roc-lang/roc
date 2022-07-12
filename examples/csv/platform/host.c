@@ -9,7 +9,7 @@
 void alloc_panic(size_t size);
 
 void *roc_alloc(size_t size, unsigned int alignment) {
-  printf("Allocating %llu (alignment %ud) ", (unsigned long long)size,
+  printf("Allocating %llu (alignment %u) ", (unsigned long long)size,
          alignment);
   void *result = malloc(size);
   printf("at: %p\n", result);
@@ -28,7 +28,7 @@ void *roc_alloc(size_t size, unsigned int alignment) {
 
 void *roc_realloc(void *ptr, size_t new_size, size_t old_size,
                   unsigned int alignment) {
-  printf("Rellocating %p (%llu -> %llu) (alignment %ud) ", ptr,
+  printf("Rellocating %p (%llu -> %llu) (alignment %u) ", ptr,
          (unsigned long long)old_size, (unsigned long long)new_size, alignment);
 
   void *result = realloc(ptr, new_size);
@@ -47,7 +47,7 @@ void *roc_realloc(void *ptr, size_t new_size, size_t old_size,
 }
 
 void roc_dealloc(void *ptr, unsigned int alignment) {
-  printf("Deallocating %p (alignment %ud)\n", ptr, alignment);
+  printf("Deallocating %p (alignment %u)\n", ptr, alignment);
   free(ptr);
 }
 

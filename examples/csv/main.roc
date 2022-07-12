@@ -12,7 +12,7 @@ app "main"
 # main = partialTest fieldParser "\"An escaped field with some <- double quotes\""
 # main = fullTest fieldContentsParser "My very cool,\"\"\r\n string"
 # main = partialTest betweenParser "\"this is a test\"\" to see\""
-main = partialTest manyParser "this is a very long string\"\""
+main = partialTest deconstructedParser "0123456789ABCDEFGHIJKLMN"
 
 partialTest = \parser, input ->
   when Parser.Str.runPartialStr parser input is
@@ -36,39 +36,15 @@ fullTest = \parser, input ->
     Err (ParsingIncomplete leftover) ->
       "Parse failure: Expected to reach end of input, but the following was still left: `\(leftover)`\n"
 
-betweenParser : Parser RawStr Str
-betweenParser =
-  Parser.Core.between manyParser (Parser.Str.codepoint 34) (Parser.Str.codepoint 34)
-
-manyParser : Parser RawStr Str
-manyParser =
-  Parser.Str.string "\"\"" |> Parser.Core.map(\_ -> 34) # Escaped double quote
-  |> Parser.Core.alt (Parser.Str.codepoint 44) # Comma
-  |> Parser.Core.alt (Parser.Str.codepoint 13) # CR
-  |> Parser.Core.alt (Parser.Str.codepoint 10) # LF
-  |> Parser.Core.alt (Parser.Str.codepointSatisfies (\x -> (x >= 32 && x <= 33) || (x >= 35 && x <= 43) || (x >= 45 && x <= 126))) # Any printable char except " (34) and , (44)
-  |> Parser.Core.many
+deconstructedParser =
+  Parser.Core.buildPrimitiveParser (\input ->
+    manyImpl (Parser.Str.codepointSatisfies (\_ -> True)) [] input)
   |> Parser.Core.map (\field -> field |> Str.fromUtf8 |> Result.withDefault "Should not happen")
 
-fieldContentsParser : Parser RawStr Str
-fieldContentsParser =
-  Parser.CSV.escapedContents
-  |> Parser.Core.map (\field -> field |> Str.fromUtf8 |> Result.withDefault "Should not happen")
-
-fieldParser : Parser RawStr Str
-fieldParser =
-  Parser.CSV.escapedField
-  |> Parser.Core.map (\field -> field |> Str.fromUtf8 |> Result.withDefault "Should not happen")
-
-csvParser : Parser RawStr (List Str)
-csvParser =
-  Parser.CSV.file
-  |> Parser.Core.map \records ->
-    records
-    |> List.map (\record ->
-      record
-      |> List.map (\field ->
-        field
-        |> Str.fromUtf8
-        |> Result.withDefault "Unexpected problem while turning a List U8 back into a Str")
-      |> Str.joinWith ", ")
+manyImpl = \parser, vals, input ->
+  result = Parser.Core.runPartial parser input
+  when result is
+    Err _ ->
+      Ok {val: vals, input: input}
+    Ok {val: val, input: inputRest} ->
+      manyImpl parser (List.append vals val) inputRest

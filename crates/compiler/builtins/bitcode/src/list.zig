@@ -436,6 +436,9 @@ pub fn listAppendUnsafe(
     element: Opaque,
     element_width: usize,
 ) callconv(.C) RocList {
+    // std.debug.print("appendUnsafe was called! element_width: {}, old_length: {}\n", .{element_width, old_length});
+    _=&std.os.write(1,"appendUnsafe start\n");
+
     const old_length = list.len();
     var output = list;
     output.length += 1;
@@ -445,6 +448,8 @@ pub fn listAppendUnsafe(
             @memcpy(target + old_length * element_width, source, element_width);
         }
     }
+
+    _=&std.os.write(1,"appendUnsafe end\n");
 
     return output;
 }
