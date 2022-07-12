@@ -68,29 +68,29 @@ roc_error_macros::assert_sizeof_non_wasm!(Call, 9 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(CallType, 7 * 8);
 
 macro_rules! return_on_layout_error {
-    ($env:expr, $layout_result:expr) => {
+    ($env:expr, $layout_result:expr, $context_msg:expr) => {
         match $layout_result {
             Ok(cached) => cached,
-            Err(error) => return_on_layout_error_help!($env, error),
+            Err(error) => return_on_layout_error_help!($env, error, $context_msg),
         }
     };
 }
 
 macro_rules! return_on_layout_error_help {
-    ($env:expr, $error:expr) => {{
+    ($env:expr, $error:expr, $context_msg:expr) => {{
         match $error {
             LayoutProblem::UnresolvedTypeVar(_) => {
                 return Stmt::RuntimeError($env.arena.alloc(format!(
-                    "UnresolvedTypeVar {} line {}",
+                    "UnresolvedTypeVar {} at {}",
                     file!(),
-                    line!()
+                    $context_msg,
                 )));
             }
             LayoutProblem::Erroneous => {
                 return Stmt::RuntimeError($env.arena.alloc(format!(
-                    "Erroneous {} line {}",
+                    "Erroneous {} at {}",
                     file!(),
-                    line!()
+                    $context_msg,
                 )));
             }
         }
@@ -1980,9 +1980,16 @@ impl<'a> Stmt<'a> {
                 .append(alloc.hardline())
                 .append(cont.to_doc(alloc)),
 
-            Expect { condition, .. } => alloc
+            Expect {
+                condition,
+                remainder,
+                ..
+            } => alloc
                 .text("expect ")
-                .append(symbol_to_doc(alloc, *condition)),
+                .append(symbol_to_doc(alloc, *condition))
+                .append(";")
+                .append(alloc.hardline())
+                .append(remainder.to_doc(alloc)),
 
             Ret(symbol) => alloc
                 .text("ret ")
@@ -4357,7 +4364,8 @@ pub fn with_hole<'a>(
                 Ok(_) => {
                     let raw_layout = return_on_layout_error!(
                         env,
-                        layout_cache.raw_from_var(env.arena, function_type, env.subs,)
+                        layout_cache.raw_from_var(env.arena, function_type, env.subs),
+                        "Expr::Accessor"
                     );
 
                     match raw_layout {
@@ -4559,7 +4567,7 @@ pub fn with_hole<'a>(
 
             let raw = layout_cache.raw_from_var(env.arena, function_type, env.subs);
 
-            match return_on_layout_error!(env, raw) {
+            match return_on_layout_error!(env, raw, "Expr::Closure") {
                 RawFunctionLayout::ZeroArgumentThunk(_) => {
                     unreachable!("a closure syntactically always must have at least one argument")
                 }
@@ -4691,7 +4699,8 @@ pub fn with_hole<'a>(
 
                     let full_layout = return_on_layout_error!(
                         env,
-                        layout_cache.raw_from_var(env.arena, fn_var, env.subs,)
+                        layout_cache.raw_from_var(env.arena, fn_var, env.subs),
+                        "Expr::Call"
                     );
 
                     // if the function expression (loc_expr) is already a symbol,
@@ -4877,8 +4886,11 @@ pub fn with_hole<'a>(
             let arg_symbols = arg_symbols.into_bump_slice();
 
             // layout of the return type
-            let layout =
-                return_on_layout_error!(env, layout_cache.from_var(env.arena, ret_var, env.subs,));
+            let layout = return_on_layout_error!(
+                env,
+                layout_cache.from_var(env.arena, ret_var, env.subs),
+                "ForeignCall"
+            );
 
             let call = self::Call {
                 call_type: CallType::Foreign {
@@ -4913,8 +4925,11 @@ pub fn with_hole<'a>(
             let arg_symbols = arg_symbols.into_bump_slice();
 
             // layout of the return type
-            let layout =
-                return_on_layout_error!(env, layout_cache.from_var(env.arena, ret_var, env.subs,));
+            let layout = return_on_layout_error!(
+                env,
+                layout_cache.from_var(env.arena, ret_var, env.subs),
+                "RunLowLevel"
+            );
 
             macro_rules! match_on_closure_argument {
                 ( $ho:ident, [$($x:ident),* $(,)?]) => {{
@@ -4924,7 +4939,8 @@ pub fn with_hole<'a>(
 
                     let closure_data_layout = return_on_layout_error!(
                         env,
-                        layout_cache.raw_from_var(env.arena, closure_data_var, env.subs)
+                        layout_cache.raw_from_var(env.arena, closure_data_var, env.subs),
+                        "match_on_closure_argument"
                     );
 
                     // NB: I don't think the top_level here can have a captures niche?
@@ -5388,7 +5404,8 @@ fn convert_tag_union<'a>(
             // version is not the same as the minimal version.
             let union_layout = match return_on_layout_error!(
                 env,
-                layout_cache.from_var(env.arena, variant_var, env.subs,)
+                layout_cache.from_var(env.arena, variant_var, env.subs),
+                "Wrapped"
             ) {
                 Layout::Union(ul) => ul,
                 _ => unreachable!(),
@@ -5581,7 +5598,8 @@ fn tag_union_to_function<'a>(
             // only need to construct closure data
             let raw_layout = return_on_layout_error!(
                 env,
-                layout_cache.raw_from_var(env.arena, whole_var, env.subs,)
+                layout_cache.raw_from_var(env.arena, whole_var, env.subs),
+                "tag_union_to_function"
             );
 
             match raw_layout {
@@ -5878,7 +5896,7 @@ pub fn from_can<'a>(
 
             for (_, var) in lookups_in_cond {
                 let res_layout = layout_cache.from_var(env.arena, var, env.subs);
-                let layout = return_on_layout_error!(env, res_layout);
+                let layout = return_on_layout_error!(env, res_layout, "Expect");
                 layouts.push(layout);
             }
 
@@ -6044,11 +6062,17 @@ fn from_can_when<'a>(
     }
     let opt_branches = to_opt_branches(env, procs, branches, exhaustive_mark, layout_cache);
 
-    let cond_layout =
-        return_on_layout_error!(env, layout_cache.from_var(env.arena, cond_var, env.subs,));
+    let cond_layout = return_on_layout_error!(
+        env,
+        layout_cache.from_var(env.arena, cond_var, env.subs),
+        "from_can_when cond_layout"
+    );
 
-    let ret_layout =
-        return_on_layout_error!(env, layout_cache.from_var(env.arena, expr_var, env.subs,));
+    let ret_layout = return_on_layout_error!(
+        env,
+        layout_cache.from_var(env.arena, expr_var, env.subs),
+        "from_can_when ret_layout"
+    );
 
     let arena = env.arena;
     let it = opt_branches
@@ -7040,7 +7064,7 @@ where
             add_needed_external(procs, env, variable, LambdaName::no_niche(right));
 
             let res_layout = layout_cache.from_var(env.arena, variable, env.subs);
-            let layout = return_on_layout_error!(env, res_layout);
+            let layout = return_on_layout_error!(env, res_layout, "handle_variable_aliasing");
 
             result = force_thunk(env, right, layout, left, env.arena.alloc(result));
         }
@@ -7131,7 +7155,7 @@ fn specialize_symbol<'a>(
                 Some(arg_var) if env.is_imported_symbol(original) => {
                     let raw = match layout_cache.raw_from_var(env.arena, arg_var, env.subs) {
                         Ok(v) => v,
-                        Err(e) => return_on_layout_error_help!(env, e),
+                        Err(e) => return_on_layout_error_help!(env, e, "specialize_symbol"),
                     };
 
                     if procs.is_imported_module_thunk(original) {
@@ -7192,7 +7216,8 @@ fn specialize_symbol<'a>(
             // to it in the IR.
             let res_layout = return_on_layout_error!(
                 env,
-                layout_cache.raw_from_var(env.arena, arg_var, env.subs,)
+                layout_cache.raw_from_var(env.arena, arg_var, env.subs),
+                "specialize_symbol res_layout"
             );
 
             // we have three kinds of functions really. Plain functions, closures by capture,

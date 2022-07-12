@@ -523,10 +523,8 @@ name = "cli_utils"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "const_format",
  "criterion",
  "rlimit",
- "roc_cli",
  "roc_collections",
  "roc_load",
  "roc_module",
@@ -3392,7 +3390,6 @@ dependencies = [
  "roc_module",
  "roc_region",
  "roc_target",
- "roc_types",
  "tempfile",
 ]
 
@@ -3451,7 +3448,6 @@ dependencies = [
  "roc_target",
  "roc_test_utils",
  "serial_test",
- "signal-hook",
  "strum",
  "strum_macros",
  "target-lexicon",
@@ -3492,7 +3488,6 @@ name = "roc_constrain"
 version = "0.1.0"
 dependencies = [
  "arrayvec 0.7.2",
- "roc_builtins",
  "roc_can",
  "roc_collections",
  "roc_error_macros",
@@ -3915,10 +3910,6 @@ name = "roc_repl_expect"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "const_format",
- "inkwell 0.1.0",
- "libloading",
- "roc_build",
  "roc_builtins",
  "roc_collections",
  "roc_load",
@@ -3930,8 +3921,6 @@ dependencies = [
  "roc_std",
  "roc_target",
  "roc_types",
- "rustyline",
- "rustyline-derive",
  "target-lexicon",
 ]
 
@@ -4388,25 +4377,6 @@ name = "shlex"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43b2853a4d09f215c24cc5489c992ce46052d359b5109343cbafbf26bc62f8a3"
-
-[[package]]
-name = "signal-hook"
-version = "0.3.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a253b5e89e2698464fc26b545c9edceb338e18a89effeeecfea192c3025be29d"
-dependencies = [
- "libc",
- "signal-hook-registry",
-]
-
-[[package]]
-name = "signal-hook-registry"
-version = "1.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e51e73328dc4ac0c7ccbda3a494dfa03df1de2f46018127f60c693f2648455b0"
-dependencies = [
- "libc",
-]
 
 [[package]]
 name = "similar"

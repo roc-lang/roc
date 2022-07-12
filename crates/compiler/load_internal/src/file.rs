@@ -626,6 +626,7 @@ pub struct MonomorphizedModule<'a> {
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+    pub toplevel_expects: Vec<Symbol>,
     pub entry_point: EntryPoint<'a>,
     pub exposed_to_host: ExposedToHost,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
@@ -708,6 +709,7 @@ enum Msg<'a> {
         solved_subs: Solved<Subs>,
         module_timing: ModuleTiming,
         abilities_store: AbilitiesStore,
+        toplevel_expects: std::vec::Vec<Symbol>,
     },
     MadeSpecializations {
         module_id: ModuleId,
@@ -795,6 +797,7 @@ struct State<'a> {
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies<'a>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+    pub toplevel_expects: Vec<Symbol>,
     pub exposed_to_host: ExposedToHost,
 
     /// This is the "final" list of IdentIds, after canonicalization and constraint gen
@@ -861,6 +864,7 @@ impl<'a> State<'a> {
             module_cache: ModuleCache::default(),
             dependencies: Dependencies::default(),
             procedures: MutMap::default(),
+            toplevel_expects: Vec::new(),
             exposed_to_host: ExposedToHost::default(),
             exposed_types,
             arc_modules,
@@ -2324,10 +2328,13 @@ fn update<'a>(
             layout_cache,
             module_timing,
             abilities_store,
+            toplevel_expects,
         } => {
             log!("found specializations for {:?}", module_id);
 
             let subs = solved_subs.into_inner();
+
+            state.toplevel_expects.extend(toplevel_expects);
 
             state
                 .module_cache
@@ -2630,6 +2637,7 @@ fn finish_specialization(
     };
 
     let State {
+        toplevel_expects,
         procedures,
         module_cache,
         output_path,
@@ -2718,6 +2726,7 @@ fn finish_specialization(
         entry_point,
         sources,
         timings: state.timings,
+        toplevel_expects,
     })
 }
 
@@ -4560,13 +4569,14 @@ fn build_pending_specializations<'a>(
     mut module_timing: ModuleTiming,
     mut layout_cache: LayoutCache<'a>,
     target_info: TargetInfo,
-    exposed_to_host: ExposedToHost, // TODO remove
+    exposed_to_host: ExposedToHost,
     abilities_store: AbilitiesStore,
     derived_symbols: GlobalDerivedSymbols,
 ) -> Msg<'a> {
     let find_specializations_start = SystemTime::now();
 
     let mut module_thunks = bumpalo::collections::Vec::new_in(arena);
+    let mut toplevel_expects = std::vec::Vec::new();
 
     let mut procs_base = ProcsBase {
         partial_procs: BumpMap::default(),
@@ -4809,6 +4819,8 @@ fn build_pending_specializations<'a>(
                 // mark this symbol as a top-level thunk before any other work on the procs
                 module_thunks.push(symbol);
 
+                let expr_var = Variable::EMPTY_RECORD;
+
                 let is_host_exposed = true;
 
                 // If this is an exposed symbol, we need to
@@ -4848,6 +4860,8 @@ fn build_pending_specializations<'a>(
                     );
                 }
 
+                let body = roc_can::expr::toplevel_expect_to_inline_expect(body);
+
                 let proc = PartialProc {
                     annotation: expr_var,
                     // This is a 0-arity thunk, so it has no arguments.
@@ -4860,6 +4874,7 @@ fn build_pending_specializations<'a>(
                     is_self_recursive: false,
                 };
 
+                toplevel_expects.push(symbol);
                 procs_base.partial_procs.insert(symbol, proc);
             }
         }
@@ -4880,6 +4895,7 @@ fn build_pending_specializations<'a>(
         procs_base,
         module_timing,
         abilities_store,
+        toplevel_expects,
     }
 }
 
