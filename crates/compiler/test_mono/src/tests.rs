@@ -1867,3 +1867,22 @@ fn encode_derived_tag_one_field_string() {
         "#
     )
 }
+
+#[mono_test]
+fn encode_derived_tag_two_payloads_string() {
+    indoc!(
+        r#"
+        app "test"
+            imports [Encode.{ toEncoder }, Json]
+            provides [main] to "./platform"
+
+        main =
+            x : [A Str Str]
+            x = A "foo" "foo"
+            result = Str.fromUtf8 (Encode.toBytes x Json.format)
+            when result is
+                Ok s -> s
+                _ -> "<bad>"
+        "#
+    )
+}
