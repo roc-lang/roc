@@ -14,7 +14,7 @@ interface AssocList
         remove,
         normalizeWith,
         insertAll,
-        ]
+    ]
     imports [List.{ List }]
 
 ## An Association List is a list of key-value pairs.
@@ -31,7 +31,6 @@ interface AssocList
 ## If you want to compare whether two AssocLists contain the same key-values,
 ## call [normalize] on them first.
 AssocList k v := List [Pair k v]
-
 
 ## Creates a new, empty AssocList
 ##
@@ -52,8 +51,8 @@ single = \k, v ->
 insertFresh : AssocList k v, k, v -> AssocList k v
 insertFresh = \@AssocList list, k, v ->
     list
-      |> List.append (Pair k v)
-      |> @AssocList
+        |> List.append (Pair k v)
+        |> @AssocList
 
 ## Returns true iff a value is currently associated with the given key.
 contains : AssocList k v, k -> Bool
@@ -92,6 +91,7 @@ insert = \@AssocList list, k, v ->
     when listFindIndex list (\Pair key _ -> key == k) is
         Err NotFound ->
             insertFresh (@AssocList list) k v
+
         Ok index ->
             list
                 |> List.set index (Pair k v)
@@ -124,10 +124,11 @@ values = \@AssocList list ->
 
 get : AssocList k v, k -> Result v [KeyNotFound]*
 get = \@AssocList list, needle ->
-        when List.find list (\Pair key _ -> key == needle) is
-          Ok (Pair _ v) -> 
+    when List.find list (\Pair key _ -> key == needle) is
+        Ok (Pair _ v) ->
             Ok v
-          Err NotFound -> 
+
+        Err NotFound ->
             Err KeyNotFound
 
 walk : AssocList k v, state, (state, k, v -> state) -> state
@@ -145,6 +146,7 @@ remove = \@AssocList list, key ->
     when listFindIndex list (\Pair k _ -> k == key) is
         Err NotFound ->
             @AssocList list
+
         Ok index ->
             lastIndex = List.len list - 1
 
@@ -163,11 +165,11 @@ remove = \@AssocList list, key ->
 ## To make sure that two AssocLists containing the same keys compare equal,
 ## call normalizeWith (with the same sorter function)
 ## on both of them before comparison.
-normalizeWith : AssocList k v, (k, k -> [LT, EQ, GT])  -> AssocList k v
+normalizeWith : AssocList k v, (k, k -> [LT, EQ, GT]) -> AssocList k v
 normalizeWith = \@AssocList list, sorter ->
     list
-      |> List.sortWith (\Pair k1 _v1, Pair k2 _v2 -> sorter k1 k2)
-      |> @AssocList
+        |> List.sortWith (\Pair k1 _v1, Pair k2 _v2 -> sorter k1 k2)
+        |> @AssocList
 
 ## Returns an association list where all associations of the second parameter
 ## have been inserted into the first parameter.
@@ -177,6 +179,16 @@ normalizeWith = \@AssocList list, sorter ->
 ## It runs in quadratic time.
 ## (`O(n * m)` where `n` and `m` are the number of elements in the first and second parameters, respectively.
 insertAll : AssocList k v, AssocList k v -> AssocList k v
-insertAll = \xs, ys ->
-          walk ys xs \result, key, value ->
-              insert result key value
+insertAll = \xs, @AssocList ys ->
+    List.walk ys xs (\state, Pair k v -> AssocList.insert state k v)
+
+## Returns an association list where all keys (and their values) of the second parameter
+## have been inserted from the first parameter.
+## This means that on conflict, the association inside the second parameter is kept.
+##
+## Note that this uses plain removal internally, and as such is rather inefficient:
+## It runs in quadratic time.
+## (`O(n * m)` where `n` and `m` are the number of elements in the first and second parameters, respectively.
+removeAll : AssocList k v, AssocList k v -> AssocList k v
+removeAll = \xs, @AssocList ys ->
+    List.walk ys xs (\state, Pair k _ -> AssocList.remove state k)
