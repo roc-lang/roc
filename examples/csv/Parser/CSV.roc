@@ -40,14 +40,22 @@ field : Parser RawStr CSVField
 field = alt escapedField nonescapedField
 
 escapedField : Parser RawStr CSVField
-escapedField = between (many escapedContents) dquote dquote
-escapedContents = oneOf [
-  twodquotes |> map (\_ -> 34), # An escaped double quote
-  comma,
-  cr,
-  lf,
-  textdata
-]
+escapedField = between escapedContents dquote dquote
+# escapedContents = many (oneOf [
+#   twodquotes |> map (\_ -> 34), # An escaped double quote
+#   comma,
+#   cr,
+#   lf,
+#   textdata
+# ])
+escapedContents =
+  (twodquotes |> map (\_ -> 34))
+  |> alt comma
+  |> alt cr
+  |> alt lf
+  |> alt textdata
+  |> many
+
 twodquotes = string "\"\""
 
 nonescapedField : Parser RawStr CSVField

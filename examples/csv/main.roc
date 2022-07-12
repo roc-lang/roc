@@ -7,16 +7,15 @@ app "main"
 # use the simple 'hello world' platform for testing
 # with hard-coded input.
 
-main : Str
-main = fullTest fieldContentsParser "An escaped field with some <- double quotes"
-# main = fullTest fieldParser "\"An escaped field with some <- double quotes\""
+# main = fullTest fieldContentsParser "My very cool,\"\"\r\n string"
+main = partialTest fieldParser "\"An escaped field with some <- double quotes\""
 # main = fullTest csvParser "10,20\n\"An escaped field!\",30\n"
 
 partialTest = \parser, input ->
   when Parser.Str.runPartialStr parser input is
     Ok result ->
-      val = result.val |> Str.joinWith("\r\n")
-      # val = result.val
+      # val = result.val |> Str.joinWith("\r\n")
+      val = result.val
       leftover = result.input
       "Parse success: \(val) (leftover string: \(leftover))\n"
     Err (ParsingFailure problem) ->
@@ -37,7 +36,7 @@ fullTest = \parser, input ->
 fieldContentsParser : Parser RawStr Str
 fieldContentsParser =
   Parser.CSV.escapedContents
-  |> Parser.Core.map (\field -> [field] |> Str.fromUtf8 |> Result.withDefault "Should not happen")
+  |> Parser.Core.map (\field -> field |> Str.fromUtf8 |> Result.withDefault "Should not happen")
 
 fieldParser : Parser RawStr Str
 fieldParser =
