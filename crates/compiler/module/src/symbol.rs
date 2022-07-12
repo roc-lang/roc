@@ -1301,7 +1301,7 @@ define_builtins! {
         9 RESULT_AFTER_ERR: "afterErr"
     }
     7 DICT: "Dict" => {
-        0 DICT_DICT: "Dict" imported // the Dict.Dict type alias
+        0 DICT_DICT: "Dict" // the Dict.Dict type alias
         1 DICT_EMPTY: "empty"
         2 DICT_SINGLE: "single"
         3 DICT_GET: "get"
@@ -1322,7 +1322,7 @@ define_builtins! {
         15 DICT_GET_LOWLEVEL: "getLowlevel"
     }
     8 SET: "Set" => {
-        0 SET_SET: "Set" imported // the Set.Set type alias
+        0 SET_SET: "Set" // the Set.Set type alias
         1 SET_EMPTY: "empty"
         2 SET_SINGLE: "single"
         3 SET_LEN: "len"

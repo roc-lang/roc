@@ -314,7 +314,8 @@ impl Aliases {
         let (typ, delayed_variables, &mut kind) =
             match self.aliases.iter_mut().find(|(s, _, _, _)| *s == symbol) {
                 None => internal_error!(
-                    "Alias not registered in delayed aliases! {:?}",
+                    "Alias {:?} not registered in delayed aliases! {:?}",
+                    symbol,
                     &self.aliases
                 ),
                 Some((_, typ, delayed_variables, kind)) => (typ, delayed_variables, kind),

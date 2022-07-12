@@ -4340,13 +4340,16 @@ fn canonicalize_and_constrain<'a>(
         .into_iter()
         .map(|(k, v)| (k, (true, v)))
         .collect();
+
     for (name, alias) in module_output.scope.aliases {
         match aliases.entry(name) {
             Occupied(_) => {
                 // do nothing
             }
             Vacant(vacant) => {
-                if !name.is_builtin() || name.module_id() == ModuleId::ENCODE {
+                if name == Symbol::DICT_DICT {
+                    vacant.insert((false, alias));
+                } else if !name.is_builtin() || name.module_id() == ModuleId::ENCODE {
                     vacant.insert((false, alias));
                 }
             }
