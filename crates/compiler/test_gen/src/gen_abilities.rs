@@ -563,14 +563,13 @@ fn encode_derived_nested_tag_string() {
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"a":{"b":"bar",},}"#),
+        RocStr::from(r#"{"A":[{"B":["foo","bar",]},]}"#),
         RocStr
     )
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[ignore]
 fn encode_derived_nested_record_tag_record() {
     assert_evals_to!(
         indoc!(
@@ -589,7 +588,7 @@ fn encode_derived_nested_record_tag_record() {
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"a":{"b":"bar",},}"#),
+        RocStr::from(r#"{"a":{"B":[{"c":"foo",},]},}"#),
         RocStr
     )
 }
