@@ -8,7 +8,7 @@ interface Parser.CSV
   ]
   imports [
   Parser.Core.{Parser, fail, const, alt, map, map2, apply, many, oneorMore, sepBy1, between, ignore},
-  Parser.Str.{RawStr, runPartialStr, runStr, oneOf, codepoint, codepointSatisfies, string, scalar, digits}
+  Parser.Str.{RawStr, parseStrPartial, parseStr, oneOf, codepoint, codepointSatisfies, string, scalar, digits}
   ]
 
 ## This is a CSV parser which follows RFC4180

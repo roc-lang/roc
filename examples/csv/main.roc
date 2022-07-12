@@ -15,7 +15,7 @@ main = fullTest csvParser "10,20\n\"An escaped field!\"\"\n,,,\",30\n"
 # main = partialTest manyParser "this is a very long string\"\""
 
 partialTest = \parser, input ->
-  when Parser.Str.runPartialStr parser input is
+  when Parser.Str.parseStrPartial parser input is
     Ok result ->
       # val = result.val |> Str.joinWith("\r\n")
       val = result.val
@@ -25,7 +25,7 @@ partialTest = \parser, input ->
       "Parse failure: \(problem)\n"
 
 fullTest = \parser, input ->
-  when Parser.Str.runStr parser input is
+  when Parser.Str.parseStr parser input is
     Ok result ->
       # val = result |> Str.joinWith(", ")
       val = result |> Str.joinWith("\r\n")

@@ -1,10 +1,10 @@
 interface Parser.Str
   exposes [
     RawStr,
-    runStr,
-    runPartialStr,
-    runRaw,
-    runPartialRaw,
+    parseStr,
+    parseStrPartial,
+    parseRawStr,
+    parseRawStrPartial,
     string,
     stringRaw,
     codepoint,
@@ -14,7 +14,7 @@ interface Parser.Str
     digit,
     digits,
   ]
-  imports [Parser.Core.{Parser, const, fail, map, map2, apply, many, oneOrMore, run, runPartial, buildPrimitiveParser, between}]
+  imports [Parser.Core.{Parser, const, fail, map, map2, apply, many, oneOrMore, parse, parsePartial, buildPrimitiveParser, between}]
 
 # Specific string-based parsers:
 
@@ -40,18 +40,18 @@ strFromCodepoint = \cp ->
   strFromRaw [cp]
 
 ## Runs a parser against the start of a list of scalars, allowing the parser to consume it only partially.
-runPartialRaw : Parser RawStr a, RawStr -> Result {val: a, input: RawStr} [ParsingFailure Str]
-runPartialRaw = \parser, input ->
-  runPartial parser input
+parseRawStrPartial : Parser RawStr a, RawStr -> Result {val: a, input: RawStr} [ParsingFailure Str]
+parseRawStrPartial = \parser, input ->
+  parsePartial parser input
 
 ## Runs a parser against the start of a string, allowing the parser to consume it only partially.
 ##
 ## - If the parser succeeds, returns the resulting value as well as the leftover input.
 ## - If the parser fails, returns `Err (ParsingFailure msg)`
-runPartialStr : Parser RawStr a, Str -> Result {val: a, input: Str} [ParsingFailure Str]
-runPartialStr = \parser, input ->
+parseStrPartial : Parser RawStr a, Str -> Result {val: a, input: Str} [ParsingFailure Str]
+parseStrPartial = \parser, input ->
   parser
-  |> runPartialRaw (strToRaw input)
+  |> parseRawStrPartial (strToRaw input)
   |> Result.map \{val: val, input: restRaw} ->
     {val: val, input: (strFromRaw restRaw)}
 
@@ -60,14 +60,14 @@ runPartialStr = \parser, input ->
 ## - If the parser succeeds, returns `Ok val`
 ## - If the parser fails, returns `Err (ParsingFailure msg)`
 ## - If the parser succeeds but does not consume the full string, returns `Err (ParsingIncomplete leftover)`
-runRaw : Parser RawStr a, RawStr -> Result a [ParsingFailure Str, ParsingIncomplete RawStr]
-runRaw = \parser, input ->
-  run parser input (\leftover -> List.len leftover == 0)
+parseRawStr : Parser RawStr a, RawStr -> Result a [ParsingFailure Str, ParsingIncomplete RawStr]
+parseRawStr = \parser, input ->
+  parse parser input (\leftover -> List.len leftover == 0)
 
-runStr : Parser RawStr a, Str -> Result a [ParsingFailure Str, ParsingIncomplete Str]
-runStr = \parser, input ->
+parseStr : Parser RawStr a, Str -> Result a [ParsingFailure Str, ParsingIncomplete Str]
+parseStr = \parser, input ->
   parser
-  |> runRaw (strToRaw input)
+  |> parseRawStr (strToRaw input)
   |> Result.mapErr \problem ->
       when problem is
         ParsingFailure msg ->
@@ -173,7 +173,7 @@ oneOf : List (Parser RawStr a) -> Parser RawStr a
 oneOf = \parsers ->
   buildPrimitiveParser \input ->
     List.walkUntil parsers (Err (ParsingFailure "(no possibilities)")) \_, parser ->
-      when runPartialRaw parser input is
+      when parseRawStrPartial parser input is
         Ok val ->
           Break (Ok val)
         Err problem ->

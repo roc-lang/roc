@@ -1,8 +1,8 @@
 interface Parser.Core
   exposes [
     Parser,
-    run,
-    runPartial,
+    parse,
+    parsePartial,
     fail,
     const,
     alt,
@@ -57,8 +57,8 @@ buildPrimitiveParser = \fun ->
 ##
 ## Of course, this is mostly useful when creating your own internal parsing building blocks.
 ## `run` or `Parser.Str.runStr` etc. are more useful in daily usage.
-runPartial : Parser input a, input -> Result {val: a, input: input} [ParsingFailure Str]
-runPartial = \@Parser parser, input ->
+parsePartial : Parser input a, input -> Result {val: a, input: input} [ParsingFailure Str]
+parsePartial = \@Parser parser, input ->
   (parser input)
 
 ## Runs a parser on the given input, expecting it to fully consume the input
@@ -68,9 +68,9 @@ runPartial = \@Parser parser, input ->
 ##
 ## For most (but not all!) input types, a parsing run that leaves some unparsed input behind
 ## should be considered an error.
-run : Parser input a, input, (input -> Bool) -> Result a [ParsingFailure Str, ParsingIncomplete input]
-run = \parser, input, isParsingCompleted ->
-  when (runPartial parser input) is
+parse : Parser input a, input, (input -> Bool) -> Result a [ParsingFailure Str, ParsingIncomplete input]
+parse = \parser, input, isParsingCompleted ->
+  when (parsePartial parser input) is
     Ok {val: val, input: leftover} ->
       if isParsingCompleted leftover then
         Ok val
@@ -100,10 +100,10 @@ const = \val ->
 alt : Parser input a, Parser input a -> Parser input a
 alt = \left, right ->
   fun = \input ->
-    when (runPartial left input) is
+    when (parsePartial left input) is
       Ok {val: val, input: rest} -> Ok {val: val, input: rest}
       Err (ParsingFailure leftErr) ->
-        when (runPartial right input) is
+        when (parsePartial right input) is
         Ok {val: val, input: rest} -> Ok {val: val, input: rest}
         Err (ParsingFailure rightErr) ->
           Err (ParsingFailure ("\(leftErr) or \(rightErr)"))
@@ -112,8 +112,8 @@ alt = \left, right ->
 #  applyOld : Parser input a, Parser input (a -> b) -> Parser input b
 #  applyOld = \valParser, funParser ->
 #    combined = \input ->
-#      {val: val, input: rest} <- Result.after (runPartial valParser input)
-#      (runPartial funParser rest)
+#      {val: val, input: rest} <- Result.after (parsePartial valParser input)
+#      (parsePartial funParser rest)
 #      |> Result.map \{val: funVal, input: rest2} ->
 #        {val: funVal val, input: rest2}
 #    @Parser combined
@@ -144,8 +144,8 @@ alt = \left, right ->
 apply : Parser input (a -> b), Parser input a -> Parser input b
 apply = \funParser, valParser ->
   combined = \input ->
-    {val: funVal, input: rest} <- Result.after (runPartial funParser input)
-    (runPartial valParser rest)
+    {val: funVal, input: rest} <- Result.after (parsePartial funParser input)
+    (parsePartial valParser rest)
     |> Result.map \{val: val, input: rest2} ->
       {val: funVal val, input: rest2}
   buildPrimitiveParser combined
@@ -162,9 +162,9 @@ apply = \funParser, valParser ->
 andThen : Parser input a, (a -> Parser input b) -> Parser input b
 andThen = \firstParser, buildNextParser ->
   fun = \input ->
-    {val: firstVal, input: rest} <- Result.after (runPartial firstParser input)
+    {val: firstVal, input: rest} <- Result.after (parsePartial firstParser input)
     nextParser = (buildNextParser firstVal)
-    runPartial nextParser rest
+    parsePartial nextParser rest
   buildPrimitiveParser fun
 
 # NOTE: Using this implementation in an actual program,
@@ -228,7 +228,7 @@ maybe = \parser ->
 
 manyImpl : Parser input a, List a, input -> Result { input : input, val : List a } [ParsingFailure Str]
 manyImpl = \parser, vals, input ->
-  result = runPartial parser input
+  result = parsePartial parser input
   when result is
     Err _ ->
       Ok {val: vals, input: input}
