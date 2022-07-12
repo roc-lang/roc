@@ -20,4 +20,4 @@ jobs:
           clean: "true"
 
       - name: execute tests with --release
-        run: nix develop -c cargo test --locked --release
+        run: /home/big-ci-user/.nix-profile/bin/nix develop -c cargo test --locked --release
