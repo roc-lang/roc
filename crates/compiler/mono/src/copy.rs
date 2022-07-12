@@ -2,12 +2,13 @@ use roc_can::{
     def::Def,
     expr::{AccessorData, ClosureData, Expr, Field, WhenBranch},
 };
+use roc_module::ident::{Lowercase, TagName};
 use roc_types::{
     subs::{
-        self, AliasVariables, Descriptor, OptVariable, RecordFields, Subs, SubsSlice, UnionLambdas,
-        UnionTags, Variable, VariableSubsSlice,
+        self, AliasVariables, Descriptor, GetSubsSlice, OptVariable, RecordFields, Subs, SubsIndex,
+        SubsSlice, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
     },
-    types::Uls,
+    types::{RecordField, Uls},
 };
 
 trait CopyEnv {
@@ -46,6 +47,19 @@ trait CopyEnv {
     fn source(&self) -> &Subs;
 
     fn target(&mut self) -> &mut Subs;
+
+    fn clone_name(&mut self, name: SubsIndex<Lowercase>) -> SubsIndex<Lowercase>;
+
+    fn clone_tag_name(&mut self, tag_name: SubsIndex<TagName>) -> SubsIndex<TagName>;
+
+    fn clone_field_names(&mut self, field_names: SubsSlice<Lowercase>) -> SubsSlice<Lowercase>;
+
+    fn clone_tag_names(&mut self, tag_names: SubsSlice<TagName>) -> SubsSlice<TagName>;
+
+    fn clone_record_fields(
+        &mut self,
+        record_fields: SubsSlice<RecordField<()>>,
+    ) -> SubsSlice<RecordField<()>>;
 }
 
 impl CopyEnv for Subs {
@@ -60,6 +74,80 @@ impl CopyEnv for Subs {
     fn target(&mut self) -> &mut Subs {
         self
     }
+
+    fn clone_name(&mut self, name: SubsIndex<Lowercase>) -> SubsIndex<Lowercase> {
+        name
+    }
+
+    fn clone_tag_name(&mut self, tag_name: SubsIndex<TagName>) -> SubsIndex<TagName> {
+        tag_name
+    }
+
+    fn clone_field_names(&mut self, field_names: SubsSlice<Lowercase>) -> SubsSlice<Lowercase> {
+        field_names
+    }
+
+    fn clone_tag_names(&mut self, tag_names: SubsSlice<TagName>) -> SubsSlice<TagName> {
+        tag_names
+    }
+
+    fn clone_record_fields(
+        &mut self,
+        record_fields: SubsSlice<RecordField<()>>,
+    ) -> SubsSlice<RecordField<()>> {
+        record_fields
+    }
+}
+
+struct AcrossSubs<'a> {
+    source: &'a mut Subs,
+    target: &'a mut Subs,
+}
+
+impl<'a> CopyEnv for AcrossSubs<'a> {
+    fn mut_source(&mut self) -> &mut Subs {
+        self.source
+    }
+
+    fn source(&self) -> &Subs {
+        self.source
+    }
+
+    fn target(&mut self) -> &mut Subs {
+        self.target
+    }
+
+    fn clone_name(&mut self, name: SubsIndex<Lowercase>) -> SubsIndex<Lowercase> {
+        SubsIndex::push_new(&mut self.target.field_names, self.source[name].clone())
+    }
+
+    fn clone_tag_name(&mut self, tag_name: SubsIndex<TagName>) -> SubsIndex<TagName> {
+        SubsIndex::push_new(&mut self.target.tag_names, self.source[tag_name].clone())
+    }
+
+    fn clone_field_names(&mut self, field_names: SubsSlice<Lowercase>) -> SubsSlice<Lowercase> {
+        SubsSlice::extend_new(
+            &mut self.target.field_names,
+            self.source.get_subs_slice(field_names).iter().cloned(),
+        )
+    }
+
+    fn clone_tag_names(&mut self, tag_names: SubsSlice<TagName>) -> SubsSlice<TagName> {
+        SubsSlice::extend_new(
+            &mut self.target.tag_names,
+            self.source.get_subs_slice(tag_names).iter().cloned(),
+        )
+    }
+
+    fn clone_record_fields(
+        &mut self,
+        record_fields: SubsSlice<RecordField<()>>,
+    ) -> SubsSlice<RecordField<()>> {
+        SubsSlice::extend_new(
+            &mut self.target.record_fields,
+            self.source.get_subs_slice(record_fields).iter().copied(),
+        )
+    }
 }
 
 pub fn deep_copy_type_vars_into_expr(
@@ -68,6 +156,16 @@ pub fn deep_copy_type_vars_into_expr(
     expr: &Expr,
 ) -> Option<(Variable, Expr)> {
     deep_copy_type_vars_into_expr_help(subs, var, expr)
+}
+
+pub fn deep_copy_expr_across_subs(
+    source: &mut Subs,
+    target: &mut Subs,
+    var: Variable,
+    expr: &Expr,
+) -> Option<(Variable, Expr)> {
+    let mut across_subs = AcrossSubs { source, target };
+    deep_copy_type_vars_into_expr_help(&mut across_subs, var, expr)
 }
 
 /// Deep copies all type variables in [`expr`].
@@ -533,10 +631,12 @@ fn deep_copy_type_vars<'a, C: CopyEnv>(
         // will not repeat this work or crawl this variable again.
         let new_content = match content {
             // The vars for which we want to do something interesting.
-            FlexVar(opt_name) => FlexVar(opt_name),
-            FlexAbleVar(opt_name, ability) => FlexAbleVar(opt_name, ability),
-            RigidVar(name) => RigidVar(name),
-            RigidAbleVar(name, ability) => RigidAbleVar(name, ability),
+            FlexVar(opt_name) => FlexVar(opt_name.map(|n| env.clone_name(n))),
+            FlexAbleVar(opt_name, ability) => {
+                FlexAbleVar(opt_name.map(|n| env.clone_name(n)), ability)
+            }
+            RigidVar(name) => RigidVar(env.clone_name(name)),
+            RigidAbleVar(name, ability) => RigidAbleVar(env.clone_name(name), ability),
 
             // Everything else is a mechanical descent.
             Structure(flat_type) => match flat_type {
@@ -567,12 +667,15 @@ fn deep_copy_type_vars<'a, C: CopyEnv>(
 
                     perform_clone!({
                         let new_variables = clone_var_slice!(fields.variables());
+                        let new_field_names = env.clone_field_names(fields.field_names());
+                        let new_record_fields = env.clone_record_fields(fields.record_fields());
+
                         let new_fields = {
                             RecordFields {
                                 length: fields.length,
-                                field_names_start: fields.field_names_start,
+                                field_names_start: new_field_names.start,
                                 variables_start: new_variables.start,
-                                field_types_start: fields.field_types_start,
+                                field_types_start: new_record_fields.start,
                             }
                         };
 
@@ -596,9 +699,10 @@ fn deep_copy_type_vars<'a, C: CopyEnv>(
                             let new_variables = clone_var_slice!(slice);
                             env.target().variable_slices[target_index] = new_variables;
                         }
+                        let new_tag_names = env.clone_tag_names(tags.labels());
 
                         let new_union_tags =
-                            UnionTags::from_slices(tags.labels(), new_variable_slices);
+                            UnionTags::from_slices(new_tag_names, new_variable_slices);
 
                         Structure(TagUnion(new_union_tags, new_ext_var))
                     })
@@ -622,16 +726,22 @@ fn deep_copy_type_vars<'a, C: CopyEnv>(
 
                             env.target().variable_slices[target_index] = new_variables;
                         }
+                        let new_tag_names = env.clone_tag_names(tags.labels());
 
                         let new_union_tags =
-                            UnionTags::from_slices(tags.labels(), new_variable_slices);
+                            UnionTags::from_slices(new_tag_names, new_variable_slices);
 
                         Structure(RecursiveTagUnion(new_rec_var, new_union_tags, new_ext_var))
                     })
                 }
                 FunctionOrTagUnion(tag_name, symbol, ext_var) => {
                     let new_ext_var = descend_var!(ext_var);
-                    perform_clone!(Structure(FunctionOrTagUnion(tag_name, symbol, new_ext_var)))
+                    let new_tag_name = env.clone_tag_name(tag_name);
+                    perform_clone!(Structure(FunctionOrTagUnion(
+                        new_tag_name,
+                        symbol,
+                        new_ext_var
+                    )))
                 }
             },
 
@@ -640,10 +750,11 @@ fn deep_copy_type_vars<'a, C: CopyEnv>(
                 structure,
             } => {
                 let new_structure = descend_var!(structure);
+                let new_opt_name = opt_name.map(|n| env.clone_name(n));
 
                 perform_clone!({
                     RecursionVar {
-                        opt_name,
+                        opt_name: new_opt_name,
                         structure: new_structure,
                     }
                 })
@@ -731,7 +842,7 @@ fn deep_copy_type_vars<'a, C: CopyEnv>(
 mod test {
     use crate::copy::deep_copy_type_vars_into_expr;
 
-    use super::deep_copy_type_vars;
+    use super::{deep_copy_expr_across_subs, deep_copy_type_vars};
     use roc_can::expr::Expr;
     use roc_error_macros::internal_error;
     use roc_module::{ident::TagName, symbol::Symbol};
@@ -860,6 +971,9 @@ mod test {
 
         let (var, expr) = deep_copy_type_vars_into_expr(&mut subs, var1, &expr).unwrap();
 
+        assert!(subs.get_copy(var1).is_none());
+        assert!(subs.get_copy(var2).is_none());
+
         match expr {
             Expr::Tag {
                 variant_var,
@@ -904,6 +1018,88 @@ mod test {
                         assert_eq!(variant_var, v2);
                         assert!(matches!(
                             subs.get_content_without_compacting(ext_var),
+                            Content::Structure(FlatType::EmptyTagUnion)
+                        ));
+                        assert_eq!(name.0.as_str(), "G");
+                        assert_eq!(arguments.len(), 0);
+                    }
+                    e => panic!("{:?}", e),
+                }
+            }
+            e => panic!("{:?}", e),
+        }
+    }
+
+    #[test]
+    fn copy_deep_expr_across_subs() {
+        let mut source = Subs::new();
+        let mut target = Subs::new();
+
+        let a = SubsIndex::push_new(&mut source.field_names, "a".into());
+        let b = SubsIndex::push_new(&mut source.field_names, "b".into());
+        let var1 = new_var(&mut source, FlexVar(Some(a)));
+        let var2 = new_var(&mut source, FlexVar(Some(b)));
+
+        let expr = Expr::Tag {
+            variant_var: var1,
+            ext_var: Variable::EMPTY_TAG_UNION,
+            name: TagName("F".into()),
+            arguments: vec![(
+                var2,
+                Loc::at_zero(Expr::Tag {
+                    variant_var: var2,
+                    ext_var: Variable::EMPTY_TAG_UNION,
+                    name: TagName("G".into()),
+                    arguments: vec![],
+                }),
+            )],
+        };
+
+        let (var, expr) =
+            deep_copy_expr_across_subs(&mut source, &mut target, var1, &expr).unwrap();
+
+        assert!(source.get_copy(var1).is_none());
+        assert!(source.get_copy(var2).is_none());
+
+        match expr {
+            Expr::Tag {
+                variant_var,
+                ext_var,
+                name,
+                mut arguments,
+            } => {
+                match target.get_content_without_compacting(variant_var) {
+                    FlexVar(Some(name)) => {
+                        assert_eq!(target[*name].as_str(), "a");
+                    }
+                    it => panic!("{:?}", it),
+                }
+                assert_eq!(var, variant_var);
+                assert!(matches!(
+                    target.get_content_without_compacting(ext_var),
+                    Content::Structure(FlatType::EmptyTagUnion)
+                ));
+                assert_eq!(name.0.as_str(), "F");
+
+                assert_eq!(arguments.len(), 1);
+                let (v2, arg) = arguments.pop().unwrap();
+                match target.get_content_without_compacting(v2) {
+                    FlexVar(Some(name)) => {
+                        assert_eq!(target[*name].as_str(), "b");
+                    }
+                    it => panic!("{:?}", it),
+                }
+
+                match arg.value {
+                    Expr::Tag {
+                        variant_var,
+                        ext_var,
+                        name,
+                        arguments,
+                    } => {
+                        assert_eq!(variant_var, v2);
+                        assert!(matches!(
+                            target.get_content_without_compacting(ext_var),
                             Content::Structure(FlatType::EmptyTagUnion)
                         ));
                         assert_eq!(name.0.as_str(), "G");
