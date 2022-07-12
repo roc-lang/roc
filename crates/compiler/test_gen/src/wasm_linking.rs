@@ -19,6 +19,7 @@ use roc_mono::ir::{
     UpdateModeId,
 };
 use roc_mono::layout::{Builtin, CapturesNiche, LambdaName, Layout};
+use wasm3::{Environment, Module};
 
 const LINKING_TEST_HOST_WASM: &str = "build/wasm_linking_test_host.wasm";
 const LINKING_TEST_HOST_NATIVE: &str = "build/wasm_linking_test_host";
@@ -180,63 +181,36 @@ impl<'a> BackendInputs<'a> {
     }
 }
 
-fn execute_wasm_bytes(bytes: &[u8]) -> Result<wasmer::Instance, String> {
-    use wasmer::{Function, Module, Store};
+fn execute_wasm_bytes(wasm_bytes: &[u8]) -> i32 {
+    let env = Environment::new().unwrap();
+    let rt = env.create_runtime(1024 * 60).unwrap();
 
-    let store = Store::default();
-    let wasmer_module = Module::new(&store, bytes).map_err(|e| e.to_string())?;
-
-    let import_object = wasmer::imports!(
-        "env" => {
-            "js_called_indirectly_from_roc" => Function::new_native(&store, js_called_indirectly_from_roc),
-            "js_called_indirectly_from_main" => Function::new_native(&store, js_called_indirectly_from_main),
-            "js_unused" => Function::new_native(&store, js_unused),
-            "js_called_directly_from_roc" => Function::new_native(&store, js_called_directly_from_roc),
-            "js_called_directly_from_main" => Function::new_native(&store, js_called_directly_from_main),
-        }
-    );
-
-    let instance =
-        wasmer::Instance::new(&wasmer_module, &import_object).map_err(|e| e.to_string())?;
-
-    let start = instance
-        .exports
-        .get_function("_start")
-        .map_err(|e| e.to_string())?;
-    start.call(&[]).map_err(|e| e.to_string())?;
-
-    Ok(instance)
-}
-
-fn js_called_directly_from_roc() -> i32 {
-    return 0x01;
-}
-fn js_called_indirectly_from_roc() -> i32 {
-    return 0x02;
-}
-fn js_called_directly_from_main() -> i32 {
-    return 0x04;
-}
-fn js_called_indirectly_from_main() -> i32 {
-    return 0x08;
-}
-fn js_unused() -> i32 {
-    return 0x10;
-}
-
-fn get_wasm_result(instance: &wasmer::Instance) -> i32 {
-    let memory = instance
-        .exports
-        .get_memory(roc_gen_wasm::MEMORY_NAME)
+    let parsed_module = Module::parse(&env, &wasm_bytes[..]).unwrap();
+    let mut module = rt.load_module(parsed_module).unwrap();
+    module
+        .link_closure("env", "js_called_directly_from_roc", |_, ()| Ok(0x01i32))
         .unwrap();
-    let memory_bytes = unsafe { memory.data_unchecked() };
+    module
+        .link_closure("env", "js_called_indirectly_from_roc", |_, ()| Ok(0x02i32))
+        .unwrap();
+    module
+        .link_closure("env", "js_called_directly_from_main", |_, ()| Ok(0x04i32))
+        .unwrap();
+    module
+        .link_closure("env", "js_called_indirectly_from_main", |_, ()| Ok(0x08i32))
+        .unwrap();
+    module
+        .link_closure("env", "js_unused", |_, ()| Ok(0x10i32))
+        .unwrap_or_else(|_| {});
 
-    // The Wasm Global tells us the memory location of the global value
-    let global = instance.exports.get_global("host_result").unwrap();
-    let global_addr = global.get().unwrap_i32() as usize;
-    let mut global_bytes = [0; 4];
-    global_bytes.copy_from_slice(&memory_bytes[global_addr..][..4]);
-    i32::from_le_bytes(global_bytes)
+    // In Zig, main can only return u8 or void, but our result is too wide for that.
+    // But I want to use main so that I can test that _start is created for it!
+    // So return void from main, and call another function to get the result.
+    let start = module.find_function::<(), ()>("_start").unwrap();
+    start.call().unwrap();
+
+    let read_host_result = module.find_function::<(), i32>("read_host_result").unwrap();
+    read_host_result.call().unwrap()
 }
 
 fn get_native_result() -> i32 {
@@ -298,9 +272,7 @@ fn test_linking_without_dce() {
         ]
     );
 
-    let instance = execute_wasm_bytes(&buffer).unwrap();
-
-    let wasm_result = get_wasm_result(&instance);
+    let wasm_result = execute_wasm_bytes(&buffer);
     assert_eq!(wasm_result, get_native_result());
 }
 
@@ -367,8 +339,6 @@ fn test_linking_with_dce() {
         ]
     );
 
-    let instance = execute_wasm_bytes(&buffer).unwrap();
-
-    let wasm_result = get_wasm_result(&instance);
+    let wasm_result = execute_wasm_bytes(&buffer);
     assert_eq!(wasm_result, get_native_result());
 }

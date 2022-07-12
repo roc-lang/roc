@@ -65,6 +65,9 @@ flags! {
     /// Only use this in single-threaded mode!
     ROC_PRINT_UNIFICATIONS
 
+    /// Prints traces of unspecialized lambda set compaction
+    ROC_TRACE_COMPACTION
+
     /// Like ROC_PRINT_UNIFICATIONS, in the context of typechecking derived implementations.
     /// Only use this in single-threaded mode!
     ROC_PRINT_UNIFICATIONS_DERIVED

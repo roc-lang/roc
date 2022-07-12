@@ -15,10 +15,8 @@ totalCount =
 toStr : Variable -> Str
 toStr = \@Variable char ->
     when Str.fromUtf8 [char] is
-        Ok str ->
-            str
-        _ ->
-            "_"
+        Ok str -> str
+        _ -> "_"
 
 fromUtf8 : U8 -> Result Variable [InvalidVariableUtf8]
 fromUtf8 = \char ->

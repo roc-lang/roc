@@ -133,7 +133,7 @@ map_symbol_to_lowlevel_and_arity! {
     StrToScalars; STR_TO_SCALARS; 1,
     StrGetUnsafe; STR_GET_UNSAFE; 2,
     StrSubstringUnsafe; STR_SUBSTRING_UNSAFE; 3,
-    StrReserve; STR_RESERVE; 1,
+    StrReserve; STR_RESERVE; 2,
     StrAppendScalar; STR_APPEND_SCALAR_UNSAFE; 2,
     StrGetScalarUnsafe; STR_GET_SCALAR_UNSAFE; 2,
     StrToNum; STR_TO_NUM; 1,
@@ -243,21 +243,6 @@ map_symbol_to_lowlevel_and_arity! {
 /// delegates to the compiler-internal List.getUnsafe function to do the actual
 /// lookup (if the bounds check passed). That internal function is hardcoded in code gen,
 /// which works fine because it doesn't involve any open tag unions.
-
-/// Does a builtin depend on any other builtins?
-///
-/// NOTE: you are supposed to give all symbols that are relied on,
-/// even those that are relied on transitively!
-pub fn builtin_dependencies(symbol: Symbol) -> &'static [Symbol] {
-    match symbol {
-        Symbol::LIST_SORT_ASC => &[Symbol::LIST_SORT_WITH, Symbol::NUM_COMPARE],
-        Symbol::LIST_SORT_DESC => &[Symbol::LIST_SORT_WITH],
-        Symbol::LIST_PRODUCT => &[Symbol::LIST_WALK, Symbol::NUM_MUL],
-        Symbol::LIST_SUM => &[Symbol::LIST_WALK, Symbol::NUM_ADD],
-        Symbol::LIST_SET => &[Symbol::LIST_REPLACE],
-        _ => &[],
-    }
-}
 
 /// Implementation for a builtin
 pub fn builtin_defs_map(symbol: Symbol, var_store: &mut VarStore) -> Option<Def> {

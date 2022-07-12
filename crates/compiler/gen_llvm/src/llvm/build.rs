@@ -164,6 +164,16 @@ impl<'a, 'ctx> Scope<'a, 'ctx> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum LlvmBackendMode {
+    /// Assumes primitives (roc_alloc, roc_panic, etc) are provided by the host
+    Binary,
+    /// Creates a test wrapper around the main roc function to catch and report panics.
+    /// Provides a testing implementation of primitives (roc_alloc, roc_panic, etc)
+    GenTest,
+    WasmGenTest,
+}
+
 pub struct Env<'a, 'ctx, 'env> {
     pub arena: &'a Bump,
     pub context: &'ctx Context,
@@ -173,7 +183,7 @@ pub struct Env<'a, 'ctx, 'env> {
     pub module: &'ctx Module<'ctx>,
     pub interns: Interns,
     pub target_info: TargetInfo,
-    pub is_gen_test: bool,
+    pub mode: LlvmBackendMode,
     pub exposed_to_host: MutSet<Symbol>,
 }
 
@@ -752,6 +762,122 @@ fn promote_to_main_function<'a, 'ctx, 'env>(
         top_level.result,
         main_fn_name,
     );
+
+    (main_fn_name, main_fn)
+}
+
+fn promote_to_wasm_test_wrapper<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    mod_solutions: &'a ModSolutions,
+    symbol: Symbol,
+    top_level: ProcLayout<'a>,
+) -> (&'static str, FunctionValue<'ctx>) {
+    // generates roughly
+    //
+    // fn $Test.wasm_test_wrapper() -> *T {
+    //     result = roc_main();
+    //     ptr = roc_malloc(size_of::<T>)
+    //     *ptr = result
+    //     ret ptr;
+    // }
+
+    let main_fn_name = "$Test.wasm_test_wrapper";
+
+    let it = top_level.arguments.iter().copied();
+    let bytes = roc_alias_analysis::func_name_bytes_help(
+        symbol,
+        it,
+        CapturesNiche::no_niche(),
+        &top_level.result,
+    );
+    let func_name = FuncName(&bytes);
+    let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
+
+    let mut it = func_solutions.specs();
+    let func_spec = it.next().unwrap();
+    debug_assert!(
+        it.next().is_none(),
+        "we expect only one specialization of this symbol"
+    );
+
+    // NOTE fake layout; it is only used for debug prints
+    let roc_main_fn = function_value_by_func_spec(
+        env,
+        *func_spec,
+        symbol,
+        &[],
+        CapturesNiche::no_niche(),
+        &Layout::UNIT,
+    );
+
+    let main_fn = {
+        let c_function_spec = {
+            match roc_main_fn.get_type().get_return_type() {
+                Some(return_type) => {
+                    let output_type = return_type.ptr_type(AddressSpace::Generic);
+                    FunctionSpec::cconv(env, CCReturn::Return, Some(output_type.into()), &[])
+                }
+                None => todo!(),
+            }
+        };
+
+        let c_function = add_func(
+            env.context,
+            env.module,
+            main_fn_name,
+            c_function_spec,
+            Linkage::External,
+        );
+
+        let subprogram = env.new_subprogram(main_fn_name);
+        c_function.set_subprogram(subprogram);
+
+        // STEP 2: build the exposed function's body
+        let builder = env.builder;
+        let context = env.context;
+
+        let entry = context.append_basic_block(c_function, "entry");
+        builder.position_at_end(entry);
+
+        // call the main roc function
+        let roc_main_fn_result = call_roc_function(env, roc_main_fn, &top_level.result, &[]);
+
+        // reserve space for the result on the heap
+        // pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
+        let (size, alignment) = top_level.result.stack_size_and_alignment(env.target_info);
+        let roc_alloc = env.module.get_function("roc_alloc").unwrap();
+
+        let call = builder.build_call(
+            roc_alloc,
+            &[
+                env.ptr_int().const_int(size as _, false).into(),
+                env.context
+                    .i32_type()
+                    .const_int(alignment as _, false)
+                    .into(),
+            ],
+            "result_ptr",
+        );
+
+        call.set_call_convention(C_CALL_CONV);
+        let void_ptr = call.try_as_basic_value().left().unwrap();
+
+        let ptr = builder.build_pointer_cast(
+            void_ptr.into_pointer_value(),
+            c_function
+                .get_type()
+                .get_return_type()
+                .unwrap()
+                .into_pointer_type(),
+            "cast_ptr",
+        );
+
+        builder.build_store(ptr, roc_main_fn_result);
+
+        builder.build_return(Some(&ptr));
+
+        c_function
+    };
 
     (main_fn_name, main_fn)
 }
@@ -3319,7 +3445,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
     return_layout: Layout<'a>,
     c_function_name: &str,
 ) -> FunctionValue<'ctx> {
-    // NOTE we ingore env.is_gen_test here
+    // NOTE we ingore env.mode here
 
     let mut cc_argument_types = Vec::with_capacity_in(arguments.len(), env.arena);
     for layout in arguments {
@@ -3411,8 +3537,8 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
 
     let arguments_for_call = &arguments_for_call.into_bump_slice();
 
-    let call_result = {
-        if env.is_gen_test {
+    let call_result = match env.mode {
+        LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest => {
             debug_assert_eq!(args.len(), roc_function.get_params().len());
 
             let roc_wrapper_function = make_exception_catcher(env, roc_function, return_layout);
@@ -3425,7 +3551,8 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
 
             let wrapped_layout = roc_result_layout(env.arena, return_layout, env.target_info);
             call_roc_function(env, roc_function, &wrapped_layout, arguments_for_call)
-        } else {
+        }
+        LlvmBackendMode::Binary => {
             call_roc_function(env, roc_function, &return_layout, arguments_for_call)
         }
     };
@@ -3629,7 +3756,11 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
     let (params, param_types) = match (&roc_return, &cc_return) {
         // Drop the "return pointer" if it exists on the roc function
         // and the c function does not return via pointer
-        (RocReturn::ByPointer, CCReturn::Return) => (&params[..], &param_types[1..]),
+        (RocReturn::ByPointer, CCReturn::Return) => {
+            // Roc currently puts the return pointer at the end of the argument list.
+            // As such, we drop the last element here instead of the first.
+            (&params[..], &param_types[..param_types.len() - 1])
+        }
         // Drop the return pointer the other way, if the C function returns by pointer but Roc
         // doesn't
         (RocReturn::Return, CCReturn::ByPointer) => (&params[1..], &param_types[..]),
@@ -3691,15 +3822,19 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
     return_layout: Layout<'a>,
     c_function_name: &str,
 ) -> FunctionValue<'ctx> {
-    if env.is_gen_test {
-        return expose_function_to_host_help_c_abi_gen_test(
-            env,
-            ident_string,
-            roc_function,
-            arguments,
-            return_layout,
-            c_function_name,
-        );
+    match env.mode {
+        LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest => {
+            return expose_function_to_host_help_c_abi_gen_test(
+                env,
+                ident_string,
+                roc_function,
+                arguments,
+                return_layout,
+                c_function_name,
+            )
+        }
+
+        LlvmBackendMode::Binary => {}
     }
 
     // a generic version that writes the result into a passed *u8 pointer
@@ -3745,11 +3880,12 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
 
     debug_info_init!(env, size_function);
 
-    let return_type = if env.is_gen_test {
-        roc_result_type(env, roc_function.get_type().get_return_type().unwrap()).into()
-    } else {
-        // roc_function.get_type().get_return_type().unwrap()
-        basic_type_from_layout(env, &return_layout)
+    let return_type = match env.mode {
+        LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest => {
+            roc_result_type(env, roc_function.get_type().get_return_type().unwrap()).into()
+        }
+
+        LlvmBackendMode::Binary => basic_type_from_layout(env, &return_layout),
     };
 
     let size: BasicValueEnum = return_type.size_of().unwrap().into();
@@ -4140,6 +4276,23 @@ pub fn build_procedures<'a, 'ctx, 'env>(
     build_procedures_help(env, opt_level, procedures, entry_point, debug_output_file);
 }
 
+pub fn build_wasm_test_wrapper<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    opt_level: OptLevel,
+    procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
+    entry_point: EntryPoint<'a>,
+) -> (&'static str, FunctionValue<'ctx>) {
+    let mod_solutions = build_procedures_help(
+        env,
+        opt_level,
+        procedures,
+        entry_point,
+        Some(Path::new("/tmp/test.ll")),
+    );
+
+    promote_to_wasm_test_wrapper(env, mod_solutions, entry_point.symbol, entry_point.layout)
+}
+
 pub fn build_procedures_return_main<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
@@ -4160,24 +4313,10 @@ pub fn build_procedures_return_main<'a, 'ctx, 'env>(
 pub fn build_procedures_expose_expects<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
+    expects: &[Symbol],
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     entry_point: EntryPoint<'a>,
 ) -> Vec<'a, &'a str> {
-    use bumpalo::collections::CollectIn;
-
-    // this is not entirely accurate: it will treat every top-level bool value (turned into a
-    // zero-argument thunk) as an expect.
-    let expects: Vec<_> = procedures
-        .keys()
-        .filter_map(|(symbol, proc_layout)| {
-            if proc_layout.arguments.is_empty() && proc_layout.result == Layout::bool() {
-                Some(*symbol)
-            } else {
-                None
-            }
-        })
-        .collect_in(env.arena);
-
     let mod_solutions = build_procedures_help(
         env,
         opt_level,
@@ -4190,7 +4329,7 @@ pub fn build_procedures_expose_expects<'a, 'ctx, 'env>(
 
     let top_level = ProcLayout {
         arguments: &[],
-        result: Layout::bool(),
+        result: Layout::UNIT,
         captures_niche,
     };
 
@@ -4490,39 +4629,44 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
         }
     }
 
-    if env.is_gen_test {
-        let call_result = set_jump_and_catch_long_jump(
-            env,
-            function_value,
-            evaluator,
-            &evaluator_arguments,
-            *return_layout,
-        );
+    match env.mode {
+        LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest => {
+            let call_result = set_jump_and_catch_long_jump(
+                env,
+                function_value,
+                evaluator,
+                &evaluator_arguments,
+                *return_layout,
+            );
 
-        builder.build_store(output, call_result);
-    } else {
-        let call_result = call_roc_function(env, evaluator, return_layout, &evaluator_arguments);
-
-        if return_layout.is_passed_by_reference(env.target_info) {
-            let align_bytes = return_layout.alignment_bytes(env.target_info);
-
-            if align_bytes > 0 {
-                let size = env
-                    .ptr_int()
-                    .const_int(return_layout.stack_size(env.target_info) as u64, false);
-
-                env.builder
-                    .build_memcpy(
-                        output,
-                        align_bytes,
-                        call_result.into_pointer_value(),
-                        align_bytes,
-                        size,
-                    )
-                    .unwrap();
-            }
-        } else {
             builder.build_store(output, call_result);
+        }
+
+        LlvmBackendMode::Binary => {
+            let call_result =
+                call_roc_function(env, evaluator, return_layout, &evaluator_arguments);
+
+            if return_layout.is_passed_by_reference(env.target_info) {
+                let align_bytes = return_layout.alignment_bytes(env.target_info);
+
+                if align_bytes > 0 {
+                    let size = env
+                        .ptr_int()
+                        .const_int(return_layout.stack_size(env.target_info) as u64, false);
+
+                    env.builder
+                        .build_memcpy(
+                            output,
+                            align_bytes,
+                            call_result.into_pointer_value(),
+                            align_bytes,
+                            size,
+                        )
+                        .unwrap();
+                }
+            } else {
+                builder.build_store(output, call_result);
+            }
         }
     };
 
@@ -5322,7 +5466,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let string = load_symbol(scope, &args[0]);
 
-            let result = call_bitcode_fn(env, &[string], intrinsic);
+            let result = call_bitcode_fn_fixing_for_convention(env, &[string], layout, intrinsic);
 
             // zig passes the result as a packed integer sometimes, instead of a struct. So we cast
             let expected_type = basic_type_from_layout(env, layout);

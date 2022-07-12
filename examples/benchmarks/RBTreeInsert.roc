@@ -18,8 +18,7 @@ show = \tree -> showRBTree tree Num.toStr (\{} -> "{}")
 showRBTree : RedBlackTree k v, (k -> Str), (v -> Str) -> Str
 showRBTree = \tree, showKey, showValue ->
     when tree is
-        Empty ->
-            "Empty"
+        Empty -> "Empty"
         Node color key value left right ->
             sColor = showColor color
             sKey = showKey key
@@ -34,6 +33,7 @@ nodeInParens = \tree, showKey, showValue ->
     when tree is
         Empty ->
             showRBTree tree showKey showValue
+
         Node _ _ _ _ _ ->
             inner = showRBTree tree showKey showValue
 
@@ -42,10 +42,8 @@ nodeInParens = \tree, showKey, showValue ->
 showColor : NodeColor -> Str
 showColor = \color ->
     when color is
-        Red ->
-            "Red"
-        Black ->
-            "Black"
+        Red -> "Red"
+        Black -> "Black"
 
 NodeColor : [Red, Black]
 
@@ -56,10 +54,8 @@ Key k : Num k
 insert : Key k, v, RedBlackTree (Key k) v -> RedBlackTree (Key k) v
 insert = \key, value, dict ->
     when insertHelp key value dict is
-        Node Red k v l r ->
-            Node Black k v l r
-        x ->
-            x
+        Node Red k v l r -> Node Black k v l r
+        x -> x
 
 insertHelp : Key k, v, RedBlackTree (Key k) v -> RedBlackTree (Key k) v
 insertHelp = \key, value, dict ->
@@ -68,14 +64,12 @@ insertHelp = \key, value, dict ->
             # New nodes are always red. If it violates the rules, it will be fixed
             # when balancing.
             Node Red key value Empty Empty
+
         Node nColor nKey nValue nLeft nRight ->
             when Num.compare key nKey is
-                LT ->
-                    balance nColor nKey nValue (insertHelp key value nLeft) nRight
-                EQ ->
-                    Node nColor nKey value nLeft nRight
-                GT ->
-                    balance nColor nKey nValue nLeft (insertHelp key value nRight)
+                LT -> balance nColor nKey nValue (insertHelp key value nLeft) nRight
+                EQ -> Node nColor nKey value nLeft nRight
+                GT -> balance nColor nKey nValue nLeft (insertHelp key value nRight)
 
 balance : NodeColor, k, v, RedBlackTree k v, RedBlackTree k v -> RedBlackTree k v
 balance = \color, key, value, left, right ->
@@ -89,8 +83,10 @@ balance = \color, key, value, left, right ->
                         value
                         (Node Black lK lV lLeft lRight)
                         (Node Black rK rV rLeft rRight)
+
                 _ ->
                     Node color rK rV (Node Red key value left rLeft) rRight
+
         _ ->
             when left is
                 Node Red lK lV (Node Red llK llV llLeft llRight) lRight ->
@@ -100,5 +96,6 @@ balance = \color, key, value, left, right ->
                         lV
                         (Node Black llK llV llLeft llRight)
                         (Node Black key value lRight right)
+
                 _ ->
                     Node color key value left right

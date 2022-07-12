@@ -342,6 +342,7 @@ fn find_names_needed(
             solved,
             recursion_var,
             unspecialized,
+            ambient_function: _,
         }) => {
             for slice_index in solved.variables() {
                 let slice = subs[slice_index];
@@ -721,6 +722,7 @@ fn write_content<'a>(
             solved,
             recursion_var,
             unspecialized,
+            ambient_function: _,
         }) => {
             debug_assert!(env.debug.print_lambda_sets);
 

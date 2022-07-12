@@ -1,23 +1,27 @@
 use super::RefCount;
-use crate::helpers::from_wasmer_memory::FromWasmerMemory;
+use crate::helpers::from_wasm32_memory::FromWasm32Memory;
 use roc_collections::all::MutSet;
 use roc_gen_wasm::wasm32_result::Wasm32Result;
 use roc_gen_wasm::wasm_module::{Export, ExportType};
-use roc_gen_wasm::{DEBUG_SETTINGS, MEMORY_NAME};
+use roc_gen_wasm::DEBUG_SETTINGS;
 use roc_load::Threading;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
-use wasmer::{Memory, WasmPtr};
-
-// Should manually match build.rs
-const PLATFORM_FILENAME: &str = "wasm_test_platform";
-const OUT_DIR_VAR: &str = "TEST_GEN_OUT";
+use std::rc::Rc;
+use std::sync::Mutex;
+use wasm3::{Environment, Module, Runtime};
 
 const TEST_WRAPPER_NAME: &str = "test_wrapper";
 const INIT_REFCOUNT_NAME: &str = "init_refcount_test";
-const PANIC_MSG_NAME: &str = "panic_msg";
+
+macro_rules! host_bytes_path {
+    () => {
+        // Should manually match build.rs. include_bytes! requires a string literal.
+        concat!(env!("OUT_DIR"), "/wasm_test_platform.wasm")
+    };
+}
 
 fn promote_expr_to_module(src: &str) -> String {
     let mut buffer = String::from("app \"test\" provides [main] to \"./platform\"\n\nmain =\n");
@@ -33,31 +37,23 @@ fn promote_expr_to_module(src: &str) -> String {
 }
 
 #[allow(dead_code)]
-pub fn compile_and_load<'a, T: Wasm32Result>(
+pub fn compile_to_wasm_bytes<'a, T: Wasm32Result>(
     arena: &'a bumpalo::Bump,
     src: &str,
     test_wrapper_type_info: PhantomData<T>,
-) -> wasmer::Instance {
-    let platform_path = get_preprocessed_host_path();
-    let platform_bytes = std::fs::read(&platform_path).unwrap();
-    println!("Loading test host {}", platform_path.display());
+) -> Vec<u8> {
+    let platform_bytes = include_bytes!(host_bytes_path!());
+    println!("Loading test host {}", host_bytes_path!());
 
     let compiled_bytes =
-        compile_roc_to_wasm_bytes(arena, &platform_bytes, src, test_wrapper_type_info);
+        compile_roc_to_wasm_bytes(arena, platform_bytes, src, test_wrapper_type_info);
 
     if DEBUG_SETTINGS.keep_test_binary {
         let build_dir_hash = src_hash(src);
         save_wasm_file(&compiled_bytes, build_dir_hash)
     };
 
-    load_bytes_into_runtime(&compiled_bytes)
-}
-
-fn get_preprocessed_host_path() -> PathBuf {
-    let out_dir = std::env::var(OUT_DIR_VAR).unwrap();
-    Path::new(&out_dir)
-        .join([PLATFORM_FILENAME, "o"].join("."))
-        .to_path_buf()
+    compiled_bytes
 }
 
 fn src_hash(src: &str) -> u64 {
@@ -73,7 +69,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
     _test_wrapper_type_info: PhantomData<T>,
 ) -> Vec<u8> {
     let filename = PathBuf::from("Test.roc");
-    let src_dir = Path::new("fake/test/path");
+    let src_dir = PathBuf::from("fake/test/path");
 
     let module_src;
     let temp;
@@ -125,7 +121,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
     let host_module = roc_gen_wasm::parse_host(env.arena, host_bytes).unwrap_or_else(|e| {
         panic!(
             "I ran into a problem with the host object file, {} at offset 0x{:x}:\n{}",
-            get_preprocessed_host_path().display(),
+            host_bytes_path!(),
             e.offset,
             e.message
         )
@@ -173,48 +169,53 @@ fn save_wasm_file(app_module_bytes: &[u8], build_dir_hash: u64) {
     );
 }
 
-fn load_bytes_into_runtime(bytes: &[u8]) -> wasmer::Instance {
-    use wasmer::{Module, Store};
-    use wasmer_wasi::WasiState;
-
-    let store = Store::default();
-    let wasmer_module = Module::new(&store, bytes).unwrap();
-
-    // First, we create the `WasiEnv`
-    let mut wasi_env = WasiState::new("hello").finalize().unwrap();
-
-    // Then, we get the import object related to our WASI
-    // and attach it to the Wasm instance.
-    let import_object = wasi_env
-        .import_object(&wasmer_module)
-        .unwrap_or_else(|_| wasmer::imports!());
-
-    wasmer::Instance::new(&wasmer_module, &import_object).unwrap()
-}
-
 #[allow(dead_code)]
 pub fn assert_evals_to_help<T>(src: &str, phantom: PhantomData<T>) -> Result<T, String>
 where
-    T: FromWasmerMemory + Wasm32Result,
+    T: FromWasm32Memory + Wasm32Result,
 {
     let arena = bumpalo::Bump::new();
 
-    let instance = crate::helpers::wasm::compile_and_load(&arena, src, phantom);
+    let wasm_bytes = crate::helpers::wasm::compile_to_wasm_bytes(&arena, src, phantom);
 
-    let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
+    run_wasm_test_bytes::<T>(TEST_WRAPPER_NAME, wasm_bytes)
+}
 
-    let test_wrapper = instance.exports.get_function(TEST_WRAPPER_NAME).unwrap();
+pub(crate) fn run_wasm_test_bytes<T>(
+    test_wrapper_name: &str,
+    wasm_bytes: Vec<u8>,
+) -> Result<T, String>
+where
+    T: FromWasm32Memory + Wasm32Result,
+{
+    let env = Environment::new().expect("Unable to create environment");
+    let rt = env
+        .create_runtime(1024 * 60)
+        .expect("Unable to create runtime");
 
-    match test_wrapper.call(&[]) {
+    let parsed = Module::parse(&env, &wasm_bytes[..]).expect("Unable to parse module");
+    let mut module = rt.load_module(parsed).expect("Unable to load module");
+    let panic_msg: Rc<Mutex<Option<(i32, i32)>>> = Default::default();
+    link_module(&mut module, panic_msg.clone());
+
+    let test_wrapper = module
+        .find_function::<(), i32>(test_wrapper_name)
+        .expect("Unable to find test wrapper function");
+
+    match test_wrapper.call() {
         Err(e) => {
-            if let Some(msg) = get_roc_panic_msg(&instance, memory) {
+            if let Some((msg_ptr, msg_len)) = *panic_msg.lock().unwrap() {
+                let memory: &[u8] = get_memory(&rt);
+                let msg_bytes = &memory[msg_ptr as usize..][..msg_len as usize];
+                let msg = std::str::from_utf8(msg_bytes).unwrap();
+
                 Err(format!("Roc failed with message: \"{}\"", msg))
             } else {
-                Err(e.to_string())
+                Err(format!("{}", e))
             }
         }
-        Ok(result) => {
-            let address = result[0].unwrap_i32();
+        Ok(address) => {
+            let memory: &[u8] = get_memory(&rt);
 
             if false {
                 println!("test_wrapper returned 0x{:x}", address);
@@ -226,36 +227,12 @@ where
                 // Manually provide address and size based on printf in wasm_test_platform.c
                 crate::helpers::wasm::debug_memory_hex(memory, 0x11440, 24);
             }
-            let output = <T as FromWasmerMemory>::decode(memory, address as u32);
+
+            let output = <T as FromWasm32Memory>::decode(memory, address as u32);
 
             Ok(output)
         }
     }
-}
-
-/// Our test roc_panic stores a pointer to its message in a global variable so we can find it.
-fn get_roc_panic_msg(instance: &wasmer::Instance, memory: &Memory) -> Option<String> {
-    let memory_bytes = unsafe { memory.data_unchecked() };
-
-    // We need to dereference twice!
-    // The Wasm Global only points at the memory location of the C global value
-    let panic_msg_global = instance.exports.get_global(PANIC_MSG_NAME).unwrap();
-    let global_addr = panic_msg_global.get().unwrap_i32() as usize;
-    let global_ptr = memory_bytes[global_addr..].as_ptr() as *const u32;
-
-    // Dereference again to find the bytes of the message string
-    let msg_addr = unsafe { *global_ptr };
-    if msg_addr == 0 {
-        return None;
-    }
-    let msg_index = msg_addr as usize;
-    let msg_len = memory_bytes[msg_index..]
-        .iter()
-        .position(|c| *c == 0)
-        .unwrap();
-    let msg_bytes = memory_bytes[msg_index..][..msg_len].to_vec();
-    let msg = unsafe { String::from_utf8_unchecked(msg_bytes) };
-    Some(msg)
 }
 
 #[allow(dead_code)]
@@ -265,50 +242,56 @@ pub fn assert_wasm_refcounts_help<T>(
     num_refcounts: usize,
 ) -> Result<Vec<RefCount>, String>
 where
-    T: FromWasmerMemory + Wasm32Result,
+    T: FromWasm32Memory + Wasm32Result,
 {
     let arena = bumpalo::Bump::new();
 
-    let instance = crate::helpers::wasm::compile_and_load(&arena, src, phantom);
+    let wasm_bytes = crate::helpers::wasm::compile_to_wasm_bytes(&arena, src, phantom);
 
-    let memory = instance.exports.get_memory(MEMORY_NAME).unwrap();
+    let env = Environment::new().expect("Unable to create environment");
+    let rt = env
+        .create_runtime(1024 * 60)
+        .expect("Unable to create runtime");
+    let parsed = Module::parse(&env, wasm_bytes).expect("Unable to parse module");
+    let mut module = rt.load_module(parsed).expect("Unable to load module");
+
+    let panic_msg: Rc<Mutex<Option<(i32, i32)>>> = Default::default();
+    link_module(&mut module, panic_msg.clone());
 
     let expected_len = num_refcounts as i32;
-    let init_refcount_test = instance.exports.get_function(INIT_REFCOUNT_NAME).unwrap();
-    let init_result = init_refcount_test.call(&[wasmer::Value::I32(expected_len)]);
-    let refcount_vector_addr = match init_result {
-        Err(e) => return Err(format!("{:?}", e)),
-        Ok(result) => result[0].unwrap_i32(),
-    };
+    let init_refcount_test = module
+        .find_function::<i32, i32>(INIT_REFCOUNT_NAME)
+        .expect("Unable to find refcount test init function");
+    let mut refcount_vector_offset = init_refcount_test.call(expected_len).unwrap() as usize;
 
     // Run the test
-    let test_wrapper = instance.exports.get_function(TEST_WRAPPER_NAME).unwrap();
-    match test_wrapper.call(&[]) {
-        Err(e) => return Err(format!("{:?}", e)),
-        Ok(_) => {}
-    }
+    let test_wrapper = module
+        .find_function::<(), i32>(TEST_WRAPPER_NAME)
+        .expect("Unable to find test wrapper function");
+    test_wrapper.call().map_err(|e| format!("{:?}", e))?;
 
-    // Check we got the right number of refcounts
-    let refcount_vector_len: WasmPtr<i32> = WasmPtr::new(refcount_vector_addr as u32);
-    let actual_len = refcount_vector_len.deref(memory).unwrap().get();
+    let memory: &[u8] = get_memory(&rt);
+
+    // Read the length of the vector in the C host
+    let actual_len = read_i32(memory, refcount_vector_offset);
     if actual_len != expected_len {
-        panic!("Expected {} refcounts but got {}", expected_len, actual_len);
+        return Err(format!(
+            "Expected {} refcounts but got {}",
+            expected_len, actual_len
+        ));
     }
 
-    // Read the actual refcount values
-    let refcount_ptr_array: WasmPtr<WasmPtr<i32>, wasmer::Array> =
-        WasmPtr::new(4 + refcount_vector_addr as u32);
-    let refcount_ptrs = refcount_ptr_array
-        .deref(memory, 0, num_refcounts as u32)
-        .unwrap();
-
+    // Read the refcounts
     let mut refcounts = Vec::with_capacity(num_refcounts);
-    for i in 0..num_refcounts {
-        let rc_ptr = refcount_ptrs[i].get();
-        let rc = if rc_ptr.offset() == 0 {
+    for _ in 0..num_refcounts {
+        // Get the next RC pointer from the host's vector
+        refcount_vector_offset += 4;
+        let rc_ptr = read_i32(memory, refcount_vector_offset) as usize;
+        let rc = if rc_ptr == 0 {
             RefCount::Deallocated
         } else {
-            let rc_encoded: i32 = rc_ptr.deref(memory).unwrap().get();
+            // Dereference the RC pointer and decode its value from the negative number format
+            let rc_encoded = read_i32(memory, rc_ptr);
             if rc_encoded == 0 {
                 RefCount::Constant
             } else {
@@ -321,13 +304,43 @@ where
     Ok(refcounts)
 }
 
+fn get_memory(rt: &Runtime) -> &[u8] {
+    unsafe {
+        let memory_ptr: *const [u8] = rt.memory();
+        let (_, memory_size) = std::mem::transmute::<_, (usize, usize)>(memory_ptr);
+        std::slice::from_raw_parts(memory_ptr as _, memory_size)
+    }
+}
+
+fn read_i32(memory: &[u8], ptr: usize) -> i32 {
+    let mut bytes = [0u8; 4];
+    bytes.copy_from_slice(&memory[ptr..][..4]);
+    i32::from_le_bytes(bytes)
+}
+
+fn link_module(module: &mut Module, panic_msg: Rc<Mutex<Option<(i32, i32)>>>) {
+    module.link_wasi().unwrap();
+    let try_link_panic = module.link_closure(
+        "env",
+        "send_panic_msg_to_rust",
+        move |_call_context, args: (i32, i32)| {
+            let mut w = panic_msg.lock().unwrap();
+            *w = Some(args);
+            Ok(())
+        },
+    );
+    match try_link_panic {
+        Ok(()) => {}
+        Err(wasm3::error::Error::FunctionNotFound) => {}
+        Err(e) => panic!("{:?}", e),
+    }
+}
+
 /// Print out hex bytes of the test result, and a few words on either side
 /// Can be handy for debugging misalignment issues etc.
-pub fn debug_memory_hex(memory: &Memory, address: i32, size: usize) {
-    let memory_words: &[u32] = unsafe {
-        let memory_bytes = memory.data_unchecked();
-        std::mem::transmute(memory_bytes)
-    };
+pub fn debug_memory_hex(memory_bytes: &[u8], address: i32, size: usize) {
+    let memory_words: &[u32] =
+        unsafe { std::slice::from_raw_parts(memory_bytes.as_ptr().cast(), memory_bytes.len() / 4) };
 
     let extra_words = 2;
     let result_start = (address as usize) / 4;

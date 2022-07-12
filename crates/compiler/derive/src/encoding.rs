@@ -325,6 +325,9 @@ fn to_encoder_string(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
     let (body, this_encoder_var) =
         wrap_in_encode_custom(env, encode_string_call, encoder_var, s_sym, Variable::STR);
 
+    // Create fn_var for ambient capture; we fix it up below.
+    let fn_var = synth_var(env.subs, Content::Error);
+
     // -[fn_name]->
     let fn_name_labels = UnionLambdas::insert_into_subs(env.subs, once((fn_name, vec![])));
     let fn_clos_var = synth_var(
@@ -333,11 +336,12 @@ fn to_encoder_string(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
             solved: fn_name_labels,
             recursion_var: OptVariable::NONE,
             unspecialized: SubsSlice::default(),
+            ambient_function: fn_var,
         }),
     );
     // Str -[fn_name]-> (typeof Encode.record [ .. ] = Encoder fmt)
-    let fn_var = synth_var(
-        env.subs,
+    env.subs.set_content(
+        fn_var,
         Content::Structure(FlatType::Func(
             string_var_slice,
             fn_clos_var,
@@ -527,6 +531,9 @@ fn to_encoder_record(
     let (body, this_encoder_var) =
         wrap_in_encode_custom(env, encode_record_call, encoder_var, rcd_sym, record_var);
 
+    // Create fn_var for ambient capture; we fix it up below.
+    let fn_var = synth_var(env.subs, Content::Error);
+
     // -[fn_name]->
     let fn_name_labels = UnionLambdas::insert_into_subs(env.subs, once((fn_name, vec![])));
     let fn_clos_var = synth_var(
@@ -535,12 +542,13 @@ fn to_encoder_record(
             solved: fn_name_labels,
             recursion_var: OptVariable::NONE,
             unspecialized: SubsSlice::default(),
+            ambient_function: fn_var,
         }),
     );
     // typeof rcd -[fn_name]-> (typeof Encode.record [ .. ] = Encoder fmt)
     let record_var_slice = SubsSlice::insert_into_subs(env.subs, once(record_var));
-    let fn_var = synth_var(
-        env.subs,
+    env.subs.set_content(
+        fn_var,
         Content::Structure(FlatType::Func(
             record_var_slice,
             fn_clos_var,
@@ -758,6 +766,9 @@ fn to_encoder_tag_union(
         tag_union_var,
     );
 
+    // Create fn_var for ambient capture; we fix it up below.
+    let fn_var = synth_var(env.subs, Content::Error);
+
     // -[fn_name]->
     let fn_name_labels = UnionLambdas::insert_into_subs(env.subs, once((fn_name, vec![])));
     let fn_clos_var = synth_var(
@@ -766,12 +777,13 @@ fn to_encoder_tag_union(
             solved: fn_name_labels,
             recursion_var: OptVariable::NONE,
             unspecialized: SubsSlice::default(),
+            ambient_function: fn_var,
         }),
     );
     // tag_union_var -[fn_name]-> whole_tag_encoders_var
     let tag_union_var_slice = SubsSlice::insert_into_subs(env.subs, once(tag_union_var));
-    let fn_var = synth_var(
-        env.subs,
+    env.subs.set_content(
+        fn_var,
         Content::Structure(FlatType::Func(
             tag_union_var_slice,
             fn_clos_var,
@@ -871,6 +883,9 @@ fn wrap_in_encode_custom(
         CalledVia::Space,
     );
 
+    // Create fn_var for ambient capture; we fix it up below.
+    let fn_var = synth_var(env.subs, Content::Error);
+
     // -[[FN_name captured_var]]->
     let fn_name_labels =
         UnionLambdas::insert_into_subs(env.subs, once((fn_name, vec![captured_var])));
@@ -880,13 +895,14 @@ fn wrap_in_encode_custom(
             solved: fn_name_labels,
             recursion_var: OptVariable::NONE,
             unspecialized: SubsSlice::default(),
+            ambient_function: fn_var,
         }),
     );
 
     // bytes, fmt -[[FN_name captured_var]]-> Encode.appendWith bytes encoder fmt
     let args_slice = SubsSlice::insert_into_subs(env.subs, vec![bytes_var, fmt_var]);
-    let fn_var = synth_var(
-        env.subs,
+    env.subs.set_content(
+        fn_var,
         Content::Structure(FlatType::Func(args_slice, fn_clos_var, Variable::LIST_U8)),
     );
 

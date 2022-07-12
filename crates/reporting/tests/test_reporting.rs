@@ -86,7 +86,7 @@ mod test_reporting {
             let result = roc_load::load_and_typecheck(
                 arena,
                 full_file_path,
-                dir.path(),
+                dir.path().to_path_buf(),
                 exposed_types,
                 roc_target::TargetInfo::default_x86_64(),
                 RenderTarget::Generic,
@@ -8941,54 +8941,54 @@ All branches in an `if` must have the same type!
                         go goal new
             "#
         ),
-        @r#"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        The 1st argument to `remove` is not what I expect:
+    The 1st argument to `remove` is not what I expect:
 
-        10│              new = { model & set : Set.remove goal model.set }
-                                                          ^^^^
+    10│              new = { model & set : Set.remove goal model.set }
+                                                      ^^^^
 
-        This `goal` value is a:
+    This `goal` value is a:
 
-            a
+        a
 
-        But `remove` needs the 1st argument to be:
+    But `remove` needs the 1st argument to be:
 
-            Set a
+        Set k
 
-        Tip: The type annotation uses the type variable `a` to say that this
-        definition can produce any type of value. But in the body I see that
-        it will only produce a `Set` value of a single specific type. Maybe
-        change the type annotation to be more specific? Maybe change the code
-        to be more general?
+    Tip: The type annotation uses the type variable `a` to say that this
+    definition can produce any type of value. But in the body I see that
+    it will only produce a `Set` value of a single specific type. Maybe
+    change the type annotation to be more specific? Maybe change the code
+    to be more general?
 
-        ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        I'm inferring a weird self-referential type for `new`:
+    I'm inferring a weird self-referential type for `new`:
 
-        10│              new = { model & set : Set.remove goal model.set }
-                         ^^^
+    10│              new = { model & set : Set.remove goal model.set }
+                     ^^^
 
-        Here is my best effort at writing down the type. You will see ∞ for
-        parts of the type that repeat something already printed out
-        infinitely.
+    Here is my best effort at writing down the type. You will see ∞ for
+    parts of the type that repeat something already printed out
+    infinitely.
 
-            { set : Set ∞ }
+        { set : Set ∞ }
 
-        ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        I'm inferring a weird self-referential type for `goal`:
+    I'm inferring a weird self-referential type for `goal`:
 
-        6│  go = \goal, model ->
-                  ^^^^
+    6│  go = \goal, model ->
+              ^^^^
 
-        Here is my best effort at writing down the type. You will see ∞ for
-        parts of the type that repeat something already printed out
-        infinitely.
+    Here is my best effort at writing down the type. You will see ∞ for
+    parts of the type that repeat something already printed out
+    infinitely.
 
-            Set ∞
-        "#
+        Set ∞
+    "###
     );
 
     test_report!(

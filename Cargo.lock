@@ -190,7 +190,7 @@ dependencies = [
  "quote",
  "regex",
  "rustc-hash",
- "shlex",
+ "shlex 1.1.0",
 ]
 
 [[package]]
@@ -523,10 +523,8 @@ name = "cli_utils"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "const_format",
  "criterion",
  "rlimit",
- "roc_cli",
  "roc_collections",
  "roc_load",
  "roc_module",
@@ -3339,6 +3337,7 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_reporting",
+ "roc_solve",
  "roc_target",
  "roc_types",
  "roc_unify",
@@ -3391,7 +3390,6 @@ dependencies = [
  "roc_module",
  "roc_region",
  "roc_target",
- "roc_types",
  "tempfile",
 ]
 
@@ -3450,7 +3448,6 @@ dependencies = [
  "roc_target",
  "roc_test_utils",
  "serial_test",
- "signal-hook",
  "strum",
  "strum_macros",
  "target-lexicon",
@@ -3491,7 +3488,6 @@ name = "roc_constrain"
 version = "0.1.0"
 dependencies = [
  "arrayvec 0.7.2",
- "roc_builtins",
  "roc_can",
  "roc_collections",
  "roc_error_macros",
@@ -3914,10 +3910,6 @@ name = "roc_repl_expect"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "const_format",
- "inkwell 0.1.0",
- "libloading",
- "roc_build",
  "roc_builtins",
  "roc_collections",
  "roc_load",
@@ -3929,8 +3921,6 @@ dependencies = [
  "roc_std",
  "roc_target",
  "roc_types",
- "rustyline",
- "rustyline-derive",
  "target-lexicon",
 ]
 
@@ -4378,28 +4368,15 @@ dependencies = [
 
 [[package]]
 name = "shlex"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7fdf1b9db47230893d76faad238fd6097fd6d6a9245cd7a4d90dbd639536bbd2"
+
+[[package]]
+name = "shlex"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43b2853a4d09f215c24cc5489c992ce46052d359b5109343cbafbf26bc62f8a3"
-
-[[package]]
-name = "signal-hook"
-version = "0.3.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a253b5e89e2698464fc26b545c9edceb338e18a89effeeecfea192c3025be29d"
-dependencies = [
- "libc",
- "signal-hook-registry",
-]
-
-[[package]]
-name = "signal-hook-registry"
-version = "1.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e51e73328dc4ac0c7ccbda3a494dfa03df1de2f46018127f60c693f2648455b0"
-dependencies = [
- "libc",
-]
 
 [[package]]
 name = "similar"
@@ -4767,8 +4744,7 @@ dependencies = [
  "target-lexicon",
  "tempfile",
  "wasi_libc_sys",
- "wasmer",
- "wasmer-wasi",
+ "wasm3",
 ]
 
 [[package]]
@@ -5166,6 +5142,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "31f0c17267a5ffd6ae3d897589460e21db1673c84fb7016b909c9691369a75ea"
 dependencies = [
  "leb128",
+]
+
+[[package]]
+name = "wasm3"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd7dde97449e99be474a432bbb0b1ab40b8f7ce3e97aa7ac640e9ecd018bbf88"
+dependencies = [
+ "cty",
+ "wasm3-sys",
+]
+
+[[package]]
+name = "wasm3-sys"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a4e5d10bf1ffe7753275d4bbae3dc135dd2d2decd90e615accf9fef8bc52bab"
+dependencies = [
+ "cc",
+ "cty",
+ "shlex 0.1.1",
 ]
 
 [[package]]

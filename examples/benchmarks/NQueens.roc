@@ -22,16 +22,13 @@ length = \xs -> lengthHelp xs 0
 lengthHelp : ConsList a, I64 -> I64
 lengthHelp = \foobar, acc ->
     when foobar is
-        Cons _ lrest ->
-            lengthHelp lrest (1 + acc)
-        Nil ->
-            acc
+        Cons _ lrest -> lengthHelp lrest (1 + acc)
+        Nil -> acc
 
 safe : I64, I64, ConsList I64 -> Bool
 safe = \queen, diagonal, xs ->
     when xs is
-        Nil ->
-            True
+        Nil -> True
         Cons q t ->
             queen != q && queen != q + diagonal && queen != q - diagonal && safe queen (diagonal + 1) t
 
@@ -46,10 +43,8 @@ appendSafe = \k, soln, solns ->
 
 extend = \n, acc, solutions ->
     when solutions is
-        Nil ->
-            acc
-        Cons soln rest ->
-            extend n (appendSafe n soln acc) rest
+        Nil -> acc
+        Cons soln rest -> extend n (appendSafe n soln acc) rest
 
 findSolutions = \n, k ->
     if k == 0 then

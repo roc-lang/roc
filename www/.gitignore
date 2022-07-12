@@ -1,1 +1,3 @@
-build
+/build
+roc_repl_wasm.js
+roc_repl_wasm_bg.wasm

@@ -4,10 +4,10 @@ pub mod platform_functions;
 
 #[cfg(feature = "gen-dev")]
 pub mod dev;
-pub mod from_wasmer_memory;
+pub mod from_wasm32_memory;
 #[cfg(feature = "gen-llvm")]
 pub mod llvm;
-#[cfg(feature = "gen-wasm")]
+#[cfg(any(feature = "gen-wasm", feature = "gen-llvm-wasm"))]
 pub mod wasm;
 
 #[allow(dead_code)]

@@ -2347,8 +2347,7 @@ mod test_fmt {
             indoc!(
                 r#"
                 f : {
-                    x : Int *,
-                    # comment 1
+                    x : Int *, # comment 1
                     # comment 2
                 }
 
@@ -3342,6 +3341,7 @@ mod test_fmt {
             when b is
                 1 ->
                     1
+
                 _ ->
                     2
             "#
@@ -3371,6 +3371,7 @@ mod test_fmt {
                 when year is
                     1999 ->
                         1
+
                     _ ->
                         0
                 "#
@@ -3387,6 +3388,7 @@ mod test_fmt {
                 1 ->
                     # when 1
                     1
+
                 # important
                 # fall through
                 _ ->
@@ -3405,6 +3407,7 @@ mod test_fmt {
                 when 0 is
                     1 # comment
                         | 2 -> "a"
+
                     _ -> "b"
             "#
         ));
@@ -3432,6 +3435,7 @@ mod test_fmt {
                     when c is
                         6 | 7 ->
                             8
+
                 3 | 4 ->
                     5
         "#
@@ -3505,15 +3509,19 @@ mod test_fmt {
                     | 2
                     | 3 ->
                     4
+
                 5 | 6 | 7 ->
                     8
+
                 9
                     | 10 -> 11
+
                 12 | 13 ->
                     when c is
                         14 | 15 -> 16
                         17
                             | 18 -> 19
+
                 20 -> 21
                 "#
             ),
@@ -3550,6 +3558,7 @@ mod test_fmt {
             is
                 1 ->
                     Nothing
+
                 _ ->
                     Just True
             "#
@@ -3567,6 +3576,7 @@ mod test_fmt {
             is
                 Complex x y ->
                     simplify x y
+
                 Simple z ->
                     z
             "#
@@ -3601,6 +3611,7 @@ mod test_fmt {
             is
                 2 ->
                     x
+
                 _ ->
                     y
             "#
@@ -3637,6 +3648,7 @@ mod test_fmt {
             is
                 4 ->
                     x
+
                 _ ->
                     y
             "#
@@ -3784,6 +3796,7 @@ mod test_fmt {
             when maybeScore is
                 Just score if score > 21 ->
                     win
+
                 _ ->
                     nextRound
             "#
@@ -3797,8 +3810,10 @@ mod test_fmt {
             when authenticationResponse is
                 Ok user if hasPermission user ->
                     loadPage route user
+
                 Ok user ->
                     PageNotFound
+
                 Err _ ->
                     ErrorPage
             "#
@@ -3904,6 +3919,7 @@ mod test_fmt {
             when f x == g y == h z is
                 True ->
                     Ok 1
+
                 False ->
                     Err 2
             "#
@@ -4040,17 +4056,20 @@ mod test_fmt {
                     3
                         * 2 # comment 3
                         < 1 # comment 4
+
                 z ->
                     4
                         / 5 # comment 5
                         < 1 # comment 6
+
                 46 # first pattern comment
                     | 95 # alternative comment 1
                     | 126 # alternative comment 2
                     | 150 -> # This comment goes after the ->
                     # This comment is for the expr
-                    Str.appendScalar output (Num.toU32 byte)
-                        |> Result.withDefault "" # this will never fail
+                    foo bar
+                        |> Result.withDefault "" # one last comment
+
                 _ ->
                     42
             "#
@@ -4302,6 +4321,7 @@ mod test_fmt {
                                 when result is
                                     Err _ ->
                                         Err {}
+
                                     Ok val ->
                                         Ok {}
                             )
@@ -4320,6 +4340,7 @@ mod test_fmt {
                                         when result is
                                             Err _ ->
                                                 Err {}
+
                                             Ok val ->
                                                 Ok {}
                                 )
@@ -4336,6 +4357,7 @@ mod test_fmt {
                                     when result is
                                         Err _ ->
                                             Err {}
+
                                         Ok val ->
                                             Ok {}
                                 )
@@ -4588,7 +4610,7 @@ mod test_fmt {
     }
 
     #[test]
-    fn multiline_tag_union_annotation() {
+    fn multiline_tag_union_annotation_no_comments() {
         expr_formats_same(indoc!(
             r#"
             b : [
@@ -4694,8 +4716,7 @@ mod test_fmt {
                 b : [
                     True,
                     # comment 1
-                    False,
-                    # comment 2
+                    False, # comment 2
                     # comment 3
                 ]
 
@@ -4748,6 +4769,7 @@ mod test_fmt {
                 when list is
                     Nil ->
                         Nothing
+
                     Cons first _ ->
                         Just first
 
@@ -5077,6 +5099,38 @@ mod test_fmt {
                     has [Eq, Hash]
 
                 0
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn comments_in_multiline_tag_union_annotation() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                    UnionAnn : [
+                        Foo, # comment 1
+                        Bar, # comment 2
+                        Baz, # comment 3
+                             # comment 4 line 1
+                             # comment 4 line 2
+                    ]
+
+                    0
+                "#
+            ),
+            indoc!(
+                r#"
+                    UnionAnn : [
+                        Foo, # comment 1
+                        Bar, # comment 2
+                        Baz, # comment 3
+                        # comment 4 line 1
+                        # comment 4 line 2
+                    ]
+
+                    0
                 "#
             ),
         );

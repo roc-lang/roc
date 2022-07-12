@@ -6,7 +6,7 @@ use roc_module::called_via::BinOp::Pizza;
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
-use roc_parse::ast::{AssignedField, Def, TypeDef, ValueDef, WhenBranch};
+use roc_parse::ast::{AssignedField, ValueDef, WhenBranch};
 use roc_region::all::{Loc, Region};
 
 // BinOp precedence logic adapted from Gluon by Markus Westerlind
@@ -63,16 +63,6 @@ fn new_op_call_expr<'a>(
     Loc { region, value }
 }
 
-fn desugar_type_def<'a>(def: &'a TypeDef<'a>) -> TypeDef<'a> {
-    use TypeDef::*;
-
-    match def {
-        alias @ Alias { .. } => *alias,
-        opaque @ Opaque { .. } => *opaque,
-        ability @ Ability { .. } => *ability,
-    }
-}
-
 fn desugar_value_def<'a>(arena: &'a Bump, def: &'a ValueDef<'a>) -> ValueDef<'a> {
     use ValueDef::*;
 
@@ -96,17 +86,6 @@ fn desugar_value_def<'a>(arena: &'a Bump, def: &'a ValueDef<'a>) -> ValueDef<'a>
             let desugared_condition = &*arena.alloc(desugar_expr(arena, condition));
             Expect(desugared_condition)
         }
-    }
-}
-
-pub fn desugar_def<'a>(arena: &'a Bump, def: &'a Def<'a>) -> Def<'a> {
-    use roc_parse::ast::Def::*;
-
-    match def {
-        Type(type_def) => Type(desugar_type_def(type_def)),
-        Value(value_def) => Value(desugar_value_def(arena, value_def)),
-        SpaceBefore(def, _) | SpaceAfter(def, _) => desugar_def(arena, def),
-        NotYetImplemented(s) => todo!("{}", s),
     }
 }
 

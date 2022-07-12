@@ -20,6 +20,9 @@ vgcore.*
 .idea/
 .vscode/
 .ignore
+.exrc
+.vimrc
+.nvimrc
 
 #files too big to track in git
 editor/benches/resources/100000_lines.roc

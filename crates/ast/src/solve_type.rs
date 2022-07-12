@@ -7,7 +7,7 @@ use roc_error_macros::internal_error;
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
-use roc_types::solved_types::Solved;
+use roc_solve::module::Solved;
 use roc_types::subs::{
     self, AliasVariables, Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields,
     Subs, SubsSlice, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
@@ -1421,6 +1421,7 @@ fn adjust_rank_content(
             recursion_var,
             // TODO: handle unspecialized
             unspecialized: _,
+            ambient_function: _,
         }) => {
             let mut rank = group_rank;
 
@@ -1623,6 +1624,7 @@ fn instantiate_rigids_help(
             recursion_var,
             // TODO: handle unspecialized
             unspecialized: _,
+            ambient_function: _,
         }) => {
             if let Some(rec_var) = recursion_var.into_variable() {
                 instantiate_rigids_help(subs, max_rank, pools, rec_var);
@@ -1903,6 +1905,7 @@ fn deep_copy_var_help(
             solved,
             recursion_var,
             unspecialized,
+            ambient_function,
         }) => {
             let mut new_variable_slices = Vec::with_capacity(solved.len());
 
@@ -1937,6 +1940,7 @@ fn deep_copy_var_help(
                 recursion_var: new_rec_var,
                 // TODO: actually copy
                 unspecialized,
+                ambient_function,
             });
 
             subs.set(copy, make_descriptor(new_content));
