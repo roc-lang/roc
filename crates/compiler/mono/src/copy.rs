@@ -675,13 +675,18 @@ fn deep_copy_type_vars<'a>(
 
 #[cfg(test)]
 mod test {
+    use crate::copy::deep_copy_type_vars_into_expr;
+
     use super::deep_copy_type_vars;
     use bumpalo::collections::Vec;
     use bumpalo::Bump;
+    use roc_can::expr::Expr;
     use roc_error_macros::internal_error;
-    use roc_module::symbol::Symbol;
+    use roc_module::{ident::TagName, symbol::Symbol};
+    use roc_region::all::Loc;
     use roc_types::subs::{
-        Content, Content::*, Descriptor, Mark, OptVariable, Rank, Subs, SubsIndex, Variable,
+        Content, Content::*, Descriptor, FlatType, Mark, OptVariable, Rank, Subs, SubsIndex,
+        Variable,
     };
 
     #[cfg(test)]
@@ -778,6 +783,89 @@ mod test {
                 assert_eq!(subs[*name].as_str(), "a");
             }
             it => internal_error!("{:?}", it),
+        }
+    }
+
+    #[test]
+    fn copy_deep_expr() {
+        let mut subs = Subs::new();
+        let arena = Bump::new();
+
+        let a = SubsIndex::push_new(&mut subs.field_names, "a".into());
+        let b = SubsIndex::push_new(&mut subs.field_names, "b".into());
+        let var1 = new_var(&mut subs, FlexVar(Some(a)));
+        let var2 = new_var(&mut subs, FlexVar(Some(b)));
+
+        let expr = Expr::Tag {
+            variant_var: var1,
+            ext_var: Variable::EMPTY_TAG_UNION,
+            name: TagName("F".into()),
+            arguments: vec![(
+                var2,
+                Loc::at_zero(Expr::Tag {
+                    variant_var: var2,
+                    ext_var: Variable::EMPTY_TAG_UNION,
+                    name: TagName("G".into()),
+                    arguments: vec![],
+                }),
+            )],
+        };
+
+        let (var, expr) = deep_copy_type_vars_into_expr(&arena, &mut subs, var1, &expr).unwrap();
+
+        match expr {
+            Expr::Tag {
+                variant_var,
+                ext_var,
+                name,
+                mut arguments,
+            } => {
+                assert_ne!(var1, variant_var);
+                assert_ne!(var2, variant_var);
+
+                match subs.get_content_without_compacting(variant_var) {
+                    FlexVar(Some(name)) => {
+                        assert_eq!(subs[*name].as_str(), "a");
+                    }
+                    it => panic!("{:?}", it),
+                }
+                assert_eq!(var, variant_var);
+                assert!(matches!(
+                    subs.get_content_without_compacting(ext_var),
+                    Content::Structure(FlatType::EmptyTagUnion)
+                ));
+                assert_eq!(name.0.as_str(), "F");
+
+                assert_eq!(arguments.len(), 1);
+                let (v2, arg) = arguments.pop().unwrap();
+                assert_ne!(var1, v2);
+                assert_ne!(var2, v2);
+                match subs.get_content_without_compacting(v2) {
+                    FlexVar(Some(name)) => {
+                        assert_eq!(subs[*name].as_str(), "b");
+                    }
+                    it => panic!("{:?}", it),
+                }
+
+                match arg.value {
+                    Expr::Tag {
+                        variant_var,
+                        ext_var,
+                        name,
+                        arguments,
+                    } => {
+                        assert_eq!(variant_var, v2);
+                        assert!(matches!(
+                            subs.get_content_without_compacting(ext_var),
+                            Content::Structure(FlatType::EmptyTagUnion)
+                        ));
+                        assert_eq!(name.0.as_str(), "G");
+                        assert_eq!(arguments.len(), 0);
+                    }
+                    e => panic!("{:?}", e),
+                }
+            }
+            e => panic!("{:?}", e),
         }
     }
 }
