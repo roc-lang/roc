@@ -98,6 +98,7 @@
           llvmPkgs.lld
           debugir
           rust
+          rust-bindgen
         ]);
       in
       {

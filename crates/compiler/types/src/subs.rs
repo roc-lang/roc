@@ -15,8 +15,7 @@ use crate::unification_table::{self, UnificationTable};
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
-roc_error_macros::assert_sizeof_all!(Descriptor, 5 * 8);
-roc_error_macros::assert_sizeof_all!(Content, 3 * 8 + 4);
+roc_error_macros::assert_sizeof_all!(Descriptor, 5 * 8 + 4);
 roc_error_macros::assert_sizeof_all!(FlatType, 3 * 8);
 roc_error_macros::assert_sizeof_all!(UnionTags, 12);
 roc_error_macros::assert_sizeof_all!(RecordFields, 2 * 8);
@@ -84,7 +83,7 @@ impl SubsHeader {
     fn from_subs(subs: &Subs, exposed_vars_by_symbol: usize) -> Self {
         // TODO what do we do with problems? they should
         // be reported and then removed from Subs I think
-        debug_assert!(subs.problems.is_empty());
+        debug_assert!(subs.problems.is_empty(), "{:?}", &subs.problems);
 
         Self {
             utable: subs.utable.len() as u64,
@@ -341,10 +340,10 @@ impl UlsOfVar {
     }
 
     /// NOTE: this does not follow unification links.
-    pub fn drain(self) -> impl Iterator<Item = (Variable, impl Iterator<Item = Variable>)> {
+    pub fn drain(self) -> impl Iterator<Item = (Variable, VecSet<Variable>)> {
         self.0
             .into_iter()
-            .map(|(v, set): (Variable, VecSet<Variable>)| (v, set.into_iter()))
+            .map(|(v, set): (Variable, VecSet<Variable>)| (v, set))
     }
 
     pub fn len(&self) -> usize {
@@ -779,8 +778,20 @@ impl<'a> fmt::Debug for SubsFmtContent<'a> {
 
 fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt::Result {
     match this {
-        Content::FlexVar(name) => write!(f, "Flex({:?})", name),
-        Content::FlexAbleVar(name, symbol) => write!(f, "FlexAble({:?}, {:?})", name, symbol),
+        Content::FlexVar(name) => {
+            let name = match name {
+                Some(index) => subs[*index].as_str(),
+                None => "_",
+            };
+            write!(f, "Flex({})", name)
+        }
+        Content::FlexAbleVar(name, symbol) => {
+            let name = match name {
+                Some(index) => subs[*index].as_str(),
+                None => "_",
+            };
+            write!(f, "FlexAble({}, {:?})", name, symbol)
+        }
         Content::RigidVar(name) => write!(f, "Rigid({:?})", name),
         Content::RigidAbleVar(name, symbol) => write!(f, "RigidAble({:?}, {:?})", name, symbol),
         Content::RecursionVar {
@@ -809,6 +820,7 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
             solved,
             recursion_var,
             unspecialized,
+            ambient_function: ambient_function_var,
         }) => {
             write!(f, "LambdaSet([")?;
 
@@ -839,7 +851,7 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
                     region
                 )?;
             }
-            write!(f, ")")
+            write!(f, ", ^<{:?}>)", ambient_function_var)
         }
         Content::RangedNumber(range) => {
             write!(f, "RangedNumber( {:?})", range)
@@ -1920,6 +1932,7 @@ impl Subs {
         recursive: Variable,
         solved_lambdas: UnionLambdas,
         unspecialized_lambdas: SubsSlice<Uls>,
+        ambient_function_var: Variable,
     ) {
         let (rec_var, new_tags) = self.mark_union_recursive_help(recursive, solved_lambdas);
 
@@ -1927,6 +1940,7 @@ impl Subs {
             solved: new_tags,
             recursion_var: OptVariable::from(rec_var),
             unspecialized: unspecialized_lambdas,
+            ambient_function: ambient_function_var,
         });
 
         self.set_content(recursive, new_lambda_set);
@@ -2167,10 +2181,11 @@ impl From<Content> for Descriptor {
     }
 }
 
-roc_error_macros::assert_sizeof_all!(Content, 3 * 8 + 4);
+roc_error_macros::assert_sizeof_all!(Content, 4 * 8);
 roc_error_macros::assert_sizeof_all!((Symbol, AliasVariables, Variable), 2 * 8 + 4);
 roc_error_macros::assert_sizeof_all!(AliasVariables, 8);
 roc_error_macros::assert_sizeof_all!(FlatType, 3 * 8);
+roc_error_macros::assert_sizeof_all!(LambdaSet, 3 * 8 + 4);
 
 roc_error_macros::assert_sizeof_aarch64!((Variable, Option<Lowercase>), 4 * 8);
 roc_error_macros::assert_sizeof_wasm!((Variable, Option<Lowercase>), 4 * 4);
@@ -2244,6 +2259,12 @@ pub struct LambdaSet {
     pub recursion_var: OptVariable,
     /// Lambdas we won't know until an ability specialization is resolved.
     pub unspecialized: SubsSlice<Uls>,
+
+    /// Backlink to the function wrapping this lambda set.
+    /// This should never be unified against when unifying a lambda set; that would evidently
+    /// introduce an infinite unification.
+    /// This is used for the ambient lambda set unification algorithm.
+    pub ambient_function: Variable,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -3135,6 +3156,7 @@ fn occurs(
                 solved,
                 recursion_var,
                 unspecialized: _,
+                ambient_function: _,
             }) => {
                 let mut new_seen = seen.to_owned();
                 new_seen.push(root_var);
@@ -3318,6 +3340,7 @@ fn explicit_substitute(
                 solved,
                 recursion_var,
                 unspecialized,
+                ambient_function: ambient_function_var,
             }) => {
                 // NOTE recursion_var is not substituted, verify that this is correct!
                 let new_solved = explicit_substitute_union(subs, from, to, solved, seen);
@@ -3332,6 +3355,7 @@ fn explicit_substitute(
                         solved: new_solved,
                         recursion_var,
                         unspecialized,
+                        ambient_function: ambient_function_var,
                     }),
                 );
 
@@ -3439,6 +3463,7 @@ fn get_var_names(
                 solved,
                 recursion_var,
                 unspecialized,
+                ambient_function: _,
             }) => {
                 let taken_names = get_var_names_union(subs, solved, taken_names);
                 let mut taken_names = match recursion_var.into_variable() {
@@ -3966,6 +3991,7 @@ impl StorageSubs {
     pub fn as_inner_mut(&mut self) -> &mut Subs {
         &mut self.subs
     }
+
     pub fn as_inner(&self) -> &Subs {
         &self.subs
     }
@@ -4156,10 +4182,12 @@ impl StorageSubs {
                 solved,
                 recursion_var,
                 unspecialized,
+                ambient_function: ambient_function_var,
             }) => LambdaSet(self::LambdaSet {
                 solved: Self::offset_lambda_set(offsets, *solved),
                 recursion_var: recursion_var.map(|v| Self::offset_variable(offsets, v)),
                 unspecialized: Self::offset_uls_slice(offsets, *unspecialized),
+                ambient_function: Self::offset_variable(offsets, *ambient_function_var),
             }),
             RangedNumber(range) => RangedNumber(*range),
             Error => Content::Error,
@@ -4578,6 +4606,7 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
             solved,
             recursion_var,
             unspecialized,
+            ambient_function: ambient_function_var,
         }) => {
             let new_solved = storage_copy_union(env, solved);
             let new_rec_var = recursion_var.map(|v| storage_copy_var_to_help(env, v));
@@ -4593,10 +4622,13 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
                 env.target[target_index] = Uls(new_var, sym, region);
             }
 
+            let new_ambient_function_var = storage_copy_var_to_help(env, ambient_function_var);
+
             let new_content = LambdaSet(self::LambdaSet {
                 solved: new_solved,
                 recursion_var: new_rec_var,
                 unspecialized: new_unspecialized,
+                ambient_function: new_ambient_function_var,
             });
             env.target.set(copy, make_descriptor(new_content));
             copy
@@ -5036,6 +5068,7 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
             solved,
             recursion_var,
             unspecialized,
+            ambient_function: ambient_function_var,
         }) => {
             let new_solved = copy_union(env, max_rank, solved);
             let new_rec_var =
@@ -5054,10 +5087,13 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
                 }
             }
 
+            let new_ambient_function_var = copy_import_to_help(env, max_rank, ambient_function_var);
+
             let new_content = LambdaSet(self::LambdaSet {
                 solved: new_solved,
                 recursion_var: new_rec_var,
                 unspecialized: new_unspecialized,
+                ambient_function: new_ambient_function_var,
             });
 
             env.target.set(copy, make_descriptor(new_content));
@@ -5214,6 +5250,7 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                 solved,
                 recursion_var,
                 unspecialized,
+                ambient_function: _,
             }) => {
                 for slice_index in solved.variables() {
                     let slice = subs.variable_slices[slice_index.index as usize];

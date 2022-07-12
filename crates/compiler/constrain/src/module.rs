@@ -1,5 +1,4 @@
 use crate::expr::{constrain_def_make_constraint, constrain_def_pattern, Env};
-use roc_builtins::std::StdLib;
 use roc_can::abilities::{PendingAbilitiesStore, PendingMemberType};
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::expected::Expected;
@@ -7,8 +6,6 @@ use roc_can::expr::Declarations;
 use roc_can::pattern::Pattern;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
-use roc_types::solved_types::{FreeVars, SolvedType};
-use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{AnnotationSource, Category, Type};
 
 pub fn constrain_module(
@@ -145,91 +142,4 @@ pub fn frontload_ability_constraints(
         }
     }
     constraint
-}
-
-#[derive(Debug, Clone)]
-pub struct Import {
-    pub loc_symbol: Loc<Symbol>,
-    pub solved_type: SolvedType,
-}
-
-pub fn introduce_builtin_imports(
-    constraints: &mut Constraints,
-    imports: Vec<Symbol>,
-    body_con: Constraint,
-    var_store: &mut VarStore,
-) -> Constraint {
-    let stdlib = roc_builtins::std::borrow_stdlib();
-    let (rigid_vars, def_types) = constrain_builtin_imports(stdlib, imports, var_store);
-    constraints.let_import_constraint(rigid_vars, def_types, body_con, &[])
-}
-
-pub fn constrain_builtin_imports(
-    stdlib: &StdLib,
-    imports: Vec<Symbol>,
-    var_store: &mut VarStore,
-) -> (Vec<Variable>, Vec<(Symbol, Loc<roc_types::types::Type>)>) {
-    let mut def_types = Vec::new();
-    let mut rigid_vars = Vec::new();
-
-    for symbol in imports {
-        let mut free_vars = FreeVars::default();
-
-        let import = match stdlib.types.get(&symbol) {
-            Some((solved_type, region)) => {
-                let loc_symbol = Loc {
-                    value: symbol,
-                    region: *region,
-                };
-
-                Import {
-                    loc_symbol,
-                    solved_type: solved_type.clone(),
-                }
-            }
-            None => {
-                continue;
-            }
-        };
-
-        let loc_symbol = import.loc_symbol;
-
-        // an imported symbol can be either an alias or a value
-        match import.solved_type {
-            SolvedType::Alias(symbol, _, _, _, _) if symbol == loc_symbol.value => {
-                // do nothing, in the future the alias definitions should not be in the list of imported values
-            }
-            _ => {
-                let typ = roc_types::solved_types::to_type(
-                    &import.solved_type,
-                    &mut free_vars,
-                    var_store,
-                );
-
-                def_types.push((
-                    loc_symbol.value,
-                    Loc {
-                        region: loc_symbol.region,
-                        value: typ,
-                    },
-                ));
-
-                for (_, var) in free_vars.named_vars {
-                    rigid_vars.push(var);
-                }
-
-                for var in free_vars.wildcards {
-                    rigid_vars.push(var);
-                }
-
-                // Variables can lose their name during type inference. But the unnamed
-                // variables are still part of a signature, and thus must be treated as rigids here!
-                for (_, var) in free_vars.unnamed_vars {
-                    rigid_vars.push(var);
-                }
-            }
-        }
-    }
-
-    (rigid_vars, def_types)
 }

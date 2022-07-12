@@ -13,6 +13,7 @@ use roc_target::TargetInfo;
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
+use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
 use std::process;
 use target_lexicon::BinaryFormat;
@@ -367,7 +368,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let loaded = roc_load::load_and_monomorphize(
         arena,
         path,
-        src_dir.as_path(),
+        src_dir,
         subs_by_module,
         target_info,
         // TODO: expose this from CLI?
@@ -593,7 +594,7 @@ pub fn build(
 
                     let mut bytes = std::fs::read(&binary_path).unwrap();
 
-                    let x = roc_run(arena, triple, args, &mut bytes);
+                    let x = roc_run(arena, opt_level, triple, args, &mut bytes);
                     std::mem::forget(bytes);
                     x
                 }
@@ -617,7 +618,7 @@ pub fn build(
 
                         let mut bytes = std::fs::read(&binary_path).unwrap();
 
-                        let x = roc_run(arena, triple, args, &mut bytes);
+                        let x = roc_run(arena, opt_level, triple, args, &mut bytes);
                         std::mem::forget(bytes);
                         x
                     } else {
@@ -667,6 +668,7 @@ pub fn build(
 
 fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
     arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
+    opt_level: OptLevel,
     triple: Triple,
     args: I,
     binary_bytes: &mut [u8],
@@ -704,7 +706,7 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
 
             Ok(0)
         }
-        _ => roc_run_native(arena, args, binary_bytes),
+        _ => roc_run_native(arena, opt_level, args, binary_bytes),
     }
 }
 
@@ -712,6 +714,7 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
 #[cfg(target_family = "unix")]
 fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     arena: Bump,
+    opt_level: OptLevel,
     args: I,
     binary_bytes: &mut [u8],
 ) -> std::io::Result<i32> {
@@ -737,11 +740,10 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
             .iter()
             .map(|x| x.as_bytes_with_nul().as_ptr().cast());
 
-        let argv: bumpalo::collections::Vec<*const libc::c_char> =
-            std::iter::once(path_cstring.as_ptr())
-                .chain(c_string_pointers)
-                .chain([std::ptr::null()])
-                .collect_in(&arena);
+        let argv: bumpalo::collections::Vec<*const c_char> = std::iter::once(path_cstring.as_ptr())
+            .chain(c_string_pointers)
+            .chain([std::ptr::null()])
+            .collect_in(&arena);
 
         // envp is an array of pointers to strings, conventionally of the
         // form key=value, which are passed as the environment of the new
@@ -755,37 +757,57 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
             })
             .collect_in(&arena);
 
-        let envp: bumpalo::collections::Vec<*const libc::c_char> = envp_cstrings
+        let envp: bumpalo::collections::Vec<*const c_char> = envp_cstrings
             .iter()
             .map(|s| s.as_ptr())
             .chain([std::ptr::null()])
             .collect_in(&arena);
 
-        match executable {
-            #[cfg(target_os = "linux")]
-            ExecutableFile::MemFd(fd, _) => {
-                if libc::fexecve(fd, argv.as_ptr(), envp.as_ptr()) != 0 {
-                    internal_error!(
-                        "libc::fexecve({:?}, ..., ...) failed: {:?}",
-                        path,
-                        errno::errno()
-                    );
-                }
+        match opt_level {
+            OptLevel::Development => {
+                // roc_run_native_debug(executable, &argv, &envp, expectations, interns)
+                todo!()
             }
-            #[cfg(not(target_os = "linux"))]
-            ExecutableFile::OnDisk(_, _) => {
-                if libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr()) != 0 {
-                    internal_error!(
-                        "libc::execve({:?}, ..., ...) failed: {:?}",
-                        path,
-                        errno::errno()
-                    );
-                }
+            OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => {
+                roc_run_native_fast(executable, &argv, &envp);
             }
         }
     }
 
     Ok(1)
+}
+
+unsafe fn roc_run_native_fast(
+    executable: ExecutableFile,
+    argv: &[*const c_char],
+    envp: &[*const c_char],
+) {
+    match executable {
+        #[cfg(target_os = "linux")]
+        ExecutableFile::MemFd(fd, path) => {
+            if libc::fexecve(fd, argv.as_ptr(), envp.as_ptr()) != 0 {
+                internal_error!(
+                    "libc::fexecve({:?}, ..., ...) failed: {:?}",
+                    path,
+                    errno::errno()
+                );
+            }
+        }
+
+        #[cfg(all(target_family = "unix", not(target_os = "linux")))]
+        ExecutableFile::OnDisk(_, path) => {
+            use std::os::unix::ffi::OsStrExt;
+
+            let path_cstring = CString::new(path.as_os_str().as_bytes()).unwrap();
+            if libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr()) != 0 {
+                internal_error!(
+                    "libc::execve({:?}, ..., ...) failed: {:?}",
+                    path,
+                    errno::errno()
+                );
+            }
+        }
+    }
 }
 
 #[derive(Debug)]

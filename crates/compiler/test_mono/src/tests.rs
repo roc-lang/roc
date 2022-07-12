@@ -73,12 +73,12 @@ fn promote_expr_to_module(src: &str) -> String {
 
 fn compiles_to_ir(test_name: &str, src: &str) {
     use bumpalo::Bump;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     let arena = &Bump::new();
 
     let filename = PathBuf::from("Test.roc");
-    let src_dir = Path::new("fake/test/path");
+    let src_dir = PathBuf::from("fake/test/path");
 
     let module_src;
     let temp;
@@ -1715,6 +1715,68 @@ fn call_function_in_empty_list_unbound() {
         r#"
         lst = []
         List.map lst \f -> f {}
+        "#
+    )
+}
+
+#[mono_test]
+fn instantiate_annotated_as_recursive_alias_toplevel() {
+    indoc!(
+        r#"
+        app "test" provides [it] to "./platform"
+
+        Value : [Nil, Array (List Value)]
+
+        foo : [Nil]*
+        foo = Nil
+
+        it : Value
+        it = foo
+        "#
+    )
+}
+
+#[mono_test]
+fn instantiate_annotated_as_recursive_alias_polymorphic_expr() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            Value : [Nil, Array (List Value)]
+
+            foo : [Nil]*
+            foo = Nil
+
+            it : Value
+            it = foo
+
+            it
+        "#
+    )
+}
+
+#[mono_test]
+fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            Value : [Nil, Array (List Value)]
+
+            foo : [Nil]*
+            foo = Nil
+
+            v1 : Value
+            v1 = foo
+
+            Value2 : [Nil, B U16, Array (List Value)]
+
+            v2 : Value2
+            v2 = foo
+
+            {v1, v2}
         "#
     )
 }

@@ -1187,7 +1187,25 @@ impl<'a> Context<'a> {
                 (switch, case_live_vars)
             }
 
-            Expect { remainder, .. } => self.visit_stmt(codegen, remainder),
+            Expect {
+                remainder,
+                condition,
+                region,
+                lookups,
+                layouts,
+            } => {
+                let (b, b_live_vars) = self.visit_stmt(codegen, remainder);
+
+                let expect = self.arena.alloc(Stmt::Expect {
+                    condition: *condition,
+                    region: *region,
+                    lookups,
+                    layouts,
+                    remainder: b,
+                });
+
+                (expect, b_live_vars)
+            }
 
             RuntimeError(_) | Refcounting(_, _) => (stmt, MutSet::default()),
         }

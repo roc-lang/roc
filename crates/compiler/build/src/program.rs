@@ -1,5 +1,5 @@
-use roc_gen_llvm::llvm::build::module_from_builtins;
 pub use roc_gen_llvm::llvm::build::FunctionIterator;
+use roc_gen_llvm::llvm::build::{module_from_builtins, LlvmBackendMode};
 use roc_load::{LoadedModule, MonomorphizedModule};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
@@ -255,9 +255,7 @@ pub fn gen_from_mono_module_llvm(
         interns: loaded.interns,
         module,
         target_info,
-        // in gen_tests, the compiler provides roc_panic
-        // and sets up the setjump/longjump exception handling
-        is_gen_test: false,
+        mode: LlvmBackendMode::Binary,
         exposed_to_host: loaded.exposed_to_host.values.keys().copied().collect(),
     };
 

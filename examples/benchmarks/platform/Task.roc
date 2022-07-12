@@ -11,10 +11,8 @@ forever = \task ->
             |> Effect.map
                 \res ->
                     when res is
-                        Ok _ ->
-                            Step {}
-                        Err e ->
-                            Done (Err e)
+                        Ok _ -> Step {}
+                        Err e -> Done (Err e)
 
     Effect.loop {} looper
 
@@ -25,12 +23,9 @@ loop = \state, step ->
             |> Effect.map
                 \res ->
                     when res is
-                        Ok (Step newState) ->
-                            Step newState
-                        Ok (Done result) ->
-                            Done (Ok result)
-                        Err e ->
-                            Done (Err e)
+                        Ok (Step newState) -> Step newState
+                        Ok (Done result) -> Done (Ok result)
+                        Err e -> Done (Err e)
 
     Effect.loop state looper
 
@@ -48,10 +43,8 @@ after = \effect, transform ->
         effect
         \result ->
             when result is
-                Ok a ->
-                    transform a
-                Err err ->
-                    Task.fail err
+                Ok a -> transform a
+                Err err -> Task.fail err
 
 map : Task a err, (a -> b) -> Task b err
 map = \effect, transform ->
@@ -59,10 +52,8 @@ map = \effect, transform ->
         effect
         \result ->
             when result is
-                Ok a ->
-                    Ok (transform a)
-                Err err ->
-                    Err err
+                Ok a -> Ok (transform a)
+                Err err -> Err err
 
 putLine : Str -> Task {} *
 putLine = \line -> Effect.map (Effect.putLine line) (\_ -> Ok {})
@@ -82,5 +73,6 @@ getInt =
                     #    # B -> Task.fail IOError
                     #    _ ->
                     Task.succeed -1
+
                 False ->
                     Task.succeed value

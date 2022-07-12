@@ -446,14 +446,14 @@ mod test_peg_grammar {
               [T::KeywordWhen] expr() [T::KeywordIs] when_branches()
 
             rule when_branches() =
-              [T::OpenIndent] when_branch()+ close_or_end()
+              [T::OpenIndent] when_branch() ([T::SameIndent]? when_branch())* close_or_end()
               / when_branch()+
 
             pub rule when_branch() =
               when_match_pattern() ([T::Pipe] full_expr())* ([T::KeywordIf] full_expr())? [T::Arrow] when_branch_body()
 
             rule when_branch_body() =
-              [T::OpenIndent] full_expr() ([T::CloseIndent] / end_of_file())
+              [T::OpenIndent] full_expr() close_or_end()
               / full_expr()
 
             rule var() =
@@ -808,6 +808,16 @@ test1 =
     }
 
     #[test]
+    fn test_when_3() {
+        let tokens = tokenize(
+            r#"when list is
+    Nil -> Cons a
+    Nil -> Nil"#,
+        );
+        assert_eq!(tokenparser::when(&tokens), Ok(()));
+    }
+
+    #[test]
     fn test_when_in_defs() {
         let tokens = tokenize(
             r#"fromBytes = \bytes ->
@@ -815,7 +825,7 @@ test1 =
         Ok v -> v
   "#,
         );
-
+        dbg!(&tokens);
         assert_eq!(tokenparser::module_defs(&tokens), Ok(()));
     }
 

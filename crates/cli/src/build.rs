@@ -55,7 +55,7 @@ pub fn build_file<'a>(
     let loaded = roc_load::load_and_monomorphize(
         arena,
         app_module_path.clone(),
-        src_dir.as_path(),
+        src_dir,
         subs_by_module,
         target_info,
         // TODO: expose this from CLI?
@@ -436,7 +436,7 @@ pub fn check_file(
     let mut loaded = roc_load::load_and_typecheck(
         arena,
         roc_file_path,
-        src_dir.as_path(),
+        src_dir,
         subs_by_module,
         target_info,
         // TODO: expose this from CLI?

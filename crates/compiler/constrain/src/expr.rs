@@ -143,6 +143,7 @@ fn constrain_untyped_closure(
         constraints,
         name,
         region,
+        fn_var,
         captured_symbols,
         closure_var,
         &mut vars,
@@ -911,6 +912,7 @@ pub fn constrain_expr(
             let lambda_set = Type::ClosureTag {
                 name: *closure_name,
                 captures: vec![],
+                ambient_function: *function_var,
             };
 
             let closure_type = Type::Variable(*closure_var);
@@ -1390,6 +1392,7 @@ fn constrain_function_def(
                 constraints,
                 loc_symbol.value,
                 region,
+                expr_var,
                 &function_def.captured_symbols,
                 closure_var,
                 &mut vars,
@@ -1981,13 +1984,13 @@ fn constrain_typed_def(
     );
 
     def_pattern_state.constraints.push(constraints.equal_types(
-        expr_type,
+        expr_type.clone(),
         annotation_expected,
         Category::Storage(std::file!(), std::line!()),
         Region::span_across(&annotation.region, &def.loc_expr.region),
     ));
 
-    // when a def is annotated, and it's body is a closure, treat this
+    // when a def is annotated, and its body is a closure, treat this
     // as a named function (in elm terms) for error messages.
     //
     // This means we get errors like "the first argument of `f` is weird"
@@ -2040,6 +2043,7 @@ fn constrain_typed_def(
                 constraints,
                 *name,
                 region,
+                *fn_var,
                 captured_symbols,
                 closure_var,
                 &mut vars,
@@ -2114,7 +2118,7 @@ fn constrain_typed_def(
                 AnnotationSource::TypedBody {
                     region: annotation.region,
                 },
-                signature.clone(),
+                expr_type,
             );
 
             let ret_constraint = constrain_expr(
@@ -2124,14 +2128,7 @@ fn constrain_typed_def(
                 &def.loc_expr.value,
                 annotation_expected,
             );
-            let ret_constraint = attach_resolution_constraints(constraints, env, ret_constraint);
-
-            let cons = [
-                ret_constraint,
-                // Store type into AST vars. We use Store so errors aren't reported twice
-                constraints.store(signature, expr_var, std::file!(), std::line!()),
-            ];
-            let expr_con = constraints.and_constraint(cons);
+            let expr_con = attach_resolution_constraints(constraints, env, ret_constraint);
 
             constrain_def_make_constraint(
                 constraints,
@@ -2514,6 +2511,7 @@ fn constrain_closure_size(
     constraints: &mut Constraints,
     name: Symbol,
     region: Region,
+    ambient_function: Variable,
     captured_symbols: &[(Symbol, Variable)],
     closure_var: Variable,
     variables: &mut Vec<Variable>,
@@ -2542,6 +2540,7 @@ fn constrain_closure_size(
     let closure_type = Type::ClosureTag {
         name,
         captures: captured_types,
+        ambient_function,
     };
 
     let finalizer = constraints.equal_types_var(
@@ -2811,6 +2810,7 @@ fn constraint_recursive_function(
                 constraints,
                 loc_symbol.value,
                 region,
+                expr_var,
                 &function_def.captured_symbols,
                 closure_var,
                 &mut vars,
@@ -3220,6 +3220,7 @@ fn rec_defs_help(
                             constraints,
                             *name,
                             region,
+                            *fn_var,
                             captured_symbols,
                             closure_var,
                             &mut vars,

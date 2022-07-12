@@ -3,7 +3,7 @@ use crate::pattern::fmt_pattern;
 use crate::spaces::{fmt_spaces, INDENT};
 use crate::Buf;
 use roc_parse::ast::{
-    AbilityMember, Def, Defs, Expr, ExtractSpaces, Pattern, TypeAnnotation, TypeDef, TypeHeader,
+    AbilityMember, Defs, Expr, ExtractSpaces, Pattern, TypeAnnotation, TypeDef, TypeHeader,
     ValueDef,
 };
 use roc_region::all::Loc;
@@ -95,8 +95,6 @@ impl<'a> Formattable for TypeDef<'a> {
                 let ann_is_where_clause =
                     matches!(ann.extract_spaces().item, TypeAnnotation::Where(..));
 
-                let ann_has_spaces_before = matches!(&ann.value, TypeAnnotation::SpaceBefore(..));
-
                 // Always put the has-derived clause on a newline if it is itself multiline, or
                 // the annotation has a where-has clause.
                 let derived_multiline = if let Some(derived) = derived {
@@ -106,12 +104,6 @@ impl<'a> Formattable for TypeDef<'a> {
                 };
 
                 let make_multiline = ann.is_multiline() || derived_multiline;
-
-                // If the annotation has spaces before, a newline will already be printed.
-                if make_multiline && !ann_has_spaces_before {
-                    buf.newline();
-                    buf.indent(indent + INDENT);
-                }
 
                 ann.format(buf, indent);
 
@@ -288,46 +280,6 @@ impl<'a> Formattable for ValueDef<'a> {
                 buf.newline();
                 fmt_body(buf, &body_pattern.value, &body_expr.value, indent);
             }
-        }
-    }
-}
-
-impl<'a> Formattable for Def<'a> {
-    fn is_multiline(&self) -> bool {
-        use roc_parse::ast::Def::*;
-
-        match self {
-            Type(def) => def.is_multiline(),
-            Value(def) => def.is_multiline(),
-            SpaceBefore(sub_def, spaces) | SpaceAfter(sub_def, spaces) => {
-                spaces.iter().any(|s| s.is_comment()) || sub_def.is_multiline()
-            }
-            NotYetImplemented(s) => todo!("{}", s),
-        }
-    }
-
-    fn format_with_options<'buf>(
-        &self,
-        buf: &mut Buf<'buf>,
-        parens: Parens,
-        newlines: Newlines,
-        indent: u16,
-    ) {
-        use roc_parse::ast::Def::*;
-
-        match self {
-            Type(def) => def.format_with_options(buf, parens, newlines, indent),
-            Value(def) => def.format_with_options(buf, parens, newlines, indent),
-
-            SpaceBefore(sub_def, spaces) => {
-                fmt_spaces(buf, spaces.iter(), indent);
-                sub_def.format(buf, indent);
-            }
-            SpaceAfter(sub_def, spaces) => {
-                sub_def.format(buf, indent);
-                fmt_spaces(buf, spaces.iter(), indent);
-            }
-            NotYetImplemented(s) => todo!("{}", s),
         }
     }
 }

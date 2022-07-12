@@ -1,7 +1,7 @@
 use bumpalo::Bump;
 use roc_load::Threading;
 use roc_reporting::report::Palette;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use roc_fmt::annotation::Formattable;
 use roc_fmt::annotation::{Newlines, Parens};
@@ -49,7 +49,7 @@ pub fn compile_to_mono<'a>(
     palette: Palette,
 ) -> Result<MonomorphizedModule<'a>, Vec<String>> {
     let filename = PathBuf::from("");
-    let src_dir = Path::new("fake/test/path");
+    let src_dir = PathBuf::from("fake/test/path");
 
     let module_src = arena.alloc(promote_expr_to_module(src));
 

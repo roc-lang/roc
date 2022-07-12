@@ -1,4 +1,5 @@
 pub mod ast_error;
+mod builtin_aliases;
 mod canonicalization;
 pub mod constrain;
 pub mod lang;

@@ -2,6 +2,7 @@ use bumpalo::Bump;
 use const_format::concatcp;
 use inkwell::context::Context;
 use libloading::Library;
+use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_types::subs::Subs;
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
@@ -200,6 +201,7 @@ pub fn expect_mono_module_to_dylib<'a>(
     let target_info = TargetInfo::from(&target);
 
     let MonomorphizedModule {
+        toplevel_expects,
         procedures,
         entry_point,
         interns,
@@ -228,7 +230,7 @@ pub fn expect_mono_module_to_dylib<'a>(
         interns,
         module,
         target_info,
-        is_gen_test: true, // so roc_panic is generated
+        mode: LlvmBackendMode::GenTest, // so roc_panic is generated
         // important! we don't want any procedures to get the C calling convention
         exposed_to_host: MutSet::default(),
     };
@@ -240,6 +242,7 @@ pub fn expect_mono_module_to_dylib<'a>(
     let expects = roc_gen_llvm::llvm::build::build_procedures_expose_expects(
         &env,
         opt_level,
+        &toplevel_expects,
         procedures,
         entry_point,
     );
@@ -306,7 +309,7 @@ pub fn mono_module_to_dylib<'a>(
         interns,
         module,
         target_info,
-        is_gen_test: true, // so roc_panic is generated
+        mode: LlvmBackendMode::GenTest, // so roc_panic is generated
         // important! we don't want any procedures to get the C calling convention
         exposed_to_host: MutSet::default(),
     };

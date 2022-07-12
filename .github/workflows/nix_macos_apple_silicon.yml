@@ -19,5 +19,5 @@ jobs:
         with:
           clean: "true"
 
-      - name: execute tests without --release
-        run: nix develop -c cargo test --locked  # no --release yet until #3166 is fixed
+      - name: execute tests with --release
+        run: nix develop -c cargo test --locked --release

@@ -12,8 +12,8 @@ function setGlobalsForWasmBindgen() {
 }
 setGlobalsForWasmBindgen();
 
-import * as roc_repl_wasm from "/roc_repl_wasm.js";
-import { getMockWasiImports } from "/wasi.js";
+import * as roc_repl_wasm from "./roc_repl_wasm.js";
+import { getMockWasiImports } from "./wasi.js";
 
 // ----------------------------------------------------------------------------
 // REPL state
@@ -41,7 +41,7 @@ const repl = {
 // Initialise
 repl.elemSourceInput.addEventListener("change", onInputChange);
 repl.elemSourceInput.addEventListener("keyup", onInputKeyup);
-roc_repl_wasm.default().then((instance) => {
+roc_repl_wasm.default('./roc_repl_wasm_bg.wasm').then((instance) => {
   repl.compiler = instance;
 });
 
