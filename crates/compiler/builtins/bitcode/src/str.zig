@@ -1651,6 +1651,8 @@ pub fn fromUtf8RangeC(
 pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: UpdateMode) FromUtf8Result {
     const bytes = @ptrCast([*]const u8, arg.bytes)[start..count];
 
+    _=&std.os.write(1,"fromUtf8Range start\n");
+
     if (unicode.utf8ValidateSlice(bytes)) {
         // the output will be correct. Now we need to clone the input
 
@@ -1663,6 +1665,7 @@ pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: Upda
                 .str_capacity = byte_list.capacity,
             };
 
+            _=&std.os.write(1,"fromUtf8Range end (ok large)\n");
             return FromUtf8Result{
                 .is_ok = true,
                 .string = string,
@@ -1670,6 +1673,8 @@ pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: Upda
                 .problem_code = Utf8ByteProblem.InvalidStartByte,
             };
         } else {
+            _=&std.os.write(1,"fromUtf8Range end (ok small)\n");
+
             return FromUtf8Result{
                 .is_ok = true,
                 .string = RocStr.init(@ptrCast([*]const u8, bytes), count),
@@ -1679,6 +1684,8 @@ pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: Upda
         }
     } else {
         const temp = errorToProblem(@ptrCast([*]u8, arg.bytes), arg.length);
+
+        _=&std.os.write(1,"fromUtf8Range end (error)\n");
         return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = temp.index, .problem_code = temp.problem };
     }
 }
