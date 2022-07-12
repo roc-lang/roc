@@ -10,7 +10,6 @@ description = "Shared code for cli tests and benchmarks"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-roc_cli = { path = "../cli" }
 roc_collections = { path = "../compiler/collections" }
 roc_reporting = { path = "../reporting" }
 roc_load = { path = "../compiler/load" }
@@ -21,7 +20,6 @@ serde = { version = "1.0.130", features = ["derive"] }
 serde-xml-rs = "0.5.1"
 strip-ansi-escapes = "0.1.1"
 tempfile = "3.2.0"
-const_format = { version = "0.2.23", features = ["const_generics"] }
 
 [target.'cfg(unix)'.dependencies]
 rlimit = "0.6.2"

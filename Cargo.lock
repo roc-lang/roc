@@ -523,10 +523,8 @@ name = "cli_utils"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
- "const_format",
  "criterion",
  "rlimit",
- "roc_cli",
  "roc_collections",
  "roc_load",
  "roc_module",
