@@ -370,17 +370,3 @@ withExtension = \@Path path, extension ->
 
 # NOTE: no withExtensionBytes because it's too narrow. If you really need to get some
 # non-Unicode in there, do it with
-
-# Returns `True` if the path is absolute.
-#
-# A path is only absolute if it begins with an absolute root
-# (see [PathRoot] for examples of roots) _and_ it contains neither `..` nor `.` path
-# components.
-#
-# Note that an absolute path may contain unresolved symlinks, so even an absolute path
-# may change when passed to [canonicalize].
-#
-# This returns a [Task] because the answer varies by operating system; on UNIX,
-# `/blah` is an absolute path, but on Windows, `/blah` is a relative path. The
-# task returns the appropriate answer for the operating system on which it's run.
-# isAbsolute
