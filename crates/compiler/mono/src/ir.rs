@@ -2353,7 +2353,6 @@ fn from_can_let<'a>(
                             use crate::copy::deep_copy_type_vars_into_expr;
 
                             let (new_def_expr_var, specialized_expr) = deep_copy_type_vars_into_expr(
-                            env.arena,
                             env.subs,
                             def.expr_var,
                             &def.loc_expr.value,
