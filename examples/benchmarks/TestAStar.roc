@@ -18,10 +18,8 @@ main =
 showBool : Bool -> Str
 showBool = \b ->
     when b is
-        True ->
-            "True"
-        False ->
-            "False"
+        True -> "True"
+        False -> "False"
 
 test1 : Bool
 test1 =
@@ -32,20 +30,14 @@ example1 =
     step : I64 -> Set I64
     step = \n ->
         when n is
-            1 ->
-                Set.fromList [2, 3]
-            2 ->
-                Set.fromList [4]
-            3 ->
-                Set.fromList [4]
-            _ ->
-                Set.fromList []
+            1 -> Set.fromList [2, 3]
+            2 -> Set.fromList [4]
+            3 -> Set.fromList [4]
+            _ -> Set.fromList []
 
     cost : I64, I64 -> F64
     cost = \_, _ -> 1
 
     when AStar.findPath cost step 1 4 is
-        Ok path ->
-            path
-        Err _ ->
-            []
+        Ok path -> path
+        Err _ -> []

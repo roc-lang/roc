@@ -13,7 +13,5 @@ update = Update
 map : Action a, (a -> b) -> Action b
 map = \action, transform ->
     when action is
-        None ->
-            None
-        Update state ->
-            Update (transform state)
+        None -> None
+        Update state -> Update (transform state)

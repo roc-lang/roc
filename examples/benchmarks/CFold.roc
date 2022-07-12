@@ -31,6 +31,7 @@ mkExpr = \n, v ->
     when n is
         0 ->
             if v == 0 then Var 1 else Val v
+
         _ ->
             Add (mkExpr (n - 1) (v + 1)) (mkExpr (n - 1) (max (v - 1) 0))
 
@@ -42,6 +43,7 @@ appendAdd = \e1, e2 ->
     when e1 is
         Add a1 a2 ->
             Add a1 (appendAdd a2 e2)
+
         _ ->
             Add e1 e2
 
@@ -50,6 +52,7 @@ appendMul = \e1, e2 ->
     when e1 is
         Mul a1 a2 ->
             Mul a1 (appendMul a2 e2)
+
         _ ->
             Mul e1 e2
 
@@ -58,10 +61,13 @@ eval = \e ->
     when e is
         Var _ ->
             0
+
         Val v ->
             v
+
         Add l r ->
             eval l + eval r
+
         Mul l r ->
             eval l * eval r
 
@@ -73,11 +79,13 @@ reassoc = \e ->
             x2 = reassoc e2
 
             appendAdd x1 x2
+
         Mul e1 e2 ->
             x1 = reassoc e1
             x2 = reassoc e2
 
             appendMul x1 x2
+
         _ ->
             e
 
@@ -91,12 +99,16 @@ constFolding = \e ->
             when Pair x1 x2 is
                 Pair (Val a) (Val b) ->
                     Val (a + b)
+
                 Pair (Val a) (Add (Val b) x) ->
                     Add (Val (a + b)) x
+
                 Pair (Val a) (Add x (Val b)) ->
                     Add (Val (a + b)) x
+
                 Pair y1 y2 ->
                     Add y1 y2
+
         Mul e1 e2 ->
             x1 = constFolding e1
             x2 = constFolding e2
@@ -104,11 +116,15 @@ constFolding = \e ->
             when Pair x1 x2 is
                 Pair (Val a) (Val b) ->
                     Val (a * b)
+
                 Pair (Val a) (Mul (Val b) x) ->
                     Mul (Val (a * b)) x
+
                 Pair (Val a) (Mul x (Val b)) ->
                     Mul (Val (a * b)) x
+
                 Pair y1 y2 ->
                     Add y1 y2
+
         _ ->
             e

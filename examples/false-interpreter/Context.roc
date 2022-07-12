@@ -26,36 +26,27 @@ popStack = \ctx ->
             poppedCtx = { ctx & stack: List.dropAt ctx.stack (List.len ctx.stack - 1) }
 
             Ok (T poppedCtx val)
+
         Err ListWasEmpty ->
             Err EmptyStack
 
 toStrData : Data -> Str
 toStrData = \data ->
     when data is
-        Lambda _ ->
-            "[]"
-        Number n ->
-            Num.toStr (Num.intCast n)
-        Var v ->
-            Variable.toStr v
+        Lambda _ -> "[]"
+        Number n -> Num.toStr (Num.intCast n)
+        Var v -> Variable.toStr v
 
 toStrState : State -> Str
 toStrState = \state ->
     when state is
-        Executing ->
-            "Executing"
-        InComment ->
-            "InComment"
-        InString _ ->
-            "InString"
-        InNumber _ ->
-            "InNumber"
-        InLambda _ _ ->
-            "InLambda"
-        InSpecialChar ->
-            "InSpecialChar"
-        LoadChar ->
-            "LoadChar"
+        Executing -> "Executing"
+        InComment -> "InComment"
+        InString _ -> "InString"
+        InNumber _ -> "InNumber"
+        InLambda _ _ -> "InLambda"
+        InSpecialChar -> "InSpecialChar"
+        LoadChar -> "LoadChar"
 
 toStr : Context -> Str
 toStr = \{ scopes, stack, state, vars } ->
@@ -81,6 +72,7 @@ getChar = \ctx ->
         Ok scope ->
             (T val newScope) <- Task.await (getCharScope scope)
             Task.succeed (T val { ctx & scopes: List.set ctx.scopes (List.len ctx.scopes - 1) newScope })
+
         Err ListWasEmpty ->
             Task.fail NoScope
 
@@ -89,6 +81,7 @@ getCharScope = \scope ->
     when List.get scope.buf scope.index is
         Ok val ->
             Task.succeed (T val { scope & index: scope.index + 1 })
+
         Err OutOfBounds ->
             when scope.data is
                 Some h ->
@@ -97,8 +90,10 @@ getCharScope = \scope ->
                         Ok val ->
                             # This starts at 1 because the first character is already being returned.
                             Task.succeed (T val { scope & buf: bytes, index: 1 })
+
                         Err ListWasEmpty ->
                             Task.fail EndOfData
+
                 None ->
                     Task.fail EndOfData
 
@@ -107,5 +102,6 @@ inWhileScope = \ctx ->
     when List.last ctx.scopes is
         Ok scope ->
             scope.whileInfo != None
+
         Err ListWasEmpty ->
             False
