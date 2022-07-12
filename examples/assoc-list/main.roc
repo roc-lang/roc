@@ -5,7 +5,6 @@ app "main"
 
 ## An example program
 ## that takes [AssocList] for a spin.
-
 main =
     _ <- await (Stdout.line "This example program takes the AssocList interface for a spin.")
     _ <- await (Stdout.line "Input pairs of lines.\nEach pair will become an association in the first AssocList.\nFinish by inputting an empty line.")
@@ -21,13 +20,11 @@ main =
     _ <- await (Stdout.line "insertAll assocs1 assocs2:")
     _ <- printAssociations (AssocList.insertAll assocs1 assocs2)
 
-
     # TODO: There seems to be a problem with 'remove'
     _ <- await (Stdout.line "remove assocs1 \"2\":")
     _ <- printAssociations (AssocList.remove assocs1 "3")
 
     succeed {}
-
 
 readAssociations = \assocs, after ->
     key <- await Stdin.line
@@ -36,12 +33,14 @@ readAssociations = \assocs, after ->
     else
         value <- await Stdin.line
         assocs
-          |> AssocList.insert key value
-          |> readAssociations after
+            |> AssocList.insert key value
+            |> readAssociations after
 
 printAssociations = \assocs, after ->
-    (assocs
-        |> AssocList.walk (succeed {}) \_, key, value ->
-            _ <- await (Stdout.line "\(key) => \(value)")
-            succeed {})
+    walker = \_, key, value ->
+        _ <- await (Stdout.line "\(key) => \(value)")
+        succeed {}
+
+    assocs
+        |> AssocList.walk (succeed {}) walker
         |> after

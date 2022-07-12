@@ -228,7 +228,7 @@ mod cli_run {
 
             if !&out.stdout.ends_with(expected_ending) {
                 panic!(
-                    "expected output to end with {:?} but instead got {:#?} - stderr was: {:#?}",
+                    "expected output to end with {} but instead got {} - stderr was: {}",
                     expected_ending, out.stdout, out.stderr
                 );
             }
@@ -565,10 +565,10 @@ mod cli_run {
                     4 => d\n\
                     5 => e\n\
                     remove assocs1 \"2\":\n\
-                    => a\n\
+                    1 => a\n\
                     2 => b\n\
                     ",
-                use_valgrind: false,
+                use_valgrind: true,
             }
         },
     }
