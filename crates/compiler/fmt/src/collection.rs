@@ -46,16 +46,16 @@ pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable>(
             let is_only_newlines = item.before.iter().all(|s| s.is_newline());
 
             if item.before.is_empty() || is_only_newlines {
-                buf.ensure_ends_in_newline();
+                buf.ensure_ends_with_newline();
             } else {
                 if is_first_item {
                     // The first item in a multiline collection always begins with exactly
                     // one newline (so the delimiter is at the end of its own line),
                     // and that newline appears before the first comment (if there is one).
-                    buf.ensure_ends_in_newline();
+                    buf.ensure_ends_with_newline();
                 } else {
                     if item.before.starts_with(&[CommentOrNewline::Newline]) {
-                        buf.ensure_ends_in_newline();
+                        buf.ensure_ends_with_newline();
                     }
 
                     if item
@@ -113,7 +113,7 @@ pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable>(
             item_indent,
         );
 
-        buf.ensure_ends_in_newline();
+        buf.ensure_ends_with_newline();
         buf.indent(braces_indent);
     } else {
         // is_multiline == false

@@ -27,24 +27,18 @@ sequence = \encoders ->
 getWidth : Encoder -> Nat
 getWidth = \encoder ->
     when encoder is
-        Signed8 _ ->
-            1
-        Unsigned8 _ ->
-            1
-        Signed16 _ _ ->
-            2
-        Unsigned16 _ _ ->
-            2
+        Signed8 _ -> 1
+        Unsigned8 _ -> 1
+        Signed16 _ _ -> 2
+        Unsigned16 _ _ -> 2
         # Signed32 _ -> 4
         # Unsigned32 _ -> 4
         # Signed64 _ -> 8
         # Unsigned64 _ -> 8
         # Signed128 _ -> 16
         # Unsigned128 _ -> 16
-        Sequence w _ ->
-            w
-        Bytes bs ->
-            List.len bs
+        Sequence w _ -> w
+        Bytes bs -> List.len bs
 
 getWidths : List Encoder, Nat -> Nat
 getWidths = \encoders, initial ->
@@ -65,6 +59,7 @@ encodeHelp = \encoder, offset, output ->
                 output: List.set output offset value,
                 offset: offset + 1,
             }
+
         Signed8 value ->
             cast : U8
             cast = Num.intCast value
@@ -73,6 +68,7 @@ encodeHelp = \encoder, offset, output ->
                 output: List.set output offset cast,
                 offset: offset + 1,
             }
+
         Unsigned16 endianness value ->
             a : U8
             a = Num.intCast (Num.shiftRightBy 8 value)
@@ -86,6 +82,7 @@ encodeHelp = \encoder, offset, output ->
                         output
                             |> List.set (offset + 0) a
                             |> List.set (offset + 1) b
+
                     LE ->
                         output
                             |> List.set (offset + 0) b
@@ -95,6 +92,7 @@ encodeHelp = \encoder, offset, output ->
                 output: newOutput,
                 offset: offset + 2,
             }
+
         Signed16 endianness value ->
             a : U8
             a = Num.intCast (Num.shiftRightBy 8 value)
@@ -108,6 +106,7 @@ encodeHelp = \encoder, offset, output ->
                         output
                             |> List.set (offset + 0) a
                             |> List.set (offset + 1) b
+
                     LE ->
                         output
                             |> List.set (offset + 0) b
@@ -117,6 +116,7 @@ encodeHelp = \encoder, offset, output ->
                 output: newOutput,
                 offset: offset + 1,
             }
+
         Bytes bs ->
             List.walk
                 bs
@@ -125,6 +125,7 @@ encodeHelp = \encoder, offset, output ->
                     offset: accum.offset + 1,
                     output: List.set accum.output offset byte,
                 }
+
         Sequence _ encoders ->
             List.walk
                 encoders
