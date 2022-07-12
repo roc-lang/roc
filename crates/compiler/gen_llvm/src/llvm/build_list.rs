@@ -313,21 +313,28 @@ pub fn list_replace_unsafe<'a, 'ctx, 'env>(
     // Load the element and returned list into a struct.
     let old_element = env.builder.build_load(element_ptr, "load_element");
 
-    let result = env
-        .context
-        .struct_type(
-            &[super::convert::zig_list_type(env).into(), element_type],
-            false,
-        )
-        .const_zero();
+    // the list has the same alignment as a usize / ptr. The element comes first in the struct if
+    // its alignment is bigger than that of a list.
+    let element_align = element_layout.alignment_bytes(env.target_info);
+    let element_first = element_align > env.target_info.ptr_width() as u32;
+
+    let fields = if element_first {
+        [element_type, super::convert::zig_list_type(env).into()]
+    } else {
+        [super::convert::zig_list_type(env).into(), element_type]
+    };
+
+    let result = env.context.struct_type(&fields, false).const_zero();
+
+    let (list_index, element_index) = if element_first { (1, 0) } else { (0, 1) };
 
     let result = env
         .builder
-        .build_insert_value(result, new_list, 0, "insert_list")
+        .build_insert_value(result, new_list, list_index, "insert_list")
         .unwrap();
 
     env.builder
-        .build_insert_value(result, old_element, 1, "insert_value")
+        .build_insert_value(result, old_element, element_index, "insert_value")
         .unwrap()
         .into_struct_value()
         .into()
