@@ -64,6 +64,9 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - Clickable backtrace of functions, user defined functions should be made extra visible.
 - VR debugging: render massive curved screen with rectangle showing code (and expression values) for every function in call stack.
 
+### Testing
+- [Wallaby.js](https://wallabyjs.com/) could serve as inspiration for live gutters showing tested / untested / passing / failing code based on tests, combined with time travel debugging (inline runtime values / inline error reports / inline code coverage); could be useful for debugging as well
+
 ### Cool regular editors
 
 * [Helix](https://github.com/helix-editor/helix) modal (terminal, for now) editor in rust. Good UX.
@@ -100,6 +103,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 #### Inspiration
 
 * [Github Next](https://next.github.com/projects/repo-visualization) each file and folder is visualised as a circle: the circle’s color is the type of file, and the circle’s size represents the size of the file. Sidenote, a cool addition to this might be to use heatmap colors for the circles; circles for files that have had lots of commits could be more red, files with few commits would be blue.
+* [AppMap](https://appland.com/docs/appmap-overview.html) records code execution traces, collecting information about how your code works and what it does. Then it presents this information as interactive diagrams that you can search and navigate. In the diagrams, you can see exactly how functions, web services, data stores, security, I/O, and dependent services all work together when application code runs.
 
 ### Voice Interaction Related
 

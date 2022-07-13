@@ -638,30 +638,6 @@ fn add_builtin_type<'a>(
         (Builtin::Decimal, _) => types.add(RocType::Num(RocNum::Dec), layout),
         (Builtin::Bool, _) => types.add(RocType::Bool, layout),
         (Builtin::Str, _) => types.add(RocType::RocStr, layout),
-        (Builtin::Dict(key_layout, val_layout), Structure(Apply(Symbol::DICT_DICT, args))) => {
-            let args = env.subs.get_subs_slice(*args);
-            debug_assert_eq!(args.len(), 2);
-
-            let key_id = add_type_help(env, *key_layout, args[0], opt_name, types);
-            let val_id = add_type_help(env, *val_layout, args[1], opt_name, types);
-            let dict_id = types.add(RocType::RocDict(key_id, val_id), layout);
-
-            types.depends(dict_id, key_id);
-            types.depends(dict_id, val_id);
-
-            dict_id
-        }
-        (Builtin::Set(elem_layout), Structure(Apply(Symbol::SET_SET, args))) => {
-            let args = env.subs.get_subs_slice(*args);
-            debug_assert_eq!(args.len(), 1);
-
-            let elem_id = add_type_help(env, *elem_layout, args[0], opt_name, types);
-            let set_id = types.add(RocType::RocSet(elem_id), layout);
-
-            types.depends(set_id, elem_id);
-
-            set_id
-        }
         (Builtin::List(elem_layout), Structure(Apply(Symbol::LIST_LIST, args))) => {
             let args = env.subs.get_subs_slice(*args);
             debug_assert_eq!(args.len(), 1);

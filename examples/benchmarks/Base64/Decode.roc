@@ -48,10 +48,8 @@ loopHelp = \{ remaining, string } ->
 bitsToChars : U32, Int * -> Str
 bitsToChars = \bits, missing ->
     when Str.fromUtf8 (bitsToCharsHelp bits missing) is
-        Ok str ->
-            str
-        Err _ ->
-            ""
+        Ok str -> str
+        Err _ -> ""
 
 # Mask that can be used to get the lowest 6 bits of a binary number
 lowest6BitsMask : Int *
@@ -87,12 +85,9 @@ bitsToCharsHelp = \bits, missing ->
     equals = 61
 
     when missing is
-        0 ->
-            [p, q, r, s]
-        1 ->
-            [p, q, r, equals]
-        2 ->
-            [p, q, equals, equals]
+        0 -> [p, q, r, s]
+        1 -> [p, q, r, equals]
+        2 -> [p, q, equals, equals]
         _ ->
             # unreachable
             []
@@ -115,9 +110,11 @@ unsafeToChar = \n ->
             62 ->
                 # '+'
                 43
+
             63 ->
                 # '/'
                 47
+
             _ ->
                 # anything else is invalid '\u{0000}'
                 0

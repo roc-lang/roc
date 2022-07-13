@@ -734,6 +734,7 @@ min = \list ->
     when List.first list is
         Ok initial ->
             Ok (minHelp list initial)
+
         Err ListWasEmpty ->
             Err ListWasEmpty
 
@@ -750,6 +751,7 @@ max = \list ->
     when List.first list is
         Ok initial ->
             Ok (maxHelp list initial)
+
         Err ListWasEmpty ->
             Err ListWasEmpty
 
@@ -782,6 +784,7 @@ find = \array, pred ->
     when List.iterate array {} callback is
         Continue {} ->
             Err NotFound
+
         Break found ->
             Ok found
 
@@ -819,6 +822,7 @@ sublist : List elem, { start : Nat, len : Nat } -> List elem
 sublist = \list, config ->
     sublistLowlevel list config.start config.len
 
+## low-level slicing operation that does no bounds checking
 sublistLowlevel : List elem, Nat, Nat -> List elem
 
 ## Intersperses `sep` between the elements of `list`
@@ -863,6 +867,7 @@ iterHelp = \list, state, f, index, length ->
         when f state (List.getUnsafe list index) is
             Continue nextState ->
                 iterHelp list nextState f (index + 1) length
+
             Break b ->
                 Break b
     else

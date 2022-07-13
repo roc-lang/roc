@@ -1210,6 +1210,10 @@ pub fn countUtf8Bytes(string: RocStr) callconv(.C) usize {
     return string.len();
 }
 
+pub fn getCapacity(string: RocStr) callconv(.C) usize {
+    return string.getCapacity();
+}
+
 pub fn substringUnsafe(string: RocStr, start: usize, length: usize) callconv(.C) RocStr {
     const slice = string.asSlice()[start .. start + length];
     return RocStr.fromSlice(slice);

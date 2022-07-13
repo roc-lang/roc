@@ -68,30 +68,27 @@ roc_error_macros::assert_sizeof_non_wasm!(Call, 9 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(CallType, 7 * 8);
 
 macro_rules! return_on_layout_error {
-    ($env:expr, $layout_result:expr) => {
+    ($env:expr, $layout_result:expr, $context_msg:expr) => {
         match $layout_result {
             Ok(cached) => cached,
-            Err(error) => return_on_layout_error_help!($env, error),
+            Err(error) => return_on_layout_error_help!($env, error, $context_msg),
         }
     };
 }
 
 macro_rules! return_on_layout_error_help {
-    ($env:expr, $error:expr) => {{
+    ($env:expr, $error:expr, $context_msg:expr) => {{
         match $error {
             LayoutProblem::UnresolvedTypeVar(_) => {
-                return Stmt::RuntimeError($env.arena.alloc(format!(
-                    "UnresolvedTypeVar {} line {}",
-                    file!(),
-                    line!()
-                )));
+                return Stmt::RuntimeError(
+                    $env.arena
+                        .alloc(format!("UnresolvedTypeVar: {}", $context_msg,)),
+                );
             }
             LayoutProblem::Erroneous => {
-                return Stmt::RuntimeError($env.arena.alloc(format!(
-                    "Erroneous {} line {}",
-                    file!(),
-                    line!()
-                )));
+                return Stmt::RuntimeError(
+                    $env.arena.alloc(format!("Erroneous: {}", $context_msg,)),
+                );
             }
         }
     }};
@@ -1980,9 +1977,16 @@ impl<'a> Stmt<'a> {
                 .append(alloc.hardline())
                 .append(cont.to_doc(alloc)),
 
-            Expect { condition, .. } => alloc
+            Expect {
+                condition,
+                remainder,
+                ..
+            } => alloc
                 .text("expect ")
-                .append(symbol_to_doc(alloc, *condition)),
+                .append(symbol_to_doc(alloc, *condition))
+                .append(";")
+                .append(alloc.hardline())
+                .append(remainder.to_doc(alloc)),
 
             Ret(symbol) => alloc
                 .text("ret ")
@@ -2346,7 +2350,6 @@ fn from_can_let<'a>(
                             use crate::copy::deep_copy_type_vars_into_expr;
 
                             let (new_def_expr_var, specialized_expr) = deep_copy_type_vars_into_expr(
-                            env.arena,
                             env.subs,
                             def.expr_var,
                             &def.loc_expr.value,
@@ -4357,7 +4360,8 @@ pub fn with_hole<'a>(
                 Ok(_) => {
                     let raw_layout = return_on_layout_error!(
                         env,
-                        layout_cache.raw_from_var(env.arena, function_type, env.subs,)
+                        layout_cache.raw_from_var(env.arena, function_type, env.subs),
+                        "Expr::Accessor"
                     );
 
                     match raw_layout {
@@ -4374,6 +4378,60 @@ pub fn with_hole<'a>(
                             )
                         }
                         RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!(),
+                    }
+                }
+
+                Err(_error) => Stmt::RuntimeError(
+                    "TODO convert anonymous function error to a RuntimeError string",
+                ),
+            }
+        }
+
+        OpaqueWrapFunction(wrap_fn_data) => {
+            let opaque_var = wrap_fn_data.opaque_var;
+            let arg_symbol = env.unique_symbol();
+
+            let ClosureData {
+                name,
+                function_type,
+                arguments,
+                loc_body,
+                ..
+            } = wrap_fn_data.to_closure_data(arg_symbol);
+
+            match procs.insert_anonymous(
+                env,
+                LambdaName::no_niche(name),
+                function_type,
+                arguments,
+                *loc_body,
+                CapturedSymbols::None,
+                opaque_var,
+                layout_cache,
+            ) {
+                Ok(_) => {
+                    let raw_layout = return_on_layout_error!(
+                        env,
+                        layout_cache.raw_from_var(env.arena, function_type, env.subs),
+                        "Expr::OpaqueWrapFunction"
+                    );
+
+                    match raw_layout {
+                        RawFunctionLayout::Function(_, lambda_set, _) => {
+                            let lambda_name =
+                                find_lambda_name(env, layout_cache, lambda_set, name, &[]);
+                            construct_closure_data(
+                                env,
+                                lambda_set,
+                                lambda_name,
+                                &[],
+                                assigned,
+                                hole,
+                            )
+                        }
+                        RawFunctionLayout::ZeroArgumentThunk(_) => {
+                            internal_error!("should not be a thunk!")
+                        }
                     }
                 }
 
@@ -4559,7 +4617,7 @@ pub fn with_hole<'a>(
 
             let raw = layout_cache.raw_from_var(env.arena, function_type, env.subs);
 
-            match return_on_layout_error!(env, raw) {
+            match return_on_layout_error!(env, raw, "Expr::Closure") {
                 RawFunctionLayout::ZeroArgumentThunk(_) => {
                     unreachable!("a closure syntactically always must have at least one argument")
                 }
@@ -4591,12 +4649,10 @@ pub fn with_hole<'a>(
                     );
 
                     if let Err(runtime_error) = inserted {
-                        return Stmt::RuntimeError(env.arena.alloc(format!(
-                            "RuntimeError {} line {} {:?}",
-                            file!(),
-                            line!(),
-                            runtime_error,
-                        )));
+                        return Stmt::RuntimeError(
+                            env.arena
+                                .alloc(format!("RuntimeError: {:?}", runtime_error,)),
+                        );
                     } else {
                         drop(inserted);
                     }
@@ -4691,7 +4747,8 @@ pub fn with_hole<'a>(
 
                     let full_layout = return_on_layout_error!(
                         env,
-                        layout_cache.raw_from_var(env.arena, fn_var, env.subs,)
+                        layout_cache.raw_from_var(env.arena, fn_var, env.subs),
+                        "Expr::Call"
                     );
 
                     // if the function expression (loc_expr) is already a symbol,
@@ -4877,8 +4934,11 @@ pub fn with_hole<'a>(
             let arg_symbols = arg_symbols.into_bump_slice();
 
             // layout of the return type
-            let layout =
-                return_on_layout_error!(env, layout_cache.from_var(env.arena, ret_var, env.subs,));
+            let layout = return_on_layout_error!(
+                env,
+                layout_cache.from_var(env.arena, ret_var, env.subs),
+                "ForeignCall"
+            );
 
             let call = self::Call {
                 call_type: CallType::Foreign {
@@ -4913,8 +4973,11 @@ pub fn with_hole<'a>(
             let arg_symbols = arg_symbols.into_bump_slice();
 
             // layout of the return type
-            let layout =
-                return_on_layout_error!(env, layout_cache.from_var(env.arena, ret_var, env.subs,));
+            let layout = return_on_layout_error!(
+                env,
+                layout_cache.from_var(env.arena, ret_var, env.subs),
+                "RunLowLevel"
+            );
 
             macro_rules! match_on_closure_argument {
                 ( $ho:ident, [$($x:ident),* $(,)?]) => {{
@@ -4924,7 +4987,8 @@ pub fn with_hole<'a>(
 
                     let closure_data_layout = return_on_layout_error!(
                         env,
-                        layout_cache.raw_from_var(env.arena, closure_data_var, env.subs)
+                        layout_cache.raw_from_var(env.arena, closure_data_var, env.subs),
+                        "match_on_closure_argument"
                     );
 
                     // NB: I don't think the top_level here can have a captures niche?
@@ -4976,57 +5040,6 @@ pub fn with_hole<'a>(
                 }};
             }
 
-            macro_rules! walk {
-                ($oh:ident) => {{
-                    debug_assert_eq!(arg_symbols.len(), 3);
-
-                    const LIST_INDEX: usize = 0;
-                    const DEFAULT_INDEX: usize = 1;
-                    const CLOSURE_INDEX: usize = 2;
-
-                    let xs = arg_symbols[LIST_INDEX];
-                    let state = arg_symbols[DEFAULT_INDEX];
-
-                    let stmt = match_on_closure_argument!($oh, [xs, state]);
-
-                    // because of a hack to implement List.product and List.sum, we need to also
-                    // assign to symbols here. Normally the arguments to a lowlevel function are
-                    // all symbols anyway, but because of this hack the closure symbol can be an
-                    // actual closure, and the default is either the number 1 or 0
-                    // this can be removed when we define builtin modules as proper modules
-
-                    let stmt = assign_to_symbol(
-                        env,
-                        procs,
-                        layout_cache,
-                        args[LIST_INDEX].0,
-                        Loc::at_zero(args[LIST_INDEX].1.clone()),
-                        arg_symbols[LIST_INDEX],
-                        stmt,
-                    );
-
-                    let stmt = assign_to_symbol(
-                        env,
-                        procs,
-                        layout_cache,
-                        args[DEFAULT_INDEX].0,
-                        Loc::at_zero(args[DEFAULT_INDEX].1.clone()),
-                        arg_symbols[DEFAULT_INDEX],
-                        stmt,
-                    );
-
-                    assign_to_symbol(
-                        env,
-                        procs,
-                        layout_cache,
-                        args[CLOSURE_INDEX].0,
-                        Loc::at_zero(args[CLOSURE_INDEX].1.clone()),
-                        arg_symbols[CLOSURE_INDEX],
-                        stmt,
-                    )
-                }};
-            }
-
             use LowLevel::*;
             match op {
                 ListMap => {
@@ -5039,7 +5052,6 @@ pub fn with_hole<'a>(
                     let xs = arg_symbols[0];
                     match_on_closure_argument!(ListSortWith, [xs])
                 }
-                DictWalk => walk!(DictWalk),
                 ListMap2 => {
                     debug_assert_eq!(arg_symbols.len(), 3);
 
@@ -5306,16 +5318,14 @@ fn convert_tag_union<'a>(
         Ok(cached) => cached,
         Err(LayoutProblem::UnresolvedTypeVar(_)) => {
             return Stmt::RuntimeError(env.arena.alloc(format!(
-                "UnresolvedTypeVar {} line {}",
-                file!(),
-                line!()
+                "Unresolved type variable for tag {}",
+                tag_name.0.as_str()
             )))
         }
         Err(LayoutProblem::Erroneous) => {
             return Stmt::RuntimeError(env.arena.alloc(format!(
-                "Erroneous {} line {}",
-                file!(),
-                line!()
+                "Tag {} was part of a type error!",
+                tag_name.0.as_str()
             )));
         }
     };
@@ -5388,7 +5398,8 @@ fn convert_tag_union<'a>(
             // version is not the same as the minimal version.
             let union_layout = match return_on_layout_error!(
                 env,
-                layout_cache.from_var(env.arena, variant_var, env.subs,)
+                layout_cache.from_var(env.arena, variant_var, env.subs),
+                "Wrapped"
             ) {
                 Layout::Union(ul) => ul,
                 _ => unreachable!(),
@@ -5581,7 +5592,8 @@ fn tag_union_to_function<'a>(
             // only need to construct closure data
             let raw_layout = return_on_layout_error!(
                 env,
-                layout_cache.raw_from_var(env.arena, whole_var, env.subs,)
+                layout_cache.raw_from_var(env.arena, whole_var, env.subs),
+                "tag_union_to_function"
             );
 
             match raw_layout {
@@ -5596,9 +5608,7 @@ fn tag_union_to_function<'a>(
         }
 
         Err(runtime_error) => Stmt::RuntimeError(env.arena.alloc(format!(
-            "RuntimeError {} line {} {:?}",
-            file!(),
-            line!(),
+            "Could not produce tag function due to a runtime error: {:?}",
             runtime_error,
         ))),
     }
@@ -5878,7 +5888,7 @@ pub fn from_can<'a>(
 
             for (_, var) in lookups_in_cond {
                 let res_layout = layout_cache.from_var(env.arena, var, env.subs);
-                let layout = return_on_layout_error!(env, res_layout);
+                let layout = return_on_layout_error!(env, res_layout, "Expect");
                 layouts.push(layout);
             }
 
@@ -6044,11 +6054,17 @@ fn from_can_when<'a>(
     }
     let opt_branches = to_opt_branches(env, procs, branches, exhaustive_mark, layout_cache);
 
-    let cond_layout =
-        return_on_layout_error!(env, layout_cache.from_var(env.arena, cond_var, env.subs,));
+    let cond_layout = return_on_layout_error!(
+        env,
+        layout_cache.from_var(env.arena, cond_var, env.subs),
+        "from_can_when cond_layout"
+    );
 
-    let ret_layout =
-        return_on_layout_error!(env, layout_cache.from_var(env.arena, expr_var, env.subs,));
+    let ret_layout = return_on_layout_error!(
+        env,
+        layout_cache.from_var(env.arena, expr_var, env.subs),
+        "from_can_when ret_layout"
+    );
 
     let arena = env.arena;
     let it = opt_branches
@@ -7040,7 +7056,7 @@ where
             add_needed_external(procs, env, variable, LambdaName::no_niche(right));
 
             let res_layout = layout_cache.from_var(env.arena, variable, env.subs);
-            let layout = return_on_layout_error!(env, res_layout);
+            let layout = return_on_layout_error!(env, res_layout, "handle_variable_aliasing");
 
             result = force_thunk(env, right, layout, left, env.arena.alloc(result));
         }
@@ -7131,7 +7147,7 @@ fn specialize_symbol<'a>(
                 Some(arg_var) if env.is_imported_symbol(original) => {
                     let raw = match layout_cache.raw_from_var(env.arena, arg_var, env.subs) {
                         Ok(v) => v,
-                        Err(e) => return_on_layout_error_help!(env, e),
+                        Err(e) => return_on_layout_error_help!(env, e, "specialize_symbol"),
                     };
 
                     if procs.is_imported_module_thunk(original) {
@@ -7192,7 +7208,8 @@ fn specialize_symbol<'a>(
             // to it in the IR.
             let res_layout = return_on_layout_error!(
                 env,
-                layout_cache.raw_from_var(env.arena, arg_var, env.subs,)
+                layout_cache.raw_from_var(env.arena, arg_var, env.subs),
+                "specialize_symbol res_layout"
             );
 
             // we have three kinds of functions really. Plain functions, closures by capture,

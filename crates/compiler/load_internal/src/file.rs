@@ -5,7 +5,6 @@ use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
 use roc_builtins::roc::module_source;
-use roc_builtins::std::borrow_stdlib;
 use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedSpecializations};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::expr::Declarations;
@@ -14,7 +13,7 @@ use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
 };
 use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
-use roc_constrain::module::{constrain_builtin_imports, constrain_module};
+use roc_constrain::module::constrain_module;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::{
@@ -42,10 +41,9 @@ use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SyntaxError};
 use roc_region::all::{LineInfo, Loc, Region};
 use roc_reporting::report::RenderTarget;
-use roc_solve::module::SolvedModule;
+use roc_solve::module::{Solved, SolvedModule};
 use roc_solve::solve;
 use roc_target::TargetInfo;
-use roc_types::solved_types::Solved;
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, VarStore, Variable};
 use roc_types::types::{Alias, AliasKind};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
@@ -628,6 +626,7 @@ pub struct MonomorphizedModule<'a> {
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+    pub toplevel_expects: Vec<Symbol>,
     pub entry_point: EntryPoint<'a>,
     pub exposed_to_host: ExposedToHost,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
@@ -710,6 +709,7 @@ enum Msg<'a> {
         solved_subs: Solved<Subs>,
         module_timing: ModuleTiming,
         abilities_store: AbilitiesStore,
+        toplevel_expects: std::vec::Vec<Symbol>,
     },
     MadeSpecializations {
         module_id: ModuleId,
@@ -797,6 +797,7 @@ struct State<'a> {
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies<'a>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+    pub toplevel_expects: Vec<Symbol>,
     pub exposed_to_host: ExposedToHost,
 
     /// This is the "final" list of IdentIds, after canonicalization and constraint gen
@@ -863,6 +864,7 @@ impl<'a> State<'a> {
             module_cache: ModuleCache::default(),
             dependencies: Dependencies::default(),
             procedures: MutMap::default(),
+            toplevel_expects: Vec::new(),
             exposed_to_host: ExposedToHost::default(),
             exposed_types,
             arc_modules,
@@ -977,7 +979,6 @@ enum BuildTask<'a> {
     Solve {
         module: Module,
         ident_ids: IdentIds,
-        imported_builtins: Vec<Symbol>,
         exposed_for_module: ExposedForModule,
         module_timing: ModuleTiming,
         constraints: Constraints,
@@ -2048,6 +2049,12 @@ fn update<'a>(
                     .insert(Ident::from("Bool"), (Symbol::BOOL_BOOL, Region::zero()));
             }
 
+            if header.module_id == ModuleId::NUM {
+                header
+                    .exposed_imports
+                    .insert(Ident::from("List"), (Symbol::LIST_LIST, Region::zero()));
+            }
+
             if !header.module_id.is_builtin() {
                 header
                     .package_qualified_imported_modules
@@ -2074,12 +2081,20 @@ fn update<'a>(
                     .insert(ModuleId::DICT, Region::zero());
 
                 header
+                    .exposed_imports
+                    .insert(Ident::from("Dict"), (Symbol::DICT_DICT, Region::zero()));
+
+                header
                     .package_qualified_imported_modules
                     .insert(PackageQualified::Unqualified(ModuleId::SET));
 
                 header
                     .imported_modules
                     .insert(ModuleId::SET, Region::zero());
+
+                header
+                    .exposed_imports
+                    .insert(Ident::from("Set"), (Symbol::SET_SET, Region::zero()));
 
                 header
                     .package_qualified_imported_modules
@@ -2321,10 +2336,13 @@ fn update<'a>(
             layout_cache,
             module_timing,
             abilities_store,
+            toplevel_expects,
         } => {
             log!("found specializations for {:?}", module_id);
 
             let subs = solved_subs.into_inner();
+
+            state.toplevel_expects.extend(toplevel_expects);
 
             state
                 .module_cache
@@ -2627,6 +2645,7 @@ fn finish_specialization(
     };
 
     let State {
+        toplevel_expects,
         procedures,
         module_cache,
         output_path,
@@ -2715,6 +2734,7 @@ fn finish_specialization(
         entry_point,
         sources,
         timings: state.timings,
+        toplevel_expects,
     })
 }
 
@@ -3785,18 +3805,10 @@ impl<'a> BuildTask<'a> {
         let exposed_for_module =
             ExposedForModule::new(module.referenced_values.iter(), exposed_by_module);
 
-        let imported_builtins = module
-            .referenced_values
-            .iter()
-            .filter(|s| s.is_builtin())
-            .copied()
-            .collect();
-
         // Next, solve this module in the background.
         Self::Solve {
             module,
             ident_ids,
-            imported_builtins,
             exposed_for_module,
             constraints,
             constraint,
@@ -3811,6 +3823,45 @@ impl<'a> BuildTask<'a> {
     }
 }
 
+fn synth_import(subs: &mut Subs, content: roc_types::subs::Content) -> Variable {
+    use roc_types::subs::{Descriptor, Mark, OptVariable, Rank};
+    subs.fresh(Descriptor {
+        content,
+        rank: Rank::import(),
+        mark: Mark::NONE,
+        copy: OptVariable::NONE,
+    })
+}
+
+fn synth_list_len_type(subs: &mut Subs) -> Variable {
+    use roc_types::subs::{Content, FlatType, LambdaSet, OptVariable, SubsSlice, UnionLabels};
+
+    // List.len : List a -> Nat
+    let a = synth_import(subs, Content::FlexVar(None));
+    let a_slice = SubsSlice::extend_new(&mut subs.variables, [a]);
+    let list_a = synth_import(
+        subs,
+        Content::Structure(FlatType::Apply(Symbol::LIST_LIST, a_slice)),
+    );
+    let fn_var = synth_import(subs, Content::Error);
+    let solved_list_len = UnionLabels::insert_into_subs(subs, [(Symbol::LIST_LEN, [])]);
+    let clos_list_len = synth_import(
+        subs,
+        Content::LambdaSet(LambdaSet {
+            solved: solved_list_len,
+            recursion_var: OptVariable::NONE,
+            unspecialized: SubsSlice::default(),
+            ambient_function: fn_var,
+        }),
+    );
+    let fn_args_slice = SubsSlice::extend_new(&mut subs.variables, [list_a]);
+    subs.set_content(
+        fn_var,
+        Content::Structure(FlatType::Func(fn_args_slice, clos_list_len, Variable::NAT)),
+    );
+    fn_var
+}
+
 pub fn add_imports(
     my_module: ModuleId,
     subs: &mut Subs,
@@ -3819,6 +3870,8 @@ pub fn add_imports(
     def_types: &mut Vec<(Symbol, Loc<roc_types::types::Type>)>,
     rigid_vars: &mut Vec<Variable>,
 ) -> (Vec<Variable>, AbilitiesStore) {
+    use roc_types::types::Type;
+
     let mut import_variables = Vec::new();
 
     let mut cached_symbol_vars = VecMap::default();
@@ -3846,7 +3899,7 @@ pub fn add_imports(
 
                     def_types.push((
                         $symbol,
-                        Loc::at_zero(roc_types::types::Type::Variable(copied_import.variable)),
+                        Loc::at_zero(Type::Variable(copied_import.variable)),
                     ));
 
                     // not a typo; rigids are turned into flex during type inference, but when imported we must
@@ -3871,6 +3924,17 @@ pub fn add_imports(
 
     for symbol in exposed_for_module.imported_values {
         import_var_for_symbol!(subs, exposed_for_module.exposed_by_module, symbol, continue);
+    }
+
+    // Patch used symbols from circular dependencies.
+    if my_module == ModuleId::NUM {
+        // Num needs List.len, but List imports Num.
+        let list_len_type = synth_list_len_type(subs);
+        def_types.push((
+            Symbol::LIST_LEN,
+            Loc::at_zero(Type::Variable(list_len_type)),
+        ));
+        import_variables.push(list_len_type);
     }
 
     // TODO: see if we can reduce the amount of specializations we need to import.
@@ -3930,12 +3994,11 @@ pub fn add_imports(
 
 #[allow(clippy::complexity)]
 fn run_solve_solve(
-    imported_builtins: Vec<Symbol>,
     exposed_for_module: ExposedForModule,
     mut constraints: Constraints,
     constraint: ConstraintSoa,
     pending_derives: PendingDerives,
-    mut var_store: VarStore,
+    var_store: VarStore,
     module: Module,
     derived_symbols: GlobalDerivedSymbols,
 ) -> (
@@ -3953,8 +4016,8 @@ fn run_solve_solve(
         ..
     } = module;
 
-    let (mut rigid_vars, mut def_types) =
-        constrain_builtin_imports(borrow_stdlib(), imported_builtins, &mut var_store);
+    let mut rigid_vars: Vec<Variable> = Vec::new();
+    let mut def_types: Vec<(Symbol, Loc<roc_types::types::Type>)> = Vec::new();
 
     let mut subs = Subs::new_from_varstore(var_store);
 
@@ -4033,7 +4096,6 @@ fn run_solve<'a>(
     module: Module,
     ident_ids: IdentIds,
     mut module_timing: ModuleTiming,
-    imported_builtins: Vec<Symbol>,
     exposed_for_module: ExposedForModule,
     constraints: Constraints,
     constraint: ConstraintSoa,
@@ -4055,7 +4117,6 @@ fn run_solve<'a>(
         if module_id.is_builtin() {
             match cached_subs.lock().remove(&module_id) {
                 None => run_solve_solve(
-                    imported_builtins,
                     exposed_for_module,
                     constraints,
                     constraint,
@@ -4078,7 +4139,6 @@ fn run_solve<'a>(
             }
         } else {
             run_solve_solve(
-                imported_builtins,
                 exposed_for_module,
                 constraints,
                 constraint,
@@ -4288,13 +4348,19 @@ fn canonicalize_and_constrain<'a>(
         .into_iter()
         .map(|(k, v)| (k, (true, v)))
         .collect();
+
     for (name, alias) in module_output.scope.aliases {
         match aliases.entry(name) {
             Occupied(_) => {
                 // do nothing
             }
             Vacant(vacant) => {
-                if !name.is_builtin() || name.module_id() == ModuleId::ENCODE {
+                let should_include_builtin = matches!(
+                    name.module_id(),
+                    ModuleId::ENCODE | ModuleId::DICT | ModuleId::SET
+                );
+
+                if !name.is_builtin() || should_include_builtin {
                     vacant.insert((false, alias));
                 }
             }
@@ -4517,13 +4583,14 @@ fn build_pending_specializations<'a>(
     mut module_timing: ModuleTiming,
     mut layout_cache: LayoutCache<'a>,
     target_info: TargetInfo,
-    exposed_to_host: ExposedToHost, // TODO remove
+    exposed_to_host: ExposedToHost,
     abilities_store: AbilitiesStore,
     derived_symbols: GlobalDerivedSymbols,
 ) -> Msg<'a> {
     let find_specializations_start = SystemTime::now();
 
     let mut module_thunks = bumpalo::collections::Vec::new_in(arena);
+    let mut toplevel_expects = std::vec::Vec::new();
 
     let mut procs_base = ProcsBase {
         partial_procs: BumpMap::default(),
@@ -4766,6 +4833,8 @@ fn build_pending_specializations<'a>(
                 // mark this symbol as a top-level thunk before any other work on the procs
                 module_thunks.push(symbol);
 
+                let expr_var = Variable::EMPTY_RECORD;
+
                 let is_host_exposed = true;
 
                 // If this is an exposed symbol, we need to
@@ -4805,6 +4874,8 @@ fn build_pending_specializations<'a>(
                     );
                 }
 
+                let body = roc_can::expr::toplevel_expect_to_inline_expect(body);
+
                 let proc = PartialProc {
                     annotation: expr_var,
                     // This is a 0-arity thunk, so it has no arguments.
@@ -4817,6 +4888,7 @@ fn build_pending_specializations<'a>(
                     is_self_recursive: false,
                 };
 
+                toplevel_expects.push(symbol);
                 procs_base.partial_procs.insert(symbol, proc);
             }
         }
@@ -4831,12 +4903,13 @@ fn build_pending_specializations<'a>(
 
     Msg::FoundSpecializations {
         module_id: home,
-        solved_subs: roc_types::solved_types::Solved(subs),
+        solved_subs: Solved(subs),
         ident_ids,
         layout_cache,
         procs_base,
         module_timing,
         abilities_store,
+        toplevel_expects,
     }
 }
 
@@ -4890,7 +4963,6 @@ fn run_task<'a>(
         Solve {
             module,
             module_timing,
-            imported_builtins,
             exposed_for_module,
             constraints,
             constraint,
@@ -4905,7 +4977,6 @@ fn run_task<'a>(
             module,
             ident_ids,
             module_timing,
-            imported_builtins,
             exposed_for_module,
             constraints,
             constraint,

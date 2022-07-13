@@ -759,10 +759,10 @@ mod test_reporting {
 
                 Did you mean one of these?
 
-                    Set
                     List
                     True
                     Box
+                    Str
                 "#
             ),
         );
@@ -4682,10 +4682,12 @@ mod test_reporting {
         dict_type_formatting,
         indoc!(
             r#"
-            myDict : Dict Num.I64 Str
+            app "dict" imports [ Dict ] provides [main] to "./platform"
+
+            myDict : Dict.Dict Num.I64 Str
             myDict = Dict.insert Dict.empty "foo" 42
 
-            myDict
+            main = myDict
             "#
         ),
         @r###"
@@ -4693,9 +4695,9 @@ mod test_reporting {
 
     Something is off with the body of the `myDict` definition:
 
-    4│      myDict : Dict Num.I64 Str
-    5│      myDict = Dict.insert Dict.empty "foo" 42
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    3│  myDict : Dict.Dict Num.I64 Str
+    4│  myDict = Dict.insert Dict.empty "foo" 42
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     This `insert` call produces:
 
@@ -4711,6 +4713,8 @@ mod test_reporting {
         alias_type_diff,
         indoc!(
             r#"
+            app "test" imports [Set.{ Set }] provides [main] to "./platform"
+
             HSet a : Set a
 
             foo : Str -> HSet {}
@@ -4718,7 +4722,7 @@ mod test_reporting {
             myDict : HSet Str
             myDict = foo "bar"
 
-            myDict
+            main = myDict
             "#
         ),
         @r###"
@@ -4726,9 +4730,9 @@ mod test_reporting {
 
     Something is off with the body of the `myDict` definition:
 
-    8│      myDict : HSet Str
-    9│      myDict = foo "bar"
-                     ^^^^^^^^^
+    7│  myDict : HSet Str
+    8│  myDict = foo "bar"
+                 ^^^^^^^^^
 
     This `foo` call produces:
 
@@ -7479,14 +7483,14 @@ All branches in an `if` must have the same type!
         // and checking it during can. The reason the error appears is because it is parsed as
         // Apply(Error(OtherModule), [@Age, 21])
         @r###"
-    ── OPAQUE TYPE NOT APPLIED ─────────────────────────────── /code/proj/Main.roc ─
+    ── OPAQUE TYPE NOT DEFINED ─────────────────────────────── /code/proj/Main.roc ─
 
-    This opaque type is not applied to an argument:
+    The opaque type Age referenced here is not defined:
 
     4│      OtherModule.@Age 21
                         ^^^^
 
-    Note: Opaque types always wrap exactly one argument!
+    Note: It looks like there are no opaque types declared in this scope yet!
 
     ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
@@ -8925,12 +8929,13 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
+        #[ignore]
         type_error_in_apply_is_circular,
         indoc!(
             r#"
-            app "test" provides [go] to "./platform"
+            app "test" imports [Set] provides [go] to "./platform"
 
-            S a : { set : Set a }
+            S a : { set : Set.Set a }
 
             go : a, S a -> Result (List a) *
             go = \goal, model ->
@@ -8941,54 +8946,54 @@ All branches in an `if` must have the same type!
                         go goal new
             "#
         ),
-        @r#"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        The 1st argument to `remove` is not what I expect:
+    The 1st argument to `remove` is not what I expect:
 
-        10│              new = { model & set : Set.remove goal model.set }
-                                                          ^^^^
+    10│              new = { model & set : Set.remove goal model.set }
+                                                      ^^^^
 
-        This `goal` value is a:
+    This `goal` value is a:
 
-            a
+        a
 
-        But `remove` needs the 1st argument to be:
+    But `remove` needs the 1st argument to be:
 
-            Set a
+        Set k
 
-        Tip: The type annotation uses the type variable `a` to say that this
-        definition can produce any type of value. But in the body I see that
-        it will only produce a `Set` value of a single specific type. Maybe
-        change the type annotation to be more specific? Maybe change the code
-        to be more general?
+    Tip: The type annotation uses the type variable `a` to say that this
+    definition can produce any type of value. But in the body I see that
+    it will only produce a `Set` value of a single specific type. Maybe
+    change the type annotation to be more specific? Maybe change the code
+    to be more general?
 
-        ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        I'm inferring a weird self-referential type for `new`:
+    I'm inferring a weird self-referential type for `new`:
 
-        10│              new = { model & set : Set.remove goal model.set }
-                         ^^^
+    10│              new = { model & set : Set.remove goal model.set }
+                     ^^^
 
-        Here is my best effort at writing down the type. You will see ∞ for
-        parts of the type that repeat something already printed out
-        infinitely.
+    Here is my best effort at writing down the type. You will see ∞ for
+    parts of the type that repeat something already printed out
+    infinitely.
 
-            { set : Set ∞ }
+        { set : Set ∞ }
 
-        ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        I'm inferring a weird self-referential type for `goal`:
+    I'm inferring a weird self-referential type for `goal`:
 
-        6│  go = \goal, model ->
-                  ^^^^
+    6│  go = \goal, model ->
+              ^^^^
 
-        Here is my best effort at writing down the type. You will see ∞ for
-        parts of the type that repeat something already printed out
-        infinitely.
+    Here is my best effort at writing down the type. You will see ∞ for
+    parts of the type that repeat something already printed out
+    infinitely.
 
-            Set ∞
-        "#
+        Set ∞
+    "###
     );
 
     test_report!(
@@ -9544,6 +9549,32 @@ All branches in an `if` must have the same type!
     both types are the same opaque type. Did you mean to create an opaque
     type by wrapping it? If I have an opaque type Age := U32 I can create
     an instance of this opaque type by doing @Age 23.
+    "###
+    );
+
+    test_report!(
+        opaque_wrap_function_mismatch,
+        indoc!(
+            r#"
+            A := U8
+            List.map [1u16, 2u16, 3u16] @A
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd argument to `map` is not what I expect:
+
+    5│      List.map [1u16, 2u16, 3u16] @A
+                                        ^^
+
+    This A opaque wrapping has the type:
+
+        U8 -> A
+
+    But `map` needs the 2nd argument to be:
+
+        U16 -> A
     "###
     );
 }

@@ -1,8 +1,8 @@
-procedure List.2 (List.78, List.79):
-    let List.310 : U64 = CallByName List.6 List.78;
-    let List.307 : Int1 = CallByName Num.22 List.79 List.310;
+procedure List.2 (List.79, List.80):
+    let List.310 : U64 = CallByName List.6 List.79;
+    let List.307 : Int1 = CallByName Num.22 List.80 List.310;
     if List.307 then
-        let List.309 : I64 = CallByName List.60 List.78 List.79;
+        let List.309 : I64 = CallByName List.60 List.79 List.80;
         let List.308 : [C {}, C I64] = TagId(1) List.309;
         ret List.308;
     else
@@ -10,21 +10,21 @@ procedure List.2 (List.78, List.79):
         let List.305 : [C {}, C I64] = TagId(0) List.306;
         ret List.305;
 
-procedure List.3 (List.86, List.87, List.88):
-    let List.298 : {List I64, I64} = CallByName List.57 List.86 List.87 List.88;
+procedure List.3 (List.87, List.88, List.89):
+    let List.298 : {List I64, I64} = CallByName List.57 List.87 List.88 List.89;
     let List.297 : List I64 = StructAtIndex 0 List.298;
     inc List.297;
     dec List.298;
     ret List.297;
 
-procedure List.57 (List.83, List.84, List.85):
-    let List.315 : U64 = CallByName List.6 List.83;
-    let List.312 : Int1 = CallByName Num.22 List.84 List.315;
+procedure List.57 (List.84, List.85, List.86):
+    let List.315 : U64 = CallByName List.6 List.84;
+    let List.312 : Int1 = CallByName Num.22 List.85 List.315;
     if List.312 then
-        let List.313 : {List I64, I64} = CallByName List.61 List.83 List.84 List.85;
+        let List.313 : {List I64, I64} = CallByName List.61 List.84 List.85 List.86;
         ret List.313;
     else
-        let List.311 : {List I64, I64} = Struct {List.83, List.85};
+        let List.311 : {List I64, I64} = Struct {List.84, List.86};
         ret List.311;
 
 procedure List.6 (#Attr.2):

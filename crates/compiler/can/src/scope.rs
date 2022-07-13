@@ -653,8 +653,8 @@ mod test {
                 Ident::from("List"),
                 Ident::from("Ok"),
                 Ident::from("Err"),
-                Ident::from("Dict"),
-                Ident::from("Set"),
+                // Ident::from("Dict"),
+                // Ident::from("Set"),
                 Ident::from("Box"),
             ]
         );
@@ -680,8 +680,8 @@ mod test {
                 Ident::from("List"),
                 Ident::from("Ok"),
                 Ident::from("Err"),
-                Ident::from("Dict"),
-                Ident::from("Set"),
+                // Ident::from("Dict"),
+                // Ident::from("Set"),
                 Ident::from("Box"),
             ]
         );

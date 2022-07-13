@@ -2,25 +2,36 @@
 
 ## Running locally
 
-### 1. Run the build script
+### 1. Build the Roc website
+
+For a minimal build (when just working on the web REPL)
+```bash
+cp -r www/public www/build
+```
+
+Or, for a full build (with std lib documentation, downloadable source code, etc.)
+```bash
+www/build.sh
+```
+
+### 2. Build the web REPL
 
 This builds the compiler as a `.wasm` file, and generates JS glue code.
 It will `cargo install` the `wasm-pack` command line tool if you don't already have it.
 You should run it from the project root directory.
 
 ```bash
-./repl_www/build.sh
+crates/repl_wasm/build-www.sh
+cp crates/repl_wasm/build/* www/build/repl/
 ```
-
-All the final assets for the web REPL will end up in `./repl_www/build/`
 
 ### 2. Run a local HTTP server
 
-Browsers won't load .wasm files over the `file://` protocol, so you need to serve the files in `./repl_www/build/` from a local web server.
+Browsers won't load .wasm files over the `file://` protocol, so you need to serve the files in `./www/build/` from a local web server.
 Any server will do, but this example should work on any system that has Python 3 installed:
 
 ```bash
-cd repl_www/build
+cd www/build
 python3 -m http.server
 ```
 
@@ -59,6 +70,6 @@ You should be able to find the Roc REPL at http://127.0.0.1:8000/repl (or whatev
 
 There are several directories/packages involved here:
 
-- `repl_www`: The web page with its JavaScript and a build script
-- `repl_wasm`: The Rust crate that becomes the "compiler" WebAssembly module
-- `repl_eval`: REPL logic shared between `repl_cli` and `repl_wasm`
+- `www/public/repl/index.html`: The web page with its JavaScript and a build script
+- `crates/repl_wasm`: The Rust crate that becomes the "compiler" WebAssembly module
+- `crates/repl_eval`: REPL logic shared between `crates/repl_cli` and `crates/repl_wasm`

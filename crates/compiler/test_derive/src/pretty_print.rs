@@ -2,7 +2,7 @@
 
 use roc_can::def::Def;
 use roc_can::expr::Expr::{self, *};
-use roc_can::expr::{ClosureData, WhenBranch};
+use roc_can::expr::{ClosureData, OpaqueWrapFunctionData, WhenBranch};
 use roc_can::pattern::{Pattern, RecordDestruct};
 
 use roc_module::symbol::Interns;
@@ -191,6 +191,9 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         } => expr(c, CallArg, f, &loc_expr.value)
             .append(f.text(format!(".{}", field.as_str())))
             .group(),
+        OpaqueWrapFunction(OpaqueWrapFunctionData { opaque_name, .. }) => {
+            f.text(format!("@{}", opaque_name.as_str(c.interns)))
+        }
         Accessor(_) => todo!(),
         Update { .. } => todo!(),
         Tag { .. } => todo!(),

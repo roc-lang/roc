@@ -7,7 +7,7 @@ use roc_error_macros::internal_error;
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
-use roc_types::solved_types::Solved;
+use roc_solve::module::Solved;
 use roc_types::subs::{
     self, AliasVariables, Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields,
     Subs, SubsSlice, UnionLambdas, UnionTags, Variable, VariableSubsSlice,

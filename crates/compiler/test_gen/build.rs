@@ -85,12 +85,12 @@ fn build_wasm_test_host() {
     source_path.set_extension("c");
     println!("cargo:rerun-if-changed={}", source_path.to_str().unwrap());
 
-    let build_dir = "build";
+    let out_dir = env::var("OUT_DIR").unwrap();
 
     // Create an object file with relocations
-    let platform_path = build_wasm_platform(build_dir, source_path.to_str().unwrap());
+    let platform_path = build_wasm_platform(&out_dir, source_path.to_str().unwrap());
 
-    let mut outfile = PathBuf::from(build_dir).join(PLATFORM_FILENAME);
+    let mut outfile = PathBuf::from(&out_dir).join(PLATFORM_FILENAME);
     outfile.set_extension("wasm");
 
     run_zig(&[

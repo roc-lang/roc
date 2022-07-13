@@ -163,6 +163,7 @@ impl Symbol {
 /// `Foo.bar`
 impl fmt::Debug for Symbol {
     #[cfg(debug_assertions)]
+    #[allow(clippy::print_in_format_impl)]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if PRETTY_PRINT_DEBUG_SYMBOLS {
             let module_id = self.module_id();
@@ -1214,6 +1215,7 @@ define_builtins! {
         46 STR_WALK_SCALARS_UNTIL: "walkScalarsUntil"
         47 STR_TO_NUM: "strToNum"
         48 STR_FROM_UTF8_RANGE_LOWLEVEL: "fromUtf8RangeLowlevel"
+        49 STR_CAPACITY: "capacity"
     }
     5 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
@@ -1284,6 +1286,7 @@ define_builtins! {
         65 LIST_RESERVE: "reserve"
         66 LIST_APPEND_UNSAFE: "appendUnsafe"
         67 LIST_SUBLIST_LOWLEVEL: "sublistLowlevel"
+        68 LIST_CAPACITY: "capacity"
     }
     6 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" // the Result.Result type alias
@@ -1300,7 +1303,7 @@ define_builtins! {
         9 RESULT_AFTER_ERR: "afterErr"
     }
     7 DICT: "Dict" => {
-        0 DICT_DICT: "Dict" imported // the Dict.Dict type alias
+        0 DICT_DICT: "Dict" // the Dict.Dict type alias
         1 DICT_EMPTY: "empty"
         2 DICT_SINGLE: "single"
         3 DICT_GET: "get"
@@ -1314,14 +1317,15 @@ define_builtins! {
         10 DICT_KEYS: "keys"
         11 DICT_VALUES: "values"
 
-        12 DICT_UNION: "union"
-        13 DICT_INTERSECTION: "intersection"
-        14 DICT_DIFFERENCE: "difference"
+        12 DICT_INSERT_ALL: "insertAll" // union
+        13 DICT_KEEP_SHARED: "keepShared" // intersection
+        14 DICT_REMOVE_ALL: "removeAll" // difference
 
-        15 DICT_GET_LOWLEVEL: "getLowlevel"
+        15 DICT_WITH_CAPACITY: "withCapacity"
+        16 DICT_CAPACITY: "capacity"
     }
     8 SET: "Set" => {
-        0 SET_SET: "Set" imported // the Set.Set type alias
+        0 SET_SET: "Set" // the Set.Set type alias
         1 SET_EMPTY: "empty"
         2 SET_SINGLE: "single"
         3 SET_LEN: "len"
@@ -1336,6 +1340,7 @@ define_builtins! {
         12 SET_WALK_USER_FUNCTION: "#walk_user_function"
         13 SET_CONTAINS: "contains"
         14 SET_TO_DICT: "toDict"
+        15 SET_CAPACITY: "capacity"
     }
     9 BOX: "Box" => {
         0 BOX_BOX_TYPE: "Box" imported // the Box.Box opaque type

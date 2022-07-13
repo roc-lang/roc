@@ -19,7 +19,7 @@ const INIT_REFCOUNT_NAME: &str = "init_refcount_test";
 macro_rules! host_bytes_path {
     () => {
         // Should manually match build.rs. include_bytes! requires a string literal.
-        concat!(env!("CARGO_MANIFEST_DIR"), "/build/wasm_test_platform.wasm")
+        concat!(env!("OUT_DIR"), "/wasm_test_platform.wasm")
     };
 }
 

@@ -314,6 +314,7 @@ pub const STR_STR_SPLIT: &str = "roc_builtins.str.str_split";
 pub const STR_TO_SCALARS: &str = "roc_builtins.str.to_scalars";
 pub const STR_COUNT_GRAPEHEME_CLUSTERS: &str = "roc_builtins.str.count_grapheme_clusters";
 pub const STR_COUNT_UTF8_BYTES: &str = "roc_builtins.str.count_utf8_bytes";
+pub const STR_CAPACITY: &str = "roc_builtins.str.capacity";
 pub const STR_STARTS_WITH: &str = "roc_builtins.str.starts_with";
 pub const STR_STARTS_WITH_SCALAR: &str = "roc_builtins.str.starts_with_scalar";
 pub const STR_ENDS_WITH: &str = "roc_builtins.str.ends_with";
@@ -335,24 +336,6 @@ pub const STR_GET_UNSAFE: &str = "roc_builtins.str.get_unsafe";
 pub const STR_RESERVE: &str = "roc_builtins.str.reserve";
 pub const STR_APPEND_SCALAR: &str = "roc_builtins.str.append_scalar";
 pub const STR_GET_SCALAR_UNSAFE: &str = "roc_builtins.str.get_scalar_unsafe";
-
-pub const DICT_HASH: &str = "roc_builtins.dict.hash";
-pub const DICT_HASH_STR: &str = "roc_builtins.dict.hash_str";
-pub const DICT_LEN: &str = "roc_builtins.dict.len";
-pub const DICT_EMPTY: &str = "roc_builtins.dict.empty";
-pub const DICT_INSERT: &str = "roc_builtins.dict.insert";
-pub const DICT_REMOVE: &str = "roc_builtins.dict.remove";
-pub const DICT_CONTAINS: &str = "roc_builtins.dict.contains";
-pub const DICT_GET: &str = "roc_builtins.dict.get";
-pub const DICT_ELEMENTS_RC: &str = "roc_builtins.dict.elementsRc";
-pub const DICT_KEYS: &str = "roc_builtins.dict.keys";
-pub const DICT_VALUES: &str = "roc_builtins.dict.values";
-pub const DICT_UNION: &str = "roc_builtins.dict.union";
-pub const DICT_DIFFERENCE: &str = "roc_builtins.dict.difference";
-pub const DICT_INTERSECTION: &str = "roc_builtins.dict.intersection";
-pub const DICT_WALK: &str = "roc_builtins.dict.walk";
-
-pub const SET_FROM_LIST: &str = "roc_builtins.dict.set_from_list";
 
 pub const LIST_MAP: &str = "roc_builtins.list.map";
 pub const LIST_MAP2: &str = "roc_builtins.list.map2";

@@ -12,7 +12,7 @@ pub static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
 static EMPTY_TAG_UNION: &str = "[]";
 
-/// Rerquirements for parentheses.
+/// Requirements for parentheses.
 ///
 /// If we're inside a function (that is, this is either an argument or a return
 /// value), we may need to use parens. Examples:

@@ -811,22 +811,6 @@ impl<'a> Context<'a> {
 
                 handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
             }
-            DictWalk { xs, state: _ } => {
-                let ownerships = [
-                    // borrow data structure based on second argument of the folded function
-                    (xs, function_ps[1]),
-                ];
-                // borrow the default based on first argument of the folded function
-                // (state, function_ps[0])
-
-                let b = self.add_dec_after_lowlevel(after_arguments, &borrows, b, b_live_vars);
-
-                let b = handle_ownerships_post!(b, ownerships);
-
-                let v = create_call!(function_ps.get(2));
-
-                handle_ownerships_pre!(Stmt::Let(z, v, l, b), ownerships)
-            }
         }
     }
 
@@ -1187,7 +1171,25 @@ impl<'a> Context<'a> {
                 (switch, case_live_vars)
             }
 
-            Expect { remainder, .. } => self.visit_stmt(codegen, remainder),
+            Expect {
+                remainder,
+                condition,
+                region,
+                lookups,
+                layouts,
+            } => {
+                let (b, b_live_vars) = self.visit_stmt(codegen, remainder);
+
+                let expect = self.arena.alloc(Stmt::Expect {
+                    condition: *condition,
+                    region: *region,
+                    lookups,
+                    layouts,
+                    remainder: b,
+                });
+
+                (expect, b_live_vars)
+            }
 
             RuntimeError(_) | Refcounting(_, _) => (stmt, MutSet::default()),
         }

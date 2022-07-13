@@ -41,7 +41,7 @@ interface Str
         walkScalars,
         walkScalarsUntil,
     ]
-    imports [Bool.{ Bool }, Result.{ Result }]
+    imports [Bool.{ Bool }, Result.{ Result }, List]
 
 ## # Types
 ##
@@ -290,6 +290,7 @@ splitFirst = \haystack, needle ->
             after = Str.substringUnsafe haystack (index + Str.countUtf8Bytes needle) remaining
 
             Ok { before, after }
+
         None ->
             Err NotFound
 
@@ -325,6 +326,7 @@ splitLast = \haystack, needle ->
             after = Str.substringUnsafe haystack (index + Str.countUtf8Bytes needle) remaining
 
             Ok { before, after }
+
         None ->
             Err NotFound
 
@@ -344,6 +346,7 @@ lastMatchHelp = \haystack, needle, index ->
         when Num.subChecked index 1 is
             Ok nextIndex ->
                 lastMatchHelp haystack needle nextIndex
+
             Err _ ->
                 None
 
@@ -428,6 +431,7 @@ walkScalarsUntilHelp = \string, state, step, index, length ->
         when step state scalar is
             Continue newState ->
                 walkScalarsUntilHelp string newState step (index + bytesParsed) length
+
             Break newState ->
                 newState
     else
