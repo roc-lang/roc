@@ -1,8 +1,8 @@
-procedure List.2 (List.78, List.79):
-    let List.300 : U64 = CallByName List.6 List.78;
-    let List.297 : Int1 = CallByName Num.22 List.79 List.300;
+procedure List.2 (List.79, List.80):
+    let List.300 : U64 = CallByName List.6 List.79;
+    let List.297 : Int1 = CallByName Num.22 List.80 List.300;
     if List.297 then
-        let List.299 : {} = CallByName List.60 List.78 List.79;
+        let List.299 : {} = CallByName List.60 List.79 List.80;
         let List.298 : [C {}, C {}] = TagId(1) List.299;
         ret List.298;
     else
