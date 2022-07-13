@@ -312,7 +312,14 @@ impl<'a> LowLevelCall<'a> {
                     // List is stored as (pointer, length, capacity),
                     // with each of those fields being 4 bytes on wasm.
                     // So the length is 4 bytes after the start of the struct.
-                    backend.code_builder.i32_load(Align::Bytes4, offset + 4);
+                    //
+                    // WRAPPER_LEN represents the index of the length field
+                    // (which is 1 as of the writing of this comment). If the field order
+                    // ever changes, WRAPPER_LEN should be updated and this logic should
+                    // continue to work even though this comment may become inaccurate.
+                    backend
+                        .code_builder
+                        .i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_LEN));
                 }
                 _ => internal_error!("invalid storage for List"),
             },
@@ -325,7 +332,14 @@ impl<'a> LowLevelCall<'a> {
                     // List is stored as (pointer, length, capacity),
                     // with each of those fields being 4 bytes on wasm.
                     // So the capacity is 8 bytes after the start of the struct.
-                    backend.code_builder.i32_load(Align::Bytes4, offset + 8);
+                    //
+                    // WRAPPER_CAPACITY represents the index of the capacity field
+                    // (which is 2 as of the writing of this comment). If the field order
+                    // ever changes, WRAPPER_CAPACITY should be updated and this logic should
+                    // continue to work even though this comment may become inaccurate.
+                    backend
+                        .code_builder
+                        .i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_CAPACITY));
                 }
                 _ => internal_error!("invalid storage for List"),
             },
@@ -1806,7 +1820,14 @@ impl<'a> LowLevelCall<'a> {
                     // Dict is stored as (pointer, length, capacity),
                     // with each of those fields being 4 bytes on wasm.
                     // So the capacity is 8 bytes after the start of the struct.
-                    backend.code_builder.i32_load(Align::Bytes4, offset + 8);
+                    //
+                    // WRAPPER_CAPACITY represents the index of the capacity field
+                    // (which is 2 as of the writing of this comment). If the field order
+                    // ever changes, WRAPPER_CAPACITY should be updated and this logic should
+                    // continue to work even though this comment may become inaccurate.
+                    backend
+                        .code_builder
+                        .i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_CAPACITY));
                 }
                 _ => internal_error!("invalid storage for Dict"),
             },
@@ -1819,7 +1840,14 @@ impl<'a> LowLevelCall<'a> {
                     // Set is stored as (pointer, length, capacity),
                     // with each of those fields being 4 bytes on wasm.
                     // So the capacity is 8 bytes after the start of the struct.
-                    backend.code_builder.i32_load(Align::Bytes4, offset + 8);
+                    //
+                    // WRAPPER_CAPACITY represents the index of the capacity field
+                    // (which is 2 as of the writing of this comment). If the field order
+                    // ever changes, WRAPPER_CAPACITY should be updated and this logic should
+                    // continue to work even though this comment may become inaccurate.
+                    backend
+                        .code_builder
+                        .i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_CAPACITY));
                 }
                 _ => internal_error!("invalid storage for Dict"),
             },
