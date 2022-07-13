@@ -4076,7 +4076,7 @@ pub fn add_imports(
                 resolved_specializations: _,
             }) => {
                 let var = exposed_types
-                    .stored_specialization_lambda_set_vars
+                    .stored_ability_lambda_set_vars
                     .get(&lset_var)
                     .expect("Lambda set var from other module not available");
 
@@ -4260,9 +4260,11 @@ fn run_solve<'a>(
 
     let mut solved_subs = solved_subs;
     let exposed_types = roc_solve::module::exposed_types_storage_subs(
+        module_id,
         &mut solved_subs,
         &exposed_vars_by_symbol,
         &solved_specializations,
+        &abilities_store,
     );
 
     let solved_module = SolvedModule {

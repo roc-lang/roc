@@ -133,7 +133,7 @@ impl Phase for LatePhase<'_> {
                 let (_module_store, module_types) = world.get_mut(&external_module_id).unwrap();
 
                 let storage_lambda_set_var = *module_types
-                    .stored_specialization_lambda_set_vars
+                    .stored_ability_lambda_set_vars
                     .get(&external_lambda_set_var)
                     .unwrap();
                 let LambdaSet {

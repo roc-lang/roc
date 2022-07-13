@@ -3959,12 +3959,13 @@ fn get_fresh_var_name(state: &mut ErrorTypeState) -> Lowercase {
 /// - all implicitly exposed variables, which include
 ///   - ability member specializations
 ///   - specialization lambda sets under specialization ability members
+///   - lambda sets under ability members defined in the module
 #[derive(Clone, Debug)]
 pub struct ExposedTypesStorageSubs {
     pub storage_subs: StorageSubs,
     pub stored_vars_by_symbol: VecMap<Symbol, Variable>,
     /// lambda set var in other module -> var in storage subs
-    pub stored_specialization_lambda_set_vars: VecMap<Variable, Variable>,
+    pub stored_ability_lambda_set_vars: VecMap<Variable, Variable>,
 }
 
 #[derive(Clone, Debug)]

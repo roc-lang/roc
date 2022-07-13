@@ -8,7 +8,10 @@ use roc_collections::VecMap;
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
 use roc_module::symbol::{ModuleId, Symbol};
-use roc_types::subs::{Content, ExposedTypesStorageSubs, FlatType, StorageSubs, Subs, Variable};
+use roc_types::subs::{
+    get_member_lambda_sets_at_region, Content, ExposedTypesStorageSubs, FlatType, StorageSubs,
+    Subs, Variable,
+};
 use roc_types::types::Alias;
 
 /// A marker that a given Subs has been solved.
@@ -105,53 +108,77 @@ pub fn run_solve(
 
 /// Copies exposed types and all ability specializations, which may be implicitly exposed.
 pub fn exposed_types_storage_subs(
+    home: ModuleId,
     solved_subs: &mut Solved<Subs>,
     exposed_vars_by_symbol: &[(Symbol, Variable)],
     solved_specializations: &ResolvedSpecializations,
+    abilities_store: &AbilitiesStore,
 ) -> ExposedTypesStorageSubs {
     let subs = solved_subs.inner_mut();
     let mut storage_subs = StorageSubs::new(Subs::new());
     let mut stored_vars_by_symbol = VecMap::with_capacity(exposed_vars_by_symbol.len());
-    let mut stored_specialization_lambda_set_vars =
-        VecMap::with_capacity(solved_specializations.len());
+    let mut stored_ability_lambda_set_vars = VecMap::with_capacity(solved_specializations.len());
 
     for (symbol, var) in exposed_vars_by_symbol.iter() {
         let new_var = storage_subs.import_variable_from(subs, *var).variable;
         stored_vars_by_symbol.insert(*symbol, new_var);
     }
 
-    for (_, member_specialization) in solved_specializations.iter() {
-        for (_, &specialization_lset_var) in member_specialization.specialization_lambda_sets.iter()
+    // Store all specialization lambda sets solved thanks to this module
+    let solved_specialization_lambda_sets =
+        solved_specializations
+            .iter()
+            .flat_map(|(_, member_specialization)| {
+                member_specialization
+                    .specialization_lambda_sets
+                    .iter()
+                    .map(|(_region, var)| *var)
+            });
+
+    // Store the regioned lambda sets of the ability members defined in this module.
+    let defined_member_lambda_sets = abilities_store
+        .root_ability_members()
+        .iter()
+        .filter_map(|(member, data)| {
+            if member.module_id() == home {
+                Some(get_member_lambda_sets_at_region(
+                    subs,
+                    data.signature_var(),
+                    None,
+                ))
+            } else {
+                None
+            }
+        })
+        .flatten();
+
+    for lset_var in solved_specialization_lambda_sets.chain(defined_member_lambda_sets) {
+        let specialization_lset_ambient_function_var =
+            subs.get_lambda_set(lset_var).ambient_function;
+
+        // Import the ambient function of this specialization lambda set; that will import the
+        // lambda set as well. The ambient function is needed for the lambda set compaction
+        // algorithm.
+        let imported_lset_ambient_function_var = storage_subs
+            .import_variable_from(subs, specialization_lset_ambient_function_var)
+            .variable;
+
+        let imported_lset_var = match storage_subs
+            .as_inner()
+            .get_content_without_compacting(imported_lset_ambient_function_var)
         {
-            let specialization_lset_ambient_function_var = subs
-                .get_lambda_set(specialization_lset_var)
-                .ambient_function;
-
-            // Import the ambient function of this specialization lambda set; that will import the
-            // lambda set as well. The ambient function is needed for the lambda set compaction
-            // algorithm.
-            let imported_lset_ambient_function_var = storage_subs
-                .import_variable_from(subs, specialization_lset_ambient_function_var)
-                .variable;
-
-            let imported_lset_var = match storage_subs
-                .as_inner()
-                .get_content_without_compacting(imported_lset_ambient_function_var)
-            {
-                Content::Structure(FlatType::Func(_, lambda_set_var, _)) => *lambda_set_var,
-                content => internal_error!(
-                    "ambient lambda set function import is not a function, found: {:?}",
-                    roc_types::subs::SubsFmtContent(content, storage_subs.as_inner())
-                ),
-            };
-            stored_specialization_lambda_set_vars
-                .insert(specialization_lset_var, imported_lset_var);
-        }
+            Content::Structure(FlatType::Func(_, lambda_set_var, _)) => *lambda_set_var,
+            content => internal_error!(
+                "ambient lambda set function import is not a function, found: {:?}",
+                roc_types::subs::SubsFmtContent(content, storage_subs.as_inner())
+            ),
+        };
+        stored_ability_lambda_set_vars.insert(lset_var, imported_lset_var);
     }
 
     ExposedTypesStorageSubs {
         storage_subs,
         stored_vars_by_symbol,
-        stored_specialization_lambda_set_vars,
+        stored_ability_lambda_set_vars,
     }
 }
