@@ -370,6 +370,15 @@ fn to_encoder_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
         CalledVia::Space,
     );
 
+    // Encode.custom \bytes, fmt -> Encode.appendWith bytes (Encode.list ..) fmt
+    let (body, this_encoder_var) = wrap_in_encode_custom(
+        env,
+        encode_list_call,
+        this_list_encoder_var,
+        lst_sym,
+        list_var,
+    );
+
     // \lst -> Encode.list lst (\elem -> Encode.toEncoder elem)
     // Create fn_var for ambient capture; we fix it up below.
     let fn_var = synth_var(env.subs, Content::Error);
@@ -392,7 +401,7 @@ fn to_encoder_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
         Content::Structure(FlatType::Func(
             list_var_slice,
             fn_clos_var,
-            this_list_encoder_var,
+            this_encoder_var,
         )),
     );
 
@@ -400,7 +409,7 @@ fn to_encoder_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
     let clos = Closure(ClosureData {
         function_type: fn_var,
         closure_type: fn_clos_var,
-        return_type: this_list_encoder_var,
+        return_type: this_encoder_var,
         name: fn_name,
         captured_symbols: vec![],
         recursive: Recursive::NotRecursive,
@@ -409,7 +418,7 @@ fn to_encoder_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
             AnnotatedMark::known_exhaustive(),
             Loc::at_zero(Pattern::Identifier(lst_sym)),
         )],
-        loc_body: Box::new(Loc::at_zero(encode_list_call)),
+        loc_body: Box::new(Loc::at_zero(body)),
     });
 
     (clos, fn_var)

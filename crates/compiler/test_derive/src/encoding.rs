@@ -718,13 +718,15 @@ fn list() {
         assert_snapshot!(golden, @r###"
         # derived for List Str
         # List val -[[toEncoder_list(0)]]-> Encoder fmt | fmt has EncoderFormatting, val has Encoding
-        # List val -[[toEncoder_list(0)]]-> (List U8, fmt -[[] + fmt:Encode.list(19):4]-> List U8) | fmt has EncoderFormatting, val has Encoding
+        # List val -[[toEncoder_list(0)]]-> (List U8, fmt -[[custom(4) (List val)]]-> List U8) | fmt has EncoderFormatting, val has Encoding
         # Specialization lambda sets:
         #   @<1>: [[toEncoder_list(0)]]
-        #   @<2>: [[] + fmt:Encode.list(19):4] | fmt has EncoderFormatting
+        #   @<2>: [[custom(4) (List val)]] | val has Encoding
         #Derived.toEncoder_list =
           \#Derived.lst ->
-            Encode.list #Derived.lst \#Derived.elem -> Encode.toEncoder #Derived.elem
+            Encode.custom \#Derived.bytes, #Derived.fmt ->
+              Encode.appendWith #Derived.bytes (Encode.list #Derived.lst
+              \#Derived.elem -> Encode.toEncoder #Derived.elem) #Derived.fmt
         "###
         )
     })
