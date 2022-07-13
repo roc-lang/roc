@@ -843,7 +843,7 @@ test "toStr: 123.45" {
     var res_roc_str = dec.toStr();
 
     const res_slice: []const u8 = "123.45"[0..];
-    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+    try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
 }
 
 test "toStr: -123.45" {
@@ -851,7 +851,7 @@ test "toStr: -123.45" {
     var res_roc_str = dec.toStr();
 
     const res_slice: []const u8 = "-123.45"[0..];
-    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+    try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
 }
 
 test "toStr: 123.0" {
@@ -859,7 +859,7 @@ test "toStr: 123.0" {
     var res_roc_str = dec.toStr();
 
     const res_slice: []const u8 = "123.0"[0..];
-    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+    try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
 }
 
 test "toStr: -123.0" {
@@ -867,7 +867,7 @@ test "toStr: -123.0" {
     var res_roc_str = dec.toStr();
 
     const res_slice: []const u8 = "-123.0"[0..];
-    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+    try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
 }
 
 test "toStr: 0.45" {
@@ -875,7 +875,7 @@ test "toStr: 0.45" {
     var res_roc_str = dec.toStr();
 
     const res_slice: []const u8 = "0.45"[0..];
-    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+    try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
 }
 
 test "toStr: -0.45" {
@@ -883,7 +883,7 @@ test "toStr: -0.45" {
     var res_roc_str = dec.toStr();
 
     const res_slice: []const u8 = "-0.45"[0..];
-    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+    try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
 }
 
 test "toStr: 0.00045" {
@@ -891,7 +891,7 @@ test "toStr: 0.00045" {
     var res_roc_str = dec.toStr();
 
     const res_slice: []const u8 = "0.00045"[0..];
-    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+    try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
 }
 
 test "toStr: -0.00045" {
@@ -899,7 +899,7 @@ test "toStr: -0.00045" {
     var res_roc_str = dec.toStr();
 
     const res_slice: []const u8 = "-0.00045"[0..];
-    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+    try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
 }
 
 test "toStr: -111.123456" {
@@ -907,7 +907,7 @@ test "toStr: -111.123456" {
     var res_roc_str = dec.toStr();
 
     const res_slice: []const u8 = "-111.123456"[0..];
-    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+    try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
 }
 
 test "toStr: 123.1111111" {
@@ -915,57 +915,57 @@ test "toStr: 123.1111111" {
     var res_roc_str = dec.toStr();
 
     const res_slice: []const u8 = "123.1111111"[0..];
-    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+    try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
 }
 
 test "toStr: 123.1111111111111 (big str)" {
     var dec: RocDec = .{ .num = 123111111111111000000 };
     var res_roc_str = dec.toStr();
-    errdefer res_roc_str.?.deinit();
-    defer res_roc_str.?.deinit();
+    errdefer res_roc_str.deinit();
+    defer res_roc_str.deinit();
 
     const res_slice: []const u8 = "123.111111111111"[0..];
-    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+    try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
 }
 
 test "toStr: 123.111111111111444444 (max number of decimal places)" {
     var dec: RocDec = .{ .num = 123111111111111444444 };
     var res_roc_str = dec.toStr();
-    errdefer res_roc_str.?.deinit();
-    defer res_roc_str.?.deinit();
+    errdefer res_roc_str.deinit();
+    defer res_roc_str.deinit();
 
     const res_slice: []const u8 = "123.111111111111444444"[0..];
-    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+    try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
 }
 
 test "toStr: 12345678912345678912.111111111111111111 (max number of digits)" {
     var dec: RocDec = .{ .num = 12345678912345678912111111111111111111 };
     var res_roc_str = dec.toStr();
-    errdefer res_roc_str.?.deinit();
-    defer res_roc_str.?.deinit();
+    errdefer res_roc_str.deinit();
+    defer res_roc_str.deinit();
 
     const res_slice: []const u8 = "12345678912345678912.111111111111111111"[0..];
-    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+    try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
 }
 
 test "toStr: std.math.maxInt" {
     var dec: RocDec = .{ .num = std.math.maxInt(i128) };
     var res_roc_str = dec.toStr();
-    errdefer res_roc_str.?.deinit();
-    defer res_roc_str.?.deinit();
+    errdefer res_roc_str.deinit();
+    defer res_roc_str.deinit();
 
     const res_slice: []const u8 = "170141183460469231731.687303715884105727"[0..];
-    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+    try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
 }
 
 test "toStr: std.math.minInt" {
     var dec: RocDec = .{ .num = std.math.minInt(i128) };
     var res_roc_str = dec.toStr();
-    errdefer res_roc_str.?.deinit();
-    defer res_roc_str.?.deinit();
+    errdefer res_roc_str.deinit();
+    defer res_roc_str.deinit();
 
     const res_slice: []const u8 = "-170141183460469231731.687303715884105728"[0..];
-    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+    try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
 }
 
 test "toStr: 0" {
@@ -973,7 +973,7 @@ test "toStr: 0" {
     var res_roc_str = dec.toStr();
 
     const res_slice: []const u8 = "0.0"[0..];
-    try expectEqualSlices(u8, res_slice, res_roc_str.?.asSlice());
+    try expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
 }
 
 test "add: 0" {
