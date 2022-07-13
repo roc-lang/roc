@@ -13,7 +13,7 @@ use crate::llvm::build_list::{
     list_replace_unsafe, list_reserve, list_sort_with, list_sublist, list_swap,
     list_symbol_to_c_abi, list_to_c_abi, list_with_capacity, pass_update_mode,
 };
-use crate::llvm::build_str::{str_from_float, str_from_int};
+use crate::llvm::build_str::{dec_to_str, str_from_float, str_from_int};
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
     self, argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout,
@@ -5825,6 +5825,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                 Layout::Builtin(Builtin::Float(float_width)) => {
                     str_from_float(env, num, *float_width)
                 }
+                Layout::Builtin(Builtin::Decimal) => dec_to_str(env, num),
                 _ => unreachable!(),
             }
         }

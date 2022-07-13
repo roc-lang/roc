@@ -131,7 +131,7 @@ pub const RocDec = extern struct {
         return (c -% 48) <= 9;
     }
 
-    pub fn toStr(self: RocDec) ?RocStr {
+    pub fn toStr(self: RocDec) RocStr {
         // Special case
         if (self.num == 0) {
             return RocStr.init("0.0", 3);
@@ -1063,6 +1063,10 @@ pub fn fromStr(arg: RocStr) callconv(.C) num_.NumParseResult(i128) {
     } else {
         return .{ .errorcode = 1, .value = 0 };
     }
+}
+
+pub fn toStr(arg: RocDec) callconv(.C) RocStr {
+    return @call(.{ .modifier = always_inline }, RocDec.toStr, .{arg});
 }
 
 pub fn fromF64C(arg: f64) callconv(.C) i128 {

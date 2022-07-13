@@ -12,6 +12,7 @@ const dec = @import("dec.zig");
 
 comptime {
     exportDecFn(dec.fromStr, "from_str");
+    exportDecFn(dec.toStr, "to_str");
     exportDecFn(dec.fromF64C, "from_f64");
     exportDecFn(dec.eqC, "eq");
     exportDecFn(dec.neqC, "neq");

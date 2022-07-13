@@ -372,6 +372,7 @@ pub const LIST_APPEND_UNSAFE: &str = "roc_builtins.list.append_unsafe";
 pub const LIST_RESERVE: &str = "roc_builtins.list.reserve";
 
 pub const DEC_FROM_STR: &str = "roc_builtins.dec.from_str";
+pub const DEC_TO_STR: &str = "roc_builtins.dec.to_str";
 pub const DEC_FROM_F64: &str = "roc_builtins.dec.from_f64";
 pub const DEC_EQ: &str = "roc_builtins.dec.eq";
 pub const DEC_NEQ: &str = "roc_builtins.dec.neq";
