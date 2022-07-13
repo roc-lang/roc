@@ -137,6 +137,7 @@ map_symbol_to_lowlevel_and_arity! {
     StrAppendScalar; STR_APPEND_SCALAR_UNSAFE; 2,
     StrGetScalarUnsafe; STR_GET_SCALAR_UNSAFE; 2,
     StrToNum; STR_TO_NUM; 1,
+    StrGetCapacity; STR_CAPACITY; 1,
 
     ListLen; LIST_LEN; 1,
     ListWithCapacity; LIST_WITH_CAPACITY; 1,
@@ -155,6 +156,7 @@ map_symbol_to_lowlevel_and_arity! {
     ListSublist; LIST_SUBLIST_LOWLEVEL; 3,
     ListDropAt; LIST_DROP_AT; 2,
     ListSwap; LIST_SWAP; 3,
+    ListGetCapacity; LIST_CAPACITY; 1,
 
     DictSize; DICT_LEN; 1,
     DictInsert; DICT_INSERT; 3,
@@ -167,9 +169,11 @@ map_symbol_to_lowlevel_and_arity! {
     DictIntersection; DICT_INTERSECTION; 2,
     DictDifference; DICT_DIFFERENCE; 2,
     DictWalk; DICT_WALK; 3,
+    DictGetCapacity; DICT_CAPACITY; 1,
 
     SetFromList; SET_FROM_LIST; 1,
     SetToDict; SET_TO_DICT; 1,
+    SetGetCapacity; SET_CAPACITY; 1,
 
     NumAdd; NUM_ADD; 2,
     NumAddWrap; NUM_ADD_WRAP; 2,
