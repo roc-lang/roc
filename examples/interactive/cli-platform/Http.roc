@@ -12,6 +12,8 @@ interface Http
         multiPartBody,
         stringPart,
         bytesPart,
+        Response,
+        Metadata,
         handleStringResponse,
         handleEncodedResponse,
     ]
