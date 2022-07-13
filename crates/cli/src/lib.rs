@@ -382,34 +382,64 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     )
     .unwrap();
 
+    let mut loaded = loaded;
+    let mut expectations = std::mem::take(&mut loaded.expectations);
+    let loaded = loaded;
+
+    let interns = loaded.interns.clone();
+
     let (lib, expects) =
         expect_mono_module_to_dylib(arena, target.clone(), loaded, opt_level).unwrap();
 
+    let name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
+    let cstring = CString::new(name).unwrap();
+
+    let arena = &bumpalo::Bump::new();
+    let interns = arena.alloc(interns);
+
     use roc_gen_llvm::run_jit_function;
 
-    let mut failures = 0;
-    let passed = expects.len();
+    let mut failed = 0;
+    let mut passed = 0;
 
-    for expect in expects {
-        print!("test {expect}... ");
-        let result = run_jit_function!(lib, expect, bool, |v: bool| v);
+    unsafe {
+        let shared_fd = libc::shm_open(cstring.as_ptr().cast(), libc::O_RDWR, 0o666);
 
-        match result {
-            true => println!("ok"),
-            false => {
-                failures += 1;
-                println!("failed")
+        libc::ftruncate(shared_fd, SHM_SIZE);
+
+        let shared_ptr = libc::mmap(
+            std::ptr::null_mut(),
+            SHM_SIZE as usize,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            shared_fd,
+            0,
+        );
+
+        for expect in expects {
+            libc::memset(shared_ptr.cast(), 0, SHM_SIZE as _);
+
+            run_jit_function!(lib, expect, (), |v: ()| v);
+
+            let shared_memory_ptr: *const u8 = shared_ptr.cast();
+
+            let buffer = std::slice::from_raw_parts(shared_memory_ptr, SHM_SIZE as _);
+
+            if buffer.iter().any(|b| *b != 0) {
+                failed += 1;
+                render_expect_failure(arena, &mut expectations, interns, shared_memory_ptr);
+                println!();
+            } else {
+                passed += 1;
             }
         }
     }
 
-    println!();
-
-    if failures > 0 {
-        println!("test result: failed. {passed} passed; {failures} failed;");
+    if failed > 0 {
+        println!("test result: failed. {passed} passed; {failed} failed;");
         Ok(1)
     } else {
-        println!("test result: ok. {passed} passed; {failures} failed;");
+        println!("test result: ok. {passed} passed; {failed} failed;");
         Ok(0)
     }
 }
@@ -925,8 +955,6 @@ unsafe fn roc_run_native_debug(
                         // clean up
                         libc::shm_unlink(cstring.as_ptr().cast());
 
-                        // dbg!(libc::unlink(app_path.as_ptr().cast()));
-
                         // done!
                         process::exit(0);
                     }
@@ -1033,12 +1061,20 @@ fn render_expect_failure<'a>(
                 ])
             });
 
-    let doc = alloc.stack([
-        alloc.text("This expectation failed:"),
-        alloc.region(line_col_region),
-        alloc.text("The variables used in this expression are:"),
-        alloc.stack(it),
-    ]);
+    let doc = if it.len() > 0 {
+        alloc.stack([
+            alloc.text("This expectation failed:"),
+            alloc.region(line_col_region),
+            alloc.text("The variables used in this expression are:"),
+            alloc.stack(it),
+        ])
+    } else {
+        alloc.stack([
+            alloc.text("This expectation failed:"),
+            alloc.region(line_col_region),
+            alloc.text("I did not record any variables in this expression."),
+        ])
+    };
 
     let report = Report {
         title: "EXPECT FAILED".into(),
