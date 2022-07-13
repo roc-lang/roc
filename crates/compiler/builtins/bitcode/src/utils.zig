@@ -151,7 +151,7 @@ pub fn increfC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
 
 pub fn decrefC(
     bytes_or_null: ?[*]isize,
-    size: usize,
+    data_bytes: usize,
     alignment: u32,
 ) callconv(.C) void {
     // IMPORTANT: bytes_or_null is this case is expected to be a pointer to the refcount
@@ -160,7 +160,7 @@ pub fn decrefC(
     // this is of course unsafe, but we trust what we get from the llvm side
     var bytes = @ptrCast([*]isize, bytes_or_null);
 
-    return @call(.{ .modifier = always_inline }, decref_ptr_to_refcount, .{ bytes, size, alignment });
+    return @call(.{ .modifier = always_inline }, decrefPtrToRefcount, .{ bytes, data_bytes, alignment });
 }
 
 pub fn decrefCheckNullC(
@@ -170,7 +170,7 @@ pub fn decrefCheckNullC(
 ) callconv(.C) void {
     if (bytes_or_null) |bytes| {
         const isizes: [*]isize = @ptrCast([*]isize, @alignCast(@sizeOf(isize), bytes));
-        return @call(.{ .modifier = always_inline }, decref_ptr_to_refcount, .{ isizes - 1, size, alignment });
+        return @call(.{ .modifier = always_inline }, decrefPtrToRefcount, .{ isizes - 1, size, alignment });
     }
 }
 
@@ -187,12 +187,12 @@ pub fn decref(
 
     const isizes: [*]isize = @ptrCast([*]isize, @alignCast(@alignOf(isize), bytes));
 
-    decref_ptr_to_refcount(isizes - 1, data_bytes, alignment);
+    decrefPtrToRefcount(isizes - 1, data_bytes, alignment);
 }
 
-inline fn decref_ptr_to_refcount(
+inline fn decrefPtrToRefcount(
     refcount_ptr: [*]isize,
-    size: usize,
+    data_bytes: usize,
     alignment: u32,
 ) void {
     if (RC_TYPE == Refcount.none) return;
@@ -201,11 +201,10 @@ inline fn decref_ptr_to_refcount(
         Refcount.normal => {
             const refcount: isize = refcount_ptr[0];
             if (refcount == REFCOUNT_ONE_ISIZE) {
-                dealloc(
-                    @ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)),
-                    size,
-                    @intCast(usize, alignment)
-                );
+                const allocation_ptr = @ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize));
+                const allocation_size = data_bytes + extra_bytes;
+
+                dealloc(allocation_ptr, allocation_size, @intCast(usize, alignment));
             } else if (refcount < REFCOUNT_MAX_ISIZE) {
                 refcount_ptr[0] = refcount - 1;
             }
@@ -214,11 +213,10 @@ inline fn decref_ptr_to_refcount(
             if (refcount_ptr[0] < REFCOUNT_MAX_ISIZE) {
                 var last = @atomicRmw(isize, &refcount_ptr[0], std.builtin.AtomicRmwOp.Sub, 1, Monotonic);
                 if (last == REFCOUNT_ONE_ISIZE) {
-                    dealloc(
-                        @ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)),
-                        size,
-                        alignment
-                    );
+                    const allocation_ptr = @ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize));
+                    const allocation_size = data_bytes + extra_bytes;
+
+                    dealloc(allocation_ptr, allocation_size, @intCast(usize, alignment));
                 }
             }
         },
