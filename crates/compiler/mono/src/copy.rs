@@ -1,6 +1,6 @@
 use roc_can::{
     def::Def,
-    expr::{AccessorData, ClosureData, Expr, Field, WhenBranch},
+    expr::{AccessorData, ClosureData, Expr, Field, OpaqueWrapFunctionData, WhenBranch},
 };
 use roc_module::ident::{Lowercase, TagName};
 use roc_types::{
@@ -542,6 +542,29 @@ fn deep_copy_type_vars_into_expr_help<C: CopyEnv>(
                 type_arguments: type_arguments.clone(),
                 lambda_set_variables: lambda_set_variables.clone(),
             },
+
+            OpaqueWrapFunction(OpaqueWrapFunctionData {
+                opaque_name,
+                opaque_var,
+                specialized_def_type,
+                type_arguments,
+                lambda_set_variables,
+                function_name,
+                function_var,
+                argument_var,
+                closure_var,
+            }) => OpaqueWrapFunction(OpaqueWrapFunctionData {
+                opaque_name: *opaque_name,
+                opaque_var: sub!(*opaque_var),
+                function_name: *function_name,
+                function_var: sub!(*function_var),
+                argument_var: sub!(*argument_var),
+                closure_var: sub!(*closure_var),
+                // The following three are only used for constraining
+                specialized_def_type: specialized_def_type.clone(),
+                type_arguments: type_arguments.clone(),
+                lambda_set_variables: lambda_set_variables.clone(),
+            }),
 
             Expect {
                 loc_condition,

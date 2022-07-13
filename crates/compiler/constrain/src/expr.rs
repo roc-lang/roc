@@ -13,7 +13,7 @@ use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
 use roc_can::expr::{
     AccessorData, AnnotatedMark, ClosureData, DeclarationTag, Declarations, DestructureDef, Field,
-    FunctionDef, WhenBranch,
+    FunctionDef, OpaqueWrapFunctionData, WhenBranch,
 };
 use roc_can::pattern::Pattern;
 use roc_can::traverse::symbols_introduced_from_pattern;
@@ -1113,6 +1113,100 @@ pub fn constrain_expr(
             }));
 
             constraints.exists_many(vars, [arg_con, opaque_con, link_type_variables_con])
+        }
+        OpaqueWrapFunction(OpaqueWrapFunctionData {
+            opaque_name,
+            opaque_var,
+            specialized_def_type,
+            type_arguments,
+            lambda_set_variables,
+            function_name,
+            function_var,
+            argument_var,
+            closure_var,
+        }) => {
+            let argument_type = Type::Variable(*argument_var);
+
+            let opaque_type = Type::Alias {
+                symbol: *opaque_name,
+                type_arguments: type_arguments
+                    .iter()
+                    .map(|v| OptAbleType {
+                        typ: Type::Variable(v.var),
+                        opt_ability: v.opt_ability,
+                    })
+                    .collect(),
+                lambda_set_variables: lambda_set_variables.clone(),
+                actual: Box::new(argument_type.clone()),
+                kind: AliasKind::Opaque,
+            };
+
+            // Tie the opaque type to the opaque_var
+            let opaque_con = constraints.equal_types_var(
+                *opaque_var,
+                Expected::NoExpectation(opaque_type),
+                Category::OpaqueWrap(*opaque_name),
+                region,
+            );
+
+            // Tie the type of the value wrapped by the opaque to the opaque's type variables.
+            let link_type_variables_con = constraints.equal_types(
+                argument_type.clone(),
+                Expected::NoExpectation((*specialized_def_type).clone()),
+                Category::OpaqueArg,
+                region,
+            );
+
+            let lambda_set = Type::ClosureTag {
+                name: *function_name,
+                captures: vec![],
+                ambient_function: *function_var,
+            };
+
+            let closure_type = Type::Variable(*closure_var);
+
+            let opaque_type = Type::Variable(*opaque_var);
+
+            let function_type = Type::Function(
+                vec![argument_type],
+                Box::new(closure_type),
+                Box::new(opaque_type),
+            );
+
+            let cons = [
+                opaque_con,
+                link_type_variables_con,
+                constraints.equal_types_var(
+                    *closure_var,
+                    NoExpectation(lambda_set),
+                    Category::OpaqueWrap(*opaque_name),
+                    region,
+                ),
+                constraints.equal_types_var(
+                    *function_var,
+                    Expected::NoExpectation(function_type),
+                    Category::OpaqueWrap(*opaque_name),
+                    region,
+                ),
+                constraints.equal_types_var(
+                    *function_var,
+                    expected,
+                    Category::OpaqueWrap(*opaque_name),
+                    region,
+                ),
+            ];
+
+            let mut vars = vec![*argument_var, *opaque_var];
+
+            // Also add the fresh variables we created for the type argument and lambda sets
+            vars.extend(type_arguments.iter().map(|v| v.var));
+            vars.extend(lambda_set_variables.iter().map(|v| {
+                v.0.expect_variable("all lambda sets should be fresh variables here")
+            }));
+
+            vars.extend([*function_var, *closure_var]);
+
+            constraints.exists_many(vars, cons)
         }
 
         RunLowLevel { args, ret_var, op } => {
