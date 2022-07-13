@@ -87,6 +87,7 @@ list = \lst, encodeElem ->
                 else
                     buffer
             bufferWithElem = appendWith bufferWithPrefix (encodeElem elem) (@Json {})
+
             { buffer: bufferWithElem, elemIndex: elemIndex + 1 }
 
         head = List.append bytes (Num.toU8 '[')
