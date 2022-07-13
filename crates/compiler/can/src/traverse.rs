@@ -7,7 +7,10 @@ use roc_types::subs::Variable;
 use crate::{
     abilities::AbilitiesStore,
     def::{Annotation, Declaration, Def},
-    expr::{self, AccessorData, AnnotatedMark, ClosureData, Declarations, Expr, Field},
+    expr::{
+        self, AccessorData, AnnotatedMark, ClosureData, Declarations, Expr, Field,
+        OpaqueWrapFunctionData,
+    },
     pattern::{DestructType, Pattern, RecordDestruct},
 };
 
@@ -220,6 +223,7 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
             ext_var: _,
         } => visitor.visit_expr(&loc_expr.value, loc_expr.region, *field_var),
         Expr::Accessor(AccessorData { .. }) => { /* terminal */ }
+        Expr::OpaqueWrapFunction(OpaqueWrapFunctionData { .. }) => { /* terminal */ }
         Expr::Update {
             record_var: _,
             ext_var: _,

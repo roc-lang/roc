@@ -124,6 +124,7 @@ map_symbol_to_lowlevel_and_arity! {
     StrAppendScalar; STR_APPEND_SCALAR_UNSAFE; 2,
     StrGetScalarUnsafe; STR_GET_SCALAR_UNSAFE; 2,
     StrToNum; STR_TO_NUM; 1,
+    StrGetCapacity; STR_CAPACITY; 1,
 
     ListLen; LIST_LEN; 1,
     ListWithCapacity; LIST_WITH_CAPACITY; 1,
@@ -142,6 +143,7 @@ map_symbol_to_lowlevel_and_arity! {
     ListSublist; LIST_SUBLIST_LOWLEVEL; 3,
     ListDropAt; LIST_DROP_AT; 2,
     ListSwap; LIST_SWAP; 3,
+    ListGetCapacity; LIST_CAPACITY; 1,
 
     NumAdd; NUM_ADD; 2,
     NumAddWrap; NUM_ADD_WRAP; 2,

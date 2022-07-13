@@ -1,18 +1,18 @@
-procedure List.3 (List.86, List.87, List.88):
-    let List.298 : {List I64, I64} = CallByName List.57 List.86 List.87 List.88;
+procedure List.3 (List.87, List.88, List.89):
+    let List.298 : {List I64, I64} = CallByName List.57 List.87 List.88 List.89;
     let List.297 : List I64 = StructAtIndex 0 List.298;
     inc List.297;
     dec List.298;
     ret List.297;
 
-procedure List.57 (List.83, List.84, List.85):
-    let List.303 : U64 = CallByName List.6 List.83;
-    let List.300 : Int1 = CallByName Num.22 List.84 List.303;
+procedure List.57 (List.84, List.85, List.86):
+    let List.303 : U64 = CallByName List.6 List.84;
+    let List.300 : Int1 = CallByName Num.22 List.85 List.303;
     if List.300 then
-        let List.301 : {List I64, I64} = CallByName List.61 List.83 List.84 List.85;
+        let List.301 : {List I64, I64} = CallByName List.61 List.84 List.85 List.86;
         ret List.301;
     else
-        let List.299 : {List I64, I64} = Struct {List.83, List.85};
+        let List.299 : {List I64, I64} = Struct {List.84, List.86};
         ret List.299;
 
 procedure List.6 (#Attr.2):

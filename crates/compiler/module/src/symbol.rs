@@ -1215,6 +1215,7 @@ define_builtins! {
         46 STR_WALK_SCALARS_UNTIL: "walkScalarsUntil"
         47 STR_TO_NUM: "strToNum"
         48 STR_FROM_UTF8_RANGE_LOWLEVEL: "fromUtf8RangeLowlevel"
+        49 STR_CAPACITY: "capacity"
     }
     5 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
@@ -1285,6 +1286,7 @@ define_builtins! {
         65 LIST_RESERVE: "reserve"
         66 LIST_APPEND_UNSAFE: "appendUnsafe"
         67 LIST_SUBLIST_LOWLEVEL: "sublistLowlevel"
+        68 LIST_CAPACITY: "capacity"
     }
     6 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" // the Result.Result type alias
@@ -1320,6 +1322,7 @@ define_builtins! {
         14 DICT_REMOVE_ALL: "removeAll" // difference
 
         15 DICT_WITH_CAPACITY: "withCapacity"
+        16 DICT_CAPACITY: "capacity"
     }
     8 SET: "Set" => {
         0 SET_SET: "Set" // the Set.Set type alias
@@ -1337,6 +1340,7 @@ define_builtins! {
         12 SET_WALK_USER_FUNCTION: "#walk_user_function"
         13 SET_CONTAINS: "contains"
         14 SET_TO_DICT: "toDict"
+        15 SET_CAPACITY: "capacity"
     }
     9 BOX: "Box" => {
         0 BOX_BOX_TYPE: "Box" imported // the Box.Box opaque type

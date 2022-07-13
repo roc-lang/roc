@@ -220,6 +220,9 @@ pub enum Expr {
         lambda_set_variables: Vec<LambdaSet>,
     },
 
+    // Opaque as a function, e.g. @Id as a shorthand for \x -> @Id x
+    OpaqueWrapFunction(OpaqueWrapFunctionData),
+
     // Test
     Expect {
         loc_condition: Box<Loc<Expr>>,
@@ -269,6 +272,9 @@ impl Expr {
                 args_count: 0,
             },
             &Self::OpaqueRef { name, .. } => Category::OpaqueWrap(name),
+            &Self::OpaqueWrapFunction(OpaqueWrapFunctionData { opaque_name, .. }) => {
+                Category::OpaqueWrap(opaque_name)
+            }
             Self::Expect { .. } => Category::Expect,
 
             // these nodes place no constraints on the expression's type
@@ -372,6 +378,76 @@ impl AccessorData {
             closure_type: closure_var,
             return_type: field_var,
             name,
+            captured_symbols: vec![],
+            recursive: Recursive::NotRecursive,
+            arguments,
+            loc_body: Box::new(loc_body),
+        }
+    }
+}
+
+/// An opaque wrapper like `@Foo`, which is equivalent to `\p -> @Foo p`
+/// These are desugared to closures, but we distinguish them so we can have
+/// better error messages during constraint generation.
+#[derive(Clone, Debug)]
+pub struct OpaqueWrapFunctionData {
+    pub opaque_name: Symbol,
+    pub opaque_var: Variable,
+    // The following fields help link the concrete opaque type; see
+    // `Expr::OpaqueRef` for more info on how they're used.
+    pub specialized_def_type: Type,
+    pub type_arguments: Vec<OptAbleVar>,
+    pub lambda_set_variables: Vec<LambdaSet>,
+
+    pub function_name: Symbol,
+    pub function_var: Variable,
+    pub argument_var: Variable,
+    pub closure_var: Variable,
+}
+
+impl OpaqueWrapFunctionData {
+    pub fn to_closure_data(self, argument_symbol: Symbol) -> ClosureData {
+        let OpaqueWrapFunctionData {
+            opaque_name,
+            opaque_var,
+            specialized_def_type,
+            type_arguments,
+            lambda_set_variables,
+            function_name,
+            function_var,
+            argument_var,
+            closure_var,
+        } = self;
+
+        // IDEA: convert
+        //
+        // @Foo
+        //
+        // into
+        //
+        // (\p -> @Foo p)
+        let body = Expr::OpaqueRef {
+            opaque_var,
+            name: opaque_name,
+            argument: Box::new((argument_var, Loc::at_zero(Expr::Var(argument_symbol)))),
+            specialized_def_type: Box::new(specialized_def_type),
+            type_arguments,
+            lambda_set_variables,
+        };
+
+        let loc_body = Loc::at_zero(body);
+
+        let arguments = vec![(
+            argument_var,
+            AnnotatedMark::known_exhaustive(),
+            Loc::at_zero(Pattern::Identifier(argument_symbol)),
+        )];
+
+        ClosureData {
+            function_type: function_var,
+            closure_type: closure_var,
+            return_type: opaque_var,
+            name: function_name,
             captured_symbols: vec![],
             recursive: Recursive::NotRecursive,
             arguments,
@@ -835,15 +911,41 @@ pub fn canonicalize_expr<'a>(
                 Output::default(),
             )
         }
-        ast::Expr::OpaqueRef(opaque_ref) => {
+        ast::Expr::OpaqueRef(name) => {
             // If we're here, the opaque reference is definitely not wrapping an argument - wrapped
             // arguments are handled in the Apply branch.
-            let problem = roc_problem::can::RuntimeError::OpaqueNotApplied(Loc::at(
-                region,
-                (*opaque_ref).into(),
-            ));
-            env.problem(Problem::RuntimeError(problem.clone()));
-            (RuntimeError(problem), Output::default())
+            // Treat this as a function \payload -> @Opaque payload
+            match scope.lookup_opaque_ref(name, region) {
+                Err(runtime_error) => {
+                    env.problem(Problem::RuntimeError(runtime_error.clone()));
+                    (RuntimeError(runtime_error), Output::default())
+                }
+                Ok((name, opaque_def)) => {
+                    let mut output = Output::default();
+                    output.references.insert_type_lookup(name);
+
+                    let (type_arguments, lambda_set_variables, specialized_def_type) =
+                        freshen_opaque_def(var_store, opaque_def);
+
+                    let fn_symbol = scope.gen_unique_symbol();
+
+                    (
+                        OpaqueWrapFunction(OpaqueWrapFunctionData {
+                            opaque_name: name,
+                            opaque_var: var_store.fresh(),
+                            specialized_def_type,
+                            type_arguments,
+                            lambda_set_variables,
+
+                            function_name: fn_symbol,
+                            function_var: var_store.fresh(),
+                            argument_var: var_store.fresh(),
+                            closure_var: var_store.fresh(),
+                        }),
+                        output,
+                    )
+                }
+            }
         }
         ast::Expr::Expect(condition, continuation) => {
             let mut output = Output::default();
@@ -1420,7 +1522,8 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         | other @ AbilityMember(..)
         | other @ RunLowLevel { .. }
         | other @ TypedHole { .. }
-        | other @ ForeignCall { .. } => other,
+        | other @ ForeignCall { .. }
+        | other @ OpaqueWrapFunction(_) => other,
 
         List {
             elem_var,
@@ -2387,7 +2490,8 @@ fn get_lookup_symbols(expr: &Expr, var_store: &mut VarStore) -> Vec<(Symbol, Var
             | Expr::SingleQuote(_)
             | Expr::EmptyRecord
             | Expr::TypedHole(_)
-            | Expr::RuntimeError(_) => {}
+            | Expr::RuntimeError(_)
+            | Expr::OpaqueWrapFunction(_) => {}
         }
     }
 
