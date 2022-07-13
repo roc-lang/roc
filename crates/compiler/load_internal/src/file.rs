@@ -4076,7 +4076,7 @@ pub fn add_imports(
                 resolved_specializations: _,
             }) => {
                 let var = exposed_types
-                    .stored_ability_lambda_set_vars
+                    .stored_specialization_lambda_set_vars
                     .get(&lset_var)
                     .expect("Lambda set var from other module not available");
 

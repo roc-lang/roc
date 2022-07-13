@@ -3964,8 +3964,10 @@ fn get_fresh_var_name(state: &mut ErrorTypeState) -> Lowercase {
 pub struct ExposedTypesStorageSubs {
     pub storage_subs: StorageSubs,
     pub stored_vars_by_symbol: VecMap<Symbol, Variable>,
-    /// lambda set var in other module -> var in storage subs
-    pub stored_ability_lambda_set_vars: VecMap<Variable, Variable>,
+    /// specialization lambda set var in other module -> var in storage subs
+    pub stored_specialization_lambda_set_vars: VecMap<Variable, Variable>,
+    /// ability member signature in other module -> var in storage subs
+    pub stored_ability_member_vars: VecMap<Variable, Variable>,
 }
 
 #[derive(Clone, Debug)]
@@ -5295,18 +5297,8 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
 ///
 /// Panics if the given function type does not correspond with what's expected of an ability
 /// member, namely its lambda sets have more than a single unspecialized lambda set.
-pub fn get_member_lambda_sets_at_region(
-    subs: &Subs,
-    var: Variable,
-    target_region: Option<u8>,
-) -> Vec<Variable> {
+pub fn get_member_lambda_sets_at_region(subs: &Subs, var: Variable, target_region: u8) -> Variable {
     let mut stack = vec![var];
-
-    let mut result = if target_region.is_some() {
-        Vec::with_capacity(1)
-    } else {
-        Vec::with_capacity(4)
-    };
 
     while let Some(var) = stack.pop() {
         match subs.get_content_without_compacting(var) {
@@ -5320,19 +5312,8 @@ pub fn get_member_lambda_sets_at_region(
                 debug_assert!(recursion_var.is_none());
                 debug_assert_eq!(unspecialized.len(), 1);
                 let Uls(_, _, region) = subs.get_subs_slice(*unspecialized)[0];
-                match target_region {
-                    Some(r) => {
-                        if region == r {
-                            result.push(var);
-                            return result;
-                        } else {
-                            continue;
-                        }
-                    }
-                    None => {
-                        result.push(var);
-                        continue;
-                    }
+                if region == target_region {
+                    return var;
                 }
             }
             Content::Structure(flat_type) => match flat_type {
@@ -5386,5 +5367,5 @@ pub fn get_member_lambda_sets_at_region(
         }
     }
 
-    return result;
+    internal_error!("No lambda set at region {} found", target_region);
 }
