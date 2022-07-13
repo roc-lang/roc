@@ -174,7 +174,7 @@ pub(crate) fn derive_to_encoder(
     def_symbol: Symbol,
 ) -> DerivedBody {
     let (body, body_type) = match key {
-        FlatEncodableKey::List() => todo!(),
+        FlatEncodableKey::List() => to_encoder_list(env, def_symbol),
         FlatEncodableKey::Set() => todo!(),
         FlatEncodableKey::Dict() => todo!(),
         FlatEncodableKey::Record(fields) => {
@@ -229,6 +229,190 @@ pub(crate) fn derive_to_encoder(
         body_type,
         specialization_lambda_sets,
     }
+}
+
+fn to_encoder_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
+    // Build \lst -> Encode.list lst (\elem -> Encode.toEncoder elem)
+    //
+    // TODO eta reduce this baby     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    use Expr::*;
+
+    let lst_sym = env.new_symbol("lst");
+    let elem_sym = env.new_symbol("elem");
+
+    // List elem
+    let elem_var = env.subs.fresh_unnamed_flex_var();
+    let elem_var_slice = SubsSlice::insert_into_subs(env.subs, [elem_var]);
+    let list_var = synth_var(
+        env.subs,
+        Content::Structure(FlatType::Apply(Symbol::LIST_LIST, elem_var_slice)),
+    );
+
+    // build `toEncoder elem` type
+    // val -[uls]-> Encoder fmt | fmt has EncoderFormatting
+    let to_encoder_fn_var = env.import_encode_symbol(Symbol::ENCODE_TO_ENCODER);
+
+    // elem -[clos]-> t1
+    let to_encoder_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
+    let elem_encoder_var = env.subs.fresh_unnamed_flex_var(); // t1
+    let elem_to_encoder_fn_var = synth_var(
+        env.subs,
+        Content::Structure(FlatType::Func(
+            elem_var_slice,
+            to_encoder_clos_var,
+            elem_encoder_var,
+        )),
+    );
+
+    //   val  -[uls]->  Encoder fmt | fmt has EncoderFormatting
+    // ~ elem -[clos]-> t1
+    env.unify(to_encoder_fn_var, elem_to_encoder_fn_var);
+
+    // toEncoder : (typeof rcd.a) -[clos]-> Encoder fmt | fmt has EncoderFormatting
+    let to_encoder_var = AbilityMember(Symbol::ENCODE_TO_ENCODER, None, elem_to_encoder_fn_var);
+    let to_encoder_fn = Box::new((
+        to_encoder_fn_var,
+        Loc::at_zero(to_encoder_var),
+        to_encoder_clos_var,
+        elem_encoder_var,
+    ));
+
+    // toEncoder elem
+    let to_encoder_call = Call(
+        to_encoder_fn,
+        vec![(elem_var, Loc::at_zero(Var(elem_sym)))],
+        CalledVia::Space,
+    );
+
+    // elem -[to_elem_encoder]-> toEncoder elem
+    let to_elem_encoder_sym = env.new_symbol("to_elem_encoder");
+
+    // Create fn_var for ambient capture; we fix it up below.
+    let to_elem_encoder_fn_var = synth_var(env.subs, Content::Error);
+
+    // -[to_elem_encoder]->
+    let to_elem_encoder_labels =
+        UnionLambdas::insert_into_subs(env.subs, once((to_elem_encoder_sym, vec![])));
+    let to_elem_encoder_lset = synth_var(
+        env.subs,
+        Content::LambdaSet(LambdaSet {
+            solved: to_elem_encoder_labels,
+            recursion_var: OptVariable::NONE,
+            unspecialized: SubsSlice::default(),
+            ambient_function: to_elem_encoder_fn_var,
+        }),
+    );
+    // elem -[to_elem_encoder]-> toEncoder elem
+    env.subs.set_content(
+        to_elem_encoder_fn_var,
+        Content::Structure(FlatType::Func(
+            elem_var_slice,
+            to_elem_encoder_lset,
+            elem_encoder_var,
+        )),
+    );
+
+    // \elem -> toEncoder elem
+    let to_elem_encoder = Closure(ClosureData {
+        function_type: to_elem_encoder_fn_var,
+        closure_type: to_elem_encoder_lset,
+        return_type: elem_encoder_var,
+        name: to_elem_encoder_sym,
+        captured_symbols: vec![],
+        recursive: Recursive::NotRecursive,
+        arguments: vec![(
+            elem_var,
+            AnnotatedMark::known_exhaustive(),
+            Loc::at_zero(Pattern::Identifier(elem_sym)),
+        )],
+        loc_body: Box::new(Loc::at_zero(to_encoder_call)),
+    });
+
+    // build `Encode.list lst (\elem -> Encode.toEncoder elem)` type
+    // List e, (e -> Encoder fmt) -[uls]-> Encoder fmt | fmt has EncoderFormatting
+    let encode_list_fn_var = env.import_encode_symbol(Symbol::ENCODE_LIST);
+
+    // List elem, to_elem_encoder_fn_var -[clos]-> t1
+    let this_encode_list_args_slice =
+        VariableSubsSlice::insert_into_subs(env.subs, [list_var, to_elem_encoder_fn_var]);
+    let this_encode_list_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
+    let this_list_encoder_var = env.subs.fresh_unnamed_flex_var(); // t1
+    let this_encode_list_fn_var = synth_var(
+        env.subs,
+        Content::Structure(FlatType::Func(
+            this_encode_list_args_slice,
+            this_encode_list_clos_var,
+            this_list_encoder_var,
+        )),
+    );
+
+    //   List e,    (e -> Encoder fmt)     -[uls]->  Encoder fmt | fmt has EncoderFormatting
+    // ~ List elem, to_elem_encoder_fn_var -[clos]-> t1
+    env.unify(encode_list_fn_var, this_encode_list_fn_var);
+
+    // Encode.list : List elem, to_elem_encoder_fn_var -[clos]-> Encoder fmt | fmt has EncoderFormatting
+    let encode_list = AbilityMember(Symbol::ENCODE_LIST, None, this_encode_list_fn_var);
+    let encode_list_fn = Box::new((
+        this_encode_list_fn_var,
+        Loc::at_zero(encode_list),
+        this_encode_list_clos_var,
+        this_list_encoder_var,
+    ));
+
+    // Encode.list lst to_elem_encoder
+    let encode_list_call = Call(
+        encode_list_fn,
+        vec![
+            (list_var, Loc::at_zero(Var(lst_sym))),
+            (to_elem_encoder_fn_var, Loc::at_zero(to_elem_encoder)),
+        ],
+        CalledVia::Space,
+    );
+
+    // \lst -> Encode.list lst (\elem -> Encode.toEncoder elem)
+    // Create fn_var for ambient capture; we fix it up below.
+    let fn_var = synth_var(env.subs, Content::Error);
+
+    // -[fn_name]->
+    let fn_name_labels = UnionLambdas::insert_into_subs(env.subs, once((fn_name, vec![])));
+    let fn_clos_var = synth_var(
+        env.subs,
+        Content::LambdaSet(LambdaSet {
+            solved: fn_name_labels,
+            recursion_var: OptVariable::NONE,
+            unspecialized: SubsSlice::default(),
+            ambient_function: fn_var,
+        }),
+    );
+    // List elem -[fn_name]-> Encoder fmt
+    let list_var_slice = SubsSlice::insert_into_subs(env.subs, once(list_var));
+    env.subs.set_content(
+        fn_var,
+        Content::Structure(FlatType::Func(
+            list_var_slice,
+            fn_clos_var,
+            this_list_encoder_var,
+        )),
+    );
+
+    // \lst -[fn_name]-> Encode.list lst (\elem -> Encode.toEncoder elem)
+    let clos = Closure(ClosureData {
+        function_type: fn_var,
+        closure_type: fn_clos_var,
+        return_type: this_list_encoder_var,
+        name: fn_name,
+        captured_symbols: vec![],
+        recursive: Recursive::NotRecursive,
+        arguments: vec![(
+            list_var,
+            AnnotatedMark::known_exhaustive(),
+            Loc::at_zero(Pattern::Identifier(lst_sym)),
+        )],
+        loc_body: Box::new(Loc::at_zero(encode_list_call)),
+    });
+
+    (clos, fn_var)
 }
 
 fn to_encoder_record(
