@@ -80,8 +80,17 @@ string = \s -> custom \bytes, @Json {} ->
 
 list = \lst, encodeElem ->
     custom \bytes, @Json {} ->
+        writeList = \{ buffer, elemIndex }, elem ->
+            bufferWithPrefix =
+                if elemIndex > 0 then
+                    List.append buffer (Num.toU8 ',')
+                else
+                    buffer
+            bufferWithElem = appendWith bufferWithPrefix (encodeElem elem) (@Json {})
+            { buffer: bufferWithElem, elemIndex: elemIndex + 1 }
+
         head = List.append bytes (Num.toU8 '[')
-        withList = List.walk lst head (\bytes1, elem -> appendWith bytes1 (encodeElem elem) (@Json {}))
+        { buffer: withList } = List.walk lst { buffer: head, elemIndex: 0 } writeList
 
         List.append withList (Num.toU8 ']')
 

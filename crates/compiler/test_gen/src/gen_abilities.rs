@@ -659,7 +659,7 @@ fn encode_derived_list_string() {
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"["foo""bar""baz"]"#),
+        RocStr::from(r#"["foo","bar","baz"]"#),
         RocStr
     )
 }
