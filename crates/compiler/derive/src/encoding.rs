@@ -15,25 +15,12 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{
     instantiate_rigids, Content, ExhaustiveMark, FlatType, GetSubsSlice, LambdaSet, OptVariable,
-    RecordFields, RedundantMark, Subs, SubsFmtContent, SubsSlice, UnionLambdas, UnionTags,
-    Variable, VariableSubsSlice,
+    RecordFields, RedundantMark, Subs, SubsSlice, UnionLambdas, UnionTags, Variable,
+    VariableSubsSlice,
 };
-use roc_types::types::{AliasKind, RecordField};
+use roc_types::types::RecordField;
 
 use crate::{synth_var, DerivedBody, DERIVED_SYNTH};
-
-macro_rules! bad_input {
-    ($subs:expr, $var:expr) => {
-        bad_input!($subs, $var, "Invalid content")
-    };
-    ($subs:expr, $var:expr, $msg:expr) => {
-        internal_error!(
-            "{:?} for toEncoder deriver: {:?}",
-            $msg,
-            SubsFmtContent($subs.get_content_without_compacting($var), $subs)
-        )
-    };
-}
 
 pub(crate) struct Env<'a> {
     /// NB: This **must** be subs for the derive module!
@@ -179,38 +166,6 @@ impl Env<'_> {
             }
         }
     }
-}
-
-// TODO: decide whether it will be better to pass the whole signature, or just the argument type.
-// For now we are only using the argument type for convinience of testing.
-#[allow(dead_code)]
-fn verify_signature(env: &mut Env<'_>, signature: Variable) {
-    // Verify the signature is what we expect: input -> Encoder fmt | fmt has EncoderFormatting
-    // and get the input type
-    match env.subs.get_content_without_compacting(signature) {
-        Content::Structure(FlatType::Func(input, _, output)) => {
-            // Check the output is Encoder fmt | fmt has EncoderFormatting
-            match env.subs.get_content_without_compacting(*output) {
-                Content::Alias(Symbol::ENCODE_ENCODER, args, _, AliasKind::Opaque) => {
-                    match env.subs.get_subs_slice(args.all_variables()) {
-                        [one] => match env.subs.get_content_without_compacting(*one) {
-                            Content::FlexAbleVar(_, Symbol::ENCODE_ENCODERFORMATTING) => {}
-                            _ => bad_input!(env.subs, signature),
-                        },
-                        _ => bad_input!(env.subs, signature),
-                    }
-                }
-                _ => bad_input!(env.subs, signature),
-            }
-
-            // Get the only parameter into toEncoder
-            match env.subs.get_subs_slice(*input) {
-                [one] => *one,
-                _ => bad_input!(env.subs, signature),
-            }
-        }
-        _ => bad_input!(env.subs, signature),
-    };
 }
 
 pub(crate) fn derive_to_encoder(
