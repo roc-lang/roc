@@ -156,8 +156,8 @@ pub fn exposed_types_storage_subs(
         .filter_map(|(member, data)| {
             if member.module_id() == home {
                 let var = data.signature_var();
-                let improted_var = storage_subs.import_variable_from(subs, var).variable;
-                Some((var, improted_var))
+                let imported_var = storage_subs.import_variable_from(subs, var).variable;
+                Some((var, imported_var))
             } else {
                 None
             }

@@ -2346,7 +2346,7 @@ fn get_specialization_lambda_set_ambient_function<P: Phase>(
             // Immediates are like opaques in that we can simply look up their type definition in
             // the ability store, there is nothing new to synthesize.
             //
-            // THEORY: if something can become an immediate, it will always be avaialble in the
+            // THEORY: if something can become an immediate, it will always be available in the
             // local ability store, because the transformation is local (?)
             let immediate_lambda_set_at_region =
                 phase.get_and_copy_ability_member_ambient_function(imm, lset_region, subs);
