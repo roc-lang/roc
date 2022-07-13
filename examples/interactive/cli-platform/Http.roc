@@ -17,14 +17,17 @@ interface Http
     ]
     imports [Encode.{ Encoding }, Json]
 
+TimeoutConfig : [WithTimeout F64, WithoutTimeout]
+TrackerConfig : [WithTracker F64, WithoutTracker]
+
 Request a : {
     method : Str,
     headers : List Header,
     url : Str,
     body : Body,
     responseHandler : ResponseHandler a,
-    timeout : Result F64 {},
-    tracker : Result Str {},
+    timeout : TimeoutConfig,
+    tracker : TrackerConfig,
     allowCookiesFromOtherDomains : Bool,
 }
 
