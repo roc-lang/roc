@@ -1966,7 +1966,7 @@ impl<'a> LowLevelCall<'a> {
                 FloatWidth::F128 => todo!("F128 to Str"),
             },
             Layout::Builtin(Builtin::Decimal) => {
-                todo!("Decimal to Str")
+                self.load_args_and_call_zig(backend, bitcode::DEC_TO_STR)
             }
             x => internal_error!("NumToStr is not defined for {:?}", x),
         }
