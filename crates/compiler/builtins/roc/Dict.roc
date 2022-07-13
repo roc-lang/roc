@@ -137,7 +137,6 @@ single : k, v -> Dict k v
 single = \key, value ->
     @Dict [Pair key value]
 
-
 ## Returns a [List] of the dictionary's keys.
 keys : Dict k v -> List k
 keys = \@Dict list ->
