@@ -116,5 +116,11 @@ pub fn str_equal<'a, 'ctx, 'env>(
     value1: BasicValueEnum<'ctx>,
     value2: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    call_bitcode_fn(env, &[value1, value2], bitcode::STR_EQUAL)
+    call_str_bitcode_fn(
+        env,
+        &[value1, value2],
+        &[],
+        BitcodeReturns::Basic,
+        bitcode::STR_EQUAL,
+    )
 }
