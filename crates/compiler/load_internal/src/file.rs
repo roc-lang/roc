@@ -3623,7 +3623,7 @@ fn send_header_two<'a>(
         for (qualified_module_name, exposed_idents, region) in imported.into_iter() {
             let cloned_module_name = qualified_module_name.module.clone();
             let pq_module_name = match qualified_module_name.opt_package {
-                None => PQModuleName::Unqualified(qualified_module_name.module),
+                None => PQModuleName::Qualified(shorthand, qualified_module_name.module),
                 Some(package) => PQModuleName::Qualified(package, cloned_module_name.clone()),
             };
 
