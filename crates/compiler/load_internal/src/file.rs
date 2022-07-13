@@ -2678,6 +2678,7 @@ fn finish_specialization(
     } = state;
 
     let ModuleCache {
+        expectations,
         type_problems,
         can_problems,
         sources,
@@ -2758,7 +2759,7 @@ fn finish_specialization(
         sources,
         timings: state.timings,
         toplevel_expects,
-        expectations: VecMap::default(),
+        expectations,
     })
 }
 
