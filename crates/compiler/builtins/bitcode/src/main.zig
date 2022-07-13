@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const math = std.math;
 const utils = @import("utils.zig");
+const expect = @import("expect.zig");
 
 const ROC_BUILTINS = "roc_builtins";
 const NUM = "num";
@@ -161,6 +162,11 @@ comptime {
     exportUtilsFn(utils.allocateWithRefcountC, "allocate_with_refcount");
 
     @export(utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .Weak });
+
+    if (builtin.target.cpu.arch != .wasm32) {
+        exportUtilsFn(expect.expectFailedStart, "expect_failed_start");
+        exportUtilsFn(expect.expectFailedFinalize, "expect_failed_finalize");
+    }
 
     if (builtin.target.cpu.arch == .aarch64) {
         @export(__roc_force_setjmp, .{ .name = "__roc_force_setjmp", .linkage = .Weak });
