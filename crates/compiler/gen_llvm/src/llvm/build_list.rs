@@ -362,6 +362,17 @@ pub fn list_len<'ctx>(
         .into_int_value()
 }
 
+/// List.capacity : List * -> Nat
+pub fn list_capacity<'ctx>(
+    builder: &Builder<'ctx>,
+    wrapper_struct: StructValue<'ctx>,
+) -> IntValue<'ctx> {
+    builder
+        .build_extract_value(wrapper_struct, Builtin::WRAPPER_CAPACITY, "list_capacity")
+        .unwrap()
+        .into_int_value()
+}
+
 /// List.sortWith : List a, (a, a -> Ordering) -> List a
 pub fn list_sort_with<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
