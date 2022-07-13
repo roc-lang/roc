@@ -2,7 +2,6 @@ use crate::llvm::bitcode::{
     call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_list_bitcode_fn,
     call_str_bitcode_fn, call_void_bitcode_fn,
 };
-use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
     self, allocate_list, empty_polymorphic_list, list_append_unsafe, list_concat, list_drop_at,
     list_get_unsafe, list_len, list_map, list_map2, list_map3, list_map4, list_prepend,
@@ -6066,13 +6065,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             BasicValueEnum::IntValue(bool_val)
         }
         Hash => {
-            debug_assert_eq!(args.len(), 2);
-            let seed = load_symbol(scope, &args[0]);
-            let (value, layout) = load_symbol_and_layout(scope, &args[1]);
-
-            debug_assert!(seed.is_int_value());
-
-            generic_hash(env, layout_ids, seed.into_int_value(), value, layout).into()
+            unimplemented!()
         }
 
         ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith => {
