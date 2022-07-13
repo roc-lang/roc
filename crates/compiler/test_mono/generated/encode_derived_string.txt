@@ -1,33 +1,13 @@
-procedure #Derived.0 (#Derived.1):
-    let #Derived_gen.1 : {Str} = Struct {#Derived.1};
-    let #Derived_gen.0 : {Str} = CallByName Encode.22 #Derived_gen.1;
-    ret #Derived_gen.0;
-
-procedure #Derived.2 (#Derived.3, #Derived.4, #Attr.12):
-    let #Derived.1 : Str = StructAtIndex 0 #Attr.12;
-    inc #Derived.1;
-    dec #Attr.12;
-    let #Derived_gen.4 : {Str} = CallByName Json.17 #Derived.1;
-    let #Derived_gen.3 : List U8 = CallByName Encode.23 #Derived.3 #Derived_gen.4 #Derived.4;
-    ret #Derived_gen.3;
-
-procedure Encode.22 (Encode.93):
-    ret Encode.93;
-
 procedure Encode.22 (Encode.93):
     ret Encode.93;
 
 procedure Encode.23 (Encode.94, Encode.102, Encode.96):
-    let Encode.106 : List U8 = CallByName #Derived.2 Encode.94 Encode.96 Encode.102;
+    let Encode.106 : List U8 = CallByName Json.65 Encode.94 Encode.96 Encode.102;
     ret Encode.106;
-
-procedure Encode.23 (Encode.94, Encode.102, Encode.96):
-    let Encode.113 : List U8 = CallByName Json.65 Encode.94 Encode.96 Encode.102;
-    ret Encode.113;
 
 procedure Encode.25 (Encode.100, Encode.101):
     let Encode.104 : List U8 = Array [];
-    let Encode.105 : {Str} = CallByName #Derived.0 Encode.100;
+    let Encode.105 : {Str} = CallByName Json.17 Encode.100;
     let Encode.103 : List U8 = CallByName Encode.23 Encode.104 Encode.105 Encode.101;
     ret Encode.103;
 

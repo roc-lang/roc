@@ -84,7 +84,7 @@ impl FlatEncodable {
                     Symbol::LIST_LIST => Ok(Key(FlatEncodableKey::List())),
                     Symbol::SET_SET => Ok(Key(FlatEncodableKey::Set())),
                     Symbol::DICT_DICT => Ok(Key(FlatEncodableKey::Dict())),
-                    Symbol::STR_STR => Ok(Key(FlatEncodableKey::String)),
+                    Symbol::STR_STR => Ok(Immediate(Symbol::ENCODE_STRING)),
                     _ => Err(Underivable),
                 },
                 FlatType::Record(fields, ext) => {
