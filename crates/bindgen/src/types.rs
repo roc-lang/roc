@@ -483,6 +483,23 @@ fn add_type_help<'a>(
                     Layout::Builtin(builtin) => {
                         add_builtin_type(env, builtin, var, opt_name, types, layout)
                     }
+                    Layout::Union(union_layout) if *name == Symbol::BOOL_BOOL => {
+                        if cfg!(debug_assertions) {
+                            match union_layout {
+                                UnionLayout::NonRecursive(tag_layouts) => {
+                                    // Bool should always have exactly two tags: True and False
+                                    debug_assert_eq!(tag_layouts.len(), 2);
+
+                                    // Both tags should have no payload
+                                    debug_assert_eq!(tag_layouts[0].len(), 0);
+                                    debug_assert_eq!(tag_layouts[1].len(), 0);
+                                }
+                                _ => debug_assert!(false),
+                            }
+                        }
+
+                        types.add(RocType::Bool, layout)
+                    }
                     Layout::Union(union_layout) if *name == Symbol::RESULT_RESULT => {
                         match union_layout {
                             UnionLayout::NonRecursive(tag_layouts) => {
