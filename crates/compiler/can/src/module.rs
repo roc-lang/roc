@@ -737,7 +737,7 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
-    let loc_expects = Default::default();
+    let loc_expects = declarations.expects();
 
     ModuleOutput {
         scope,

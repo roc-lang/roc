@@ -4137,7 +4137,9 @@ fn run_solve<'a>(
     // TODO remove when we write builtins in roc
     let aliases = module.aliases.clone();
 
+    let mut module = module;
     let loc_expects = std::mem::take(&mut module.loc_expects);
+    let module = module;
 
     let (solved_subs, solved_specializations, exposed_vars_by_symbol, problems, abilities_store) = {
         if module_id.is_builtin() {
@@ -4403,7 +4405,7 @@ fn canonicalize_and_constrain<'a>(
         aliases,
         rigid_variables: module_output.rigid_variables,
         abilities_store: module_output.scope.abilities_store,
-        loc_expects,
+        loc_expects: module_output.loc_expects,
     };
 
     let constrained_module = ConstrainedModule {
