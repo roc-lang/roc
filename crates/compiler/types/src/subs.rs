@@ -706,6 +706,12 @@ impl GetSubsSlice<Variable> for Subs {
     }
 }
 
+impl GetSubsSlice<VariableSubsSlice> for Subs {
+    fn get_subs_slice(&self, subs_slice: SubsSlice<VariableSubsSlice>) -> &[VariableSubsSlice] {
+        subs_slice.get_slice(&self.variable_slices)
+    }
+}
+
 impl GetSubsSlice<RecordField<()>> for Subs {
     fn get_subs_slice(&self, subs_slice: SubsSlice<RecordField<()>>) -> &[RecordField<()>] {
         subs_slice.get_slice(&self.record_fields)
@@ -5281,4 +5287,103 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
             }
         });
     }
+}
+
+/// Finds the lambda set of the ability member type (not specialization) at the region `r`,
+/// or all lambda sets if no region is specified.
+///
+/// Panics if the given function type does not correspond with what's expected of an ability
+/// member, namely its lambda sets have more than a single unspecialized lambda set.
+pub fn get_member_lambda_sets_at_region(
+    subs: &Subs,
+    var: Variable,
+    target_region: Option<u8>,
+) -> Vec<Variable> {
+    let mut stack = vec![var];
+
+    let mut result = if target_region.is_some() {
+        Vec::with_capacity(1)
+    } else {
+        Vec::with_capacity(4)
+    };
+
+    while let Some(var) = stack.pop() {
+        match subs.get_content_without_compacting(var) {
+            Content::LambdaSet(LambdaSet {
+                solved,
+                recursion_var,
+                unspecialized,
+                ambient_function: _,
+            }) => {
+                debug_assert!(solved.is_empty());
+                debug_assert!(recursion_var.is_none());
+                debug_assert_eq!(unspecialized.len(), 1);
+                let Uls(_, _, region) = subs.get_subs_slice(*unspecialized)[0];
+                match target_region {
+                    Some(r) => {
+                        if region == r {
+                            result.push(var);
+                            return result;
+                        } else {
+                            continue;
+                        }
+                    }
+                    None => {
+                        result.push(var);
+                        continue;
+                    }
+                }
+            }
+            Content::Structure(flat_type) => match flat_type {
+                FlatType::Apply(_, vars) => {
+                    stack.extend(subs.get_subs_slice(*vars));
+                }
+                FlatType::Func(args, lset, ret) => {
+                    stack.extend(subs.get_subs_slice(*args));
+                    stack.push(*lset);
+                    stack.push(*ret);
+                }
+                FlatType::Record(fields, ext) => {
+                    stack.extend(subs.get_subs_slice(fields.variables()));
+                    stack.push(*ext);
+                }
+                FlatType::TagUnion(tags, ext) => {
+                    stack.extend(
+                        subs.get_subs_slice(tags.variables())
+                            .iter()
+                            .flat_map(|slice| subs.get_subs_slice(*slice)),
+                    );
+                    stack.push(*ext);
+                }
+                FlatType::FunctionOrTagUnion(_, _, ext) => {
+                    stack.push(*ext);
+                }
+                FlatType::RecursiveTagUnion(rec, tags, ext) => {
+                    stack.push(*rec);
+                    stack.extend(
+                        subs.get_subs_slice(tags.variables())
+                            .iter()
+                            .flat_map(|slice| subs.get_subs_slice(*slice)),
+                    );
+                    stack.push(*ext);
+                }
+                FlatType::Erroneous(_) | FlatType::EmptyRecord | FlatType::EmptyTagUnion => {}
+            },
+            Content::Alias(_, _, real_var, _) => {
+                stack.push(*real_var);
+            }
+            Content::RangedNumber(_)
+            | Content::Error
+            | Content::FlexVar(_)
+            | Content::RigidVar(_)
+            | Content::FlexAbleVar(_, _)
+            | Content::RigidAbleVar(_, _)
+            | Content::RecursionVar {
+                structure: _,
+                opt_name: _,
+            } => {}
+        }
+    }
+
+    return result;
 }
