@@ -19,5 +19,14 @@ jobs:
         with:
           clean: "true"
 
+      - name: check formatting with rustfmt
+        run: nix develop -c cargo fmt --all -- --check
+
+      - name: check code style with clippy
+        run: nix develop -c cargo clippy --workspace --tests -- --deny warnings
+
+      - name: check code style with clippy --release
+        run: cargo clippy --workspace --tests --release -- --deny warnings
+
       - name: execute tests with --release
         run: nix develop -c cargo test --locked --release
