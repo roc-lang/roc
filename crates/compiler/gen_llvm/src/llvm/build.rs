@@ -5586,7 +5586,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             call_bitcode_fn(env, &[string, index], bitcode::STR_GET_SCALAR_UNSAFE)
         }
         StrCountUtf8Bytes => {
-            // Str.countGraphemes : Str -> Nat
+            // Str.countUtf8Bytes : Str -> Nat
             debug_assert_eq!(args.len(), 1);
 
             let string = load_symbol(scope, &args[0]);
@@ -5639,7 +5639,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             call_str_bitcode_fn(env, &[string], bitcode::STR_TRIM_RIGHT)
         }
         ListLen => {
-            // List.len : List * -> Int
+            // List.len : List * -> Nat
             debug_assert_eq!(args.len(), 1);
 
             let arg = load_symbol(scope, &args[0]);

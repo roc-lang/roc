@@ -351,7 +351,7 @@ fn bounds_check_comparison<'ctx>(
     builder.build_int_compare(IntPredicate::ULT, elem_index, len, "bounds_check")
 }
 
-/// List.len : List elem -> Int
+/// List.len : List * -> Nat
 pub fn list_len<'ctx>(
     builder: &Builder<'ctx>,
     wrapper_struct: StructValue<'ctx>,
