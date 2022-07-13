@@ -820,7 +820,10 @@ findIndex = \list, matcher ->
 ## Some languages have a function called **`slice`** which works similarly to this.
 sublist : List elem, { start : Nat, len : Nat } -> List elem
 sublist = \list, config ->
-    sublistLowlevel list config.start config.len
+    if config.len == 0 then
+        []
+    else
+        sublistLowlevel list config.start config.len
 
 sublistLowlevel : List elem, Nat, Nat -> List elem
 

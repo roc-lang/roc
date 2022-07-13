@@ -1674,16 +1674,31 @@ pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: Upda
                 .problem_code = Utf8ByteProblem.InvalidStartByte,
             };
         } else {
+            // turn the bytes into a small string
+            const string = RocStr.init(@ptrCast([*]const u8, bytes), count);
+
+            // decref the list
+            utils.decref(arg.bytes, arg.len(), 1);
+
             return FromUtf8Result{
                 .is_ok = true,
-                .string = RocStr.init(@ptrCast([*]const u8, bytes), count),
+                .string = string,
                 .byte_index = 0,
                 .problem_code = Utf8ByteProblem.InvalidStartByte,
             };
         }
     } else {
         const temp = errorToProblem(@ptrCast([*]u8, arg.bytes), arg.length);
-        return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = temp.index, .problem_code = temp.problem };
+
+        // decref the list
+        utils.decref(arg.bytes, arg.len(), 1);
+
+        return FromUtf8Result{
+            .is_ok = false,
+            .string = RocStr.empty(),
+            .byte_index = temp.index,
+            .problem_code = temp.problem,
+        };
     }
 }
 
