@@ -315,7 +315,7 @@ impl<'a> LowLevelCall<'a> {
 
             ListIsUnique => self.load_args_and_call_zig(backend, bitcode::LIST_IS_UNIQUE),
 
-            ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith | DictWalk => {
+            ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith => {
                 internal_error!("HigherOrder lowlevels should not be handled here")
             }
 
@@ -742,12 +742,6 @@ impl<'a> LowLevelCall<'a> {
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
 
                 backend.call_host_fn_after_loading_args(bitcode::LIST_SWAP, 8, false);
-            }
-
-            DictSize | DictEmpty | DictInsert | DictRemove | DictContains | DictGetUnsafe
-            | DictKeys | DictValues | DictUnion | DictIntersection | DictDifference
-            | SetFromList | SetToDict => {
-                todo!("{:?}", self.lowlevel);
             }
 
             // Num
@@ -2082,7 +2076,6 @@ pub fn call_higher_order_lowlevel<'a>(
             ListMap { .. } | ListMap2 { .. } | ListMap3 { .. } | ListMap4 { .. } => {
                 ProcSource::HigherOrderMapper(passed_proc_index)
             }
-            DictWalk { .. } => todo!("DictWalk"),
         }
     };
     let wrapper_sym = backend.create_symbol(&format!("#wrap#{:?}", fn_name));
@@ -2230,8 +2223,6 @@ pub fn call_higher_order_lowlevel<'a>(
 
             backend.call_host_fn_after_loading_args(bitcode::LIST_SORT_WITH, 9, false);
         }
-
-        DictWalk { .. } => todo!("{:?}", op),
     }
 }
 

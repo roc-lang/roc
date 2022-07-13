@@ -733,31 +733,6 @@ fn call_spec(
             }
 
             match op {
-                DictWalk { xs, state } => {
-                    let dict = env.symbols[xs];
-                    let state = env.symbols[state];
-
-                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
-                        let bag = builder.add_get_tuple_field(block, dict, DICT_BAG_INDEX)?;
-
-                        let element = builder.add_bag_get(block, bag)?;
-
-                        let key = builder.add_get_tuple_field(block, element, 0)?;
-                        let val = builder.add_get_tuple_field(block, element, 1)?;
-
-                        let new_state = call_function!(builder, block, [state, key, val]);
-
-                        Ok(new_state)
-                    };
-
-                    let state_layout = argument_layouts[0];
-                    let state_type =
-                        layout_spec(builder, &state_layout, &WhenRecursive::Unreachable)?;
-                    let init_state = state;
-
-                    add_loop(builder, block, state_type, init_state, loop_body)
-                }
-
                 ListMap { xs } => {
                     let list = env.symbols[xs];
 
@@ -1001,7 +976,7 @@ fn lowlevel_spec(
             // just dream up a unit value
             builder.add_make_tuple(block, &[])
         }
-        ListLen | DictSize => {
+        ListLen => {
             // TODO should this touch the heap cell?
             // just dream up a unit value
             builder.add_make_tuple(block, &[])
@@ -1086,47 +1061,6 @@ fn lowlevel_spec(
             let problem_code = builder.add_make_tuple(block, &[])?;
 
             builder.add_make_tuple(block, &[byte_index, string, is_ok, problem_code])
-        }
-        DictEmpty => match layout {
-            Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
-                let key_id = layout_spec(builder, key_layout, &WhenRecursive::Unreachable)?;
-                let value_id = layout_spec(builder, value_layout, &WhenRecursive::Unreachable)?;
-                new_dict(builder, block, key_id, value_id)
-            }
-            _ => unreachable!("empty array does not have a list layout"),
-        },
-        DictGetUnsafe => {
-            // NOTE DictGetUnsafe returns a { flag: Bool, value: v }
-            // when the flag is True, the value is found and defined;
-            // otherwise it is not and `Dict.get` should return `Err ...`
-
-            let dict = env.symbols[&arguments[0]];
-            let key = env.symbols[&arguments[1]];
-
-            // indicate that we use the key
-            builder.add_recursive_touch(block, key)?;
-
-            let bag = builder.add_get_tuple_field(block, dict, DICT_BAG_INDEX)?;
-            let cell = builder.add_get_tuple_field(block, dict, DICT_CELL_INDEX)?;
-
-            let _unit = builder.add_touch(block, cell)?;
-            builder.add_bag_get(block, bag)
-        }
-        DictInsert => {
-            let dict = env.symbols[&arguments[0]];
-            let key = env.symbols[&arguments[1]];
-            let value = env.symbols[&arguments[2]];
-
-            let key_value = builder.add_make_tuple(block, &[key, value])?;
-
-            let bag = builder.add_get_tuple_field(block, dict, DICT_BAG_INDEX)?;
-            let cell = builder.add_get_tuple_field(block, dict, DICT_CELL_INDEX)?;
-
-            let _unit = builder.add_update(block, update_mode_var, cell)?;
-
-            builder.add_bag_insert(block, bag, key_value)?;
-
-            with_new_heap_cell(builder, block, bag)
         }
         _other => {
             // println!("missing {:?}", _other);
@@ -1512,18 +1446,10 @@ fn builtin_spec(
     use Builtin::*;
 
     match builtin {
+        Dict(_, _) => todo!(),
         Int(_) | Bool => builder.add_tuple_type(&[]),
         Decimal | Float(_) => builder.add_tuple_type(&[]),
         Str => str_type(builder),
-        Dict(key_layout, value_layout) => {
-            let value_type = layout_spec_help(builder, value_layout, when_recursive)?;
-            let key_type = layout_spec_help(builder, key_layout, when_recursive)?;
-            let element_type = builder.add_tuple_type(&[key_type, value_type])?;
-
-            let cell = builder.add_heap_cell_type();
-            let bag = builder.add_bag_type(element_type)?;
-            builder.add_tuple_type(&[cell, bag])
-        }
         Set(key_layout) => {
             let value_type = builder.add_tuple_type(&[])?;
             let key_type = layout_spec_help(builder, key_layout, when_recursive)?;
@@ -1560,9 +1486,6 @@ fn static_list_type<TC: TypeContext>(builder: &mut TC) -> Result<TypeId> {
 const LIST_CELL_INDEX: u32 = 0;
 const LIST_BAG_INDEX: u32 = 1;
 
-const DICT_CELL_INDEX: u32 = LIST_CELL_INDEX;
-const DICT_BAG_INDEX: u32 = LIST_BAG_INDEX;
-
 #[allow(dead_code)]
 const BOX_CELL_INDEX: u32 = LIST_CELL_INDEX;
 const BOX_VALUE_INDEX: u32 = LIST_BAG_INDEX;
@@ -1580,17 +1503,6 @@ fn with_new_heap_cell(
 }
 
 fn new_list(builder: &mut FuncDefBuilder, block: BlockId, element_type: TypeId) -> Result<ValueId> {
-    let bag = builder.add_empty_bag(block, element_type)?;
-    with_new_heap_cell(builder, block, bag)
-}
-
-fn new_dict(
-    builder: &mut FuncDefBuilder,
-    block: BlockId,
-    key_type: TypeId,
-    value_type: TypeId,
-) -> Result<ValueId> {
-    let element_type = builder.add_tuple_type(&[key_type, value_type])?;
     let bag = builder.add_empty_bag(block, element_type)?;
     with_new_heap_cell(builder, block, bag)
 }

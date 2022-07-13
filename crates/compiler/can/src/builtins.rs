@@ -58,18 +58,6 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 Symbol::NUM_DIV_FRAC => Some(lowlevel_2(Symbol::NUM_DIV_FRAC, LowLevel::NumDivUnchecked, var_store)),
                 Symbol::NUM_DIV_TRUNC => Some(lowlevel_2(Symbol::NUM_DIV_TRUNC, LowLevel::NumDivUnchecked, var_store)),
 
-                Symbol::DICT_EMPTY => Some(dict_empty(Symbol::DICT_EMPTY, var_store)),
-
-                Symbol::SET_UNION => Some(lowlevel_2(Symbol::SET_UNION, LowLevel::DictUnion, var_store)),
-                Symbol::SET_DIFFERENCE => Some(lowlevel_2(Symbol::SET_DIFFERENCE, LowLevel::DictDifference, var_store)),
-                Symbol::SET_INTERSECTION => Some(lowlevel_2(Symbol::SET_INTERSECTION, LowLevel::DictIntersection, var_store)),
-
-                Symbol::SET_TO_LIST => Some(lowlevel_1(Symbol::SET_TO_LIST, LowLevel::DictKeys, var_store)),
-                Symbol::SET_REMOVE => Some(lowlevel_2(Symbol::SET_REMOVE, LowLevel::DictRemove, var_store)),
-                Symbol::SET_INSERT => Some(set_insert(Symbol::SET_INSERT, var_store)),
-                Symbol::SET_EMPTY => Some(set_empty(Symbol::SET_EMPTY, var_store)),
-                Symbol::SET_SINGLE => Some(set_single(Symbol::SET_SINGLE, var_store)),
-
                 _ => None,
             }
         }
@@ -94,7 +82,6 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 LowLevel::NumToIntChecked => unreachable!(),
                 LowLevel::NumToFloatChecked => unreachable!(),
                 LowLevel::NumDivUnchecked => unreachable!(),
-                LowLevel::DictEmpty => unreachable!(),
 
                 // these are used internally and not tied to a symbol
                 LowLevel::Hash => unimplemented!(),
@@ -155,21 +142,6 @@ map_symbol_to_lowlevel_and_arity! {
     ListSublist; LIST_SUBLIST_LOWLEVEL; 3,
     ListDropAt; LIST_DROP_AT; 2,
     ListSwap; LIST_SWAP; 3,
-
-    DictSize; DICT_LEN; 1,
-    DictInsert; DICT_INSERT; 3,
-    DictRemove; DICT_REMOVE; 2,
-    DictContains; DICT_CONTAINS; 2,
-    DictGetUnsafe; DICT_GET_LOWLEVEL; 2,
-    DictKeys; DICT_KEYS; 1,
-    DictValues; DICT_VALUES; 1,
-    DictUnion; DICT_UNION; 2,
-    DictIntersection; DICT_INTERSECTION; 2,
-    DictDifference; DICT_DIFFERENCE; 2,
-    DictWalk; DICT_WALK; 3,
-
-    SetFromList; SET_FROM_LIST; 1,
-    SetToDict; SET_TO_DICT; 1,
 
     NumAdd; NUM_ADD; 2,
     NumAddWrap; NUM_ADD_WRAP; 2,
@@ -561,97 +533,5 @@ fn to_num_checked(symbol: Symbol, var_store: &mut VarStore, lowlevel: LowLevel) 
         var_store,
         body,
         ret_var,
-    )
-}
-
-/// Dict.empty : Dict * *
-fn dict_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let dict_var = var_store.fresh();
-    let body = RunLowLevel {
-        op: LowLevel::DictEmpty,
-        args: vec![],
-        ret_var: dict_var,
-    };
-
-    Def {
-        annotation: None,
-        expr_var: dict_var,
-        loc_expr: Loc::at_zero(body),
-        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
-        pattern_vars: SendMap::default(),
-    }
-}
-
-/// Set.empty : Set *
-fn set_empty(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let set_var = var_store.fresh();
-    let body = RunLowLevel {
-        op: LowLevel::DictEmpty,
-        args: vec![],
-        ret_var: set_var,
-    };
-
-    Def {
-        annotation: None,
-        expr_var: set_var,
-        loc_expr: Loc::at_zero(body),
-        loc_pattern: Loc::at_zero(Pattern::Identifier(symbol)),
-        pattern_vars: SendMap::default(),
-    }
-}
-
-/// Set.insert : Set k, k -> Set k
-fn set_insert(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let dict_var = var_store.fresh();
-    let key_var = var_store.fresh();
-    let val_var = Variable::EMPTY_RECORD;
-
-    let body = RunLowLevel {
-        op: LowLevel::DictInsert,
-        args: vec![
-            (dict_var, Var(Symbol::ARG_1)),
-            (key_var, Var(Symbol::ARG_2)),
-            (val_var, EmptyRecord),
-        ],
-        ret_var: dict_var,
-    };
-
-    defn(
-        symbol,
-        vec![(dict_var, Symbol::ARG_1), (key_var, Symbol::ARG_2)],
-        var_store,
-        body,
-        dict_var,
-    )
-}
-
-/// Set.single : k -> Set k
-fn set_single(symbol: Symbol, var_store: &mut VarStore) -> Def {
-    let key_var = var_store.fresh();
-    let set_var = var_store.fresh();
-    let value_var = Variable::EMPTY_RECORD;
-
-    let empty = RunLowLevel {
-        op: LowLevel::DictEmpty,
-        args: vec![],
-        ret_var: set_var,
-    };
-
-    let body = RunLowLevel {
-        op: LowLevel::DictInsert,
-        args: vec![
-            (set_var, empty),
-            (key_var, Var(Symbol::ARG_1)),
-            (value_var, EmptyRecord),
-        ],
-        ret_var: set_var,
-    };
-
-    defn(
-        symbol,
-        vec![(key_var, Symbol::ARG_1)],
-        var_store,
-        body,
-        set_var,
     )
 }

@@ -23,10 +23,6 @@ pub enum HigherOrder {
     ListSortWith {
         xs: Symbol,
     },
-    DictWalk {
-        xs: Symbol,
-        state: Symbol,
-    },
 }
 
 impl HigherOrder {
@@ -37,7 +33,6 @@ impl HigherOrder {
             HigherOrder::ListMap3 { .. } => 3,
             HigherOrder::ListMap4 { .. } => 4,
             HigherOrder::ListSortWith { .. } => 2,
-            HigherOrder::DictWalk { .. } => 2,
         }
     }
 
@@ -51,7 +46,6 @@ impl HigherOrder {
             ListMap2 { .. } => 3,
             ListMap3 { .. } => 4,
             ListMap4 { .. } => 5,
-            DictWalk { .. } => 3,
         }
     }
 
@@ -85,18 +79,6 @@ enum FirstOrder {
     ListAppend,
     ListPrepend,
     ListSwap,
-    DictSize,
-    DictEmpty,
-    DictInsert,
-    DictRemove,
-    DictContains,
-    DictGetUnsafe,
-    DictKeys,
-    DictValues,
-    DictUnion,
-    DictIntersection,
-    DictDifference,
-    SetFromList,
     NumAdd,
     NumAddWrap,
     NumAddChecked,
