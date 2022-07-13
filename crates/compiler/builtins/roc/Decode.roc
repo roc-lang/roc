@@ -27,7 +27,9 @@ interface Decode
         fromBytesPartial,
         fromBytes,
     ]
-    imports []
+    imports [
+        List,
+    ]
 
 DecodeError : [TooShort]
 
