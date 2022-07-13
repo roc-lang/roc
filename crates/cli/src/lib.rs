@@ -10,6 +10,7 @@ use roc_error_macros::{internal_error, user_error};
 use roc_load::{Expectations, LoadingProblem, Threading};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
+use roc_region::all::Region;
 use roc_repl_cli::expect_mono_module_to_dylib;
 use roc_target::TargetInfo;
 use std::env;
@@ -823,7 +824,7 @@ impl ExecutableFile {
     unsafe fn execve(&self, argv: &[*const c_char], envp: &[*const c_char]) -> c_int {
         match self {
             #[cfg(target_os = "linux")]
-            ExecutableFile::MemFd(fd, path) => libc::fexecve(*fd, argv.as_ptr(), envp.as_ptr()),
+            ExecutableFile::MemFd(fd, _path) => libc::fexecve(*fd, argv.as_ptr(), envp.as_ptr()),
 
             #[cfg(all(target_family = "unix", not(target_os = "linux")))]
             ExecutableFile::OnDisk(_, path) => {
@@ -913,8 +914,7 @@ unsafe fn roc_run_native_debug(
 
                         let shared_memory_ptr: *const u8 = shared_ptr.cast();
 
-                        // render_expect_failure(arena, &mut expectations, interns, shared_memory_ptr);
-                        todo!()
+                        render_expect_failure(arena, &mut expectations, interns, shared_memory_ptr);
                     }
                     _ => println!("received signal {}", sig),
                 }
@@ -922,6 +922,107 @@ unsafe fn roc_run_native_debug(
         }
         _ => unreachable!(),
     }
+}
+
+fn render_expect_failure<'a>(
+    arena: &'a Bump,
+    expectations: &mut VecMap<ModuleId, Expectations>,
+    interns: &'a Interns,
+    start: *const u8,
+) {
+    use roc_reporting::report::Report;
+    use roc_reporting::report::RocDocAllocator;
+    use ven_pretty::DocAllocator;
+
+    // we always run programs as the host
+    let target_info = (&target_lexicon::Triple::host()).into();
+
+    let region_bytes: [u8; 8] = unsafe { *(start.cast()) };
+    let region: Region = unsafe { std::mem::transmute(region_bytes) };
+
+    let module_id_bytes: [u8; 4] = unsafe { *(start.add(8).cast()) };
+    let module_id: ModuleId = unsafe { std::mem::transmute(module_id_bytes) };
+
+    let data = expectations.get_mut(&module_id).unwrap();
+    let current = data.expectations.get(&region).unwrap();
+    let subs = arena.alloc(&mut data.subs);
+
+    // TODO cache these line offsets?
+    let path = &data.path;
+    let filename = data.path.to_owned();
+    let file_string = std::fs::read_to_string(path).unwrap();
+    let src_lines: Vec<_> = file_string.lines().collect();
+
+    let line_info = roc_region::all::LineInfo::new(&file_string);
+    let line_col_region = line_info.convert_region(region);
+
+    let alloc = RocDocAllocator::new(&src_lines, module_id, interns);
+
+    // 8 bytes for region, 4 for module id
+    let start_offset = 12;
+
+    let (symbols, variables): (Vec<_>, Vec<_>) = current.iter().map(|(a, b)| (*a, *b)).unzip();
+
+    let error_types: Vec<_> = variables
+        .iter()
+        .map(|variable| {
+            let (error_type, _) = subs.var_to_error_type(*variable);
+            error_type
+        })
+        .collect();
+
+    let expressions =
+        roc_repl_expect::get_values(target_info, arena, subs, start, start_offset, &variables)
+            .unwrap();
+
+    use roc_fmt::annotation::Formattable;
+    use roc_reporting::error::r#type::error_type_to_doc;
+
+    let it =
+        symbols
+            .iter()
+            .zip(expressions)
+            .zip(error_types)
+            .map(|((symbol, expr), error_type)| {
+                let mut buf = roc_fmt::Buf::new_in(arena);
+                expr.format(&mut buf, 0);
+
+                alloc.vcat([
+                    alloc
+                        .symbol_unqualified(*symbol)
+                        .append(" : ")
+                        .append(error_type_to_doc(&alloc, error_type)),
+                    alloc
+                        .symbol_unqualified(*symbol)
+                        .append(" = ")
+                        .append(buf.into_bump_str()),
+                ])
+            });
+
+    let doc = alloc.stack([
+        alloc.text("This expectation failed:"),
+        alloc.region(line_col_region),
+        alloc.text("The variables used in this expression are:"),
+        alloc.stack(it),
+    ]);
+
+    let report = Report {
+        title: "EXPECT FAILED".into(),
+        doc,
+        filename,
+        severity: roc_reporting::report::Severity::RuntimeError,
+    };
+
+    let mut buf = String::new();
+
+    report.render(
+        roc_reporting::report::RenderTarget::ColorTerminal,
+        &mut buf,
+        &alloc,
+        &roc_reporting::report::DEFAULT_PALETTE,
+    );
+
+    println!("{}", buf);
 }
 
 #[cfg(target_os = "linux")]

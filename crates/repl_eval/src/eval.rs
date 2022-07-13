@@ -25,6 +25,7 @@ struct Env<'a, 'env> {
     target_info: TargetInfo,
 }
 
+#[derive(Debug)]
 pub enum ToAstProblem {
     FunctionLayout,
 }

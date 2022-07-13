@@ -3444,6 +3444,7 @@ dependencies = [
  "roc_parse",
  "roc_region",
  "roc_repl_cli",
+ "roc_repl_expect",
  "roc_reporting",
  "roc_target",
  "roc_test_utils",
