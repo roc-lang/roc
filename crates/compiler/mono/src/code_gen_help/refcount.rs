@@ -519,41 +519,27 @@ fn modify_refcount<'a>(
             // This is necessary because roc_dealloc requires this as an argument!
             let size_sym = root.create_symbol(ident_ids, "size");
             let size_expr = match layout {
-                Layout::Builtin(builtin) => match builtin {
-                    Builtin::Str => Expr::Call(Call {
+                Layout::Builtin(builtin) => {
+                    let op = match builtin {
+                        Builtin::Str => LowLevel::StrGetCapacity,
+                        Builtin::List(_) => LowLevel::ListGetCapacity,
+                        Builtin::Dict(_, _) => LowLevel::DictGetCapacity,
+                        Builtin::Set(_) => LowLevel::SetGetCapacity,
+                        Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal => {
+                            // We should never attempt to decrement the reference count of these,
+                            // because they aren't reference-counted types!
+                            unreachable!();
+                        }
+                    };
+
+                    Expr::Call(Call {
                         call_type: CallType::LowLevel {
-                            op: LowLevel::StrGetCapacity,
+                            op,
                             update_mode: UpdateModeId::BACKEND_DUMMY,
                         },
                         arguments: root.arena.alloc([rc_ptr]),
-                    }),
-                    Builtin::List(_) => Expr::Call(Call {
-                        call_type: CallType::LowLevel {
-                            op: LowLevel::ListGetCapacity,
-                            update_mode: UpdateModeId::BACKEND_DUMMY,
-                        },
-                        arguments: root.arena.alloc([rc_ptr]),
-                    }),
-                    Builtin::Dict(_, _) => Expr::Call(Call {
-                        call_type: CallType::LowLevel {
-                            op: LowLevel::DictGetCapacity,
-                            update_mode: UpdateModeId::BACKEND_DUMMY,
-                        },
-                        arguments: root.arena.alloc([rc_ptr]),
-                    }),
-                    Builtin::Set(_) => Expr::Call(Call {
-                        call_type: CallType::LowLevel {
-                            op: LowLevel::SetGetCapacity,
-                            update_mode: UpdateModeId::BACKEND_DUMMY,
-                        },
-                        arguments: root.arena.alloc([rc_ptr]),
-                    }),
-                    Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal => {
-                        // We should never attempt to decrement the reference count of these,
-                        // because they aren't reference-counted types!
-                        unreachable!();
-                    }
-                },
+                    })
+                }
                 Layout::Boxed(inner) => {
                     // Box heap-allocates enough bytes to store its inner type
                     let stack_size = inner.stack_size(root.target_info);
