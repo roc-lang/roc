@@ -10,6 +10,7 @@ use crate::llvm::build_list::{layout_width, pass_as_opaque};
 use crate::llvm::convert::{basic_type_from_layout, zig_dict_type};
 use crate::llvm::refcounting::Mode;
 use inkwell::attributes::{Attribute, AttributeLoc};
+use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::types::BasicType;
 use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, IntValue, StructValue};
@@ -695,6 +696,28 @@ pub fn dict_values<'a, 'ctx, 'env>(
         ],
         bitcode::DICT_VALUES,
     )
+}
+
+/// Dict.capacity : Dict * * -> Nat
+pub fn dict_capacity<'ctx>(
+    builder: &Builder<'ctx>,
+    wrapper_struct: StructValue<'ctx>,
+) -> IntValue<'ctx> {
+    builder
+        .build_extract_value(wrapper_struct, Builtin::WRAPPER_CAPACITY, "dict_capacity")
+        .unwrap()
+        .into_int_value()
+}
+
+/// Set.capacity : Set * -> Nat
+pub fn set_capacity<'ctx>(
+    builder: &Builder<'ctx>,
+    wrapper_struct: StructValue<'ctx>,
+) -> IntValue<'ctx> {
+    builder
+        .build_extract_value(wrapper_struct, Builtin::WRAPPER_CAPACITY, "set_capacity")
+        .unwrap()
+        .into_int_value()
 }
 
 #[allow(clippy::too_many_arguments)]

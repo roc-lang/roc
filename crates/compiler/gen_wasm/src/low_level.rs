@@ -243,6 +243,7 @@ impl<'a> LowLevelCall<'a> {
             StrCountUtf8Bytes => {
                 self.load_args_and_call_zig(backend, bitcode::STR_COUNT_UTF8_BYTES)
             }
+            StrGetCapacity => self.load_args_and_call_zig(backend, bitcode::STR_CAPACITY),
             StrToNum => {
                 let number_layout = match self.ret_layout {
                     Layout::Struct { field_layouts, .. } => field_layouts[0],
@@ -308,7 +309,37 @@ impl<'a> LowLevelCall<'a> {
                     let (local_id, offset) =
                         location.local_and_offset(backend.storage.stack_frame_pointer);
                     backend.code_builder.get_local(local_id);
-                    backend.code_builder.i32_load(Align::Bytes4, offset + 4);
+                    // List is stored as (pointer, length, capacity),
+                    // with each of those fields being 4 bytes on wasm.
+                    // So the length is 4 bytes after the start of the struct.
+                    //
+                    // WRAPPER_LEN represents the index of the length field
+                    // (which is 1 as of the writing of this comment). If the field order
+                    // ever changes, WRAPPER_LEN should be updated and this logic should
+                    // continue to work even though this comment may become inaccurate.
+                    backend
+                        .code_builder
+                        .i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_LEN));
+                }
+                _ => internal_error!("invalid storage for List"),
+            },
+
+            ListGetCapacity => match backend.storage.get(&self.arguments[0]) {
+                StoredValue::StackMemory { location, .. } => {
+                    let (local_id, offset) =
+                        location.local_and_offset(backend.storage.stack_frame_pointer);
+                    backend.code_builder.get_local(local_id);
+                    // List is stored as (pointer, length, capacity),
+                    // with each of those fields being 4 bytes on wasm.
+                    // So the capacity is 8 bytes after the start of the struct.
+                    //
+                    // WRAPPER_CAPACITY represents the index of the capacity field
+                    // (which is 2 as of the writing of this comment). If the field order
+                    // ever changes, WRAPPER_CAPACITY should be updated and this logic should
+                    // continue to work even though this comment may become inaccurate.
+                    backend
+                        .code_builder
+                        .i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_CAPACITY));
                 }
                 _ => internal_error!("invalid storage for List"),
             },
@@ -1780,6 +1811,46 @@ impl<'a> LowLevelCall<'a> {
             BoxExpr | UnboxExpr => {
                 unreachable!("The {:?} operation is turned into mono Expr", self.lowlevel)
             }
+
+            DictGetCapacity => match backend.storage.get(&self.arguments[0]) {
+                StoredValue::StackMemory { location, .. } => {
+                    let (local_id, offset) =
+                        location.local_and_offset(backend.storage.stack_frame_pointer);
+                    backend.code_builder.get_local(local_id);
+                    // Dict is stored as (pointer, length, capacity),
+                    // with each of those fields being 4 bytes on wasm.
+                    // So the capacity is 8 bytes after the start of the struct.
+                    //
+                    // WRAPPER_CAPACITY represents the index of the capacity field
+                    // (which is 2 as of the writing of this comment). If the field order
+                    // ever changes, WRAPPER_CAPACITY should be updated and this logic should
+                    // continue to work even though this comment may become inaccurate.
+                    backend
+                        .code_builder
+                        .i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_CAPACITY));
+                }
+                _ => internal_error!("invalid storage for Dict"),
+            },
+
+            SetGetCapacity => match backend.storage.get(&self.arguments[0]) {
+                StoredValue::StackMemory { location, .. } => {
+                    let (local_id, offset) =
+                        location.local_and_offset(backend.storage.stack_frame_pointer);
+                    backend.code_builder.get_local(local_id);
+                    // Set is stored as (pointer, length, capacity),
+                    // with each of those fields being 4 bytes on wasm.
+                    // So the capacity is 8 bytes after the start of the struct.
+                    //
+                    // WRAPPER_CAPACITY represents the index of the capacity field
+                    // (which is 2 as of the writing of this comment). If the field order
+                    // ever changes, WRAPPER_CAPACITY should be updated and this logic should
+                    // continue to work even though this comment may become inaccurate.
+                    backend
+                        .code_builder
+                        .i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_CAPACITY));
+                }
+                _ => internal_error!("invalid storage for Dict"),
+            },
 
             Unreachable => match self.ret_storage {
                 StoredValue::VirtualMachineStack { value_type, .. }
