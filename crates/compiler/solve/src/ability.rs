@@ -553,15 +553,6 @@ impl ObligationCache<'_> {
                     }
                     Erroneous(_) => return Err(var),
                 },
-                Alias(name, _, _, AliasKind::Opaque) => {
-                    let opaque = *name;
-                    if self
-                        .check_opaque_and_read(subs, opaque, Symbol::ENCODE_ENCODING)
-                        .is_err()
-                    {
-                        return Err(var);
-                    }
-                }
                 Alias(
                     Symbol::NUM_U8
                     | Symbol::NUM_U16
@@ -576,12 +567,22 @@ impl ObligationCache<'_> {
                     | Symbol::NUM_NAT
                     | Symbol::NUM_F32
                     | Symbol::NUM_F64
-                    | Symbol::NUM_DEC,
+                    | Symbol::NUM_DEC
+                    | Symbol::NUM_NUM,
                     _,
                     _,
                     _,
                 ) => {
                     // yes
+                }
+                Alias(name, _, _, AliasKind::Opaque) => {
+                    let opaque = *name;
+                    if self
+                        .check_opaque_and_read(subs, opaque, Symbol::ENCODE_ENCODING)
+                        .is_err()
+                    {
+                        return Err(var);
+                    }
                 }
                 Alias(_, arguments, real_type_var, _) => {
                     push_var_slice!(arguments.all_variables());

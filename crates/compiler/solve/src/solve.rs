@@ -2233,7 +2233,10 @@ fn make_specialization_decision(subs: &Subs, var: Variable) -> SpecializeDecisio
     use Content::*;
     use SpecializationTypeKey::*;
     match subs.get_content_without_compacting(var) {
-        Structure(_) | Alias(_, _, _, AliasKind::Structural) => {
+        Alias(opaque, _, _, AliasKind::Opaque) if opaque.module_id() != ModuleId::NUM => {
+            SpecializeDecision::Specialize(Opaque(*opaque))
+        }
+        Structure(_) | Alias(_, _, _, _) => {
             // This is a structural type, find the name of the derived ability function it
             // should use.
             match roc_derive_key::Derived::encoding(subs, var) {
@@ -2258,7 +2261,6 @@ fn make_specialization_decision(subs: &Subs, var: Variable) -> SpecializeDecisio
                 }
             }
         }
-        Alias(opaque, _, _, AliasKind::Opaque) => SpecializeDecision::Specialize(Opaque(*opaque)),
         Error => SpecializeDecision::Drop,
         FlexAbleVar(_, _)
         | RigidAbleVar(..)
