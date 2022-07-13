@@ -258,6 +258,7 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
         RocType::Unit
         | RocType::Num(_)
         | RocType::Bool
+        | RocType::RocResult(_, _)
         | RocType::RocStr
         | RocType::RocDict(_, _)
         | RocType::RocSet(_)
@@ -619,6 +620,7 @@ pub struct {name} {{
                     | RocType::RocSet(_)
                     | RocType::RocBox(_)
                     | RocType::TagUnion(_)
+                    | RocType::RocResult(_, _)
                     | RocType::RecursivePointer { .. } => {
                         owned_ret_type = type_name(*payload_id, types);
                         borrowed_ret_type = format!("&{}", owned_ret_type);
@@ -1111,6 +1113,7 @@ pub struct {name} {{
                         | RocType::RocSet(_)
                         | RocType::RocBox(_)
                         | RocType::TagUnion(_)
+                        | RocType::RocResult(_, _)
                         | RocType::Struct { .. }
                         | RocType::RecursivePointer { .. } => {
                             format!(".field({deref_str}{actual_self}.{tag_name})")
@@ -1286,6 +1289,13 @@ fn type_name(id: TypeId, types: &Types) -> String {
         RocType::RocSet(elem_id) => format!("roc_std::RocSet<{}>", type_name(*elem_id, types)),
         RocType::RocList(elem_id) => format!("roc_std::RocList<{}>", type_name(*elem_id, types)),
         RocType::RocBox(elem_id) => format!("roc_std::RocBox<{}>", type_name(*elem_id, types)),
+        RocType::RocResult(ok_id, err_id) => {
+            format!(
+                "roc_std::RocResult<{}, {}>",
+                type_name(*ok_id, types),
+                type_name(*err_id, types)
+            )
+        }
         RocType::Struct { name, .. }
         | RocType::TagUnionPayload { name, .. }
         | RocType::TagUnion(RocTagUnion::NonRecursive { name, .. })
@@ -1410,6 +1420,7 @@ pub struct {name} {{
             | RocType::RocDict(_, _)
             | RocType::RocSet(_)
             | RocType::RocBox(_)
+            | RocType::RocResult(_, _)
             | RocType::TagUnion(_)
             | RocType::RecursivePointer { .. } => {
                 owned_ret_type = type_name(non_null_payload, types);
@@ -1647,6 +1658,7 @@ pub struct {name} {{
             | RocType::RocDict(_, _)
             | RocType::RocSet(_)
             | RocType::RocBox(_)
+            | RocType::RocResult(_, _)
             | RocType::TagUnion(_)
             | RocType::RecursivePointer { .. } => {
                 format!(
@@ -1871,6 +1883,7 @@ fn cannot_derive_default(roc_type: &RocType, types: &Types) -> bool {
     match roc_type {
         RocType::Unit
         | RocType::TagUnion { .. }
+        | RocType::RocResult(_, _)
         | RocType::RecursivePointer { .. }
         | RocType::Function(_, _) => true,
         RocType::RocStr | RocType::Bool | RocType::Num(_) => false,
@@ -1915,6 +1928,10 @@ fn cannot_derive_copy(roc_type: &RocType, types: &Types) -> bool {
                     .any(|id| cannot_derive_copy(types.get_type(*id), types))
             })
         }
+        RocType::RocResult(ok_id, err_id) => {
+            cannot_derive_copy(types.get_type(*ok_id), types)
+                || cannot_derive_copy(types.get_type(*err_id), types)
+        }
         RocType::Struct { fields, .. } => fields
             .iter()
             .any(|(_, type_id)| cannot_derive_copy(types.get_type(*type_id), types)),
@@ -1946,6 +1963,10 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
         | RocType::Function(_, _) => false,
         RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
             has_float_help(types.get_type(*id), types, do_not_recurse)
+        }
+        RocType::RocResult(ok_id, err_id) => {
+            has_float_help(types.get_type(*ok_id), types, do_not_recurse)
+                || has_float_help(types.get_type(*err_id), types, do_not_recurse)
         }
         RocType::RocDict(key_id, val_id) => {
             has_float_help(types.get_type(*key_id), types, do_not_recurse)

@@ -143,6 +143,7 @@ impl Types {
 pub enum RocType {
     RocStr,
     Bool,
+    RocResult(TypeId, TypeId),
     Num(RocNum),
     RocList(TypeId),
     RocDict(TypeId, TypeId),
@@ -478,11 +479,47 @@ fn add_type_help<'a>(
             // This can happen when unwrapping a tag union; don't do anything.
             todo!()
         }
-        Content::Alias(name, _, real_var, _) => {
+        Content::Alias(name, alias_vars, real_var, _) => {
             if name.is_builtin() {
                 match layout {
                     Layout::Builtin(builtin) => {
                         add_builtin_type(env, builtin, var, opt_name, types, layout)
+                    }
+                    Layout::Union(union_layout) if *name == Symbol::RESULT_RESULT => {
+                        match union_layout {
+                            UnionLayout::NonRecursive(tag_layouts) => {
+                                // Result should always have exactly two tags: Ok and Err
+                                debug_assert_eq!(tag_layouts.len(), 2);
+
+                                // Both tags should have exactly 1 payload
+                                debug_assert_eq!(tag_layouts[0].len(), 1);
+                                debug_assert_eq!(tag_layouts[1].len(), 1);
+
+                                let type_vars =
+                                    env.subs.get_subs_slice(alias_vars.type_variables());
+
+                                let ok_layout = tag_layouts[0][0];
+                                let ok_var = type_vars[0];
+                                let ok_id = add_type_help(env, ok_layout, ok_var, None, types);
+
+                                let err_layout = tag_layouts[1][0];
+                                let err_var = type_vars[1];
+                                let err_id = add_type_help(env, err_layout, err_var, None, types);
+
+                                let type_id = types.add(RocType::RocResult(ok_id, err_id), layout);
+
+                                types.depends(type_id, ok_id);
+                                types.depends(type_id, err_id);
+
+                                type_id
+                            }
+                            UnionLayout::Recursive(_)
+                            | UnionLayout::NonNullableUnwrapped(_)
+                            | UnionLayout::NullableWrapped { .. }
+                            | UnionLayout::NullableUnwrapped { .. } => {
+                                unreachable!();
+                            }
+                        }
                     }
                     _ => {
                         unreachable!()
