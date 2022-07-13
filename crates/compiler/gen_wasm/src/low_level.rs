@@ -1958,10 +1958,10 @@ impl<'a> LowLevelCall<'a> {
                 FloatWidth::F32 => {
                     self.load_args(backend);
                     backend.code_builder.f64_promote_f32();
-                    self.load_args_and_call_zig(backend, bitcode::STR_FROM_FLOAT);
+                    self.load_args_and_call_zig(backend, &bitcode::STR_FROM_FLOAT[width]);
                 }
                 FloatWidth::F64 => {
-                    self.load_args_and_call_zig(backend, bitcode::STR_FROM_FLOAT);
+                    self.load_args_and_call_zig(backend, &bitcode::STR_FROM_FLOAT[width]);
                 }
                 FloatWidth::F128 => todo!("F128 to Str"),
             },

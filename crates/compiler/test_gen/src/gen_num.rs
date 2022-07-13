@@ -3056,6 +3056,54 @@ fn num_to_str_i64() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn num_to_str_f32() {
+    use roc_std::RocStr;
+
+    assert_evals_to!(r#"Num.toStr -10.75f32"#, RocStr::from("-1.075e+01"), RocStr);
+    assert_evals_to!(r#"Num.toStr -1.75f32"#, RocStr::from("-1.75e+00"), RocStr);
+    assert_evals_to!(r#"Num.toStr 0f32"#, RocStr::from("0.0e+00"), RocStr);
+    assert_evals_to!(r#"Num.toStr 1.75f32"#, RocStr::from("1.75e+00"), RocStr);
+    assert_evals_to!(r#"Num.toStr 10.75f32"#, RocStr::from("1.075e+01"), RocStr);
+
+    assert_evals_to!(
+        r#"Num.toStr Num.maxF32"#,
+        RocStr::from("3.40282346e+38"),
+        RocStr
+    );
+
+    assert_evals_to!(
+        r#"Num.toStr Num.minF32"#,
+        RocStr::from("-3.40282346e+38"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn num_to_str_f64() {
+    use roc_std::RocStr;
+
+    assert_evals_to!(r#"Num.toStr -10.75f64"#, RocStr::from("-1.075e+01"), RocStr);
+    assert_evals_to!(r#"Num.toStr -1.75f64"#, RocStr::from("-1.75e+00"), RocStr);
+    assert_evals_to!(r#"Num.toStr 0f64"#, RocStr::from("0.0e+00"), RocStr);
+    assert_evals_to!(r#"Num.toStr 1.75f64"#, RocStr::from("1.75e+00"), RocStr);
+    assert_evals_to!(r#"Num.toStr 10.75f64"#, RocStr::from("1.075e+01"), RocStr);
+
+    assert_evals_to!(
+        r#"Num.toStr Num.maxF64"#,
+        RocStr::from("1.7976931348623157e+308"),
+        RocStr
+    );
+
+    assert_evals_to!(
+        r#"Num.toStr Num.minF64"#,
+        RocStr::from("-1.7976931348623157e+308"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn u8_addition_greater_than_i8() {
     assert_evals_to!(
         indoc!(

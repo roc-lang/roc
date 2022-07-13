@@ -3,7 +3,7 @@ use crate::llvm::build::{Env, Scope};
 use inkwell::builder::Builder;
 use inkwell::values::{BasicValueEnum, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
-use roc_builtins::bitcode::{self, IntWidth};
+use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
 use roc_target::PtrWidth;
@@ -103,11 +103,15 @@ pub fn decode_from_utf8_result<'a, 'ctx, 'env>(
     }
 }
 
-/// Str.fromFloat : Int -> Str
+/// Str.fromFloat : Float * -> Str
 pub fn str_from_float<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    scope: &Scope<'a, 'ctx>,
-    int_symbol: Symbol,
+    float: BasicValueEnum<'ctx>,
+    float_width: FloatWidth,
+) -> BasicValueEnum<'ctx> {
+    call_str_bitcode_fn(env, &[float], &bitcode::STR_FROM_FLOAT[float_width])
+}
+
 ) -> BasicValueEnum<'ctx> {
     let float = load_symbol(scope, &int_symbol);
 
