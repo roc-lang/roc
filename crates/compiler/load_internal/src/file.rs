@@ -2095,12 +2095,20 @@ fn update<'a>(
                     .insert(ModuleId::DICT, Region::zero());
 
                 header
+                    .exposed_imports
+                    .insert(Ident::from("Dict"), (Symbol::DICT_DICT, Region::zero()));
+
+                header
                     .package_qualified_imported_modules
                     .insert(PackageQualified::Unqualified(ModuleId::SET));
 
                 header
                     .imported_modules
                     .insert(ModuleId::SET, Region::zero());
+
+                header
+                    .exposed_imports
+                    .insert(Ident::from("Set"), (Symbol::SET_SET, Region::zero()));
 
                 header
                     .package_qualified_imported_modules

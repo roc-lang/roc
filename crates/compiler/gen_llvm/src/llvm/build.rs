@@ -3,9 +3,9 @@ use crate::llvm::bitcode::{
     call_str_bitcode_fn, call_void_bitcode_fn,
 };
 use crate::llvm::build_list::{
-    self, allocate_list, empty_polymorphic_list, list_append_unsafe, list_concat, list_drop_at,
-    list_get_unsafe, list_len, list_map, list_map2, list_map3, list_map4, list_prepend,
-    list_replace_unsafe, list_reserve, list_sort_with, list_sublist, list_swap,
+    self, allocate_list, empty_polymorphic_list, list_append_unsafe, list_capacity, list_concat,
+    list_drop_at, list_get_unsafe, list_len, list_map, list_map2, list_map3, list_map4,
+    list_prepend, list_replace_unsafe, list_reserve, list_sort_with, list_sublist, list_swap,
     list_symbol_to_c_abi, list_to_c_abi, list_with_capacity, pass_update_mode,
 };
 use crate::llvm::build_str::{str_from_float, str_from_int};
@@ -5661,11 +5661,18 @@ fn run_low_level<'a, 'ctx, 'env>(
             call_bitcode_fn(env, &[string, index], bitcode::STR_GET_SCALAR_UNSAFE)
         }
         StrCountUtf8Bytes => {
-            // Str.countGraphemes : Str -> Nat
+            // Str.countUtf8Bytes : Str -> Nat
             debug_assert_eq!(args.len(), 1);
 
             let string = load_symbol(scope, &args[0]);
             call_bitcode_fn(env, &[string], bitcode::STR_COUNT_UTF8_BYTES)
+        }
+        StrGetCapacity => {
+            // Str.capacity : Str -> Nat
+            debug_assert_eq!(args.len(), 1);
+
+            let string = load_symbol(scope, &args[0]);
+            call_bitcode_fn(env, &[string], bitcode::STR_CAPACITY)
         }
         StrSubstringUnsafe => {
             // Str.substringUnsafe : Str, Nat, Nat -> Str
@@ -5714,12 +5721,20 @@ fn run_low_level<'a, 'ctx, 'env>(
             call_str_bitcode_fn(env, &[string], bitcode::STR_TRIM_RIGHT)
         }
         ListLen => {
-            // List.len : List * -> Int
+            // List.len : List * -> Nat
             debug_assert_eq!(args.len(), 1);
 
             let arg = load_symbol(scope, &args[0]);
 
             list_len(env.builder, arg.into_struct_value()).into()
+        }
+        ListGetCapacity => {
+            // List.capacity : List * -> Nat
+            debug_assert_eq!(args.len(), 1);
+
+            let arg = load_symbol(scope, &args[0]);
+
+            list_capacity(env.builder, arg.into_struct_value()).into()
         }
         ListWithCapacity => {
             // List.withCapacity : Nat -> List a

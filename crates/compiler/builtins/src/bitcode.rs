@@ -314,6 +314,7 @@ pub const STR_STR_SPLIT: &str = "roc_builtins.str.str_split";
 pub const STR_TO_SCALARS: &str = "roc_builtins.str.to_scalars";
 pub const STR_COUNT_GRAPEHEME_CLUSTERS: &str = "roc_builtins.str.count_grapheme_clusters";
 pub const STR_COUNT_UTF8_BYTES: &str = "roc_builtins.str.count_utf8_bytes";
+pub const STR_CAPACITY: &str = "roc_builtins.str.capacity";
 pub const STR_STARTS_WITH: &str = "roc_builtins.str.starts_with";
 pub const STR_STARTS_WITH_SCALAR: &str = "roc_builtins.str.starts_with_scalar";
 pub const STR_ENDS_WITH: &str = "roc_builtins.str.ends_with";

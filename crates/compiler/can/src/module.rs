@@ -967,5 +967,6 @@ fn fix_values_captured_in_closure_expr(
             let (_, loc_arg) = &mut **argument;
             fix_values_captured_in_closure_expr(&mut loc_arg.value, no_capture_symbols);
         }
+        OpaqueWrapFunction(_) => {}
     }
 }

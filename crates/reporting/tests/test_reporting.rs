@@ -7483,14 +7483,14 @@ All branches in an `if` must have the same type!
         // and checking it during can. The reason the error appears is because it is parsed as
         // Apply(Error(OtherModule), [@Age, 21])
         @r###"
-    ── OPAQUE TYPE NOT APPLIED ─────────────────────────────── /code/proj/Main.roc ─
+    ── OPAQUE TYPE NOT DEFINED ─────────────────────────────── /code/proj/Main.roc ─
 
-    This opaque type is not applied to an argument:
+    The opaque type Age referenced here is not defined:
 
     4│      OtherModule.@Age 21
                         ^^^^
 
-    Note: Opaque types always wrap exactly one argument!
+    Note: It looks like there are no opaque types declared in this scope yet!
 
     ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
@@ -9549,6 +9549,32 @@ All branches in an `if` must have the same type!
     both types are the same opaque type. Did you mean to create an opaque
     type by wrapping it? If I have an opaque type Age := U32 I can create
     an instance of this opaque type by doing @Age 23.
+    "###
+    );
+
+    test_report!(
+        opaque_wrap_function_mismatch,
+        indoc!(
+            r#"
+            A := U8
+            List.map [1u16, 2u16, 3u16] @A
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd argument to `map` is not what I expect:
+
+    5│      List.map [1u16, 2u16, 3u16] @A
+                                        ^^
+
+    This A opaque wrapping has the type:
+
+        U8 -> A
+
+    But `map` needs the 2nd argument to be:
+
+        U16 -> A
     "###
     );
 }

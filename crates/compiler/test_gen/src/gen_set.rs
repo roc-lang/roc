@@ -18,9 +18,7 @@ fn empty_len() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "set" imports [ Set ] provides [main] to "./platform"
-
-            main = Set.len Set.empty
+            Set.len Set.empty
             "#
         ),
         0,
@@ -34,9 +32,7 @@ fn single_len() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "set" imports [ Set ] provides [main] to "./platform"
-
-            main = Set.len (Set.single 42)
+            Set.len (Set.single 42)
             "#
         ),
         1,
@@ -50,9 +46,7 @@ fn single_to_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "set" imports [ Set ] provides [main] to "./platform"
-
-            main = Set.toList (Set.single 42)
+            Set.toList (Set.single 42)
             "#
         ),
         RocList::from_slice(&[42]),
@@ -62,9 +56,7 @@ fn single_to_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "set" imports [ Set ] provides [main] to "./platform"
-
-            main = Set.toList (Set.single 1)
+            Set.toList (Set.single 1)
             "#
         ),
         RocList::from_slice(&[1]),
@@ -74,9 +66,7 @@ fn single_to_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "set" imports [ Set ] provides [main] to "./platform"
-
-            main = Set.toList (Set.single 1.0)
+            Set.toList (Set.single 1.0)
             "#
         ),
         RocList::from_slice(&[1.0]),
@@ -90,14 +80,11 @@ fn insert() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "set" imports [ Set ] provides [main] to "./platform"
-
-            main =
-                Set.empty
-                    |> Set.insert 0
-                    |> Set.insert 1
-                    |> Set.insert 2
-                    |> Set.toList
+            Set.empty
+                |> Set.insert 0
+                |> Set.insert 1
+                |> Set.insert 2
+                |> Set.toList
             "#
         ),
         RocList::from_slice(&[0, 1, 2]),
@@ -111,15 +98,12 @@ fn remove() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "set" imports [ Set ] provides [main] to "./platform"
-
-            main =
-                Set.empty
-                    |> Set.insert 0
-                    |> Set.insert 1
-                    |> Set.remove 1
-                    |> Set.remove 2
-                    |> Set.toList
+            Set.empty
+                |> Set.insert 0
+                |> Set.insert 1
+                |> Set.remove 1
+                |> Set.remove 2
+                |> Set.toList
             "#
         ),
         RocList::from_slice(&[0]),
@@ -133,17 +117,14 @@ fn union() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "set" imports [ Set ] provides [main] to "./platform"
-
             set1 : Set.Set I64
             set1 = Set.fromList [1,2]
 
             set2 : Set.Set I64
             set2 = Set.fromList [1,3,4]
 
-            main =
-                Set.union set1 set2
-                    |> Set.toList
+            Set.union set1 set2
+                |> Set.toList
             "#
         ),
         RocList::from_slice(&[1, 2, 3, 4]),
@@ -157,17 +138,14 @@ fn difference() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "set" imports [ Set ] provides [main] to "./platform"
-
             set1 : Set.Set I64
             set1 = Set.fromList [1,2]
 
             set2 : Set.Set I64
             set2 = Set.fromList [1,3,4]
 
-            main =
-                Set.difference set1 set2
-                    |> Set.toList
+            Set.difference set1 set2
+                |> Set.toList
             "#
         ),
         RocList::from_slice(&[2]),
@@ -181,17 +159,14 @@ fn intersection() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "set" imports [ Set ] provides [main] to "./platform"
-
             set1 : Set.Set I64
             set1 = Set.fromList [1,2]
 
             set2 : Set.Set I64
             set2 = Set.fromList [1,3,4]
 
-            main =
-                Set.intersection set1 set2
-                    |> Set.toList
+            Set.intersection set1 set2
+                |> Set.toList
             "#
         ),
         RocList::from_slice(&[1]),
@@ -205,9 +180,7 @@ fn walk_sum() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "set" imports [ Set ] provides [main] to "./platform"
-
-            main = Set.walk (Set.fromList [1,2,3]) 0 (\x, y -> x + y)
+            Set.walk (Set.fromList [1,2,3]) 0 (\x, y -> x + y)
             "#
         ),
         6,
@@ -221,9 +194,7 @@ fn contains() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "set" imports [ Set ] provides [main] to "./platform"
-
-            main = Set.contains (Set.fromList [1,3,4]) 4
+            Set.contains (Set.fromList [1,3,4]) 4
             "#
         ),
         true,
@@ -233,9 +204,7 @@ fn contains() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "set" imports [ Set ] provides [main] to "./platform"
-
-            main = Set.contains (Set.fromList [1,3,4]) 2
+            Set.contains (Set.fromList [1,3,4]) 2
             "#
         ),
         false,
@@ -249,12 +218,9 @@ fn from_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "set" imports [ Set ] provides [main] to "./platform"
-
-            main =
-                [1,2,2,3,1,4]
-                    |> Set.fromList
-                    |> Set.toList
+            [1,2,2,3,1,4]
+                |> Set.fromList
+                |> Set.toList
             "#
         ),
         RocList::from_slice(&[1, 2, 3, 4]),
@@ -264,15 +230,12 @@ fn from_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "set" imports [ Set ] provides [main] to "./platform"
-
             empty : List I64
             empty = []
 
-            main =
-                empty
-                    |> Set.fromList
-                    |> Set.toList
+            empty
+                |> Set.fromList
+                |> Set.toList
             "#
         ),
         RocList::<i64>::default(),
@@ -287,12 +250,9 @@ fn from_list_void() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "set" imports [ Set ] provides [main] to "./platform"
-
-            main =
-                []
-                    |> Set.fromList
-                    |> Set.toList
+            []
+                |> Set.fromList
+                |> Set.toList
             "#
         ),
         RocList::<i64>::default(),
@@ -306,16 +266,13 @@ fn from_list_result() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "set" imports [ Set ] provides [main] to "./platform"
-
             x : Result Str {}
             x = Ok "foo"
 
-            main =
-                [x]
-                    |> Set.fromList
-                    |> Set.toList
-                    |> List.len
+            [x]
+                |> Set.fromList
+                |> Set.toList
+                |> List.len
             "#
         ),
         1,

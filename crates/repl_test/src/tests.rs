@@ -1179,3 +1179,16 @@ fn render_nullable_unwrapped_passing_through_alias() {
         "Cons (L (Cons (L (Cons (L Nil))))) : DeepList",
     )
 }
+
+#[test]
+fn opaque_wrap_function() {
+    expect_success(
+        indoc!(
+            r#"
+            A a := a
+            List.map [1u8, 2u8, 3u8] @A
+            "#
+        ),
+        "[1, 2, 3] : List (A U8)",
+    );
+}

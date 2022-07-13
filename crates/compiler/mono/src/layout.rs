@@ -1809,7 +1809,7 @@ impl<'a> Builtin<'a> {
     pub const STR_WORDS: u32 = 3;
     pub const LIST_WORDS: u32 = 3;
 
-    /// Layout of collection wrapper for List and Str - a struct of (pointer, length, capacity).
+    /// Layout of collection wrapper for List, Str, Dict, and Set - a struct of (pointer, length, capacity).
     pub const WRAPPER_PTR: u32 = 0;
     pub const WRAPPER_LEN: u32 = 1;
     pub const WRAPPER_CAPACITY: u32 = 2;

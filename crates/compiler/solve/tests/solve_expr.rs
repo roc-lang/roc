@@ -7341,4 +7341,30 @@ mod solve_expr {
             "Rose I64",
         );
     }
+
+    #[test]
+    fn opaque_wrap_function() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                A := U8
+                List.map [1, 2, 3] @A
+                "#
+            ),
+            "List A",
+        );
+    }
+
+    #[test]
+    fn opaque_wrap_function_with_inferred_arg() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                A a := a
+                List.map [1u8, 2u8, 3u8] @A
+                "#
+            ),
+            "List (A U8)",
+        );
+    }
 }
