@@ -1694,6 +1694,10 @@ impl<'a> LayoutCache<'a> {
 pub struct SnapshotKeyPlaceholder;
 
 impl<'a> Layout<'a> {
+    pub fn str() -> Layout<'a> {
+        Layout::Builtin(Builtin::Str)
+    }
+
     pub fn int_width(width: IntWidth) -> Layout<'a> {
         Layout::Builtin(Builtin::Int(width))
     }
