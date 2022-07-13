@@ -18,9 +18,7 @@ fn dict_empty_len() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
-
-            main = Dict.len Dict.empty
+            Dict.len Dict.empty
             "#
         ),
         0,
@@ -34,12 +32,9 @@ fn dict_insert_empty() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
-
-            main =
-                Dict.empty
-                    |> Dict.insert 42 32
-                    |> Dict.len
+            Dict.empty
+                |> Dict.insert 42 32
+                |> Dict.len
             "#
         ),
         1,
@@ -53,13 +48,10 @@ fn dict_empty_contains() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
-
             empty : Dict.Dict I64 F64
             empty = Dict.empty
 
-            main =
-                Dict.contains empty 42
+            Dict.contains empty 42
             "#
         ),
         false,
@@ -73,12 +65,10 @@ fn dict_nonempty_contains() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
-
             empty : Dict.Dict I64 F64
             empty = Dict.insert Dict.empty 42 1.23
 
-            main = Dict.contains empty 42
+            Dict.contains empty 42
             "#
         ),
         true,
@@ -92,15 +82,12 @@ fn dict_empty_remove() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
-
             empty : Dict.Dict I64 F64
             empty = Dict.empty
 
-            main =
-                empty
-                    |> Dict.remove 42
-                    |> Dict.len
+            empty
+                |> Dict.remove 42
+                |> Dict.len
             "#
         ),
         0,
@@ -114,15 +101,12 @@ fn dict_nonempty_remove() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
-
             empty : Dict.Dict I64 F64
             empty = Dict.insert Dict.empty 42 1.23
 
-            main =
-                empty
-                    |> Dict.remove 42
-                    |> Dict.len
+            empty
+                |> Dict.remove 42
+                |> Dict.len
             "#
         ),
         0,
@@ -136,8 +120,6 @@ fn dict_nonempty_get() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
-
             empty : Dict.Dict I64 F64
             empty = Dict.insert Dict.empty 42 1.23
 
@@ -146,11 +128,10 @@ fn dict_nonempty_get() {
                     Ok v -> v
                     Err _ -> def
 
-            main =
-                empty
-                    |> Dict.insert 42 1.23
-                    |> Dict.get 42
-                    |> withDefault 0
+            empty
+                |> Dict.insert 42 1.23
+                |> Dict.get 42
+                |> withDefault 0
             "#
         ),
         1.23,
@@ -160,18 +141,15 @@ fn dict_nonempty_get() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
-
             withDefault = \x, def ->
                 when  x is
                     Ok v -> v
                     Err _ -> def
 
-            main =
-                Dict.empty
-                    |> Dict.insert 42 1.23
-                    |> Dict.get 43
-                    |> withDefault 0
+            Dict.empty
+                |> Dict.insert 42 1.23
+                |> Dict.get 43
+                |> withDefault 0
             "#
         ),
         0.0,
@@ -185,8 +163,6 @@ fn keys() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
-
             myDict : Dict.Dict I64 I64
             myDict =
                 Dict.empty
@@ -195,7 +171,7 @@ fn keys() {
                     |> Dict.insert 2 100
 
 
-            main = Dict.keys myDict
+            Dict.keys myDict
             "#
         ),
         RocList::from_slice(&[0, 1, 2]),
@@ -209,8 +185,6 @@ fn values() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
-
             myDict : Dict.Dict I64 I64
             myDict =
                 Dict.empty
@@ -219,7 +193,7 @@ fn values() {
                     |> Dict.insert 2 300
 
 
-            main = Dict.values myDict
+            Dict.values myDict
             "#
         ),
         RocList::from_slice(&[100, 200, 300]),
@@ -233,14 +207,12 @@ fn from_list_with_fold_simple() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
-
             myDict : Dict.Dict I64 I64
             myDict =
                 [1,2,3]
                     |> List.walk Dict.empty (\accum, value -> Dict.insert accum value value)
 
-            main = Dict.values myDict
+            Dict.values myDict
             "#
         ),
         RocList::from_slice(&[1, 2, 3]),
@@ -254,8 +226,6 @@ fn from_list_with_fold_reallocates() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
-
             range : I64, I64, List I64-> List I64
             range = \low, high, accum ->
                 if low < high then
@@ -269,7 +239,7 @@ fn from_list_with_fold_reallocates() {
                 range 0 25 []
                     |> List.walk Dict.empty (\accum, value -> Dict.insert accum value value)
 
-            main = Dict.values myDict
+            Dict.values myDict
             "#
         ),
         RocList::from_slice(&[
@@ -286,8 +256,6 @@ fn small_str_keys() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
-
             myDict : Dict.Dict Str I64
             myDict =
                 Dict.empty
@@ -296,7 +264,7 @@ fn small_str_keys() {
                     |> Dict.insert "c" 100
 
 
-            main = Dict.keys myDict
+            Dict.keys myDict
             "#
         ),
         RocList::from_slice(&["a".into(), "b".into(), "c".into(),],),
@@ -310,8 +278,6 @@ fn big_str_keys() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
-
             myDict : Dict.Dict Str I64
             myDict =
                 Dict.empty
@@ -319,7 +285,7 @@ fn big_str_keys() {
                     |> Dict.insert "synopsis for high level overviews. Iterative approaches" 200
                     |> Dict.insert "to corporate strategy foster collaborative thinking to" 300
 
-            main = Dict.keys myDict
+            Dict.keys myDict
             "#
         ),
         RocList::from_slice(&[
@@ -337,8 +303,6 @@ fn big_str_values() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
-
             myDict : Dict.Dict I64 Str
             myDict =
                 Dict.empty
@@ -346,7 +310,7 @@ fn big_str_values() {
                     |> Dict.insert 200 "synopsis for high level overviews. Iterative approaches"
                     |> Dict.insert 300 "to corporate strategy foster collaborative thinking to"
 
-            main = Dict.values myDict
+            Dict.values myDict
             "#
         ),
         RocList::from_slice(&[
@@ -364,8 +328,6 @@ fn unit_values() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
-
             myDict : Dict.Dict I64 {}
             myDict =
                 Dict.empty
@@ -374,7 +336,7 @@ fn unit_values() {
                     |> Dict.insert 2 {}
                     |> Dict.insert 3 {}
 
-            main = Dict.len myDict
+            Dict.len myDict
             "#
         ),
         4,
@@ -388,13 +350,11 @@ fn single() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
-
             myDict : Dict.Dict I64 {}
             myDict =
                 Dict.single 0 {}
 
-            main = Dict.len myDict
+            Dict.len myDict
             "#
         ),
         1,
@@ -408,13 +368,11 @@ fn insert_all() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
-
-            myDict : Dict.Dict I64 {}
+            myDict : Dict I64 {}
             myDict =
                 Dict.insertAll (Dict.single 0 {}) (Dict.single 1 {})
 
-            main = Dict.len myDict
+            Dict.len myDict
             "#
         ),
         2,
@@ -428,14 +386,12 @@ fn insert_all_prefer_first() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
-
             myDict : Dict.Dict I64 I64
             myDict =
                 (Dict.single 0 100)
                     |> Dict.insertAll (Dict.single 0 200)
 
-            main = Dict.values myDict
+            Dict.values myDict
             "#
         ),
         RocList::from_slice(&[100]),
@@ -449,8 +405,6 @@ fn keep_shared() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
-
             dict1 : Dict.Dict I64 {}
             dict1 =
                 Dict.empty
@@ -467,9 +421,8 @@ fn keep_shared() {
                     |> Dict.insert 2 {}
                     |> Dict.insert 4 {}
 
-            main =
-                Dict.keepShared dict1 dict2
-                    |> Dict.len
+            Dict.keepShared dict1 dict2
+                |> Dict.len
             "#
         ),
         2,
@@ -483,8 +436,6 @@ fn keep_shared_prefer_first() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
-
             dict1 : Dict.Dict I64 I64
             dict1 =
                 Dict.empty
@@ -501,9 +452,8 @@ fn keep_shared_prefer_first() {
                     |> Dict.insert 2 200
                     |> Dict.insert 4 300
 
-            main =
-                Dict.keepShared dict1 dict2
-                    |> Dict.values
+            Dict.keepShared dict1 dict2
+                |> Dict.values
             "#
         ),
         RocList::from_slice(&[2, 4]),
@@ -517,8 +467,6 @@ fn remove_all() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
-
             dict1 : Dict.Dict I64 {}
             dict1 =
                 Dict.empty
@@ -535,9 +483,8 @@ fn remove_all() {
                     |> Dict.insert 2 {}
                     |> Dict.insert 4 {}
 
-            main =
-                Dict.removeAll dict1 dict2
-                    |> Dict.len
+            Dict.removeAll dict1 dict2
+                |> Dict.len
             "#
         ),
         3,
@@ -551,8 +498,6 @@ fn remove_all_prefer_first() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
-
             dict1 : Dict.Dict I64 I64
             dict1 =
                 Dict.empty
@@ -569,9 +514,8 @@ fn remove_all_prefer_first() {
                     |> Dict.insert 2 200
                     |> Dict.insert 4 300
 
-            main =
-                Dict.removeAll dict1 dict2
-                    |> Dict.values
+            Dict.removeAll dict1 dict2
+                |> Dict.values
             "#
         ),
         RocList::from_slice(&[1, 5, 3]),
@@ -585,8 +529,6 @@ fn walk_sum_keys() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
-
             dict1 : Dict.Dict I64 I64
             dict1 =
                 Dict.empty
@@ -596,7 +538,7 @@ fn walk_sum_keys() {
                     |> Dict.insert 4 4
                     |> Dict.insert 5 5
 
-            main = Dict.walk dict1 0 \k, _, a -> k + a
+            Dict.walk dict1 0 \k, _, a -> k + a
             "#
         ),
         15,
