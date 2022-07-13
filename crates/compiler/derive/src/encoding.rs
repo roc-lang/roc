@@ -219,7 +219,6 @@ pub(crate) fn derive_to_encoder(
     def_symbol: Symbol,
 ) -> DerivedBody {
     let (body, body_type) = match key {
-        FlatEncodableKey::String => to_encoder_string(env, def_symbol),
         FlatEncodableKey::List() => todo!(),
         FlatEncodableKey::Set() => todo!(),
         FlatEncodableKey::Dict() => todo!(),
@@ -275,97 +274,6 @@ pub(crate) fn derive_to_encoder(
         body_type,
         specialization_lambda_sets,
     }
-}
-
-fn to_encoder_string(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
-    // Build \s -> Encode.string s
-
-    use Expr::*;
-
-    let s_sym = env.new_symbol("s");
-
-    // build `Encode.string s` type
-    // Str -[uls]-> Encoder fmt | fmt has EncoderFormatting
-    let encode_string_fn_var = env.import_encode_symbol(Symbol::ENCODE_STRING);
-
-    // Str -[clos]-> t1
-    let string_var_slice = VariableSubsSlice::insert_into_subs(env.subs, once(Variable::STR)); // TODO: consider caching this singleton slice
-    let encode_string_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
-    let encoder_var = env.subs.fresh_unnamed_flex_var(); // t1
-    let this_encode_string_fn_var = synth_var(
-        env.subs,
-        Content::Structure(FlatType::Func(
-            string_var_slice,
-            encode_string_clos_var,
-            encoder_var,
-        )),
-    );
-
-    //   Str -[uls]->  Encoder fmt | fmt has EncoderFormatting
-    // ~ Str -[clos]-> t1
-    env.unify(encode_string_fn_var, this_encode_string_fn_var);
-
-    // Encode.string : Str -[clos]-> Encoder fmt | fmt has EncoderFormatting
-    let encode_string_var = AbilityMember(Symbol::ENCODE_STRING, None, encode_string_fn_var);
-    let encode_record_fn = Box::new((
-        encode_string_fn_var,
-        Loc::at_zero(encode_string_var),
-        encode_string_clos_var,
-        encoder_var,
-    ));
-
-    // Encode.string s
-    let encode_string_call = Call(
-        encode_record_fn,
-        vec![(Variable::STR, Loc::at_zero(Var(s_sym)))],
-        CalledVia::Space,
-    );
-
-    // Encode.custom \bytes, fmt -> Encode.appendWith bytes (Encode.string s) fmt
-    let (body, this_encoder_var) =
-        wrap_in_encode_custom(env, encode_string_call, encoder_var, s_sym, Variable::STR);
-
-    // Create fn_var for ambient capture; we fix it up below.
-    let fn_var = synth_var(env.subs, Content::Error);
-
-    // -[fn_name]->
-    let fn_name_labels = UnionLambdas::insert_into_subs(env.subs, once((fn_name, vec![])));
-    let fn_clos_var = synth_var(
-        env.subs,
-        Content::LambdaSet(LambdaSet {
-            solved: fn_name_labels,
-            recursion_var: OptVariable::NONE,
-            unspecialized: SubsSlice::default(),
-            ambient_function: fn_var,
-        }),
-    );
-    // Str -[fn_name]-> (typeof Encode.record [ .. ] = Encoder fmt)
-    env.subs.set_content(
-        fn_var,
-        Content::Structure(FlatType::Func(
-            string_var_slice,
-            fn_clos_var,
-            this_encoder_var,
-        )),
-    );
-
-    // \rcd -[fn_name]-> Encode.record [ { key: .., value: .. }, .. ]
-    let clos = Closure(ClosureData {
-        function_type: fn_var,
-        closure_type: fn_clos_var,
-        return_type: this_encoder_var,
-        name: fn_name,
-        captured_symbols: vec![],
-        recursive: Recursive::NotRecursive,
-        arguments: vec![(
-            Variable::STR,
-            AnnotatedMark::known_exhaustive(),
-            Loc::at_zero(Pattern::Identifier(s_sym)),
-        )],
-        loc_body: Box::new(Loc::at_zero(body)),
-    });
-
-    (clos, fn_var)
 }
 
 fn to_encoder_record(

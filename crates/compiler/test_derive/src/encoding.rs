@@ -515,25 +515,7 @@ fn immediates() {
     check_immediate(v!(DEC), Symbol::ENCODE_DEC);
     check_immediate(v!(F32), Symbol::ENCODE_F32);
     check_immediate(v!(F64), Symbol::ENCODE_F64);
-}
-
-#[test]
-fn string() {
-    derive_test(v!(STR), |golden| {
-        assert_snapshot!(golden, @r###"
-        # derived for Str
-        # Str -[[toEncoder_string(0)]]-> Encoder fmt | fmt has EncoderFormatting
-        # Str -[[toEncoder_string(0)]]-> (List U8, fmt -[[custom(2) Str]]-> List U8) | fmt has EncoderFormatting
-        # Specialization lambda sets:
-        #   @<1>: [[toEncoder_string(0)]]
-        #   @<2>: [[custom(2) Str]]
-        #Derived.toEncoder_string =
-          \#Derived.s ->
-            Encode.custom \#Derived.bytes, #Derived.fmt ->
-              Encode.appendWith #Derived.bytes (Encode.string #Derived.s) #Derived.fmt
-        "###
-        )
-    })
+    check_immediate(v!(STR), Symbol::ENCODE_STRING);
 }
 
 #[test]
