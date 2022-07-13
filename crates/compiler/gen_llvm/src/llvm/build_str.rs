@@ -1,4 +1,4 @@
-use crate::llvm::bitcode::{call_bitcode_fn, call_str_bitcode_fn};
+use crate::llvm::bitcode::call_str_bitcode_fn;
 use crate::llvm::build::{Env, Scope};
 use inkwell::builder::Builder;
 use inkwell::values::{BasicValueEnum, IntValue, PointerValue, StructValue};
@@ -8,6 +8,7 @@ use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
 use roc_target::PtrWidth;
 
+use super::bitcode::call_bitcode_fn;
 use super::build::{create_entry_block_alloca, load_symbol};
 
 pub static CHAR_LAYOUT: Layout = Layout::u8();
@@ -137,7 +138,7 @@ pub fn dec_to_str<'a, 'ctx, 'env>(
 }
 
 /// Str.equal : Str, Str -> Bool
-pub fn str_equal<'a, 'ctx, 'env>(
+pub(crate) fn str_equal<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     value1: BasicValueEnum<'ctx>,
     value2: BasicValueEnum<'ctx>,

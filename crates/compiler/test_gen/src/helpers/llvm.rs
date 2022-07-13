@@ -261,6 +261,7 @@ fn create_llvm_module<'a>(
 
     // Verify the module
     if let Err(errors) = env.module.verify() {
+        env.module.print_to_file("/tmp/test.ll").unwrap();
         panic!("Errors defining module:\n\n{}", errors.to_string());
     }
 
