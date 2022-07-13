@@ -760,8 +760,8 @@ pub fn exportFromFloat(comptime T: type, comptime name: []const u8) void {
 }
 
 fn strFromFloatHelp(comptime T: type, float: T) RocStr {
-    var buf: [100]u8 = undefined;
-    const result = std.fmt.bufPrint(&buf, "{}", .{float}) catch unreachable;
+    var buf: [400]u8 = undefined;
+    const result = std.fmt.bufPrint(&buf, "{d}", .{float}) catch unreachable;
 
     return RocStr.init(&buf, result.len);
 }

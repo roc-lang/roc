@@ -3059,21 +3059,21 @@ fn num_to_str_i64() {
 fn num_to_str_f32() {
     use roc_std::RocStr;
 
-    assert_evals_to!(r#"Num.toStr -10.75f32"#, RocStr::from("-1.075e+01"), RocStr);
-    assert_evals_to!(r#"Num.toStr -1.75f32"#, RocStr::from("-1.75e+00"), RocStr);
-    assert_evals_to!(r#"Num.toStr 0f32"#, RocStr::from("0.0e+00"), RocStr);
-    assert_evals_to!(r#"Num.toStr 1.75f32"#, RocStr::from("1.75e+00"), RocStr);
-    assert_evals_to!(r#"Num.toStr 10.75f32"#, RocStr::from("1.075e+01"), RocStr);
+    assert_evals_to!(r#"Num.toStr -10.75f32"#, RocStr::from("-10.75"), RocStr);
+    assert_evals_to!(r#"Num.toStr -1.75f32"#, RocStr::from("-1.75"), RocStr);
+    assert_evals_to!(r#"Num.toStr 0f32"#, RocStr::from("0"), RocStr);
+    assert_evals_to!(r#"Num.toStr 1.75f32"#, RocStr::from("1.75"), RocStr);
+    assert_evals_to!(r#"Num.toStr 10.75f32"#, RocStr::from("10.75"), RocStr);
 
     assert_evals_to!(
         r#"Num.toStr Num.maxF32"#,
-        RocStr::from("3.40282346e+38"),
+        RocStr::from("340282346638528860000000000000000000000"),
         RocStr
     );
 
     assert_evals_to!(
         r#"Num.toStr Num.minF32"#,
-        RocStr::from("-3.40282346e+38"),
+        RocStr::from("-340282346638528860000000000000000000000"),
         RocStr
     );
 }
@@ -3083,21 +3083,21 @@ fn num_to_str_f32() {
 fn num_to_str_f64() {
     use roc_std::RocStr;
 
-    assert_evals_to!(r#"Num.toStr -10.75f64"#, RocStr::from("-1.075e+01"), RocStr);
-    assert_evals_to!(r#"Num.toStr -1.75f64"#, RocStr::from("-1.75e+00"), RocStr);
-    assert_evals_to!(r#"Num.toStr 0f64"#, RocStr::from("0.0e+00"), RocStr);
-    assert_evals_to!(r#"Num.toStr 1.75f64"#, RocStr::from("1.75e+00"), RocStr);
-    assert_evals_to!(r#"Num.toStr 10.75f64"#, RocStr::from("1.075e+01"), RocStr);
+    assert_evals_to!(r#"Num.toStr -10.75f64"#, RocStr::from("-10.75"), RocStr);
+    assert_evals_to!(r#"Num.toStr -1.75f64"#, RocStr::from("-1.75"), RocStr);
+    assert_evals_to!(r#"Num.toStr 0f64"#, RocStr::from("0"), RocStr);
+    assert_evals_to!(r#"Num.toStr 1.75f64"#, RocStr::from("1.75"), RocStr);
+    assert_evals_to!(r#"Num.toStr 10.75f64"#, RocStr::from("10.75"), RocStr);
 
     assert_evals_to!(
         r#"Num.toStr Num.maxF64"#,
-        RocStr::from("1.7976931348623157e+308"),
+        RocStr::from(f64::MAX.to_string().as_str()),
         RocStr
     );
 
     assert_evals_to!(
         r#"Num.toStr Num.minF64"#,
-        RocStr::from("-1.7976931348623157e+308"),
+        RocStr::from(f64::MIN.to_string().as_str()),
         RocStr
     );
 }
