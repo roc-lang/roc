@@ -1,4 +1,4 @@
-use crate::llvm::bitcode::{call_bitcode_fn, call_str_bitcode_fn};
+use crate::llvm::bitcode::call_str_bitcode_fn;
 use crate::llvm::build::{Env, Scope};
 use inkwell::builder::Builder;
 use inkwell::values::{BasicValueEnum, IntValue, PointerValue, StructValue};

@@ -2374,7 +2374,7 @@ fn list_literal<'a, 'ctx, 'env>(
                     .build_in_bounds_gep(global, &[zero, offset], "first_element_pointer")
             };
 
-            super::build_list::store_list(env, ptr, list_length_intval)
+            super::build_list::store_list(env, ptr, list_length_intval).into()
         } else {
             // some of our elements are non-constant, so we must allocate space on the heap
             let ptr = allocate_list(env, element_layout, list_length_intval);
@@ -2398,7 +2398,7 @@ fn list_literal<'a, 'ctx, 'env>(
                 builder.build_store(elem_ptr, val);
             }
 
-            super::build_list::store_list(env, ptr, list_length_intval)
+            super::build_list::store_list(env, ptr, list_length_intval).into()
         }
     } else {
         let ptr = allocate_list(env, element_layout, list_length_intval);
@@ -2417,7 +2417,7 @@ fn list_literal<'a, 'ctx, 'env>(
             store_roc_value(env, *element_layout, elem_ptr, val);
         }
 
-        super::build_list::store_list(env, ptr, list_length_intval)
+        super::build_list::store_list(env, ptr, list_length_intval).into()
     }
 }
 

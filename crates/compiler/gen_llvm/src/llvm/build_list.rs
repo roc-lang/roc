@@ -16,7 +16,10 @@ use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
 use super::bitcode::call_list_bitcode_fn;
-use super::build::{create_entry_block_alloca, load_roc_value, load_symbol, store_roc_value};
+use super::build::{
+    create_entry_block_alloca, load_roc_value, load_symbol, store_roc_value, struct_from_fields,
+};
+use super::convert::zig_list_type;
 
 fn call_list_bitcode_fn_1<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -38,7 +41,7 @@ pub fn list_symbol_to_c_abi<'a, 'ctx, 'env>(
         .and_then(|b| b.get_parent())
         .unwrap();
 
-    let list_type = super::convert::zig_list_type(env);
+    let list_type = zig_list_type(env);
     let list_alloca = create_entry_block_alloca(env, parent, list_type.into(), "list_alloca");
 
     let list = load_symbol(scope, &symbol);
@@ -319,9 +322,9 @@ pub fn list_replace_unsafe<'a, 'ctx, 'env>(
     let element_first = element_align > env.target_info.ptr_width() as u32;
 
     let fields = if element_first {
-        [element_type, super::convert::zig_list_type(env).into()]
+        [element_type, zig_list_type(env).into()]
     } else {
-        [super::convert::zig_list_type(env).into(), element_type]
+        [zig_list_type(env).into(), element_type]
     };
 
     let result = env.context.struct_type(&fields, false).const_zero();
@@ -764,7 +767,7 @@ where
 }
 
 pub fn empty_polymorphic_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
-    let struct_type = super::convert::zig_list_type(env);
+    let struct_type = zig_list_type(env);
 
     // The pointer should be null (aka zero) and the length should be zero,
     // so the whole struct should be a const_zero
@@ -823,40 +826,19 @@ pub fn store_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     pointer_to_first_element: PointerValue<'ctx>,
     len: IntValue<'ctx>,
-) -> BasicValueEnum<'ctx> {
-    let builder = env.builder;
+) -> StructValue<'ctx> {
+    let ptr = pass_as_opaque(env, pointer_to_first_element);
+    let cap = len;
 
-    let struct_type = super::convert::zig_list_type(env);
-
-    // Store the pointer
-    let mut struct_val = builder
-        .build_insert_value(
-            struct_type.get_undef(),
-            pass_as_opaque(env, pointer_to_first_element),
-            Builtin::WRAPPER_PTR,
-            "insert_ptr_store_list",
-        )
-        .unwrap();
-
-    // Store the length
-    struct_val = builder
-        .build_insert_value(struct_val, len, Builtin::WRAPPER_LEN, "insert_len")
-        .unwrap();
-
-    // Store the capacity
-    struct_val = builder
-        .build_insert_value(
-            struct_val,
-            len,
-            Builtin::WRAPPER_CAPACITY,
-            "insert_capacity",
-        )
-        .unwrap();
-
-    builder.build_bitcast(
-        struct_val.into_struct_value(),
-        super::convert::zig_list_type(env),
-        "cast_collection",
+    struct_from_fields(
+        env,
+        zig_list_type(env),
+        [
+            (Builtin::WRAPPER_PTR as usize, ptr),
+            (Builtin::WRAPPER_LEN as usize, len.into()),
+            (Builtin::WRAPPER_CAPACITY as usize, cap.into()),
+        ]
+        .into_iter(),
     )
 }
 
