@@ -4347,7 +4347,7 @@ fn canonicalize_and_constrain<'a>(
                 // do nothing
             }
             Vacant(vacant) => {
-                if name == Symbol::DICT_DICT {
+                if name == Symbol::DICT_DICT || name == Symbol::SET_SET {
                     vacant.insert((false, alias));
                 } else if !name.is_builtin() || name.module_id() == ModuleId::ENCODE {
                     vacant.insert((false, alias));

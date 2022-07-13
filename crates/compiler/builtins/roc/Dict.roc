@@ -2,6 +2,7 @@ interface Dict
     exposes [
         Dict,
         empty,
+        withCapacity,
         single,
         get,
         walk,
@@ -18,6 +19,7 @@ interface Dict
     imports [
         Bool.{ Bool },
         Result.{ Result },
+        List,
     ]
 
 ## A [dictionary](https://en.wikipedia.org/wiki/Associative_array) that lets you can associate keys with values.
@@ -73,6 +75,9 @@ Dict k v := List [Pair k v]
 ## An empty dictionary.
 empty : Dict k v
 empty = @Dict []
+
+withCapacity : Nat -> Dict k v
+withCapacity = \n -> @Dict (List.withCapacity n)
 
 get : Dict k v, k -> Result v [KeyNotFound]*
 get = \@Dict list, needle ->
@@ -132,6 +137,7 @@ single : k, v -> Dict k v
 single = \key, value ->
     @Dict [Pair key value]
 
+
 ## Returns a [List] of the dictionary's keys.
 keys : Dict k v -> List k
 keys = \@Dict list ->
@@ -149,7 +155,7 @@ insertAll = \xs, @Dict ys ->
 
 # intersection : Dict k v, Dict k v -> Dict k v
 keepShared : Dict k v, Dict k v -> Dict k v
-keepShared = \Dict xs, ys ->
+keepShared = \@Dict xs, ys ->
     List.keepIf xs (\Pair k _ -> Dict.contains ys k)
         |> @Dict
 

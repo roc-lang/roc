@@ -1320,6 +1320,7 @@ define_builtins! {
         14 DICT_DIFFERENCE: "difference"
 
         15 DICT_GET_LOWLEVEL: "getLowlevel"
+        16 DICT_WITH_CAPACITY: "withCapacity"
     }
     8 SET: "Set" => {
         0 SET_SET: "Set" // the Set.Set type alias

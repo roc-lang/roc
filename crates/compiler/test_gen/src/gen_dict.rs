@@ -243,7 +243,7 @@ fn from_list_with_fold_simple() {
             main = Dict.values myDict
             "#
         ),
-        RocList::from_slice(&[2, 3, 1]),
+        RocList::from_slice(&[1, 2, 3]),
         RocList<i64>
     );
 }
@@ -273,8 +273,8 @@ fn from_list_with_fold_reallocates() {
             "#
         ),
         RocList::from_slice(&[
-            4, 5, 20, 0, 7, 3, 1, 21, 10, 6, 13, 9, 14, 19, 2, 15, 12, 17, 16, 18, 22, 8, 11, 24,
-            23
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24
         ]),
         RocList<i64>
     );
@@ -299,7 +299,7 @@ fn small_str_keys() {
             main = Dict.keys myDict
             "#
         ),
-        RocList::from_slice(&[RocStr::from("c"), RocStr::from("a"), RocStr::from("b"),],),
+        RocList::from_slice(&["a".into(), "b".into(), "c".into(),],),
         RocList<RocStr>
     );
 }
@@ -324,8 +324,8 @@ fn big_str_keys() {
         ),
         RocList::from_slice(&[
             RocStr::from("Leverage agile frameworks to provide a robust"),
-            RocStr::from("to corporate strategy foster collaborative thinking to"),
             RocStr::from("synopsis for high level overviews. Iterative approaches"),
+            RocStr::from("to corporate strategy foster collaborative thinking to"),
         ]),
         RocList<RocStr>
     );
@@ -351,8 +351,8 @@ fn big_str_values() {
         ),
         RocList::from_slice(&[
             RocStr::from("Leverage agile frameworks to provide a robust"),
-            RocStr::from("to corporate strategy foster collaborative thinking to"),
             RocStr::from("synopsis for high level overviews. Iterative approaches"),
+            RocStr::from("to corporate strategy foster collaborative thinking to"),
         ]),
         RocList<RocStr>
     );

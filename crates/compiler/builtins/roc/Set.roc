@@ -30,7 +30,7 @@ empty = fromDict Dict.empty
 
 single : k -> Set k
 single = \key ->
-    Dict.single key {}
+    @Set (Dict.single key {})
 
 ## Make sure never to insert a *NaN* to a [Set]! Because *NaN* is defined to be
 ## unequal to *NaN*, adding a *NaN* results in an entry that can never be
@@ -48,7 +48,7 @@ len = \@Set dict ->
 ## Drops the given element from the set.
 remove : Set k, k -> Set k
 remove = \@Set dict, key ->
-    @Set (Dict.remove key dict)
+    @Set (Dict.remove dict key)
 
 contains : Set k, k -> Bool
 contains = \set, key ->
@@ -62,7 +62,7 @@ toList = \@Set dict ->
 
 fromList : List k -> Set k
 fromList = \list ->
-    initial = List.withCapacity (List.len list)
+    initial = @Set (Dict.withCapacity (List.len list))
 
     List.walk list initial \set, key -> Set.insert set key
 
