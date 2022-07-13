@@ -7,7 +7,7 @@ use crate::expr::{ClosureData, Declarations, Expr, Output, PendingDerives};
 use crate::pattern::{BindingsFromPattern, Pattern};
 use crate::scope::Scope;
 use bumpalo::Bump;
-use roc_collections::{MutMap, SendMap, VecSet};
+use roc_collections::{MutMap, SendMap, VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
@@ -122,6 +122,7 @@ pub struct Module {
     pub aliases: MutMap<Symbol, (bool, Alias)>,
     pub rigid_variables: RigidVariables,
     pub abilities_store: PendingAbilitiesStore,
+    pub loc_expects: VecMap<Region, Vec<(Symbol, Variable)>>,
 }
 
 #[derive(Debug, Default)]
@@ -144,6 +145,7 @@ pub struct ModuleOutput {
     pub symbols_from_requires: Vec<(Loc<Symbol>, Loc<Type>)>,
     pub pending_derives: PendingDerives,
     pub scope: Scope,
+    pub loc_expects: VecMap<Region, Vec<(Symbol, Variable)>>,
 }
 
 fn validate_generate_with<'a>(
@@ -735,6 +737,8 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
+    let loc_expects = Default::default();
+
     ModuleOutput {
         scope,
         aliases,
@@ -747,6 +751,7 @@ pub fn canonicalize_module_defs<'a>(
         symbols_from_requires,
         pending_derives,
         lookups,
+        loc_expects,
     }
 }
 
