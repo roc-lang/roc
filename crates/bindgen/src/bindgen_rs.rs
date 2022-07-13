@@ -255,7 +255,8 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
             }
         }
         // These types don't need to be declared in Rust.
-        RocType::Num(_)
+        RocType::Unit
+        | RocType::Num(_)
         | RocType::Bool
         | RocType::RocStr
         | RocType::RocDict(_, _)
@@ -609,7 +610,8 @@ pub struct {name} {{
                 }
 
                 match payload_type {
-                    RocType::RocStr
+                    RocType::Unit
+                    | RocType::RocStr
                     | RocType::Bool
                     | RocType::Num(_)
                     | RocType::RocList(_)
@@ -1100,7 +1102,8 @@ pub struct {name} {{
                     };
 
                     let fields_str = match payload_type {
-                        RocType::RocStr
+                        RocType::Unit
+                        | RocType::RocStr
                         | RocType::Bool
                         | RocType::Num(_)
                         | RocType::RocList(_)
@@ -1258,6 +1261,7 @@ fn add_struct<S: Display>(
 
 fn type_name(id: TypeId, types: &Types) -> String {
     match types.get_type(id) {
+        RocType::Unit => "()".to_string(),
         RocType::RocStr => "roc_std::RocStr".to_string(),
         RocType::Bool => "bool".to_string(),
         RocType::Num(RocNum::U8) => "u8".to_string(),
@@ -1398,7 +1402,8 @@ pub struct {name} {{
         let borrowed_ret;
 
         match payload_type {
-            RocType::RocStr
+            RocType::Unit
+            | RocType::RocStr
             | RocType::Bool
             | RocType::Num(_)
             | RocType::RocList(_)
@@ -1634,7 +1639,8 @@ pub struct {name} {{
         let extra_deref = if cannot_derive_copy { "*" } else { "" };
 
         let fields_str = match payload_type {
-            RocType::RocStr
+            RocType::Unit
+            | RocType::RocStr
             | RocType::Bool
             | RocType::Num(_)
             | RocType::RocList(_)
@@ -1863,9 +1869,10 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
 
 fn cannot_derive_default(roc_type: &RocType, types: &Types) -> bool {
     match roc_type {
-        RocType::TagUnion { .. } | RocType::RecursivePointer { .. } | RocType::Function(_, _) => {
-            true
-        }
+        RocType::Unit
+        | RocType::TagUnion { .. }
+        | RocType::RecursivePointer { .. }
+        | RocType::Function(_, _) => true,
         RocType::RocStr | RocType::Bool | RocType::Num(_) => false,
         RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
             cannot_derive_default(types.get_type(*id), types)
@@ -1886,7 +1893,8 @@ fn cannot_derive_default(roc_type: &RocType, types: &Types) -> bool {
 /// Useful when determining whether to derive Copy in a Rust type.
 fn cannot_derive_copy(roc_type: &RocType, types: &Types) -> bool {
     match roc_type {
-        RocType::Bool
+        RocType::Unit
+        | RocType::Bool
         | RocType::Num(_)
         | RocType::TagUnion(RocTagUnion::Enumeration { .. })
         | RocType::Function(_, _) => false,
@@ -1931,7 +1939,8 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
                 I8 | U8 | I16 | U16 | I32 | U32 | I64 | U64 | I128 | U128 | Dec => false,
             }
         }
-        RocType::RocStr
+        RocType::Unit
+        | RocType::RocStr
         | RocType::Bool
         | RocType::TagUnion(RocTagUnion::Enumeration { .. })
         | RocType::Function(_, _) => false,
