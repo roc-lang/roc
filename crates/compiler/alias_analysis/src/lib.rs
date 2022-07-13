@@ -1446,19 +1446,9 @@ fn builtin_spec(
     use Builtin::*;
 
     match builtin {
-        Dict(_, _) => todo!(),
         Int(_) | Bool => builder.add_tuple_type(&[]),
         Decimal | Float(_) => builder.add_tuple_type(&[]),
         Str => str_type(builder),
-        Set(key_layout) => {
-            let value_type = builder.add_tuple_type(&[])?;
-            let key_type = layout_spec_help(builder, key_layout, when_recursive)?;
-            let element_type = builder.add_tuple_type(&[key_type, value_type])?;
-
-            let cell = builder.add_heap_cell_type();
-            let bag = builder.add_bag_type(element_type)?;
-            builder.add_tuple_type(&[cell, bag])
-        }
         List(element_layout) => {
             let element_type = layout_spec_help(builder, element_layout, when_recursive)?;
 

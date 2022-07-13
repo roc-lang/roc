@@ -135,8 +135,6 @@ fn build_eq_builtin<'a, 'ctx, 'env>(
             rhs_val.into_struct_value(),
             when_recursive,
         ),
-        Builtin::Set(_elem) => todo!("equality on Set"),
-        Builtin::Dict(_key, _value) => todo!("equality on Dict"),
     }
 }
 
@@ -312,8 +310,6 @@ fn build_neq_builtin<'a, 'ctx, 'env>(
 
             result.into()
         }
-        Builtin::Set(_elem) => todo!("equality on Set"),
-        Builtin::Dict(_key, _value) => todo!("equality on Dict"),
     }
 }
 

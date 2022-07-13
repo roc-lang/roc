@@ -1824,7 +1824,7 @@ impl<'a> LowLevelCall<'a> {
                 backend.code_builder.i32_const(!invert_result as i32);
             }
 
-            Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::List(_))
+            Layout::Builtin(Builtin::List(_))
             | Layout::Struct { .. }
             | Layout::Union(_)
             | Layout::LambdaSet(_)

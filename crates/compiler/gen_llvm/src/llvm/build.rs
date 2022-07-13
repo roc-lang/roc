@@ -2810,12 +2810,6 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
                             build_list::decref(env, value.into_struct_value(), alignment);
                         }
-                        Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
-                            todo!()
-                        }
-                        Layout::Builtin(Builtin::Set(key_layout)) => {
-                            todo!()
-                        }
 
                         _ if layout.is_refcounted() => {
                             if value.is_pointer_value() {
@@ -6145,10 +6139,6 @@ fn to_cc_type_builtin<'a, 'ctx, 'env>(
             let struct_type = env.context.struct_type(&field_types, false);
 
             struct_type.ptr_type(address_space).into()
-        }
-        Builtin::Dict(_, _) | Builtin::Set(_) => {
-            // TODO verify this is what actually happens
-            basic_type_from_builtin(env, builtin)
         }
     }
 }

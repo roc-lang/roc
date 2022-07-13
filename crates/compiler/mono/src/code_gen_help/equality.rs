@@ -30,7 +30,6 @@ pub fn eq_generic<'a>(
         Layout::Builtin(Builtin::Str) => {
             unreachable!("No generated helper proc for `==` on Str. Use Zig function.")
         }
-        Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_)) => eq_todo(),
         Layout::Builtin(Builtin::List(elem_layout)) => eq_list(root, ident_ids, ctx, elem_layout),
         Layout::Struct { field_layouts, .. } => eq_struct(root, ident_ids, ctx, field_layouts),
         Layout::Union(union_layout) => eq_tag_union(root, ident_ids, ctx, union_layout),

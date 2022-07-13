@@ -130,12 +130,6 @@ fn hash_builtin<'a, 'ctx, 'env>(
             call_bitcode_fn(env, &[seed.into(), val], bitcode::DICT_HASH_STR).into_int_value()
         }
 
-        Builtin::Dict(_, _) => {
-            todo!("Implement hash for Dict")
-        }
-        Builtin::Set(_) => {
-            todo!("Implement Hash for Set")
-        }
         Builtin::List(element_layout) => build_hash_list(
             env,
             layout_ids,
