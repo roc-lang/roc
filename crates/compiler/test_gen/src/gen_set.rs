@@ -281,6 +281,7 @@ fn from_list() {
 }
 
 #[test]
+#[ignore]
 #[cfg(any(feature = "gen-llvm"))]
 fn from_list_void() {
     assert_evals_to!(
