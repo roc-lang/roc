@@ -825,7 +825,6 @@ sublist = \list, config ->
     else
         sublistLowlevel list config.start config.len
 
-
 sublistLowlevel : List elem, Nat, Nat -> List elem
 
 ## Intersperses `sep` between the elements of `list`
