@@ -530,8 +530,9 @@ fn empty_record() {
         #   @<2>: [[custom(2) {}]]
         #Derived.toEncoder_{} =
           \#Derived.rcd ->
-            Encode.custom \#Derived.bytes, #Derived.fmt ->
-              Encode.appendWith #Derived.bytes (Encode.record []) #Derived.fmt
+            Encode.custom
+              \#Derived.bytes, #Derived.fmt ->
+                Encode.appendWith #Derived.bytes (Encode.record []) #Derived.fmt
         "###
         )
     })
@@ -549,8 +550,9 @@ fn zero_field_record() {
         #   @<2>: [[custom(2) {}]]
         #Derived.toEncoder_{} =
           \#Derived.rcd ->
-            Encode.custom \#Derived.bytes, #Derived.fmt ->
-              Encode.appendWith #Derived.bytes (Encode.record []) #Derived.fmt
+            Encode.custom
+              \#Derived.bytes, #Derived.fmt ->
+                Encode.appendWith #Derived.bytes (Encode.record []) #Derived.fmt
         "###
         )
     })
@@ -568,10 +570,15 @@ fn one_field_record() {
         #   @<2>: [[custom(2) { a : val }]] | val has Encoding
         #Derived.toEncoder_{a} =
           \#Derived.rcd ->
-            Encode.custom \#Derived.bytes, #Derived.fmt ->
-              Encode.appendWith #Derived.bytes (Encode.record [
-                { value: Encode.toEncoder #Derived.rcd.a, key: "a", },
-              ]) #Derived.fmt
+            Encode.custom
+              \#Derived.bytes, #Derived.fmt ->
+                Encode.appendWith
+                  #Derived.bytes
+                  (Encode.record
+                    [
+                      { value: Encode.toEncoder #Derived.rcd.a, key: "a", },
+                    ])
+                  #Derived.fmt
         "###
         )
     })
@@ -625,9 +632,12 @@ fn tag_one_label_zero_args() {
         #   @<2>: [[custom(2) [A]]]
         #Derived.toEncoder_[A 0] =
           \#Derived.tag ->
-            Encode.custom \#Derived.bytes, #Derived.fmt ->
-              Encode.appendWith #Derived.bytes (when #Derived.tag is
-                A -> Encode.tag "A" []) #Derived.fmt
+            Encode.custom
+              \#Derived.bytes, #Derived.fmt ->
+                Encode.appendWith
+                  #Derived.bytes
+                  (when #Derived.tag is A -> Encode.tag "A" [])
+                  #Derived.fmt
         "###
         )
     })
@@ -724,9 +734,14 @@ fn list() {
         #   @<2>: [[custom(4) (List val)]] | val has Encoding
         #Derived.toEncoder_list =
           \#Derived.lst ->
-            Encode.custom \#Derived.bytes, #Derived.fmt ->
-              Encode.appendWith #Derived.bytes (Encode.list #Derived.lst
-              \#Derived.elem -> Encode.toEncoder #Derived.elem) #Derived.fmt
+            Encode.custom
+              \#Derived.bytes, #Derived.fmt ->
+                Encode.appendWith
+                  #Derived.bytes
+                  (Encode.list
+                    #Derived.lst
+                    \#Derived.elem -> Encode.toEncoder #Derived.elem)
+                  #Derived.fmt
         "###
         )
     })
