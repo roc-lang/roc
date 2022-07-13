@@ -41,7 +41,7 @@ use inkwell::types::{
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
     BasicMetadataValueEnum, BasicValue, CallSiteValue, FloatValue, FunctionValue,
-    InstructionOpcode, InstructionValue, IntValue, PhiValue, PointerValue, StructValue,
+    InstructionOpcode, IntValue, PhiValue, PointerValue, StructValue,
 };
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
@@ -285,71 +285,6 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         let alignment_iv = self.alignment_const(alignment);
 
         alignment_iv.into()
-    }
-
-    pub fn call_alloc(
-        &self,
-        number_of_bytes: IntValue<'ctx>,
-        alignment: usize,
-    ) -> PointerValue<'ctx> {
-        let function = self.module.get_function("roc_alloc").unwrap();
-        let alignment = self.alignment_const(alignment);
-        let call = self.builder.build_call(
-            function,
-            &[number_of_bytes.into(), alignment.into()],
-            "roc_alloc",
-        );
-
-        call.set_call_convention(C_CALL_CONV);
-
-        call.try_as_basic_value()
-            .left()
-            .unwrap()
-            .into_pointer_value()
-        // TODO check if alloc returned null; if so, runtime error for OOM!
-    }
-
-    pub fn call_dealloc(
-        &self,
-        ptr: PointerValue<'ctx>,
-        size: usize,
-        alignment: usize,
-    ) -> InstructionValue<'ctx> {
-        let function = self.module.get_function("roc_dealloc").unwrap();
-        let alignment = self.alignment_const(alignment);
-        let call = self.builder.build_call(
-            function,
-            &[ptr.into(), size.into(), alignment.into()],
-            "roc_dealloc",
-        );
-
-        call.set_call_convention(C_CALL_CONV);
-
-        call.try_as_basic_value().right().unwrap()
-    }
-
-    pub fn call_memset(
-        &self,
-        bytes_ptr: PointerValue<'ctx>,
-        filler: IntValue<'ctx>,
-        length: IntValue<'ctx>,
-    ) -> CallSiteValue<'ctx> {
-        let false_val = self.context.bool_type().const_int(0, false);
-
-        let intrinsic_name = match self.target_info.ptr_width() {
-            roc_target::PtrWidth::Bytes8 => LLVM_MEMSET_I64,
-            roc_target::PtrWidth::Bytes4 => LLVM_MEMSET_I32,
-        };
-
-        self.build_intrinsic_call(
-            intrinsic_name,
-            &[
-                bytes_ptr.into(),
-                filler.into(),
-                length.into(),
-                false_val.into(),
-            ],
-        )
     }
 
     pub fn call_panic(&self, message: PointerValue<'ctx>, tag_id: PanicTagId) {
@@ -620,9 +555,6 @@ static LLVM_COS: IntrinsicName = float_intrinsic!("llvm.cos");
 static LLVM_CEILING: IntrinsicName = float_intrinsic!("llvm.ceil");
 static LLVM_FLOOR: IntrinsicName = float_intrinsic!("llvm.floor");
 static LLVM_ROUND: IntrinsicName = float_intrinsic!("llvm.round");
-
-static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
-static LLVM_MEMSET_I32: &str = "llvm.memset.p0i8.i32";
 
 static LLVM_FRAME_ADDRESS: &str = "llvm.frameaddress.p0i8";
 static LLVM_STACK_SAVE: &str = "llvm.stacksave";
