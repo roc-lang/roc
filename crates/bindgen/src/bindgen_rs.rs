@@ -1309,7 +1309,7 @@ fn derive_str(typ: &RocType, types: &Types, include_debug: bool) -> String {
         buf.push_str("Debug, ");
     }
 
-    if !typ.has_enumeration(types) {
+    if !can_derive_default(typ, types) {
         buf.push_str("Default, ");
     }
 
@@ -1858,5 +1858,27 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
         borrowed_ret,
         owned_ret_type,
         borrowed_ret_type,
+    }
+}
+
+pub fn can_derive_default(roc_type: &RocType, types: &Types) -> bool {
+    match roc_type {
+        RocType::TagUnion { .. } | RocType::RecursivePointer { .. } | RocType::Function(_, _) => {
+            true
+        }
+        RocType::RocStr | RocType::Bool | RocType::Num(_) => false,
+        RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
+            can_derive_default(types.get_type(*id), types)
+        }
+        RocType::RocDict(key_id, val_id) => {
+            can_derive_default(types.get_type(*key_id), types)
+                || can_derive_default(types.get_type(*val_id), types)
+        }
+        RocType::Struct { fields, .. } => fields
+            .iter()
+            .any(|(_, type_id)| can_derive_default(types.get_type(*type_id), types)),
+        RocType::TagUnionPayload { fields, .. } => fields
+            .iter()
+            .any(|(_, type_id)| can_derive_default(types.get_type(*type_id), types)),
     }
 }

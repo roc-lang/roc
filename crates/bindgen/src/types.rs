@@ -312,28 +312,6 @@ impl RocType {
             }
         }
     }
-
-    /// Useful when determining whether to derive Default in a Rust type.
-    pub fn has_enumeration(&self, types: &Types) -> bool {
-        match self {
-            RocType::TagUnion { .. } | RocType::RecursivePointer { .. } => true,
-            RocType::RocStr | RocType::Bool | RocType::Num(_) => false,
-            RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
-                types.get_type(*id).has_enumeration(types)
-            }
-            RocType::RocDict(key_id, val_id) => {
-                types.get_type(*key_id).has_enumeration(types)
-                    || types.get_type(*val_id).has_enumeration(types)
-            }
-            RocType::Struct { fields, .. } => fields
-                .iter()
-                .any(|(_, type_id)| types.get_type(*type_id).has_enumeration(types)),
-            RocType::TagUnionPayload { fields, .. } => fields
-                .iter()
-                .any(|(_, type_id)| types.get_type(*type_id).has_enumeration(types)),
-            RocType::Function(_, _) => todo!(),
-        }
-    }
 }
 
 impl From<IntWidth> for RocNum {
