@@ -22,12 +22,12 @@ use ven_pretty::{DocAllocator, DocBuilder};
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
-roc_error_macros::assert_sizeof_aarch64!(Builtin, 3 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Builtin, 2 * 8);
 roc_error_macros::assert_sizeof_aarch64!(Layout, 4 * 8);
 roc_error_macros::assert_sizeof_aarch64!(UnionLayout, 3 * 8);
 roc_error_macros::assert_sizeof_aarch64!(LambdaSet, 3 * 8);
 
-roc_error_macros::assert_sizeof_wasm!(Builtin, 3 * 4);
+roc_error_macros::assert_sizeof_wasm!(Builtin, 2 * 4);
 roc_error_macros::assert_sizeof_wasm!(Layout, 6 * 4);
 roc_error_macros::assert_sizeof_wasm!(UnionLayout, 3 * 4);
 roc_error_macros::assert_sizeof_wasm!(LambdaSet, 3 * 4);
