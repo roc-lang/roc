@@ -10,7 +10,7 @@ use crate::num::{
 use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
-use crate::traverse::Visitor;
+use crate::traverse::{walk_expr, Visitor};
 use roc_collections::soa::Index;
 use roc_collections::{SendMap, VecMap, VecSet};
 use roc_error_macros::internal_error;
@@ -2509,12 +2509,14 @@ struct ExpectCollector {
 }
 
 impl crate::traverse::Visitor for ExpectCollector {
-    fn visit_expr(&mut self, expr: &Expr, region: Region, _var: Variable) {
+    fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
         if let Expr::Expect {
             lookups_in_cond, ..
         } = expr
         {
             self.expects.insert(region, lookups_in_cond.to_vec());
         }
+
+        walk_expr(self, expr, var)
     }
 }

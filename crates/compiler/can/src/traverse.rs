@@ -1,6 +1,5 @@
 //! Traversals over the can ast.
 
-use roc_collections::VecMap;
 use roc_module::{ident::Lowercase, symbol::Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
