@@ -1,4 +1,6 @@
-interface AStar exposes [findPath, Model, initialModel, cheapestOpen, reconstructPath] imports [Quicksort]
+interface AStar
+    exposes [findPath, Model, initialModel, cheapestOpen, reconstructPath]
+    imports [Quicksort, Dict.{ Dict }, Set.{ Set }]
 
 findPath = \costFn, moveFn, start, end ->
     astar costFn moveFn end (initialModel start)
@@ -14,7 +16,7 @@ initialModel : position -> Model position
 initialModel = \start -> {
     evaluated: Set.empty,
     openSet: Set.single start,
-    costs: Dict.single start 0,
+    costs: Dict.single start 0.0,
     cameFrom: Dict.empty,
 }
 
