@@ -276,7 +276,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         })
     }
 
-    pub fn alignment_const(&self, alignment: usize) -> IntValue<'ctx> {
+    pub fn alignment_const(&self, alignment: u32) -> IntValue<'ctx> {
         self.ptr_int().const_int(alignment as u64, false)
     }
 
