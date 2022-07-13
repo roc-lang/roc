@@ -1315,12 +1315,11 @@ define_builtins! {
         10 DICT_KEYS: "keys"
         11 DICT_VALUES: "values"
 
-        12 DICT_UNION: "union"
-        13 DICT_INTERSECTION: "intersection"
-        14 DICT_DIFFERENCE: "difference"
+        12 DICT_INSERT_ALL: "insertAll" // union
+        13 DICT_KEEP_SHARED: "keepShared" // intersection
+        14 DICT_REMOVE_ALL: "removeAll" // difference
 
-        15 DICT_GET_LOWLEVEL: "getLowlevel"
-        16 DICT_WITH_CAPACITY: "withCapacity"
+        15 DICT_WITH_CAPACITY: "withCapacity"
     }
     8 SET: "Set" => {
         0 SET_SET: "Set" // the Set.Set type alias

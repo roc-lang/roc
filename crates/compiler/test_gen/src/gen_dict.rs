@@ -404,7 +404,7 @@ fn single() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn union() {
+fn insert_all() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -412,7 +412,7 @@ fn union() {
 
             myDict : Dict.Dict I64 {}
             myDict =
-                Dict.union (Dict.single 0 {}) (Dict.single 1 {})
+                Dict.insertAll (Dict.single 0 {}) (Dict.single 1 {})
 
             main = Dict.len myDict
             "#
@@ -424,7 +424,7 @@ fn union() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn union_prefer_first() {
+fn insert_all_prefer_first() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -432,7 +432,8 @@ fn union_prefer_first() {
 
             myDict : Dict.Dict I64 I64
             myDict =
-                Dict.union (Dict.single 0 100) (Dict.single 0 200)
+                (Dict.single 0 100)
+                    |> Dict.insertAll (Dict.single 0 200)
 
             main = Dict.values myDict
             "#
@@ -444,7 +445,7 @@ fn union_prefer_first() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn intersection() {
+fn keep_shared() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -467,7 +468,7 @@ fn intersection() {
                     |> Dict.insert 4 {}
 
             main =
-                Dict.intersection dict1 dict2
+                Dict.keepShared dict1 dict2
                     |> Dict.len
             "#
         ),
@@ -478,7 +479,7 @@ fn intersection() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn intersection_prefer_first() {
+fn keep_shared_prefer_first() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -501,18 +502,18 @@ fn intersection_prefer_first() {
                     |> Dict.insert 4 300
 
             main =
-                Dict.intersection dict1 dict2
+                Dict.keepShared dict1 dict2
                     |> Dict.values
             "#
         ),
-        RocList::from_slice(&[4, 2]),
+        RocList::from_slice(&[2, 4]),
         RocList<i64>
     );
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn difference() {
+fn remove_all() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -535,7 +536,7 @@ fn difference() {
                     |> Dict.insert 4 {}
 
             main =
-                Dict.difference dict1 dict2
+                Dict.removeAll dict1 dict2
                     |> Dict.len
             "#
         ),
@@ -546,7 +547,7 @@ fn difference() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn difference_prefer_first() {
+fn remove_all_prefer_first() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -569,11 +570,11 @@ fn difference_prefer_first() {
                     |> Dict.insert 4 300
 
             main =
-                Dict.difference dict1 dict2
+                Dict.removeAll dict1 dict2
                     |> Dict.values
             "#
         ),
-        RocList::from_slice(&[5, 3, 1]),
+        RocList::from_slice(&[1, 5, 3]),
         RocList<i64>
     );
 }

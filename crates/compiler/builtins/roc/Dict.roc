@@ -151,7 +151,7 @@ values = \@Dict list ->
 # union : Dict k v, Dict k v -> Dict k v
 insertAll : Dict k v, Dict k v -> Dict k v
 insertAll = \xs, @Dict ys ->
-    List.walk ys xs (\state, Pair k v -> Dict.insert state k v)
+    List.walk ys xs (\state, Pair k v -> Dict.insertIfVacant state k v)
 
 # intersection : Dict k v, Dict k v -> Dict k v
 keepShared : Dict k v, Dict k v -> Dict k v
@@ -172,3 +172,10 @@ insertFresh = \@Dict list, k, v ->
     list
         |> List.append (Pair k v)
         |> @Dict
+
+insertIfVacant : Dict k v, k, v -> Dict k v
+insertIfVacant = \dict, key, value ->
+    if Dict.contains dict key then
+        dict
+    else
+        Dict.insert dict key value
