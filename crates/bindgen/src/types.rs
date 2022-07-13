@@ -474,10 +474,8 @@ fn add_type_help<'a>(
             todo!()
         }
         Content::Structure(FlatType::Erroneous(_)) => todo!(),
-        Content::Structure(FlatType::EmptyRecord) => types.add(RocType::Unit, layout),
-        Content::Structure(FlatType::EmptyTagUnion) => {
-            // This can happen when unwrapping a tag union; don't do anything.
-            todo!()
+        Content::Structure(FlatType::EmptyRecord) | Content::Structure(FlatType::EmptyTagUnion) => {
+            types.add(RocType::Unit, layout)
         }
         Content::Alias(name, alias_vars, real_var, _) => {
             if name.is_builtin() {
