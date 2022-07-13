@@ -4,7 +4,8 @@ use core::alloc::Layout;
 use core::ffi::c_void;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use libc;
-use roc_std::RocStr;
+use reqwest::{Client, ClientBuilder, Request};
+use roc_std::{RocResult, RocList, RocStr};
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
@@ -122,4 +123,66 @@ pub extern "C" fn roc_fx_getLine() -> RocStr {
 pub extern "C" fn roc_fx_putLine(line: &RocStr) {
     let string = line.as_str();
     println!("{}", string);
+}
+
+// We just provide just one Client to the Roc program for simplicity, so it must be static in the host.
+// `thread_local!` avoids contention between threads, should that ever arise
+// `lazy_static` & `Mutex` might have easier-to-understand semantics for resources like cookies
+use std::cell::RefCell;
+std::thread_local! {
+    static HTTP_CLIENT: RefCell<Option<Client>> = RefCell::new(None);
+}
+
+struct RocHeader {
+    name: RocStr,
+    value: RocStr,
+}
+
+// This is not the right Rust translation, it's something more complicated...
+enum RocBody {
+    Body(RocStr, RocList<u8>),
+    EmptyBody
+}
+
+#[repr(C)]
+struct RocRequest {
+    method : RocStr,
+    headers : RocList<RocHeader>,
+    url : RocStr,
+    body : RocBody,
+    responseHandler : *const u8, // Response (List U8) -> Result a Error
+    timeout : RocResult<f64, ()>,
+    tracker : RocResult<RocStr, ()>,
+    allowCookiesFromOtherDomains : bool,
+}
+
+#[repr(C)]
+struct RocMetadata {
+    url : RocStr,
+    statusCode : u16,
+    statusText : RocStr,
+    headers : RocList<RocHeader>,
+}
+
+enum RocResponseOfListU8 {
+    BadUrl(RocStr),
+    Timeout,
+    NetworkError,
+    BadStatus(RocMetadata, RocList<u8>),
+    GoodStatus(RocMetadata, RocList<u8>),
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_send_request(req: RocRequest) {
+
+    /*
+
+     */
+
+    let rust_body_bytes: Vec<u8> = vec![];
+    let roc_body_bytes = RocList::from_slice(&rust_body_bytes);
+
+    let roc_response: RocResponseOfListU8 = todo!();
+
+    // call_the_closure
 }
