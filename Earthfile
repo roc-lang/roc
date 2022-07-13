@@ -12,7 +12,7 @@ install-other-libs:
     RUN apt -y install libunwind-dev pkg-config libx11-dev zlib1g-dev
     RUN apt -y install unzip # for www/build.sh
 
-install-zig-llvm-valgrind-clippy-rustfmt:
+install-zig-llvm-valgrind:
     FROM +install-other-libs
     # editor
     RUN apt -y install libxkbcommon-dev
@@ -35,10 +35,6 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld -C target-cpu=native"
     # valgrind
     RUN apt -y install valgrind
-    # clippy
-    RUN rustup component add clippy
-    # rustfmt
-    RUN rustup component add rustfmt
     # wasm repl & tests
     RUN rustup target add wasm32-unknown-unknown wasm32-wasi
     RUN apt -y install libssl-dev
@@ -53,11 +49,11 @@ install-zig-llvm-valgrind-clippy-rustfmt:
     ENV CARGO_INCREMENTAL=0 # no need to recompile package when using new function
 
 copy-dirs:
-    FROM +install-zig-llvm-valgrind-clippy-rustfmt
+    FROM +install-zig-llvm-valgrind
     COPY --dir crates examples Cargo.toml Cargo.lock version.txt www ./
 
 test-zig:
-    FROM +install-zig-llvm-valgrind-clippy-rustfmt
+    FROM +install-zig-llvm-valgrind
     COPY --dir crates/compiler/builtins/bitcode ./
     RUN cd bitcode && ./run-tests.sh && ./run-wasm-tests.sh
 
@@ -69,19 +65,6 @@ build-rust-test:
     RUN gcc --version
     RUN --mount=type=cache,target=$SCCACHE_DIR \
         cargo test --locked --release --features with_sound --workspace --no-run && sccache --show-stats
-
-check-clippy:
-    FROM +build-rust-test
-    RUN cargo clippy -V
-    RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo clippy --workspace --tests -- --deny warnings
-    RUN --mount=type=cache,target=$SCCACHE_DIR \
-        cargo clippy --workspace --tests --release -- --deny warnings
-
-check-rustfmt:
-    FROM +build-rust-test
-    RUN cargo fmt --version
-    RUN cargo fmt --all -- --check
 
 check-typos:
     RUN cargo install typos-cli --version 1.0.11 # version set to prevent confusion if the version is updated automatically
@@ -132,8 +115,6 @@ verify-no-git-changes:
 
 test-all:
     BUILD +test-zig
-    BUILD +check-rustfmt
-    BUILD +check-clippy
     BUILD +test-rust
     BUILD +verify-no-git-changes
 
