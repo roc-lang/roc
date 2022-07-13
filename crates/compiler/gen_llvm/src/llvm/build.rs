@@ -984,7 +984,7 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
             if str_literal.len() < env.small_str_bytes() as usize {
                 match env.small_str_bytes() {
                     24 => small_str_ptr_width_8(env, parent, str_literal).into(),
-                    12 => small_str_ptr_width_4(env, parent, str_literal).into(),
+                    12 => small_str_ptr_width_4(env,  str_literal).into(),
                     _ => unreachable!("incorrect small_str_bytes"),
                 }
             } else {
@@ -1051,9 +1051,8 @@ fn small_str_ptr_width_8<'a, 'ctx, 'env>(
 
 fn small_str_ptr_width_4<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
     str_literal: &str,
-) -> PointerValue<'ctx> {
+) -> StructValue<'ctx> {
     debug_assert_eq!(env.target_info.ptr_width() as u8, 4);
 
     let mut array = [0u8; 12];
@@ -1074,7 +1073,7 @@ fn small_str_ptr_width_4<'a, 'ctx, 'env>(
     let ptr_type = env.context.i8_type().ptr_type(address_space);
     let ptr = env.builder.build_int_to_ptr(ptr, ptr_type, "to_u8_ptr");
 
-    const_str_alloca_ptr(env, parent, ptr, len, cap)
+    struct_from_fields(env, zig_str_type(env), [(0, ptr.into()), (1, len.into()), (2, cap.into())].into_iter())
 }
 
 pub fn build_exp_call<'a, 'ctx, 'env>(
