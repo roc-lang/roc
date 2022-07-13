@@ -7,6 +7,7 @@ use clap::{Arg, ArgMatches, Command, ValueSource};
 use roc_build::link::{LinkType, LinkingStrategy};
 use roc_collections::VecMap;
 use roc_error_macros::{internal_error, user_error};
+use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{Expectations, LoadingProblem, Threading};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
@@ -388,8 +389,14 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let interns = loaded.interns.clone();
 
-    let (lib, expects) =
-        expect_mono_module_to_dylib(arena, target.clone(), loaded, opt_level).unwrap();
+    let (lib, expects) = expect_mono_module_to_dylib(
+        arena,
+        target.clone(),
+        loaded,
+        opt_level,
+        LlvmBackendMode::CliTest,
+    )
+    .unwrap();
 
     let name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
     let cstring = CString::new(name).unwrap();
