@@ -498,6 +498,8 @@ fn modify_refcount<'a>(
 ) -> Stmt<'a> {
     // Call the relevant Zig lowlevel to actually modify the refcount
     let zig_call_result = root.create_symbol(ident_ids, "zig_call_result");
+    let arena = root.arena;
+
     match ctx.op {
         HelperOp::Inc => {
             let zig_call_expr = Expr::Call(Call {
@@ -505,7 +507,7 @@ fn modify_refcount<'a>(
                     op: LowLevel::RefCountInc,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
-                arguments: root.arena.alloc([rc_ptr, Symbol::ARG_2]),
+                arguments: arena.alloc([rc_ptr, Symbol::ARG_2]),
             });
             Stmt::Let(zig_call_result, zig_call_expr, LAYOUT_UNIT, following)
         }
@@ -537,7 +539,7 @@ fn modify_refcount<'a>(
                             op,
                             update_mode: UpdateModeId::BACKEND_DUMMY,
                         },
-                        arguments: root.arena.alloc([rc_ptr]),
+                        arguments: arena.alloc([rc_ptr]),
                     })
                 }
                 Layout::Boxed(inner) => {
@@ -573,11 +575,11 @@ fn modify_refcount<'a>(
                     op: LowLevel::RefCountDec,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
-                arguments: root.arena.alloc([rc_ptr, size_sym, alignment_sym]),
+                arguments: arena.alloc([rc_ptr, size_sym, alignment_sym]),
             });
             let zig_call_stmt = Stmt::Let(zig_call_result, zig_call_expr, LAYOUT_UNIT, following);
 
-            alignment_stmt(root.arena.alloc(zig_call_stmt))
+            alignment_stmt(arena.alloc(size_stmt(arena.alloc(zig_call_stmt))))
         }
 
         _ => unreachable!(),

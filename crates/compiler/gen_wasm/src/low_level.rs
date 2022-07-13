@@ -344,6 +344,19 @@ impl<'a> LowLevelCall<'a> {
                 _ => internal_error!("invalid storage for List"),
             },
 
+            ListGetCapacity => match backend.storage.get(&self.arguments[0]) {
+                StoredValue::StackMemory { location, .. } => {
+                    let (local_id, offset) =
+                        location.local_and_offset(backend.storage.stack_frame_pointer);
+                    backend.code_builder.get_local(local_id);
+                    // List is stored as (pointer, length, capacity),
+                    // with each of those fields being 4 bytes on wasm.
+                    // So the capacity is 8 bytes after the start of the struct.
+                    backend.code_builder.i32_load(Align::Bytes4, offset + 8);
+                }
+                _ => internal_error!("invalid storage for List"),
+            },
+
             ListIsUnique => self.load_args_and_call_zig(backend, bitcode::LIST_IS_UNIQUE),
 
             ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith | DictWalk => {
