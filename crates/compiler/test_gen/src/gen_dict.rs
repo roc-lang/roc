@@ -1,4 +1,4 @@
-#![cfg(feature = "gen-llvm")]
+#![cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
@@ -6,8 +6,8 @@ use crate::helpers::llvm::assert_evals_to;
 // #[cfg(feature = "gen-dev")]
 // use crate::helpers::dev::assert_evals_to;
 
-// #[cfg(feature = "gen-wasm")]
-// use crate::helpers::wasm::assert_evals_to;
+#[cfg(feature = "gen-wasm")]
+use crate::helpers::wasm::assert_evals_to;
 
 use indoc::indoc;
 use roc_std::{RocList, RocStr};
@@ -158,7 +158,7 @@ fn dict_nonempty_get() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn keys() {
     assert_evals_to!(
         indoc!(
@@ -180,7 +180,7 @@ fn keys() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn values() {
     assert_evals_to!(
         indoc!(
@@ -202,7 +202,7 @@ fn values() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn from_list_with_fold_simple() {
     assert_evals_to!(
         indoc!(
@@ -221,7 +221,7 @@ fn from_list_with_fold_simple() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn from_list_with_fold_reallocates() {
     assert_evals_to!(
         indoc!(
@@ -251,7 +251,7 @@ fn from_list_with_fold_reallocates() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn small_str_keys() {
     assert_evals_to!(
         indoc!(
@@ -273,7 +273,7 @@ fn small_str_keys() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn big_str_keys() {
     assert_evals_to!(
         indoc!(
@@ -298,7 +298,7 @@ fn big_str_keys() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn big_str_values() {
     assert_evals_to!(
         indoc!(
@@ -381,7 +381,7 @@ fn insert_all() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn insert_all_prefer_first() {
     assert_evals_to!(
         indoc!(
@@ -431,7 +431,7 @@ fn keep_shared() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn keep_shared_prefer_first() {
     assert_evals_to!(
         indoc!(
