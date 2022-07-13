@@ -1684,11 +1684,17 @@ pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: Upda
             };
         }
     } else {
+        const temp = errorToProblem(@ptrCast([*]u8, arg.bytes), arg.length);
+
         // decref the list
         utils.decref(arg.bytes, arg.len(), 1);
 
-        const temp = errorToProblem(@ptrCast([*]u8, arg.bytes), arg.length);
-        return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = temp.index, .problem_code = temp.problem };
+        return FromUtf8Result{
+            .is_ok = false,
+            .string = RocStr.empty(),
+            .byte_index = temp.index,
+            .problem_code = temp.problem,
+        };
     }
 }
 
