@@ -156,6 +156,7 @@ pub enum RocType {
     /// this would be the field of Cons containing the (recursive) StrConsList type,
     /// and the TypeId is the TypeId of StrConsList itself.
     RecursivePointer(TypeId),
+    Function(Vec<TypeId>, TypeId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
@@ -208,7 +209,8 @@ impl RocType {
         match self {
             RocType::Bool
             | RocType::Num(_)
-            | RocType::TagUnion(RocTagUnion::Enumeration { .. }) => false,
+            | RocType::TagUnion(RocTagUnion::Enumeration { .. })
+            | RocType::Function(_, _) => false,
             RocType::RocStr
             | RocType::RocList(_)
             | RocType::RocDict(_, _)
@@ -252,7 +254,8 @@ impl RocType {
             }
             RocType::RocStr
             | RocType::Bool
-            | RocType::TagUnion(RocTagUnion::Enumeration { .. }) => false,
+            | RocType::TagUnion(RocTagUnion::Enumeration { .. })
+            | RocType::Function(_, _) => false,
             RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
                 types.get_type(*id).has_float_help(types, do_not_recurse)
             }
@@ -558,8 +561,41 @@ fn add_type_help<'a>(
                 }
             }
         },
-        Content::Structure(FlatType::Func(_, _, _)) => {
-            todo!()
+        Content::Structure(FlatType::Func(args, _closure_var, ret_var)) => {
+            // TODO: create a real RocType::Lambda here, but have code gen for it
+            // just gen a comment that says TODO generate lambda. This way,
+            // we get to actually return a real TypeId here, so things don't blow up.
+            let args = env.subs.get_subs_slice(*args);
+            let mut arg_type_ids = Vec::with_capacity(args.len());
+
+            for arg_var in args {
+                let arg_layout = env
+                    .layout_cache
+                    .from_var(env.arena, *arg_var, env.subs)
+                    .expect("Something weird ended up in the content");
+
+                arg_type_ids.push(add_type_help(env, arg_layout, *arg_var, opt_name, types));
+            }
+
+            let ret_type_id = {
+                let ret_layout = env
+                    .layout_cache
+                    .from_var(env.arena, *ret_var, env.subs)
+                    .expect("Something weird ended up in the content");
+
+                add_type_help(env, ret_layout, *ret_var, opt_name, types)
+            };
+
+            let fn_type_id =
+                types.add(RocType::Function(arg_type_ids.clone(), ret_type_id), layout);
+
+            types.depends(fn_type_id, ret_type_id);
+
+            for arg_type_id in arg_type_ids {
+                types.depends(fn_type_id, arg_type_id);
+            }
+
+            fn_type_id
         }
         Content::Structure(FlatType::FunctionOrTagUnion(_, _, _)) => {
             todo!()

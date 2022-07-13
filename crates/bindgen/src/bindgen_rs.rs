@@ -266,6 +266,9 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
             // This is recursively pointing to a type that should already have been added,
             // so no extra work needs to happen.
         }
+        RocType::Function(_, _) => {
+            // TODO actually bindgen functions!
+        }
     }
 }
 
@@ -648,6 +651,7 @@ pub struct {name} {{
                         payload_args = answer.payload_args;
                         args_to_payload = answer.args_to_payload;
                     }
+                    RocType::Function(_, _) => todo!(),
                 };
 
                 {
@@ -1120,6 +1124,7 @@ pub struct {name} {{
 
                             buf.join("\n")
                         }
+                        RocType::Function(_, _) => todo!(),
                     };
 
                     format!(
@@ -1286,6 +1291,7 @@ fn type_name(id: TypeId, types: &Types) -> String {
         | RocType::TagUnion(RocTagUnion::NullableUnwrapped { name, .. })
         | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { name, .. }) => name.clone(),
         RocType::RecursivePointer(content) => type_name(*content, types),
+        RocType::Function(_, _) => todo!(),
     }
 }
 
@@ -1430,6 +1436,7 @@ pub struct {name} {{
                 owned_ret_type = answer.owned_ret_type;
                 borrowed_ret_type = answer.borrowed_ret_type;
             }
+            RocType::Function(_, _) => todo!(),
         };
 
         // Add a convenience constructor function for the tag with the payload, e.g.
@@ -1659,6 +1666,7 @@ pub struct {name} {{
 
                 buf.join(&format!("\n{INDENT}{INDENT}{INDENT}{INDENT}{INDENT}"))
             }
+            RocType::Function(_, _) => todo!(),
         };
 
         let body = format!(
