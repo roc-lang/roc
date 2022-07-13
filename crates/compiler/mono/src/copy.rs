@@ -1,56 +1,238 @@
-use bumpalo::collections::Vec;
-use bumpalo::Bump;
 use roc_can::{
     def::Def,
     expr::{AccessorData, ClosureData, Expr, Field, WhenBranch},
 };
+use roc_module::ident::{Lowercase, TagName};
 use roc_types::{
     subs::{
-        self, AliasVariables, Descriptor, OptVariable, RecordFields, Subs, SubsSlice, UnionLambdas,
-        UnionTags, Variable, VariableSubsSlice,
+        self, AliasVariables, Descriptor, GetSubsSlice, OptVariable, RecordFields, Subs, SubsIndex,
+        SubsSlice, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
     },
-    types::Uls,
+    types::{RecordField, Uls},
 };
 
-/// Deep copies the type variables in the type hosted by [`var`] into [`expr`].
-/// Returns [`None`] if the expression does not need to be copied.
-pub fn deep_copy_type_vars_into_expr<'a>(
-    arena: &'a Bump,
+trait CopyEnv {
+    #[inline(always)]
+    fn clear_source_copy(&mut self, var: Variable) {
+        self.mut_source().modify(var, |descriptor| {
+            if descriptor.copy.into_variable().is_some() {
+                descriptor.copy = OptVariable::NONE;
+            } else {
+                debug_assert!(false, "{:?} marked as copied but it wasn't", var);
+            }
+        })
+    }
+
+    #[inline(always)]
+    fn source_root_var(&self, var: Variable) -> Variable {
+        self.source().get_root_key_without_compacting(var)
+    }
+
+    #[inline(always)]
+    fn source_desc(&self, var: Variable) -> Descriptor {
+        self.source().get_without_compacting(var)
+    }
+
+    #[inline(always)]
+    fn set_source_copy(&mut self, var: Variable, copy: OptVariable) {
+        self.mut_source().set_copy(var, copy)
+    }
+
+    #[inline(always)]
+    fn get_copy(&self, var: Variable) -> OptVariable {
+        self.source().get_copy(var)
+    }
+
+    #[inline(always)]
+    fn target_fresh(&mut self, descriptor: Descriptor) -> Variable {
+        self.target().fresh(descriptor)
+    }
+
+    fn mut_source(&mut self) -> &mut Subs;
+
+    fn source(&self) -> &Subs;
+
+    fn target(&mut self) -> &mut Subs;
+
+    fn clone_name(&mut self, name: SubsIndex<Lowercase>) -> SubsIndex<Lowercase>;
+
+    fn clone_tag_name(&mut self, tag_name: SubsIndex<TagName>) -> SubsIndex<TagName>;
+
+    fn clone_field_names(&mut self, field_names: SubsSlice<Lowercase>) -> SubsSlice<Lowercase>;
+
+    fn clone_tag_names(&mut self, tag_names: SubsSlice<TagName>) -> SubsSlice<TagName>;
+
+    fn clone_record_fields(
+        &mut self,
+        record_fields: SubsSlice<RecordField<()>>,
+    ) -> SubsSlice<RecordField<()>>;
+}
+
+impl CopyEnv for Subs {
+    #[inline(always)]
+    fn mut_source(&mut self) -> &mut Subs {
+        self
+    }
+
+    #[inline(always)]
+    fn source(&self) -> &Subs {
+        self
+    }
+
+    #[inline(always)]
+    fn target(&mut self) -> &mut Subs {
+        self
+    }
+
+    #[inline(always)]
+    fn clone_name(&mut self, name: SubsIndex<Lowercase>) -> SubsIndex<Lowercase> {
+        name
+    }
+
+    #[inline(always)]
+    fn clone_tag_name(&mut self, tag_name: SubsIndex<TagName>) -> SubsIndex<TagName> {
+        tag_name
+    }
+
+    #[inline(always)]
+    fn clone_field_names(&mut self, field_names: SubsSlice<Lowercase>) -> SubsSlice<Lowercase> {
+        field_names
+    }
+
+    #[inline(always)]
+    fn clone_tag_names(&mut self, tag_names: SubsSlice<TagName>) -> SubsSlice<TagName> {
+        tag_names
+    }
+
+    #[inline(always)]
+    fn clone_record_fields(
+        &mut self,
+        record_fields: SubsSlice<RecordField<()>>,
+    ) -> SubsSlice<RecordField<()>> {
+        record_fields
+    }
+}
+
+struct AcrossSubs<'a> {
+    source: &'a mut Subs,
+    target: &'a mut Subs,
+}
+
+impl<'a> CopyEnv for AcrossSubs<'a> {
+    #[inline(always)]
+    fn mut_source(&mut self) -> &mut Subs {
+        self.source
+    }
+
+    #[inline(always)]
+    fn source(&self) -> &Subs {
+        self.source
+    }
+
+    #[inline(always)]
+    fn target(&mut self) -> &mut Subs {
+        self.target
+    }
+
+    #[inline(always)]
+    fn clone_name(&mut self, name: SubsIndex<Lowercase>) -> SubsIndex<Lowercase> {
+        SubsIndex::push_new(&mut self.target.field_names, self.source[name].clone())
+    }
+
+    #[inline(always)]
+    fn clone_tag_name(&mut self, tag_name: SubsIndex<TagName>) -> SubsIndex<TagName> {
+        SubsIndex::push_new(&mut self.target.tag_names, self.source[tag_name].clone())
+    }
+
+    #[inline(always)]
+    fn clone_field_names(&mut self, field_names: SubsSlice<Lowercase>) -> SubsSlice<Lowercase> {
+        SubsSlice::extend_new(
+            &mut self.target.field_names,
+            self.source.get_subs_slice(field_names).iter().cloned(),
+        )
+    }
+
+    #[inline(always)]
+    fn clone_tag_names(&mut self, tag_names: SubsSlice<TagName>) -> SubsSlice<TagName> {
+        SubsSlice::extend_new(
+            &mut self.target.tag_names,
+            self.source.get_subs_slice(tag_names).iter().cloned(),
+        )
+    }
+
+    #[inline(always)]
+    fn clone_record_fields(
+        &mut self,
+        record_fields: SubsSlice<RecordField<()>>,
+    ) -> SubsSlice<RecordField<()>> {
+        SubsSlice::extend_new(
+            &mut self.target.record_fields,
+            self.source.get_subs_slice(record_fields).iter().copied(),
+        )
+    }
+}
+
+pub fn deep_copy_type_vars_into_expr(
     subs: &mut Subs,
     var: Variable,
     expr: &Expr,
 ) -> Option<(Variable, Expr)> {
+    deep_copy_type_vars_into_expr_help(subs, var, expr)
+}
+
+#[allow(unused)] // TODO to be removed when this is used for the derivers
+pub fn deep_copy_expr_across_subs(
+    source: &mut Subs,
+    target: &mut Subs,
+    var: Variable,
+    expr: &Expr,
+) -> Option<(Variable, Expr)> {
+    let mut across_subs = AcrossSubs { source, target };
+    deep_copy_type_vars_into_expr_help(&mut across_subs, var, expr)
+}
+
+/// Deep copies all type variables in [`expr`].
+/// Returns [`None`] if the expression does not need to be copied.
+fn deep_copy_type_vars_into_expr_help<C: CopyEnv>(
+    env: &mut C,
+    var: Variable,
+    expr: &Expr,
+) -> Option<(Variable, Expr)> {
     // Always deal with the root, so that aliases propagate correctly.
-    let var = subs.get_root_key_without_compacting(var);
+    let expr_var = env.source_root_var(var);
 
-    let substitutions = deep_copy_type_vars(arena, subs, var);
+    let mut copied = Vec::with_capacity(16);
 
-    if substitutions.is_empty() {
+    let copy_expr_var = deep_copy_type_vars(env, &mut copied, expr_var);
+
+    if copied.is_empty() {
         return None;
     }
 
-    let new_var = substitutions
-        .iter()
-        .find_map(|&(original, new)| if original == var { Some(new) } else { None })
-        .expect("Variable marked as cloned, but it isn't");
+    let copied_expr = help(env, expr, &mut copied);
 
-    return Some((new_var, help(subs, expr, &substitutions)));
+    // we have tracked all visited variables, and can now traverse them
+    // in one go (without looking at the UnificationTable) and clear the copy field
+    for var in copied {
+        env.clear_source_copy(var);
+    }
 
-    fn help(subs: &Subs, expr: &Expr, substitutions: &[(Variable, Variable)]) -> Expr {
+    return Some((copy_expr_var, copied_expr));
+
+    fn help<C: CopyEnv>(env: &mut C, expr: &Expr, copied: &mut Vec<Variable>) -> Expr {
         use Expr::*;
 
         macro_rules! sub {
             ($var:expr) => {{
-                // Always deal with the root, so that aliases propagate correctly.
-                let root = subs.get_root_key_without_compacting($var);
-                substitutions
-                    .iter()
-                    .find_map(|&(original, new)| if original == root { Some(new) } else { None })
-                    .unwrap_or($var)
+                deep_copy_type_vars(env, copied, $var)
             }};
         }
 
-        let go_help = |e: &Expr| help(subs, e, substitutions);
+        macro_rules! go_help {
+            ($expr:expr) => {{
+                help(env, $expr, copied)
+            }};
+        }
 
         match expr {
             Num(var, str, val, bound) => Num(sub!(*var), str.clone(), *val, *bound),
@@ -65,7 +247,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 loc_elems,
             } => List {
                 elem_var: sub!(*elem_var),
-                loc_elems: loc_elems.iter().map(|le| le.map(go_help)).collect(),
+                loc_elems: loc_elems.iter().map(|le| le.map(|e| go_help!(e))).collect(),
             },
             Var(sym) => Var(*sym),
             &AbilityMember(sym, specialization, specialization_var) => {
@@ -80,7 +262,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 branches_cond_var,
                 exhaustive,
             } => When {
-                loc_cond: Box::new(loc_cond.map(go_help)),
+                loc_cond: Box::new(loc_cond.map(|e| go_help!(e))),
                 cond_var: sub!(*cond_var),
                 expr_var: sub!(*expr_var),
                 region: *region,
@@ -94,8 +276,8 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                              redundant,
                          }| WhenBranch {
                             patterns: patterns.clone(),
-                            value: value.map(go_help),
-                            guard: guard.as_ref().map(|le| le.map(go_help)),
+                            value: value.map(|e| go_help!(e)),
+                            guard: guard.as_ref().map(|le| le.map(|e| go_help!(e))),
                             redundant: *redundant,
                         },
                     )
@@ -113,9 +295,9 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 branch_var: sub!(*branch_var),
                 branches: branches
                     .iter()
-                    .map(|(c, e)| (c.map(go_help), e.map(go_help)))
+                    .map(|(c, e)| (c.map(|e| go_help!(e)), e.map(|e| go_help!(e))))
                     .collect(),
-                final_else: Box::new(final_else.map(go_help)),
+                final_else: Box::new(final_else.map(|e| go_help!(e))),
             },
 
             LetRec(defs, body, cycle_mark) => LetRec(
@@ -129,7 +311,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                              annotation,
                          }| Def {
                             loc_pattern: loc_pattern.clone(),
-                            loc_expr: loc_expr.map(go_help),
+                            loc_expr: loc_expr.map(|e| go_help!(e)),
                             expr_var: sub!(*expr_var),
                             pattern_vars: pattern_vars
                                 .iter()
@@ -139,7 +321,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                         },
                     )
                     .collect(),
-                Box::new(body.map(go_help)),
+                Box::new(body.map(|e| go_help!(e))),
                 *cycle_mark,
             ),
             LetNonRec(def, body) => {
@@ -152,12 +334,12 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 } = &**def;
                 let def = Def {
                     loc_pattern: loc_pattern.clone(),
-                    loc_expr: loc_expr.map(go_help),
+                    loc_expr: loc_expr.map(|e| go_help!(e)),
                     expr_var: sub!(*expr_var),
                     pattern_vars: pattern_vars.iter().map(|(s, v)| (*s, sub!(*v))).collect(),
                     annotation: annotation.clone(),
                 };
-                LetNonRec(Box::new(def), Box::new(body.map(go_help)))
+                LetNonRec(Box::new(def), Box::new(body.map(|e| go_help!(e))))
             }
 
             Call(f, args, called_via) => {
@@ -165,12 +347,12 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 Call(
                     Box::new((
                         sub!(*fn_var),
-                        fn_expr.map(go_help),
+                        fn_expr.map(|e| go_help!(e)),
                         sub!(*clos_var),
                         sub!(*ret_var),
                     )),
                     args.iter()
-                        .map(|(var, expr)| (sub!(*var), expr.map(go_help)))
+                        .map(|(var, expr)| (sub!(*var), expr.map(|e| go_help!(e))))
                         .collect(),
                     *called_via,
                 )
@@ -179,7 +361,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 op: *op,
                 args: args
                     .iter()
-                    .map(|(var, expr)| (sub!(*var), go_help(expr)))
+                    .map(|(var, expr)| (sub!(*var), go_help!(expr)))
                     .collect(),
                 ret_var: sub!(*ret_var),
             },
@@ -191,7 +373,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 foreign_symbol: foreign_symbol.clone(),
                 args: args
                     .iter()
-                    .map(|(var, expr)| (sub!(*var), go_help(expr)))
+                    .map(|(var, expr)| (sub!(*var), go_help!(expr)))
                     .collect(),
                 ret_var: sub!(*ret_var),
             },
@@ -219,7 +401,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                     .iter()
                     .map(|(v, mark, pat)| (sub!(*v), *mark, pat.clone()))
                     .collect(),
-                loc_body: Box::new(loc_body.map(go_help)),
+                loc_body: Box::new(loc_body.map(|e| go_help!(e))),
             }),
 
             Record { record_var, fields } => Record {
@@ -240,7 +422,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                                 Field {
                                     var: sub!(*var),
                                     region: *region,
-                                    loc_expr: Box::new(loc_expr.map(go_help)),
+                                    loc_expr: Box::new(loc_expr.map(|e| go_help!(e))),
                                 },
                             )
                         },
@@ -260,7 +442,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 record_var: sub!(*record_var),
                 ext_var: sub!(*ext_var),
                 field_var: sub!(*field_var),
-                loc_expr: Box::new(loc_expr.map(go_help)),
+                loc_expr: Box::new(loc_expr.map(|e| go_help!(e))),
                 field: field.clone(),
             },
 
@@ -307,7 +489,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                                 Field {
                                     var: sub!(*var),
                                     region: *region,
-                                    loc_expr: Box::new(loc_expr.map(go_help)),
+                                    loc_expr: Box::new(loc_expr.map(|e| go_help!(e))),
                                 },
                             )
                         },
@@ -326,7 +508,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 name: name.clone(),
                 arguments: arguments
                     .iter()
-                    .map(|(v, e)| (sub!(*v), e.map(go_help)))
+                    .map(|(v, e)| (sub!(*v), e.map(|e| go_help!(e))))
                     .collect(),
             },
 
@@ -352,7 +534,7 @@ pub fn deep_copy_type_vars_into_expr<'a>(
             } => OpaqueRef {
                 opaque_var: sub!(*opaque_var),
                 name: *name,
-                argument: Box::new((sub!(argument.0), argument.1.map(go_help))),
+                argument: Box::new((sub!(argument.0), argument.1.map(|e| go_help!(e)))),
                 // These shouldn't matter for opaques during mono, because they are only used for reporting
                 // and pretty-printing to the user. During mono we decay immediately into the argument.
                 // NB: if there are bugs, check if not substituting here is the problem!
@@ -366,8 +548,8 @@ pub fn deep_copy_type_vars_into_expr<'a>(
                 loc_continuation,
                 lookups_in_cond,
             } => Expect {
-                loc_condition: Box::new(loc_condition.map(go_help)),
-                loc_continuation: Box::new(loc_continuation.map(go_help)),
+                loc_condition: Box::new(loc_condition.map(|e| go_help!(e))),
+                loc_continuation: Box::new(loc_continuation.map(|e| go_help!(e))),
                 lookups_in_cond: lookups_in_cond.to_vec(),
             },
 
@@ -380,45 +562,29 @@ pub fn deep_copy_type_vars_into_expr<'a>(
 
 /// Deep copies the type variables in [`var`], returning a map of original -> new type variable for
 /// all type variables copied.
-fn deep_copy_type_vars<'a>(
-    arena: &'a Bump,
-    subs: &mut Subs,
+#[inline]
+fn deep_copy_type_vars<C: CopyEnv>(
+    env: &mut C,
+    copied: &mut Vec<Variable>,
     var: Variable,
-) -> Vec<'a, (Variable, Variable)> {
+) -> Variable {
     // Always deal with the root, so that unified variables are treated the same.
-    let var = subs.get_root_key_without_compacting(var);
+    let var = env.source_root_var(var);
 
-    let mut copied = Vec::with_capacity_in(16, arena);
+    let cloned_var = help(env, copied, var);
 
-    let cloned_var = help(arena, subs, &mut copied, var);
-
-    // we have tracked all visited variables, and can now traverse them
-    // in one go (without looking at the UnificationTable) and clear the copy field
-    let mut result = Vec::with_capacity_in(copied.len(), arena);
-    for var in copied {
-        subs.modify(var, |descriptor| {
-            if let Some(copy) = descriptor.copy.into_variable() {
-                result.push((var, copy));
-                descriptor.copy = OptVariable::NONE;
-            } else {
-                debug_assert!(false, "{:?} marked as copied but it wasn't", var);
-            }
-        })
-    }
-
-    debug_assert!(result.contains(&(var, cloned_var)));
-
-    return result;
+    return cloned_var;
 
     #[must_use]
-    fn help(arena: &Bump, subs: &mut Subs, visited: &mut Vec<Variable>, var: Variable) -> Variable {
+    #[inline]
+    fn help<C: CopyEnv>(env: &mut C, visited: &mut Vec<Variable>, var: Variable) -> Variable {
         use roc_types::subs::Content::*;
         use roc_types::subs::FlatType::*;
 
         // Always deal with the root, so that unified variables are treated the same.
-        let var = subs.get_root_key_without_compacting(var);
+        let var = env.source_root_var(var);
 
-        let desc = subs.get(var);
+        let desc = env.source_desc(var);
 
         // Unlike `deep_copy_var` in solve, here we are cloning *all* flex and rigid vars.
         // So we only want to short-circuit if we've already done the cloning work for a particular
@@ -436,33 +602,35 @@ fn deep_copy_type_vars<'a>(
             copy: OptVariable::NONE,
         };
 
-        let copy = subs.fresh(copy_descriptor);
-        subs.set_copy(var, copy.into());
+        let copy = env.target_fresh(copy_descriptor);
+        env.set_source_copy(var, copy.into());
 
         visited.push(var);
 
         macro_rules! descend_slice {
             ($slice:expr) => {
                 for var_index in $slice {
-                    let var = subs[var_index];
-                    let _ = help(arena, subs, visited, var);
+                    let var = env.source()[var_index];
+                    let _ = help(env, visited, var);
                 }
             };
         }
 
         macro_rules! descend_var {
             ($var:expr) => {{
-                help(arena, subs, visited, $var)
+                help(env, visited, $var)
             }};
         }
 
         macro_rules! clone_var_slice {
             ($slice:expr) => {{
-                let new_arguments = VariableSubsSlice::reserve_into_subs(subs, $slice.len());
+                let new_arguments =
+                    VariableSubsSlice::reserve_into_subs(env.target(), $slice.len());
                 for (target_index, var_index) in (new_arguments.indices()).zip($slice) {
-                    let var = subs[var_index];
-                    let copy_var = subs.get_copy(var).into_variable().unwrap_or(var);
-                    subs.variables[target_index] = copy_var;
+                    let var = env.source()[var_index];
+                    let copy_var = env.get_copy(var).into_variable().unwrap_or(var);
+
+                    env.target().variables[target_index] = copy_var;
                 }
                 new_arguments
             }};
@@ -486,10 +654,12 @@ fn deep_copy_type_vars<'a>(
         // will not repeat this work or crawl this variable again.
         let new_content = match content {
             // The vars for which we want to do something interesting.
-            FlexVar(opt_name) => FlexVar(opt_name),
-            FlexAbleVar(opt_name, ability) => FlexAbleVar(opt_name, ability),
-            RigidVar(name) => RigidVar(name),
-            RigidAbleVar(name, ability) => RigidAbleVar(name, ability),
+            FlexVar(opt_name) => FlexVar(opt_name.map(|n| env.clone_name(n))),
+            FlexAbleVar(opt_name, ability) => {
+                FlexAbleVar(opt_name.map(|n| env.clone_name(n)), ability)
+            }
+            RigidVar(name) => RigidVar(env.clone_name(name)),
+            RigidAbleVar(name, ability) => RigidAbleVar(env.clone_name(name), ability),
 
             // Everything else is a mechanical descent.
             Structure(flat_type) => match flat_type {
@@ -520,12 +690,15 @@ fn deep_copy_type_vars<'a>(
 
                     perform_clone!({
                         let new_variables = clone_var_slice!(fields.variables());
+                        let new_field_names = env.clone_field_names(fields.field_names());
+                        let new_record_fields = env.clone_record_fields(fields.record_fields());
+
                         let new_fields = {
                             RecordFields {
                                 length: fields.length,
-                                field_names_start: fields.field_names_start,
+                                field_names_start: new_field_names.start,
                                 variables_start: new_variables.start,
-                                field_types_start: fields.field_types_start,
+                                field_types_start: new_record_fields.start,
                             }
                         };
 
@@ -536,22 +709,23 @@ fn deep_copy_type_vars<'a>(
                     let new_ext_var = descend_var!(ext_var);
 
                     for variables_slice_index in tags.variables() {
-                        let variables_slice = subs[variables_slice_index];
+                        let variables_slice = env.source()[variables_slice_index];
                         descend_slice!(variables_slice);
                     }
 
                     perform_clone!({
                         let new_variable_slices =
-                            SubsSlice::reserve_variable_slices(subs, tags.len());
+                            SubsSlice::reserve_variable_slices(env.target(), tags.len());
                         let it = (new_variable_slices.indices()).zip(tags.variables());
                         for (target_index, index) in it {
-                            let slice = subs[index];
+                            let slice = env.source()[index];
                             let new_variables = clone_var_slice!(slice);
-                            subs.variable_slices[target_index] = new_variables;
+                            env.target().variable_slices[target_index] = new_variables;
                         }
+                        let new_tag_names = env.clone_tag_names(tags.labels());
 
                         let new_union_tags =
-                            UnionTags::from_slices(tags.labels(), new_variable_slices);
+                            UnionTags::from_slices(new_tag_names, new_variable_slices);
 
                         Structure(TagUnion(new_union_tags, new_ext_var))
                     })
@@ -561,29 +735,36 @@ fn deep_copy_type_vars<'a>(
                     let new_rec_var = descend_var!(rec_var);
 
                     for variables_slice_index in tags.variables() {
-                        let variables_slice = subs[variables_slice_index];
+                        let variables_slice = env.source()[variables_slice_index];
                         descend_slice!(variables_slice);
                     }
 
                     perform_clone!({
                         let new_variable_slices =
-                            SubsSlice::reserve_variable_slices(subs, tags.len());
+                            SubsSlice::reserve_variable_slices(env.target(), tags.len());
                         let it = (new_variable_slices.indices()).zip(tags.variables());
                         for (target_index, index) in it {
-                            let slice = subs[index];
+                            let slice = env.source()[index];
                             let new_variables = clone_var_slice!(slice);
-                            subs.variable_slices[target_index] = new_variables;
+
+                            env.target().variable_slices[target_index] = new_variables;
                         }
+                        let new_tag_names = env.clone_tag_names(tags.labels());
 
                         let new_union_tags =
-                            UnionTags::from_slices(tags.labels(), new_variable_slices);
+                            UnionTags::from_slices(new_tag_names, new_variable_slices);
 
                         Structure(RecursiveTagUnion(new_rec_var, new_union_tags, new_ext_var))
                     })
                 }
                 FunctionOrTagUnion(tag_name, symbol, ext_var) => {
                     let new_ext_var = descend_var!(ext_var);
-                    perform_clone!(Structure(FunctionOrTagUnion(tag_name, symbol, new_ext_var)))
+                    let new_tag_name = env.clone_tag_name(tag_name);
+                    perform_clone!(Structure(FunctionOrTagUnion(
+                        new_tag_name,
+                        symbol,
+                        new_ext_var
+                    )))
                 }
             },
 
@@ -592,10 +773,11 @@ fn deep_copy_type_vars<'a>(
                 structure,
             } => {
                 let new_structure = descend_var!(structure);
+                let new_opt_name = opt_name.map(|n| env.clone_name(n));
 
                 perform_clone!({
                     RecursionVar {
-                        opt_name,
+                        opt_name: new_opt_name,
                         structure: new_structure,
                     }
                 })
@@ -624,35 +806,39 @@ fn deep_copy_type_vars<'a>(
             }) => {
                 let new_rec_var = recursion_var.map(|var| descend_var!(var));
                 for variables_slice_index in solved.variables() {
-                    let variables_slice = subs[variables_slice_index];
+                    let variables_slice = env.source()[variables_slice_index];
                     descend_slice!(variables_slice);
                 }
                 for uls_index in unspecialized {
-                    let Uls(var, _, _) = subs[uls_index];
+                    let Uls(var, _, _) = env.source()[uls_index];
                     descend_var!(var);
                 }
                 let new_ambient_function = descend_var!(ambient_function);
 
                 perform_clone!({
                     let new_variable_slices =
-                        SubsSlice::reserve_variable_slices(subs, solved.len());
+                        SubsSlice::reserve_variable_slices(env.target(), solved.len());
                     let it = (new_variable_slices.indices()).zip(solved.variables());
                     for (target_index, index) in it {
-                        let slice = subs[index];
+                        let slice = env.source()[index];
                         let new_variables = clone_var_slice!(slice);
-                        subs.variable_slices[target_index] = new_variables;
+
+                        env.target().variable_slices[target_index] = new_variables;
                     }
 
                     let new_solved =
                         UnionLambdas::from_slices(solved.labels(), new_variable_slices);
 
-                    let new_unspecialized = SubsSlice::reserve_uls_slice(subs, unspecialized.len());
+                    let new_unspecialized =
+                        SubsSlice::reserve_uls_slice(env.target(), unspecialized.len());
                     for (target_index, uls_index) in
                         (new_unspecialized.into_iter()).zip(unspecialized.into_iter())
                     {
-                        let Uls(var, sym, region) = subs[uls_index];
-                        let copy_var = subs.get_copy(var).into_variable().unwrap_or(var);
-                        subs[target_index] = Uls(copy_var, sym, region);
+                        let Uls(var, sym, region) = env.source()[uls_index];
+                        let copy_var = env.get_copy(var).into_variable().unwrap_or(var);
+
+                        env.target()[target_index] = Uls(copy_var, sym, region);
+                        env.target().uls_of_var.add(copy_var, copy);
                     }
 
                     LambdaSet(subs::LambdaSet {
@@ -670,7 +856,7 @@ fn deep_copy_type_vars<'a>(
             Error => Error,
         };
 
-        subs.set_content(copy, new_content);
+        env.target().set_content(copy, new_content);
 
         copy
     }
@@ -678,12 +864,19 @@ fn deep_copy_type_vars<'a>(
 
 #[cfg(test)]
 mod test {
-    use super::deep_copy_type_vars;
-    use bumpalo::Bump;
+    use crate::copy::{deep_copy_type_vars_into_expr, AcrossSubs};
+
+    use super::{deep_copy_expr_across_subs, deep_copy_type_vars};
+    use roc_can::expr::Expr;
     use roc_error_macros::internal_error;
-    use roc_module::symbol::Symbol;
-    use roc_types::subs::{
-        Content, Content::*, Descriptor, Mark, OptVariable, Rank, Subs, SubsIndex, Variable,
+    use roc_module::{ident::TagName, symbol::Symbol};
+    use roc_region::all::Loc;
+    use roc_types::{
+        subs::{
+            self, Content, Content::*, Descriptor, FlatType, Mark, OptVariable, Rank, Subs,
+            SubsIndex, SubsSlice, Variable,
+        },
+        types::Uls,
     };
 
     #[cfg(test)]
@@ -699,19 +892,17 @@ mod test {
     #[test]
     fn copy_flex_var() {
         let mut subs = Subs::new();
-        let arena = Bump::new();
 
         let field_name = SubsIndex::push_new(&mut subs.field_names, "a".into());
         let var = new_var(&mut subs, FlexVar(Some(field_name)));
 
-        let mut copies = deep_copy_type_vars(&arena, &mut subs, var);
+        let mut copied = vec![];
 
-        assert_eq!(copies.len(), 1);
-        let (original, new) = copies.pop().unwrap();
-        assert_ne!(original, new);
+        let copy = deep_copy_type_vars(&mut subs, &mut copied, var);
 
-        assert_eq!(original, var);
-        match subs.get_content_without_compacting(new) {
+        assert_ne!(var, copy);
+
+        match subs.get_content_without_compacting(copy) {
             FlexVar(Some(name)) => {
                 assert_eq!(subs[*name].as_str(), "a");
             }
@@ -722,19 +913,17 @@ mod test {
     #[test]
     fn copy_rigid_var() {
         let mut subs = Subs::new();
-        let arena = Bump::new();
 
         let field_name = SubsIndex::push_new(&mut subs.field_names, "a".into());
         let var = new_var(&mut subs, RigidVar(field_name));
 
-        let mut copies = deep_copy_type_vars(&arena, &mut subs, var);
+        let mut copied = vec![];
 
-        assert_eq!(copies.len(), 1);
-        let (original, new) = copies.pop().unwrap();
-        assert_ne!(original, new);
+        let copy = deep_copy_type_vars(&mut subs, &mut copied, var);
 
-        assert_eq!(original, var);
-        match subs.get_content_without_compacting(new) {
+        assert_ne!(var, copy);
+
+        match subs.get_content_without_compacting(var) {
             RigidVar(name) => {
                 assert_eq!(subs[*name].as_str(), "a");
             }
@@ -745,19 +934,17 @@ mod test {
     #[test]
     fn copy_flex_able_var() {
         let mut subs = Subs::new();
-        let arena = Bump::new();
 
         let field_name = SubsIndex::push_new(&mut subs.field_names, "a".into());
         let var = new_var(&mut subs, FlexAbleVar(Some(field_name), Symbol::UNDERSCORE));
 
-        let mut copies = deep_copy_type_vars(&arena, &mut subs, var);
+        let mut copied = vec![];
 
-        assert_eq!(copies.len(), 1);
-        let (original, new) = copies.pop().unwrap();
-        assert_ne!(original, new);
+        let copy = deep_copy_type_vars(&mut subs, &mut copied, var);
 
-        assert_eq!(original, var);
-        match subs.get_content_without_compacting(new) {
+        assert_ne!(var, copy);
+
+        match subs.get_content_without_compacting(var) {
             FlexAbleVar(Some(name), Symbol::UNDERSCORE) => {
                 assert_eq!(subs[*name].as_str(), "a");
             }
@@ -768,23 +955,235 @@ mod test {
     #[test]
     fn copy_rigid_able_var() {
         let mut subs = Subs::new();
-        let arena = Bump::new();
 
         let field_name = SubsIndex::push_new(&mut subs.field_names, "a".into());
         let var = new_var(&mut subs, RigidAbleVar(field_name, Symbol::UNDERSCORE));
 
-        let mut copies = deep_copy_type_vars(&arena, &mut subs, var);
+        let mut copied = vec![];
 
-        assert_eq!(copies.len(), 1);
-        let (original, new) = copies.pop().unwrap();
-        assert_ne!(original, new);
+        let copy = deep_copy_type_vars(&mut subs, &mut copied, var);
 
-        assert_eq!(original, var);
-        match subs.get_content_without_compacting(new) {
+        assert_ne!(var, copy);
+        match subs.get_content_without_compacting(var) {
             RigidAbleVar(name, Symbol::UNDERSCORE) => {
                 assert_eq!(subs[*name].as_str(), "a");
             }
             it => internal_error!("{:?}", it),
         }
+    }
+
+    #[test]
+    fn copy_deep_expr() {
+        let mut subs = Subs::new();
+
+        let a = SubsIndex::push_new(&mut subs.field_names, "a".into());
+        let b = SubsIndex::push_new(&mut subs.field_names, "b".into());
+        let var1 = new_var(&mut subs, FlexVar(Some(a)));
+        let var2 = new_var(&mut subs, FlexVar(Some(b)));
+
+        let expr = Expr::Tag {
+            variant_var: var1,
+            ext_var: Variable::EMPTY_TAG_UNION,
+            name: TagName("F".into()),
+            arguments: vec![(
+                var2,
+                Loc::at_zero(Expr::Tag {
+                    variant_var: var2,
+                    ext_var: Variable::EMPTY_TAG_UNION,
+                    name: TagName("G".into()),
+                    arguments: vec![],
+                }),
+            )],
+        };
+
+        let (var, expr) = deep_copy_type_vars_into_expr(&mut subs, var1, &expr).unwrap();
+
+        assert!(subs.get_copy(var1).is_none());
+        assert!(subs.get_copy(var2).is_none());
+
+        match expr {
+            Expr::Tag {
+                variant_var,
+                ext_var,
+                name,
+                mut arguments,
+            } => {
+                assert_ne!(var1, variant_var);
+                assert_ne!(var2, variant_var);
+
+                match subs.get_content_without_compacting(variant_var) {
+                    FlexVar(Some(name)) => {
+                        assert_eq!(subs[*name].as_str(), "a");
+                    }
+                    it => panic!("{:?}", it),
+                }
+                assert_eq!(var, variant_var);
+                assert!(matches!(
+                    subs.get_content_without_compacting(ext_var),
+                    Content::Structure(FlatType::EmptyTagUnion)
+                ));
+                assert_eq!(name.0.as_str(), "F");
+
+                assert_eq!(arguments.len(), 1);
+                let (v2, arg) = arguments.pop().unwrap();
+                assert_ne!(var1, v2);
+                assert_ne!(var2, v2);
+                match subs.get_content_without_compacting(v2) {
+                    FlexVar(Some(name)) => {
+                        assert_eq!(subs[*name].as_str(), "b");
+                    }
+                    it => panic!("{:?}", it),
+                }
+
+                match arg.value {
+                    Expr::Tag {
+                        variant_var,
+                        ext_var,
+                        name,
+                        arguments,
+                    } => {
+                        assert_eq!(variant_var, v2);
+                        assert!(matches!(
+                            subs.get_content_without_compacting(ext_var),
+                            Content::Structure(FlatType::EmptyTagUnion)
+                        ));
+                        assert_eq!(name.0.as_str(), "G");
+                        assert_eq!(arguments.len(), 0);
+                    }
+                    e => panic!("{:?}", e),
+                }
+            }
+            e => panic!("{:?}", e),
+        }
+    }
+
+    #[test]
+    fn copy_deep_expr_across_subs() {
+        let mut source = Subs::new();
+        let mut target = Subs::new();
+
+        let a = SubsIndex::push_new(&mut source.field_names, "a".into());
+        let b = SubsIndex::push_new(&mut source.field_names, "b".into());
+        let var1 = new_var(&mut source, FlexVar(Some(a)));
+        let var2 = new_var(&mut source, FlexVar(Some(b)));
+
+        let expr = Expr::Tag {
+            variant_var: var1,
+            ext_var: Variable::EMPTY_TAG_UNION,
+            name: TagName("F".into()),
+            arguments: vec![(
+                var2,
+                Loc::at_zero(Expr::Tag {
+                    variant_var: var2,
+                    ext_var: Variable::EMPTY_TAG_UNION,
+                    name: TagName("G".into()),
+                    arguments: vec![],
+                }),
+            )],
+        };
+
+        let (var, expr) =
+            deep_copy_expr_across_subs(&mut source, &mut target, var1, &expr).unwrap();
+
+        assert!(source.get_copy(var1).is_none());
+        assert!(source.get_copy(var2).is_none());
+
+        match expr {
+            Expr::Tag {
+                variant_var,
+                ext_var,
+                name,
+                mut arguments,
+            } => {
+                match target.get_content_without_compacting(variant_var) {
+                    FlexVar(Some(name)) => {
+                        assert_eq!(target[*name].as_str(), "a");
+                    }
+                    it => panic!("{:?}", it),
+                }
+                assert_eq!(var, variant_var);
+                assert!(matches!(
+                    target.get_content_without_compacting(ext_var),
+                    Content::Structure(FlatType::EmptyTagUnion)
+                ));
+                assert_eq!(name.0.as_str(), "F");
+
+                assert_eq!(arguments.len(), 1);
+                let (v2, arg) = arguments.pop().unwrap();
+                match target.get_content_without_compacting(v2) {
+                    FlexVar(Some(name)) => {
+                        assert_eq!(target[*name].as_str(), "b");
+                    }
+                    it => panic!("{:?}", it),
+                }
+
+                match arg.value {
+                    Expr::Tag {
+                        variant_var,
+                        ext_var,
+                        name,
+                        arguments,
+                    } => {
+                        assert_eq!(variant_var, v2);
+                        assert!(matches!(
+                            target.get_content_without_compacting(ext_var),
+                            Content::Structure(FlatType::EmptyTagUnion)
+                        ));
+                        assert_eq!(name.0.as_str(), "G");
+                        assert_eq!(arguments.len(), 0);
+                    }
+                    e => panic!("{:?}", e),
+                }
+            }
+            e => panic!("{:?}", e),
+        }
+    }
+
+    #[test]
+    fn copy_across_subs_preserve_uls_of_var() {
+        let mut source = Subs::new();
+        let mut target = Subs::new();
+
+        let a = new_var(&mut source, FlexVar(None));
+        let uls = SubsSlice::extend_new(
+            &mut source.unspecialized_lambda_sets,
+            vec![Uls(a, Symbol::UNDERSCORE, 3)],
+        );
+        let lambda_set_var = new_var(
+            &mut source,
+            LambdaSet(subs::LambdaSet {
+                solved: Default::default(),
+                recursion_var: OptVariable::NONE,
+                unspecialized: uls,
+                ambient_function: Variable::NULL,
+            }),
+        );
+
+        source.uls_of_var.add(a, lambda_set_var);
+
+        assert!(target.uls_of_var.is_empty());
+
+        let mut env = AcrossSubs {
+            source: &mut source,
+            target: &mut target,
+        };
+        let mut copied = vec![];
+        let copy_uls = deep_copy_type_vars(&mut env, &mut copied, lambda_set_var);
+        let copy_a = deep_copy_type_vars(&mut env, &mut copied, a);
+
+        assert!(matches!(
+            target.get_content_without_compacting(copy_a),
+            Content::FlexVar(None)
+        ));
+        assert!(matches!(
+            target.get_content_without_compacting(copy_uls),
+            Content::LambdaSet(..)
+        ));
+
+        let uls_of_var: Vec<_> = target
+            .remove_dependent_unspecialized_lambda_sets(copy_a)
+            .collect();
+        assert_eq!(uls_of_var.len(), 1);
+        assert_eq!(uls_of_var[0], copy_uls);
     }
 }
