@@ -64,7 +64,9 @@ impl<'a> WasmModule<'a> {
         self.types.serialize(buffer);
         self.import.serialize(buffer);
         self.function.serialize(buffer);
-        self.table.serialize(buffer);
+        if !self.element.is_empty() {
+            self.table.serialize(buffer);
+        }
         self.memory.serialize(buffer);
         self.global.serialize(buffer);
         self.export.serialize(buffer);
