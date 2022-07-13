@@ -1114,13 +1114,13 @@ pub struct LoadStart<'a> {
 impl<'a> LoadStart<'a> {
     pub fn from_path(
         arena: &'a Bump,
-        mut src_dir: PathBuf,
         filename: PathBuf,
         render: RenderTarget,
     ) -> Result<Self, LoadingProblem<'a>> {
         let arc_modules = Arc::new(Mutex::new(PackageModuleIds::default()));
         let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
         let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
+        let mut src_dir = filename.parent().unwrap().to_path_buf();
 
         // Load the root module synchronously; we can't proceed until we have its id.
         let (root_id, root_msg) = {

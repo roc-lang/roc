@@ -33,7 +33,6 @@ enum OutputType {
 pub fn main() {
     let opts = Opts::parse();
     let input_path = opts.platform_module;
-    let cwd = std::env::current_dir().unwrap();
     let output_path = opts.dest;
     let output_type = match output_path.extension().and_then(OsStr::to_str) {
         Some("rs") => OutputType::Rust,
@@ -56,7 +55,7 @@ pub fn main() {
         }
     };
 
-    match load_types(input_path.clone(), cwd, Threading::AllAvailable) {
+    match load_types(input_path.clone(), Threading::AllAvailable) {
         Ok(types_and_targets) => {
             let mut file = File::create(output_path.clone()).unwrap_or_else(|err| {
                 eprintln!(
