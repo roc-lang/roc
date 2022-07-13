@@ -777,8 +777,8 @@ fn make_argv_envp<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     executable: &ExecutableFile,
     args: I,
 ) -> (
-    bumpalo::collections::Vec<'a, *const c_char>,
-    bumpalo::collections::Vec<'a, *const c_char>,
+    bumpalo::collections::Vec<'a, CString>,
+    bumpalo::collections::Vec<'a, CString>,
 ) {
     use bumpalo::collections::CollectIn;
     use std::os::unix::ffi::OsStrExt;
@@ -791,19 +791,12 @@ fn make_argv_envp<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     // strings (i.e., argv[0]) should contain the filename associated
     // with the file being executed.  The argv array must be terminated
     // by a NULL pointer. (Thus, in the new program, argv[argc] will be NULL.)
-    let c_strings: bumpalo::collections::Vec<CString> = args
+    let it = args
         .into_iter()
-        .map(|x| CString::new(x.as_ref().as_bytes()).unwrap())
-        .collect_in(arena);
+        .map(|x| CString::new(x.as_ref().as_bytes()).unwrap());
 
-    let c_string_pointers = c_strings
-        .iter()
-        .map(|x| x.as_bytes_with_nul().as_ptr().cast());
-
-    let argv: bumpalo::collections::Vec<*const c_char> = std::iter::once(path_cstring.as_ptr())
-        .chain(c_string_pointers)
-        .chain([std::ptr::null()])
-        .collect_in(arena);
+    let argv_cstrings: bumpalo::collections::Vec<CString> =
+        std::iter::once(path_cstring).chain(it).collect_in(arena);
 
     // envp is an array of pointers to strings, conventionally of the
     // form key=value, which are passed as the environment of the new
@@ -817,13 +810,7 @@ fn make_argv_envp<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
         })
         .collect_in(arena);
 
-    let envp: bumpalo::collections::Vec<*const c_char> = envp_cstrings
-        .iter()
-        .map(|s| s.as_ptr())
-        .chain([std::ptr::null()])
-        .collect_in(arena);
-
-    (argv, envp)
+    (argv_cstrings, envp_cstrings)
 }
 
 /// Run on the native OS (not on wasm)
@@ -836,9 +823,23 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     expectations: VecMap<ModuleId, Expectations>,
     interns: Interns,
 ) -> std::io::Result<i32> {
+    use bumpalo::collections::CollectIn;
+
     unsafe {
         let executable = roc_run_executable_file_path(binary_bytes)?;
-        let (argv, envp) = make_argv_envp(&arena, &executable, args);
+        let (argv_cstrings, envp_cstrings) = make_argv_envp(&arena, &executable, args);
+
+        let argv: bumpalo::collections::Vec<*const c_char> = argv_cstrings
+            .iter()
+            .map(|s| s.as_ptr())
+            .chain([std::ptr::null()])
+            .collect_in(&arena);
+
+        let envp: bumpalo::collections::Vec<*const c_char> = envp_cstrings
+            .iter()
+            .map(|s| s.as_ptr())
+            .chain([std::ptr::null()])
+            .collect_in(&arena);
 
         match opt_level {
             OptLevel::Development => {
