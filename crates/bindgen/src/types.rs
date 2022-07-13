@@ -26,6 +26,9 @@ impl TypeId {
     /// have *some* TypeId value until we later in the process determine
     /// their real TypeId and can go back and fix them up.
     pub(crate) const PENDING: Self = Self(usize::MAX);
+
+    /// When adding, we check for overflow based on whether we've exceeded this.
+    const MAX: Self = Self(Self::PENDING.0 - 1);
 }
 
 #[derive(Debug, Clone)]
@@ -55,6 +58,8 @@ impl Types {
 
     pub fn add(&mut self, typ: RocType, layout: Layout<'_>) -> TypeId {
         let id = TypeId(self.types.len());
+
+        assert!(id.0 <= TypeId::MAX.0);
 
         self.types.push(typ);
         self.sizes
@@ -157,6 +162,8 @@ pub enum RocType {
     /// and the TypeId is the TypeId of StrConsList itself.
     RecursivePointer(TypeId),
     Function(Vec<TypeId>, TypeId),
+    /// A zero-sized type, such as an empty record or a single-tag union with no payload
+    Unit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
@@ -466,7 +473,7 @@ fn add_type_help<'a>(
             todo!()
         }
         Content::Structure(FlatType::Erroneous(_)) => todo!(),
-        Content::Structure(FlatType::EmptyRecord) => todo!(),
+        Content::Structure(FlatType::EmptyRecord) => types.add(RocType::Unit, layout),
         Content::Structure(FlatType::EmptyTagUnion) => {
             // This can happen when unwrapping a tag union; don't do anything.
             todo!()
