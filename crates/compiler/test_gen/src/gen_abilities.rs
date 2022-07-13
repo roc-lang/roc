@@ -404,26 +404,73 @@ fn to_encoder_encode_custom_has_capture() {
     )
 }
 
-#[test]
-#[cfg(any(feature = "gen-llvm"))]
-fn encode_derived_string() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            app "test"
-                imports [Encode.{ toEncoder }, Json]
-                provides [main] to "./platform"
+mod encode_immediate {
+    #[cfg(feature = "gen-llvm")]
+    use crate::helpers::llvm::assert_evals_to;
 
-            main =
-                result = Str.fromUtf8 (Encode.toBytes "foo" Json.format)
-                when result is
-                    Ok s -> s
-                    _ -> "<bad>"
-            "#
-        ),
-        RocStr::from("\"foo\""),
-        RocStr
-    )
+    #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
+    use indoc::indoc;
+
+    #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
+    use roc_std::RocStr;
+
+    #[test]
+    #[cfg(any(feature = "gen-llvm"))]
+    fn string() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" imports [Encode.{ toEncoder }, Json] provides [main] to "./platform"
+
+                main =
+                    when Str.fromUtf8 (Encode.toBytes "foo" Json.format) is
+                        Ok s -> s
+                        _ -> "<bad>"
+                "#
+            ),
+            RocStr::from("\"foo\""),
+            RocStr
+        )
+    }
+
+    macro_rules! num_immediate {
+        ($($num:expr, $typ:ident)*) => {$(
+            #[test]
+            #[cfg(any(feature = "gen-llvm"))]
+            fn $typ() {
+                assert_evals_to!(
+                    &format!(indoc!(
+                        r#"
+                        app "test" imports [Encode.{{ toEncoder }}, Json] provides [main] to "./platform"
+
+                        main =
+                            when Str.fromUtf8 (Encode.toBytes {}{} Json.format) is
+                                Ok s -> s
+                                _ -> "<bad>"
+                        "#
+                    ), $num, stringify!($typ)),
+                    RocStr::from(format!(r#"{}"#, $num).as_str()),
+                    RocStr
+                )
+            }
+        )*}
+    }
+
+    num_immediate! {
+        17, i8
+        17, i16
+        17, i32
+        17, i64
+        17, i128
+        17, u8
+        17, u16
+        17, u32
+        17, u64
+        17, u128
+        // 17.23, f32 TODO https://github.com/rtfeldman/roc/issues/3522
+        17.23, f64
+        // 17.23, dec TODO https://github.com/rtfeldman/roc/issues/3522
+    }
 }
 
 #[test]
