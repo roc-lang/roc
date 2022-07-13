@@ -492,6 +492,7 @@ fn modify_refcount<'a>(
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
     rc_ptr: Symbol,
+    layout: &Layout,
     alignment: u32,
     following: &'a Stmt<'a>,
 ) -> Stmt<'a> {
@@ -514,12 +515,79 @@ fn modify_refcount<'a>(
             let alignment_expr = Expr::Literal(Literal::Int((alignment as i128).to_ne_bytes()));
             let alignment_stmt = |next| Stmt::Let(alignment_sym, alignment_expr, LAYOUT_U32, next);
 
+            // The number of bytes to deallocate, if decref decides to deallocate.
+            // This is necessary because roc_dealloc requires this as an argument!
+            let size_sym = root.create_symbol(ident_ids, "size");
+            let size_expr = match layout {
+                Layout::Builtin(builtin) => match builtin {
+                    Builtin::Str => Expr::Call(Call {
+                        call_type: CallType::LowLevel {
+                            op: LowLevel::StrGetCapacity,
+                            update_mode: UpdateModeId::BACKEND_DUMMY,
+                        },
+                        arguments: root.arena.alloc([rc_ptr]),
+                    }),
+                    Builtin::List(_) => Expr::Call(Call {
+                        call_type: CallType::LowLevel {
+                            op: LowLevel::ListGetCapacity,
+                            update_mode: UpdateModeId::BACKEND_DUMMY,
+                        },
+                        arguments: root.arena.alloc([rc_ptr]),
+                    }),
+                    Builtin::Dict(_, _) => Expr::Call(Call {
+                        call_type: CallType::LowLevel {
+                            op: LowLevel::DictGetCapacity,
+                            update_mode: UpdateModeId::BACKEND_DUMMY,
+                        },
+                        arguments: root.arena.alloc([rc_ptr]),
+                    }),
+                    Builtin::Set(_) => Expr::Call(Call {
+                        call_type: CallType::LowLevel {
+                            op: LowLevel::SetGetCapacity,
+                            update_mode: UpdateModeId::BACKEND_DUMMY,
+                        },
+                        arguments: root.arena.alloc([rc_ptr]),
+                    }),
+                    Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal => {
+                        // We should never attempt to decrement the reference count of these,
+                        // because they aren't reference-counted types!
+                        unreachable!();
+                    }
+                },
+                Layout::Boxed(inner) => {
+                    // Box heap-allocates enough bytes to store its inner type
+                    let stack_size = inner.stack_size(root.target_info);
+
+                    Expr::Literal(Literal::Int((stack_size as i128).to_ne_bytes()))
+                }
+                Layout::Union(UnionLayout::NonNullableUnwrapped(_))
+                | Layout::Union(UnionLayout::NullableUnwrapped { .. })
+                | Layout::Union(UnionLayout::NullableWrapped { .. })
+                | Layout::Union(UnionLayout::Recursive(_)) => {
+                    // Recursive tag unions heap-allocate the same number of bytes
+                    // needed to store one of their variants on the stack.
+                    let stack_size = layout.stack_size(root.target_info);
+
+                    Expr::Literal(Literal::Int((stack_size as i128).to_ne_bytes()))
+                }
+                Layout::Union(UnionLayout::NonRecursive(_))
+                | Layout::RecursivePointer
+                | Layout::LambdaSet(_)
+                | Layout::Struct { .. } => {
+                    // We should never attempt to decrement the reference count of these,
+                    // because they aren't reference-counted types!
+                    unreachable!();
+                }
+            };
+            let size_stmt =
+                |next| Stmt::Let(size_sym, size_expr, Layout::usize(root.target_info), next);
+
             let zig_call_expr = Expr::Call(Call {
                 call_type: CallType::LowLevel {
                     op: LowLevel::RefCountDec,
                     update_mode: UpdateModeId::BACKEND_DUMMY,
                 },
-                arguments: root.arena.alloc([rc_ptr, size, alignment_sym]),
+                arguments: root.arena.alloc([rc_ptr, size_sym, alignment_sym]),
             });
             let zig_call_stmt = Stmt::Let(zig_call_result, zig_call_expr, LAYOUT_UNIT, following);
 
@@ -585,6 +653,7 @@ fn refcount_str<'a>(
         ident_ids,
         ctx,
         rc_ptr,
+        &Layout::str(),
         alignment,
         root.arena.alloc(ret_unit_stmt),
     );
@@ -690,6 +759,7 @@ fn refcount_list<'a>(
         ident_ids,
         ctx,
         rc_ptr,
+        layout,
         alignment,
         arena.alloc(ret_stmt),
     );
@@ -1176,6 +1246,7 @@ fn refcount_union_rec<'a>(
             ident_ids,
             ctx,
             rc_ptr,
+            &Layout::Union(union_layout),
             alignment,
             root.arena.alloc(ret_stmt),
         );
@@ -1283,6 +1354,7 @@ fn refcount_union_tailrec<'a>(
             ident_ids,
             ctx,
             rc_ptr,
+            &Layout::Union(union_layout),
             alignment,
             root.arena.alloc(loop_or_exit_based_on_next_addr),
         );
@@ -1489,6 +1561,7 @@ fn refcount_boxed<'a>(
         ident_ids,
         ctx,
         rc_ptr,
+        layout,
         alignment,
         arena.alloc(ret_stmt),
     );
