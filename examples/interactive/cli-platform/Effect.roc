@@ -1,6 +1,6 @@
 hosted Effect
-    exposes [Effect, after, map, always, forever, loop, putLine, getLine]
-    imports []
+    exposes [Effect, after, map, always, forever, loop, putLine, getLine, sendRequest]
+    imports [Http.{ Request }]
     generates Effect with [after, map, always, forever, loop]
 
 putLine : Str -> Effect {}
