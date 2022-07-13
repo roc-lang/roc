@@ -631,6 +631,7 @@ pub struct MonomorphizedModule<'a> {
     pub exposed_to_host: ExposedToHost,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
+    pub expectations: VecMap<ModuleId, Expectations>,
 }
 
 #[derive(Debug)]
@@ -2735,6 +2736,7 @@ fn finish_specialization(
         sources,
         timings: state.timings,
         toplevel_expects,
+        expectations: VecMap::default(),
     })
 }
 

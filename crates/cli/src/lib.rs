@@ -521,6 +521,8 @@ pub fn build(
             binary_path,
             problems,
             total_time,
+            expectations,
+            interns,
         }) => {
             match config {
                 BuildOnly => {
@@ -599,7 +601,15 @@ pub fn build(
 
                     let mut bytes = std::fs::read(&binary_path).unwrap();
 
-                    let x = roc_run(arena, opt_level, triple, args, &mut bytes);
+                    let x = roc_run(
+                        arena,
+                        opt_level,
+                        triple,
+                        args,
+                        &mut bytes,
+                        expectations,
+                        interns,
+                    );
                     std::mem::forget(bytes);
                     x
                 }
@@ -623,7 +633,15 @@ pub fn build(
 
                         let mut bytes = std::fs::read(&binary_path).unwrap();
 
-                        let x = roc_run(arena, opt_level, triple, args, &mut bytes);
+                        let x = roc_run(
+                            arena,
+                            opt_level,
+                            triple,
+                            args,
+                            &mut bytes,
+                            expectations,
+                            interns,
+                        );
                         std::mem::forget(bytes);
                         x
                     } else {
@@ -677,6 +695,8 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
     triple: Triple,
     args: I,
     binary_bytes: &mut [u8],
+    expectations: VecMap<ModuleId, Expectations>,
+    interns: Interns,
 ) -> io::Result<i32> {
     match triple.architecture {
         Architecture::Wasm32 => {
@@ -711,7 +731,7 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
 
             Ok(0)
         }
-        _ => roc_run_native(arena, opt_level, args, binary_bytes),
+        _ => roc_run_native(arena, opt_level, args, binary_bytes, expectations, interns),
     }
 }
 
@@ -776,6 +796,8 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     opt_level: OptLevel,
     args: I,
     binary_bytes: &mut [u8],
+    expectations: VecMap<ModuleId, Expectations>,
+    interns: Interns,
 ) -> std::io::Result<i32> {
     unsafe {
         let executable = roc_run_executable_file_path(binary_bytes)?;
@@ -783,8 +805,7 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
 
         match opt_level {
             OptLevel::Development => {
-                // roc_run_native_debug(executable, &argv, &envp, expectations, interns)
-                todo!()
+                roc_run_native_debug(executable, &argv, &envp, expectations, interns)
             }
             OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => {
                 roc_run_native_fast(executable, &argv, &envp);
@@ -1092,6 +1113,8 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     _arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
     _args: I,
     _binary_bytes: &mut [u8],
+    _expectations: VecMap<ModuleId, Expectations>,
+    _interns: Interns,
 ) -> io::Result<i32> {
     todo!("TODO support running roc programs on non-UNIX targets");
     // let mut cmd = std::process::Command::new(&binary_path);
