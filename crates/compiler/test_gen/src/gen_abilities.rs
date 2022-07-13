@@ -663,3 +663,27 @@ fn encode_derived_list_string() {
         RocStr
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn encode_derived_list_of_records() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ toEncoder }, Json]
+                provides [main] to "./platform"
+
+            main =
+                lst = [{a: "foo"}, {a: "bar"}, {a: "baz"}]
+                encoded = Encode.toBytes lst Json.format
+                result = Str.fromUtf8 encoded
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"[{"a":"foo",},{"a":"bar",},{"a":"baz",}]"#),
+        RocStr
+    )
+}
