@@ -5,15 +5,17 @@ use build::BuiltFile;
 use bumpalo::Bump;
 use clap::{Arg, ArgMatches, Command, ValueSource};
 use roc_build::link::{LinkType, LinkingStrategy};
+use roc_collections::VecMap;
 use roc_error_macros::{internal_error, user_error};
-use roc_load::{LoadingProblem, Threading};
+use roc_load::{Expectations, LoadingProblem, Threading};
+use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_repl_cli::expect_mono_module_to_dylib;
 use roc_target::TargetInfo;
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
-use std::os::raw::c_char;
+use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::process;
 use target_lexicon::BinaryFormat;
@@ -281,6 +283,8 @@ pub enum FormatMode {
     CheckOnly,
 }
 
+const SHM_SIZE: i64 = 1024;
+
 pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let arena = Bump::new();
     let filename = matches.value_of_os(ROC_FILE).unwrap();
@@ -341,7 +345,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         let shared_fd =
             libc::shm_open(cstring.as_ptr().cast(), libc::O_RDWR | libc::O_CREAT, 0o666);
 
-        libc::ftruncate(shared_fd, 1024);
+        libc::ftruncate(shared_fd, SHM_SIZE);
 
         let _shared_ptr = libc::mmap(
             std::ptr::null_mut(),
@@ -782,31 +786,13 @@ unsafe fn roc_run_native_fast(
     argv: &[*const c_char],
     envp: &[*const c_char],
 ) {
-    match executable {
-        #[cfg(target_os = "linux")]
-        ExecutableFile::MemFd(fd, path) => {
-            if libc::fexecve(fd, argv.as_ptr(), envp.as_ptr()) != 0 {
-                internal_error!(
-                    "libc::fexecve({:?}, ..., ...) failed: {:?}",
-                    path,
-                    errno::errno()
-                );
-            }
-        }
-
-        #[cfg(all(target_family = "unix", not(target_os = "linux")))]
-        ExecutableFile::OnDisk(_, path) => {
-            use std::os::unix::ffi::OsStrExt;
-
-            let path_cstring = CString::new(path.as_os_str().as_bytes()).unwrap();
-            if libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr()) != 0 {
-                internal_error!(
-                    "libc::execve({:?}, ..., ...) failed: {:?}",
-                    path,
-                    errno::errno()
-                );
-            }
-        }
+    if executable.execve(argv, envp) != 0 {
+        internal_error!(
+            "libc::{}({:?}, ..., ...) failed: {:?}",
+            ExecutableFile::SYSCALL,
+            executable.as_path(),
+            errno::errno()
+        );
     }
 }
 
@@ -819,6 +805,12 @@ enum ExecutableFile {
 }
 
 impl ExecutableFile {
+    #[cfg(target_os = "linux")]
+    const SYSCALL: &'static str = "fexecve";
+
+    #[cfg(not(target_os = "linux"))]
+    const SYSCALL: &'static str = "execve";
+
     fn as_path(&self) -> &Path {
         match self {
             #[cfg(target_os = "linux")]
@@ -826,6 +818,109 @@ impl ExecutableFile {
             #[cfg(not(target_os = "linux"))]
             ExecutableFile::OnDisk(_, path_buf) => path_buf.as_ref(),
         }
+    }
+
+    unsafe fn execve(&self, argv: &[*const c_char], envp: &[*const c_char]) -> c_int {
+        match self {
+            #[cfg(target_os = "linux")]
+            ExecutableFile::MemFd(fd, path) => libc::fexecve(*fd, argv.as_ptr(), envp.as_ptr()),
+
+            #[cfg(all(target_family = "unix", not(target_os = "linux")))]
+            ExecutableFile::OnDisk(_, path) => {
+                use std::os::unix::ffi::OsStrExt;
+
+                let path_cstring = CString::new(path.as_os_str().as_bytes()).unwrap();
+                libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr())
+            }
+        }
+    }
+}
+
+// with Expect
+unsafe fn roc_run_native_debug(
+    executable: ExecutableFile,
+    argv: &[*const c_char],
+    envp: &[*const c_char],
+    mut expectations: VecMap<ModuleId, Expectations>,
+    interns: Interns,
+) {
+    use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
+
+    let mut signals = Signals::new(&[SIGCHLD, SIGUSR1]).unwrap();
+
+    match libc::fork() {
+        0 => {
+            // we are the child
+
+            if executable.execve(argv, envp) < 0 {
+                // Get the current value of errno
+                let e = errno::errno();
+
+                // Extract the error code as an i32
+                let code = e.0;
+
+                // Display a human-friendly error message
+                println!("💥 Error {}: {}", code, e);
+            }
+        }
+        -1 => {
+            // something failed
+
+            // Get the current value of errno
+            let e = errno::errno();
+
+            // Extract the error code as an i32
+            let code = e.0;
+
+            // Display a human-friendly error message
+            println!("Error {}: {}", code, e);
+
+            process::exit(1)
+        }
+        1.. => {
+            let name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
+            let cstring = CString::new(name).unwrap();
+
+            let arena = &bumpalo::Bump::new();
+            let interns = arena.alloc(interns);
+
+            for sig in &mut signals {
+                match sig {
+                    SIGCHLD => {
+                        // clean up
+                        libc::shm_unlink(cstring.as_ptr().cast());
+
+                        // dbg!(libc::unlink(app_path.as_ptr().cast()));
+
+                        // done!
+                        process::exit(0);
+                    }
+                    SIGUSR1 => {
+                        // this is the signal we use for an expect failure. Let's see what the child told us
+                        let shared_fd =
+                            libc::shm_open(cstring.as_ptr().cast(), libc::O_RDONLY, 0o666);
+
+                        libc::ftruncate(shared_fd, SHM_SIZE);
+
+                        let shared_ptr = libc::mmap(
+                            std::ptr::null_mut(),
+                            SHM_SIZE as usize,
+                            libc::PROT_READ,
+                            libc::MAP_SHARED,
+                            shared_fd,
+                            0,
+                        );
+
+                        let shared_memory_ptr: *const u8 = shared_ptr.cast();
+
+                        // render_expect_failure(arena, &mut expectations, interns, shared_memory_ptr);
+                        todo!()
+                    }
+                    _ => println!("received signal {}", sig),
+                }
+            }
+        }
+        _ => unreachable!(),
     }
 }
 

@@ -633,6 +633,14 @@ pub struct MonomorphizedModule<'a> {
     pub timings: MutMap<ModuleId, ModuleTiming>,
 }
 
+#[derive(Debug)]
+pub struct Expectations {
+    pub subs: roc_types::subs::Subs,
+    pub path: PathBuf,
+    pub expectations: VecMap<Region, Vec<(Symbol, Variable)>>,
+    pub ident_ids: IdentIds,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ExposedToHost {
     /// usually `mainForHost`
