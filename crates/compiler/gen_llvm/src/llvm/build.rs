@@ -5358,13 +5358,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.joinWith : List Str, Str -> Str
             debug_assert_eq!(args.len(), 2);
 
-            let list = list_symbol_to_c_abi(env, scope, args[0]);
+            let list = load_symbol(scope, &args[0]);
             let string = load_symbol(scope, &args[1]);
 
-            call_list_bitcode_fn(
+            call_str_bitcode_fn(
                 env,
+                &[list, string],
                 &[],
-                &[list.into(), string],
                 BitcodeReturns::Str,
                 bitcode::STR_JOIN_WITH,
             )
