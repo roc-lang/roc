@@ -478,8 +478,8 @@ fn has_clause_chain<'a>(
     }
 }
 
-/// Parse a has-derived clause, e.g. `has [Eq, Hash]`.
-pub fn has_derived<'a>(min_indent: u32) -> impl Parser<'a, Loc<Derived<'a>>, EType<'a>> {
+/// Parse a has-abilities clause, e.g. `has [Eq, Hash]`.
+pub fn has_abilities<'a>(min_indent: u32) -> impl Parser<'a, Loc<Derived<'a>>, EType<'a>> {
     skip_first!(
         // Parse "has"; we don't care about this keyword
         word3(b'h', b'a', b's', EType::THasClause),

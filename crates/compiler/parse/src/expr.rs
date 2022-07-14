@@ -966,7 +966,7 @@ fn opaque_signature_with_space_before<'a>(
         optional(specialize(
             EExpr::Type,
             space0_before_e(
-                type_annotation::has_derived(min_indent),
+                type_annotation::has_abilities(min_indent),
                 min_indent,
                 EType::TIndentStart,
             ),
