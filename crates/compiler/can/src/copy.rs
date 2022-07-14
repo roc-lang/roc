@@ -236,7 +236,7 @@ fn deep_copy_expr_top<C: CopyEnv>(
         env.clear_source_copy(var);
     }
 
-    return Some((copy_expr_var, copied_expr));
+    Some((copy_expr_var, copied_expr))
 }
 
 fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr: &Expr) -> Expr {
@@ -715,7 +715,7 @@ fn deep_copy_pattern_help<C: CopyEnv>(
         Shadowed(region, ident, symbol) => Shadowed(*region, ident.clone(), *symbol),
         OpaqueNotInScope(ident) => OpaqueNotInScope(ident.clone()),
         UnsupportedPattern(region) => UnsupportedPattern(*region),
-        MalformedPattern(problem, region) => MalformedPattern(problem.clone(), *region),
+        MalformedPattern(problem, region) => MalformedPattern(*problem, *region),
     }
 }
 
