@@ -5,12 +5,13 @@ app "network"
 
 main : Task.Task {} [] [Write [Stdout], Network [Http]]
 main =
-    request : Request
-    request = { defaultRequest & url: "https://httpbin.org/get" }
+    # request : Request
+    # request = { defaultRequest & url: "https://httpbin.org/get" }
 
-    result <- Http.send request |> Task.await
-    output =
-        when result is
-            Ok payload -> payload
-            Err httpError -> Http.errorToString httpError
+    # result <- Http.send request |> Task.await
+    # output =
+    #     when result is
+    #         Ok payload -> payload
+    #         Err httpError -> Http.errorToString httpError
+    output = "Hello"
     Stdout.line output

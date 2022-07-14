@@ -1,10 +1,6 @@
 interface Http
     exposes [
-        Error,
-        Request,
-        Header,
         header,
-        Body,
         emptyBody,
         bytesBody,
         stringBody,
@@ -12,27 +8,18 @@ interface Http
         multiPartBody,
         stringPart,
         bytesPart,
-        Response,
-        Metadata,
         handleStringResponse,
         defaultRequest,
         errorToString,
         send,
     ]
-    imports [Encode.{ Encoding }, Json]
-
-TimeoutConfig : [WithTimeout F64, WithoutTimeout]
-TrackerConfig : [WithTracker Str, WithoutTracker]
-
-Request : {
-    method : Str,
-    headers : List Header,
-    url : Str,
-    body : Body,
-    timeout : TimeoutConfig,
-    tracker : TrackerConfig,
-    allowCookiesFromOtherDomains : Bool,
-}
+    imports [
+        pf.Effect,
+        InternalTask,
+        Task,
+        Encode.{ Encoding },
+        HttpTypes.{ Request, Header, TimeoutConfig, TrackerConfig, Part, Body, Response, Metadata, Error },
+    ]
 
 defaultRequest : Request
 defaultRequest = {
@@ -40,12 +27,10 @@ defaultRequest = {
     headers: [],
     url: "",
     body: Http.emptyBody,
-    timeout: Http.WithoutTimeout,
-    tracker: Http.WithoutTracker,
+    timeout: NoTimeout,
+    tracker: NoTracker,
     allowCookiesFromOtherDomains: False,
 }
-
-Header : { name : Str, value : Str }
 
 ## An HTTP header for configuring requests. See a bunch of common headers
 ## [here](https://en.wikipedia.org/wiki/List_of_HTTP_header_fields).
@@ -53,11 +38,6 @@ Header : { name : Str, value : Str }
 header : Str, Str -> Header
 header = \name, value ->
     { name, value }
-
-Body : [
-    Body [MimeType Str] (List U8),
-    EmptyBody,
-]
 
 emptyBody : Body
 emptyBody =
@@ -90,8 +70,6 @@ multiPartBody = \parts ->
 
     Body (MimeType "multipart/form-data;boundary=\"\(boundary)\"") bodyBytes
 
-Part : [Part Str (List U8)]
-
 bytesPart : Str, List U8 -> Part
 bytesPart =
     Part
@@ -99,29 +77,6 @@ bytesPart =
 stringPart : Str, Str -> Part
 stringPart = \name, str ->
     Part name (Str.toUtf8 str)
-
-Error : [
-    BadUrl Str,
-    Timeout,
-    NetworkError,
-    BadStatus U16,
-    BadBody Str,
-]
-
-Response : [
-    BadUrl Str,
-    Timeout,
-    NetworkError,
-    BadStatus Metadata (List U8),
-    GoodStatus Metadata (List U8),
-]
-
-Metadata : {
-    url : Str,
-    statusCode : U16,
-    statusText : Str,
-    headers : List Header,
-}
 
 handleStringResponse : Response -> Result Str Error
 handleStringResponse = \response ->
@@ -145,7 +100,7 @@ errorToString = \err ->
         Timeout -> "Request timed out"
         NetworkError -> "Network error"
         BadStatus code -> Str.concat "Request failed with status " (Num.toStr code)
-        BadBody details -> Str.concat  "Request failed. Invalid body. " details
+        BadBody details -> Str.concat "Request failed. Invalid body. " details
 
 send : Request -> Task Str Error [Network [Http]*]*
 send = \req ->
