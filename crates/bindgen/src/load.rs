@@ -10,7 +10,6 @@ use target_lexicon::Triple;
 
 pub fn load_types(
     full_file_path: PathBuf,
-    dir: PathBuf,
     threading: Threading,
 ) -> Result<Vec<(Types, TargetInfo)>, io::Error> {
     let target_info = (&Triple::host()).into();
@@ -28,7 +27,6 @@ pub fn load_types(
     } = roc_load::load_and_typecheck(
         arena,
         full_file_path,
-        dir,
         subs_by_module,
         target_info,
         RenderTarget::Generic,

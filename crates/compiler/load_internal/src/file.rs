@@ -1114,13 +1114,13 @@ pub struct LoadStart<'a> {
 impl<'a> LoadStart<'a> {
     pub fn from_path(
         arena: &'a Bump,
-        mut src_dir: PathBuf,
         filename: PathBuf,
         render: RenderTarget,
     ) -> Result<Self, LoadingProblem<'a>> {
         let arc_modules = Arc::new(Mutex::new(PackageModuleIds::default()));
         let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
         let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
+        let mut src_dir = filename.parent().unwrap().to_path_buf();
 
         // Load the root module synchronously; we can't proceed until we have its id.
         let (root_id, root_msg) = {
@@ -2839,7 +2839,7 @@ fn load_platform_module<'a>(
                     // make a `platform` module that ultimately exposes `main` to the host
                     let platform_module_msg = fabricate_platform_module(
                         arena,
-                        shorthand,
+                        Some(shorthand),
                         Some(app_module_id),
                         filename.to_path_buf(),
                         parser_state,
@@ -3237,19 +3237,17 @@ fn parse_header<'a>(
                 To::NewPackage(_package_name) => Ok((module_id, app_module_header_msg)),
             }
         }
-        Ok((ast::Module::Platform { header }, parse_state)) => {
-            Ok(fabricate_platform_module(
-                arena,
-                "", // Use a shorthand of "" - it will be fine for `roc check` and bindgen
-                None,
-                filename,
-                parse_state,
-                module_ids.clone(),
-                ident_ids_by_module,
-                &header,
-                module_timing,
-            ))
-        }
+        Ok((ast::Module::Platform { header }, parse_state)) => Ok(fabricate_platform_module(
+            arena,
+            None,
+            None,
+            filename,
+            parse_state,
+            module_ids.clone(),
+            ident_ids_by_module,
+            &header,
+            module_timing,
+        )),
 
         Err(fail) => Err(LoadingProblem::ParsingFailed(
             fail.map_problem(SyntaxError::Header)
@@ -3534,7 +3532,7 @@ fn send_header<'a>(
 struct PlatformHeaderInfo<'a> {
     filename: PathBuf,
     is_root_module: bool,
-    shorthand: &'a str,
+    opt_shorthand: Option<&'a str>,
     opt_app_module_id: Option<ModuleId>,
     packages: &'a [Loc<PackageEntry<'a>>],
     provides: &'a [Loc<ExposedName<'a>>],
@@ -3554,7 +3552,7 @@ fn send_header_two<'a>(
 ) -> (ModuleId, Msg<'a>) {
     let PlatformHeaderInfo {
         filename,
-        shorthand,
+        opt_shorthand,
         is_root_module,
         opt_app_module_id,
         packages,
@@ -3609,7 +3607,10 @@ fn send_header_two<'a>(
         let mut module_ids = (*module_ids).lock();
         let mut ident_ids_by_module = (*ident_ids_by_module).lock();
 
-        let name = PQModuleName::Qualified(shorthand, declared_name);
+        let name = match opt_shorthand {
+            Some(shorthand) => PQModuleName::Qualified(shorthand, declared_name),
+            None => PQModuleName::Unqualified(declared_name),
+        };
         home = module_ids.get_or_insert(&name);
 
         // Ensure this module has an entry in the exposed_ident_ids map.
@@ -3623,8 +3624,13 @@ fn send_header_two<'a>(
         for (qualified_module_name, exposed_idents, region) in imported.into_iter() {
             let cloned_module_name = qualified_module_name.module.clone();
             let pq_module_name = match qualified_module_name.opt_package {
-                None => PQModuleName::Qualified(shorthand, qualified_module_name.module),
-                Some(package) => PQModuleName::Qualified(package, cloned_module_name.clone()),
+                None => match opt_shorthand {
+                    Some(shorthand) => {
+                        PQModuleName::Qualified(shorthand, qualified_module_name.module)
+                    }
+                    None => PQModuleName::Unqualified(qualified_module_name.module),
+                },
+                Some(package) => PQModuleName::Qualified(package, cloned_module_name),
             };
 
             let module_id = module_ids.get_or_insert(&pq_module_name);
@@ -3733,7 +3739,8 @@ fn send_header_two<'a>(
     };
 
     let extra = HeaderFor::Platform {
-        config_shorthand: shorthand,
+        // A config_shorthand of "" should be fine
+        config_shorthand: opt_shorthand.unwrap_or_default(),
         platform_main_type: requires[0].value,
         main_for_host,
     };
@@ -4187,7 +4194,7 @@ fn unspace<'a, T: Copy>(arena: &'a Bump, items: &[Loc<Spaced<'a, T>>]) -> &'a [L
 #[allow(clippy::too_many_arguments)]
 fn fabricate_platform_module<'a>(
     arena: &'a Bump,
-    shorthand: &'a str,
+    opt_shorthand: Option<&'a str>,
     opt_app_module_id: Option<ModuleId>,
     filename: PathBuf,
     parse_state: roc_parse::state::State<'a>,
@@ -4203,7 +4210,7 @@ fn fabricate_platform_module<'a>(
     let info = PlatformHeaderInfo {
         filename,
         is_root_module,
-        shorthand,
+        opt_shorthand,
         opt_app_module_id,
         packages: &[],
         provides: unspace(arena, header.provides.items),
