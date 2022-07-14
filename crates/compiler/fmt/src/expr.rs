@@ -700,53 +700,49 @@ fn fmt_when<'a, 'buf>(
 
         for (pattern_index, pattern) in patterns.iter().enumerate() {
             if pattern_index == 0 {
-                match &pattern.value {
-                    Pattern::SpaceBefore(sub_pattern, spaces) => {
-                        let added_blank_line;
+                if let Pattern::SpaceBefore(sub_pattern, spaces) = &pattern.value {
+                    let added_blank_line;
 
-                        if branch_index > 0 // Never render newlines before the first branch.
-                            && matches!(spaces.first(), Some(CommentOrNewline::Newline))
-                        {
-                            if prev_branch_was_multiline {
-                                // Multiline branches always get a full blank line after them.
-                                buf.ensure_ends_with_blank_line();
-                                added_blank_line = true;
-                            } else {
-                                buf.ensure_ends_with_newline();
-                                added_blank_line = false;
-                            }
+                    // Never render newlines before the first branch.
+                    if branch_index > 0 {
+                        if prev_branch_was_multiline {
+                            // Multiline branches always get a full blank line after them.
+                            buf.ensure_ends_with_blank_line();
+                            added_blank_line = true;
                         } else {
+                            buf.ensure_ends_with_newline();
                             added_blank_line = false;
                         }
-
-                        // Write comments (which may have been attached to the previous
-                        // branch's expr, if there was a previous branch).
-                        fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent + INDENT);
-
-                        if branch_index > 0 {
-                            if prev_branch_was_multiline && !added_blank_line {
-                                // Multiline branches always get a full blank line after them
-                                // (which we may already have added before a comment).
-                                buf.ensure_ends_with_blank_line();
-                            } else {
-                                buf.ensure_ends_with_newline();
-                            }
-                        }
-
-                        fmt_pattern(buf, sub_pattern, indent + INDENT, Parens::NotNeeded);
+                    } else {
+                        added_blank_line = false;
                     }
-                    other => {
-                        if branch_index > 0 {
-                            if prev_branch_was_multiline {
-                                // Multiline branches always get a full blank line after them.
-                                buf.ensure_ends_with_blank_line();
-                            } else {
-                                buf.ensure_ends_with_newline();
-                            }
-                        }
 
-                        fmt_pattern(buf, other, indent + INDENT, Parens::NotNeeded);
+                    // Write comments (which may have been attached to the previous
+                    // branch's expr, if there was a previous branch).
+                    fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent + INDENT);
+
+                    if branch_index > 0 {
+                        if prev_branch_was_multiline && !added_blank_line {
+                            // Multiline branches always get a full blank line after them
+                            // (which we may already have added before a comment).
+                            buf.ensure_ends_with_blank_line();
+                        } else {
+                            buf.ensure_ends_with_newline();
+                        }
                     }
+
+                    fmt_pattern(buf, sub_pattern, indent + INDENT, Parens::NotNeeded);
+                } else {
+                    if branch_index > 0 {
+                        if prev_branch_was_multiline {
+                            // Multiline branches always get a full blank line after them.
+                            buf.ensure_ends_with_blank_line();
+                        } else {
+                            buf.ensure_ends_with_newline();
+                        }
+                    }
+
+                    fmt_pattern(buf, &pattern.value, indent + INDENT, Parens::NotNeeded);
                 }
             } else {
                 if is_multiline_patterns {
