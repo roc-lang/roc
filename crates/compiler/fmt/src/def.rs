@@ -324,6 +324,7 @@ pub fn fmt_body<'a, 'buf>(
 ) {
     pattern.format_with_options(buf, Parens::InApply, Newlines::No, indent);
     buf.push_str(" =");
+
     if body.is_multiline() {
         match body {
             Expr::SpaceBefore(sub_def, spaces) => {
@@ -346,6 +347,22 @@ pub fn fmt_body<'a, 'buf>(
                         indent + INDENT,
                     );
                 }
+            }
+            Expr::BinOps(_, _) => {
+                // Binop chains always get a newline. Otherwise you can have things like:
+                //
+                //     something = foo
+                //        |> bar baz
+                //
+                // By always inserting a newline, this becomes:
+                //
+                //     something =
+                //         foo
+                //         |> bar baz
+                //
+                // This makes it clear what the binop is applying to!
+                buf.newline();
+                body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent + INDENT);
             }
             _ => {
                 buf.spaces(1);
