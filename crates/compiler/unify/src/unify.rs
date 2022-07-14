@@ -881,15 +881,7 @@ fn unify_structure<M: MetaCollector>(
         RecursionVar { structure, .. } => match flat_type {
             FlatType::TagUnion(_, _) => {
                 // unify the structure with this unrecursive tag union
-                let mut outcome = unify_pool(subs, pool, ctx.first, *structure, ctx.mode);
-
-                if outcome.mismatches.is_empty() {
-                    outcome.union(fix_tag_union_recursion_variable(
-                        subs, ctx, ctx.first, other,
-                    ));
-                }
-
-                outcome
+                unify_pool(subs, pool, ctx.first, *structure, ctx.mode)
             }
             FlatType::RecursiveTagUnion(rec, _, _) => {
                 debug_assert!(is_recursion_var(subs, *rec));
@@ -898,15 +890,7 @@ fn unify_structure<M: MetaCollector>(
             }
             FlatType::FunctionOrTagUnion(_, _, _) => {
                 // unify the structure with this unrecursive tag union
-                let mut outcome = unify_pool(subs, pool, ctx.first, *structure, ctx.mode);
-
-                if outcome.mismatches.is_empty() {
-                    outcome.union(fix_tag_union_recursion_variable(
-                        subs, ctx, ctx.first, other,
-                    ));
-                }
-
-                outcome
+                unify_pool(subs, pool, ctx.first, *structure, ctx.mode)
             }
             // Only tag unions can be recursive; everything else is an error.
             _ => mismatch!(
@@ -2060,14 +2044,19 @@ fn unify_shared_tags_new<M: MetaCollector>(
 
             outcome.union(unify_pool(subs, pool, actual, expected, ctx.mode));
 
-            // clearly, this is very suspicious: these variables have just been unified. And yet,
-            // not doing this leads to stack overflows
-            if let Rec::Right(_) = recursion_var {
-                if outcome.mismatches.is_empty() {
-                    matching_vars.push(expected);
-                }
-            } else if outcome.mismatches.is_empty() {
-                matching_vars.push(actual);
+            if outcome.mismatches.is_empty() {
+                // If one of the variables is a recursion var, keep that one, so that we avoid inlining
+                // a recursive tag union type content where we should have a recursion var instead.
+                let merged_var = match (
+                    (actual, subs.get_content_unchecked(actual)),
+                    (expected, subs.get_content_unchecked(expected)),
+                ) {
+                    ((var, Content::RecursionVar { .. }), _)
+                    | (_, (var, Content::RecursionVar { .. })) => var,
+                    _ => actual,
+                };
+
+                matching_vars.push(merged_var);
             }
         }
 
