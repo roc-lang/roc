@@ -773,13 +773,13 @@ fn fmt_when<'a, 'buf>(
 
         match expr.value {
             Expr::SpaceBefore(nested, spaces) => {
-                fmt_spaces_no_blank_lines(buf, spaces.iter(), indent + (INDENT * 2));
-
                 if is_multiline_expr {
                     buf.ensure_ends_with_newline();
                 } else {
                     buf.spaces(1);
                 }
+
+                fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent + (INDENT * 2));
 
                 nested.format_with_options(
                     buf,
