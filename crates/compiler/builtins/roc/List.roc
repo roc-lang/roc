@@ -825,6 +825,7 @@ sublist = \list, config ->
     else
         sublistLowlevel list config.start config.len
 
+## low-level slicing operation that does no bounds checking
 sublistLowlevel : List elem, Nat, Nat -> List elem
 
 ## Intersperses `sep` between the elements of `list`

@@ -54,31 +54,6 @@ comptime {
     exportListFn(list.listIsUnique, "is_unique");
 }
 
-// Dict Module
-const dict = @import("dict.zig");
-const hash = @import("hash.zig");
-
-comptime {
-    exportDictFn(dict.dictLen, "len");
-    exportDictFn(dict.dictEmpty, "empty");
-    exportDictFn(dict.dictInsert, "insert");
-    exportDictFn(dict.dictRemove, "remove");
-    exportDictFn(dict.dictContains, "contains");
-    exportDictFn(dict.dictGet, "get");
-    exportDictFn(dict.elementsRc, "elementsRc");
-    exportDictFn(dict.dictKeys, "keys");
-    exportDictFn(dict.dictValues, "values");
-    exportDictFn(dict.dictUnion, "union");
-    exportDictFn(dict.dictIntersection, "intersection");
-    exportDictFn(dict.dictDifference, "difference");
-    exportDictFn(dict.dictWalk, "walk");
-
-    exportDictFn(dict.setFromList, "set_from_list");
-
-    exportDictFn(hash.wyhash, "hash");
-    exportDictFn(hash.wyhash_rocstr, "hash_str");
-}
-
 // Num Module
 const num = @import("num.zig");
 

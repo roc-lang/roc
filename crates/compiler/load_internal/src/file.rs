@@ -2129,12 +2129,20 @@ fn update<'a>(
                     .insert(ModuleId::DICT, Region::zero());
 
                 header
+                    .exposed_imports
+                    .insert(Ident::from("Dict"), (Symbol::DICT_DICT, Region::zero()));
+
+                header
                     .package_qualified_imported_modules
                     .insert(PackageQualified::Unqualified(ModuleId::SET));
 
                 header
                     .imported_modules
                     .insert(ModuleId::SET, Region::zero());
+
+                header
+                    .exposed_imports
+                    .insert(Ident::from("Set"), (Symbol::SET_SET, Region::zero()));
 
                 header
                     .package_qualified_imported_modules
@@ -4366,8 +4374,10 @@ fn canonicalize_and_constrain<'a>(
         ModuleNameEnum::Platform => None,
         ModuleNameEnum::App(_) => None,
         ModuleNameEnum::Interface(name) | ModuleNameEnum::Hosted(name) => {
+            let mut scope = module_output.scope.clone();
+            scope.add_docs_imports();
             let docs = crate::docs::generate_module_docs(
-                module_output.scope.clone(),
+                scope,
                 name.as_str().into(),
                 &parsed_defs_for_docs,
             );
@@ -4411,13 +4421,19 @@ fn canonicalize_and_constrain<'a>(
         .into_iter()
         .map(|(k, v)| (k, (true, v)))
         .collect();
+
     for (name, alias) in module_output.scope.aliases {
         match aliases.entry(name) {
             Occupied(_) => {
                 // do nothing
             }
             Vacant(vacant) => {
-                if !name.is_builtin() || name.module_id() == ModuleId::ENCODE {
+                let should_include_builtin = matches!(
+                    name.module_id(),
+                    ModuleId::ENCODE | ModuleId::DICT | ModuleId::SET
+                );
+
+                if !name.is_builtin() || should_include_builtin {
                     vacant.insert((false, alias));
                 }
             }

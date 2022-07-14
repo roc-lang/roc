@@ -18,7 +18,7 @@ pub enum ReturnMethod {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StackMemoryFormat {
-    /// Record, Str, List, Dict, etc.
+    /// Record, Str, List, etc.
     DataStructure,
     Int128,
     Float128,
@@ -87,7 +87,7 @@ impl WasmLayout {
 
             Layout::LambdaSet(lambda_set) => WasmLayout::new(&lambda_set.runtime_representation()),
 
-            Layout::Builtin(Str | Dict(_, _) | Set(_) | List(_))
+            Layout::Builtin(Str | List(_))
             | Layout::Struct { .. }
             | Layout::Union(NonRecursive(_)) => Self::StackMemory {
                 size,

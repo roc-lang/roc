@@ -145,6 +145,8 @@ mod cli_run {
                     vec.push(VALGRIND_FLAG);
                 }
 
+                vec.push("--max-threads=1");
+
                 vec.into_iter()
             };
 
@@ -322,7 +324,7 @@ mod cli_run {
                         &file_name,
                         example.stdin,
                         example.executable_filename,
-                        &[],
+                        &[LINKER_FLAG, "legacy"], // remove LINKER_FLAG, "legacy" once #3540 is fixed
                         example.input_file.and_then(|file| Some(example_file(dir_name, file))),
                         example.expected_ending,
                         example.use_valgrind,

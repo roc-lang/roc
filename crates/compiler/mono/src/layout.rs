@@ -22,17 +22,17 @@ use ven_pretty::{DocAllocator, DocBuilder};
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
-roc_error_macros::assert_sizeof_aarch64!(Builtin, 3 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Builtin, 2 * 8);
 roc_error_macros::assert_sizeof_aarch64!(Layout, 4 * 8);
 roc_error_macros::assert_sizeof_aarch64!(UnionLayout, 3 * 8);
 roc_error_macros::assert_sizeof_aarch64!(LambdaSet, 3 * 8);
 
-roc_error_macros::assert_sizeof_wasm!(Builtin, 3 * 4);
+roc_error_macros::assert_sizeof_wasm!(Builtin, 2 * 4);
 roc_error_macros::assert_sizeof_wasm!(Layout, 6 * 4);
 roc_error_macros::assert_sizeof_wasm!(UnionLayout, 3 * 4);
 roc_error_macros::assert_sizeof_wasm!(LambdaSet, 3 * 4);
 
-roc_error_macros::assert_sizeof_default!(Builtin, 3 * 8);
+roc_error_macros::assert_sizeof_default!(Builtin, 2 * 8);
 roc_error_macros::assert_sizeof_default!(Layout, 4 * 8);
 roc_error_macros::assert_sizeof_default!(UnionLayout, 3 * 8);
 roc_error_macros::assert_sizeof_default!(LambdaSet, 3 * 8);
@@ -1155,8 +1155,6 @@ pub enum Builtin<'a> {
     Bool,
     Decimal,
     Str,
-    Dict(&'a Layout<'a>, &'a Layout<'a>),
-    Set(&'a Layout<'a>),
     List(&'a Layout<'a>),
 }
 
@@ -1809,8 +1807,6 @@ impl<'a> Builtin<'a> {
 
     /// Number of machine words in an empty one of these
     pub const STR_WORDS: u32 = 3;
-    pub const DICT_WORDS: u32 = 3;
-    pub const SET_WORDS: u32 = Builtin::DICT_WORDS; // Set is an alias for Dict with {} for value
     pub const LIST_WORDS: u32 = 3;
 
     /// Layout of collection wrapper for List, Str, Dict, and Set - a struct of (pointer, length, capacity).
@@ -1829,8 +1825,6 @@ impl<'a> Builtin<'a> {
             Bool => Builtin::I1_SIZE,
             Decimal => Builtin::DECIMAL_SIZE,
             Str => Builtin::STR_WORDS * ptr_width,
-            Dict(_, _) => Builtin::DICT_WORDS * ptr_width,
-            Set(_) => Builtin::SET_WORDS * ptr_width,
             List(_) => Builtin::LIST_WORDS * ptr_width,
         }
     }
@@ -1849,8 +1843,6 @@ impl<'a> Builtin<'a> {
             Float(float_width) => float_width.alignment_bytes(target_info),
             Bool => align_of::<bool>() as u32,
             Decimal => IntWidth::I128.alignment_bytes(target_info),
-            Dict(_, _) => ptr_width,
-            Set(_) => ptr_width,
             // we often treat these as i128 (64-bit systems)
             // or i64 (32-bit systems).
             //
@@ -1867,7 +1859,7 @@ impl<'a> Builtin<'a> {
         match self {
             Int(_) | Float(_) | Bool | Decimal => true,
 
-            Str | Dict(_, _) | Set(_) | List(_) => false,
+            Str | List(_) => false,
         }
     }
 
@@ -1878,8 +1870,7 @@ impl<'a> Builtin<'a> {
         match self {
             Int(_) | Float(_) | Bool | Decimal => false,
             List(_) => true,
-
-            Str | Dict(_, _) | Set(_) => true,
+            Str => true,
         }
     }
 
@@ -1926,14 +1917,6 @@ impl<'a> Builtin<'a> {
             List(layout) => alloc
                 .text("List ")
                 .append(layout.to_doc(alloc, Parens::InTypeParam)),
-            Set(layout) => alloc
-                .text("Set ")
-                .append(layout.to_doc(alloc, Parens::InTypeParam)),
-            Dict(key_layout, value_layout) => alloc
-                .text("Dict ")
-                .append(key_layout.to_doc(alloc, Parens::InTypeParam))
-                .append(" ")
-                .append(value_layout.to_doc(alloc, Parens::InTypeParam)),
         }
     }
 
@@ -1942,11 +1925,6 @@ impl<'a> Builtin<'a> {
 
         let allocation = match self {
             Builtin::Str => ptr_width,
-            Builtin::Dict(k, v) => k
-                .alignment_bytes(target_info)
-                .max(v.alignment_bytes(target_info))
-                .max(ptr_width),
-            Builtin::Set(k) => k.alignment_bytes(target_info).max(ptr_width),
             Builtin::List(e) => e.alignment_bytes(target_info).max(ptr_width),
             // The following are usually not heap-allocated, but they might be when inside a Box.
             Builtin::Int(int_width) => int_width.alignment_bytes(target_info).max(ptr_width),
@@ -2079,8 +2057,6 @@ fn layout_from_flat_type<'a>(
 
                 Symbol::STR_STR => Ok(Layout::Builtin(Builtin::Str)),
                 Symbol::LIST_LIST => list_layout_from_elem(env, args[0]),
-                Symbol::DICT_DICT => dict_layout_from_key_value(env, args[0], args[1]),
-                Symbol::SET_SET => dict_layout_from_key_value(env, args[0], Variable::EMPTY_RECORD),
                 Symbol::BOX_BOX_TYPE => {
                     // Num.Num should only ever have 1 argument, e.g. Num.Num Int.Integer
                     debug_assert_eq!(args.len(), 1);
@@ -3122,39 +3098,6 @@ fn layout_from_num_content<'a>(
         }
         Error => Err(LayoutProblem::Erroneous),
     }
-}
-
-fn dict_layout_from_key_value<'a>(
-    env: &mut Env<'a, '_>,
-    key_var: Variable,
-    value_var: Variable,
-) -> Result<Layout<'a>, LayoutProblem> {
-    let is_variable = |content| matches!(content, &Content::FlexVar(_) | &Content::RigidVar(_));
-
-    let key_content = env.subs.get_content_without_compacting(key_var);
-    let value_content = env.subs.get_content_without_compacting(value_var);
-
-    let key_layout = if is_variable(key_content) {
-        Layout::VOID
-    } else {
-        // NOTE: cannot re-use Content, because it may be recursive
-        // then some state is not correctly kept, we have to go through from_var
-        Layout::from_var(env, key_var)?
-    };
-
-    let value_layout = if is_variable(value_content) {
-        Layout::VOID
-    } else {
-        // NOTE: cannot re-use Content, because it may be recursive
-        // then some state is not correctly kept, we have to go through from_var
-        Layout::from_var(env, value_var)?
-    };
-
-    // This is a normal list.
-    Ok(Layout::Builtin(Builtin::Dict(
-        env.arena.alloc(key_layout),
-        env.arena.alloc(value_layout),
-    )))
 }
 
 pub fn list_layout_from_elem<'a>(

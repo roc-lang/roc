@@ -5069,57 +5069,6 @@ pub fn with_hole<'a>(
                 }};
             }
 
-            macro_rules! walk {
-                ($oh:ident) => {{
-                    debug_assert_eq!(arg_symbols.len(), 3);
-
-                    const LIST_INDEX: usize = 0;
-                    const DEFAULT_INDEX: usize = 1;
-                    const CLOSURE_INDEX: usize = 2;
-
-                    let xs = arg_symbols[LIST_INDEX];
-                    let state = arg_symbols[DEFAULT_INDEX];
-
-                    let stmt = match_on_closure_argument!($oh, [xs, state]);
-
-                    // because of a hack to implement List.product and List.sum, we need to also
-                    // assign to symbols here. Normally the arguments to a lowlevel function are
-                    // all symbols anyway, but because of this hack the closure symbol can be an
-                    // actual closure, and the default is either the number 1 or 0
-                    // this can be removed when we define builtin modules as proper modules
-
-                    let stmt = assign_to_symbol(
-                        env,
-                        procs,
-                        layout_cache,
-                        args[LIST_INDEX].0,
-                        Loc::at_zero(args[LIST_INDEX].1.clone()),
-                        arg_symbols[LIST_INDEX],
-                        stmt,
-                    );
-
-                    let stmt = assign_to_symbol(
-                        env,
-                        procs,
-                        layout_cache,
-                        args[DEFAULT_INDEX].0,
-                        Loc::at_zero(args[DEFAULT_INDEX].1.clone()),
-                        arg_symbols[DEFAULT_INDEX],
-                        stmt,
-                    );
-
-                    assign_to_symbol(
-                        env,
-                        procs,
-                        layout_cache,
-                        args[CLOSURE_INDEX].0,
-                        Loc::at_zero(args[CLOSURE_INDEX].1.clone()),
-                        arg_symbols[CLOSURE_INDEX],
-                        stmt,
-                    )
-                }};
-            }
-
             use LowLevel::*;
             match op {
                 ListMap => {
@@ -5132,7 +5081,6 @@ pub fn with_hole<'a>(
                     let xs = arg_symbols[0];
                     match_on_closure_argument!(ListSortWith, [xs])
                 }
-                DictWalk => walk!(DictWalk),
                 ListMap2 => {
                     debug_assert_eq!(arg_symbols.len(), 3);
 

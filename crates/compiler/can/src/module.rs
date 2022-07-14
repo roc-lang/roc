@@ -328,15 +328,7 @@ pub fn canonicalize_module_defs<'a>(
                     panic!("TODO gracefully handle shadowing in imports.")
                 }
             }
-        } else if [
-            Symbol::LIST_LIST,
-            Symbol::STR_STR,
-            Symbol::DICT_DICT,
-            Symbol::SET_SET,
-            Symbol::BOX_BOX_TYPE,
-        ]
-        .contains(&symbol)
-        {
+        } else if [Symbol::LIST_LIST, Symbol::STR_STR, Symbol::BOX_BOX_TYPE].contains(&symbol) {
             // These are not aliases but Apply's and we make sure they are always in scope
         } else {
             // This is a type alias or ability

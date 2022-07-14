@@ -758,10 +758,10 @@ mod test_reporting {
 
                 Did you mean one of these?
 
-                    Set
                     List
                     True
                     Box
+                    Str
                 "#
             ),
         );
@@ -4681,10 +4681,12 @@ mod test_reporting {
         dict_type_formatting,
         indoc!(
             r#"
-            myDict : Dict Num.I64 Str
+            app "dict" imports [ Dict ] provides [main] to "./platform"
+
+            myDict : Dict.Dict Num.I64 Str
             myDict = Dict.insert Dict.empty "foo" 42
 
-            myDict
+            main = myDict
             "#
         ),
         @r###"
@@ -4692,9 +4694,9 @@ mod test_reporting {
 
     Something is off with the body of the `myDict` definition:
 
-    4│      myDict : Dict Num.I64 Str
-    5│      myDict = Dict.insert Dict.empty "foo" 42
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    3│  myDict : Dict.Dict Num.I64 Str
+    4│  myDict = Dict.insert Dict.empty "foo" 42
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     This `insert` call produces:
 
@@ -4710,6 +4712,8 @@ mod test_reporting {
         alias_type_diff,
         indoc!(
             r#"
+            app "test" imports [Set.{ Set }] provides [main] to "./platform"
+
             HSet a : Set a
 
             foo : Str -> HSet {}
@@ -4717,7 +4721,7 @@ mod test_reporting {
             myDict : HSet Str
             myDict = foo "bar"
 
-            myDict
+            main = myDict
             "#
         ),
         @r###"
@@ -4725,9 +4729,9 @@ mod test_reporting {
 
     Something is off with the body of the `myDict` definition:
 
-    8│      myDict : HSet Str
-    9│      myDict = foo "bar"
-                     ^^^^^^^^^
+    7│  myDict : HSet Str
+    8│  myDict = foo "bar"
+                 ^^^^^^^^^
 
     This `foo` call produces:
 
@@ -8924,12 +8928,13 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
+        #[ignore]
         type_error_in_apply_is_circular,
         indoc!(
             r#"
-            app "test" provides [go] to "./platform"
+            app "test" imports [Set] provides [go] to "./platform"
 
-            S a : { set : Set a }
+            S a : { set : Set.Set a }
 
             go : a, S a -> Result (List a) *
             go = \goal, model ->

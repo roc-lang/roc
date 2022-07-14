@@ -316,13 +316,50 @@ impl Aliases {
         let (typ, delayed_variables, &mut kind) =
             match self.aliases.iter_mut().find(|(s, _, _, _)| *s == symbol) {
                 None => internal_error!(
-                    "Alias not registered in delayed aliases! {:?}",
+                    "Alias {:?} not registered in delayed aliases! {:?}",
+                    symbol,
                     &self.aliases
                 ),
                 Some((_, typ, delayed_variables, kind)) => (typ, delayed_variables, kind),
             };
 
         let mut substitutions: MutMap<_, _> = Default::default();
+
+        let old_type_variables = delayed_variables.type_variables(&mut self.variables);
+        let new_type_variables = &subs.variables[alias_variables.type_variables().indices()];
+
+        let some_new_vars_are_equivalent = {
+            // In practice the number of type variables is tiny, so just do a quadratic check
+            // without allocating.
+            let mut some_equivalent = false;
+            for (i, var) in new_type_variables.iter().enumerate() {
+                for other_var in new_type_variables.iter().skip(i + 1) {
+                    some_equivalent = some_equivalent || var == other_var;
+                }
+            }
+            some_equivalent
+        };
+
+        // If some type variables are equivalent, we have to work over a cloned type variable,
+        // otherwise we will leave in place an alias without preserving the property of unique
+        // type variables.
+        //
+        // For example, if a delayed alias `Foo a b` is instantiated with args `t1 t1` without cloning,
+        // then the delayed alias would be updated to `Foo t1 t1`, and now the distinction between the
+        // two type variables is lost.
+        let can_reuse_old_definition = !some_new_vars_are_equivalent;
+
+        for (old, new) in old_type_variables.iter_mut().zip(new_type_variables) {
+            // if constraint gen duplicated a type these variables could be the same
+            // (happens very often in practice)
+            if old.var != *new {
+                substitutions.insert(old.var, *new);
+
+                if can_reuse_old_definition {
+                    old.var = *new;
+                }
+            }
+        }
 
         for OptAbleVar {
             var: rec_var,
@@ -334,19 +371,9 @@ impl Aliases {
             debug_assert!(opt_ability.is_none());
             let new_var = subs.fresh_unnamed_flex_var();
             substitutions.insert(*rec_var, new_var);
-            *rec_var = new_var;
-        }
 
-        let old_type_variables = delayed_variables.type_variables(&mut self.variables);
-        let new_type_variables = &subs.variables[alias_variables.type_variables().indices()];
-
-        for (old, new) in old_type_variables.iter_mut().zip(new_type_variables) {
-            // if constraint gen duplicated a type these variables could be the same
-            // (happens very often in practice)
-            if old.var != *new {
-                substitutions.insert(old.var, *new);
-
-                old.var = *new;
+            if can_reuse_old_definition {
+                *rec_var = new_var;
             }
         }
 
@@ -361,34 +388,44 @@ impl Aliases {
             debug_assert!(old.opt_ability.is_none());
             if old.var != *new {
                 substitutions.insert(old.var, *new);
-                old.var = *new;
-            }
-        }
 
-        if !substitutions.is_empty() {
-            typ.substitute_variables(&substitutions);
-        }
-
-        let mut t = Type::EmptyRec;
-
-        std::mem::swap(typ, &mut t);
-
-        // assumption: an alias does not (transitively) syntactically contain itself
-        // (if it did it would have to be a recursive tag union, which we should have fixed up
-        // during canonicalization)
-        let alias_variable = type_to_variable(subs, rank, pools, arena, self, &t, false);
-
-        {
-            match self.aliases.iter_mut().find(|(s, _, _, _)| *s == symbol) {
-                None => unreachable!(),
-                Some((_, typ, _, _)) => {
-                    // swap typ back
-                    std::mem::swap(typ, &mut t);
+                if can_reuse_old_definition {
+                    old.var = *new;
                 }
             }
         }
 
-        (alias_variable, kind)
+        if !can_reuse_old_definition {
+            let mut typ = typ.clone();
+            typ.substitute_variables(&substitutions);
+            let alias_variable = type_to_variable(subs, rank, pools, arena, self, &typ, false);
+            (alias_variable, kind)
+        } else {
+            if !substitutions.is_empty() {
+                typ.substitute_variables(&substitutions);
+            }
+
+            let mut t = Type::EmptyRec;
+
+            std::mem::swap(typ, &mut t);
+
+            // assumption: an alias does not (transitively) syntactically contain itself
+            // (if it did it would have to be a recursive tag union, which we should have fixed up
+            // during canonicalization)
+            let alias_variable = type_to_variable(subs, rank, pools, arena, self, &t, false);
+
+            {
+                match self.aliases.iter_mut().find(|(s, _, _, _)| *s == symbol) {
+                    None => unreachable!(),
+                    Some((_, typ, _, _)) => {
+                        // swap typ back
+                        std::mem::swap(typ, &mut t);
+                    }
+                }
+            }
+
+            (alias_variable, kind)
+        }
     }
 }
 

@@ -356,9 +356,6 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 list_to_ast(env, mem, addr, len, elem_layout, raw_content)
             },
         )),
-        Layout::Builtin(other) => {
-            todo!("add support for rendering builtin {:?} to the REPL", other)
-        }
         Layout::Struct { field_layouts, .. } => {
             let struct_addr_to_ast = |mem: &'a A::Memory, addr: usize| match raw_content {
                 Content::Structure(FlatType::Record(fields, _)) => {

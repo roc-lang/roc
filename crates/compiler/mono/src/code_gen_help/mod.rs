@@ -410,15 +410,6 @@ impl<'a> CodeGenHelp<'a> {
     // needs *two* specializations for `List(RecursivePointer)`, not just one.
     fn replace_rec_ptr(&self, ctx: &Context<'a>, layout: Layout<'a>) -> Layout<'a> {
         match layout {
-            Layout::Builtin(Builtin::Dict(k, v)) => Layout::Builtin(Builtin::Dict(
-                self.arena.alloc(self.replace_rec_ptr(ctx, *k)),
-                self.arena.alloc(self.replace_rec_ptr(ctx, *v)),
-            )),
-
-            Layout::Builtin(Builtin::Set(k)) => Layout::Builtin(Builtin::Set(
-                self.arena.alloc(self.replace_rec_ptr(ctx, *k)),
-            )),
-
             Layout::Builtin(Builtin::List(v)) => Layout::Builtin(Builtin::List(
                 self.arena.alloc(self.replace_rec_ptr(ctx, *v)),
             )),
@@ -543,7 +534,7 @@ fn layout_needs_helper_proc(layout: &Layout, op: HelperOp) -> bool {
             // Both are fine, they were just developed at different times.
             matches!(op, HelperOp::Inc | HelperOp::Dec | HelperOp::DecRef(_))
         }
-        Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::List(_)) => true,
+        Layout::Builtin(Builtin::List(_)) => true,
         Layout::Struct { .. } => true, // note: we do generate a helper for Unit, with just a Stmt::Ret
         Layout::Union(UnionLayout::NonRecursive(tags)) => !tags.is_empty(),
         Layout::Union(_) => true,

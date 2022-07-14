@@ -1306,7 +1306,7 @@ define_builtins! {
         9 RESULT_AFTER_ERR: "afterErr"
     }
     8 DICT: "Dict" => {
-        0 DICT_DICT: "Dict" imported // the Dict.Dict type alias
+        0 DICT_DICT: "Dict" // the Dict.Dict type alias
         1 DICT_EMPTY: "empty"
         2 DICT_SINGLE: "single"
         3 DICT_GET: "get"
@@ -1320,15 +1320,15 @@ define_builtins! {
         10 DICT_KEYS: "keys"
         11 DICT_VALUES: "values"
 
-        12 DICT_UNION: "union"
-        13 DICT_INTERSECTION: "intersection"
-        14 DICT_DIFFERENCE: "difference"
+        12 DICT_INSERT_ALL: "insertAll" // union
+        13 DICT_KEEP_SHARED: "keepShared" // intersection
+        14 DICT_REMOVE_ALL: "removeAll" // difference
 
-        15 DICT_GET_LOWLEVEL: "getLowlevel"
+        15 DICT_WITH_CAPACITY: "withCapacity"
         16 DICT_CAPACITY: "capacity"
     }
     9 SET: "Set" => {
-        0 SET_SET: "Set" imported // the Set.Set type alias
+        0 SET_SET: "Set" // the Set.Set type alias
         1 SET_EMPTY: "empty"
         2 SET_SINGLE: "single"
         3 SET_LEN: "len"

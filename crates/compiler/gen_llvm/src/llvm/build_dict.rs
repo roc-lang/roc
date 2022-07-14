@@ -59,25 +59,7 @@ pub fn dict_len<'a, 'ctx, 'env>(
     let (_, dict_layout) = load_symbol_and_layout(scope, &dict_symbol);
 
     match dict_layout {
-        Layout::Builtin(Builtin::Dict(_, _)) => {
-            // let dict_as_int = dict_symbol_to_i128(env, scope, dict_symbol);
-            let dict_as_zig_dict = dict_symbol_to_zig_dict(env, scope, dict_symbol);
-
-            let length_i64 = call_bitcode_fn(
-                env,
-                &[pass_dict_c_abi(env, dict_as_zig_dict.into())],
-                bitcode::DICT_LEN,
-            );
-
-            env.builder
-                .build_int_cast_sign_flag(
-                    length_i64.into_int_value(),
-                    env.ptr_int(),
-                    false,
-                    "to_usize",
-                )
-                .into()
-        }
+        Layout::Builtin(Builtin::Dict(_, _)) => 
         _ => unreachable!("Invalid layout given to Dict.len : {:?}", dict_layout),
     }
 }

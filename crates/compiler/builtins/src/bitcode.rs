@@ -337,24 +337,6 @@ pub const STR_RESERVE: &str = "roc_builtins.str.reserve";
 pub const STR_APPEND_SCALAR: &str = "roc_builtins.str.append_scalar";
 pub const STR_GET_SCALAR_UNSAFE: &str = "roc_builtins.str.get_scalar_unsafe";
 
-pub const DICT_HASH: &str = "roc_builtins.dict.hash";
-pub const DICT_HASH_STR: &str = "roc_builtins.dict.hash_str";
-pub const DICT_LEN: &str = "roc_builtins.dict.len";
-pub const DICT_EMPTY: &str = "roc_builtins.dict.empty";
-pub const DICT_INSERT: &str = "roc_builtins.dict.insert";
-pub const DICT_REMOVE: &str = "roc_builtins.dict.remove";
-pub const DICT_CONTAINS: &str = "roc_builtins.dict.contains";
-pub const DICT_GET: &str = "roc_builtins.dict.get";
-pub const DICT_ELEMENTS_RC: &str = "roc_builtins.dict.elementsRc";
-pub const DICT_KEYS: &str = "roc_builtins.dict.keys";
-pub const DICT_VALUES: &str = "roc_builtins.dict.values";
-pub const DICT_UNION: &str = "roc_builtins.dict.union";
-pub const DICT_DIFFERENCE: &str = "roc_builtins.dict.difference";
-pub const DICT_INTERSECTION: &str = "roc_builtins.dict.intersection";
-pub const DICT_WALK: &str = "roc_builtins.dict.walk";
-
-pub const SET_FROM_LIST: &str = "roc_builtins.dict.set_from_list";
-
 pub const LIST_MAP: &str = "roc_builtins.list.map";
 pub const LIST_MAP2: &str = "roc_builtins.list.map2";
 pub const LIST_MAP3: &str = "roc_builtins.list.map3";
