@@ -2,12 +2,12 @@ use crate::solve::{self, Aliases};
 use roc_can::abilities::{AbilitiesStore, ResolvedSpecializations};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::expr::PendingDerives;
-use roc_can::module::RigidVariables;
+use roc_can::module::{ExposedByModule, RigidVariables};
 use roc_collections::all::MutMap;
 use roc_collections::VecMap;
-use roc_derive_key::GlobalDerivedSymbols;
+use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_types::subs::{Content, ExposedTypesStorageSubs, FlatType, StorageSubs, Subs, Variable};
 use roc_types::types::Alias;
 
@@ -54,6 +54,7 @@ pub struct SolvedModule {
 
 #[allow(clippy::too_many_arguments)] // TODO: put params in a context/env var
 pub fn run_solve(
+    home: ModuleId,
     constraints: &Constraints,
     constraint: ConstraintSoa,
     rigid_variables: RigidVariables,
@@ -61,7 +62,8 @@ pub fn run_solve(
     mut aliases: Aliases,
     mut abilities_store: AbilitiesStore,
     pending_derives: PendingDerives,
-    derived_symbols: GlobalDerivedSymbols,
+    exposed_by_module: &ExposedByModule,
+    derived_module: SharedDerivedModule,
 ) -> (
     Solved<Subs>,
     solve::Env,
@@ -86,6 +88,7 @@ pub fn run_solve(
 
     // Run the solver to populate Subs.
     let (solved_subs, solved_env) = solve::run(
+        home,
         constraints,
         &mut problems,
         subs,
@@ -93,7 +96,8 @@ pub fn run_solve(
         &constraint,
         pending_derives,
         &mut abilities_store,
-        derived_symbols,
+        exposed_by_module,
+        derived_module,
     );
 
     (solved_subs, solved_env, problems, abilities_store)

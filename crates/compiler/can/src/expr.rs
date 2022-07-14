@@ -471,6 +471,15 @@ pub enum Recursive {
     TailRecursive = 2,
 }
 
+impl Recursive {
+    pub fn is_recursive(&self) -> bool {
+        match self {
+            Recursive::NotRecursive => false,
+            Recursive::Recursive | Recursive::TailRecursive => true,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct WhenBranch {
     pub patterns: Vec<Loc<Pattern>>,
