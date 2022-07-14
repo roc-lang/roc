@@ -4,9 +4,10 @@ mod glue;
 
 use core::alloc::Layout;
 use core::ffi::c_void;
-use core::mem::{ManuallyDrop, MaybeUninit};
+use core::mem::MaybeUninit;
+use glue::Metadata;
 use libc;
-use roc_std::{RocList, RocResult, RocStr};
+use roc_std::{RocList, RocStr};
 use std::ffi::CStr;
 use std::os::raw::c_char;
 use ureq::Error;
@@ -128,35 +129,60 @@ pub extern "C" fn roc_fx_putLine(line: &RocStr) {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_send_request(roc_request: &glue::Request, /* should I borrow or not? */) {
-    let (mimetype, body_bytes_slice): (String, Vec<u8>) = match roc_request.body.discriminant() {
-        glue::discriminant_Body::EmptyBody => ("".into(), vec![]),
-        glue::discriminant_Body::Body => {
-            let (mimetype_union, body_roclist) = unsafe { roc_request.body.as_Body() };
-            let mimetype_string: String = unsafe { mimetype_union.as_MimeType() }.as_str().into();
-            let body_bytes: &[u8] = body_roclist.as_slice();
-            (mimetype_string, Vec::from(body_bytes))
-        }
-    };
+pub extern "C" fn roc_fx_send_request(roc_request: &glue::Request) -> glue::Response {
+    // let (mimetype, body_bytes_slice): (String, Vec<u8>) = match roc_request.body.discriminant() {
+    //     glue::discriminant_Body::EmptyBody => ("".into(), vec![]),
+    //     glue::discriminant_Body::Body => {
+    //         let (mimetype_union, body_roclist) = unsafe { roc_request.body.as_Body() };
+    //         let mimetype_string: String = unsafe { mimetype_union.as_MimeType() }.as_str().into();
+    //         let body_bytes: &[u8] = body_roclist.as_slice();
+    //         (mimetype_string, Vec::from(body_bytes))
+    //     }
+    // };
 
     let url = roc_request.url.as_str();
     match ureq::get(url).call() {
         Ok(response) => {
+            let statusCode = response.status();
+
             let mut buffer: Vec<u8> = vec![];
-            let reader = response.into_reader();
-            reader.read(&mut buffer);
+            let mut reader = response.into_reader();
+            reader.read(&mut buffer).expect("can't read response");
+            let body = RocList::from_slice(&buffer);
+
+            let metadata = Metadata {
+                headers: RocList::empty(),
+                statusText: RocStr::empty(),
+                url: RocStr::empty(),
+                statusCode,
+            };
+
+            glue::Response::GoodStatus(metadata, body)
         }
-        Err(_) => todo!(),
+        Err(Error::Status(statusCode, response)) => {
+            let mut buffer: Vec<u8> = vec![];
+            let mut reader = response.into_reader();
+            reader.read(&mut buffer).expect("can't read response");
+            let body = RocList::from_slice(&buffer);
+
+            let metadata = Metadata {
+                headers: RocList::empty(),
+                statusText: RocStr::empty(),
+                url: RocStr::empty(),
+                statusCode,
+            };
+
+            glue::Response::BadStatus(metadata, body)
+        }
+        Err(transortError) => {
+            use ureq::ErrorKind::*;
+            match transortError.kind() {
+                InvalidUrl | UnknownScheme => glue::Response::BadUrl(RocStr::from(url)),
+                _ => glue::Response::NetworkError,
+            }
+        }
     }
-    // let rust_body_bytes: Vec<u8> = vec![]; // reqwest something something
-    // let roc_body_bytes = RocList::from_slice(&rust_body_bytes);
-
-    // let roc_response: glue::Response = todo!();
-
-    // call_the_closure
 }
-
-
 
 /*
 pub enum Error {
