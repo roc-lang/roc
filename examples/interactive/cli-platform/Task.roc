@@ -1,6 +1,6 @@
 interface Task
     exposes [Task, succeed, fail, await, map, onFail, attempt, forever, loop]
-    imports [pf.Effect, pf.InternalTask]
+    imports [Effect, InternalTask]
 
 Task ok err fx : InternalTask.Task ok err fx
 

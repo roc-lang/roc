@@ -8,6 +8,7 @@ use crate::llvm::build_list::{
     list_prepend, list_replace_unsafe, list_reserve, list_sort_with, list_sublist, list_swap,
     list_symbol_to_c_abi, list_with_capacity, pass_update_mode,
 };
+use crate::llvm::build_str::dec_to_str;
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
     self, argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout,
@@ -5531,15 +5532,19 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.fromFloat : Float * -> Str
             debug_assert_eq!(args.len(), 1);
 
-            let int_symbol = args[0];
-            let float = load_symbol(scope, &int_symbol);
+            let (float, float_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            let float_width = match float_layout {
+                Layout::Builtin(Builtin::Float(float_width)) => *float_width,
+                _ => unreachable!(),
+            };
 
             call_str_bitcode_fn(
                 env,
                 &[],
                 &[float],
                 BitcodeReturns::Str,
-                bitcode::STR_FROM_FLOAT,
+                &bitcode::STR_FROM_FLOAT[float_width],
             )
         }
         StrFromUtf8Range => {
@@ -5999,16 +6004,22 @@ fn run_low_level<'a, 'ctx, 'env>(
                     )
                 }
                 Layout::Builtin(Builtin::Float(_float_width)) => {
-                    let float = load_symbol(scope, &args[0]);
+                    let (float, float_layout) = load_symbol_and_layout(scope, &args[0]);
+
+                    let float_width = match float_layout {
+                        Layout::Builtin(Builtin::Float(float_width)) => *float_width,
+                        _ => unreachable!(),
+                    };
 
                     call_str_bitcode_fn(
                         env,
                         &[],
                         &[float],
                         BitcodeReturns::Str,
-                        bitcode::STR_FROM_FLOAT,
+                        &bitcode::STR_FROM_FLOAT[float_width],
                     )
                 }
+                Layout::Builtin(Builtin::Decimal) => dec_to_str(env, num),
                 _ => unreachable!(),
             }
         }

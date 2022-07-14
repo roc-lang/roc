@@ -86,7 +86,6 @@ mod test_reporting {
             let result = roc_load::load_and_typecheck(
                 arena,
                 full_file_path,
-                dir.path().to_path_buf(),
                 exposed_types,
                 roc_target::TargetInfo::default_x86_64(),
                 RenderTarget::Generic,
@@ -9056,39 +9055,6 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        unbound_type_in_record_does_not_implement_encoding,
-        indoc!(
-            r#"
-            app "test" imports [Encode] provides [main] to "./platform"
-
-            main = \x -> Encode.toEncoder { x: x }
-            "#
-        ),
-        @r#"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-        This expression has a type that does not implement the abilities it's expected to:
-
-        3│  main = \x -> Encode.toEncoder { x: x }
-                                          ^^^^^^^^
-
-        Roc can't generate an implementation of the `Encode.Encoding` ability
-        for
-
-            { x : a }
-
-        In particular, an implementation for
-
-            a
-
-        cannot be generated.
-
-        Tip: This type variable is not bound to `Encoding`. Consider adding a
-        `has` clause to bind the type variable, like `| a has Encode.Encoding`
-        "#
-    );
-
-    test_report!(
         nested_opaque_does_not_implement_encoding,
         indoc!(
             r#"
@@ -9098,7 +9064,9 @@ All branches in an `if` must have the same type!
             main = Encode.toEncoder { x: @A {} }
             "#
         ),
-        @r#"
+        // TODO: this error message is quite unfortunate. We should remove the duplication, and
+        // also support regions that point to things in other modules. See also https://github.com/rtfeldman/roc/issues/3056.
+        @r###"
         ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
         This expression has a type that does not implement the abilities it's expected to:
@@ -9119,7 +9087,17 @@ All branches in an `if` must have the same type!
 
         Tip: `A` does not implement `Encoding`. Consider adding a custom
         implementation or `has Encode.Encoding` to the definition of `A`.
-        "#
+
+        ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+        The type `A` does not fully implement the ability `Encoding`. The
+        following specializations are missing:
+
+        A specialization for `toEncoder`, which is defined here:
+
+        5│
+                                                                                                                                                                                                                                                                                                                                                                                                                                                    ^^^^^^^^^
+        "###
     );
 
     test_report!(

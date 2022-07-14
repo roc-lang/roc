@@ -20,7 +20,7 @@ use roc_types::subs::{
 };
 use roc_types::types::{AliasKind, RecordField};
 
-use crate::{synth_var, DerivedBody, DERIVED_MODULE};
+use crate::{synth_var, DerivedBody, DERIVED_SYNTH};
 
 macro_rules! bad_input {
     ($subs:expr, $var:expr) => {
@@ -64,7 +64,7 @@ impl Env<'_> {
 
             let ident_id = self.derived_ident_ids.get_or_insert(&debug_name);
 
-            Symbol::new(DERIVED_MODULE, ident_id)
+            Symbol::new(DERIVED_SYNTH, ident_id)
         } else {
             self.unique_symbol()
         }
@@ -72,7 +72,7 @@ impl Env<'_> {
 
     fn unique_symbol(&mut self) -> Symbol {
         let ident_id = self.derived_ident_ids.gen_unique();
-        Symbol::new(DERIVED_MODULE, ident_id)
+        Symbol::new(DERIVED_SYNTH, ident_id)
     }
 
     fn import_encode_symbol(&mut self, symbol: Symbol) -> Variable {

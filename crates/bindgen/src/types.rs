@@ -156,6 +156,7 @@ pub enum RocType {
     /// this would be the field of Cons containing the (recursive) StrConsList type,
     /// and the TypeId is the TypeId of StrConsList itself.
     RecursivePointer(TypeId),
+    Function(Vec<TypeId>, TypeId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
@@ -199,136 +200,6 @@ impl RocNum {
         };
 
         answer as u32
-    }
-}
-
-impl RocType {
-    /// Useful when determining whether to derive Copy in a Rust type.
-    pub fn has_pointer(&self, types: &Types) -> bool {
-        match self {
-            RocType::Bool
-            | RocType::Num(_)
-            | RocType::TagUnion(RocTagUnion::Enumeration { .. }) => false,
-            RocType::RocStr
-            | RocType::RocList(_)
-            | RocType::RocDict(_, _)
-            | RocType::RocSet(_)
-            | RocType::RocBox(_)
-            | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { .. })
-            | RocType::TagUnion(RocTagUnion::NullableUnwrapped { .. })
-            | RocType::TagUnion(RocTagUnion::NullableWrapped { .. })
-            | RocType::TagUnion(RocTagUnion::Recursive { .. })
-            | RocType::RecursivePointer { .. } => true,
-            RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => {
-                tags.iter().any(|(_, payloads)| {
-                    payloads
-                        .iter()
-                        .any(|id| types.get_type(*id).has_pointer(types))
-                })
-            }
-            RocType::Struct { fields, .. } => fields
-                .iter()
-                .any(|(_, type_id)| types.get_type(*type_id).has_pointer(types)),
-            RocType::TagUnionPayload { fields, .. } => fields
-                .iter()
-                .any(|(_, type_id)| types.get_type(*type_id).has_pointer(types)),
-        }
-    }
-
-    /// Useful when determining whether to derive Eq, Ord, and Hash in a Rust type.
-    pub fn has_float(&self, types: &Types) -> bool {
-        self.has_float_help(types, &[])
-    }
-
-    fn has_float_help(&self, types: &Types, do_not_recurse: &[TypeId]) -> bool {
-        match self {
-            RocType::Num(num) => {
-                use RocNum::*;
-
-                match num {
-                    F32 | F64 | F128 => true,
-                    I8 | U8 | I16 | U16 | I32 | U32 | I64 | U64 | I128 | U128 | Dec => false,
-                }
-            }
-            RocType::RocStr
-            | RocType::Bool
-            | RocType::TagUnion(RocTagUnion::Enumeration { .. }) => false,
-            RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
-                types.get_type(*id).has_float_help(types, do_not_recurse)
-            }
-            RocType::RocDict(key_id, val_id) => {
-                types
-                    .get_type(*key_id)
-                    .has_float_help(types, do_not_recurse)
-                    || types
-                        .get_type(*val_id)
-                        .has_float_help(types, do_not_recurse)
-            }
-            RocType::Struct { fields, .. } => fields.iter().any(|(_, type_id)| {
-                types
-                    .get_type(*type_id)
-                    .has_float_help(types, do_not_recurse)
-            }),
-            RocType::TagUnionPayload { fields, .. } => fields.iter().any(|(_, type_id)| {
-                types
-                    .get_type(*type_id)
-                    .has_float_help(types, do_not_recurse)
-            }),
-            RocType::TagUnion(RocTagUnion::Recursive { tags, .. })
-            | RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => {
-                tags.iter().any(|(_, payloads)| {
-                    payloads
-                        .iter()
-                        .any(|id| types.get_type(*id).has_float_help(types, do_not_recurse))
-                })
-            }
-            RocType::TagUnion(RocTagUnion::NullableWrapped { non_null_tags, .. }) => {
-                non_null_tags.iter().any(|(_, _, payloads)| {
-                    payloads
-                        .iter()
-                        .any(|id| types.get_type(*id).has_float_help(types, do_not_recurse))
-                })
-            }
-            RocType::TagUnion(RocTagUnion::NullableUnwrapped {
-                non_null_payload: content,
-                ..
-            })
-            | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { content, .. })
-            | RocType::RecursivePointer(content) => {
-                if do_not_recurse.contains(content) {
-                    false
-                } else {
-                    let mut do_not_recurse: Vec<TypeId> = do_not_recurse.into();
-
-                    do_not_recurse.push(*content);
-
-                    types
-                        .get_type(*content)
-                        .has_float_help(types, &do_not_recurse)
-                }
-            }
-        }
-    }
-
-    /// Useful when determining whether to derive Default in a Rust type.
-    pub fn has_enumeration(&self, types: &Types) -> bool {
-        match self {
-            RocType::TagUnion { .. } | RocType::RecursivePointer { .. } => true,
-            RocType::RocStr | RocType::Bool | RocType::Num(_) => false,
-            RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
-                types.get_type(*id).has_enumeration(types)
-            }
-            RocType::RocDict(key_id, val_id) => {
-                types.get_type(*key_id).has_enumeration(types)
-                    || types.get_type(*val_id).has_enumeration(types)
-            }
-            RocType::Struct { fields, .. } => fields
-                .iter()
-                .any(|(_, type_id)| types.get_type(*type_id).has_enumeration(types)),
-            RocType::TagUnionPayload { fields, .. } => fields
-                .iter()
-                .any(|(_, type_id)| types.get_type(*type_id).has_enumeration(types)),
-        }
     }
 }
 
@@ -558,8 +429,38 @@ fn add_type_help<'a>(
                 }
             }
         },
-        Content::Structure(FlatType::Func(_, _, _)) => {
-            todo!()
+        Content::Structure(FlatType::Func(args, _closure_var, ret_var)) => {
+            let args = env.subs.get_subs_slice(*args);
+            let mut arg_type_ids = Vec::with_capacity(args.len());
+
+            for arg_var in args {
+                let arg_layout = env
+                    .layout_cache
+                    .from_var(env.arena, *arg_var, env.subs)
+                    .expect("Something weird ended up in the content");
+
+                arg_type_ids.push(add_type_help(env, arg_layout, *arg_var, None, types));
+            }
+
+            let ret_type_id = {
+                let ret_layout = env
+                    .layout_cache
+                    .from_var(env.arena, *ret_var, env.subs)
+                    .expect("Something weird ended up in the content");
+
+                add_type_help(env, ret_layout, *ret_var, None, types)
+            };
+
+            let fn_type_id =
+                types.add(RocType::Function(arg_type_ids.clone(), ret_type_id), layout);
+
+            types.depends(fn_type_id, ret_type_id);
+
+            for arg_type_id in arg_type_ids {
+                types.depends(fn_type_id, arg_type_id);
+            }
+
+            fn_type_id
         }
         Content::Structure(FlatType::FunctionOrTagUnion(_, _, _)) => {
             todo!()

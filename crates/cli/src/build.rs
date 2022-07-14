@@ -35,7 +35,6 @@ pub struct BuiltFile {
 pub fn build_file<'a>(
     arena: &'a Bump,
     target: &Triple,
-    src_dir: PathBuf,
     app_module_path: PathBuf,
     opt_level: OptLevel,
     emit_debug_info: bool,
@@ -55,7 +54,6 @@ pub fn build_file<'a>(
     let loaded = roc_load::load_and_monomorphize(
         arena,
         app_module_path.clone(),
-        src_dir,
         subs_by_module,
         target_info,
         // TODO: expose this from CLI?
@@ -419,7 +417,6 @@ fn spawn_rebuild_thread(
 #[allow(clippy::too_many_arguments)]
 pub fn check_file(
     arena: &Bump,
-    src_dir: PathBuf,
     roc_file_path: PathBuf,
     emit_timings: bool,
     threading: Threading,
@@ -436,7 +433,6 @@ pub fn check_file(
     let mut loaded = roc_load::load_and_typecheck(
         arena,
         roc_file_path,
-        src_dir,
         subs_by_module,
         target_info,
         // TODO: expose this from CLI?

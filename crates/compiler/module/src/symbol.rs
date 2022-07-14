@@ -249,7 +249,7 @@ lazy_static! {
         std::sync::Mutex::new(roc_collections::SmallStringInterner::with_capacity(10));
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Interns {
     pub module_ids: ModuleIds,
     pub all_ident_ids: IdentIdsByModule,
@@ -663,7 +663,7 @@ impl IdentIds {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct IdentIdsByModule(VecMap<ModuleId, IdentIds>);
 
 impl IdentIdsByModule {
@@ -1001,10 +1001,13 @@ define_builtins! {
 
         31 ATTR_INVALID: "#attr_invalid"
     }
-    // Fake module for storing derived function symbols
-    1 DERIVED: "#Derived" => {
+    // Fake module for synthesizing and storing derived implementations
+    1 DERIVED_SYNTH: "#Derived" => {
     }
-    2 NUM: "Num" => {
+    // Fake module from which derived implementations are code-generated
+    2 DERIVED_GEN: "#Derived_gen" => {
+    }
+    3 NUM: "Num" => {
         0 NUM_NUM: "Num"  // the Num.Num type alias
         1 NUM_I128: "I128"  // the Num.I128 type alias
         2 NUM_U128: "U128"  // the Num.U128 type alias
@@ -1152,7 +1155,7 @@ define_builtins! {
         144 NUM_BYTES_TO_U16_LOWLEVEL: "bytesToU16Lowlevel"
         145 NUM_BYTES_TO_U32_LOWLEVEL: "bytesToU32Lowlevel"
     }
-    3 BOOL: "Bool" => {
+    4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" // the Bool.Bool type alias
         1 BOOL_FALSE: "False" imported // Bool.Bool = [False, True]
                                        // NB: not strictly needed; used for finding tag names in error suggestions
@@ -1165,7 +1168,7 @@ define_builtins! {
         7 BOOL_EQ: "isEq"
         8 BOOL_NEQ: "isNotEq"
     }
-    4 STR: "Str" => {
+    5 STR: "Str" => {
         0 STR_STR: "Str" imported // the Str.Str type alias
         1 STR_IS_EMPTY: "isEmpty"
         2 STR_APPEND: "#append" // unused
@@ -1217,7 +1220,7 @@ define_builtins! {
         48 STR_FROM_UTF8_RANGE_LOWLEVEL: "fromUtf8RangeLowlevel"
         49 STR_CAPACITY: "capacity"
     }
-    5 LIST: "List" => {
+    6 LIST: "List" => {
         0 LIST_LIST: "List" imported // the List.List type alias
         1 LIST_IS_EMPTY: "isEmpty"
         2 LIST_GET: "get"
@@ -1288,7 +1291,7 @@ define_builtins! {
         67 LIST_SUBLIST_LOWLEVEL: "sublistLowlevel"
         68 LIST_CAPACITY: "capacity"
     }
-    6 RESULT: "Result" => {
+    7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" // the Result.Result type alias
         1 RESULT_OK: "Ok" imported // Result.Result a e = [Ok a, Err e]
                                    // NB: not strictly needed; used for finding tag names in error suggestions
@@ -1302,7 +1305,7 @@ define_builtins! {
         8 RESULT_IS_ERR: "isErr"
         9 RESULT_AFTER_ERR: "afterErr"
     }
-    7 DICT: "Dict" => {
+    8 DICT: "Dict" => {
         0 DICT_DICT: "Dict" // the Dict.Dict type alias
         1 DICT_EMPTY: "empty"
         2 DICT_SINGLE: "single"
@@ -1324,7 +1327,7 @@ define_builtins! {
         15 DICT_WITH_CAPACITY: "withCapacity"
         16 DICT_CAPACITY: "capacity"
     }
-    8 SET: "Set" => {
+    9 SET: "Set" => {
         0 SET_SET: "Set" // the Set.Set type alias
         1 SET_EMPTY: "empty"
         2 SET_SINGLE: "single"
@@ -1342,12 +1345,12 @@ define_builtins! {
         14 SET_TO_DICT: "toDict"
         15 SET_CAPACITY: "capacity"
     }
-    9 BOX: "Box" => {
+    10 BOX: "Box" => {
         0 BOX_BOX_TYPE: "Box" imported // the Box.Box opaque type
         1 BOX_BOX_FUNCTION: "box" // Box.box
         2 BOX_UNBOX: "unbox"
     }
-    10 ENCODE: "Encode" => {
+    11 ENCODE: "Encode" => {
         0 ENCODE_ENCODER: "Encoder"
         1 ENCODE_ENCODING: "Encoding"
         2 ENCODE_TO_ENCODER: "toEncoder"
@@ -1375,9 +1378,9 @@ define_builtins! {
         24 ENCODE_APPEND: "append"
         25 ENCODE_TO_BYTES: "toBytes"
     }
-    11 JSON: "Json" => {
+    12 JSON: "Json" => {
         0 JSON_JSON: "Json"
     }
 
-    num_modules: 12 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    num_modules: 13 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

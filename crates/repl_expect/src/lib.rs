@@ -1,3 +1,4 @@
+use roc_module::symbol::Interns;
 use roc_mono::{
     ir::ProcLayout,
     layout::{CapturesNiche, LayoutCache},
@@ -16,6 +17,7 @@ pub fn get_values<'a>(
     target_info: TargetInfo,
     arena: &'a bumpalo::Bump,
     subs: &'a Subs,
+    interns: &'a Interns,
     start: *const u8,
     mut start_offset: usize,
     variables: &[Variable],
@@ -52,6 +54,7 @@ pub fn get_values<'a>(
                 proc_layout,
                 content,
                 subs,
+                interns,
                 target_info,
             )
         }?;

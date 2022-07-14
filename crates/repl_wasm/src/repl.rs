@@ -251,6 +251,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         main_fn_layout,
         content,
         &subs,
+        &interns,
         target_info,
     );
 

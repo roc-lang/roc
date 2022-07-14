@@ -1,6 +1,6 @@
 app "test-astar"
     packages { pf: "platform/main.roc" }
-    imports [pf.Task, AStar, Dict.{ Dict }, Set.{ Set }]
+    imports [pf.Task, AStar]
     provides [main] to pf
 
 main : Task.Task {} []
