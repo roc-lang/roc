@@ -348,6 +348,19 @@ pub fn fmt_body<'a, 'buf>(
                     );
                 }
             }
+            Expr::Record { .. } | Expr::List { .. } | Expr::Closure(_, _) => {
+                if body.is_multiline() {
+                    buf.spaces(1);
+                    body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+                } else {
+                    body.format_with_options(
+                        buf,
+                        Parens::NotNeeded,
+                        Newlines::Yes,
+                        indent + INDENT,
+                    );
+                }
+            }
             Expr::BinOps(_, _) => {
                 // Binop chains always get a newline. Otherwise you can have things like:
                 //
