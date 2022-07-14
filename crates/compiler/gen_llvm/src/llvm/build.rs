@@ -4809,8 +4809,22 @@ pub fn build_proc<'a, 'ctx, 'env>(
                         )
                     }
 
-                    RawFunctionLayout::ZeroArgumentThunk(_) => {
-                        // do nothing
+                    RawFunctionLayout::ZeroArgumentThunk(result) => {
+                        // Define only the return value size, since this is a thunk
+                        //
+                        // * roc__mainForHost_1_Update_result_size() -> i64
+                        let ident_string = proc.name.name().as_str(&env.interns);
+                        let fn_name: String = format!("{}_1", ident_string);
+
+                        let result_type = basic_type_from_layout(env, &result);
+
+                        build_host_exposed_alias_size_help(
+                            env,
+                            &fn_name,
+                            name,
+                            Some("result"),
+                            result_type,
+                        );
                     }
                 }
             }
