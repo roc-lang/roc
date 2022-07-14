@@ -5554,17 +5554,40 @@ fn run_low_level<'a, 'ctx, 'env>(
                 .builder
                 .build_alloca(result_type, "alloca_utf8_validate_bytes_result");
 
-            call_void_bitcode_fn(
-                env,
-                &[
-                    result_ptr.into(),
-                    list_symbol_to_c_abi(env, scope, list).into(),
-                    start,
-                    count,
-                    pass_update_mode(env, update_mode),
-                ],
-                bitcode::STR_FROM_UTF8_RANGE,
-            );
+            match env.target_info.ptr_width() {
+                PtrWidth::Bytes4 => {
+                    let list = load_symbol(scope, &list).into_struct_value();
+                    let (a, b) = pass_list_or_string_to_zig_32bit(env, list);
+
+                    call_void_bitcode_fn(
+                        env,
+                        &[
+                            result_ptr.into(),
+                            a.into(),
+                            b.into(),
+                            start,
+                            count,
+                            pass_update_mode(env, update_mode),
+                        ],
+                        bitcode::STR_FROM_UTF8_RANGE,
+                    );
+                }
+                PtrWidth::Bytes8 => {
+                    //
+
+                    call_void_bitcode_fn(
+                        env,
+                        &[
+                            result_ptr.into(),
+                            list_symbol_to_c_abi(env, scope, list).into(),
+                            start,
+                            count,
+                            pass_update_mode(env, update_mode),
+                        ],
+                        bitcode::STR_FROM_UTF8_RANGE,
+                    );
+                }
+            }
 
             crate::llvm::build_str::decode_from_utf8_result(env, result_ptr).into()
         }
