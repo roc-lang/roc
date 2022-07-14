@@ -532,17 +532,14 @@ fn fmt_binops<'a, 'buf>(
         || (&loc_right_side.value).is_multiline()
         || lefts.iter().any(|(expr, _)| expr.value.is_multiline());
 
-    let mut curr_indent = indent;
-
     for (loc_left_side, loc_binop) in lefts {
         let binop = loc_binop.value;
 
-        loc_left_side.format_with_options(buf, apply_needs_parens, Newlines::No, curr_indent);
+        loc_left_side.format_with_options(buf, apply_needs_parens, Newlines::No, indent);
 
         if is_multiline {
             buf.ensure_ends_with_newline();
-            curr_indent = indent + INDENT;
-            buf.indent(curr_indent);
+            buf.indent(indent);
         } else {
             buf.spaces(1);
         }
