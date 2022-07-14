@@ -269,7 +269,7 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
             // This is recursively pointing to a type that should already have been added,
             // so no extra work needs to happen.
         }
-        RocType::Function(_, _) => {
+        RocType::Function { .. } => {
             // TODO actually bindgen functions!
         }
     }
@@ -657,7 +657,7 @@ pub struct {name} {{
                         payload_args = answer.payload_args;
                         args_to_payload = answer.args_to_payload;
                     }
-                    RocType::Function(_, _) => todo!(),
+                    RocType::Function { .. } => todo!(),
                 };
 
                 {
@@ -1133,7 +1133,7 @@ pub struct {name} {{
 
                             buf.join("\n")
                         }
-                        RocType::Function(_, _) => todo!(),
+                        RocType::Function { .. } => todo!(),
                     };
 
                     format!(
@@ -1309,7 +1309,7 @@ fn type_name(id: TypeId, types: &Types) -> String {
         | RocType::TagUnion(RocTagUnion::NullableUnwrapped { name, .. })
         | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { name, .. }) => name.clone(),
         RocType::RecursivePointer(content) => type_name(*content, types),
-        RocType::Function(_, _) => todo!(),
+        RocType::Function { name, .. } => name.clone(),
     }
 }
 
@@ -1457,7 +1457,7 @@ pub struct {name} {{
                 owned_ret_type = answer.owned_ret_type;
                 borrowed_ret_type = answer.borrowed_ret_type;
             }
-            RocType::Function(_, _) => todo!(),
+            RocType::Function { .. } => todo!(),
         };
 
         // Add a convenience constructor function for the tag with the payload, e.g.
@@ -1690,7 +1690,7 @@ pub struct {name} {{
 
                 buf.join(&format!("\n{INDENT}{INDENT}{INDENT}{INDENT}{INDENT}"))
             }
-            RocType::Function(_, _) => todo!(),
+            RocType::Function { .. } => todo!(),
         };
 
         let body = format!(
@@ -1892,7 +1892,7 @@ fn cannot_derive_default(roc_type: &RocType, types: &Types) -> bool {
         | RocType::TagUnion { .. }
         | RocType::RocResult(_, _)
         | RocType::RecursivePointer { .. }
-        | RocType::Function(_, _) => true,
+        | RocType::Function { .. } => true,
         RocType::RocStr | RocType::Bool | RocType::Num(_) => false,
         RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
             cannot_derive_default(types.get_type(*id), types)
@@ -1918,7 +1918,7 @@ fn cannot_derive_copy(roc_type: &RocType, types: &Types) -> bool {
         | RocType::Bool
         | RocType::Num(_)
         | RocType::TagUnion(RocTagUnion::Enumeration { .. })
-        | RocType::Function(_, _) => false,
+        | RocType::Function { .. } => false,
         RocType::RocStr
         | RocType::RocList(_)
         | RocType::RocDict(_, _)
@@ -1969,7 +1969,7 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
         | RocType::RocStr
         | RocType::Bool
         | RocType::TagUnion(RocTagUnion::Enumeration { .. })
-        | RocType::Function(_, _) => false,
+        | RocType::Function { .. } => false,
         RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
             has_float_help(types.get_type(*id), types, do_not_recurse)
         }
