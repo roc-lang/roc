@@ -331,9 +331,8 @@ impl Aliases {
             // without allocating.
             let mut some_equivalent = false;
             for (i, var) in new_type_variables.iter().enumerate() {
-                for j in (i + 1)..new_type_variables.len() {
-                    let other_var = new_type_variables[j];
-                    some_equivalent = some_equivalent || *var == other_var;
+                for other_var in new_type_variables.iter().skip(i + 1) {
+                    some_equivalent = some_equivalent || var == other_var;
                 }
             }
             some_equivalent
