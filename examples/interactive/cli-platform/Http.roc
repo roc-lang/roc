@@ -20,7 +20,7 @@ interface Http
     imports [Encode.{ Encoding }, Json]
 
 TimeoutConfig : [WithTimeout F64, WithoutTimeout]
-TrackerConfig : [WithTracker F64, WithoutTracker]
+TrackerConfig : [WithTracker Str, WithoutTracker]
 
 Request a : {
     method : Str,
