@@ -502,23 +502,25 @@ fn add_type_help<'a>(
                     }
                     Layout::Union(union_layout) if *name == Symbol::RESULT_RESULT => {
                         match union_layout {
-                            UnionLayout::NonRecursive(tag_layouts) => {
+                            UnionLayout::NonRecursive(tags) => {
                                 // Result should always have exactly two tags: Ok and Err
-                                debug_assert_eq!(tag_layouts.len(), 2);
+                                debug_assert_eq!(tags.len(), 2);
 
                                 // Both tags should have exactly 1 payload
-                                debug_assert_eq!(tag_layouts[0].len(), 1);
-                                debug_assert_eq!(tag_layouts[1].len(), 1);
+                                debug_assert_eq!(tags[0].len(), 1);
+                                debug_assert_eq!(tags[1].len(), 1);
 
                                 let type_vars =
                                     env.subs.get_subs_slice(alias_vars.type_variables());
 
-                                let ok_layout = tag_layouts[0][0];
                                 let ok_var = type_vars[0];
+                                let ok_layout =
+                                    env.layout_cache.from_var(env.arena, ok_var, subs).unwrap();
                                 let ok_id = add_type_help(env, ok_layout, ok_var, None, types);
 
-                                let err_layout = tag_layouts[1][0];
                                 let err_var = type_vars[1];
+                                let err_layout =
+                                    env.layout_cache.from_var(env.arena, err_var, subs).unwrap();
                                 let err_id = add_type_help(env, err_layout, err_var, None, types);
 
                                 let type_id = types.add(RocType::RocResult(ok_id, err_id), layout);
