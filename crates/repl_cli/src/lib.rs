@@ -395,6 +395,8 @@ fn gen_and_eval_llvm<'a>(
         }
     };
 
+    let interns = loaded.interns.clone();
+
     let (lib, main_fn_name, subs) =
         mono_module_to_dylib(&arena, target, loaded, opt_level).expect("we produce a valid Dylib");
 
@@ -407,6 +409,7 @@ fn gen_and_eval_llvm<'a>(
         main_fn_layout,
         &content,
         &subs,
+        &interns,
         target_info,
     );
 
