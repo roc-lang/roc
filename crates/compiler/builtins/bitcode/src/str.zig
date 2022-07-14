@@ -749,12 +749,18 @@ fn strFromIntHelp(comptime T: type, int: T) RocStr {
 }
 
 // Str.fromFloat
-pub fn strFromFloatC(float: f64) callconv(.C) RocStr {
-    return @call(.{ .modifier = always_inline }, strFromFloatHelp, .{ f64, float });
+pub fn exportFromFloat(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(float: T) callconv(.C) RocStr {
+            return @call(.{ .modifier = always_inline }, strFromFloatHelp, .{ T, float });
+        }
+    }.func;
+
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }
 
 fn strFromFloatHelp(comptime T: type, float: T) RocStr {
-    var buf: [100]u8 = undefined;
+    var buf: [400]u8 = undefined;
     const result = std.fmt.bufPrint(&buf, "{d}", .{float}) catch unreachable;
 
     return RocStr.init(&buf, result.len);

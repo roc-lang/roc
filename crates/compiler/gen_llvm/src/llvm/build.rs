@@ -14,7 +14,7 @@ use crate::llvm::build_list::{
     list_prepend, list_replace_unsafe, list_reserve, list_sort_with, list_sublist, list_swap,
     list_symbol_to_c_abi, list_to_c_abi, list_with_capacity, pass_update_mode,
 };
-use crate::llvm::build_str::{str_from_float, str_from_int};
+use crate::llvm::build_str::{dec_to_str, str_from_float, str_from_int};
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
     self, argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout,
@@ -5497,7 +5497,14 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.fromFloat : Float * -> Str
             debug_assert_eq!(args.len(), 1);
 
-            str_from_float(env, scope, args[0])
+            let (float, float_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            let float_width = match float_layout {
+                Layout::Builtin(Builtin::Float(float_width)) => *float_width,
+                _ => unreachable!(),
+            };
+
+            str_from_float(env, float, float_width)
         }
         StrFromUtf8Range => {
             debug_assert_eq!(args.len(), 3);
@@ -5831,9 +5838,10 @@ fn run_low_level<'a, 'ctx, 'env>(
 
                     str_from_int(env, int, *int_width)
                 }
-                Layout::Builtin(Builtin::Float(_float_width)) => {
-                    str_from_float(env, scope, args[0])
+                Layout::Builtin(Builtin::Float(float_width)) => {
+                    str_from_float(env, num, *float_width)
                 }
+                Layout::Builtin(Builtin::Decimal) => dec_to_str(env, num),
                 _ => unreachable!(),
             }
         }

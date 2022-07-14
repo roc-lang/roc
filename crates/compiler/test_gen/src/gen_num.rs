@@ -3056,6 +3056,78 @@ fn num_to_str_i64() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn num_to_str_f32() {
+    use roc_std::RocStr;
+
+    assert_evals_to!(r#"Num.toStr -10.75f32"#, RocStr::from("-10.75"), RocStr);
+    assert_evals_to!(r#"Num.toStr -1.75f32"#, RocStr::from("-1.75"), RocStr);
+    assert_evals_to!(r#"Num.toStr 0f32"#, RocStr::from("0"), RocStr);
+    assert_evals_to!(r#"Num.toStr 1.75f32"#, RocStr::from("1.75"), RocStr);
+    assert_evals_to!(r#"Num.toStr 10.75f32"#, RocStr::from("10.75"), RocStr);
+
+    assert_evals_to!(
+        r#"Num.toStr Num.maxF32"#,
+        RocStr::from("340282346638528860000000000000000000000"),
+        RocStr
+    );
+
+    assert_evals_to!(
+        r#"Num.toStr Num.minF32"#,
+        RocStr::from("-340282346638528860000000000000000000000"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn num_to_str_f64() {
+    use roc_std::RocStr;
+
+    assert_evals_to!(r#"Num.toStr -10.75f64"#, RocStr::from("-10.75"), RocStr);
+    assert_evals_to!(r#"Num.toStr -1.75f64"#, RocStr::from("-1.75"), RocStr);
+    assert_evals_to!(r#"Num.toStr 0f64"#, RocStr::from("0"), RocStr);
+    assert_evals_to!(r#"Num.toStr 1.75f64"#, RocStr::from("1.75"), RocStr);
+    assert_evals_to!(r#"Num.toStr 10.75f64"#, RocStr::from("10.75"), RocStr);
+
+    assert_evals_to!(
+        r#"Num.toStr Num.maxF64"#,
+        RocStr::from(f64::MAX.to_string().as_str()),
+        RocStr
+    );
+
+    assert_evals_to!(
+        r#"Num.toStr Num.minF64"#,
+        RocStr::from(f64::MIN.to_string().as_str()),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn num_to_str_dec() {
+    use roc_std::RocStr;
+
+    assert_evals_to!(r#"Num.toStr -10.75dec"#, RocStr::from("-10.75"), RocStr);
+    assert_evals_to!(r#"Num.toStr -1.75dec"#, RocStr::from("-1.75"), RocStr);
+    assert_evals_to!(r#"Num.toStr 0dec"#, RocStr::from("0.0"), RocStr);
+    assert_evals_to!(r#"Num.toStr 1.75dec"#, RocStr::from("1.75"), RocStr);
+    assert_evals_to!(r#"Num.toStr 10.75dec"#, RocStr::from("10.75"), RocStr);
+
+    assert_evals_to!(
+        r#"Num.toStr 170141183460469.105727dec"#,
+        RocStr::from("170141183460469.105727"),
+        RocStr
+    );
+
+    assert_evals_to!(
+        r#"Num.toStr -170141183460469.105727dec"#,
+        RocStr::from("-170141183460469.105727"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn u8_addition_greater_than_i8() {
     assert_evals_to!(
         indoc!(
