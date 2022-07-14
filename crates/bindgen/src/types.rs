@@ -574,7 +574,7 @@ fn add_type_help<'a>(
                     .from_var(env.arena, *arg_var, env.subs)
                     .expect("Something weird ended up in the content");
 
-                arg_type_ids.push(add_type_help(env, arg_layout, *arg_var, opt_name, types));
+                arg_type_ids.push(add_type_help(env, arg_layout, *arg_var, None, types));
             }
 
             let ret_type_id = {
@@ -583,7 +583,7 @@ fn add_type_help<'a>(
                     .from_var(env.arena, *ret_var, env.subs)
                     .expect("Something weird ended up in the content");
 
-                add_type_help(env, ret_layout, *ret_var, opt_name, types)
+                add_type_help(env, ret_layout, *ret_var, None, types)
             };
 
             let fn_type_id =
