@@ -5390,7 +5390,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             let string = load_symbol(scope, &args[0]);
             let prefix = load_symbol(scope, &args[1]);
 
-            call_bitcode_fn(env, &[string, prefix], bitcode::STR_STARTS_WITH)
+            call_str_bitcode_fn(
+                env,
+                &[string, prefix],
+                &[],
+                BitcodeReturns::Basic,
+                bitcode::STR_STARTS_WITH,
+            )
         }
         StrStartsWithScalar => {
             // Str.startsWithScalar : Str, U32 -> Bool
@@ -5399,7 +5405,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             let string = load_symbol(scope, &args[0]);
             let prefix = load_symbol(scope, &args[1]);
 
-            call_bitcode_fn(env, &[string, prefix], bitcode::STR_STARTS_WITH_SCALAR)
+            call_str_bitcode_fn(
+                env,
+                &[string, prefix],
+                &[],
+                BitcodeReturns::Basic,
+                bitcode::STR_STARTS_WITH_SCALAR,
+            )
         }
         StrEndsWith => {
             // Str.startsWith : Str, Str -> Bool
@@ -5408,7 +5420,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             let string = load_symbol(scope, &args[0]);
             let prefix = load_symbol(scope, &args[1]);
 
-            call_bitcode_fn(env, &[string, prefix], bitcode::STR_ENDS_WITH)
+            call_str_bitcode_fn(
+                env,
+                &[string, prefix],
+                &[],
+                BitcodeReturns::Basic,
+                bitcode::STR_ENDS_WITH,
+            )
         }
         StrToNum => {
             // Str.toNum : Str -> Result (Num *) {}
