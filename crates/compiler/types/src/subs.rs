@@ -3141,7 +3141,7 @@ fn occurs(
                     EmptyRecord | EmptyTagUnion | Erroneous(_) => Ok(()),
                 }
             }
-            Alias(_, args, _, _) => {
+            Alias(_, args, real_var, _) => {
                 let mut new_seen = seen.to_owned();
                 new_seen.push(root_var);
 
@@ -3149,6 +3149,7 @@ fn occurs(
                     let var = subs[var_index];
                     short_circuit_help(subs, root_var, &new_seen, var, include_recursion_var)?;
                 }
+                short_circuit_help(subs, root_var, &new_seen, *real_var, include_recursion_var)?;
 
                 Ok(())
             }
