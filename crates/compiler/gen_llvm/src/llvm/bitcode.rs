@@ -335,7 +335,7 @@ fn pass_string_to_zig_64bit<'a, 'ctx, 'env>(
     string.into_pointer_value()
 }
 
-fn pass_list_or_string_to_zig_32bit<'a, 'ctx, 'env>(
+pub(crate) fn pass_list_or_string_to_zig_32bit<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     list_or_string: StructValue<'ctx>,
 ) -> (IntValue<'ctx>, IntValue<'ctx>) {
