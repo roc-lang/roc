@@ -5407,8 +5407,8 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             call_str_bitcode_fn(
                 env,
-                &[string, prefix],
-                &[],
+                &[string],
+                &[prefix],
                 BitcodeReturns::Basic,
                 bitcode::STR_STARTS_WITH_SCALAR,
             )
@@ -5682,13 +5682,23 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let string = load_symbol(scope, &args[0]);
             let index = load_symbol(scope, &args[1]);
-            call_str_bitcode_fn(
+
+            let result = call_str_bitcode_fn(
                 env,
                 &[string],
                 &[index],
                 BitcodeReturns::Basic,
                 bitcode::STR_GET_SCALAR_UNSAFE,
-            )
+            );
+
+            // on 32-bit platforms, zig bitpacks the struct
+            match env.target_info.ptr_width() {
+                PtrWidth::Bytes8 => result,
+                PtrWidth::Bytes4 => {
+                    let to = basic_type_from_layout(env, layout);
+                    complex_bitcast_check_size(env, result, to, "to_roc_record")
+                }
+            }
         }
         StrCountUtf8Bytes => {
             // Str.countUtf8Bytes : Str -> Nat
