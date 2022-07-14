@@ -41,13 +41,13 @@ fn main() {
     fs::copy(&libc_path, &out_file).unwrap();
 
     println!(
-        "cargo:rustc-env=WASI_LIBC_PATH=\"{}\"",
-        out_file.to_str().unwrap().replace('\\', "\\\\")
+        "cargo:rustc-env=WASI_LIBC_PATH={}",
+        out_file.to_str().unwrap()
     );
 
     println!(
-        "cargo:rustc-env=WASI_COMPILER_RT_PATH=\"{}\"",
-        compiler_rt_path.to_str().unwrap().replace('\\', "\\\\")
+        "cargo:rustc-env=WASI_COMPILER_RT_PATH={}",
+        compiler_rt_path.to_str().unwrap()
     );
 }
 
