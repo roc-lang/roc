@@ -1,10 +1,10 @@
 hosted Effect
     exposes [Effect, after, map, always, forever, loop, putLine, getLine, sendRequest]
-    imports [Http.{ Request }]
+    imports [Http.{ Request, Reponse }]
     generates Effect with [after, map, always, forever, loop]
 
 putLine : Str -> Effect {}
 
 getLine : Effect Str
 
-sendRequest : Request response -> Effect response
+sendRequest : Request -> Effect Reponse

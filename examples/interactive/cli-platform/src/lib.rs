@@ -6,10 +6,10 @@ use core::alloc::Layout;
 use core::ffi::c_void;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use libc;
-use reqwest::{Client, Method};
 use roc_std::{RocList, RocResult, RocStr};
 use std::ffi::CStr;
 use std::os::raw::c_char;
+use ureq::Error;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
@@ -127,54 +127,64 @@ pub extern "C" fn roc_fx_putLine(line: &RocStr) {
     println!("{}", string);
 }
 
-// We just provide just one Client to the Roc program for simplicity, so it must be static in the host.
-// `thread_local!` avoids contention between threads, should that ever arise
-// `lazy_static` & `Mutex` might have easier-to-understand semantics for resources like cookies
-use std::cell::RefCell;
-std::thread_local! {
-    static HTTP_CLIENT: RefCell<Option<Client>> = RefCell::new(None);
-}
-
 #[no_mangle]
 pub extern "C" fn roc_fx_send_request(roc_request: &glue::Request, /* should I borrow or not? */) {
-    HTTP_CLIENT.with(|refcell| {
-        let client = match refcell.take() {
-            Some(c) => c,
-            None => {
-                // Lazily create the client, the first time the Roc program decides to send a request
-                let builder = Client::builder();
-                let c = builder.build().expect("Failed to create HTTP client");
-                refcell.replace(Some(c.clone())); // cheap to clone, has internal refcount
-                c
-            }
-        };
+    let (mimetype, body_bytes_slice): (String, Vec<u8>) = match roc_request.body.discriminant() {
+        glue::discriminant_Body::EmptyBody => ("".into(), vec![]),
+        glue::discriminant_Body::Body => {
+            let (mimetype_union, body_roclist) = unsafe { roc_request.body.as_Body() };
+            let mimetype_string: String = unsafe { mimetype_union.as_MimeType() }.as_str().into();
+            let body_bytes: &[u8] = body_roclist.as_slice();
+            (mimetype_string, Vec::from(body_bytes))
+        }
+    };
 
-        let (mimetype, body_bytes_slice): (String, Vec<u8>) = match roc_request.body.discriminant() {
-            glue::discriminant_Body::EmptyBody => ("".into(), vec![]),
-            glue::discriminant_Body::Body => {
-                let (mimetype_union, body_roclist) = unsafe { roc_request.body.as_Body() };
-                let mimetype_string: String = unsafe { mimetype_union.as_MimeType() }.as_str().into();
-                let body_bytes: &[u8] = body_roclist.as_slice();
-                (mimetype_string, Vec::from(body_bytes))
-            }
-        };
+    let url = roc_request.url.as_str();
+    match ureq::get(url).call() {
+        Ok(response) => {
+            let mut buffer: Vec<u8> = vec![];
+            let reader = response.into_reader();
+            reader.read(&mut buffer);
+        }
+        Err(_) => todo!(),
+    }
+    // let rust_body_bytes: Vec<u8> = vec![]; // reqwest something something
+    // let roc_body_bytes = RocList::from_slice(&rust_body_bytes);
 
-        let url = match reqwest::Url::parse(roc_request.url.as_str()) {
-            Ok(u) => u,
-            Err(_) => todo!("return a Future that immediately resolves to BadUrl"),
-        };
+    // let roc_response: glue::Response = todo!();
 
-        let request = client
-            .request(Method::GET /* TODO */, url)
-            .body(Vec::from(body_bytes_slice))
-            .build();
-
-
-        // let rust_body_bytes: Vec<u8> = vec![]; // reqwest something something
-        // let roc_body_bytes = RocList::from_slice(&rust_body_bytes);
-
-        // let roc_response: glue::Response = todo!();
-
-        // call_the_closure
-    });
+    // call_the_closure
 }
+
+
+
+/*
+pub enum Error {
+    Status(u16, Response),
+    Transport(Transport),
+}
+match ureq::get("http://mypage.example.com/").call() {
+    Ok(response) => { /* it worked */},
+    Err(Error::Status(code, response)) => {
+        /* the server returned an unexpected status
+           code (such as 400, 500 etc) */
+    }
+    Err(_) => { /* some kind of io/transport error */ }
+}
+
+enum ErrorKind {
+    InvalidUrl,
+    UnknownScheme,
+    Dns,
+    InsecureRequestHttpsOnly,
+    ConnectionFailed,
+    TooManyRedirects,
+    BadStatus,
+    BadHeader,
+    Io,
+    InvalidProxyUrl,
+    ProxyConnect,
+    ProxyUnauthorized,
+    HTTP,
+}
+*/

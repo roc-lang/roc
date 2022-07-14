@@ -18,25 +18,23 @@ platform "cli"
         Response,
         Metadata,
         handleStringResponse,
-        handleEncodedResponse,
     }]
     provides [mainForHost]
 
 BindGenTypes : {
-    req : Request Str,
+    req : Request,
     res : Response (List U8),
 }
 
 mainForHost : BindGenTypes
 mainForHost = { req, res }
 
-req : Request Str
+req : Request
 req = {
     method: "GET",
     headers: [{ name: "Expires", value: "0" }],
     url: "https://www.google.com",
     body: stringBody (MimeType "text") "banana",
-    responseHandler: handleStringResponse,
     timeout: WithoutTimeout,
     tracker: WithoutTracker,
     allowCookiesFromOtherDomains: False,

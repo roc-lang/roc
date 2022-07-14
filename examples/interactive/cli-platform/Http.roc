@@ -15,19 +15,17 @@ interface Http
         Response,
         Metadata,
         handleStringResponse,
-        handleEncodedResponse,
     ]
     imports [Encode.{ Encoding }, Json]
 
 TimeoutConfig : [WithTimeout F64, WithoutTimeout]
 TrackerConfig : [WithTracker Str, WithoutTracker]
 
-Request a : {
+Request : {
     method : Str,
     headers : List Header,
     url : Str,
     body : Body,
-    responseHandler : ResponseHandler a,
     timeout : TimeoutConfig,
     tracker : TrackerConfig,
     allowCookiesFromOtherDomains : Bool,
@@ -111,19 +109,7 @@ Metadata : {
     headers : List Header,
 }
 
-ResponseHandler a : Response (List U8) -> Result a Error
-
-handleEncodedResponse : (List U8 -> Result a Str) -> ResponseHandler a
-handleEncodedResponse = \decoder ->
-    \response ->
-        when response is
-            BadUrl url -> Err (BadUrl url)
-            Timeout -> Err Timeout
-            NetworkError -> Err NetworkError
-            BadStatus metadata _ -> Err (BadStatus metadata.statusCode)
-            GoodStatus _ bodyBytes -> decoder bodyBytes |> Result.mapErr BadBody
-
-handleStringResponse : ResponseHandler Str
+handleStringResponse : Response (List U8) -> Result Str Error
 handleStringResponse = \response ->
     when response is
         BadUrl url -> Err (BadUrl url)
