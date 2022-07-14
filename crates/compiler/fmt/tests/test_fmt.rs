@@ -3655,19 +3655,19 @@ mod test_fmt {
         );
     }
 
-
     #[test]
     fn multi_line_when_branch() {
-        expr_formats_to(indoc!(
-            r#"
+        expr_formats_to(
+            indoc!(
+                r#"
             when x is
                 Foo -> bar
                     "arg1" "arg2"
                 Bar -> 2
             "#
-        ),
-        indoc!(
-            r#"
+            ),
+            indoc!(
+                r#"
             when x is
                 Foo ->
                     bar
@@ -3676,7 +3676,8 @@ mod test_fmt {
 
                 Bar -> 2
             "#
-        ));
+            ),
+        );
     }
 
     #[test]
@@ -4008,7 +4009,7 @@ mod test_fmt {
             "#
             ),
             indoc!(
-            r#"
+                r#"
             x =
                 1
                 + 1 # comment 1
@@ -4016,7 +4017,8 @@ mod test_fmt {
                 * 1 # comment 3
 
             x
-            "#)
+            "#
+            ),
         );
 
         expr_formats_to(
@@ -4128,8 +4130,9 @@ mod test_fmt {
 
     #[test]
     fn multiline_binop_when_with_comments() {
-        expr_formats_to(indoc!(
-            r#"
+        expr_formats_to(
+            indoc!(
+                r#"
             when
                 x
                 + 1 # comment 1
@@ -4156,9 +4159,9 @@ mod test_fmt {
                 _ ->
                     42
             "#
-        ),
-        indoc!(
-            r#"
+            ),
+            indoc!(
+                r#"
             when
                 x
                 + 1 # comment 1
@@ -4185,7 +4188,8 @@ mod test_fmt {
                 _ ->
                     42
             "#
-        ) );
+            ),
+        );
     }
 
     #[test]
@@ -4287,23 +4291,25 @@ mod test_fmt {
 
     #[test]
     fn multi_line_binary_op_2() {
-        expr_formats_to(indoc!(
-            r#"
+        expr_formats_to(
+            indoc!(
+                r#"
             x = 1
                 < 2
 
             f x
             "#
-        ),
-        indoc!(
-            r#"
+            ),
+            indoc!(
+                r#"
             x =
                 1
                 < 2
 
             f x
             "#
-        ));
+            ),
+        );
     }
 
     #[test]
