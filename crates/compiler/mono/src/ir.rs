@@ -1085,8 +1085,6 @@ impl<'a> Procs<'a> {
                             // (We had a bug around this before this system existed!)
                             self.specialized.mark_in_progress(name.name(), layout);
 
-                            let outside_layout = layout;
-
                             let partial_proc_id = if let Some(partial_proc_id) =
                                 self.partial_procs.symbol_to_id(name.name())
                             {
@@ -2634,23 +2632,38 @@ fn specialize_suspended<'a>(
         };
 
         match specialize_variable(env, procs, name, layout_cache, var, &[], partial_proc) {
-            Ok((proc, layout)) => {
-                // TODO thiscode is duplicated elsewhere
-                let top_level = ProcLayout::from_raw(env.arena, layout, proc.name.captures_niche());
+            Ok((proc, _layout)) => {
+                // TODO this code is duplicated elsewhere
 
+                // the `layout` is a function pointer, while `_ignore_layout` can be a
+                // closure. We only specialize functions, storing this value with a closure
+                // layout will give trouble.
+                let arguments = Vec::from_iter_in(proc.args.iter().map(|(l, _)| *l), env.arena)
+                    .into_bump_slice();
+
+                let proper_layout = ProcLayout {
+                    arguments,
+                    result: proc.ret_layout,
+                    captures_niche: proc.name.captures_niche(),
+                };
                 if procs.is_module_thunk(proc.name.name()) {
                     debug_assert!(
-                        top_level.arguments.is_empty(),
+                        proper_layout.arguments.is_empty(),
                         "{:?} from {:?}",
                         name,
-                        layout
+                        proper_layout
                     );
                 }
 
-                debug_assert_eq!(outside_layout, top_level, " in {:?}", name);
+                // NOTE: some functions are specialized to have a closure, but don't actually
+                // need any closure argument. Here is where we correct this sort of thing,
+                // by trusting the layout of the Proc, not of what we specialize for
                 procs
                     .specialized
-                    .insert_specialized(name.name(), top_level, proc);
+                    .remove_specialized(name.name(), &outside_layout);
+                procs
+                    .specialized
+                    .insert_specialized(name.name(), proper_layout, proc);
             }
             Err(SpecializeFailure {
                 attempted_layout, ..
