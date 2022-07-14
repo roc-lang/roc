@@ -20,8 +20,8 @@ main =
             val = fold (\_, v, r -> if v then r + 1 else r) m 0
 
             val
-                |> Num.toStr
-                |> Task.putLine
+            |> Num.toStr
+            |> Task.putLine
 
 boom : Str -> a
 boom = \_ -> boom ""

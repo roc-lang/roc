@@ -7,8 +7,8 @@ show = \list ->
     else
         content =
             list
-                |> List.map Num.toStr
-                |> Str.joinWith ", "
+            |> List.map Num.toStr
+            |> Str.joinWith ", "
 
         "[\(content)]"
 
@@ -30,8 +30,8 @@ quicksortHelp = \list, order, low, high ->
         when partition low high list order is
             Pair partitionIndex partitioned ->
                 partitioned
-                    |> quicksortHelp order low (Num.subSaturated partitionIndex 1)
-                    |> quicksortHelp order (partitionIndex + 1) high
+                |> quicksortHelp order low (Num.subSaturated partitionIndex 1)
+                |> quicksortHelp order (partitionIndex + 1) high
     else
         list
 
@@ -68,8 +68,8 @@ swap = \i, j, list ->
     when Pair (List.get list i) (List.get list j) is
         Pair (Ok atI) (Ok atJ) ->
             list
-                |> List.set i atJ
-                |> List.set j atI
+            |> List.set i atJ
+            |> List.set j atI
 
         _ ->
             []

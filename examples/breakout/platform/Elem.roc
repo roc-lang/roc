@@ -90,8 +90,8 @@ translate = \child, toChild, toParent ->
         Button config label ->
             onPress = \parentState, event ->
                 toChild parentState
-                    |> config.onPress event
-                    |> Action.map \c -> toParent parentState c
+                |> config.onPress event
+                |> Action.map \c -> toParent parentState c
 
             Button { onPress } (translate label toChild toParent)
 
@@ -136,8 +136,8 @@ list = \renderChild, parent, toChildren, toParent ->
                 toChild
                 \par, ch ->
                     toChildren par
-                        |> List.set ch index
-                        |> toParent
+                    |> List.set ch index
+                    |> toParent
 
             renderChild newChild
 
@@ -165,8 +165,8 @@ translateOrDrop = \child, toChild, toParent ->
                 when toChild parentState is
                     Ok newChild ->
                         newChild
-                            |> config.onPress event
-                            |> Action.map \c -> toParent parentState c
+                        |> config.onPress event
+                        |> Action.map \c -> toParent parentState c
 
                     Err _ ->
                         # The child was removed from the list before this onPress handler resolved.
@@ -182,7 +182,7 @@ translateOrDrop = \child, toChild, toParent ->
                     when toChild parentState is
                         Ok newChild ->
                             renderChild newChild
-                                |> translateOrDrop toChild toParent
+                            |> translateOrDrop toChild toParent
 
                         Err _ ->
                             None

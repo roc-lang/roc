@@ -5,4 +5,4 @@ interface Stdout
 line : Str -> Task {} * [Write [Stdout]*]*
 line = \str ->
     Effect.map (Effect.putLine str) (\_ -> Ok {})
-        |> InternalTask.fromEffect
+    |> InternalTask.fromEffect

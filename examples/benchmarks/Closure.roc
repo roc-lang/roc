@@ -13,7 +13,7 @@ main = closure1 {}
 closure1 : {} -> Task.Task {} []
 closure1 = \_ ->
     Task.succeed (foo toUnitBorrowed "a long string such that it's malloced")
-        |> Task.map (\_ -> {})
+    |> Task.map \_ -> {}
 
 toUnitBorrowed = \x -> Str.countGraphemes x
 

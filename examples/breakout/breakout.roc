@@ -64,7 +64,7 @@ update = \model, event ->
 tick : Model -> Model
 tick = \model ->
     model
-        |> moveBall
+    |> moveBall
 
 moveBall : Model -> Model
 moveBall = \model ->
@@ -99,12 +99,12 @@ render = \model ->
         \index ->
             col =
                 Num.rem index numCols
-                    |> Num.toF32
+                |> Num.toF32
 
             row =
                 index
-                    // numCols
-                    |> Num.toF32
+                // numCols
+                |> Num.toF32
 
             red = col / Num.toF32 numCols
             green = row / Num.toF32 numRows

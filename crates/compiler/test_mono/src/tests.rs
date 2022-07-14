@@ -572,8 +572,8 @@ fn quicksort_help() {
             (Pair partitionIndex partitioned) = Pair 0 []
 
             partitioned
-                |> quicksortHelp low (partitionIndex - 1)
-                |> quicksortHelp (partitionIndex + 1) high
+            |> quicksortHelp low (partitionIndex - 1)
+            |> quicksortHelp (partitionIndex + 1) high
         else
             list
 
@@ -591,8 +591,8 @@ fn quicksort_swap() {
             when Pair (List.get list 0) (List.get list 0) is
                 Pair (Ok atI) (Ok atJ) ->
                     list
-                        |> List.set 0 atJ
-                        |> List.set 0 atI
+                    |> List.set 0 atJ
+                    |> List.set 0 atI
 
                 _ ->
                     []

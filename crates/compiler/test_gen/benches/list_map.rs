@@ -25,8 +25,8 @@ const ROC_LIST_MAP: &str = indoc::indoc!(
     r#"
     app "bench" provides [main] to "./platform"
 
-    main : List I64 -> Nat 
-    main = \list -> 
+    main : List I64 -> Nat
+    main = \list ->
         list
             |> List.map (\x -> x + 2)
             |> List.len
@@ -37,11 +37,11 @@ const ROC_LIST_MAP_WITH_INDEX: &str = indoc::indoc!(
     r#"
     app "bench" provides [main] to "./platform"
 
-    main : List I64 -> Nat 
-    main = \list -> 
+    main : List I64 -> Nat
+    main = \list ->
         list
-            |> List.mapWithIndex (\x, _ -> x + 2)
-            |> List.len
+        |> List.mapWithIndex (\x, _ -> x + 2)
+        |> List.len
     "#
 );
 
