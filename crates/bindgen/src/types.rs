@@ -563,9 +563,6 @@ fn add_type_help<'a>(
             }
         },
         Content::Structure(FlatType::Func(args, _closure_var, ret_var)) => {
-            // TODO: create a real RocType::Lambda here, but have code gen for it
-            // just gen a comment that says TODO generate lambda. This way,
-            // we get to actually return a real TypeId here, so things don't blow up.
             let args = env.subs.get_subs_slice(*args);
             let mut arg_type_ids = Vec::with_capacity(args.len());
 
