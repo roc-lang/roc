@@ -30,11 +30,11 @@ interface Dict
 ##
 ##     populationByCity =
 ##         Dict.empty
-##             |> Dict.insert "London" 8_961_989
-##             |> Dict.insert "Philadelphia" 1_603_797
-##             |> Dict.insert "Shanghai" 24_870_895
-##             |> Dict.insert "Delhi" 16_787_941
-##             |> Dict.insert "Amsterdam" 872_680
+##         |> Dict.insert "London" 8_961_989
+##         |> Dict.insert "Philadelphia" 1_603_797
+##         |> Dict.insert "Shanghai" 24_870_895
+##         |> Dict.insert "Delhi" 16_787_941
+##         |> Dict.insert "Amsterdam" 872_680
 ##
 ## ### Accessing keys or values
 ##
@@ -87,7 +87,7 @@ contains : Dict k v, k -> Bool
 single : k, v -> Dict k v
 single = \key, value ->
     Dict.empty
-        |> Dict.insert key value
+    |> Dict.insert key value
 
 ## Returns a [List] of the dictionary's keys.
 keys : Dict k v -> List k
