@@ -3108,7 +3108,7 @@ mod test_fmt {
             r#"
             if
                 1
-                    == 2
+                == 2
             then
                 "yes"
             else
@@ -3385,8 +3385,7 @@ mod test_fmt {
             r#"
             when b is
                 # look at cases
-                1 ->
-                    # when 1
+                1 -> # when 1
                     1
 
                 # important
@@ -3406,7 +3405,7 @@ mod test_fmt {
             r#"
                 when 0 is
                     1 # comment
-                        | 2 -> "a"
+                    | 2 -> "a"
 
                     _ -> "b"
             "#
@@ -3506,21 +3505,21 @@ mod test_fmt {
                 r#"
             when b is
                 1
-                    | 2
-                    | 3 ->
+                | 2
+                | 3 ->
                     4
 
                 5 | 6 | 7 ->
                     8
 
                 9
-                    | 10 -> 11
+                | 10 -> 11
 
                 12 | 13 ->
                     when c is
                         14 | 15 -> 16
                         17
-                            | 18 -> 19
+                        | 18 -> 19
 
                 20 -> 21
                 "#
@@ -3543,7 +3542,7 @@ mod test_fmt {
             when b is
                 3 -> 4
                 9
-                    | 8 -> 9
+                | 8 -> 9
             "#
             ),
         );
@@ -3607,7 +3606,7 @@ mod test_fmt {
 
             when
                 1
-                    + 1
+                + 1
             is
                 2 ->
                     x
@@ -3644,7 +3643,7 @@ mod test_fmt {
 
             when
                 2
-                    + 2
+                + 2
             is
                 4 ->
                     x
@@ -3654,6 +3653,30 @@ mod test_fmt {
             "#
             ),
         );
+    }
+
+
+    #[test]
+    fn multi_line_when_branch() {
+        expr_formats_to(indoc!(
+            r#"
+            when x is
+                Foo -> bar
+                    "arg1" "arg2"
+                Bar -> 2
+            "#
+        ),
+        indoc!(
+            r#"
+            when x is
+                Foo ->
+                    bar
+                        "arg1"
+                        "arg2"
+
+                Bar -> 2
+            "#
+        ));
     }
 
     #[test]
@@ -3874,8 +3897,8 @@ mod test_fmt {
                 r#"
             if
                 True
-                    == False
-                    == True
+                == False
+                == True
             then
                 False
             else
@@ -3901,8 +3924,8 @@ mod test_fmt {
                 r#"
             if
                 False
-                    == False
-                    == False
+                == False
+                == False
             then
                 "true"
             else
@@ -3960,8 +3983,8 @@ mod test_fmt {
                 r#"
             if
                 (1 == 1)
-                    && (2 == 1)
-                    && (3 == 2)
+                && (2 == 1)
+                && (3 == 2)
             then
                 "true"
             else
@@ -3973,8 +3996,9 @@ mod test_fmt {
 
     #[test]
     fn multiline_binop_with_comments() {
-        expr_formats_same(indoc!(
-            r#"
+        expr_formats_to(
+            indoc!(
+                r#"
             x = 1
                 + 1 # comment 1
                 - 1 # comment 2
@@ -3982,39 +4006,86 @@ mod test_fmt {
 
             x
             "#
-        ));
-
-        expr_formats_same(indoc!(
+            ),
+            indoc!(
             r#"
+            x =
+                1
+                + 1 # comment 1
+                - 1 # comment 2
+                * 1 # comment 3
+
+            x
+            "#)
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
             x = 1
                 + 1 # comment 1
                 * 1 # comment 2
 
             x
             "#
-        ));
+            ),
+            indoc!(
+                r#"
+            x =
+                1
+                + 1 # comment 1
+                * 1 # comment 2
 
-        expr_formats_same(indoc!(
-            r#"
+            x
+            "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
             x = 1
                 + 1 # comment
 
             x
             "#
-        ));
+            ),
+            indoc!(
+                r#"
+            x =
+                1
+                + 1 # comment
 
-        expr_formats_same(indoc!(
-            r#"
+            x
+            "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
             x = 1
                 * 1
                 + 1 # comment
 
             x
             "#
-        ));
+            ),
+            indoc!(
+                r#"
+            x =
+                1
+                * 1
+                + 1 # comment
 
-        expr_formats_same(indoc!(
-            r#"
+            x
+            "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
             x = 1
                 - 1
                 * 1
@@ -4022,7 +4093,19 @@ mod test_fmt {
 
             x
             "#
-        ));
+            ),
+            indoc!(
+                r#"
+            x =
+                1
+                - 1
+                * 1
+                + 1
+
+            x
+            "#
+            ),
+        );
     }
 
     #[test]
@@ -4031,12 +4114,12 @@ mod test_fmt {
             r#"
             if
                 x
-                    + 1 # comment 1
-                    > 0 # comment 2
+                + 1 # comment 1
+                > 0 # comment 2
             then
                 y
-                    * 2 # comment 3
-                    < 1 # comment 4
+                * 2 # comment 3
+                < 1 # comment 4
             else
                 42
             "#
@@ -4045,35 +4128,64 @@ mod test_fmt {
 
     #[test]
     fn multiline_binop_when_with_comments() {
-        expr_formats_same(indoc!(
+        expr_formats_to(indoc!(
             r#"
             when
                 x
-                    + 1 # comment 1
-                    > 0 # comment 2
+                + 1 # comment 1
+                > 0 # comment 2
             is
                 y ->
                     3
-                        * 2 # comment 3
-                        < 1 # comment 4
+                    * 2 # comment 3
+                    < 1 # comment 4
 
                 z ->
                     4
-                        / 5 # comment 5
-                        < 1 # comment 6
+                        / 5  # comment 5
+                            < 1    # comment 6
 
                 46 # first pattern comment
-                    | 95 # alternative comment 1
-                    | 126 # alternative comment 2
-                    | 150 -> # This comment goes after the ->
+                | 95 # alternative comment 1
+                | 126 # alternative comment 2
+                | 150 -> # This comment came after the ->
                     # This comment is for the expr
-                    foo bar
-                        |> Result.withDefault "" # one last comment
+                        foo bar
+                            |> Result.withDefault "" # one last comment
 
                 _ ->
                     42
             "#
-        ));
+        ),
+        indoc!(
+            r#"
+            when
+                x
+                + 1 # comment 1
+                > 0 # comment 2
+            is
+                y ->
+                    3
+                    * 2 # comment 3
+                    < 1 # comment 4
+
+                z ->
+                    4
+                    / 5 # comment 5
+                    < 1 # comment 6
+
+                46 # first pattern comment
+                | 95 # alternative comment 1
+                | 126 # alternative comment 2
+                | 150 -> # This comment came after the ->
+                    # This comment is for the expr
+                    foo bar
+                    |> Result.withDefault "" # one last comment
+
+                _ ->
+                    42
+            "#
+        ) );
     }
 
     #[test]
@@ -4167,17 +4279,26 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r#"
             isLast
-                && isEmpty
-                && isLoaded
+            && isEmpty
+            && isLoaded
             "#
         ));
     }
 
     #[test]
     fn multi_line_binary_op_2() {
-        expr_formats_same(indoc!(
+        expr_formats_to(indoc!(
             r#"
             x = 1
+                < 2
+
+            f x
+            "#
+        ),
+        indoc!(
+            r#"
+            x =
+                1
                 < 2
 
             f x
@@ -4199,9 +4320,9 @@ mod test_fmt {
             indoc!(
                 r#"
                 1
-                    * 2
-                    / 3
-                    // 4
+                * 2
+                / 3
+                // 4
                 "#
             ),
         );
@@ -4220,9 +4341,9 @@ mod test_fmt {
             indoc!(
                 r#"
                 2
-                    % 3
-                    // 5
-                    + 7
+                % 3
+                // 5
+                + 7
                 "#
             ),
         );
@@ -4240,8 +4361,8 @@ mod test_fmt {
             indoc!(
                 r#"
                 isGreenLight
-                    && isRedLight
-                    && isYellowLight
+                && isRedLight
+                && isYellowLight
                 "#
             ),
         );
@@ -4252,8 +4373,8 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r#"
             output
-                |> List.set (offset + 0) b
-                |> List.set (offset + 1) a
+            |> List.set (offset + 0) b
+            |> List.set (offset + 1) a
             "#
         ));
     }
@@ -4275,9 +4396,9 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r#"
             shout
-                |> List.map
-                    xs
-                    (\i -> i)
+            |> List.map
+                xs
+                (\i -> i)
             "#
         ));
     }
@@ -4287,10 +4408,10 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r#"
             shout
-                |> List.map
-                    xs
-                    (\i -> i)
-                |> List.join
+            |> List.map
+                xs
+                (\i -> i)
+            |> List.join
             "#
         ));
     }
@@ -4316,15 +4437,15 @@ mod test_fmt {
             r#"
                 example = \model ->
                     model
-                        |> withModel
-                            (\result ->
-                                when result is
-                                    Err _ ->
-                                        Err {}
+                    |> withModel
+                        (\result ->
+                            when result is
+                                Err _ ->
+                                    Err {}
 
-                                    Ok val ->
-                                        Ok {}
-                            )
+                                Ok val ->
+                                    Ok {}
+                        )
 
                 example
             "#
@@ -4352,15 +4473,15 @@ mod test_fmt {
                 r#"
                     example = \model ->
                         model
-                            |> withModel
-                                (\result ->
-                                    when result is
-                                        Err _ ->
-                                            Err {}
+                        |> withModel
+                            (\result ->
+                                when result is
+                                    Err _ ->
+                                        Err {}
 
-                                        Ok val ->
-                                            Ok {}
-                                )
+                                    Ok val ->
+                                        Ok {}
+                            )
 
                     example
                 "#
