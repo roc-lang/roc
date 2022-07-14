@@ -4374,8 +4374,10 @@ fn canonicalize_and_constrain<'a>(
         ModuleNameEnum::Platform => None,
         ModuleNameEnum::App(_) => None,
         ModuleNameEnum::Interface(name) | ModuleNameEnum::Hosted(name) => {
+            let mut scope = module_output.scope.clone();
+            scope.add_docs_imports();
             let docs = crate::docs::generate_module_docs(
-                module_output.scope.clone(),
+                scope,
                 name.as_str().into(),
                 &parsed_defs_for_docs,
             );

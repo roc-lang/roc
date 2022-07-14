@@ -56,6 +56,13 @@ impl Scope {
         self.lookup_str(ident.as_str(), region)
     }
 
+    pub fn add_docs_imports(&mut self) {
+        self.imports
+            .push(("Dict".into(), Symbol::DICT_DICT, Region::zero()));
+        self.imports
+            .push(("Set".into(), Symbol::SET_SET, Region::zero()));
+    }
+
     pub fn lookup_str(&self, ident: &str, region: Region) -> Result<Symbol, RuntimeError> {
         use ContainsIdent::*;
 
