@@ -15,6 +15,9 @@ interface Http
         Response,
         Metadata,
         handleStringResponse,
+        defaultRequest,
+        errorToString,
+        send,
     ]
     imports [Encode.{ Encoding }, Json]
 
@@ -29,6 +32,17 @@ Request : {
     timeout : TimeoutConfig,
     tracker : TrackerConfig,
     allowCookiesFromOtherDomains : Bool,
+}
+
+defaultRequest : Request
+defaultRequest = {
+    method: "GET",
+    headers: [],
+    url: "",
+    body: Http.emptyBody,
+    timeout: Http.WithoutTimeout,
+    tracker: Http.WithoutTracker,
+    allowCookiesFromOtherDomains: False,
 }
 
 Header : { name : Str, value : Str }
@@ -94,12 +108,12 @@ Error : [
     BadBody Str,
 ]
 
-Response body : [
+Response : [
     BadUrl Str,
     Timeout,
     NetworkError,
-    BadStatus Metadata body,
-    GoodStatus Metadata body,
+    BadStatus Metadata (List U8),
+    GoodStatus Metadata (List U8),
 ]
 
 Metadata : {
@@ -109,7 +123,7 @@ Metadata : {
     headers : List Header,
 }
 
-handleStringResponse : Response (List U8) -> Result Str Error
+handleStringResponse : Response -> Result Str Error
 handleStringResponse = \response ->
     when response is
         BadUrl url -> Err (BadUrl url)
@@ -123,3 +137,18 @@ handleStringResponse = \response ->
                         position = Num.toStr pos
 
                         BadBody "Invalid UTF-8 at byte offset \(position)"
+
+errorToString : Error -> Str
+errorToString = \err ->
+    when err is
+        BadUrl url -> "\(url) is not a valid URL"
+        Timeout -> "Request timed out"
+        NetworkError -> "Network error"
+        BadStatus code -> Str.concat "Request failed with status " (Num.toStr code)
+        BadBody details -> Str.concat  "Request failed. Invalid body. " details
+
+send : Request -> Task Str Error [Network [Http]*]*
+send = \req ->
+    Effect.sendRequest req
+        |> Effect.map handleStringResponse
+        |> InternalTask.fromEffect
