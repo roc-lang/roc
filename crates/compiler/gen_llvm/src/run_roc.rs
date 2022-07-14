@@ -39,12 +39,7 @@ impl<T: Sized> From<RocCallResult<T>> for Result<T, String> {
             _ => Err({
                 let raw = unsafe { CString::from_raw(call_result.error_msg) };
 
-                let result = format!("{:?}", raw);
-
-                // make sure rust does not try to free the Roc string
-                std::mem::forget(raw);
-
-                result
+                raw.into_string().unwrap()
             }),
         }
     }
