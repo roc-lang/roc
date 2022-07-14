@@ -12,6 +12,7 @@ const dec = @import("dec.zig");
 
 comptime {
     exportDecFn(dec.fromStr, "from_str");
+    exportDecFn(dec.toStr, "to_str");
     exportDecFn(dec.fromF64C, "from_f64");
     exportDecFn(dec.eqC, "eq");
     exportDecFn(dec.neqC, "neq");
@@ -128,7 +129,6 @@ comptime {
     exportStrFn(str.strConcatC, "concat");
     exportStrFn(str.strJoinWithC, "joinWith");
     exportStrFn(str.strNumberOfBytes, "number_of_bytes");
-    exportStrFn(str.strFromFloatC, "from_float");
     exportStrFn(str.strEqual, "equal");
     exportStrFn(str.substringUnsafe, "substring_unsafe");
     exportStrFn(str.getUnsafe, "get_unsafe");
@@ -149,6 +149,7 @@ comptime {
     }
 
     inline for (FLOATS) |T| {
+        str.exportFromFloat(T, ROC_BUILTINS ++ "." ++ STR ++ ".from_float.");
         num.exportParseFloat(T, ROC_BUILTINS ++ "." ++ STR ++ ".to_float.");
     }
 }

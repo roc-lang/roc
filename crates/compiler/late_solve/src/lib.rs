@@ -5,8 +5,10 @@ use std::sync::{Arc, RwLock};
 
 use bumpalo::Bump;
 use roc_can::abilities::AbilitiesStore;
+use roc_can::module::ExposedByModule;
 use roc_collections::MutMap;
-use roc_derive_key::GlobalDerivedSymbols;
+use roc_derive::SharedDerivedModule;
+use roc_error_macros::internal_error;
 use roc_module::symbol::ModuleId;
 use roc_solve::solve::{compact_lambda_sets_of_vars, Phase, Pools};
 use roc_types::subs::{Content, FlatType, LambdaSet};
@@ -45,6 +47,30 @@ impl WorldAbilities {
         debug_assert!(old_store.is_none(), "{:?} abilities not new", module);
     }
 
+    #[inline(always)]
+    pub fn with_module_exposed_type<T>(
+        &mut self,
+        module: ModuleId,
+        mut f: impl FnMut(&mut ExposedTypesStorageSubs) -> T,
+    ) -> T {
+        let mut world = self.world.write().unwrap();
+        let (_, exposed_types) = world.get_mut(&module).expect("module not in the world");
+
+        f(exposed_types)
+    }
+
+    #[inline(always)]
+    pub fn with_module_abilities_store<T, F>(&self, module: ModuleId, mut f: F) -> T
+    where
+        F: FnMut(&AbilitiesStore) -> T,
+    {
+        let world = self.world.read().unwrap();
+        let (module_store, _module_types) = world
+            .get(&module)
+            .unwrap_or_else(|| internal_error!("Module {:?} not found in world abilities", module));
+        f(module_store)
+    }
+
     pub fn clone_ref(&self) -> Self {
         Self {
             world: Arc::clone(&self.world),
@@ -53,7 +79,7 @@ impl WorldAbilities {
 }
 
 pub enum AbilitiesView<'a> {
-    World(WorldAbilities),
+    World(&'a WorldAbilities),
     Module(&'a AbilitiesStore),
 }
 
@@ -64,11 +90,7 @@ impl AbilitiesView<'_> {
         F: FnMut(&AbilitiesStore) -> T,
     {
         match self {
-            AbilitiesView::World(wa) => {
-                let world = wa.world.read().unwrap();
-                let (module_store, _module_types) = world.get(&module).unwrap();
-                f(module_store)
-            }
+            AbilitiesView::World(wa) => wa.with_module_abilities_store(module, f),
             AbilitiesView::Module(store) => f(store),
         }
     }
@@ -142,16 +164,24 @@ impl Phase for LatePhase<'_> {
 
 /// Unifies two variables and performs lambda set compaction.
 /// Ranks and other ability demands are disregarded.
+#[allow(clippy::too_many_arguments)]
 pub fn unify(
     home: ModuleId,
     arena: &Bump,
     subs: &mut Subs,
     abilities: &AbilitiesView,
-    derived_symbols: &GlobalDerivedSymbols,
+    derived_module: &SharedDerivedModule,
+    exposed_by_module: &ExposedByModule,
     left: Variable,
     right: Variable,
 ) -> Result<(), UnificationFailed> {
+    debug_assert_ne!(
+        home,
+        ModuleId::DERIVED_SYNTH,
+        "derived module can only unify its subs in its own context!"
+    );
     let unified = unify_unify(subs, left, right, Mode::EQ);
+
     match unified {
         Unified::Success {
             vars: _,
@@ -165,11 +195,12 @@ pub fn unify(
 
             let must_implement_constraints = compact_lambda_sets_of_vars(
                 subs,
+                derived_module,
                 arena,
                 &mut pools,
                 lambda_sets_to_specialize,
                 &late_phase,
-                derived_symbols,
+                exposed_by_module,
             );
             // At this point we can't do anything with must-implement constraints, since we're no
             // longer solving. We must assume that they were totally caught during solving.

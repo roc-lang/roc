@@ -1024,7 +1024,7 @@ fn opaque_apply() {
             @Age 23
             "#
         ),
-        "23 : Age",
+        "@Age 23 : Age",
     )
 }
 
@@ -1038,7 +1038,7 @@ fn opaque_apply_polymorphic() {
             @F (Package "" { a: "" })
             "#
         ),
-        r#"Package "" { a: "" } : F Str { a : Str }"#,
+        r#"@F (Package "" { a: "" }) : F Str { a : Str }"#,
     )
 }
 
@@ -1054,7 +1054,7 @@ fn opaque_pattern_and_call() {
             f (@F (Package A {}))
             "#
         ),
-        r#"Package {} A : F {} [A]*"#,
+        r#"@F (Package {} A) : F {} [A]*"#,
     )
 }
 
@@ -1189,6 +1189,6 @@ fn opaque_wrap_function() {
             List.map [1u8, 2u8, 3u8] @A
             "#
         ),
-        "[1, 2, 3] : List (A U8)",
+        "[@A 1, @A 2, @A 3] : List (A U8)",
     );
 }
