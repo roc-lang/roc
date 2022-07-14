@@ -757,10 +757,7 @@ fn fmt_when<'a, 'buf>(
             } else {
                 if is_multiline_patterns {
                     buf.ensure_ends_with_newline();
-                    // Indent an extra level for the `|`;
-                    // otherwise it'll be at the start of the line,
-                    // and will be incorrectly parsed as a pattern
-                    buf.indent(indent + INDENT + INDENT);
+                    buf.indent(indent + INDENT);
                     buf.push('|');
                 } else {
                     buf.push_str(" |");
