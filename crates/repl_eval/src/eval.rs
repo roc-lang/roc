@@ -166,7 +166,7 @@ fn apply_newtypes<'a>(
                 expr = Expr::Record(Collection::with_items(&*arena.alloc([field])))
             }
             NewtypeKind::Opaque(name) => {
-                let opaque_name = arena.alloc(format!("@{}", name.as_str(&env.interns)));
+                let opaque_name = arena.alloc(format!("@{}", name.as_str(env.interns)));
                 let opaque_ref = &*arena.alloc(Loc::at_zero(Expr::OpaqueRef(opaque_name)));
                 let loc_arg_expr = &*arena.alloc(Loc::at_zero(expr));
                 let loc_arg_exprs = arena.alloc_slice_copy(&[loc_arg_expr]);
