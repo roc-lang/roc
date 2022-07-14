@@ -2789,7 +2789,6 @@ fn specialize_external_help<'a>(
     variable: Variable,
     host_exposed_aliases: &[(Symbol, Variable)],
 ) {
-    dbg!(env.home);
     let partial_proc_id = match procs.partial_procs.symbol_to_id(name.name()) {
         Some(v) => v,
         None => {

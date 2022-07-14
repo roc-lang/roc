@@ -19,10 +19,6 @@ mod encoding;
 
 pub(crate) const DERIVED_SYNTH: ModuleId = ModuleId::DERIVED_SYNTH;
 
-mod encoding;
-
-pub(crate) const DERIVED_MODULE: ModuleId = ModuleId::DERIVED;
-
 pub fn synth_var(subs: &mut Subs, content: Content) -> Variable {
     let descriptor = Descriptor {
         content,
@@ -210,30 +206,6 @@ impl DerivedModule {
 
     pub fn decompose(self) -> (Subs, IdentIds) {
         (self.subs, self.derived_ident_ids)
-    }
-
-    pub fn copy_lambda_set_var_to_subs(&self, var: Variable, target: &mut Subs) -> Variable {
-        #[cfg(debug_assertions)]
-        {
-            debug_assert!(!self.stolen);
-        }
-
-        let copied_import = copy_import_to(
-            &self.subs,
-            target,
-            // bookkeep unspecialized lambda sets of var - I think we want this here
-            true,
-            var,
-            // TODO: I think this is okay because the only use of `copy_lambda_set_var_to_subs`
-            // (at least right now) is for lambda set compaction, which will automatically unify
-            // and lower ranks, and never generalize.
-            //
-            // However this is a bad coupling and maybe not a good assumption, we should revisit
-            // this when possible.
-            Rank::toplevel(),
-        );
-
-        copied_import.variable
     }
 }
 

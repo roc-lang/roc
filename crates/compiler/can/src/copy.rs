@@ -1,6 +1,7 @@
 use crate::{
     def::Def,
-    expr::{AccessorData, ClosureData, Expr, Field, OpaqueWrapFunctionData, WhenBranch},
+    expr::{AccessorData, ClosureData, Expr, Field, OpaqueWrapFunctionData},
+    pattern::{DestructType, Pattern, RecordDestruct},
 };
 use roc_module::{
     ident::{Lowercase, TagName},
@@ -570,6 +571,29 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             lambda_set_variables: lambda_set_variables.clone(),
         },
 
+        OpaqueWrapFunction(OpaqueWrapFunctionData {
+            opaque_name,
+            opaque_var,
+            specialized_def_type,
+            type_arguments,
+            lambda_set_variables,
+            function_name,
+            function_var,
+            argument_var,
+            closure_var,
+        }) => OpaqueWrapFunction(OpaqueWrapFunctionData {
+            opaque_name: *opaque_name,
+            opaque_var: sub!(*opaque_var),
+            function_name: *function_name,
+            function_var: sub!(*function_var),
+            argument_var: sub!(*argument_var),
+            closure_var: sub!(*closure_var),
+            // The following three are only used for constraining
+            specialized_def_type: specialized_def_type.clone(),
+            type_arguments: type_arguments.clone(),
+            lambda_set_variables: lambda_set_variables.clone(),
+        }),
+
         Expect {
             loc_condition,
             loc_continuation,
@@ -639,44 +663,7 @@ fn deep_copy_pattern_help<C: CopyEnv>(
                 specialized_def_type: specialized_def_type.clone(),
                 type_arguments: type_arguments.clone(),
                 lambda_set_variables: lambda_set_variables.clone(),
-            },
-
-            OpaqueWrapFunction(OpaqueWrapFunctionData {
-                opaque_name,
-                opaque_var,
-                specialized_def_type,
-                type_arguments,
-                lambda_set_variables,
-                function_name,
-                function_var,
-                argument_var,
-                closure_var,
-            }) => OpaqueWrapFunction(OpaqueWrapFunctionData {
-                opaque_name: *opaque_name,
-                opaque_var: sub!(*opaque_var),
-                function_name: *function_name,
-                function_var: sub!(*function_var),
-                argument_var: sub!(*argument_var),
-                closure_var: sub!(*closure_var),
-                // The following three are only used for constraining
-                specialized_def_type: specialized_def_type.clone(),
-                type_arguments: type_arguments.clone(),
-                lambda_set_variables: lambda_set_variables.clone(),
-            }),
-
-            Expect {
-                loc_condition,
-                loc_continuation,
-                lookups_in_cond,
-            } => Expect {
-                loc_condition: Box::new(loc_condition.map(|e| go_help!(e))),
-                loc_continuation: Box::new(loc_continuation.map(|e| go_help!(e))),
-                lookups_in_cond: lookups_in_cond.to_vec(),
-            },
-
-            TypedHole(v) => TypedHole(sub!(*v)),
-
-            RuntimeError(err) => RuntimeError(err.clone()),
+            }
         }
         RecordDestructure {
             whole_var,
