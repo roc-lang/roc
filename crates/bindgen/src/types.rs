@@ -331,6 +331,7 @@ impl RocType {
             RocType::TagUnionPayload { fields, .. } => fields
                 .iter()
                 .any(|(_, type_id)| types.get_type(*type_id).has_enumeration(types)),
+            RocType::Function(_, _) => todo!(),
         }
     }
 }
