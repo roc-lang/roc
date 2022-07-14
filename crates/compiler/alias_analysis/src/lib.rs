@@ -194,7 +194,7 @@ where
                         RawFunctionLayout::ZeroArgumentThunk(_) => {
                             let bytes = func_name_bytes_help(
                                 *symbol,
-                                [Layout::UNIT],
+                                [],
                                 CapturesNiche::no_niche(),
                                 &top_level.result,
                             );

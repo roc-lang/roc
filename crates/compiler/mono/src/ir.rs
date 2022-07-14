@@ -2976,8 +2976,35 @@ fn specialize_external<'a>(
 
                     aliases.insert(*symbol, (name, top_level, layout));
                 }
-                RawFunctionLayout::ZeroArgumentThunk(_) => {
-                    unreachable!("so far");
+                RawFunctionLayout::ZeroArgumentThunk(result) => {
+                    let assigned = env.unique_symbol();
+                    let hole = env.arena.alloc(Stmt::Ret(assigned));
+                    let forced = force_thunk(env, lambda_name.name(), result, assigned, hole);
+
+                    let proc = Proc {
+                        name: LambdaName::no_niche(name),
+                        args: &[],
+                        body: forced,
+                        closure_data_layout: None,
+                        ret_layout: result,
+                        is_self_recursive: SelfRecursive::NotSelfRecursive,
+                        must_own_arguments: false,
+                        host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+                    };
+
+                    let top_level =
+                        ProcLayout::from_raw(env.arena, layout, CapturesNiche::no_niche());
+
+                    procs.specialized.insert_specialized(name, top_level, proc);
+
+                    aliases.insert(
+                        *symbol,
+                        (
+                            name,
+                            ProcLayout::new(env.arena, &[], CapturesNiche::no_niche(), result),
+                            layout,
+                        ),
+                    );
                 }
             }
         }
