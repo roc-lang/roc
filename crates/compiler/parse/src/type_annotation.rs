@@ -1,6 +1,6 @@
 use crate::ast::{
-    AssignedField, CommentOrNewline, Derived, HasClause, Pattern, Spaced, Tag, TypeAnnotation,
-    TypeHeader,
+    AssignedField, CommentOrNewline, HasAbilities, HasAbility, HasClause, Pattern, Spaced, Tag,
+    TypeAnnotation, TypeHeader,
 };
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::ident::lowercase_ident;
@@ -479,7 +479,7 @@ fn has_clause_chain<'a>(
 }
 
 /// Parse a has-abilities clause, e.g. `has [Eq, Hash]`.
-pub fn has_abilities<'a>(min_indent: u32) -> impl Parser<'a, Loc<Derived<'a>>, EType<'a>> {
+pub fn has_abilities<'a>(min_indent: u32) -> impl Parser<'a, Loc<HasAbilities<'a>>, EType<'a>> {
     skip_first!(
         // Parse "has"; we don't care about this keyword
         word3(b'h', b'a', b's', EType::THasClause),
@@ -488,19 +488,31 @@ pub fn has_abilities<'a>(min_indent: u32) -> impl Parser<'a, Loc<Derived<'a>>, E
             loc!(map!(
                 collection_trailing_sep_e!(
                     word1(b'[', EType::TStart),
-                    specialize(EType::TApply, loc!(parse_concrete_type)),
+                    loc!(parse_has_ability(min_indent)),
                     word1(b',', EType::TEnd),
                     word1(b']', EType::TEnd),
                     min_indent + 1,
                     EType::TStart,
                     EType::TIndentEnd,
-                    TypeAnnotation::SpaceBefore
+                    HasAbility::SpaceBefore
                 ),
-                Derived::Has
+                HasAbilities::Has
             )),
             min_indent + 1,
-            EType::TIndentEnd
+            EType::TIndentEnd,
         )
+    )
+}
+
+fn parse_has_ability<'a>(_min_indent: u32) -> impl Parser<'a, HasAbility<'a>, EType<'a>> {
+    map!(
+        loc!(specialize(EType::TApply, parse_concrete_type)),
+        |ability| {
+            HasAbility::HasAbility {
+                ability,
+                impls: Default::default(),
+            }
+        }
     )
 }
 
