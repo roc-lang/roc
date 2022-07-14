@@ -549,13 +549,7 @@ fn fmt_binops<'a, 'buf>(
         buf.spaces(1);
     }
 
-    let next_indent = if is_multiline {
-        indent + INDENT
-    } else {
-        indent
-    };
-
-    loc_right_side.format_with_options(buf, apply_needs_parens, Newlines::Yes, next_indent);
+    loc_right_side.format_with_options(buf, apply_needs_parens, Newlines::Yes, indent);
 }
 
 fn format_spaces<'a, 'buf>(
