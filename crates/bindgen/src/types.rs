@@ -150,6 +150,7 @@ pub enum RocType {
     RocSet(TypeId),
     RocBox(TypeId),
     TagUnion(RocTagUnion),
+    EmptyTagUnion,
     Struct {
         name: String,
         fields: Vec<(String, TypeId)>,
@@ -474,9 +475,8 @@ fn add_type_help<'a>(
             todo!()
         }
         Content::Structure(FlatType::Erroneous(_)) => todo!(),
-        Content::Structure(FlatType::EmptyRecord) | Content::Structure(FlatType::EmptyTagUnion) => {
-            types.add(RocType::Unit, layout)
-        }
+        Content::Structure(FlatType::EmptyRecord) => types.add(RocType::Unit, layout),
+        Content::Structure(FlatType::EmptyTagUnion) => types.add(RocType::EmptyTagUnion, layout),
         Content::Alias(name, alias_vars, real_var, _) => {
             if name.is_builtin() {
                 match layout {

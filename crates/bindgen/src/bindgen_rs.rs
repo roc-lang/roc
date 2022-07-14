@@ -256,6 +256,7 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
         }
         // These types don't need to be declared in Rust.
         RocType::Unit
+        | RocType::EmptyTagUnion
         | RocType::Num(_)
         | RocType::Bool
         | RocType::RocResult(_, _)
@@ -612,6 +613,7 @@ pub struct {name} {{
 
                 match payload_type {
                     RocType::Unit
+                    | RocType::EmptyTagUnion
                     | RocType::RocStr
                     | RocType::Bool
                     | RocType::Num(_)
@@ -1105,6 +1107,7 @@ pub struct {name} {{
 
                     let fields_str = match payload_type {
                         RocType::Unit
+                        | RocType::EmptyTagUnion
                         | RocType::RocStr
                         | RocType::Bool
                         | RocType::Num(_)
@@ -1265,6 +1268,7 @@ fn add_struct<S: Display>(
 fn type_name(id: TypeId, types: &Types) -> String {
     match types.get_type(id) {
         RocType::Unit => "()".to_string(),
+        RocType::EmptyTagUnion => "()".to_string(), // In the future, this can be `!` - https://doc.rust-lang.org/std/primitive.never.html
         RocType::RocStr => "roc_std::RocStr".to_string(),
         RocType::Bool => "bool".to_string(),
         RocType::Num(RocNum::U8) => "u8".to_string(),
@@ -1413,6 +1417,7 @@ pub struct {name} {{
 
         match payload_type {
             RocType::Unit
+            | RocType::EmptyTagUnion
             | RocType::RocStr
             | RocType::Bool
             | RocType::Num(_)
@@ -1651,6 +1656,7 @@ pub struct {name} {{
 
         let fields_str = match payload_type {
             RocType::Unit
+            | RocType::EmptyTagUnion
             | RocType::RocStr
             | RocType::Bool
             | RocType::Num(_)
@@ -1882,6 +1888,7 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
 fn cannot_derive_default(roc_type: &RocType, types: &Types) -> bool {
     match roc_type {
         RocType::Unit
+        | RocType::EmptyTagUnion
         | RocType::TagUnion { .. }
         | RocType::RocResult(_, _)
         | RocType::RecursivePointer { .. }
@@ -1907,6 +1914,7 @@ fn cannot_derive_default(roc_type: &RocType, types: &Types) -> bool {
 fn cannot_derive_copy(roc_type: &RocType, types: &Types) -> bool {
     match roc_type {
         RocType::Unit
+        | RocType::EmptyTagUnion
         | RocType::Bool
         | RocType::Num(_)
         | RocType::TagUnion(RocTagUnion::Enumeration { .. })
@@ -1957,6 +1965,7 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
             }
         }
         RocType::Unit
+        | RocType::EmptyTagUnion
         | RocType::RocStr
         | RocType::Bool
         | RocType::TagUnion(RocTagUnion::Enumeration { .. })
