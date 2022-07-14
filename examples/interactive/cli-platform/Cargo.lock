@@ -183,6 +183,7 @@ checksum = "607c8a29735385251a339424dd462993c0fed8fa09d378f259377df08c126022"
 name = "host"
 version = "0.1.0"
 dependencies = [
+ "lazy_static",
  "libc",
  "reqwest",
  "roc_std",
