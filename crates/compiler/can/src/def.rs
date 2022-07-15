@@ -470,12 +470,41 @@ fn canonicalize_opaque<'a>(
                                 // }
                                 let mut impl_map: VecMap<Symbol, Symbol> = VecMap::default();
 
+                                let ability_home = ability.module_id();
+
                                 for loc_field in impls.extract_spaces().item.items {
                                     match loc_field.value {
                                         AssignedField::LabelOnly(label) => {
-                                            let sym: Symbol = todo!();
+                                            let label_ident = label.into();
+                                            let region = label.region;
 
-                                            impl_map.insert(sym, sym);
+        let member_symbol = match env.qualified_lookup_with_module_id(scope, ability_home, label_ident, region) {
+            Ok(symbol) => {
+                symbol
+            }
+                Err(_) => {
+                    env.problem(Problem::NotAnAbilityMember {
+                        ability,
+                        region,
+                    });
+                }
+        }
+
+                                            match scope.lookup(label.value.into(), label.region) {
+                                                Ok(symbol) => {
+                                                    impl_map.insert(symbol, symbol);
+                                                }
+                                                Err(_) => {
+                                                    // [Eq { eq }]
+
+                                                    env.problem(Problem::ImplementationNotFound{
+
+                                                        ability,
+                                                        member: scope.lookup()
+                                                        region: label.region,
+                                                    });
+                                                }
+                                            }
                                         }
                                         AssignedField::RequiredValue(
                                             label,
@@ -579,7 +608,9 @@ pub(crate) fn canonicalize_defs<'a>(
     // to itself won't be processed until after its def has been added to scope.
 
     let mut pending_type_defs = Vec::with_capacity(loc_defs.type_defs.len());
-    let mut value_defs = Vec::with_capacity(loc_defs.value_defs.len());
+    let mut pending_value_defs = Vec::with_capacity(loc_defs.value_defs.len());
+
+    let mut output = Output::default();
 
     for (index, either_index) in loc_defs.tags.iter().enumerate() {
         match either_index.split() {
@@ -590,7 +621,17 @@ pub(crate) fn canonicalize_defs<'a>(
             Err(value_index) => {
                 let value_def = &loc_defs.value_defs[value_index.index()];
                 let region = loc_defs.regions[index];
-                value_defs.push(Loc::at(region, value_def));
+
+                let pending = to_pending_value_def(
+                    env,
+                    var_store,
+                    &value_def,
+                    scope,
+                    &mut output,
+                    pattern_type,
+                );
+
+                pending_value_defs.push(Loc::at(region, pending));
             }
         }
     }
@@ -615,7 +656,7 @@ pub(crate) fn canonicalize_defs<'a>(
         output,
         var_store,
         scope,
-        &value_defs,
+        &pending_value_defs,
         pattern_type,
         aliases,
         symbols_introduced,
@@ -628,7 +669,7 @@ fn canonicalize_value_defs<'a>(
     mut output: Output,
     var_store: &mut VarStore,
     scope: &mut Scope,
-    value_defs: &[Loc<&'a roc_parse::ast::ValueDef<'a>>],
+    value_defs: &[Loc<PendingValue<'a>>],
     pattern_type: PatternType,
     mut aliases: VecMap<Symbol, Alias>,
     mut symbols_introduced: MutMap<Symbol, Region>,
@@ -639,25 +680,14 @@ fn canonicalize_value_defs<'a>(
     let mut pending_value_defs = Vec::with_capacity(value_defs.len());
     let mut pending_expects = Vec::with_capacity(value_defs.len());
 
-    for loc_def in value_defs {
-        let mut new_output = Output::default();
-        let pending = to_pending_value_def(
-            env,
-            var_store,
-            loc_def.value,
-            scope,
-            &mut new_output,
-            pattern_type,
-        );
-
-        match pending {
+    for loc_pending_def in value_defs {
+        match loc_pending_def.value {
             PendingValue::Def(pending_def) => {
                 // Record the ast::Expr for later. We'll do another pass through these
                 // once we have the entire scope assembled. If we were to canonicalize
                 // the exprs right now, they wouldn't have symbols in scope from defs
                 // that get would have gotten added later in the defs list!
                 pending_value_defs.push(pending_def);
-                output.union(new_output);
             }
             PendingValue::SignatureDefMismatch => { /* skip */ }
             PendingValue::Expect(pending_expect) => {
