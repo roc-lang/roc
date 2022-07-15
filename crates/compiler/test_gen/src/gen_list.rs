@@ -3024,3 +3024,38 @@ fn list_reserve_does_not_change_length() {
         usize
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm-wasm"))]
+fn llvm_wasm_list_layout() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.withCapacity 10
+                |> List.append 1
+                |> List.append 2
+            "#
+        ),
+        [0, 2, 10],
+        [u32; 3],
+        |[_ptr, len, cap]: [u32; 3]| [0, len, cap]
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm-wasm"))]
+fn llvm_wasm_list_layout_modified() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.withCapacity 10
+                |> List.append 1
+                |> List.append 2
+                |> List.set 5 0
+            "#
+        ),
+        [0, 2, 10],
+        [u32; 3],
+        |[_ptr, len, cap]: [u32; 3]| [0, len, cap]
+    )
+}

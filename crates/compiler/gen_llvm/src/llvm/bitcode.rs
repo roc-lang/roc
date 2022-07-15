@@ -362,8 +362,12 @@ pub(crate) fn pass_list_or_string_to_zig_32bit<'a, 'ctx, 'env>(
         .into_int_value();
 
     let int_64_type = env.context.i64_type();
-    let len = env.builder.build_int_cast(len, int_64_type, "list_len_64");
-    let ptr = env.builder.build_int_cast(ptr, int_64_type, "list_ptr_64");
+    let len = env
+        .builder
+        .build_int_z_extend(len, int_64_type, "list_len_64");
+    let ptr = env
+        .builder
+        .build_int_z_extend(ptr, int_64_type, "list_ptr_64");
 
     let len_shift =
         env.builder
