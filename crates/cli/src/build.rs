@@ -4,7 +4,9 @@ use roc_build::{
     program::{self, Problems},
 };
 use roc_builtins::bitcode;
-use roc_load::{LoadingProblem, Threading};
+use roc_collections::VecMap;
+use roc_load::{Expectations, LoadingProblem, Threading};
+use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_reporting::report::RenderTarget;
 use roc_target::TargetInfo;
@@ -29,6 +31,8 @@ pub struct BuiltFile {
     pub binary_path: PathBuf,
     pub problems: Problems,
     pub total_time: Duration,
+    pub expectations: VecMap<ModuleId, Expectations>,
+    pub interns: Interns,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -199,7 +203,10 @@ pub fn build_file<'a>(
     // inside a nested scope without causing a borrow error!
     let mut loaded = loaded;
     let problems = program::report_problems_monomorphized(&mut loaded);
+    let expectations = std::mem::take(&mut loaded.expectations);
     let loaded = loaded;
+
+    let interns = loaded.interns.clone();
 
     enum HostRebuildTiming {
         BeforeApp(u128),
@@ -344,6 +351,8 @@ pub fn build_file<'a>(
         binary_path,
         problems,
         total_time,
+        interns,
+        expectations,
     })
 }
 

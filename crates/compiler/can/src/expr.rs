@@ -10,6 +10,7 @@ use crate::num::{
 use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern};
 use crate::procedure::References;
 use crate::scope::Scope;
+use crate::traverse::{walk_expr, Visitor};
 use roc_collections::soa::Index;
 use roc_collections::{SendMap, VecMap, VecSet};
 use roc_error_macros::internal_error;
@@ -2355,6 +2356,38 @@ impl Declarations {
                 Some((length_so_far, *e))
             })
     }
+
+    pub fn expects(&self) -> VecMap<Region, Vec<(Symbol, Variable)>> {
+        let mut collector = ExpectCollector {
+            expects: VecMap::default(),
+        };
+
+        let var = Variable::EMPTY_RECORD;
+
+        for index in 0..self.len() {
+            use crate::expr::DeclarationTag::*;
+
+            match self.declarations[index] {
+                Value | Function(_) | Recursive(_) | TailRecursive(_) | Destructure(_) => {
+                    // def pattern has no default expressions, so skip
+                    let loc_expr = &self.expressions[index];
+
+                    collector.visit_expr(&loc_expr.value, loc_expr.region, var);
+                }
+                MutualRecursion { .. } => {
+                    // the self of this group will be treaded individually by later iterations
+                }
+                Expectation => {
+                    let loc_expr =
+                        toplevel_expect_to_inline_expect(self.expressions[index].clone());
+
+                    collector.visit_expr(&loc_expr.value, loc_expr.region, var);
+                }
+            }
+        }
+
+        collector.expects
+    }
 }
 
 roc_error_macros::assert_sizeof_default!(DeclarationTag, 8);
@@ -2582,4 +2615,21 @@ pub fn toplevel_expect_to_inline_expect(mut loc_expr: Loc<Expr>) -> Loc<Expr> {
     }
 
     loc_expr
+}
+
+struct ExpectCollector {
+    expects: VecMap<Region, Vec<(Symbol, Variable)>>,
+}
+
+impl crate::traverse::Visitor for ExpectCollector {
+    fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
+        if let Expr::Expect {
+            lookups_in_cond, ..
+        } = expr
+        {
+            self.expects.insert(region, lookups_in_cond.to_vec());
+        }
+
+        walk_expr(self, expr, var)
+    }
 }

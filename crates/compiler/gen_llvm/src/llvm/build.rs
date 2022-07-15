@@ -167,6 +167,41 @@ pub enum LlvmBackendMode {
     /// Provides a testing implementation of primitives (roc_alloc, roc_panic, etc)
     GenTest,
     WasmGenTest,
+    CliTest,
+}
+
+impl LlvmBackendMode {
+    pub(crate) fn has_host(self) -> bool {
+        match self {
+            LlvmBackendMode::Binary => true,
+            LlvmBackendMode::GenTest => false,
+            LlvmBackendMode::WasmGenTest => false,
+            LlvmBackendMode::CliTest => false,
+        }
+    }
+
+    /// In other words, catches exceptions and returns a result
+    fn returns_roc_result(self) -> bool {
+        match self {
+            LlvmBackendMode::Binary => false,
+            LlvmBackendMode::GenTest => true,
+            LlvmBackendMode::WasmGenTest => true,
+            LlvmBackendMode::CliTest => true,
+        }
+    }
+
+    fn runs_expects(self) -> bool {
+        match self {
+            LlvmBackendMode::Binary => false,
+            LlvmBackendMode::GenTest => false,
+            LlvmBackendMode::WasmGenTest => false,
+            LlvmBackendMode::CliTest => true,
+        }
+    }
+
+    fn runs_expects_in_separate_process(self) -> bool {
+        false
+    }
 }
 
 pub struct Env<'a, 'ctx, 'env> {
@@ -2847,18 +2882,16 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
         }
 
         Expect {
-            condition: cond,
-            region: _,
-            lookups: _,
+            condition: cond_symbol,
+            region,
+            lookups,
             layouts: _,
             remainder,
         } => {
-            // do stuff
-
             let bd = env.builder;
             let context = env.context;
 
-            let (cond, _cond_layout) = load_symbol_and_layout(scope, cond);
+            let (cond, _cond_layout) = load_symbol_and_layout(scope, cond_symbol);
 
             let condition = bd.build_int_compare(
                 IntPredicate::EQ,
@@ -2872,19 +2905,131 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
             bd.build_conditional_branch(condition, then_block, throw_block);
 
-            {
+            if env.mode.runs_expects() {
                 bd.position_at_end(throw_block);
 
                 match env.target_info.ptr_width() {
                     roc_target::PtrWidth::Bytes8 => {
-                        // temporary native implementation
-                        throw_exception(env, "An expectation failed!");
+                        let func = env
+                            .module
+                            .get_function(bitcode::UTILS_EXPECT_FAILED_START)
+                            .unwrap();
+
+                        let call_result = bd.build_call(func, &[], "call_expect_start_failed");
+
+                        let mut ptr = call_result
+                            .try_as_basic_value()
+                            .left()
+                            .unwrap()
+                            .into_pointer_value();
+
+                        {
+                            let value = env
+                                .context
+                                .i32_type()
+                                .const_int(region.start().offset as _, false);
+
+                            let cast_ptr = env.builder.build_pointer_cast(
+                                ptr,
+                                value.get_type().ptr_type(AddressSpace::Generic),
+                                "to_store_pointer",
+                            );
+
+                            env.builder.build_store(cast_ptr, value);
+
+                            // let increment = layout.stack_size(env.target_info);
+                            let increment = 4;
+                            let increment = env.ptr_int().const_int(increment as _, false);
+
+                            ptr = unsafe {
+                                env.builder.build_gep(ptr, &[increment], "increment_ptr")
+                            };
+                        }
+
+                        {
+                            let value = env
+                                .context
+                                .i32_type()
+                                .const_int(region.end().offset as _, false);
+
+                            let cast_ptr = env.builder.build_pointer_cast(
+                                ptr,
+                                value.get_type().ptr_type(AddressSpace::Generic),
+                                "to_store_pointer",
+                            );
+
+                            env.builder.build_store(cast_ptr, value);
+
+                            // let increment = layout.stack_size(env.target_info);
+                            let increment = 4;
+                            let increment = env.ptr_int().const_int(increment as _, false);
+
+                            ptr = unsafe {
+                                env.builder.build_gep(ptr, &[increment], "increment_ptr")
+                            };
+                        }
+
+                        {
+                            let region_bytes: u32 =
+                                unsafe { std::mem::transmute(cond_symbol.module_id()) };
+                            let value = env.context.i32_type().const_int(region_bytes as _, false);
+
+                            let cast_ptr = env.builder.build_pointer_cast(
+                                ptr,
+                                value.get_type().ptr_type(AddressSpace::Generic),
+                                "to_store_pointer",
+                            );
+
+                            env.builder.build_store(cast_ptr, value);
+
+                            // let increment = layout.stack_size(env.target_info);
+                            let increment = 4;
+                            let increment = env.ptr_int().const_int(increment as _, false);
+
+                            ptr = unsafe {
+                                env.builder.build_gep(ptr, &[increment], "increment_ptr")
+                            };
+                        }
+
+                        for lookup in lookups.iter() {
+                            let (value, layout) = load_symbol_and_layout(scope, lookup);
+
+                            let cast_ptr = env.builder.build_pointer_cast(
+                                ptr,
+                                value.get_type().ptr_type(AddressSpace::Generic),
+                                "to_store_pointer",
+                            );
+
+                            store_roc_value(env, *layout, cast_ptr, value);
+
+                            let increment = layout.stack_size(env.target_info);
+                            let increment = env.ptr_int().const_int(increment as _, false);
+
+                            ptr = unsafe {
+                                env.builder.build_gep(ptr, &[increment], "increment_ptr")
+                            };
+                        }
+
+                        // NOTE: signals to the parent process that an expect failed
+                        if env.mode.runs_expects_in_separate_process() {
+                            let func = env
+                                .module
+                                .get_function(bitcode::UTILS_EXPECT_FAILED_FINALIZE)
+                                .unwrap();
+
+                            bd.build_call(func, &[], "call_expect_finalize_failed");
+                        }
+
+                        bd.build_unconditional_branch(then_block);
                     }
                     roc_target::PtrWidth::Bytes4 => {
                         // temporary WASM implementation
                         throw_exception(env, "An expectation failed!");
                     }
                 }
+            } else {
+                bd.position_at_end(throw_block);
+                bd.build_unconditional_branch(then_block);
             }
 
             bd.position_at_end(then_block);
@@ -3509,24 +3654,21 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
 
     let arguments_for_call = &arguments_for_call.into_bump_slice();
 
-    let call_result = match env.mode {
-        LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest => {
-            debug_assert_eq!(args.len(), roc_function.get_params().len());
+    let call_result = if env.mode.returns_roc_result() {
+        debug_assert_eq!(args.len(), roc_function.get_params().len());
 
-            let roc_wrapper_function = make_exception_catcher(env, roc_function, return_layout);
-            debug_assert_eq!(
-                arguments_for_call.len(),
-                roc_wrapper_function.get_params().len()
-            );
+        let roc_wrapper_function = make_exception_catcher(env, roc_function, return_layout);
+        debug_assert_eq!(
+            arguments_for_call.len(),
+            roc_wrapper_function.get_params().len()
+        );
 
-            builder.position_at_end(entry);
+        builder.position_at_end(entry);
 
-            let wrapped_layout = roc_result_layout(env.arena, return_layout, env.target_info);
-            call_roc_function(env, roc_function, &wrapped_layout, arguments_for_call)
-        }
-        LlvmBackendMode::Binary => {
-            call_roc_function(env, roc_function, &return_layout, arguments_for_call)
-        }
+        let wrapped_layout = roc_result_layout(env.arena, return_layout, env.target_info);
+        call_roc_function(env, roc_function, &wrapped_layout, arguments_for_call)
+    } else {
+        call_roc_function(env, roc_function, &return_layout, arguments_for_call)
     };
 
     let output_arg_index = 0;
@@ -3795,7 +3937,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
     c_function_name: &str,
 ) -> FunctionValue<'ctx> {
     match env.mode {
-        LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest => {
+        LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest | LlvmBackendMode::CliTest => {
             return expose_function_to_host_help_c_abi_gen_test(
                 env,
                 ident_string,
@@ -3853,7 +3995,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
     debug_info_init!(env, size_function);
 
     let return_type = match env.mode {
-        LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest => {
+        LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest | LlvmBackendMode::CliTest => {
             roc_result_type(env, roc_function.get_type().get_return_type().unwrap()).into()
         }
 
@@ -4601,44 +4743,39 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
         }
     }
 
-    match env.mode {
-        LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest => {
-            let call_result = set_jump_and_catch_long_jump(
-                env,
-                function_value,
-                evaluator,
-                &evaluator_arguments,
-                *return_layout,
-            );
+    if env.mode.returns_roc_result() {
+        let call_result = set_jump_and_catch_long_jump(
+            env,
+            function_value,
+            evaluator,
+            &evaluator_arguments,
+            *return_layout,
+        );
 
-            builder.build_store(output, call_result);
-        }
+        builder.build_store(output, call_result);
+    } else {
+        let call_result = call_roc_function(env, evaluator, return_layout, &evaluator_arguments);
 
-        LlvmBackendMode::Binary => {
-            let call_result =
-                call_roc_function(env, evaluator, return_layout, &evaluator_arguments);
+        if return_layout.is_passed_by_reference(env.target_info) {
+            let align_bytes = return_layout.alignment_bytes(env.target_info);
 
-            if return_layout.is_passed_by_reference(env.target_info) {
-                let align_bytes = return_layout.alignment_bytes(env.target_info);
+            if align_bytes > 0 {
+                let size = env
+                    .ptr_int()
+                    .const_int(return_layout.stack_size(env.target_info) as u64, false);
 
-                if align_bytes > 0 {
-                    let size = env
-                        .ptr_int()
-                        .const_int(return_layout.stack_size(env.target_info) as u64, false);
-
-                    env.builder
-                        .build_memcpy(
-                            output,
-                            align_bytes,
-                            call_result.into_pointer_value(),
-                            align_bytes,
-                            size,
-                        )
-                        .unwrap();
-                }
-            } else {
-                builder.build_store(output, call_result);
+                env.builder
+                    .build_memcpy(
+                        output,
+                        align_bytes,
+                        call_result.into_pointer_value(),
+                        align_bytes,
+                        size,
+                    )
+                    .unwrap();
             }
+        } else {
+            builder.build_store(output, call_result);
         }
     };
 

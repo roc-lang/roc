@@ -27,6 +27,7 @@ struct Env<'a, 'env> {
     interns: &'a Interns,
 }
 
+#[derive(Debug)]
 pub enum ToAstProblem {
     FunctionLayout,
 }
