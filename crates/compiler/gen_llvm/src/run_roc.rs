@@ -1,4 +1,4 @@
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::mem::MaybeUninit;
 use std::os::raw::c_char;
 
@@ -37,9 +37,9 @@ impl<T: Sized> From<RocCallResult<T>> for Result<T, String> {
         match call_result.tag {
             0 => Ok(unsafe { call_result.value.assume_init() }),
             _ => Err({
-                let raw = unsafe { CString::from_raw(call_result.error_msg) };
+                let raw = unsafe { CStr::from_ptr(call_result.error_msg) };
 
-                raw.into_string().unwrap()
+                raw.to_str().unwrap().to_owned()
             }),
         }
     }
