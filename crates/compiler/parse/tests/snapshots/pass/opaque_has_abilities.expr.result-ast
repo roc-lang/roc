@@ -4,23 +4,59 @@ Defs(
             Index(0),
             Index(1),
             Index(2),
+            Index(3),
+            Index(4),
+            Index(5),
+            Index(6),
+            Index(7),
+            Index(8),
         ],
         regions: [
             @0-7,
             @24-44,
             @61-81,
+            @103-110,
+            @139-146,
+            @167-174,
+            @201-208,
+            @235-242,
+            @251-271,
         ],
         space_before: [
             Slice(start = 0, length = 0),
             Slice(start = 0, length = 2),
             Slice(start = 2, length = 2),
+            Slice(start = 4, length = 2),
+            Slice(start = 6, length = 2),
+            Slice(start = 8, length = 2),
+            Slice(start = 10, length = 2),
+            Slice(start = 12, length = 2),
+            Slice(start = 14, length = 2),
         ],
         space_after: [
             Slice(start = 0, length = 0),
             Slice(start = 2, length = 0),
             Slice(start = 4, length = 0),
+            Slice(start = 6, length = 0),
+            Slice(start = 8, length = 0),
+            Slice(start = 10, length = 0),
+            Slice(start = 12, length = 0),
+            Slice(start = 14, length = 0),
+            Slice(start = 16, length = 0),
         ],
         spaces: [
+            Newline,
+            Newline,
+            Newline,
+            Newline,
+            Newline,
+            Newline,
+            Newline,
+            Newline,
+            Newline,
+            Newline,
+            Newline,
+            Newline,
             Newline,
             Newline,
             Newline,
@@ -46,7 +82,7 @@ Defs(
                                     "Eq",
                                     [],
                                 ),
-                                impls: [],
+                                impls: None,
                             },
                             @17-21 HasAbility {
                                 ability: @17-21 Apply(
@@ -54,7 +90,7 @@ Defs(
                                     "Hash",
                                     [],
                                 ),
-                                impls: [],
+                                impls: None,
                             },
                         ],
                     ),
@@ -89,7 +125,7 @@ Defs(
                                     "Eq",
                                     [],
                                 ),
-                                impls: [],
+                                impls: None,
                             },
                             @54-58 HasAbility {
                                 ability: @54-58 Apply(
@@ -97,7 +133,7 @@ Defs(
                                     "Hash",
                                     [],
                                 ),
-                                impls: [],
+                                impls: None,
                             },
                         ],
                     ),
@@ -133,7 +169,7 @@ Defs(
                                         "Eq",
                                         [],
                                     ),
-                                    impls: [],
+                                    impls: None,
                                 },
                                 @96-100 HasAbility {
                                     ability: @96-100 Apply(
@@ -141,7 +177,260 @@ Defs(
                                         "Hash",
                                         [],
                                     ),
-                                    impls: [],
+                                    impls: None,
+                                },
+                            ],
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ),
+            },
+            Opaque {
+                header: TypeHeader {
+                    name: @103-104 "A",
+                    vars: [],
+                },
+                typ: @108-110 Apply(
+                    "",
+                    "U8",
+                    [],
+                ),
+                derived: Some(
+                    @115-137 Has(
+                        [
+                            @116-123 HasAbility {
+                                ability: @116-118 Apply(
+                                    "",
+                                    "Eq",
+                                    [],
+                                ),
+                                impls: Some(
+                                    @119-123 HasImpls(
+                                        [
+                                            @120-122 LabelOnly(
+                                                @120-122 "eq",
+                                            ),
+                                        ],
+                                    ),
+                                ),
+                            },
+                            @125-136 HasAbility {
+                                ability: @125-129 Apply(
+                                    "",
+                                    "Hash",
+                                    [],
+                                ),
+                                impls: Some(
+                                    @130-136 HasImpls(
+                                        [
+                                            @131-135 LabelOnly(
+                                                @131-135 "hash",
+                                            ),
+                                        ],
+                                    ),
+                                ),
+                            },
+                        ],
+                    ),
+                ),
+            },
+            Opaque {
+                header: TypeHeader {
+                    name: @139-140 "A",
+                    vars: [],
+                },
+                typ: @144-146 Apply(
+                    "",
+                    "U8",
+                    [],
+                ),
+                derived: Some(
+                    @151-165 Has(
+                        [
+                            @152-164 HasAbility {
+                                ability: @152-154 Apply(
+                                    "",
+                                    "Eq",
+                                    [],
+                                ),
+                                impls: Some(
+                                    @155-164 HasImpls(
+                                        [
+                                            @156-158 LabelOnly(
+                                                @156-158 "eq",
+                                            ),
+                                            @160-163 LabelOnly(
+                                                @160-163 "eq1",
+                                            ),
+                                        ],
+                                    ),
+                                ),
+                            },
+                        ],
+                    ),
+                ),
+            },
+            Opaque {
+                header: TypeHeader {
+                    name: @167-168 "A",
+                    vars: [],
+                },
+                typ: @172-174 Apply(
+                    "",
+                    "U8",
+                    [],
+                ),
+                derived: Some(
+                    @179-199 Has(
+                        [
+                            @180-192 HasAbility {
+                                ability: @180-182 Apply(
+                                    "",
+                                    "Eq",
+                                    [],
+                                ),
+                                impls: Some(
+                                    @183-192 HasImpls(
+                                        [
+                                            @184-186 LabelOnly(
+                                                @184-186 "eq",
+                                            ),
+                                            @188-191 LabelOnly(
+                                                @188-191 "eq1",
+                                            ),
+                                        ],
+                                    ),
+                                ),
+                            },
+                            @194-198 HasAbility {
+                                ability: @194-198 Apply(
+                                    "",
+                                    "Hash",
+                                    [],
+                                ),
+                                impls: None,
+                            },
+                        ],
+                    ),
+                ),
+            },
+            Opaque {
+                header: TypeHeader {
+                    name: @201-202 "A",
+                    vars: [],
+                },
+                typ: @206-208 Apply(
+                    "",
+                    "U8",
+                    [],
+                ),
+                derived: Some(
+                    @213-233 Has(
+                        [
+                            @214-218 HasAbility {
+                                ability: @214-218 Apply(
+                                    "",
+                                    "Hash",
+                                    [],
+                                ),
+                                impls: None,
+                            },
+                            @220-232 HasAbility {
+                                ability: @220-222 Apply(
+                                    "",
+                                    "Eq",
+                                    [],
+                                ),
+                                impls: Some(
+                                    @223-232 HasImpls(
+                                        [
+                                            @224-226 LabelOnly(
+                                                @224-226 "eq",
+                                            ),
+                                            @228-231 LabelOnly(
+                                                @228-231 "eq1",
+                                            ),
+                                        ],
+                                    ),
+                                ),
+                            },
+                        ],
+                    ),
+                ),
+            },
+            Opaque {
+                header: TypeHeader {
+                    name: @235-236 "A",
+                    vars: [],
+                },
+                typ: @240-242 Apply(
+                    "",
+                    "U8",
+                    [],
+                ),
+                derived: Some(
+                    @247-249 Has(
+                        [],
+                    ),
+                ),
+            },
+            Opaque {
+                header: TypeHeader {
+                    name: @251-252 "A",
+                    vars: [],
+                },
+                typ: @256-271 Where(
+                    @256-257 BoundVariable(
+                        "a",
+                    ),
+                    [
+                        @260-271 HasClause {
+                            var: @260-261 "a",
+                            ability: @266-271 Apply(
+                                "",
+                                "Other",
+                                [],
+                            ),
+                        },
+                    ],
+                ),
+                derived: Some(
+                    @281-303 SpaceBefore(
+                        Has(
+                            [
+                                @282-289 HasAbility {
+                                    ability: @282-284 Apply(
+                                        "",
+                                        "Eq",
+                                        [],
+                                    ),
+                                    impls: Some(
+                                        @285-289 HasImpls(
+                                            [
+                                                @286-288 LabelOnly(
+                                                    @286-288 "eq",
+                                                ),
+                                            ],
+                                        ),
+                                    ),
+                                },
+                                @291-302 HasAbility {
+                                    ability: @291-295 Apply(
+                                        "",
+                                        "Hash",
+                                        [],
+                                    ),
+                                    impls: Some(
+                                        @296-302 HasImpls(
+                                            [
+                                                @297-301 LabelOnly(
+                                                    @297-301 "hash",
+                                                ),
+                                            ],
+                                        ),
+                                    ),
                                 },
                             ],
                         ),
@@ -154,7 +443,7 @@ Defs(
         ],
         value_defs: [],
     },
-    @103-104 SpaceBefore(
+    @305-306 SpaceBefore(
         Num(
             "0",
         ),
