@@ -8047,6 +8047,35 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
+        ability_member_not_defined,
+        indoc!(
+            r#"
+            app "test" provides [] to "./platform"
+
+            Eq has
+                eq : a, a -> U64 | a has Eq
+
+            Hash has
+                hash : a, a -> U64 | a has Hash
+
+            A := U8 has [Eq {eq}, Hash {hash}]
+            "#
+        ),
+        @r###"
+    ── NAMING ERROR ── tmp/ability_first_demand_not_indented_enough/Test.roc ─
+
+    I was partway through parsing an ability definition, but I got stuck
+    here:
+
+    4│      Eq has
+    5│      eq : a, a -> U64 | a has Eq
+            ^
+
+    I suspect this line is not indented enough (by 1 spaces)
+    "###
+    );
+
+    test_report!(
         wildcard_in_alias,
         indoc!(
             r#"
