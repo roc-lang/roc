@@ -3,6 +3,7 @@ use crate::ast::{
     Spaced, Tag, TypeAnnotation, TypeHeader,
 };
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
+use crate::expr::record_value_field;
 use crate::ident::lowercase_ident;
 use crate::keyword;
 use crate::parser::{
@@ -10,7 +11,7 @@ use crate::parser::{
     ETypeApply, ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, ParseResult, Parser,
     Progress::{self, *},
 };
-use crate::parser::{then, ETypeAbilityImpl};
+use crate::parser::{then, ERecord, ETypeAbilityImpl};
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
@@ -515,8 +516,8 @@ fn parse_has_ability<'a>(min_indent: u32) -> impl Parser<'a, HasAbility<'a>, ETy
                         collection_trailing_sep_e!(
                             word1(b'{', ETypeAbilityImpl::Open),
                             specialize(
-                                |e: ETypeRecord<'_>, _| e.into(),
-                                loc!(record_type_field(min_indent + 1))
+                                |e: ERecord<'_>, _| e.into(),
+                                loc!(record_value_field(min_indent + 1))
                             ),
                             word1(b',', ETypeAbilityImpl::End),
                             word1(b'}', ETypeAbilityImpl::End),

@@ -2440,7 +2440,7 @@ fn list_literal_help<'a>(min_indent: u32) -> impl Parser<'a, Expr<'a>, EList<'a>
     }
 }
 
-fn record_field_help<'a>(
+pub fn record_value_field<'a>(
     min_indent: u32,
 ) -> impl Parser<'a, AssignedField<'a, Expr<'a>>, ERecord<'a>> {
     use AssignedField::*;
@@ -2543,7 +2543,7 @@ fn record_help<'a>(
                         trailing_sep_by0(
                             word1(b',', ERecord::End),
                             space0_before_optional_after(
-                                loc!(record_field_help(min_indent)),
+                                loc!(record_value_field(min_indent)),
                                 min_indent,
                                 ERecord::IndentEnd,
                                 ERecord::IndentEnd
