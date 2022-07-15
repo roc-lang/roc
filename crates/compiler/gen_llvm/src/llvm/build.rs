@@ -5362,13 +5362,29 @@ fn run_low_level<'a, 'ctx, 'env>(
             let list = load_symbol(scope, &args[0]);
             let string = load_symbol(scope, &args[1]);
 
-            call_str_bitcode_fn(
-                env,
-                &[list, string],
-                &[],
-                BitcodeReturns::Str,
-                bitcode::STR_JOIN_WITH,
-            )
+            match env.target_info.ptr_width() {
+                PtrWidth::Bytes4 => {
+                    // list and string are both stored as structs on the stack on 32-bit targets
+                    call_str_bitcode_fn(
+                        env,
+                        &[list, string],
+                        &[],
+                        BitcodeReturns::Str,
+                        bitcode::STR_JOIN_WITH,
+                    )
+                }
+                PtrWidth::Bytes8 => {
+                    // on 64-bit targets, strings are stored as pointers, but that is not what zig expects
+
+                    call_list_bitcode_fn(
+                        env,
+                        &[list.into_struct_value()],
+                        &[string],
+                        BitcodeReturns::Str,
+                        bitcode::STR_JOIN_WITH,
+                    )
+                }
+            }
         }
         StrToScalars => {
             // Str.toScalars : Str -> List U32
