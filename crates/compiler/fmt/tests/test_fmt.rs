@@ -5122,6 +5122,70 @@ mod test_fmt {
     }
 
     #[test]
+    fn opaque_has_with_impls() {
+        expr_formats_same(indoc!(
+            r#"
+            A := U8 has [Eq { eq }, Hash { hash }]
+
+            0
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            A := U8 has [Eq { eq, eq1 }]
+
+            0
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                A := U8 has [Eq {   eq,     eq1   }]
+                A := U8 has [Eq {
+                                    eq,
+                                    eq1
+                                }]
+
+                0
+                "#
+            ),
+            indoc!(
+                r#"
+                A := U8 has [Eq { eq, eq1 }]
+                A := U8
+                    has [
+                        Eq {
+                            eq,
+                            eq1,
+                        },
+                    ]
+                
+                0
+                "#
+            ),
+        );
+
+        expr_formats_same(indoc!(
+            r#"
+            A := a | a has Other
+                has [Eq { eq }, Hash { hash }]
+
+            0
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            A := U8 has [Eq {}]
+
+            0
+            "#
+        ));
+    }
+
+    #[test]
     fn comments_in_multiline_tag_union_annotation() {
         expr_formats_to(
             indoc!(

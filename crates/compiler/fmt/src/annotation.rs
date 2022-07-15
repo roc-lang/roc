@@ -584,7 +584,7 @@ impl<'a> Formattable for HasImpls<'a> {
                     buf.newline();
                     buf.indent(indent);
                 }
-                impls.format_with_options(buf, parens, newlines, indent);
+                fmt_collection(buf, indent, Braces::Curly, *impls, Newlines::No);
             }
             HasImpls::SpaceBefore(impls, spaces) => {
                 buf.newline();
@@ -666,7 +666,7 @@ impl<'a> Formattable for HasAbilities<'a> {
                 }
                 buf.push_str("has");
                 buf.spaces(1);
-                fmt_collection(buf, indent, Braces::Square, *has_abilities, newlines);
+                fmt_collection(buf, indent, Braces::Square, *has_abilities, Newlines::No);
             }
             HasAbilities::SpaceBefore(has_abilities, spaces) => {
                 buf.newline();
