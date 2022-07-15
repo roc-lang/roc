@@ -1237,40 +1237,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             call,
         ),
 
-        Struct(sorted_fields) => {
-            let ctx = env.context;
-
-            // Determine types
-            let num_fields = sorted_fields.len();
-            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
-            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
-
-            for symbol in sorted_fields.iter() {
-                // Zero-sized fields have no runtime representation.
-                // The layout of the struct expects them to be dropped!
-                let (field_expr, field_layout) = load_symbol_and_layout(scope, symbol);
-                if !field_layout.is_dropped_because_empty() {
-                    field_types.push(basic_type_from_layout(env, field_layout));
-
-                    if field_layout.is_passed_by_reference(env.target_info) {
-                        let field_value = env.builder.build_load(
-                            field_expr.into_pointer_value(),
-                            "load_tag_to_put_in_struct",
-                        );
-
-                        field_vals.push(field_value);
-                    } else {
-                        field_vals.push(field_expr);
-                    }
-                }
-            }
-
-            // Create the struct_type
-            let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-
-            // Insert field exprs into struct_val
-            struct_from_fields(env, struct_type, field_vals.into_iter().enumerate()).into()
-        }
+        Struct(sorted_fields) => build_struct(env, scope, sorted_fields).into(),
 
         Reuse {
             arguments,
@@ -1697,6 +1664,44 @@ fn build_tag_fields<'a, 'ctx, 'env>(
     }
 
     (field_types, field_values)
+}
+
+fn build_struct<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &Scope<'a, 'ctx>,
+    sorted_fields: &[Symbol],
+) -> StructValue<'ctx> {
+    let ctx = env.context;
+
+    // Determine types
+    let num_fields = sorted_fields.len();
+    let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
+    let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
+
+    for symbol in sorted_fields.iter() {
+        // Zero-sized fields have no runtime representation.
+        // The layout of the struct expects them to be dropped!
+        let (field_expr, field_layout) = load_symbol_and_layout(scope, symbol);
+        if !field_layout.is_dropped_because_empty() {
+            field_types.push(basic_type_from_layout(env, field_layout));
+
+            if field_layout.is_passed_by_reference(env.target_info) {
+                let field_value = env
+                    .builder
+                    .build_load(field_expr.into_pointer_value(), "load_tag_to_put_in_struct");
+
+                field_vals.push(field_value);
+            } else {
+                field_vals.push(field_expr);
+            }
+        }
+    }
+
+    // Create the struct_type
+    let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+
+    // Insert field exprs into struct_val
+    struct_from_fields(env, struct_type, field_vals.into_iter().enumerate())
 }
 
 fn build_tag<'a, 'ctx, 'env>(
