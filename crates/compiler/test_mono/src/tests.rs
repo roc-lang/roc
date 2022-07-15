@@ -1850,7 +1850,6 @@ fn encode_derived_nested_record_string() {
 }
 
 #[mono_test]
-#[ignore = "TODO make this work (one ULS var is missing)"]
 fn encode_derived_tag_one_field_string() {
     indoc!(
         r#"
@@ -1861,6 +1860,25 @@ fn encode_derived_tag_one_field_string() {
         main =
             x : [A Str]
             x = A "foo"
+            result = Str.fromUtf8 (Encode.toBytes x Json.format)
+            when result is
+                Ok s -> s
+                _ -> "<bad>"
+        "#
+    )
+}
+
+#[mono_test]
+fn encode_derived_tag_two_payloads_string() {
+    indoc!(
+        r#"
+        app "test"
+            imports [Encode.{ toEncoder }, Json]
+            provides [main] to "./platform"
+
+        main =
+            x : [A Str Str]
+            x = A "foo" "foo"
             result = Str.fromUtf8 (Encode.toBytes x Json.format)
             when result is
                 Ok s -> s

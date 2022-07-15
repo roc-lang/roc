@@ -1417,10 +1417,9 @@ fn solve(
                         subs.commit_snapshot(snapshot);
 
                         introduce(subs, rank, pools, &vars);
-                        if !must_implement_ability.is_empty() {
-                            internal_error!("Didn't expect ability vars to land here");
-                        }
 
+                        deferred_obligations
+                            .add(must_implement_ability, AbilityImplError::IncompleteAbility);
                         deferred_uls_to_resolve.union(lambda_sets_to_specialize);
 
                         // Case 1: unify error types, but don't check exhaustiveness.
