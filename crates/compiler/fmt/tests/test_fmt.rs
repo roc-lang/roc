@@ -5102,6 +5102,23 @@ mod test_fmt {
                 "#
             ),
         );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                A := U8 has []
+
+                0
+                "#
+            ),
+            indoc!(
+                r#"
+                A := U8 has []
+
+                0
+                "#
+            ),
+        );
     }
 
     #[test]
