@@ -28,6 +28,7 @@ use roc_module::symbol::ModuleId;
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
 use roc_parse::ast::AbilityMember;
+use roc_parse::ast::AssignedField;
 use roc_parse::ast::Defs;
 use roc_parse::ast::ExtractSpaces;
 use roc_parse::ast::TypeHeader;
@@ -41,6 +42,8 @@ use roc_types::types::AliasCommon;
 use roc_types::types::AliasKind;
 use roc_types::types::AliasVar;
 use roc_types::types::LambdaSet;
+use roc_types::types::Opaque;
+use roc_types::types::OpaqueSupports;
 use roc_types::types::OptAbleType;
 use roc_types::types::{Alias, Type};
 use std::fmt::Debug;
@@ -426,7 +429,7 @@ fn canonicalize_opaque<'a>(
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
     vars: &[Loc<Lowercase>],
     has_abilities: Option<&'a Loc<ast::HasAbilities<'a>>>,
-) -> Result<Alias, ()> {
+) -> Result<Opaque, ()> {
     let alias = canonicalize_alias(
         env,
         output,
@@ -442,24 +445,72 @@ fn canonicalize_opaque<'a>(
     if let Some(has_abilities) = has_abilities {
         let has_abilities = has_abilities.value.collection();
 
-        let mut can_abilities = vec![];
+        let mut derived_abilities = vec![];
+        let mut supported_abilities = vec![];
 
         for has_ability in has_abilities.items {
             let region = has_ability.region;
-            let (ability, _impls) = match has_ability.value.extract_spaces().item {
+            let (ability, opt_impls) = match has_ability.value.extract_spaces().item {
                 ast::HasAbility::HasAbility { ability, impls } => (ability, impls),
                 _ => internal_error!("spaces not extracted"),
             };
             match ability.value {
                 ast::TypeAnnotation::Apply(module_name, ident, []) => {
                     match make_apply_symbol(env, region, scope, module_name, ident) {
-                        Ok(ability) if ability.is_builtin_ability() => {
-                            can_abilities.push(Loc::at(region, ability));
-                        }
-                        Ok(_) => {
-                            // Register the problem but keep going, we may still be able to compile the
-                            // program even if a derive is missing.
-                            env.problem(Problem::IllegalDerive(region));
+                        Ok(ability) => {
+                            if let Some(impls) = opt_impls {
+                                // #[derive(Debug, Copy, Clone, PartialEq)]
+                                // pub enum HasImpls<'a> {
+                                //     // `{ eq: myEq }`
+                                //     HasImpls(Collection<'a, Loc<AssignedField<'a, TypeAnnotation<'a>>>>),
+
+                                //     // We preserve this for the formatter; canonicalization ignores it.
+                                //     SpaceBefore(&'a HasImpls<'a>, &'a [CommentOrNewline<'a>]),
+                                //     SpaceAfter(&'a HasImpls<'a>, &'a [CommentOrNewline<'a>]),
+                                // }
+                                let mut impl_map: VecMap<Symbol, Symbol> = VecMap::default();
+
+                                for loc_field in impls.extract_spaces().item.items {
+                                    match loc_field.value {
+                                        AssignedField::LabelOnly(label) => {
+                                            let sym: Symbol = todo!();
+
+                                            impl_map.insert(sym, sym);
+                                        }
+                                        AssignedField::RequiredValue(
+                                            label,
+                                            _spaces,
+                                            Loc {
+                                                value: Expr::Var(var_name),
+                                                ..
+                                            },
+                                        ) => {
+                                            let key_sym: Symbol = todo!(); // label
+                                            let value_sym: Symbol = todo!(); // var_name
+
+                                            impl_map.insert(key_sym, value_sym);
+                                        }
+                                    }
+                                }
+
+                                supported_abilities.push(OpaqueSupports::Implemented {
+                                    ability_name: ability,
+                                    impls: impl_map,
+                                });
+                            } else {
+                                if ability.is_builtin_ability() {
+                                    derived_abilities.push(Loc::at(region, ability));
+                                    supported_abilities.push(OpaqueSupports::Derived(ability));
+                                } else {
+                                    // There was no record specified of functions to use for
+                                    // members, but also this isn't a builtin ability, so we don't
+                                    // know how to auto-derive it.
+                                    //
+                                    // Register the problem but keep going, we may still be able to compile the
+                                    // program even if a derive is missing.
+                                    env.problem(Problem::IllegalDerive(region));
+                                }
+                            }
                         }
                         Err(_) => {
                             // This is bad apply; an error will have been reported for it
@@ -475,7 +526,7 @@ fn canonicalize_opaque<'a>(
             }
         }
 
-        if !can_abilities.is_empty() {
+        if !derived_abilities.is_empty() {
             // Fresh instance of this opaque to be checked for derivability during solving.
             let fresh_inst = Type::DelayedAlias(AliasCommon {
                 symbol: name.value,
@@ -493,7 +544,7 @@ fn canonicalize_opaque<'a>(
 
             let old = output
                 .pending_derives
-                .insert(name.value, (fresh_inst, can_abilities));
+                .insert(name.value, (fresh_inst, derived_abilities));
             debug_assert!(old.is_none());
         }
     }

@@ -437,7 +437,7 @@ pub struct HasClause<'a> {
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum HasImpls<'a> {
     // `{ eq: myEq }`
-    HasImpls(Collection<'a, Loc<AssignedField<'a, TypeAnnotation<'a>>>>),
+    HasImpls(Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>),
 
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a HasImpls<'a>, &'a [CommentOrNewline<'a>]),
