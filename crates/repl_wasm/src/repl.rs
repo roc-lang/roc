@@ -155,12 +155,14 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
     }
 }
 
+const PRE_LINKED_BINARY: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/pre_linked_binary.o")) as &[_];
+
 pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
     #[cfg(feature = "console_error_panic_hook")]
     console_error_panic_hook::set_once();
 
     let arena = &Bump::new();
-    let pre_linked_binary: &'static [u8] = include_bytes!("pre_linked_binary.o");
 
     // Compile the app
     let target_info = TargetInfo::default_wasm32();
@@ -210,7 +212,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         };
 
         let (mut module, called_preload_fns, main_fn_index) = {
-            let host_module = roc_gen_wasm::parse_host(env.arena, pre_linked_binary).unwrap();
+            let host_module = roc_gen_wasm::parse_host(env.arena, PRE_LINKED_BINARY).unwrap();
             roc_gen_wasm::build_app_module(
                 &env,
                 &mut interns, // NOTE: must drop this mutable ref before jit_to_ast

@@ -14,5 +14,7 @@ extern "C" {
 // Tell users of this crate where to find the Wasm .a file
 // If a non-Wasm target is using this crate, we assume it is a build script that wants to emit Wasm
 // For Wasm target, it won't ever be used, but we expose it just to keep things simple
-mod generated;
-pub use generated::{WASI_COMPILER_RT_PATH, WASI_LIBC_PATH};
+
+// these variables are set by build.rs
+pub const WASI_LIBC_PATH: &str = env!("WASI_LIBC_PATH");
+pub const WASI_COMPILER_RT_PATH: &str = env!("WASI_COMPILER_RT_PATH");
