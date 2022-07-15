@@ -190,17 +190,20 @@ pub fn block_of_memory_slices<'ctx>(
     layouts: &[&[Layout<'_>]],
     target_info: TargetInfo,
 ) -> BasicTypeEnum<'ctx> {
+    let mut union_alignment = 1;
     let mut union_size = 0;
     for tag in layouts {
         let mut total = 0;
         for layout in tag.iter() {
-            total += layout.stack_size(target_info);
+            let (stack_size, alignment) = layout.stack_size_and_alignment(target_info);
+            total += stack_size;
+            union_alignment = union_alignment.max(alignment);
         }
 
         union_size = union_size.max(total);
     }
 
-    block_of_memory_help(context, union_size)
+    block_of_memory_help(context, union_alignment, union_size)
 }
 
 pub fn block_of_memory<'ctx>(
@@ -209,16 +212,16 @@ pub fn block_of_memory<'ctx>(
     target_info: TargetInfo,
 ) -> BasicTypeEnum<'ctx> {
     // TODO make this dynamic
-    let mut union_size = layout.stack_size(target_info);
+    let (mut union_size, union_align) = layout.stack_size_and_alignment(target_info);
 
     if let Layout::Union(UnionLayout::NonRecursive { .. }) = layout {
         union_size -= target_info.ptr_width() as u32;
     }
 
-    block_of_memory_help(context, union_size)
+    block_of_memory_help(context, union_align, union_size)
 }
 
-fn block_of_memory_help(context: &Context, union_size: u32) -> BasicTypeEnum<'_> {
+fn block_of_memory_help(context: &Context, union_align: u32, union_size: u32) -> BasicTypeEnum<'_> {
     // The memory layout of Union is a bit tricky.
     // We have tags with different memory layouts, that are part of the same type.
     // For llvm, all tags must have the same memory layout.
@@ -227,8 +230,19 @@ fn block_of_memory_help(context: &Context, union_size: u32) -> BasicTypeEnum<'_>
     // It turns out that encoding to i64 for as many elements as possible is
     // a nice optimization, the remainder is encoded as bytes.
 
-    let num_i64 = union_size / 8;
-    let num_i8 = union_size % 8;
+    let num_i64;
+    let num_i8;
+
+    match union_align {
+        0..=7 => {
+            num_i64 = 0;
+            num_i8 = union_size;
+        }
+        8.. => {
+            num_i64 = union_size / 8;
+            num_i8 = union_size % 8;
+        }
+    }
 
     let i8_array_type = context.i8_type().array_type(num_i8).as_basic_type_enum();
     let i64_array_type = context.i64_type().array_type(num_i64).as_basic_type_enum();

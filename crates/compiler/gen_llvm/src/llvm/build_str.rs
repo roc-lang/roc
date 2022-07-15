@@ -3,7 +3,7 @@ use crate::llvm::build::{Env, Scope};
 use inkwell::builder::Builder;
 use inkwell::values::{BasicValueEnum, IntValue, PointerValue, StructValue};
 use inkwell::AddressSpace;
-use roc_builtins::bitcode::{self, IntWidth};
+use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
 use roc_target::PtrWidth;
