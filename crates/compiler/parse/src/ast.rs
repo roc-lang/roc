@@ -1108,7 +1108,6 @@ impl_extract_spaces!(Tag);
 impl_extract_spaces!(AssignedField<T>);
 impl_extract_spaces!(TypeAnnotation);
 impl_extract_spaces!(HasAbility);
-impl_extract_spaces!(HasImpls);
 
 impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
     type Item = T;
@@ -1157,6 +1156,48 @@ impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
                 before: &[],
                 item: *item,
                 after: &[],
+            },
+        }
+    }
+}
+
+impl<'a> ExtractSpaces<'a> for HasImpls<'a> {
+    type Item = Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>;
+
+    fn extract_spaces(&self) -> Spaces<'a, Self::Item> {
+        match self {
+            HasImpls::HasImpls(inner) => Spaces {
+                before: &[],
+                item: *inner,
+                after: &[],
+            },
+            HasImpls::SpaceBefore(item, before) => match item {
+                HasImpls::HasImpls(inner) => Spaces {
+                    before: before,
+                    item: *inner,
+                    after: &[],
+                },
+                HasImpls::SpaceBefore(_, _) => todo!(),
+                HasImpls::SpaceAfter(HasImpls::HasImpls(inner), after) => Spaces {
+                    before,
+                    item: *inner,
+                    after,
+                },
+                HasImpls::SpaceAfter(_, _) => todo!(),
+            },
+            HasImpls::SpaceAfter(item, after) => match item {
+                HasImpls::HasImpls(inner) => Spaces {
+                    before: &[],
+                    item: *inner,
+                    after,
+                },
+                HasImpls::SpaceBefore(HasImpls::HasImpls(inner), before) => Spaces {
+                    before,
+                    item: *inner,
+                    after,
+                },
+                HasImpls::SpaceBefore(_, _) => todo!(),
+                HasImpls::SpaceAfter(_, _) => todo!(),
             },
         }
     }
