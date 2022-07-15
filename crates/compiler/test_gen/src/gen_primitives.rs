@@ -1065,6 +1065,8 @@ fn nested_closure() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn closure_in_list() {
+    use roc_std::RocList;
+
     assert_evals_to!(
         indoc!(
             r#"
@@ -1077,14 +1079,11 @@ fn closure_in_list() {
 
                 [f]
 
-            main =
-                items = foo {}
-
-                List.len items
+            main = foo {}
             "#
         ),
-        1,
-        i64
+        RocList::from_slice(&[41]),
+        RocList<i64>
     );
 }
 
