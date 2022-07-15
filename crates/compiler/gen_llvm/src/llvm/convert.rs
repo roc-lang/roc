@@ -2,6 +2,7 @@ use crate::llvm::build::Env;
 use bumpalo::collections::Vec;
 use inkwell::context::Context;
 use inkwell::types::{BasicType, BasicTypeEnum, FloatType, IntType, StructType};
+use inkwell::values::StructValue;
 use inkwell::AddressSpace;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
@@ -60,32 +61,38 @@ pub fn basic_type_from_union_layout<'a, 'ctx, 'env>(
 
     match union_layout {
         NonRecursive(tags) => {
-            let data = block_of_memory_slices(env.context, tags, env.target_info);
-
-            env.context.struct_type(&[data, tag_id_type], false).into()
+            //
+            RocUnionType::tagged_from_slices(env.context, tags, env.target_info)
+                .struct_type()
+                .into()
         }
         Recursive(tags)
         | NullableWrapped {
             other_tags: tags, ..
         } => {
-            let data = block_of_memory_slices(env.context, tags, env.target_info);
-
             if union_layout.stores_tag_id_as_data(env.target_info) {
-                env.context
-                    .struct_type(&[data, tag_id_type], false)
+                RocUnionType::tagged_from_slices(env.context, tags, env.target_info)
+                    .struct_type()
                     .ptr_type(AddressSpace::Generic)
                     .into()
             } else {
-                data.ptr_type(AddressSpace::Generic).into()
+                RocUnionType::untagged_from_slices(env.context, tags, env.target_info)
+                    .struct_type()
+                    .ptr_type(AddressSpace::Generic)
+                    .into()
             }
         }
         NullableUnwrapped { other_fields, .. } => {
-            let block = block_of_memory_slices(env.context, &[other_fields], env.target_info);
-            block.ptr_type(AddressSpace::Generic).into()
+            RocUnionType::untagged_from_slices(env.context, &[other_fields], env.target_info)
+                .struct_type()
+                .ptr_type(AddressSpace::Generic)
+                .into()
         }
         NonNullableUnwrapped(fields) => {
-            let block = block_of_memory_slices(env.context, &[fields], env.target_info);
-            block.ptr_type(AddressSpace::Generic).into()
+            RocUnionType::untagged_from_slices(env.context, &[fields], env.target_info)
+                .struct_type()
+                .ptr_type(AddressSpace::Generic)
+                .into()
         }
     }
 }
@@ -185,68 +192,187 @@ pub fn float_type_from_float_width<'a, 'ctx, 'env>(
     }
 }
 
-pub fn block_of_memory_slices<'ctx>(
-    context: &'ctx Context,
-    layouts: &[&[Layout<'_>]],
-    target_info: TargetInfo,
-) -> BasicTypeEnum<'ctx> {
-    let mut union_size = 0;
-    for tag in layouts {
-        let mut total = 0;
-        for layout in tag.iter() {
-            total += layout.stack_size(target_info);
+fn alignment_type(context: &Context, alignment: u32) -> BasicTypeEnum {
+    match alignment {
+        0 => context.struct_type(&[], false).into(),
+        1 => context.i8_type().into(),
+        2 => context.i16_type().into(),
+        4 => context.i32_type().into(),
+        8 => context.i64_type().into(),
+        16 => context.i128_type().into(),
+        _ => unimplemented!("weird alignment: {alignment}"),
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RocUnionValue<'ctx> {
+    roc_union_type: RocUnionType<'ctx>,
+    pub struct_value: StructValue<'ctx>,
+}
+
+impl<'ctx> RocUnionValue<'ctx> {
+    pub fn new<'a, 'env>(
+        env: &Env<'a, 'ctx, 'env>,
+        roc_union_type: RocUnionType<'ctx>,
+        data: StructValue<'ctx>,
+        tag_id: Option<usize>,
+    ) -> Self {
+        debug_assert_eq!(tag_id.is_some(), roc_union_type.tag_type.is_some());
+
+        let mut struct_value = roc_union_type.struct_type().const_zero();
+
+        // set the tag id
+        if let Some(tag_id) = tag_id {
+            let tag_id = roc_union_type
+                .tag_type
+                .unwrap()
+                .const_int(tag_id as u64, false);
+
+            struct_value = env
+                .builder
+                .build_insert_value(struct_value, tag_id, 3, "insert_tag_id")
+                .unwrap()
+                .into_struct_value();
         }
 
-        union_size = union_size.max(total);
-    }
+        let tag_alloca = env
+            .builder
+            .build_alloca(struct_value.get_type(), "tag_alloca");
+        env.builder.build_store(tag_alloca, struct_value);
 
-    block_of_memory_help(context, union_size)
+        let opaque_data_ptr = env
+            .builder
+            .build_struct_gep(tag_alloca, 1, "get_opaque_data_ptr")
+            .unwrap();
+
+        let cast_pointer = env.builder.build_pointer_cast(
+            opaque_data_ptr,
+            data.get_type().ptr_type(AddressSpace::Generic),
+            "to_data_ptr",
+        );
+
+        env.builder.build_store(cast_pointer, data);
+
+        struct_value = env
+            .builder
+            .build_load(tag_alloca, "load_tag")
+            .into_struct_value();
+
+        Self {
+            roc_union_type,
+            struct_value,
+        }
+    }
 }
 
-pub fn block_of_memory<'ctx>(
-    context: &'ctx Context,
-    layout: &Layout<'_>,
-    target_info: TargetInfo,
-) -> BasicTypeEnum<'ctx> {
-    // TODO make this dynamic
-    let mut union_size = layout.stack_size(target_info);
-
-    if let Layout::Union(UnionLayout::NonRecursive { .. }) = layout {
-        union_size -= target_info.ptr_width() as u32;
-    }
-
-    block_of_memory_help(context, union_size)
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RocUnionType<'ctx> {
+    struct_type: StructType<'ctx>,
+    data_align: u32,
+    data_width: u32,
+    tag_type: Option<IntType<'ctx>>,
 }
 
-fn block_of_memory_help(context: &Context, union_size: u32) -> BasicTypeEnum<'_> {
-    // The memory layout of Union is a bit tricky.
-    // We have tags with different memory layouts, that are part of the same type.
-    // For llvm, all tags must have the same memory layout.
-    //
-    // So, we convert all tags to a layout of bytes of some size.
-    // It turns out that encoding to i64 for as many elements as possible is
-    // a nice optimization, the remainder is encoded as bytes.
+impl<'ctx> RocUnionType<'ctx> {
+    fn new(
+        context: &'ctx Context,
+        target_info: TargetInfo,
+        data_align: u32,
+        data_width: u32,
+        tag_type: Option<IntType<'ctx>>,
+    ) -> Self {
+        let (word_type, words, bytes) = match target_info.ptr_width() {
+            roc_target::PtrWidth::Bytes4 => (context.i32_type(), data_width / 4, data_width % 4),
+            roc_target::PtrWidth::Bytes8 => (context.i64_type(), data_width / 8, data_width % 8),
+        };
 
-    let num_i64 = union_size / 8;
-    let num_i8 = union_size % 8;
+        let byte_array_type = context.i8_type().array_type(bytes).as_basic_type_enum();
+        let word_array_type = word_type.array_type(words).as_basic_type_enum();
 
-    let i8_array_type = context.i8_type().array_type(num_i8).as_basic_type_enum();
-    let i64_array_type = context.i64_type().array_type(num_i64).as_basic_type_enum();
+        let alignment_array_type = alignment_type(context, data_align)
+            .array_type(0)
+            .as_basic_type_enum();
 
-    if num_i64 == 0 {
-        // The object fits perfectly in some number of i8s
-        context.struct_type(&[i8_array_type], false).into()
-    } else if num_i8 == 0 {
-        // The object fits perfectly in some number of i64s
-        // (i.e. the size is a multiple of 8 bytes)
-        context.struct_type(&[i64_array_type], false).into()
-    } else {
-        // There are some trailing bytes at the end
-        let i8_array_type = context.i8_type().array_type(num_i8).as_basic_type_enum();
+        let struct_type = if let Some(tag_type) = tag_type {
+            context.struct_type(
+                &[
+                    alignment_array_type,
+                    word_array_type,
+                    byte_array_type,
+                    tag_type.into(),
+                ],
+                false,
+            )
+        } else {
+            context.struct_type(
+                &[alignment_array_type, word_array_type, byte_array_type],
+                false,
+            )
+        };
 
-        context
-            .struct_type(&[i64_array_type, i8_array_type], false)
-            .into()
+        dbg!(struct_type);
+
+        Self {
+            struct_type,
+            data_align,
+            data_width,
+            tag_type,
+        }
+    }
+
+    pub fn struct_type(&self) -> StructType<'ctx> {
+        self.struct_type
+    }
+
+    pub fn tagged_from_slices(
+        context: &'ctx Context,
+        layouts: &[&[Layout<'_>]],
+        target_info: TargetInfo,
+    ) -> Self {
+        let tag_type = match layouts.len() {
+            0..=255 => context.i8_type(),
+            _ => context.i16_type(),
+        };
+
+        // alignment of the tag id is at least 1
+        let mut data_align = 1;
+
+        let mut data_width = 0;
+        for tag in layouts {
+            let mut total = 0;
+            for layout in tag.iter() {
+                let (stack_size, alignment) = layout.stack_size_and_alignment(target_info);
+                total += stack_size;
+                data_align = data_align.max(alignment);
+            }
+
+            data_width = data_width.max(total);
+        }
+
+        Self::new(context, target_info, data_align, data_width, Some(tag_type))
+    }
+
+    pub fn untagged_from_slices(
+        context: &'ctx Context,
+        layouts: &[&[Layout<'_>]],
+        target_info: TargetInfo,
+    ) -> Self {
+        // alignment of the tag id is at least 1
+        let mut data_align = 1;
+
+        let mut data_width = 0;
+        for tag in layouts {
+            let mut total = 0;
+            for layout in tag.iter() {
+                let (stack_size, alignment) = layout.stack_size_and_alignment(target_info);
+                total += stack_size;
+                data_align = data_align.max(alignment);
+            }
+
+            data_width = data_width.max(total);
+        }
+
+        Self::new(context, target_info, data_align, data_width, None)
     }
 }
 
