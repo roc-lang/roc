@@ -434,13 +434,23 @@ pub struct HasClause<'a> {
     pub ability: AbilityName<'a>,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum HasImpls<'a> {
+    // `{ eq: myEq }`
+    HasImpls(Collection<'a, Loc<AssignedField<'a, TypeAnnotation<'a>>>>),
+
+    // We preserve this for the formatter; canonicalization ignores it.
+    SpaceBefore(&'a HasImpls<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a HasImpls<'a>, &'a [CommentOrNewline<'a>]),
+}
+
 /// `Eq` or `Eq { eq: myEq }`
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum HasAbility<'a> {
     HasAbility {
         /// Should be a zero-argument `Apply` or an error; we'll check this in canonicalization
         ability: Loc<TypeAnnotation<'a>>,
-        impls: Collection<'a, Loc<AssignedField<'a, TypeAnnotation<'a>>>>,
+        impls: Option<Loc<HasImpls<'a>>>,
     },
 
     // We preserve this for the formatter; canonicalization ignores it.
@@ -987,6 +997,15 @@ impl<'a> Spaceable<'a> for Has<'a> {
     }
 }
 
+impl<'a> Spaceable<'a> for HasImpls<'a> {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        HasImpls::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        HasImpls::SpaceAfter(self, spaces)
+    }
+}
+
 impl<'a> Spaceable<'a> for HasAbility<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
         HasAbility::SpaceBefore(self, spaces)
@@ -1089,6 +1108,7 @@ impl_extract_spaces!(Tag);
 impl_extract_spaces!(AssignedField<T>);
 impl_extract_spaces!(TypeAnnotation);
 impl_extract_spaces!(HasAbility);
+impl_extract_spaces!(HasImpls);
 
 impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
     type Item = T;
