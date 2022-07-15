@@ -532,10 +532,7 @@ fn parse_has_ability<'a>(min_indent: u32) -> impl Parser<'a, HasAbility<'a>, ETy
                 EType::TIndentEnd
             ))
         ),
-        |(ability, impls): (_, Option<_>)| {
-            dbg!(1, &ability, &impls);
-            HasAbility::HasAbility { ability, impls }
-        }
+        |(ability, impls): (_, Option<_>)| { HasAbility::HasAbility { ability, impls } }
     )
 }
 
