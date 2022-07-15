@@ -4,8 +4,8 @@ use crate::{
     Buf,
 };
 use roc_parse::ast::{
-    AssignedField, Collection, Expr, ExtractSpaces, HasAbilities, HasAbility, HasClause, Tag,
-    TypeAnnotation, TypeHeader,
+    AssignedField, Collection, Expr, ExtractSpaces, HasAbilities, HasAbility, HasClause, HasImpls,
+    Tag, TypeAnnotation, TypeHeader,
 };
 use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
@@ -563,12 +563,49 @@ impl<'a> Formattable for HasClause<'a> {
     }
 }
 
+impl<'a> Formattable for HasImpls<'a> {
+    fn is_multiline(&self) -> bool {
+        match self {
+            HasImpls::SpaceBefore(_, _) | HasImpls::SpaceAfter(_, _) => true,
+            HasImpls::HasImpls(impls) => impls.is_multiline(),
+        }
+    }
+
+    fn format_with_options<'buf>(
+        &self,
+        buf: &mut Buf<'buf>,
+        parens: Parens,
+        newlines: Newlines,
+        indent: u16,
+    ) {
+        match self {
+            HasImpls::HasImpls(impls) => {
+                if newlines == Newlines::Yes {
+                    buf.newline();
+                    buf.indent(indent);
+                }
+                impls.format_with_options(buf, parens, newlines, indent);
+            }
+            HasImpls::SpaceBefore(impls, spaces) => {
+                buf.newline();
+                buf.indent(indent);
+                fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
+                impls.format_with_options(buf, parens, Newlines::No, indent);
+            }
+            HasImpls::SpaceAfter(impls, spaces) => {
+                impls.format_with_options(buf, parens, newlines, indent);
+                fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
+            }
+        }
+    }
+}
+
 impl<'a> Formattable for HasAbility<'a> {
     fn is_multiline(&self) -> bool {
         match self {
             HasAbility::SpaceAfter(..) | HasAbility::SpaceBefore(..) => true,
             HasAbility::HasAbility { ability, impls } => {
-                ability.is_multiline() || impls.is_multiline()
+                ability.is_multiline() || impls.map(|i| i.is_multiline()).unwrap_or(false)
             }
         }
     }
@@ -587,9 +624,9 @@ impl<'a> Formattable for HasAbility<'a> {
                     buf.indent(indent);
                 }
                 ability.format_with_options(buf, parens, newlines, indent);
-                if !impls.is_empty() {
+                if let Some(impls) = impls {
                     buf.spaces(1);
-                    fmt_collection(buf, indent, Braces::Curly, *impls, newlines);
+                    impls.format_with_options(buf, parens, newlines, indent);
                 }
             }
             HasAbility::SpaceBefore(ab, spaces) => {

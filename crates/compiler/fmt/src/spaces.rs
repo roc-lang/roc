@@ -4,7 +4,7 @@ use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
         AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr, Has, HasAbilities,
-        HasAbility, HasClause, Module, Pattern, Spaced, StrLiteral, StrSegment, Tag,
+        HasAbility, HasClause, HasImpls, Module, Pattern, Spaced, StrLiteral, StrSegment, Tag,
         TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
     },
     header::{
@@ -797,6 +797,17 @@ impl<'a> RemoveSpaces<'a> for Tag<'a> {
             Tag::Malformed(a) => Tag::Malformed(a),
             Tag::SpaceBefore(a, _) => a.remove_spaces(arena),
             Tag::SpaceAfter(a, _) => a.remove_spaces(arena),
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for HasImpls<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        match *self {
+            HasImpls::HasImpls(impls) => HasImpls::HasImpls(impls.remove_spaces(arena)),
+            HasImpls::SpaceBefore(has, _) | HasImpls::SpaceAfter(has, _) => {
+                has.remove_spaces(arena)
+            }
         }
     }
 }
