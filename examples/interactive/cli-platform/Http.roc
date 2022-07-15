@@ -14,7 +14,7 @@ interface Http
         send,
     ]
     imports [
-        pf.Effect,
+        Effect,
         InternalTask,
         Task,
         Encode.{ Encoding },
