@@ -35,13 +35,12 @@ use std::path::PathBuf;
 fn load_and_typecheck(
     arena: &Bump,
     filename: PathBuf,
-    src_dir: PathBuf,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
 ) -> Result<LoadedModule, LoadingProblem> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, src_dir, filename, RenderTarget::Generic)?;
+    let load_start = LoadStart::from_path(arena, filename, RenderTarget::Generic)?;
 
     match roc_load_internal::file::load(
         arena,
@@ -163,13 +162,7 @@ fn multiple_modules_help<'a>(
         writeln!(file, "{}", source)?;
         file_handles.push(file);
 
-        load_and_typecheck(
-            arena,
-            full_file_path,
-            dir.path().to_path_buf(),
-            Default::default(),
-            TARGET_INFO,
-        )
+        load_and_typecheck(arena, full_file_path, Default::default(), TARGET_INFO)
     };
 
     Ok(result)
@@ -183,7 +176,7 @@ fn load_fixture(
     let src_dir = fixtures_dir().join(dir_name);
     let filename = src_dir.join(format!("{}.roc", module_name));
     let arena = Bump::new();
-    let loaded = load_and_typecheck(&arena, filename, src_dir, subs_by_module, TARGET_INFO);
+    let loaded = load_and_typecheck(&arena, filename, subs_by_module, TARGET_INFO);
     let mut loaded_module = match loaded {
         Ok(x) => x,
         Err(roc_load_internal::file::LoadingProblem::FormattedReport(report)) => {
@@ -339,7 +332,7 @@ fn interface_with_deps() {
     let src_dir = fixtures_dir().join("interface_with_deps");
     let filename = src_dir.join("Primary.roc");
     let arena = Bump::new();
-    let loaded = load_and_typecheck(&arena, filename, src_dir, subs_by_module, TARGET_INFO);
+    let loaded = load_and_typecheck(&arena, filename, subs_by_module, TARGET_INFO);
 
     let mut loaded_module = loaded.expect("Test module failed to load");
     let home = loaded_module.module_id;
@@ -861,8 +854,8 @@ fn issue_2863_module_type_does_not_exist() {
 
                         Did you mean one of these?
 
-                            Dict
                             Result
+                            Dict
                             List
                             Box
                         "

@@ -92,7 +92,6 @@ pub fn load_and_monomorphize_from_str<'a>(
 pub fn load_and_monomorphize(
     arena: &Bump,
     filename: PathBuf,
-    src_dir: PathBuf,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
     render: RenderTarget,
@@ -100,7 +99,7 @@ pub fn load_and_monomorphize(
 ) -> Result<MonomorphizedModule<'_>, LoadingProblem<'_>> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, src_dir, filename, render)?;
+    let load_start = LoadStart::from_path(arena, filename, render)?;
 
     match load(
         arena,
@@ -119,7 +118,6 @@ pub fn load_and_monomorphize(
 pub fn load_and_typecheck(
     arena: &Bump,
     filename: PathBuf,
-    src_dir: PathBuf,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
     render: RenderTarget,
@@ -127,7 +125,7 @@ pub fn load_and_typecheck(
 ) -> Result<LoadedModule, LoadingProblem<'_>> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, src_dir, filename, render)?;
+    let load_start = LoadStart::from_path(arena, filename, render)?;
 
     match load(
         arena,

@@ -1,8 +1,11 @@
-use roc_can::{
+use crate::{
     def::Def,
     expr::{AccessorData, ClosureData, Expr, Field, OpaqueWrapFunctionData, WhenBranch},
 };
-use roc_module::ident::{Lowercase, TagName};
+use roc_module::{
+    ident::{Lowercase, TagName},
+    symbol::Symbol,
+};
 use roc_types::{
     subs::{
         self, AliasVariables, Descriptor, GetSubsSlice, OptVariable, RecordFields, Subs, SubsIndex,
@@ -62,6 +65,8 @@ trait CopyEnv {
 
     fn clone_tag_names(&mut self, tag_names: SubsSlice<TagName>) -> SubsSlice<TagName>;
 
+    fn clone_lambda_names(&mut self, lambda_names: SubsSlice<Symbol>) -> SubsSlice<Symbol>;
+
     fn clone_record_fields(
         &mut self,
         record_fields: SubsSlice<RecordField<()>>,
@@ -102,6 +107,11 @@ impl CopyEnv for Subs {
     #[inline(always)]
     fn clone_tag_names(&mut self, tag_names: SubsSlice<TagName>) -> SubsSlice<TagName> {
         tag_names
+    }
+
+    #[inline(always)]
+    fn clone_lambda_names(&mut self, lambda_names: SubsSlice<Symbol>) -> SubsSlice<Symbol> {
+        lambda_names
     }
 
     #[inline(always)]
@@ -161,6 +171,14 @@ impl<'a> CopyEnv for AcrossSubs<'a> {
     }
 
     #[inline(always)]
+    fn clone_lambda_names(&mut self, lambda_names: SubsSlice<Symbol>) -> SubsSlice<Symbol> {
+        SubsSlice::extend_new(
+            &mut self.target.closure_names,
+            self.source.get_subs_slice(lambda_names).iter().cloned(),
+        )
+    }
+
+    #[inline(always)]
     fn clone_record_fields(
         &mut self,
         record_fields: SubsSlice<RecordField<()>>,
@@ -186,9 +204,9 @@ pub fn deep_copy_expr_across_subs(
     target: &mut Subs,
     var: Variable,
     expr: &Expr,
-) -> Option<(Variable, Expr)> {
+) -> (Variable, Expr) {
     let mut across_subs = AcrossSubs { source, target };
-    deep_copy_type_vars_into_expr_help(&mut across_subs, var, expr)
+    deep_copy_type_vars_into_expr_help(&mut across_subs, var, expr).unwrap()
 }
 
 /// Deep copies all type variables in [`expr`].
@@ -849,8 +867,10 @@ fn deep_copy_type_vars<C: CopyEnv>(
                         env.target().variable_slices[target_index] = new_variables;
                     }
 
+                    let new_solved_labels = env.clone_lambda_names(solved.labels());
+
                     let new_solved =
-                        UnionLambdas::from_slices(solved.labels(), new_variable_slices);
+                        UnionLambdas::from_slices(new_solved_labels, new_variable_slices);
 
                     let new_unspecialized =
                         SubsSlice::reserve_uls_slice(env.target(), unspecialized.len());
@@ -887,10 +907,12 @@ fn deep_copy_type_vars<C: CopyEnv>(
 
 #[cfg(test)]
 mod test {
-    use crate::copy::{deep_copy_type_vars_into_expr, AcrossSubs};
+    use crate::{
+        copy::{deep_copy_type_vars_into_expr, AcrossSubs},
+        expr::Expr,
+    };
 
     use super::{deep_copy_expr_across_subs, deep_copy_type_vars};
-    use roc_can::expr::Expr;
     use roc_error_macros::internal_error;
     use roc_module::{ident::TagName, symbol::Symbol};
     use roc_region::all::Loc;
@@ -1105,8 +1127,7 @@ mod test {
             )],
         };
 
-        let (var, expr) =
-            deep_copy_expr_across_subs(&mut source, &mut target, var1, &expr).unwrap();
+        let (var, expr) = deep_copy_expr_across_subs(&mut source, &mut target, var1, &expr);
 
         assert!(source.get_copy(var1).is_none());
         assert!(source.get_copy(var2).is_none());

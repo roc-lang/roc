@@ -1,6 +1,6 @@
 interface InternalTask
     exposes [Task, fromEffect, toEffect]
-    imports [pf.Effect.{ Effect }]
+    imports [Effect.{ Effect }]
 
 Task ok err fx := Effect (Result ok err)
 

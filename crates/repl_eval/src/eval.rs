@@ -1,12 +1,13 @@
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_types::types::AliasKind;
 use std::cmp::{max_by_key, min_by_key};
 
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::TagName;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::{
     union_sorted_tags_help, Builtin, Layout, LayoutCache, UnionLayout, UnionVariant, WrappedVariant,
@@ -23,6 +24,7 @@ struct Env<'a, 'env> {
     arena: &'a Bump,
     subs: &'env Subs,
     target_info: TargetInfo,
+    interns: &'a Interns,
 }
 
 #[derive(Debug)]
@@ -46,12 +48,14 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
     layout: ProcLayout<'a>,
     content: &'a Content,
     subs: &'a Subs,
+    interns: &'a Interns,
     target_info: TargetInfo,
 ) -> Result<Expr<'a>, ToAstProblem> {
     let env = Env {
         arena,
         subs,
         target_info,
+        interns,
     };
 
     match layout {
@@ -71,6 +75,7 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
 enum NewtypeKind<'a> {
     Tag(&'a TagName),
     RecordField(&'a str),
+    Opaque(Symbol),
 }
 
 /// Unrolls types that are newtypes. These include
@@ -116,7 +121,7 @@ fn unroll_newtypes_and_aliases<'a>(
                 ));
                 content = env.subs.get_content_without_compacting(field.into_inner());
             }
-            Content::Alias(_, _, real_var, _) => {
+            Content::Alias(name, _, real_var, kind) => {
                 // We need to pass through aliases too, because their underlying types may have
                 // unrolled newtypes. For example,
                 //   T : { a : Str }
@@ -127,6 +132,9 @@ fn unroll_newtypes_and_aliases<'a>(
                 //
                 // At the end of the day what we should show to the user is the alias content, not
                 // what's inside, so keep that around too.
+                if *kind == AliasKind::Opaque && name.module_id() != ModuleId::NUM {
+                    newtype_containers.push(NewtypeKind::Opaque(*name));
+                }
                 alias_content = Some(content);
                 content = env.subs.get_content_without_compacting(*real_var);
             }
@@ -157,6 +165,13 @@ fn apply_newtypes<'a>(
                 let field_val = arena.alloc(Loc::at_zero(expr));
                 let field = Loc::at_zero(AssignedField::RequiredValue(label, &[], field_val));
                 expr = Expr::Record(Collection::with_items(&*arena.alloc([field])))
+            }
+            NewtypeKind::Opaque(name) => {
+                let opaque_name = arena.alloc(format!("@{}", name.as_str(env.interns)));
+                let opaque_ref = &*arena.alloc(Loc::at_zero(Expr::OpaqueRef(opaque_name)));
+                let loc_arg_expr = &*arena.alloc(Loc::at_zero(expr));
+                let loc_arg_exprs = arena.alloc_slice_copy(&[loc_arg_expr]);
+                expr = Expr::Apply(opaque_ref, loc_arg_exprs, CalledVia::Space);
             }
         }
     }

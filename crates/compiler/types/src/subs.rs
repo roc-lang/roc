@@ -4666,6 +4666,7 @@ pub struct CopiedImport {
 
 struct CopyImportEnv<'a> {
     visited: bumpalo::collections::Vec<'a, Variable>,
+    /// source variable -> target variable
     copy_table: &'a mut VecMap<Variable, Variable>,
     source: &'a Subs,
     target: &'a mut Subs,

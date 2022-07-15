@@ -10,7 +10,7 @@ use roc_can::operator;
 use roc_can::scope::Scope;
 use roc_collections::all::{ImMap, MutMap, SendSet};
 use roc_constrain::expr::constrain_expr;
-use roc_derive_key::GlobalDerivedSymbols;
+use roc_derive::SharedDerivedModule;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
 use roc_parse::parser::{SourceError, SyntaxError};
 use roc_problem::can::Problem;
@@ -35,10 +35,11 @@ pub fn infer_expr(
     pending_derives: PendingDerives,
     aliases: &mut Aliases,
     abilities_store: &mut AbilitiesStore,
-    derived_symbols: GlobalDerivedSymbols,
+    derived_module: SharedDerivedModule,
     expr_var: Variable,
 ) -> (Content, Subs) {
     let (solved, _) = solve::run(
+        ModuleId::ATTR,
         constraints,
         problems,
         subs,
@@ -46,7 +47,8 @@ pub fn infer_expr(
         constraint,
         pending_derives,
         abilities_store,
-        derived_symbols,
+        &Default::default(),
+        derived_module,
     );
 
     let content = *solved.inner().get_content_without_compacting(expr_var);

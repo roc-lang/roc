@@ -359,8 +359,6 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         );
     }
 
-    let src_dir = path.parent().unwrap().canonicalize().unwrap();
-
     // let target_valgrind = matches.is_present(FLAG_VALGRIND);
 
     let arena = &arena;
@@ -374,7 +372,6 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let loaded = roc_load::load_and_monomorphize(
         arena,
         path,
-        src_dir,
         subs_by_module,
         target_info,
         // TODO: expose this from CLI?
@@ -536,12 +533,10 @@ pub fn build(
         }
     });
 
-    let src_dir = path.parent().unwrap().canonicalize().unwrap();
     let target_valgrind = matches.is_present(FLAG_VALGRIND);
     let res_binary_path = build_file(
         &arena,
         &triple,
-        src_dir,
         path,
         opt_level,
         emit_debug_info,

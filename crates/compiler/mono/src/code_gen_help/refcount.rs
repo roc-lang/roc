@@ -103,7 +103,6 @@ pub fn refcount_generic<'a>(
     structure: Symbol,
 ) -> Stmt<'a> {
     debug_assert!(is_rc_implemented_yet(&layout));
-    let _rc_todo = || todo!("Please update is_rc_implemented_yet for `{:?}`", layout);
 
     match layout {
         Layout::Builtin(Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal) => {

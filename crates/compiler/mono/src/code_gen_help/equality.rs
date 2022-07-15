@@ -18,8 +18,6 @@ pub fn eq_generic<'a>(
     ctx: &mut Context<'a>,
     layout: Layout<'a>,
 ) -> Stmt<'a> {
-    let _eq_todo = || todo!("Specialized `==` operator for `{:?}`", layout);
-
     let main_body = match layout {
         Layout::Builtin(Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal) => {
             unreachable!(

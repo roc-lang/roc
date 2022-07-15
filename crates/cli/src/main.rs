@@ -90,8 +90,6 @@ fn main() -> io::Result<()> {
             let emit_timings = matches.is_present(FLAG_TIME);
             let filename = matches.value_of_os(ROC_FILE).unwrap();
             let roc_file_path = PathBuf::from(filename);
-            let src_dir = roc_file_path.parent().unwrap().to_owned();
-
             let threading = match matches
                 .value_of(roc_cli::FLAG_MAX_THREADS)
                 .and_then(|s| s.parse::<usize>().ok())
@@ -102,7 +100,7 @@ fn main() -> io::Result<()> {
                 Some(n) => Threading::AtMost(n),
             };
 
-            match check_file(&arena, src_dir, roc_file_path, emit_timings, threading) {
+            match check_file(&arena, roc_file_path, emit_timings, threading) {
                 Ok((problems, total_time)) => {
                     println!(
                         "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.",

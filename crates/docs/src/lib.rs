@@ -432,13 +432,9 @@ pub fn load_modules_for_files(filenames: Vec<PathBuf>) -> Vec<LoadedModule> {
     let mut modules = Vec::with_capacity(filenames.len());
 
     for filename in filenames {
-        let mut src_dir = filename.clone();
-        src_dir.pop();
-
         match roc_load::load_and_typecheck(
             &arena,
             filename,
-            src_dir,
             Default::default(),
             roc_target::TargetInfo::default_x86_64(), // This is just type-checking for docs, so "target" doesn't matter
             roc_reporting::report::RenderTarget::ColorTerminal,
