@@ -522,12 +522,12 @@ fn if_guard_vanilla() {
         indoc!(
             r#"
                 when "fooz" is
-                    s if s == "foo" -> 0
-                    s -> List.len (Str.toUtf8 s)
+                    s if s == "foo" -> []
+                    s -> Str.toUtf8 s
                 "#
         ),
-        4,
-        i64
+        RocList::from_slice(b"fooz"),
+        RocList<u8>
     );
 }
 
