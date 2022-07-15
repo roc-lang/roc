@@ -1036,9 +1036,16 @@ fn render_expect_failure<'a>(
         })
         .collect();
 
-    let expressions =
-        roc_repl_expect::get_values(target_info, arena, subs, start, start_offset, &variables)
-            .unwrap();
+    let expressions = roc_repl_expect::get_values(
+        target_info,
+        arena,
+        subs,
+        interns,
+        start,
+        start_offset,
+        &variables,
+    )
+    .unwrap();
 
     use roc_fmt::annotation::Formattable;
     use roc_reporting::error::r#type::error_type_to_doc;
