@@ -18,4 +18,6 @@ A := U8 has []
 A := a | a has Other
      has [Eq {eq}, Hash {hash}]
 
+A := U8 has [Eq {}]
+
 0

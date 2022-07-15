@@ -10,6 +10,7 @@ Defs(
             Index(6),
             Index(7),
             Index(8),
+            Index(9),
         ],
         regions: [
             @0-7,
@@ -21,6 +22,7 @@ Defs(
             @201-208,
             @235-242,
             @251-271,
+            @305-312,
         ],
         space_before: [
             Slice(start = 0, length = 0),
@@ -32,6 +34,7 @@ Defs(
             Slice(start = 10, length = 2),
             Slice(start = 12, length = 2),
             Slice(start = 14, length = 2),
+            Slice(start = 16, length = 2),
         ],
         space_after: [
             Slice(start = 0, length = 0),
@@ -43,8 +46,11 @@ Defs(
             Slice(start = 12, length = 0),
             Slice(start = 14, length = 0),
             Slice(start = 16, length = 0),
+            Slice(start = 18, length = 0),
         ],
         spaces: [
+            Newline,
+            Newline,
             Newline,
             Newline,
             Newline,
@@ -440,10 +446,39 @@ Defs(
                     ),
                 ),
             },
+            Opaque {
+                header: TypeHeader {
+                    name: @305-306 "A",
+                    vars: [],
+                },
+                typ: @310-312 Apply(
+                    "",
+                    "U8",
+                    [],
+                ),
+                derived: Some(
+                    @317-324 Has(
+                        [
+                            @318-323 HasAbility {
+                                ability: @318-320 Apply(
+                                    "",
+                                    "Eq",
+                                    [],
+                                ),
+                                impls: Some(
+                                    @321-323 HasImpls(
+                                        [],
+                                    ),
+                                ),
+                            },
+                        ],
+                    ),
+                ),
+            },
         ],
         value_defs: [],
     },
-    @305-306 SpaceBefore(
+    @326-327 SpaceBefore(
         Num(
             "0",
         ),
