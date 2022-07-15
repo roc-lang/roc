@@ -16,6 +16,7 @@ interface Http
     imports [
         Effect,
         InternalTask,
+        Json,
         Task.{ Task },
         Encode.{ Encoding },
         HttpTypes.{ Request, Header, TimeoutConfig, TrackerConfig, Part, Body, Response, Metadata, Error },
