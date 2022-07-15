@@ -408,16 +408,13 @@ fn llvm_module_to_wasm_file(
         .write_to_file(llvm_module, file_type, &test_a_path)
         .unwrap();
 
-    let mut wasm_test_platform = std::env::current_dir().unwrap();
-    wasm_test_platform.push("build/wasm_test_platform.wasm");
-
     use std::process::Command;
 
-    Command::new(&crate::helpers::zig_executable())
+    let output = Command::new(&crate::helpers::zig_executable())
         .current_dir(dir_path)
         .args(&[
             "wasm-ld",
-            wasm_test_platform.to_str().unwrap(),
+            concat!(env!("OUT_DIR"), "/wasm_test_platform.wasm"),
             test_a_path.to_str().unwrap(),
             "-o",
             test_wasm_path.to_str().unwrap(),
@@ -425,8 +422,12 @@ fn llvm_module_to_wasm_file(
             "--allow-undefined",
             "--no-entry",
         ])
-        .status()
+        .output()
         .unwrap();
+
+    assert!(output.status.success(), "{:#?}", output);
+    assert!(output.stdout.is_empty(), "{:#?}", output);
+    assert!(output.stderr.is_empty(), "{:#?}", output);
 
     test_wasm_path
 }
