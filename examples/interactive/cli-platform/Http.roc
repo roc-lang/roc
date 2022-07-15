@@ -14,9 +14,6 @@ interface Http
         send,
     ]
     imports [
-        Effect,
-        InternalTask,
-        Task,
         Encode.{ Encoding },
         HttpTypes.{ Request, Header, TimeoutConfig, TrackerConfig, Part, Body, Response, Metadata, Error },
     ]
