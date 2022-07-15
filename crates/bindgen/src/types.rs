@@ -1003,10 +1003,7 @@ fn add_tag_union<'a>(
                     let fields = payload_vars.iter().copied().enumerate();
                     let struct_id =
                         add_struct(env, struct_name, fields, types, layout, |name, fields| {
-                            RocType::TagUnionPayload {
-                                name: name.clone(),
-                                fields,
-                            }
+                            RocType::TagUnionPayload { name, fields }
                         });
 
                     (tag_name, Some(struct_id))
