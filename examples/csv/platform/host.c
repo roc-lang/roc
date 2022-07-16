@@ -6,13 +6,20 @@
 #include <string.h>
 #include <unistd.h>
 
+//#define ROC_PLATFORM_DEBUG
+
 void alloc_panic(size_t size);
 
 void *roc_alloc(size_t size, unsigned int alignment) {
+#ifdef ROC_PLATFORM_DEBUG
   printf("Allocating %llu (alignment %ud) ", (unsigned long long)size,
          alignment);
+#endif
   void *result = malloc(size);
+
+#ifdef ROC_PLATFORM_DEBUG
   printf("at: %p\n", result);
+#endif
 
   if (result == NULL) {
     if (size ==
@@ -28,11 +35,16 @@ void *roc_alloc(size_t size, unsigned int alignment) {
 
 void *roc_realloc(void *ptr, size_t new_size, size_t old_size,
                   unsigned int alignment) {
+#ifdef ROC_PLATFORM_DEBUG
   printf("Rellocating %p (%llu -> %llu) (alignment %ud) ", ptr,
          (unsigned long long)old_size, (unsigned long long)new_size, alignment);
+#endif
 
   void *result = realloc(ptr, new_size);
+
+#ifdef ROC_PLATFORM_DEBUG
   printf("at: %p\n", result);
+#endif
 
   if (result == NULL) {
     if (new_size ==
@@ -47,7 +59,10 @@ void *roc_realloc(void *ptr, size_t new_size, size_t old_size,
 }
 
 void roc_dealloc(void *ptr, unsigned int alignment) {
+
+#ifdef ROC_PLATFORM_DEBUG
   printf("Deallocating %p (alignment %ud)\n", ptr, alignment);
+#endif
   free(ptr);
 }
 
@@ -67,7 +82,9 @@ void alloc_panic(size_t size) {
 }
 
 void *roc_memcpy(void *dest, const void *src, size_t n) {
+#ifdef ROC_PLATFORM_DEBUG
   printf("memcpy %p -> %p (size: %llu)\n", src, dest, (unsigned long long)n);
+#endif
   return memcpy(dest, src, n);
 }
 

@@ -9,13 +9,16 @@ interface Parser.Str
     stringRaw,
     codepoint,
     codepointSatisfies,
+    anyString,
+    anyRawString,
+    anyCodepoint,
     scalar,
     oneOf,
     digit,
     digits,
     strFromRaw,
   ]
-  imports [Parser.Core.{Parser, const, fail, map, map2, apply, many, oneOrMore, parse, parsePartial, buildPrimitiveParser, between}]
+  imports [Parser.Core.{Parser, ParseResult, const, fail, map, map2, apply, many, oneOrMore, parse, parsePartial, buildPrimitiveParser, between}]
 
 # Specific string-based parsers:
 
@@ -41,7 +44,7 @@ strFromCodepoint = \cp ->
   strFromRaw [cp]
 
 ## Runs a parser against the start of a list of scalars, allowing the parser to consume it only partially.
-parseRawStrPartial : Parser RawStr a, RawStr -> Result {val: a, input: RawStr} [ParsingFailure Str]
+parseRawStrPartial : Parser RawStr a, RawStr -> ParseResult RawStr a
 parseRawStrPartial = \parser, input ->
   parsePartial parser input
 
@@ -49,7 +52,7 @@ parseRawStrPartial = \parser, input ->
 ##
 ## - If the parser succeeds, returns the resulting value as well as the leftover input.
 ## - If the parser fails, returns `Err (ParsingFailure msg)`
-parseStrPartial : Parser RawStr a, Str -> Result {val: a, input: Str} [ParsingFailure Str]
+parseStrPartial : Parser RawStr a, Str -> ParseResult Str a
 parseStrPartial = \parser, input ->
   parser
   |> parseRawStrPartial (strToRaw input)
@@ -137,9 +140,30 @@ scalar = \expectedScalar ->
   |> string
   |> map (\_ -> expectedScalar)
 
-betweenBraces : Parser RawStr a -> Parser RawStr a
-betweenBraces = \parser ->
-  between parser (scalar '[') (scalar ']')
+# Matches any codepoint
+anyCodepoint : Parser RawStr U8
+anyCodepoint = codepointSatisfies (\_ -> True)
+
+# Matches any bytestring
+# and consumes all of it.
+# Does not fail.
+anyRawString : Parser RawStr RawStr
+anyRawString = buildPrimitiveParser \rawStringValue ->
+  Ok {val: rawStringValue, input: []}
+
+# Matches any string
+# as long as it is valid UTF8.
+anyString : Parser RawStr Str
+anyString = buildPrimitiveParser \fieldRawString ->
+  when Str.fromUtf8 fieldRawString is
+    Ok stringVal ->
+      Ok {val: stringVal, input: []}
+    Err (BadUtf8 _ _) ->
+      Err (ParsingFailure "Expected a string field, but its contents cannot be parsed as UTF8.")
+
+# betweenBraces : Parser RawStr a -> Parser RawStr a
+# betweenBraces = \parser ->
+#   between parser (scalar '[') (scalar ']')
 
 
 digit : Parser RawStr U8

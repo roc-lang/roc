@@ -8,10 +8,12 @@ interface Parser.CSV
   parseStr,
   parseCSV,
   field,
+  string,
+  nat,
   ]
   imports [
-  Parser.Core.{Parser, parse, buildPrimitiveParser, fail, const, alt, map, map2, apply, many, oneorMore, sepBy1, between, ignore},
-  Parser.Str.{RawStr, parseStrPartial, oneOf, codepoint, codepointSatisfies, string, scalar, digits, strFromRaw}
+  Parser.Core.{Parser, parse, buildPrimitiveParser, fail, const, alt, map, map2, apply, many, oneorMore, sepBy1, between, ignore, flatten},
+  Parser.Str.{RawStr, parseStrPartial, oneOf, codepoint, codepointSatisfies, scalar, digits, strFromRaw}
   ]
 
 ## This is a CSV parser which follows RFC4180
@@ -27,11 +29,12 @@ CSVField : RawStr
 CSVRecord : List CSVField
 CSV : List CSVRecord
 
-parseStr : Parser CSVRecord a, Str -> Result (List a) [ParsingFailure Str, SyntaxError (List U8), ParsingIncomplete CSVRecord]
+parseStr : Parser CSVRecord a, Str -> Result (List a) [ParsingFailure Str, SyntaxError Str, ParsingIncomplete CSVRecord]
 parseStr = \csvParser, input ->
   when parseStrToCSV input is
     Err (ParsingIncomplete rest) ->
-      Err (SyntaxError rest)
+      restStr = Parser.Str.strFromRaw rest
+      Err (SyntaxError restStr)
     Err (ParsingFailure str) ->
       Err (ParsingFailure str)
     Ok csvData ->
@@ -47,32 +50,65 @@ parseCSV : Parser CSVRecord a, CSV -> Result (List a) [ParsingFailure Str, Parsi
 parseCSV = \csvParser, csvData ->
   List.walkUntil csvData (Ok []) \state, recordList ->
     when parse csvParser recordList (\leftover -> leftover == []) is
-      Err problem ->
-        Break (Err problem)
+      Err (ParsingFailure problem) ->
+        recordStr = recordList |> List.map strFromRaw |> Str.joinWith ", "
+        problemStr = "\(problem)\nWhile parsing record `\(recordStr)`."
+        Break (Err (ParsingFailure problemStr))
+      Err (ParsingIncomplete problem) ->
+        Break (Err (ParsingIncomplete problem))
       Ok val ->
         state
         |> Result.map (\vals -> List.append vals val)
         |> Continue
 
+# Wrapper function to combine a set of fields into your desired `a`
+#
+# ## Usage example
+#
+# >>> record (\firstName -> \lastName -> \age -> User {firstName, lastName, age})
+# >>> |> field string
+# >>> |> field string
+# >>> |> field nat
+#
 record : a -> Parser CSVRecord a
 record = Parser.Core.const
 
 field : Parser RawStr a -> Parser CSVRecord a
 field = \fieldParser ->
-  buildPrimitiveParser \recordVal ->
-    when List.get recordVal 0 is
+  buildPrimitiveParser \fieldsList ->
+    when List.get fieldsList 0 is
       Err OutOfBounds ->
         Err (ParsingFailure "expected another CSV field but there are no more fields in this record")
       Ok rawStr ->
         when Parser.Str.parseRawStr fieldParser rawStr is
           Ok val ->
-            Ok {val: val, input: (List.dropFirst recordVal)}
+            Ok {val: val, input: (List.dropFirst fieldsList)}
           Err (ParsingFailure reason) ->
-            Err (ParsingFailure reason)
+            fieldStr = rawStr |> strFromRaw
+            Err (ParsingFailure "Field `\(fieldStr)` from could not be parsed. \(reason)")
           Err (ParsingIncomplete reason) ->
             reasonStr = strFromRaw reason
-            Err (ParsingFailure "The field parser was unable to read the whole field: \(reasonStr)")
+            fieldsStr = fieldsList |> List.map strFromRaw |> Str.joinWith ", "
+            Err (ParsingFailure "The field parser was unable to read the whole field: `\(reasonStr)` while parsing the first field of leftover \(fieldsStr))")
 
+# Parser for a field containing a UTF8-encoded string
+string : Parser CSVField Str
+string = Parser.Str.anyString
+
+nat : Parser CSVField Nat
+nat =
+  string
+  |> map (\val ->
+    when Str.toNat val is
+      Ok num ->
+        Ok num
+      Err problem ->
+        Err "The field is not a valid Nat: \(val)"
+        )
+  |> flatten
+
+# f64 : Parser CSVField F64
+# f64 = string |> map Str.toF64 |> flatten
 
 parseStrToCSV : Str -> Result CSV [ParsingFailure Str, ParsingIncomplete RawStr]
 parseStrToCSV = \input ->
@@ -111,7 +147,7 @@ escapedContents = many (oneOf [
   textdata
 ])
 
-twodquotes = string "\"\""
+twodquotes = Parser.Str.string "\"\""
 
 nonescapedCsvField : Parser RawStr CSVField
 nonescapedCsvField = many textdata
@@ -120,5 +156,5 @@ dquote = codepoint 34 # '"'
 endOfLine = alt (ignore crlf) (ignore lf)
 cr = codepoint 13 # '\r'
 lf = codepoint 10 # '\n'
-crlf = string "\r\n"
+crlf = Parser.Str.string "\r\n"
 textdata = codepointSatisfies (\x -> (x >= 32 && x <= 33) || (x >= 35 && x <= 43) || (x >= 45 && x <= 126)) # Any printable char except " (34) and , (44)

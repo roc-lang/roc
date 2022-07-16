@@ -8,12 +8,20 @@ app "main"
 # with hard-coded input.
 
 main =
-  when Parser.CSV.parseStr userCSVParser "John,Doe,10" is
+  when Parser.CSV.parseStr userCSVParser "John,Doe,10\r\nRichard,Feldman,100\r\nMarten,Wijnja,28\r\n" is
     Ok result ->
         val = result |> Str.joinWith("\n")
-        "Parse success: \(val)\n"
+        nResults = List.len result |> Num.toStr
+        "Parse success!\n\n\(nResults) users were found:\n\(val)\n"
     Err problem ->
-        "Parsing Problem"
+      when problem is
+        ParsingFailure failure ->
+          "Parsing failure: \(failure)\n"
+        ParsingIncomplete leftover ->
+          leftoverStr = leftover |> List.map Parser.Str.strFromRaw |> Str.joinWith ", "
+          "Parsing incomplete. Following still left: \(leftoverStr)\n"
+        SyntaxError error ->
+          "Parsing failure. Syntax error in the CSV: \(error)"
 # main = fullTest csvParser "10,20\n\"An escaped field!\"\"\n,,,\",30\n"
 # main = partialTest fieldParser "\"An escaped field with some \"\"<- double quotes\""
 # main = fullTest fieldContentsParser "My very cool,\"\"\r\n string"
@@ -21,10 +29,12 @@ main =
 # main = partialTest manyParser "this is a very long string\"\""
 
 userCSVParser =
-  Parser.CSV.record (\first -> \last -> \age -> "User: \(first) \(last) \(age)")
-  |> Parser.Core.apply (Parser.CSV.field (Parser.Str.string "John"))
-  |> Parser.Core.apply (Parser.CSV.field (Parser.Str.string "Doe"))
-  |> Parser.Core.apply (Parser.CSV.field (Parser.Str.string "10"))
+  Parser.CSV.record (\first -> \last -> \age ->
+    ageStr = Num.toStr age
+    "User: \(first) \(last) \(ageStr)")
+  |> Parser.Core.apply (Parser.CSV.field Parser.CSV.string)
+  |> Parser.Core.apply (Parser.CSV.field Parser.CSV.string)
+  |> Parser.Core.apply (Parser.CSV.field Parser.CSV.nat)
 
 partialTest = \parser, input ->
   when Parser.Str.parseStrPartial parser input is

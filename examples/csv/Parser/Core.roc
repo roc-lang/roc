@@ -1,6 +1,7 @@
 interface Parser.Core
   exposes [
     Parser,
+    ParseResult,
     parse,
     parsePartial,
     fail,
@@ -21,6 +22,7 @@ interface Parser.Core
     sepBy1,
     ignore,
     buildPrimitiveParser,
+    flatten,
   ]
   imports []
 
@@ -37,9 +39,11 @@ interface Parser.Core
 ## How a parser is _actually_ implemented internally is not important
 ## and this might change between versions;
 ## for instance to improve efficiency or error messages on parsing failures.
-Parser input a := (input -> Result {val: a, input: input} [ParsingFailure Str])
+Parser input a := (input -> ParseResult input a)
 
-buildPrimitiveParser : (input -> Result {val: a, input: input} [ParsingFailure Str]) -> Parser input a
+ParseResult input a : Result {val: a, input: input} [ParsingFailure Str]
+
+buildPrimitiveParser : (input -> ParseResult input a) -> Parser input a
 buildPrimitiveParser = \fun ->
   @Parser fun
 
@@ -57,7 +61,7 @@ buildPrimitiveParser = \fun ->
 ##
 ## Of course, this is mostly useful when creating your own internal parsing building blocks.
 ## `run` or `Parser.Str.runStr` etc. are more useful in daily usage.
-parsePartial : Parser input a, input -> Result {val: a, input: input} [ParsingFailure Str]
+parsePartial : Parser input a, input -> ParseResult input a
 parsePartial = \@Parser parser, input ->
   (parser input)
 
@@ -211,6 +215,22 @@ map3 = \parserA, parserB, parserC, transform ->
 
 # ^ And this could be repeated for as high as we want, of course.
 
+# Removes a layer of 'result' from running the parser.
+#
+# This allows for instance to map functions that return a result over the parser,
+# where errors are turned into `ParsingFailure` s.
+flatten : Parser input (Result a Str) -> Parser input a
+flatten = \parser ->
+  buildPrimitiveParser \input ->
+    result = parsePartial parser input
+    when result is
+        Err problem ->
+          Err problem
+        Ok {val: (Ok val), input: inputRest} ->
+          Ok {val: val, input: inputRest}
+        Ok {val: (Err problem), input: inputRest} ->
+          Err (ParsingFailure problem)
+
 ## Runs a parser lazily
 ##
 ## This is (only) useful when dealing with a recursive structure.
@@ -226,7 +246,7 @@ maybe : Parser input a -> Parser input (Result a [Nothing])
 maybe = \parser ->
   alt (parser |> map (\val -> Ok val)) (const (Err Nothing))
 
-manyImpl : Parser input a, List a, input -> Result { input : input, val : List a } [ParsingFailure Str]
+manyImpl : Parser input a, List a, input -> ParseResult input (List a)
 manyImpl = \parser, vals, input ->
   result = parsePartial parser input
   when result is
