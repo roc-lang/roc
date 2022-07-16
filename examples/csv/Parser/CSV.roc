@@ -1,10 +1,13 @@
 interface Parser.CSV
   exposes [
   CSV,
+  CSVRecord,
+  CSVField, # <- Might be unneeded?
   file,
   record,
-  escapedField, # TODO
-  escapedContents, # TODO
+  parseStr,
+  parseCSV,
+  field,
   ]
   imports [
   Parser.Core.{Parser, fail, const, alt, map, map2, apply, many, oneorMore, sepBy1, between, ignore},
@@ -24,23 +27,63 @@ CSVField : RawStr
 CSVRecord : List CSVField
 CSV : List CSVRecord
 
+parseStr : Parser CSVRecord a, Str -> List a
+parseStr = \csvParser, input ->
+  csvData = parseStrToCSV input
+  parseCSV csvParser csvData
+
+parseCSV : Parser CSVRecord a, CSV -> List a
+parseCSV = \parser, csvData ->
+  parse (many csvParser) csvData
+
+record : Parser CSVRecord a
+record = Parser.Core.const
+
+field : Parser RawStr a -> Parser CSVRecord a
+field = \fieldParser ->
+  buildPrimitiveParser \csvRecord ->
+    when List.get csvRecord 0 is
+      Err OutOfBounds ->
+        Err (ParsingFailure "expected another CSV field but there are no more fields in this record")
+      Ok rawStr ->
+        when Parser.Str.parseRawStr fieldParser rawStr is
+          Ok val ->
+            {val: val, input: (List.dropFirst csvRecord)}
+          Err (ParsingFailure reason) ->
+            Err (ParsingFailure reason)
+          Err (ParsingIncomplete reason) ->
+            Err (ParsingFailure "The field parser was unable to read the whole field: \(reason)")
+
+
+parseStrToCSV : Parser Str CSV
+parseStrToCSV = \input ->
+  parse file (Str.toUtf8 input)
+
+parseStrToCSVRecord : Parser Str CSVRecord
+parseStrToCSVRecord = \input ->
+  parse record (Str.toUtf8 input)
+
+
+# The following are parsers to turn strings into CSV structures
+
 file : Parser RawStr CSV
 file = many recordNewline
 
 # The following compiles 6x slower, but follows the RFC to the letter (allowing the final CRLF to be omitted)
+# file : Parser RawStr CSV
 # file = map2 (many recordNewline) (alt record recordNewline) (\records, finalRecord -> List.concat records [finalRecord])
 
 recordNewline : Parser RawStr CSVRecord
-recordNewline = map2 record endOfLine (\rec, _ -> rec)
+recordNewline = map2 csvRecord endOfLine (\rec, _ -> rec)
 
-record : Parser RawStr CSVRecord
-record = sepBy1 field comma
+csvRecord : Parser RawStr CSVRecord
+csvRecord = sepBy1 csvField comma
 
-field : Parser RawStr CSVField
-field = alt escapedField nonescapedField
+csvField : Parser RawStr CSVField
+csvFfield = alt escapedCsvField nonescapedCsvField
 
-escapedField : Parser RawStr CSVField
-escapedField = between escapedContents dquote dquote
+escapedCsvField : Parser RawStr CSVField
+escapedCsvField = between escapedContents dquote dquote
 escapedContents = many (oneOf [
   twodquotes |> map (\_ -> 34), # An escaped double quote
   comma,
@@ -51,8 +94,8 @@ escapedContents = many (oneOf [
 
 twodquotes = string "\"\""
 
-nonescapedField : Parser RawStr CSVField
-nonescapedField = many textdata
+nonescapedCsvField : Parser RawStr CSVField
+nonescapedCsvField = many textdata
 comma = codepoint 44 # ','
 dquote = codepoint 34 # '"'
 endOfLine = alt (ignore crlf) (ignore lf)
