@@ -3,7 +3,7 @@ app "main"
     imports [Parser.Core.{Parser, map, apply}, Parser.Str.{RawStr}, Parser.CSV.{CSV, record, field, string, nat}]
     provides [main] to pf
 
-input = "Airplane!,1980,\"Robert Hays,Julie Hagerty\"\r\nCaddyshack,1980,\"Chevy Chase,Rodney Dangerfield,Ted Knight,Michael O'Keefe,Bill Murray\"\r\n"
+input = "Airplane!,1980,\"Robert Hays,Julie Hagerty\"\r\nCaddyshack,1980,\"Chevy Chase,Rodney Dangerfield,Ted Knight,Michael O'Keefe,Bill Murray\""
 main =
   when Parser.CSV.parseStr movieInfoParser input is
     Ok movies ->

@@ -13,7 +13,7 @@ interface Parser.CSV
   f64
   ]
   imports [
-  Parser.Core.{Parser, parse, buildPrimitiveParser, fail, const, alt, map, map2, apply, many, maybe, oneorMore, sepBy1, between, ignore, flatten},
+  Parser.Core.{Parser, parse, buildPrimitiveParser, fail, const, alt, map, map2, apply, many, maybe, oneorMore, sepBy1, between, ignore, flatten, sepBy},
   Parser.Str.{RawStr, parseStrPartial, oneOf, codepoint, codepointSatisfies, scalar, digits, strFromRaw}
   ]
 
@@ -21,10 +21,9 @@ interface Parser.CSV
 ##
 ## For simplicity's sake, the following things are not yet supported:
 ## - CSV files with headings
-## - A file not ending in a final CRLF ("\r\n").
 ##
 ## The following however *is* supported
-## - A simple LF ("\n") instead of CRLF ("\r\n") to separate records (and at the end).
+## - A simple LF ("\n") instead of CRLF ("\r\n") to separate records.
 
 CSV : List CSVRecord
 CSVRecord : List CSVField
@@ -150,19 +149,7 @@ parseStrToCSVRecord = \input ->
 # The following are parsers to turn strings into CSV structures
 
 file : Parser RawStr CSV
-file = many recordNewline
-
-# The following compiles 6x slower, but follows the RFC to the letter (allowing the final CRLF to be omitted)
-# file : Parser RawStr CSV
-# file = map2 (many recordNewline) (maybe csvRecord) \records, finalRecord ->
-#   when finalRecord is
-#     Err Nothing ->
-#       records
-#     Ok val ->
-#       List.append records val
-
-recordNewline : Parser RawStr CSVRecord
-recordNewline = map2 csvRecord endOfLine (\rec, _ -> rec)
+file = sepBy csvRecord endOfLine
 
 csvRecord : Parser RawStr CSVRecord
 csvRecord = sepBy1 csvField comma
