@@ -5078,7 +5078,7 @@ mod test_fmt {
             indoc!(
                 r#"
                 A := U8
-                    has [Eq, Hash]
+                     has [Eq, Hash]
 
                 0
                 "#
@@ -5096,12 +5096,92 @@ mod test_fmt {
             indoc!(
                 r#"
                 A := a | a has Hash
-                    has [Eq, Hash]
+                     has [Eq, Hash]
 
                 0
                 "#
             ),
         );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                A := U8 has []
+
+                0
+                "#
+            ),
+            indoc!(
+                r#"
+                A := U8 has []
+
+                0
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn opaque_has_with_impls() {
+        expr_formats_same(indoc!(
+            r#"
+            A := U8 has [Eq { eq }, Hash { hash }]
+
+            0
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            A := U8 has [Eq { eq, eq1 }]
+
+            0
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                A := U8 has [Eq {   eq,     eq1   }]
+                A := U8 has [Eq {
+                                    eq,
+                                    eq1
+                                }]
+
+                0
+                "#
+            ),
+            indoc!(
+                r#"
+                A := U8 has [Eq { eq, eq1 }]
+                A := U8 has [
+                         Eq {
+                             eq,
+                             eq1,
+                         },
+                     ]
+                
+                0
+                "#
+            ),
+        );
+
+        expr_formats_same(indoc!(
+            r#"
+            A := a | a has Other
+                 has [Eq { eq }, Hash { hash }]
+
+            0
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            A := U8 has [Eq {}]
+
+            0
+            "#
+        ));
     }
 
     #[test]
