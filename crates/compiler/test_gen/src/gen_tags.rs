@@ -1005,7 +1005,7 @@ fn alignment_in_multi_tag_construction_three() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn alignment_in_multi_tag_pattern_match() {
+fn alignment_in_multi_tag_pattern_match_1() {
     assert_evals_to!(
         indoc!(
             r"#
@@ -1023,7 +1023,11 @@ fn alignment_in_multi_tag_pattern_match() {
         (32i64, true),
         (i64, bool)
     );
+}
 
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn alignment_in_multi_tag_pattern_match_2() {
     assert_evals_to!(
         indoc!(
             r"#

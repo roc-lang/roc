@@ -1595,8 +1595,7 @@ impl<'a> WasmBackend<'a> {
 
         // Store the tag ID (if any)
         if stores_tag_id_as_data {
-            let id_offset =
-                data_offset + union_layout.data_size_without_tag_id(TARGET_INFO).unwrap();
+            let id_offset = data_offset + union_layout.tag_id_offset(TARGET_INFO).unwrap();
 
             let id_align = union_layout.tag_id_builtin().alignment_bytes(TARGET_INFO);
             let id_align = Align::from(id_align);
@@ -1679,7 +1678,7 @@ impl<'a> WasmBackend<'a> {
         };
 
         if union_layout.stores_tag_id_as_data(TARGET_INFO) {
-            let id_offset = union_layout.data_size_without_tag_id(TARGET_INFO).unwrap();
+            let id_offset = union_layout.tag_id_offset(TARGET_INFO).unwrap();
 
             let id_align = union_layout.tag_id_builtin().alignment_bytes(TARGET_INFO);
             let id_align = Align::from(id_align);

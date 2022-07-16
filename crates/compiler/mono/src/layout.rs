@@ -653,6 +653,40 @@ impl<'a> UnionLayout<'a> {
             | UnionLayout::NullableUnwrapped { .. } => target_info.ptr_width() as u32,
         }
     }
+
+    pub fn tag_id_offset(&self, target_info: TargetInfo) -> Option<u32> {
+        match self {
+            UnionLayout::NonRecursive(tags)
+            | UnionLayout::Recursive(tags)
+            | UnionLayout::NullableWrapped {
+                other_tags: tags, ..
+            } => Some(Self::tag_id_offset_help(tags, target_info)),
+            UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => None,
+        }
+    }
+
+    fn tag_id_offset_help(layouts: &[&[Layout]], target_info: TargetInfo) -> u32 {
+        let tag_id_align = if layouts.len() < 256 {
+            // i8
+            1
+        } else {
+            // i16
+            2
+        };
+
+        let mut data_width = 0;
+        for tag in layouts {
+            let mut total = 0;
+            for layout in tag.iter() {
+                let stack_size = layout.stack_size(target_info);
+                total += stack_size;
+            }
+
+            data_width = data_width.max(total);
+        }
+
+        round_up_to_alignment(data_width, tag_id_align)
+    }
 }
 
 /// Custom type so we can get the numeric representation of a symbol in tests (so `#UserApp.3`
