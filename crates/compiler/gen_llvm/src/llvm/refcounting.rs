@@ -5,7 +5,7 @@ use crate::llvm::build::{
     FAST_CALL_CONV,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
-use crate::llvm::convert::{basic_type_from_layout, RocUnionType};
+use crate::llvm::convert::{basic_type_from_layout, RocUnion};
 use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
@@ -1597,7 +1597,7 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
     // read the tag_id
     let tag_id_ptr = env
         .builder
-        .build_struct_gep(arg_ptr, RocUnionType::TAG_ID_INDEX, "tag_id_ptr")
+        .build_struct_gep(arg_ptr, RocUnion::TAG_ID_INDEX, "tag_id_ptr")
         .unwrap();
 
     let tag_id = env
@@ -1634,7 +1634,7 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
         debug_assert!(wrapper_type.is_struct_type());
         let opaque_tag_data_ptr = env
             .builder
-            .build_struct_gep(arg_ptr, RocUnionType::TAG_DATA_INDEX, "field_ptr")
+            .build_struct_gep(arg_ptr, RocUnion::TAG_DATA_INDEX, "field_ptr")
             .unwrap();
 
         let cast_tag_data_pointer = env.builder.build_pointer_cast(

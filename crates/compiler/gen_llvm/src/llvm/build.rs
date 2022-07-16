@@ -12,7 +12,7 @@ use crate::llvm::build_str::{dec_to_str, str_from_float, str_from_int};
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
     self, argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout, zig_str_type,
-    RocUnionType,
+    RocUnion,
 };
 use crate::llvm::refcounting::{
     build_reset, decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
@@ -1427,7 +1427,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         .builder
                         .build_struct_gep(
                             argument.into_pointer_value(),
-                            RocUnionType::TAG_DATA_INDEX,
+                            RocUnion::TAG_DATA_INDEX,
                             "get_opaque_data_ptr",
                         )
                         .unwrap();
@@ -1552,7 +1552,7 @@ fn build_wrapped_tag<'a, 'ctx, 'env>(
 
     if union_layout.stores_tag_id_as_data(env.target_info) {
         let tag_id_ptr = builder
-            .build_struct_gep(raw_data_ptr, RocUnionType::TAG_ID_INDEX, "tag_id_index")
+            .build_struct_gep(raw_data_ptr, RocUnion::TAG_ID_INDEX, "tag_id_index")
             .unwrap();
 
         let tag_id_type = basic_type_from_layout(env, &tag_id_layout).into_int_type();
@@ -1561,7 +1561,7 @@ fn build_wrapped_tag<'a, 'ctx, 'env>(
             .build_store(tag_id_ptr, tag_id_type.const_int(tag_id as u64, false));
 
         let opaque_struct_ptr = builder
-            .build_struct_gep(raw_data_ptr, RocUnionType::TAG_DATA_INDEX, "tag_data_index")
+            .build_struct_gep(raw_data_ptr, RocUnion::TAG_DATA_INDEX, "tag_data_index")
             .unwrap();
 
         struct_pointer_from_fields(
@@ -1708,12 +1708,11 @@ fn build_tag<'a, 'ctx, 'env>(
         UnionLayout::NonRecursive(tags) => {
             debug_assert!(union_size > 1);
 
-            let roc_union_type =
-                RocUnionType::tagged_from_slices(env.context, tags, env.target_info);
+            let roc_union = RocUnion::tagged_from_slices(env.context, tags, env.target_info);
 
             let data = build_struct(env, scope, arguments);
 
-            let value = roc_union_type.as_struct_value(env, data, Some(tag_id as _));
+            let value = roc_union.as_struct_value(env, data, Some(tag_id as _));
 
             let alloca = create_entry_block_alloca(
                 env,
@@ -1803,11 +1802,11 @@ fn build_tag<'a, 'ctx, 'env>(
             nullable_id,
             other_fields,
         } => {
-            let roc_union_type =
-                RocUnionType::untagged_from_slices(env.context, &[other_fields], env.target_info);
+            let roc_union =
+                RocUnion::untagged_from_slices(env.context, &[other_fields], env.target_info);
 
             if tag_id == *nullable_id as _ {
-                let output_type = roc_union_type.struct_type().ptr_type(AddressSpace::Generic);
+                let output_type = roc_union.struct_type().ptr_type(AddressSpace::Generic);
 
                 return output_type.const_null().into();
             }
@@ -1824,7 +1823,7 @@ fn build_tag<'a, 'ctx, 'env>(
 
             let data = build_struct(env, scope, arguments);
 
-            let value = roc_union_type.as_struct_value(env, data, None);
+            let value = roc_union.as_struct_value(env, data, None);
 
             env.builder.build_store(data_ptr, value);
 
@@ -2134,17 +2133,17 @@ fn reserve_with_refcount_union_as_block_of_memory<'a, 'ctx, 'env>(
 ) -> PointerValue<'ctx> {
     let ptr_bytes = env.target_info;
 
-    let roc_union_type = if union_layout.stores_tag_id_as_data(ptr_bytes) {
-        RocUnionType::tagged_from_slices(env.context, fields, env.target_info)
+    let roc_union = if union_layout.stores_tag_id_as_data(ptr_bytes) {
+        RocUnion::tagged_from_slices(env.context, fields, env.target_info)
     } else {
-        RocUnionType::untagged_from_slices(env.context, fields, env.target_info)
+        RocUnion::untagged_from_slices(env.context, fields, env.target_info)
     };
 
     reserve_with_refcount_help(
         env,
-        roc_union_type.struct_type(),
-        roc_union_type.tag_width(),
-        roc_union_type.tag_alignment(),
+        roc_union.struct_type(),
+        roc_union.tag_width(),
+        roc_union.tag_alignment(),
     )
 }
 
@@ -3155,7 +3154,7 @@ fn get_tag_id_wrapped<'a, 'ctx, 'env>(
 ) -> IntValue<'ctx> {
     let tag_id_ptr = env
         .builder
-        .build_struct_gep(from_value, RocUnionType::TAG_ID_INDEX, "tag_id_ptr")
+        .build_struct_gep(from_value, RocUnion::TAG_ID_INDEX, "tag_id_ptr")
         .unwrap();
 
     env.builder
@@ -3168,7 +3167,7 @@ pub fn get_tag_id_non_recursive<'a, 'ctx, 'env>(
     tag: StructValue<'ctx>,
 ) -> IntValue<'ctx> {
     env.builder
-        .build_extract_value(tag, RocUnionType::TAG_ID_INDEX, "get_tag_id")
+        .build_extract_value(tag, RocUnion::TAG_ID_INDEX, "get_tag_id")
         .unwrap()
         .into_int_value()
 }

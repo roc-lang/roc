@@ -60,7 +60,7 @@ pub fn basic_type_from_union_layout<'a, 'ctx, 'env>(
     match union_layout {
         NonRecursive(tags) => {
             //
-            RocUnionType::tagged_from_slices(env.context, tags, env.target_info)
+            RocUnion::tagged_from_slices(env.context, tags, env.target_info)
                 .struct_type()
                 .into()
         }
@@ -69,25 +69,25 @@ pub fn basic_type_from_union_layout<'a, 'ctx, 'env>(
             other_tags: tags, ..
         } => {
             if union_layout.stores_tag_id_as_data(env.target_info) {
-                RocUnionType::tagged_from_slices(env.context, tags, env.target_info)
+                RocUnion::tagged_from_slices(env.context, tags, env.target_info)
                     .struct_type()
                     .ptr_type(AddressSpace::Generic)
                     .into()
             } else {
-                RocUnionType::untagged_from_slices(env.context, tags, env.target_info)
+                RocUnion::untagged_from_slices(env.context, tags, env.target_info)
                     .struct_type()
                     .ptr_type(AddressSpace::Generic)
                     .into()
             }
         }
         NullableUnwrapped { other_fields, .. } => {
-            RocUnionType::untagged_from_slices(env.context, &[other_fields], env.target_info)
+            RocUnion::untagged_from_slices(env.context, &[other_fields], env.target_info)
                 .struct_type()
                 .ptr_type(AddressSpace::Generic)
                 .into()
         }
         NonNullableUnwrapped(fields) => {
-            RocUnionType::untagged_from_slices(env.context, &[fields], env.target_info)
+            RocUnion::untagged_from_slices(env.context, &[fields], env.target_info)
                 .struct_type()
                 .ptr_type(AddressSpace::Generic)
                 .into()
@@ -209,14 +209,14 @@ enum TagType {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct RocUnionType<'ctx> {
+pub(crate) struct RocUnion<'ctx> {
     struct_type: StructType<'ctx>,
     data_align: u32,
     data_width: u32,
     tag_type: Option<TagType>,
 }
 
-impl<'ctx> RocUnionType<'ctx> {
+impl<'ctx> RocUnion<'ctx> {
     pub const TAG_ID_INDEX: u32 = 2;
     pub const TAG_DATA_INDEX: u32 = 1;
 
