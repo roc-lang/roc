@@ -86,7 +86,7 @@ field = \fieldParser ->
             Ok {val: val, input: (List.dropFirst fieldsList)}
           Err (ParsingFailure reason) ->
             fieldStr = rawStr |> strFromRaw
-            Err (ParsingFailure "Field `\(fieldStr)` from could not be parsed. \(reason)")
+            Err (ParsingFailure "Field `\(fieldStr)` could not be parsed. \(reason)")
           Err (ParsingIncomplete reason) ->
             reasonStr = strFromRaw reason
             fieldsStr = fieldsList |> List.map strFromRaw |> Str.joinWith ", "
