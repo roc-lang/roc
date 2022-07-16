@@ -105,27 +105,28 @@ pub fn run_solve(
 
 /// Copies exposed types and all ability specializations, which may be implicitly exposed.
 pub fn exposed_types_storage_subs(
+    home: ModuleId,
     solved_subs: &mut Solved<Subs>,
     exposed_vars_by_symbol: &[(Symbol, Variable)],
     solved_specializations: &ResolvedSpecializations,
+    abilities_store: &AbilitiesStore,
 ) -> ExposedTypesStorageSubs {
     let subs = solved_subs.inner_mut();
     let mut storage_subs = StorageSubs::new(Subs::new());
     let mut stored_vars_by_symbol = VecMap::with_capacity(exposed_vars_by_symbol.len());
-    let mut stored_specialization_lambda_set_vars =
-        VecMap::with_capacity(solved_specializations.len());
 
     for (symbol, var) in exposed_vars_by_symbol.iter() {
         let new_var = storage_subs.import_variable_from(subs, *var).variable;
         stored_vars_by_symbol.insert(*symbol, new_var);
     }
 
+    let mut stored_specialization_lambda_set_vars =
+        VecMap::with_capacity(solved_specializations.len());
+
     for (_, member_specialization) in solved_specializations.iter() {
-        for (_, &specialization_lset_var) in member_specialization.specialization_lambda_sets.iter()
-        {
-            let specialization_lset_ambient_function_var = subs
-                .get_lambda_set(specialization_lset_var)
-                .ambient_function;
+        for (_, &lset_var) in member_specialization.specialization_lambda_sets.iter() {
+            let specialization_lset_ambient_function_var =
+                subs.get_lambda_set(lset_var).ambient_function;
 
             // Import the ambient function of this specialization lambda set; that will import the
             // lambda set as well. The ambient function is needed for the lambda set compaction
@@ -144,14 +145,29 @@ pub fn exposed_types_storage_subs(
                     roc_types::subs::SubsFmtContent(content, storage_subs.as_inner())
                 ),
             };
-            stored_specialization_lambda_set_vars
-                .insert(specialization_lset_var, imported_lset_var);
+            stored_specialization_lambda_set_vars.insert(lset_var, imported_lset_var);
         }
     }
+
+    // Store the regioned lambda sets of the ability members defined in this module.
+    let stored_ability_member_vars = abilities_store
+        .root_ability_members()
+        .iter()
+        .filter_map(|(member, data)| {
+            if member.module_id() == home {
+                let var = data.signature_var();
+                let imported_var = storage_subs.import_variable_from(subs, var).variable;
+                Some((var, imported_var))
+            } else {
+                None
+            }
+        })
+        .collect();
 
     ExposedTypesStorageSubs {
         storage_subs,
         stored_vars_by_symbol,
         stored_specialization_lambda_set_vars,
+        stored_ability_member_vars,
     }
 }

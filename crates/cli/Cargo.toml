@@ -58,6 +58,7 @@ roc_error_macros = { path = "../error_macros" }
 roc_editor = { path = "../editor", optional = true }
 roc_linker = { path = "../linker" }
 roc_repl_cli = { path = "../repl_cli", optional = true }
+roc_repl_expect = { path = "../repl_expect" }
 clap = { version = "3.1.15", default-features = false, features = ["std", "color", "suggestions"] }
 const_format = { version = "0.2.23", features = ["const_generics"] }
 bumpalo = { version = "3.8.0", features = ["collections"] }
@@ -73,6 +74,7 @@ wasmer-wasi = { version = "2.2.1", optional = true }
 libloading = "0.7.1"
 roc_gen_llvm = {path = "../compiler/gen_llvm"}
 inkwell = {path = "../vendor/inkwell"}
+signal-hook = "0.3.14"
 
 # Wasmer singlepass compiler only works on x86_64.
 [target.'cfg(target_arch = "x86_64")'.dependencies]

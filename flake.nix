@@ -3,10 +3,23 @@
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-21.11";
-    rust-overlay.url = "github:oxalica/rust-overlay"; # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
-    zig.url = "github:roarkanize/zig-overlay"; # using an overlay allows for quick updates after zig releases
-    flake-utils.url = "github:numtide/flake-utils"; # to easily make configs for multiple architectures
-    nixgl.url = "github:guibou/nixGL"; # to be able to use vulkan system libs for editor graphics
+    # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    # using an overlay allows for quick updates after zig releases
+    zig = {
+      url = "github:roarkanize/zig-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    # to easily make configs for multiple architectures
+    flake-utils.url = "github:numtide/flake-utils";
+    # to be able to use vulkan system libs for editor graphics
+    nixgl = {
+      url = "github:guibou/nixGL";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = { self, nixpkgs, rust-overlay, zig, flake-utils, nixgl }:

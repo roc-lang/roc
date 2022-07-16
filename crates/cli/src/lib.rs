@@ -5,15 +5,19 @@ use build::BuiltFile;
 use bumpalo::Bump;
 use clap::{Arg, ArgMatches, Command, ValueSource};
 use roc_build::link::{LinkType, LinkingStrategy};
+use roc_collections::VecMap;
 use roc_error_macros::{internal_error, user_error};
-use roc_load::{LoadingProblem, Threading};
+use roc_gen_llvm::llvm::build::LlvmBackendMode;
+use roc_load::{Expectations, LoadingProblem, Threading};
+use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
+use roc_region::all::Region;
 use roc_repl_cli::expect_mono_module_to_dylib;
 use roc_target::TargetInfo;
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
-use std::os::raw::c_char;
+use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::process;
 use target_lexicon::BinaryFormat;
@@ -281,6 +285,8 @@ pub enum FormatMode {
     CheckOnly,
 }
 
+const SHM_SIZE: i64 = 1024;
+
 pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let arena = Bump::new();
     let filename = matches.value_of_os(ROC_FILE).unwrap();
@@ -341,7 +347,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         let shared_fd =
             libc::shm_open(cstring.as_ptr().cast(), libc::O_RDWR | libc::O_CREAT, 0o666);
 
-        libc::ftruncate(shared_fd, 1024);
+        libc::ftruncate(shared_fd, SHM_SIZE);
 
         let _shared_ptr = libc::mmap(
             std::ptr::null_mut(),
@@ -374,34 +380,70 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     )
     .unwrap();
 
-    let (lib, expects) =
-        expect_mono_module_to_dylib(arena, target.clone(), loaded, opt_level).unwrap();
+    let mut loaded = loaded;
+    let mut expectations = std::mem::take(&mut loaded.expectations);
+    let loaded = loaded;
+
+    let interns = loaded.interns.clone();
+
+    let (lib, expects) = expect_mono_module_to_dylib(
+        arena,
+        target.clone(),
+        loaded,
+        opt_level,
+        LlvmBackendMode::CliTest,
+    )
+    .unwrap();
+
+    let name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
+    let cstring = CString::new(name).unwrap();
+
+    let arena = &bumpalo::Bump::new();
+    let interns = arena.alloc(interns);
 
     use roc_gen_llvm::run_jit_function;
 
-    let mut failures = 0;
-    let passed = expects.len();
+    let mut failed = 0;
+    let mut passed = 0;
 
-    for expect in expects {
-        print!("test {expect}... ");
-        let result = run_jit_function!(lib, expect, bool, |v: bool| v);
+    unsafe {
+        let shared_fd = libc::shm_open(cstring.as_ptr().cast(), libc::O_RDWR, 0o666);
 
-        match result {
-            true => println!("ok"),
-            false => {
-                failures += 1;
-                println!("failed")
+        libc::ftruncate(shared_fd, SHM_SIZE);
+
+        let shared_ptr = libc::mmap(
+            std::ptr::null_mut(),
+            SHM_SIZE as usize,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            shared_fd,
+            0,
+        );
+
+        for expect in expects {
+            libc::memset(shared_ptr.cast(), 0, SHM_SIZE as _);
+
+            run_jit_function!(lib, expect, (), |v: ()| v);
+
+            let shared_memory_ptr: *const u8 = shared_ptr.cast();
+
+            let buffer = std::slice::from_raw_parts(shared_memory_ptr, SHM_SIZE as _);
+
+            if buffer.iter().any(|b| *b != 0) {
+                failed += 1;
+                render_expect_failure(arena, &mut expectations, interns, shared_memory_ptr);
+                println!();
+            } else {
+                passed += 1;
             }
         }
     }
 
-    println!();
-
-    if failures > 0 {
-        println!("test result: failed. {passed} passed; {failures} failed;");
+    if failed > 0 {
+        println!("test result: failed. {passed} passed; {failed} failed;");
         Ok(1)
     } else {
-        println!("test result: ok. {passed} passed; {failures} failed;");
+        println!("test result: ok. {passed} passed; {failed} failed;");
         Ok(0)
     }
 }
@@ -511,6 +553,8 @@ pub fn build(
             binary_path,
             problems,
             total_time,
+            expectations,
+            interns,
         }) => {
             match config {
                 BuildOnly => {
@@ -589,7 +633,15 @@ pub fn build(
 
                     let mut bytes = std::fs::read(&binary_path).unwrap();
 
-                    let x = roc_run(arena, opt_level, triple, args, &mut bytes);
+                    let x = roc_run(
+                        arena,
+                        opt_level,
+                        triple,
+                        args,
+                        &mut bytes,
+                        expectations,
+                        interns,
+                    );
                     std::mem::forget(bytes);
                     x
                 }
@@ -613,7 +665,15 @@ pub fn build(
 
                         let mut bytes = std::fs::read(&binary_path).unwrap();
 
-                        let x = roc_run(arena, opt_level, triple, args, &mut bytes);
+                        let x = roc_run(
+                            arena,
+                            opt_level,
+                            triple,
+                            args,
+                            &mut bytes,
+                            expectations,
+                            interns,
+                        );
                         std::mem::forget(bytes);
                         x
                     } else {
@@ -667,6 +727,8 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
     triple: Triple,
     args: I,
     binary_bytes: &mut [u8],
+    expectations: VecMap<ModuleId, Expectations>,
+    interns: Interns,
 ) -> io::Result<i32> {
     match triple.architecture {
         Architecture::Wasm32 => {
@@ -701,8 +763,49 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
 
             Ok(0)
         }
-        _ => roc_run_native(arena, opt_level, args, binary_bytes),
+        _ => roc_run_native(arena, opt_level, args, binary_bytes, expectations, interns),
     }
+}
+
+fn make_argv_envp<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
+    arena: &'a Bump,
+    executable: &ExecutableFile,
+    args: I,
+) -> (
+    bumpalo::collections::Vec<'a, CString>,
+    bumpalo::collections::Vec<'a, CString>,
+) {
+    use bumpalo::collections::CollectIn;
+    use std::os::unix::ffi::OsStrExt;
+
+    let path = executable.as_path();
+    let path_cstring = CString::new(path.as_os_str().as_bytes()).unwrap();
+
+    // argv is an array of pointers to strings passed to the new program
+    // as its command-line arguments.  By convention, the first of these
+    // strings (i.e., argv[0]) should contain the filename associated
+    // with the file being executed.  The argv array must be terminated
+    // by a NULL pointer. (Thus, in the new program, argv[argc] will be NULL.)
+    let it = args
+        .into_iter()
+        .map(|x| CString::new(x.as_ref().as_bytes()).unwrap());
+
+    let argv_cstrings: bumpalo::collections::Vec<CString> =
+        std::iter::once(path_cstring).chain(it).collect_in(arena);
+
+    // envp is an array of pointers to strings, conventionally of the
+    // form key=value, which are passed as the environment of the new
+    // program.  The envp array must be terminated by a NULL pointer.
+    let envp_cstrings: bumpalo::collections::Vec<CString> = std::env::vars_os()
+        .flat_map(|(k, v)| {
+            [
+                CString::new(k.as_bytes()).unwrap(),
+                CString::new(v.as_bytes()).unwrap(),
+            ]
+        })
+        .collect_in(arena);
+
+    (argv_cstrings, envp_cstrings)
 }
 
 /// Run on the native OS (not on wasm)
@@ -712,44 +815,19 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     opt_level: OptLevel,
     args: I,
     binary_bytes: &mut [u8],
+    expectations: VecMap<ModuleId, Expectations>,
+    interns: Interns,
 ) -> std::io::Result<i32> {
     use bumpalo::collections::CollectIn;
-    use std::os::unix::ffi::OsStrExt;
 
     unsafe {
         let executable = roc_run_executable_file_path(binary_bytes)?;
-        let path = executable.as_path();
-        let path_cstring = CString::new(path.as_os_str().as_bytes()).unwrap();
+        let (argv_cstrings, envp_cstrings) = make_argv_envp(&arena, &executable, args);
 
-        // argv is an array of pointers to strings passed to the new program
-        // as its command-line arguments.  By convention, the first of these
-        // strings (i.e., argv[0]) should contain the filename associated
-        // with the file being executed.  The argv array must be terminated
-        // by a NULL pointer. (Thus, in the new program, argv[argc] will be NULL.)
-        let c_strings: bumpalo::collections::Vec<CString> = args
-            .into_iter()
-            .map(|x| CString::new(x.as_ref().as_bytes()).unwrap())
-            .collect_in(&arena);
-
-        let c_string_pointers = c_strings
+        let argv: bumpalo::collections::Vec<*const c_char> = argv_cstrings
             .iter()
-            .map(|x| x.as_bytes_with_nul().as_ptr().cast());
-
-        let argv: bumpalo::collections::Vec<*const c_char> = std::iter::once(path_cstring.as_ptr())
-            .chain(c_string_pointers)
+            .map(|s| s.as_ptr())
             .chain([std::ptr::null()])
-            .collect_in(&arena);
-
-        // envp is an array of pointers to strings, conventionally of the
-        // form key=value, which are passed as the environment of the new
-        // program.  The envp array must be terminated by a NULL pointer.
-        let envp_cstrings: bumpalo::collections::Vec<CString> = std::env::vars_os()
-            .flat_map(|(k, v)| {
-                [
-                    CString::new(k.as_bytes()).unwrap(),
-                    CString::new(v.as_bytes()).unwrap(),
-                ]
-            })
             .collect_in(&arena);
 
         let envp: bumpalo::collections::Vec<*const c_char> = envp_cstrings
@@ -760,8 +838,7 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
 
         match opt_level {
             OptLevel::Development => {
-                // roc_run_native_debug(executable, &argv, &envp, expectations, interns)
-                todo!()
+                roc_run_native_debug(executable, &argv, &envp, expectations, interns)
             }
             OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => {
                 roc_run_native_fast(executable, &argv, &envp);
@@ -777,31 +854,13 @@ unsafe fn roc_run_native_fast(
     argv: &[*const c_char],
     envp: &[*const c_char],
 ) {
-    match executable {
-        #[cfg(target_os = "linux")]
-        ExecutableFile::MemFd(fd, path) => {
-            if libc::fexecve(fd, argv.as_ptr(), envp.as_ptr()) != 0 {
-                internal_error!(
-                    "libc::fexecve({:?}, ..., ...) failed: {:?}",
-                    path,
-                    errno::errno()
-                );
-            }
-        }
-
-        #[cfg(all(target_family = "unix", not(target_os = "linux")))]
-        ExecutableFile::OnDisk(_, path) => {
-            use std::os::unix::ffi::OsStrExt;
-
-            let path_cstring = CString::new(path.as_os_str().as_bytes()).unwrap();
-            if libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr()) != 0 {
-                internal_error!(
-                    "libc::execve({:?}, ..., ...) failed: {:?}",
-                    path,
-                    errno::errno()
-                );
-            }
-        }
+    if executable.execve(argv, envp) != 0 {
+        internal_error!(
+            "libc::{}({:?}, ..., ...) failed: {:?}",
+            ExecutableFile::SYSCALL,
+            executable.as_path(),
+            errno::errno()
+        );
     }
 }
 
@@ -814,6 +873,12 @@ enum ExecutableFile {
 }
 
 impl ExecutableFile {
+    #[cfg(target_os = "linux")]
+    const SYSCALL: &'static str = "fexecve";
+
+    #[cfg(not(target_os = "linux"))]
+    const SYSCALL: &'static str = "execve";
+
     fn as_path(&self) -> &Path {
         match self {
             #[cfg(target_os = "linux")]
@@ -822,6 +887,222 @@ impl ExecutableFile {
             ExecutableFile::OnDisk(_, path_buf) => path_buf.as_ref(),
         }
     }
+
+    unsafe fn execve(&self, argv: &[*const c_char], envp: &[*const c_char]) -> c_int {
+        match self {
+            #[cfg(target_os = "linux")]
+            ExecutableFile::MemFd(fd, _path) => libc::fexecve(*fd, argv.as_ptr(), envp.as_ptr()),
+
+            #[cfg(all(target_family = "unix", not(target_os = "linux")))]
+            ExecutableFile::OnDisk(_, path) => {
+                use std::os::unix::ffi::OsStrExt;
+
+                let path_cstring = CString::new(path.as_os_str().as_bytes()).unwrap();
+                libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr())
+            }
+        }
+    }
+}
+
+// with Expect
+unsafe fn roc_run_native_debug(
+    executable: ExecutableFile,
+    argv: &[*const c_char],
+    envp: &[*const c_char],
+    mut expectations: VecMap<ModuleId, Expectations>,
+    interns: Interns,
+) {
+    use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
+
+    let mut signals = Signals::new(&[SIGCHLD, SIGUSR1]).unwrap();
+
+    match libc::fork() {
+        0 => {
+            // we are the child
+
+            if executable.execve(argv, envp) < 0 {
+                // Get the current value of errno
+                let e = errno::errno();
+
+                // Extract the error code as an i32
+                let code = e.0;
+
+                // Display a human-friendly error message
+                println!("💥 Error {}: {}", code, e);
+            }
+        }
+        -1 => {
+            // something failed
+
+            // Get the current value of errno
+            let e = errno::errno();
+
+            // Extract the error code as an i32
+            let code = e.0;
+
+            // Display a human-friendly error message
+            println!("Error {}: {}", code, e);
+
+            process::exit(1)
+        }
+        1.. => {
+            let name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
+            let cstring = CString::new(name).unwrap();
+
+            let arena = &bumpalo::Bump::new();
+            let interns = arena.alloc(interns);
+
+            for sig in &mut signals {
+                match sig {
+                    SIGCHLD => {
+                        // clean up
+                        libc::shm_unlink(cstring.as_ptr().cast());
+
+                        // done!
+                        process::exit(0);
+                    }
+                    SIGUSR1 => {
+                        // this is the signal we use for an expect failure. Let's see what the child told us
+                        let shared_fd =
+                            libc::shm_open(cstring.as_ptr().cast(), libc::O_RDONLY, 0o666);
+
+                        libc::ftruncate(shared_fd, SHM_SIZE);
+
+                        let shared_ptr = libc::mmap(
+                            std::ptr::null_mut(),
+                            SHM_SIZE as usize,
+                            libc::PROT_READ,
+                            libc::MAP_SHARED,
+                            shared_fd,
+                            0,
+                        );
+
+                        let shared_memory_ptr: *const u8 = shared_ptr.cast();
+
+                        render_expect_failure(arena, &mut expectations, interns, shared_memory_ptr);
+                    }
+                    _ => println!("received signal {}", sig),
+                }
+            }
+        }
+        _ => unreachable!(),
+    }
+}
+
+fn render_expect_failure<'a>(
+    arena: &'a Bump,
+    expectations: &mut VecMap<ModuleId, Expectations>,
+    interns: &'a Interns,
+    start: *const u8,
+) {
+    use roc_reporting::report::Report;
+    use roc_reporting::report::RocDocAllocator;
+    use ven_pretty::DocAllocator;
+
+    // we always run programs as the host
+    let target_info = (&target_lexicon::Triple::host()).into();
+
+    let region_bytes: [u8; 8] = unsafe { *(start.cast()) };
+    let region: Region = unsafe { std::mem::transmute(region_bytes) };
+
+    let module_id_bytes: [u8; 4] = unsafe { *(start.add(8).cast()) };
+    let module_id: ModuleId = unsafe { std::mem::transmute(module_id_bytes) };
+
+    let data = expectations.get_mut(&module_id).unwrap();
+    let current = data.expectations.get(&region).unwrap();
+    let subs = arena.alloc(&mut data.subs);
+
+    // TODO cache these line offsets?
+    let path = &data.path;
+    let filename = data.path.to_owned();
+    let file_string = std::fs::read_to_string(path).unwrap();
+    let src_lines: Vec<_> = file_string.lines().collect();
+
+    let line_info = roc_region::all::LineInfo::new(&file_string);
+    let line_col_region = line_info.convert_region(region);
+
+    let alloc = RocDocAllocator::new(&src_lines, module_id, interns);
+
+    // 8 bytes for region, 4 for module id
+    let start_offset = 12;
+
+    let (symbols, variables): (Vec<_>, Vec<_>) = current.iter().map(|(a, b)| (*a, *b)).unzip();
+
+    let error_types: Vec<_> = variables
+        .iter()
+        .map(|variable| {
+            let (error_type, _) = subs.var_to_error_type(*variable);
+            error_type
+        })
+        .collect();
+
+    let expressions = roc_repl_expect::get_values(
+        target_info,
+        arena,
+        subs,
+        interns,
+        start,
+        start_offset,
+        &variables,
+    )
+    .unwrap();
+
+    use roc_fmt::annotation::Formattable;
+    use roc_reporting::error::r#type::error_type_to_doc;
+
+    let it =
+        symbols
+            .iter()
+            .zip(expressions)
+            .zip(error_types)
+            .map(|((symbol, expr), error_type)| {
+                let mut buf = roc_fmt::Buf::new_in(arena);
+                expr.format(&mut buf, 0);
+
+                alloc.vcat([
+                    alloc
+                        .symbol_unqualified(*symbol)
+                        .append(" : ")
+                        .append(error_type_to_doc(&alloc, error_type)),
+                    alloc
+                        .symbol_unqualified(*symbol)
+                        .append(" = ")
+                        .append(buf.into_bump_str()),
+                ])
+            });
+
+    let doc = if it.len() > 0 {
+        alloc.stack([
+            alloc.text("This expectation failed:"),
+            alloc.region(line_col_region),
+            alloc.text("The variables used in this expression are:"),
+            alloc.stack(it),
+        ])
+    } else {
+        alloc.stack([
+            alloc.text("This expectation failed:"),
+            alloc.region(line_col_region),
+            alloc.text("I did not record any variables in this expression."),
+        ])
+    };
+
+    let report = Report {
+        title: "EXPECT FAILED".into(),
+        doc,
+        filename,
+        severity: roc_reporting::report::Severity::RuntimeError,
+    };
+
+    let mut buf = String::new();
+
+    report.render(
+        roc_reporting::report::RenderTarget::ColorTerminal,
+        &mut buf,
+        &alloc,
+        &roc_reporting::report::DEFAULT_PALETTE,
+    );
+
+    println!("{}", buf);
 }
 
 #[cfg(target_os = "linux")]
@@ -878,6 +1159,8 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     _arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
     _args: I,
     _binary_bytes: &mut [u8],
+    _expectations: VecMap<ModuleId, Expectations>,
+    _interns: Interns,
 ) -> io::Result<i32> {
     todo!("TODO support running roc programs on non-UNIX targets");
     // let mut cmd = std::process::Command::new(&binary_path);
