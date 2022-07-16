@@ -975,15 +975,14 @@ fn alignment_in_multi_tag_construction_two() {
     assert_evals_to!(
         indoc!(
             r"#
-                x : [Three Bool I64, Empty]
-                x = Three (1 == 1) 32
+            x : [Three Bool I64 , Empty]
+            x = Three True 32
 
-                x
-
-                #"
+            x
+            #"
         ),
-        ((32i64, true), 1),
-        ((i64, bool), u8)
+        (32i64, true, 1),
+        (i64, bool, u8)
     );
 }
 
@@ -999,8 +998,8 @@ fn alignment_in_multi_tag_construction_three() {
                 x
                 #"
         ),
-        ((32i64, true, 2u8), 1),
-        ((i64, bool, u8), u8)
+        (32i64, true, 2u8, 1),
+        (i64, bool, u8, u8)
     );
 }
 

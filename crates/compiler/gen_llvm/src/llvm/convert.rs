@@ -5,7 +5,7 @@ use inkwell::types::{BasicType, BasicTypeEnum, FloatType, IntType, StructType};
 use inkwell::values::StructValue;
 use inkwell::AddressSpace;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_mono::layout::{Builtin, Layout, UnionLayout};
+use roc_mono::layout::{round_up_to_alignment, Builtin, Layout, UnionLayout};
 use roc_target::TargetInfo;
 
 fn basic_type_from_record<'a, 'ctx, 'env>(
@@ -223,10 +223,12 @@ impl<'ctx> RocUnionValue<'ctx> {
 
         // set the tag id
         if let Some(tag_id) = tag_id {
-            let tag_id = roc_union_type
-                .tag_type
-                .unwrap()
-                .const_int(tag_id as u64, false);
+            let tag_id_type = match roc_union_type.tag_type.unwrap() {
+                TagType::I8 => env.context.i8_type(),
+                TagType::I16 => env.context.i16_type(),
+            };
+
+            let tag_id = tag_id_type.const_int(tag_id as u64, false);
 
             struct_value = env
                 .builder
@@ -240,13 +242,8 @@ impl<'ctx> RocUnionValue<'ctx> {
             .build_alloca(struct_value.get_type(), "tag_alloca");
         env.builder.build_store(tag_alloca, struct_value);
 
-        let opaque_data_ptr = env
-            .builder
-            .build_struct_gep(tag_alloca, 1, "get_opaque_data_ptr")
-            .unwrap();
-
         let cast_pointer = env.builder.build_pointer_cast(
-            opaque_data_ptr,
+            tag_alloca,
             data.get_type().ptr_type(AddressSpace::Generic),
             "to_data_ptr",
         );
@@ -266,11 +263,17 @@ impl<'ctx> RocUnionValue<'ctx> {
 }
 
 #[derive(Debug, Clone, Copy)]
+enum TagType {
+    I8,
+    I16,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct RocUnionType<'ctx> {
     struct_type: StructType<'ctx>,
     data_align: u32,
     data_width: u32,
-    tag_type: Option<IntType<'ctx>>,
+    tag_type: Option<TagType>,
 }
 
 impl<'ctx> RocUnionType<'ctx> {
@@ -279,12 +282,15 @@ impl<'ctx> RocUnionType<'ctx> {
         target_info: TargetInfo,
         data_align: u32,
         data_width: u32,
-        tag_type: Option<IntType<'ctx>>,
+        tag_type: Option<TagType>,
     ) -> Self {
         let (word_type, words, bytes) = match target_info.ptr_width() {
             roc_target::PtrWidth::Bytes4 => (context.i32_type(), data_width / 4, data_width % 4),
             roc_target::PtrWidth::Bytes8 => (context.i64_type(), data_width / 8, data_width % 8),
         };
+
+        let words = 0;
+        let bytes = data_width;
 
         let byte_array_type = context.i8_type().array_type(bytes).as_basic_type_enum();
         let word_array_type = word_type.array_type(words).as_basic_type_enum();
@@ -299,7 +305,10 @@ impl<'ctx> RocUnionType<'ctx> {
                     alignment_array_type,
                     word_array_type,
                     byte_array_type,
-                    tag_type.into(),
+                    match tag_type {
+                        TagType::I8 => context.i8_type().into(),
+                        TagType::I16 => context.i16_type().into(),
+                    },
                 ],
                 false,
             )
@@ -309,8 +318,6 @@ impl<'ctx> RocUnionType<'ctx> {
                 false,
             )
         };
-
-        dbg!(struct_type);
 
         Self {
             struct_type,
@@ -330,8 +337,8 @@ impl<'ctx> RocUnionType<'ctx> {
         target_info: TargetInfo,
     ) -> Self {
         let tag_type = match layouts.len() {
-            0..=255 => context.i8_type(),
-            _ => context.i16_type(),
+            0..=255 => TagType::I8,
+            _ => TagType::I16,
         };
 
         // alignment of the tag id is at least 1
@@ -373,6 +380,37 @@ impl<'ctx> RocUnionType<'ctx> {
         }
 
         Self::new(context, target_info, data_align, data_width, None)
+    }
+
+    pub fn tag_alignment(&self) -> u32 {
+        let tag_id_alignment = match self.tag_type {
+            None => 0,
+            Some(TagType::I8) => 1,
+            Some(TagType::I16) => 2,
+        };
+
+        self.data_align.max(tag_id_alignment)
+    }
+
+    pub fn tag_width(&self) -> u32 {
+        let tag_id_width = match self.tag_type {
+            None => 0,
+            Some(TagType::I8) => 1,
+            Some(TagType::I16) => 2,
+        };
+
+        let mut width = self.data_width;
+
+        // add padding between data and the tag id
+        width = round_up_to_alignment(width, tag_id_width);
+
+        // add tag id
+        width += tag_id_width;
+
+        // add padding after the tag id
+        width = round_up_to_alignment(width, self.tag_alignment());
+
+        width
     }
 }
 
