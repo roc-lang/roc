@@ -422,7 +422,7 @@ pub fn list_map<'a, 'ctx, 'env>(
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
             roc_function_call.data_is_owned.into(),
-            env.alignment_intvalue(element_layout),
+            env.alignment_intvalue(return_layout),
             layout_width(env, element_layout),
             layout_width(env, return_layout),
         ],
