@@ -232,7 +232,12 @@ impl<'ctx> RocUnionValue<'ctx> {
 
             struct_value = env
                 .builder
-                .build_insert_value(struct_value, tag_id, 3, "insert_tag_id")
+                .build_insert_value(
+                    struct_value,
+                    tag_id,
+                    RocUnionType::TAG_ID_INDEX,
+                    "insert_tag_id",
+                )
                 .unwrap()
                 .into_struct_value();
         }
@@ -277,26 +282,18 @@ pub(crate) struct RocUnionType<'ctx> {
 }
 
 impl<'ctx> RocUnionType<'ctx> {
-    pub const TAG_ID_INDEX: u32 = 3;
+    pub const TAG_ID_INDEX: u32 = 2;
     pub const TAG_DATA_INDEX: u32 = 1;
 
     fn new(
         context: &'ctx Context,
-        target_info: TargetInfo,
+        _target_info: TargetInfo,
         data_align: u32,
         data_width: u32,
         tag_type: Option<TagType>,
     ) -> Self {
-        let (word_type, words, bytes) = match target_info.ptr_width() {
-            roc_target::PtrWidth::Bytes4 => (context.i32_type(), data_width / 4, data_width % 4),
-            roc_target::PtrWidth::Bytes8 => (context.i64_type(), data_width / 8, data_width % 8),
-        };
-
-        let words = 0;
         let bytes = data_width;
-
         let byte_array_type = context.i8_type().array_type(bytes).as_basic_type_enum();
-        let word_array_type = word_type.array_type(words).as_basic_type_enum();
 
         let alignment_array_type = alignment_type(context, data_align)
             .array_type(0)
@@ -306,7 +303,6 @@ impl<'ctx> RocUnionType<'ctx> {
             context.struct_type(
                 &[
                     alignment_array_type,
-                    word_array_type,
                     byte_array_type,
                     match tag_type {
                         TagType::I8 => context.i8_type().into(),
@@ -316,10 +312,7 @@ impl<'ctx> RocUnionType<'ctx> {
                 false,
             )
         } else {
-            context.struct_type(
-                &[alignment_array_type, word_array_type, byte_array_type],
-                false,
-            )
+            context.struct_type(&[alignment_array_type, byte_array_type], false)
         };
 
         Self {
