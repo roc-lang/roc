@@ -1004,6 +1004,23 @@ fn alignment_in_multi_tag_construction_three() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn alignment_i128() {
+    assert_evals_to!(
+        indoc!(
+            r"#
+                x : [One I128 Bool, Empty]
+                x = One 42 (1 == 1)
+
+                x
+                #"
+        ),
+        (42, true, 1),
+        (i128, bool, u8)
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn alignment_in_multi_tag_pattern_match_1() {
     assert_evals_to!(

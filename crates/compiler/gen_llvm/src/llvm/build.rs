@@ -1708,10 +1708,9 @@ fn build_tag<'a, 'ctx, 'env>(
         UnionLayout::NonRecursive(tags) => {
             debug_assert!(union_size > 1);
 
-            let roc_union = RocUnion::tagged_from_slices(env.context, tags, env.target_info);
-
             let data = build_struct(env, scope, arguments);
 
+            let roc_union = RocUnion::tagged_from_slices(env.context, tags, env.target_info);
             let value = roc_union.as_struct_value(env, data, Some(tag_id as _));
 
             let alloca = create_entry_block_alloca(
