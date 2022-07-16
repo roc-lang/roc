@@ -272,20 +272,8 @@ impl<'ctx> RocUnionType<'ctx> {
             _ => TagType::I16,
         };
 
-        // alignment of the tag id is at least 1
-        let mut data_align = 1;
-
-        let mut data_width = 0;
-        for tag in layouts {
-            let mut total = 0;
-            for layout in tag.iter() {
-                let (stack_size, alignment) = layout.stack_size_and_alignment(target_info);
-                total += stack_size;
-                data_align = data_align.max(alignment);
-            }
-
-            data_width = data_width.max(total);
-        }
+        let (data_width, data_align) =
+            Layout::stack_size_and_alignment_slices(layouts, target_info);
 
         Self::new(context, target_info, data_align, data_width, Some(tag_type))
     }
@@ -295,20 +283,8 @@ impl<'ctx> RocUnionType<'ctx> {
         layouts: &[&[Layout<'_>]],
         target_info: TargetInfo,
     ) -> Self {
-        // alignment of the tag id is at least 1
-        let mut data_align = 1;
-
-        let mut data_width = 0;
-        for tag in layouts {
-            let mut total = 0;
-            for layout in tag.iter() {
-                let (stack_size, alignment) = layout.stack_size_and_alignment(target_info);
-                total += stack_size;
-                data_align = data_align.max(alignment);
-            }
-
-            data_width = data_width.max(total);
-        }
+        let (data_width, data_align) =
+            Layout::stack_size_and_alignment_slices(layouts, target_info);
 
         Self::new(context, target_info, data_align, data_width, None)
     }

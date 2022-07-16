@@ -674,16 +674,7 @@ impl<'a> UnionLayout<'a> {
             2
         };
 
-        let mut data_width = 0;
-        for tag in layouts {
-            let mut total = 0;
-            for layout in tag.iter() {
-                let stack_size = layout.stack_size(target_info);
-                total += stack_size;
-            }
-
-            data_width = data_width.max(total);
-        }
+        let (data_width, _) = Layout::stack_size_and_alignment_slices(layouts, target_info);
 
         round_up_to_alignment(data_width, tag_id_align)
     }
@@ -1474,6 +1465,28 @@ impl<'a> Layout<'a> {
 
         let size = round_up_to_alignment(width, alignment);
         (size, alignment)
+    }
+
+    pub fn stack_size_and_alignment_slices(
+        slices: &[&[Self]],
+        target_info: TargetInfo,
+    ) -> (u32, u32) {
+        // alignment of the tag id is at least 1
+        let mut data_align = 1;
+
+        let mut data_width = 0;
+        for tag in slices {
+            let mut total = 0;
+            for layout in tag.iter() {
+                let (stack_size, alignment) = layout.stack_size_and_alignment(target_info);
+                total += stack_size;
+                data_align = data_align.max(alignment);
+            }
+
+            data_width = data_width.max(total);
+        }
+
+        (data_width, data_align)
     }
 
     /// Very important to use this when doing a memcpy!
