@@ -79,7 +79,7 @@ impl<'a> Formattable for TypeDef<'a> {
             Opaque {
                 header: TypeHeader { name, vars },
                 typ: ann,
-                derived,
+                derived: has_abilities,
             } => {
                 buf.indent(indent);
                 buf.push_str(name.value);
@@ -95,28 +95,26 @@ impl<'a> Formattable for TypeDef<'a> {
                 let ann_is_where_clause =
                     matches!(ann.extract_spaces().item, TypeAnnotation::Where(..));
 
-                // Always put the has-derived clause on a newline if it is itself multiline, or
-                // the annotation has a where-has clause.
-                let derived_multiline = if let Some(derived) = derived {
-                    !derived.value.is_empty() && (derived.is_multiline() || ann_is_where_clause)
+                // Always put the has-abilities clause on a newline if the opaque annotation
+                // contains a where-has clause.
+                let has_abilities_multiline = if let Some(has_abilities) = has_abilities {
+                    !has_abilities.value.is_empty() && ann_is_where_clause
                 } else {
                     false
                 };
 
-                let make_multiline = ann.is_multiline() || derived_multiline;
+                let make_multiline = ann.is_multiline() || has_abilities_multiline;
 
                 ann.format(buf, indent);
 
-                if let Some(derived) = derived {
-                    if !make_multiline {
-                        buf.spaces(1);
-                    }
+                if let Some(has_abilities) = has_abilities {
+                    buf.spaces(1);
 
-                    derived.format_with_options(
+                    has_abilities.format_with_options(
                         buf,
                         Parens::NotNeeded,
                         Newlines::from_bool(make_multiline),
-                        indent + INDENT,
+                        indent + 1 + INDENT,
                     );
                 }
             }

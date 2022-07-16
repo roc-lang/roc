@@ -1,16 +1,16 @@
 use crate::ast::{
-    AssignedField, CommentOrNewline, Derived, HasClause, Pattern, Spaced, Tag, TypeAnnotation,
-    TypeHeader,
+    AssignedField, CommentOrNewline, HasAbilities, HasAbility, HasClause, HasImpls, Pattern,
+    Spaced, Tag, TypeAnnotation, TypeHeader,
 };
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::ident::lowercase_ident;
 use crate::keyword;
-use crate::parser::then;
 use crate::parser::{
     allocated, backtrackable, optional, specialize, specialize_ref, word1, word2, word3, EType,
     ETypeApply, ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, ParseResult, Parser,
     Progress::{self, *},
 };
+use crate::parser::{then, ETypeAbilityImpl};
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
@@ -478,8 +478,8 @@ fn has_clause_chain<'a>(
     }
 }
 
-/// Parse a has-derived clause, e.g. `has [Eq, Hash]`.
-pub fn has_derived<'a>(min_indent: u32) -> impl Parser<'a, Loc<Derived<'a>>, EType<'a>> {
+/// Parse a has-abilities clause, e.g. `has [Eq, Hash]`.
+pub fn has_abilities<'a>(min_indent: u32) -> impl Parser<'a, Loc<HasAbilities<'a>>, EType<'a>> {
     skip_first!(
         // Parse "has"; we don't care about this keyword
         word3(b'h', b'a', b's', EType::THasClause),
@@ -488,19 +488,51 @@ pub fn has_derived<'a>(min_indent: u32) -> impl Parser<'a, Loc<Derived<'a>>, ETy
             loc!(map!(
                 collection_trailing_sep_e!(
                     word1(b'[', EType::TStart),
-                    specialize(EType::TApply, loc!(parse_concrete_type)),
+                    loc!(parse_has_ability(min_indent)),
                     word1(b',', EType::TEnd),
                     word1(b']', EType::TEnd),
                     min_indent + 1,
                     EType::TStart,
                     EType::TIndentEnd,
-                    TypeAnnotation::SpaceBefore
+                    HasAbility::SpaceBefore
                 ),
-                Derived::Has
+                HasAbilities::Has
             )),
             min_indent + 1,
-            EType::TIndentEnd
+            EType::TIndentEnd,
         )
+    )
+}
+
+fn parse_has_ability<'a>(min_indent: u32) -> impl Parser<'a, HasAbility<'a>, EType<'a>> {
+    map!(
+        and!(
+            loc!(specialize(EType::TApply, parse_concrete_type)),
+            optional(space0_before_e(
+                loc!(map!(
+                    specialize(
+                        EType::TAbilityImpl,
+                        collection_trailing_sep_e!(
+                            word1(b'{', ETypeAbilityImpl::Open),
+                            specialize(
+                                |e: ETypeRecord<'_>, _| e.into(),
+                                loc!(record_type_field(min_indent + 1))
+                            ),
+                            word1(b',', ETypeAbilityImpl::End),
+                            word1(b'}', ETypeAbilityImpl::End),
+                            min_indent,
+                            ETypeAbilityImpl::Open,
+                            ETypeAbilityImpl::IndentEnd,
+                            AssignedField::SpaceBefore
+                        )
+                    ),
+                    HasImpls::HasImpls
+                )),
+                min_indent + 1,
+                EType::TIndentEnd
+            ))
+        ),
+        |(ability, impls): (_, Option<_>)| { HasAbility::HasAbility { ability, impls } }
     )
 }
 
