@@ -2,14 +2,15 @@ interface Parser.CSV
   exposes [
   CSV,
   CSVRecord,
-  CSVField, # <- Might be unneeded?
   file,
   record,
   parseStr,
   parseCSV,
+  parseStrToCSVRecord,
   field,
   string,
   nat,
+  f64
   ]
   imports [
   Parser.Core.{Parser, parse, buildPrimitiveParser, fail, const, alt, map, map2, apply, many, oneorMore, sepBy1, between, ignore, flatten},
@@ -102,13 +103,22 @@ nat =
     when Str.toNat val is
       Ok num ->
         Ok num
-      Err problem ->
+      Err _ ->
         Err "The field is not a valid Nat: \(val)"
         )
   |> flatten
 
-# f64 : Parser CSVField F64
-# f64 = string |> map Str.toF64 |> flatten
+f64 : Parser CSVField F64
+f64 =
+  string
+  |> map (\val ->
+    when Str.toF64 val is
+      Ok num ->
+        Ok num
+      Err _ ->
+        Err "The field is not a valid F64: \(val)"
+        )
+  |> flatten
 
 parseStrToCSV : Str -> Result CSV [ParsingFailure Str, ParsingIncomplete RawStr]
 parseStrToCSV = \input ->

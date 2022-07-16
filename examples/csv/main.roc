@@ -1,18 +1,19 @@
 app "main"
     packages { pf: "platform/main.roc" }
-    imports [Parser.Core.{Parser}, Parser.Str.{RawStr}, Parser.CSV.{CSV}]
+    imports [Parser.Core.{Parser, apply}, Parser.Str.{RawStr}, Parser.CSV.{CSV, record, field, string, nat}]
     provides [main] to pf
 
 # Until issue https://github.com/rtfeldman/roc/issues/3438 is fixed,
 # use the simple 'hello world' platform for testing
 # with hard-coded input.
 
+input = "John,Doe,100\r\nRichard,Feldman,42\r\nMarten,Wijnja,28\r\n"
 main =
-  when Parser.CSV.parseStr userCSVParser "John,Doe,10\r\nRichard,Feldman,100\r\nMarten,Wijnja,28\r\n" is
+  when Parser.CSV.parseStr userCSVParser input is
     Ok result ->
-        val = result |> Str.joinWith("\n")
+        val = result |> List.map printUser |> Str.joinWith("\n")
         nResults = List.len result |> Num.toStr
-        "Parse success!\n\n\(nResults) users were found:\n\(val)\n"
+        "Parse success! \(nResults) users were found:\n\n\(val)\n"
     Err problem ->
       when problem is
         ParsingFailure failure ->
@@ -22,75 +23,15 @@ main =
           "Parsing incomplete. Following still left: \(leftoverStr)\n"
         SyntaxError error ->
           "Parsing failure. Syntax error in the CSV: \(error)"
-# main = fullTest csvParser "10,20\n\"An escaped field!\"\"\n,,,\",30\n"
-# main = partialTest fieldParser "\"An escaped field with some \"\"<- double quotes\""
-# main = fullTest fieldContentsParser "My very cool,\"\"\r\n string"
-# main = partialTest betweenParser "\"this is a test\"\" to see\""
-# main = partialTest manyParser "this is a very long string\"\""
+
+User := {firstName: Str, lastName: Str, age: Nat}
 
 userCSVParser =
-  Parser.CSV.record (\first -> \last -> \age ->
+  record (\firstName -> \lastName -> \age -> @User {firstName, lastName, age})
+  |> apply (field string)
+  |> apply (field string)
+  |> apply (field nat)
+
+printUser = \@User {firstName, lastName, age} ->
     ageStr = Num.toStr age
-    "User: \(first) \(last) \(ageStr)")
-  |> Parser.Core.apply (Parser.CSV.field Parser.CSV.string)
-  |> Parser.Core.apply (Parser.CSV.field Parser.CSV.string)
-  |> Parser.Core.apply (Parser.CSV.field Parser.CSV.nat)
-
-partialTest = \parser, input ->
-  when Parser.Str.parseStrPartial parser input is
-    Ok result ->
-      # val = result.val |> Str.joinWith("\r\n")
-      val = result.val
-      leftover = result.input
-      "Parse success: \(val) (leftover string: \(leftover))\n"
-    Err (ParsingFailure problem) ->
-      "Parse failure: \(problem)\n"
-
-fullTest = \parser, input ->
-  when Parser.Str.parseStr parser input is
-    Ok result ->
-      # val = result |> Str.joinWith(", ")
-      val = result |> Str.joinWith("\r\n")
-      # val = result
-      "Parse success: \(val)\n"
-    Err (ParsingFailure problem) ->
-      "Parse failure: \(problem)\n"
-    Err (ParsingIncomplete leftover) ->
-      "Parse failure: Expected to reach end of input, but the following was still left: `\(leftover)`\n"
-
-# betweenParser : Parser RawStr Str
-# betweenParser =
-#   Parser.Core.between manyParser (Parser.Str.codepoint 34) (Parser.Str.codepoint 34)
-
-# manyParser : Parser RawStr Str
-# manyParser =
-#   Parser.Str.string "\"\"" |> Parser.Core.map(\_ -> 34) # Escaped double quote
-#   |> Parser.Core.alt (Parser.Str.codepoint 44) # Comma
-#   |> Parser.Core.alt (Parser.Str.codepoint 13) # CR
-#   |> Parser.Core.alt (Parser.Str.codepoint 10) # LF
-#   |> Parser.Core.alt (Parser.Str.codepointSatisfies (\x -> (x >= 32 && x <= 33) || (x >= 35 && x <= 43) || (x >= 45 && x <= 126))) # Any printable char except " (34) and , (44)
-#   |> Parser.Core.many
-#   |> Parser.Core.map (\field -> field |> Str.fromUtf8 |> Result.withDefault "Should not happen")
-
-# fieldContentsParser : Parser RawStr Str
-# fieldContentsParser =
-#   Parser.CSV.escapedContents
-#   |> Parser.Core.map (\field -> field |> Str.fromUtf8 |> Result.withDefault "Should not happen")
-
-# fieldParser : Parser RawStr Str
-# fieldParser =
-#   Parser.CSV.escapedField
-#   |> Parser.Core.map (\field -> field |> Str.fromUtf8 |> Result.withDefault "Should not happen")
-
-# csvParser : Parser RawStr (List Str)
-# csvParser =
-#   Parser.CSV.file
-#   |> Parser.Core.map \records ->
-#     records
-#     |> List.map (\record ->
-#       record
-#       |> List.map (\field ->
-#         field
-#         |> Str.fromUtf8
-#         |> Result.withDefault "Unexpected problem while turning a List U8 back into a Str")
-#       |> Str.joinWith ", ")
+    "User {firstName: \(firstName), lastName: \(lastName), age: \(ageStr)}"

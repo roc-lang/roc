@@ -228,7 +228,7 @@ flatten = \parser ->
           Err problem
         Ok {val: (Ok val), input: inputRest} ->
           Ok {val: val, input: inputRest}
-        Ok {val: (Err problem), input: inputRest} ->
+        Ok {val: (Err problem), input: _inputRest} ->
           Err (ParsingFailure problem)
 
 ## Runs a parser lazily
