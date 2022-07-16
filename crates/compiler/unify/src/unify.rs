@@ -5,7 +5,7 @@ use roc_debug_flags::dbg_do;
 use roc_debug_flags::{ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName};
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_types::num::{FloatWidth, IntLitWidth, NumericRange};
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
@@ -755,6 +755,15 @@ fn unify_alias<M: MetaCollector>(
 }
 
 #[inline(always)]
+fn opaque_obligation(opaque: Symbol, opaque_var: Variable) -> Obligated {
+    match opaque.module_id() {
+        // Numbers should be treated as ad-hoc obligations for ability checking.
+        ModuleId::NUM => Obligated::Adhoc(opaque_var),
+        _ => Obligated::Opaque(opaque),
+    }
+}
+
+#[inline(always)]
 fn unify_opaque<M: MetaCollector>(
     subs: &mut Subs,
     pool: &mut Pool,
@@ -772,7 +781,7 @@ fn unify_opaque<M: MetaCollector>(
             // Alias wins
             merge(subs, ctx, Alias(symbol, args, real_var, kind))
         }
-        FlexAbleVar(_, ability) if args.is_empty() => {
+        FlexAbleVar(_, ability) => {
             // Opaque type wins
             merge_flex_able_with_concrete(
                 subs,
@@ -780,7 +789,7 @@ fn unify_opaque<M: MetaCollector>(
                 ctx.second,
                 *ability,
                 Alias(symbol, args, real_var, kind),
-                Obligated::Opaque(symbol),
+                opaque_obligation(symbol, ctx.first),
             )
         }
         Alias(_, _, other_real_var, AliasKind::Structural) => {
@@ -2562,20 +2571,16 @@ fn unify_flex_able<M: MetaCollector>(
         RecursionVar { .. } => mismatch!("FlexAble with RecursionVar"),
         LambdaSet(..) => mismatch!("FlexAble with LambdaSet"),
 
-        Alias(name, args, _real_var, AliasKind::Opaque) => {
-            if args.is_empty() {
-                // Opaque type wins
-                merge_flex_able_with_concrete(
-                    subs,
-                    ctx,
-                    ctx.first,
-                    ability,
-                    *other,
-                    Obligated::Opaque(*name),
-                )
-            } else {
-                mismatch!("FlexAble vs Opaque with type vars")
-            }
+        Alias(name, _args, _real_var, AliasKind::Opaque) => {
+            // Opaque type wins
+            merge_flex_able_with_concrete(
+                subs,
+                ctx,
+                ctx.first,
+                ability,
+                *other,
+                opaque_obligation(*name, ctx.second),
+            )
         }
 
         Structure(_) | Alias(_, _, _, AliasKind::Structural) | RangedNumber(..) => {

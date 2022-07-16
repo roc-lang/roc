@@ -22,9 +22,9 @@ use roc_module::symbol::{ModuleId, Symbol};
 use roc_problem::can::CycleEntry;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{
-    self, AliasVariables, Content, Descriptor, FlatType, GetSubsSlice, LambdaSet, Mark,
-    OptVariable, Rank, RecordFields, Subs, SubsIndex, SubsSlice, UlsOfVar, UnionLabels,
-    UnionLambdas, UnionTags, Variable, VariableSubsSlice,
+    self, get_member_lambda_sets_at_region, AliasVariables, Content, Descriptor, FlatType,
+    GetSubsSlice, LambdaSet, Mark, OptVariable, Rank, RecordFields, Subs, SubsIndex, SubsSlice,
+    UlsOfVar, UnionLabels, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
@@ -526,6 +526,8 @@ impl Pools {
 
 /// What phase in the compiler is reaching out to solve types.
 /// This is important to distinguish subtle differences in the behavior of the solving algorithm.
+//
+// TODO the APIs of this trait suck, this needs a nice cleanup.
 pub trait Phase {
     /// The regular type-solving phase, or during some later phase of compilation.
     /// During the solving phase we must anticipate that some information is still unknown and react to
@@ -536,10 +538,21 @@ pub trait Phase {
     where
         F: FnMut(&AbilitiesStore) -> T;
 
+    /// Given a known lambda set's ambient function in an external module, copy that ambient
+    /// function into the given subs.
     fn copy_lambda_set_ambient_function_to_home_subs(
         &self,
         external_lambda_set_var: Variable,
         external_module_id: ModuleId,
+        home_subs: &mut Subs,
+    ) -> Variable;
+
+    /// Find the ambient function var at a given region for an ability member definition (not a
+    /// specialization!), and copy that into the given subs.
+    fn get_and_copy_ability_member_ambient_function(
+        &self,
+        ability_member: Symbol,
+        region: u8,
         home_subs: &mut Subs,
     ) -> Variable;
 }
@@ -570,6 +583,35 @@ impl Phase for SolvePhase<'_> {
         let LambdaSet {
             ambient_function, ..
         } = home_subs.get_lambda_set(external_lambda_set_var);
+        ambient_function
+    }
+
+    fn get_and_copy_ability_member_ambient_function(
+        &self,
+        ability_member: Symbol,
+        region: u8,
+        home_subs: &mut Subs,
+    ) -> Variable {
+        // During solving we're only aware of our module's abilities store, the var must
+        // be in our module store. Even if the specialization lambda set comes from another
+        // module, we should have taken care to import it before starting solving in this module.
+        let member_def = self
+            .abilities_store
+            .member_def(ability_member)
+            .unwrap_or_else(|| {
+                internal_error!(
+                    "{:?} is not resolved, or not an ability member!",
+                    ability_member
+                )
+            });
+        let member_var = member_def.signature_var();
+
+        let region_lset = get_member_lambda_sets_at_region(home_subs, member_var, region);
+
+        let LambdaSet {
+            ambient_function, ..
+        } = home_subs.get_lambda_set(region_lset);
+
         ambient_function
     }
 }
@@ -2179,6 +2221,7 @@ fn compact_lambda_set<P: Phase>(
 enum SpecializationTypeKey {
     Opaque(Symbol),
     Derived(DeriveKey),
+    Immediate(Symbol),
 }
 
 enum SpecializeDecision {
@@ -2190,13 +2233,17 @@ fn make_specialization_decision(subs: &Subs, var: Variable) -> SpecializeDecisio
     use Content::*;
     use SpecializationTypeKey::*;
     match subs.get_content_without_compacting(var) {
-        Structure(_) | Alias(_, _, _, AliasKind::Structural) => {
+        Alias(opaque, _, _, AliasKind::Opaque) if opaque.module_id() != ModuleId::NUM => {
+            SpecializeDecision::Specialize(Opaque(*opaque))
+        }
+        Structure(_) | Alias(_, _, _, _) => {
             // This is a structural type, find the name of the derived ability function it
             // should use.
             match roc_derive_key::Derived::encoding(subs, var) {
                 Ok(derived) => match derived {
-                    roc_derive_key::Derived::Immediate(_) => {
-                        todo!("deal with lambda set extraction from immediates")
+                    roc_derive_key::Derived::Immediate(imm) => {
+                        SpecializeDecision::Specialize(Immediate(imm))
+                        // todo!("deal with lambda set extraction from immediates")
                     }
                     roc_derive_key::Derived::Key(derive_key) => {
                         SpecializeDecision::Specialize(Derived(derive_key))
@@ -2214,7 +2261,6 @@ fn make_specialization_decision(subs: &Subs, var: Variable) -> SpecializeDecisio
                 }
             }
         }
-        Alias(opaque, _, _, AliasKind::Opaque) => SpecializeDecision::Specialize(Opaque(*opaque)),
         Error => SpecializeDecision::Drop,
         FlexAbleVar(_, _)
         | RigidAbleVar(..)
@@ -2294,6 +2340,18 @@ fn get_specialization_lambda_set_ambient_function<P: Phase>(
             );
 
             Ok(specialized_ambient)
+        }
+
+        SpecializationTypeKey::Immediate(imm) => {
+            // Immediates are like opaques in that we can simply look up their type definition in
+            // the ability store, there is nothing new to synthesize.
+            //
+            // THEORY: if something can become an immediate, it will always be available in the
+            // local ability store, because the transformation is local (?)
+            let immediate_lambda_set_at_region =
+                phase.get_and_copy_ability_member_ambient_function(imm, lset_region, subs);
+
+            Ok(immediate_lambda_set_at_region)
         }
     }
 }
