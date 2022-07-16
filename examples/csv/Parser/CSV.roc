@@ -49,11 +49,14 @@ parseStr = \csvParser, input ->
 
 parseCSV : Parser CSVRecord a, CSV -> Result (List a) [ParsingFailure Str, ParsingIncomplete CSVRecord]
 parseCSV = \csvParser, csvData ->
-  List.walkUntil csvData (Ok []) \state, recordList ->
-    when parse csvParser recordList (\leftover -> leftover == []) is
+  csvData
+  |> List.mapWithIndex (\recordFieldsList, index -> {record: recordFieldsList, index: index})
+  |> List.walkUntil (Ok []) \state, {record: recordFieldsList, index: index} ->
+    when parseCSVRecord csvParser recordFieldsList is
       Err (ParsingFailure problem) ->
-        recordStr = recordList |> List.map strFromRaw |> Str.joinWith ", "
-        problemStr = "\(problem)\nWhile parsing record `\(recordStr)`."
+        indexStr = Num.toStr (index + 1)
+        recordStr = recordFieldsList |> List.map strFromRaw |> List.map (\val -> "\"\(val)\"") |> Str.joinWith ", "
+        problemStr = "\(problem)\nWhile parsing record no. \(indexStr): `\(recordStr)`"
         Break (Err (ParsingFailure problemStr))
       Err (ParsingIncomplete problem) ->
         Break (Err (ParsingIncomplete problem))
@@ -61,6 +64,12 @@ parseCSV = \csvParser, csvData ->
         state
         |> Result.map (\vals -> List.append vals val)
         |> Continue
+
+
+parseCSVRecord : Parser CSVRecord a, CSVRecord -> Result a [ParsingFailure Str, ParsingIncomplete CSVRecord]
+parseCSVRecord = \csvParser, recordFieldsList ->
+    parse csvParser recordFieldsList (\leftover -> leftover == [])
+
 
 # Wrapper function to combine a set of fields into your desired `a`
 #
@@ -104,7 +113,7 @@ nat =
       Ok num ->
         Ok num
       Err _ ->
-        Err "The field is not a valid Nat: \(val)"
+        Err "\(val) is not a Nat."
         )
   |> flatten
 
@@ -116,7 +125,7 @@ f64 =
       Ok num ->
         Ok num
       Err _ ->
-        Err "The field is not a valid F64: \(val)"
+        Err "\(val) is not a F64."
         )
   |> flatten
 

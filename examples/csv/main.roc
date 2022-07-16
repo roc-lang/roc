@@ -8,7 +8,7 @@ app "main"
 # with hard-coded input.
 
 # input = "John,Doe,100,john@doe.com\r\nRichard,Feldman,42,r.feldman@example.com\r\nMarten,Wijnja,28,w-m@wmcode.nl\r\n"
-input = "Airplane!,1980,\"Robert Hays,Julie Hagerty\"\r\nCaddyshack,1 80,\"Chevy Chase,Rodney Dangerfield,Ted Knight,Michael O'Keefe,Bill Murray\"\r\n"
+input = "Airplane!,1980,\"Robert Hays,Julie Hagerty\"\r\nCaddyshack,1980,\"Chevy Chase,Rodney Dangerfield,Ted Knight,Michael O'Keefe,Bill Murray\"\r\n"
 main =
   when Parser.CSV.parseStr movieInfoParser input is
     Ok movies ->
@@ -23,30 +23,12 @@ main =
         ParsingFailure failure ->
           "Parsing failure: \(failure)\n"
         ParsingIncomplete leftover ->
-          leftoverStr = leftover |> List.map Parser.Str.strFromRaw |> Str.joinWith "; "
-          "Parsing incomplete. Following still left: \(leftoverStr)\n"
+          leftoverStr = leftover |> List.map Parser.Str.strFromRaw |> List.map (\val -> "\"\(val)\"") |> Str.joinWith ", "
+          "Parsing incomplete. Following leftover fields while parsing a record: \(leftoverStr)\n"
         SyntaxError error ->
           "Parsing failure. Syntax error in the CSV: \(error)"
 
-User := {firstName: Str, lastName: Str, age: Nat, email: Str}
-
-userCSVParser =
-  record (\firstName -> \lastName -> \age -> \email -> @User {firstName, lastName, age, email})
-  |> apply (field string)
-  |> apply (field string)
-  |> apply (field nat)
-  |> apply (field string)
-
-printUser = \@User {firstName, lastName, age, email} ->
-    ageStr = Num.toStr age
-    "User {firstName: \(firstName), lastName: \(lastName), age: \(ageStr), email: \(email)}"
-
 MovieInfo := {title: Str, releaseYear: Nat, actors: List Str}
-
-movieInfoToStr = \@MovieInfo {title, releaseYear, actors} ->
-  releaseYearStr = Num.toStr releaseYear
-  actorsStr = actors |> Str.joinWith ", "
-  "MovieInfo {title: \(title), releaseYear: \(releaseYearStr)}, actors: [\(actorsStr))]}"
 
 movieInfoParser =
   record (\title -> \releaseYear -> \actors -> @MovieInfo {title, releaseYear, actors})
@@ -54,7 +36,10 @@ movieInfoParser =
   |> apply (field nat)
   |> apply (field actorsParser)
 
-actorsParser = string |> map (\val -> Str.split val ",")
+actorsParser =
+  string
+  |> map (\val -> Str.split val ",")
+
 
 
 movieInfoExplanation = \@MovieInfo {title, releaseYear, actors} ->
@@ -69,3 +54,8 @@ enumerate = \elements ->
   last
   |> List.prepend (inits |> Str.joinWith ", ")
   |> Str.joinWith " and "
+
+# movieInfoToStr = \@MovieInfo {title, releaseYear, actors} ->
+#   releaseYearStr = Num.toStr releaseYear
+#   actorsStr = actors |> Str.joinWith ", "
+#   "MovieInfo {title: \(title), releaseYear: \(releaseYearStr)}, actors: [\(actorsStr))]}"
