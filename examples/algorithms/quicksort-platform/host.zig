@@ -23,7 +23,7 @@ comptime {
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed_generic(output: *RocList, input: *RocList) void;
+extern fn roc__mainForHost_1_exposed(input: *RocList) RocList;
 
 const Align = 2 * @alignOf(usize);
 extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
@@ -108,8 +108,7 @@ pub export fn main() u8 {
     std.os.clock_gettime(std.os.CLOCK.REALTIME, &ts1) catch unreachable;
 
     // actually call roc to populate the callresult
-    var callresult: RocList = undefined;
-    roc__mainForHost_1_exposed_generic(&callresult, &roc_list);
+    var callresult: RocList = roc__mainForHost_1_exposed(&roc_list);
 
     // const callresult: RocList = roc__mainForHost_1_exposed_generic(&roc_list);
 
