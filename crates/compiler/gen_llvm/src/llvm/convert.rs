@@ -277,6 +277,9 @@ pub(crate) struct RocUnionType<'ctx> {
 }
 
 impl<'ctx> RocUnionType<'ctx> {
+    pub const TAG_ID_INDEX: u32 = 3;
+    pub const TAG_DATA_INDEX: u32 = 1;
+
     fn new(
         context: &'ctx Context,
         target_info: TargetInfo,

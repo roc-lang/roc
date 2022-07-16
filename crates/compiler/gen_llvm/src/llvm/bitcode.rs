@@ -1,8 +1,8 @@
 /// Helpers for interacting with the zig that generates bitcode
 use crate::debug_info_init;
 use crate::llvm::build::{
-    complex_bitcast_check_size, load_roc_value, struct_from_fields, to_cc_return, CCReturn, Env,
-    C_CALL_CONV, FAST_CALL_CONV, TAG_DATA_INDEX,
+    complex_bitcast_check_size, load_roc_value, to_cc_return, CCReturn, Env, C_CALL_CONV,
+    FAST_CALL_CONV,
 };
 use crate::llvm::convert::basic_type_from_layout;
 use crate::llvm::refcounting::{
@@ -14,7 +14,7 @@ use inkwell::values::{BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, 
 use inkwell::AddressSpace;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{LambdaSet, Layout, LayoutIds, UnionLayout};
+use roc_mono::layout::{LambdaSet, Layout, LayoutIds};
 
 use super::build::create_entry_block_alloca;
 

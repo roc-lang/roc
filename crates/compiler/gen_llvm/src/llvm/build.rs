@@ -1154,9 +1154,6 @@ pub fn build_exp_call<'a, 'ctx, 'env>(
     }
 }
 
-pub const TAG_ID_INDEX: u32 = 3;
-pub const TAG_DATA_INDEX: u32 = 1;
-
 pub fn struct_from_fields<'a, 'ctx, 'env, I>(
     env: &Env<'a, 'ctx, 'env>,
     struct_type: StructType<'ctx>,
@@ -1431,7 +1428,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                         .builder
                         .build_struct_gep(
                             argument.into_pointer_value(),
-                            TAG_DATA_INDEX,
+                            RocUnionType::TAG_DATA_INDEX,
                             "get_opaque_data_ptr",
                         )
                         .unwrap();
@@ -1576,7 +1573,7 @@ fn build_wrapped_tag<'a, 'ctx, 'env>(
 
     if union_layout.stores_tag_id_as_data(env.target_info) {
         let tag_id_ptr = builder
-            .build_struct_gep(raw_data_ptr, TAG_ID_INDEX, "tag_id_index")
+            .build_struct_gep(raw_data_ptr, RocUnionType::TAG_ID_INDEX, "tag_id_index")
             .unwrap();
 
         let tag_id_type = basic_type_from_layout(env, &tag_id_layout).into_int_type();
@@ -1585,7 +1582,7 @@ fn build_wrapped_tag<'a, 'ctx, 'env>(
             .build_store(tag_id_ptr, tag_id_type.const_int(tag_id as u64, false));
 
         let opaque_struct_ptr = builder
-            .build_struct_gep(raw_data_ptr, TAG_DATA_INDEX, "tag_data_index")
+            .build_struct_gep(raw_data_ptr, RocUnionType::TAG_DATA_INDEX, "tag_data_index")
             .unwrap();
 
         struct_pointer_from_fields(
@@ -3180,7 +3177,7 @@ fn get_tag_id_wrapped<'a, 'ctx, 'env>(
 ) -> IntValue<'ctx> {
     let tag_id_ptr = env
         .builder
-        .build_struct_gep(from_value, TAG_ID_INDEX, "tag_id_ptr")
+        .build_struct_gep(from_value, RocUnionType::TAG_ID_INDEX, "tag_id_ptr")
         .unwrap();
 
     env.builder
@@ -3193,7 +3190,7 @@ pub fn get_tag_id_non_recursive<'a, 'ctx, 'env>(
     tag: StructValue<'ctx>,
 ) -> IntValue<'ctx> {
     env.builder
-        .build_extract_value(tag, TAG_ID_INDEX, "get_tag_id")
+        .build_extract_value(tag, RocUnionType::TAG_ID_INDEX, "get_tag_id")
         .unwrap()
         .into_int_value()
 }
