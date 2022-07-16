@@ -355,6 +355,17 @@ fn wasm32_target_tripple() -> Triple {
 }
 
 #[allow(dead_code)]
+fn write_final_wasm() -> bool {
+    use roc_debug_flags::{dbg_do, ROC_WRITE_FINAL_WASM};
+
+    dbg_do!(ROC_WRITE_FINAL_WASM, {
+        return true;
+    });
+
+    false
+}
+
+#[allow(dead_code)]
 fn compile_to_wasm_bytes<'a>(
     arena: &'a bumpalo::Bump,
     config: HelperConfig,
@@ -368,7 +379,14 @@ fn compile_to_wasm_bytes<'a>(
 
     let temp_dir = tempfile::tempdir().unwrap();
     let wasm_file = llvm_module_to_wasm_file(&temp_dir, llvm_module);
-    std::fs::read(wasm_file).unwrap()
+    let compiled_bytes = std::fs::read(wasm_file).unwrap();
+
+    if write_final_wasm() {
+        let build_dir_hash = crate::helpers::src_hash(src);
+        crate::helpers::save_wasm_file(&compiled_bytes, build_dir_hash)
+    };
+
+    compiled_bytes
 }
 
 #[allow(dead_code)]
