@@ -10,7 +10,7 @@ use roc_collections::VecMap;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::layout::{
     cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Layout, LayoutCache,
-    UnionLayout, FieldOrderHash,
+    UnionLayout,
 };
 use roc_target::TargetInfo;
 use roc_types::{
