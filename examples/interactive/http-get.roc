@@ -1,17 +1,15 @@
 app "http-get"
     packages { pf: "cli-platform/main.roc" }
-    imports [pf.Http, pf.Task, pf.Stdout]
+    imports [pf.Http, pf.HttpTypes, pf.Task, pf.Stdout]
     provides [main] to pf
 
 main : Task.Task {} [] [Write [Stdout], Network [Http]]
 main =
-    # request : Request
-    # request = { defaultRequest & url: "https://httpbin.org/get" }
+    request : HttpTypes.Request
+    request = { Http.defaultRequest & url: "https://httpbin.org/get" }
 
-    # result <- Http.send request |> Task.await
-    # output =
-    #     when result is
-    #         Ok payload -> payload
-    #         Err httpError -> Http.errorToString httpError
-    output = "Hello"
+    output <- Http.send request
+            |> Task.onFail (\err -> err |> Http.errorToString |> Task.succeed)
+            |> Task.await
+
     Stdout.line output

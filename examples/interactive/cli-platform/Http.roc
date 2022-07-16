@@ -4,7 +4,7 @@ interface Http
         emptyBody,
         bytesBody,
         stringBody,
-        jsonBody,
+        # jsonBody,
         multiPartBody,
         stringPart,
         bytesPart,
@@ -16,9 +16,9 @@ interface Http
     imports [
         Effect,
         InternalTask,
-        Json,
+        # Json,
         Task.{ Task },
-        Encode.{ Encoding },
+        # Encode.{ Encoding },
         HttpTypes.{ Request, Header, TimeoutConfig, TrackerConfig, Part, Body, Response, Metadata, Error },
     ]
 
@@ -52,9 +52,9 @@ stringBody : [MimeType Str], Str -> Body
 stringBody = \mimeType, str ->
     Body mimeType (Str.toUtf8 str)
 
-jsonBody : a -> Body | a has Encoding
-jsonBody = \val ->
-    Body (MimeType "application/json") (Encode.toBytes val Json.format)
+# jsonBody : a -> Body | a has Encoding
+# jsonBody = \val ->
+#     Body (MimeType "application/json") (Encode.toBytes val Json.format)
 
 multiPartBody : List Part -> Body
 multiPartBody = \parts ->
