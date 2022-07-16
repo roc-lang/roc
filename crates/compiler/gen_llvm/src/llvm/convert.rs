@@ -205,69 +205,6 @@ fn alignment_type(context: &Context, alignment: u32) -> BasicTypeEnum {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct RocUnionValue<'ctx> {
-    roc_union_type: RocUnionType<'ctx>,
-    pub struct_value: StructValue<'ctx>,
-}
-
-impl<'ctx> RocUnionValue<'ctx> {
-    pub fn new<'a, 'env>(
-        env: &Env<'a, 'ctx, 'env>,
-        roc_union_type: RocUnionType<'ctx>,
-        data: StructValue<'ctx>,
-        tag_id: Option<usize>,
-    ) -> Self {
-        debug_assert_eq!(tag_id.is_some(), roc_union_type.tag_type.is_some());
-
-        let mut struct_value = roc_union_type.struct_type().const_zero();
-
-        // set the tag id
-        if let Some(tag_id) = tag_id {
-            let tag_id_type = match roc_union_type.tag_type.unwrap() {
-                TagType::I8 => env.context.i8_type(),
-                TagType::I16 => env.context.i16_type(),
-            };
-
-            let tag_id = tag_id_type.const_int(tag_id as u64, false);
-
-            struct_value = env
-                .builder
-                .build_insert_value(
-                    struct_value,
-                    tag_id,
-                    RocUnionType::TAG_ID_INDEX,
-                    "insert_tag_id",
-                )
-                .unwrap()
-                .into_struct_value();
-        }
-
-        let tag_alloca = env
-            .builder
-            .build_alloca(struct_value.get_type(), "tag_alloca");
-        env.builder.build_store(tag_alloca, struct_value);
-
-        let cast_pointer = env.builder.build_pointer_cast(
-            tag_alloca,
-            data.get_type().ptr_type(AddressSpace::Generic),
-            "to_data_ptr",
-        );
-
-        env.builder.build_store(cast_pointer, data);
-
-        struct_value = env
-            .builder
-            .build_load(tag_alloca, "load_tag")
-            .into_struct_value();
-
-        Self {
-            roc_union_type,
-            struct_value,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
 enum TagType {
     I8,
     I16,
@@ -407,6 +344,50 @@ impl<'ctx> RocUnionType<'ctx> {
         width = round_up_to_alignment(width, self.tag_alignment());
 
         width
+    }
+
+    pub fn as_struct_value<'a, 'env>(
+        &self,
+        env: &Env<'a, 'ctx, 'env>,
+        data: StructValue<'ctx>,
+        tag_id: Option<usize>,
+    ) -> StructValue<'ctx> {
+        debug_assert_eq!(tag_id.is_some(), self.tag_type.is_some());
+
+        let mut struct_value = self.struct_type().const_zero();
+
+        // set the tag id
+        if let Some(tag_id) = tag_id {
+            let tag_id_type = match self.tag_type.unwrap() {
+                TagType::I8 => env.context.i8_type(),
+                TagType::I16 => env.context.i16_type(),
+            };
+
+            let tag_id = tag_id_type.const_int(tag_id as u64, false);
+
+            struct_value = env
+                .builder
+                .build_insert_value(struct_value, tag_id, Self::TAG_ID_INDEX, "insert_tag_id")
+                .unwrap()
+                .into_struct_value();
+        }
+
+        let tag_alloca = env
+            .builder
+            .build_alloca(struct_value.get_type(), "tag_alloca");
+        env.builder.build_store(tag_alloca, struct_value);
+
+        let cast_pointer = env.builder.build_pointer_cast(
+            tag_alloca,
+            data.get_type().ptr_type(AddressSpace::Generic),
+            "to_data_ptr",
+        );
+
+        env.builder.build_store(cast_pointer, data);
+
+        env.builder
+            .build_load(tag_alloca, "load_tag")
+            .into_struct_value()
     }
 }
 

@@ -12,7 +12,7 @@ use crate::llvm::build_str::{dec_to_str, str_from_float, str_from_int};
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
     self, argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout, zig_str_type,
-    RocUnionType, RocUnionValue,
+    RocUnionType,
 };
 use crate::llvm::refcounting::{
     build_reset, decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
@@ -56,8 +56,7 @@ use roc_mono::ir::{
     ModifyRc, OptLevel, ProcLayout,
 };
 use roc_mono::layout::{
-    round_up_to_alignment, Builtin, CapturesNiche, LambdaName, LambdaSet, Layout, LayoutIds,
-    TagIdIntType, UnionLayout,
+    Builtin, CapturesNiche, LambdaName, LambdaSet, Layout, LayoutIds, TagIdIntType, UnionLayout,
 };
 use roc_std::RocDec;
 use roc_target::{PtrWidth, TargetInfo};
@@ -1734,16 +1733,16 @@ fn build_tag<'a, 'ctx, 'env>(
 
             let data = build_struct(env, scope, arguments);
 
-            let value = RocUnionValue::new(env, roc_union_type, data, Some(tag_id as _));
+            let value = roc_union_type.as_struct_value(env, data, Some(tag_id as _));
 
             let alloca = create_entry_block_alloca(
                 env,
                 parent,
-                value.struct_value.get_type().into(),
+                value.get_type().into(),
                 "non_recursive_tag_alloca",
             );
 
-            env.builder.build_store(alloca, value.struct_value);
+            env.builder.build_store(alloca, value);
 
             alloca.into()
         }
@@ -1845,9 +1844,9 @@ fn build_tag<'a, 'ctx, 'env>(
 
             let data = build_struct(env, scope, arguments);
 
-            let value = RocUnionValue::new(env, roc_union_type, data, None);
+            let value = roc_union_type.as_struct_value(env, data, None);
 
-            env.builder.build_store(data_ptr, value.struct_value);
+            env.builder.build_store(data_ptr, value);
 
             data_ptr.into()
         }
