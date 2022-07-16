@@ -1,6 +1,6 @@
 app "http-get"
     packages { pf: "cli-platform/main.roc" }
-    imports [pf.Http, pf.Task]
+    imports [pf.Http, pf.Task, pf.Stdout]
     provides [main] to pf
 
 main : Task.Task {} [] [Write [Stdout], Network [Http]]
