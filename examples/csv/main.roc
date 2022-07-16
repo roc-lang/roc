@@ -3,11 +3,6 @@ app "main"
     imports [Parser.Core.{Parser, map, apply}, Parser.Str.{RawStr}, Parser.CSV.{CSV, record, field, string, nat}]
     provides [main] to pf
 
-# Until issue https://github.com/rtfeldman/roc/issues/3438 is fixed,
-# use the simple 'hello world' platform for testing
-# with hard-coded input.
-
-# input = "John,Doe,100,john@doe.com\r\nRichard,Feldman,42,r.feldman@example.com\r\nMarten,Wijnja,28,w-m@wmcode.nl\r\n"
 input = "Airplane!,1980,\"Robert Hays,Julie Hagerty\"\r\nCaddyshack,1980,\"Chevy Chase,Rodney Dangerfield,Ted Knight,Michael O'Keefe,Bill Murray\"\r\n"
 main =
   when Parser.CSV.parseStr movieInfoParser input is
@@ -40,13 +35,10 @@ actorsParser =
   string
   |> map (\val -> Str.split val ",")
 
-
-
 movieInfoExplanation = \@MovieInfo {title, releaseYear, actors} ->
   enumeratedActors = enumerate actors
   releaseYearStr = Num.toStr releaseYear
   "The movie '\(title)' was released in \(releaseYearStr) and stars \(enumeratedActors)"
-
 
 enumerate : List Str -> Str
 enumerate = \elements ->
