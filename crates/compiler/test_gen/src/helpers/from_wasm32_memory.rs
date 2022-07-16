@@ -158,7 +158,12 @@ impl<T: FromWasm32Memory, U: FromWasm32Memory> FromWasm32Memory for (T, U) {
     }
 }
 
-impl<T: FromWasm32Memory, U: FromWasm32Memory, V: FromWasm32Memory> FromWasm32Memory for (T, U, V) {
+impl<T, U, V> FromWasm32Memory for (T, U, V)
+where
+    T: FromWasm32Memory,
+    U: FromWasm32Memory,
+    V: FromWasm32Memory,
+{
     fn decode(memory: &[u8], offset: u32) -> Self {
         debug_assert!(
             T::ALIGN_OF_WASM >= U::ALIGN_OF_WASM,
@@ -180,6 +185,47 @@ impl<T: FromWasm32Memory, U: FromWasm32Memory, V: FromWasm32Memory> FromWasm32Me
         );
 
         (t, u, v)
+    }
+}
+
+impl<T, U, V, W> FromWasm32Memory for (T, U, V, W)
+where
+    T: FromWasm32Memory,
+    U: FromWasm32Memory,
+    V: FromWasm32Memory,
+    W: FromWasm32Memory,
+{
+    fn decode(memory: &[u8], offset: u32) -> Self {
+        debug_assert!(
+            T::ALIGN_OF_WASM >= U::ALIGN_OF_WASM,
+            "this function does not handle alignment"
+        );
+
+        debug_assert!(
+            U::ALIGN_OF_WASM >= V::ALIGN_OF_WASM,
+            "this function does not handle alignment"
+        );
+
+        debug_assert!(
+            V::ALIGN_OF_WASM >= W::ALIGN_OF_WASM,
+            "this function does not handle alignment"
+        );
+
+        let t = <T as FromWasm32Memory>::decode(memory, offset);
+
+        let u = <U as FromWasm32Memory>::decode(memory, offset + T::ACTUAL_WIDTH as u32);
+
+        let v = <V as FromWasm32Memory>::decode(
+            memory,
+            offset + T::ACTUAL_WIDTH as u32 + U::ACTUAL_WIDTH as u32,
+        );
+
+        let w = <W as FromWasm32Memory>::decode(
+            memory,
+            offset + T::ACTUAL_WIDTH as u32 + U::ACTUAL_WIDTH as u32 + V::ACTUAL_WIDTH as u32,
+        );
+
+        (t, u, v, w)
     }
 }
 
