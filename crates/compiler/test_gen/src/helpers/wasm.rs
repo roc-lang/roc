@@ -34,6 +34,16 @@ fn promote_expr_to_module(src: &str) -> String {
     buffer
 }
 
+fn write_final_wasm() -> bool {
+    use roc_debug_flags::{dbg_do, ROC_WRITE_FINAL_WASM};
+
+    dbg_do!(ROC_WRITE_FINAL_WASM, {
+        return true;
+    });
+
+    DEBUG_SETTINGS.keep_test_binary
+}
+
 #[allow(dead_code)]
 pub fn compile_to_wasm_bytes<'a, T: Wasm32Result>(
     arena: &'a bumpalo::Bump,
@@ -46,7 +56,7 @@ pub fn compile_to_wasm_bytes<'a, T: Wasm32Result>(
     let compiled_bytes =
         compile_roc_to_wasm_bytes(arena, platform_bytes, src, test_wrapper_type_info);
 
-    if DEBUG_SETTINGS.keep_test_binary {
+    if write_final_wasm() {
         let build_dir_hash = crate::helpers::src_hash(src);
         crate::helpers::save_wasm_file(&compiled_bytes, build_dir_hash)
     };
