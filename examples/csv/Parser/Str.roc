@@ -13,6 +13,7 @@ interface Parser.Str
     oneOf,
     digit,
     digits,
+    strFromRaw,
   ]
   imports [Parser.Core.{Parser, const, fail, map, map2, apply, many, oneOrMore, parse, parsePartial, buildPrimitiveParser, between}]
 
