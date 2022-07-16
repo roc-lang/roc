@@ -375,3 +375,267 @@ fn encode_use_stdlib_without_wrapping_custom() {
         RocStr
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn to_encoder_encode_custom_has_capture() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ toEncoder }, Json]
+                provides [main] to "./platform"
+
+            HelloWorld := Str
+            toEncoder = \@HelloWorld s1 ->
+                Encode.custom \bytes, fmt ->
+                    bytes
+                        |> Encode.appendWith (Encode.string s1) fmt
+
+            main =
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld "Hello, World!\n") Json.format)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from("\"Hello, World!\n\""),
+        RocStr
+    )
+}
+
+mod encode_immediate {
+    #[cfg(feature = "gen-llvm")]
+    use crate::helpers::llvm::assert_evals_to;
+
+    #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
+    use indoc::indoc;
+
+    #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
+    use roc_std::RocStr;
+
+    #[test]
+    #[cfg(any(feature = "gen-llvm"))]
+    fn string() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" imports [Encode.{ toEncoder }, Json] provides [main] to "./platform"
+
+                main =
+                    when Str.fromUtf8 (Encode.toBytes "foo" Json.format) is
+                        Ok s -> s
+                        _ -> "<bad>"
+                "#
+            ),
+            RocStr::from("\"foo\""),
+            RocStr
+        )
+    }
+
+    macro_rules! num_immediate {
+        ($($num:expr, $typ:ident)*) => {$(
+            #[test]
+            #[cfg(any(feature = "gen-llvm"))]
+            fn $typ() {
+                assert_evals_to!(
+                    &format!(indoc!(
+                        r#"
+                        app "test" imports [Encode.{{ toEncoder }}, Json] provides [main] to "./platform"
+
+                        main =
+                            when Str.fromUtf8 (Encode.toBytes {}{} Json.format) is
+                                Ok s -> s
+                                _ -> "<bad>"
+                        "#
+                    ), $num, stringify!($typ)),
+                    RocStr::from(format!(r#"{}"#, $num).as_str()),
+                    RocStr
+                )
+            }
+        )*}
+    }
+
+    num_immediate! {
+        17, i8
+        17, i16
+        17, i32
+        17, i64
+        17, i128
+        17, u8
+        17, u16
+        17, u32
+        17, u64
+        17, u128
+        // 17.23, f32 TODO https://github.com/rtfeldman/roc/issues/3522
+        17.23, f64
+        // 17.23, dec TODO https://github.com/rtfeldman/roc/issues/3522
+    }
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn encode_derived_record_one_field_string() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ toEncoder }, Json]
+                provides [main] to "./platform"
+
+            main =
+                result = Str.fromUtf8 (Encode.toBytes {a: "foo"} Json.format)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"{"a":"foo",}"#),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn encode_derived_record_two_fields_strings() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ toEncoder }, Json]
+                provides [main] to "./platform"
+
+            main =
+                rcd = {a: "foo", b: "bar"}
+                result = Str.fromUtf8 (Encode.toBytes rcd Json.format)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"{"a":"foo","b":"bar",}"#),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn encode_derived_nested_record_string() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ toEncoder }, Json]
+                provides [main] to "./platform"
+
+            main =
+                rcd = {a: {b: "bar"}}
+                encoded = Encode.toBytes rcd Json.format
+                result = Str.fromUtf8 encoded
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"{"a":{"b":"bar",},}"#),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn encode_derived_tag_one_payload_string() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ toEncoder }, Json]
+                provides [main] to "./platform"
+
+            main =
+                x : [A Str]
+                x = A "foo"
+                result = Str.fromUtf8 (Encode.toBytes x Json.format)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"{"A":["foo",]}"#),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn encode_derived_tag_two_payloads_string() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ toEncoder }, Json]
+                provides [main] to "./platform"
+
+            main =
+                x : [A Str Str]
+                x = A "foo" "bar"
+                result = Str.fromUtf8 (Encode.toBytes x Json.format)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"{"A":["foo","bar",]}"#),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn encode_derived_nested_tag_string() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ toEncoder }, Json]
+                provides [main] to "./platform"
+
+            main =
+                x : [A [B Str Str]]
+                x = A (B "foo" "bar")
+                encoded = Encode.toBytes x Json.format
+                result = Str.fromUtf8 encoded
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"{"A":[{"B":["foo","bar",]},]}"#),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn encode_derived_nested_record_tag_record() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ toEncoder }, Json]
+                provides [main] to "./platform"
+
+            main =
+                x : {a: [B {c: Str}]}
+                x = {a: (B ({c: "foo"}))}
+                encoded = Encode.toBytes x Json.format
+                result = Str.fromUtf8 encoded
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"{"a":{"B":[{"c":"foo",},]},}"#),
+        RocStr
+    )
+}

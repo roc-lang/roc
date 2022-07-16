@@ -14,6 +14,7 @@ roc_types = { path = "../types" }
 roc_can = { path = "../can" }
 roc_constrain = { path = "../constrain" }
 roc_derive_key = { path = "../derive_key" }
+roc_derive = { path = "../derive" }
 roc_builtins = { path = "../builtins" }
 roc_problem = { path = "../problem" }
 roc_unify = { path = "../unify" }

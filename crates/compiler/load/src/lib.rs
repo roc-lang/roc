@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 pub use roc_load_internal::docs;
 pub use roc_load_internal::file::{
-    LoadResult, LoadStart, LoadedModule, LoadingProblem, MonomorphizedModule, Phase,
+    Expectations, LoadResult, LoadStart, LoadedModule, LoadingProblem, MonomorphizedModule, Phase,
 };
 
 #[allow(clippy::too_many_arguments)]

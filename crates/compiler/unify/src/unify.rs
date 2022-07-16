@@ -5,7 +5,7 @@ use roc_debug_flags::dbg_do;
 use roc_debug_flags::{ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName};
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_types::num::{FloatWidth, IntLitWidth, NumericRange};
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
@@ -755,6 +755,15 @@ fn unify_alias<M: MetaCollector>(
 }
 
 #[inline(always)]
+fn opaque_obligation(opaque: Symbol, opaque_var: Variable) -> Obligated {
+    match opaque.module_id() {
+        // Numbers should be treated as ad-hoc obligations for ability checking.
+        ModuleId::NUM => Obligated::Adhoc(opaque_var),
+        _ => Obligated::Opaque(opaque),
+    }
+}
+
+#[inline(always)]
 fn unify_opaque<M: MetaCollector>(
     subs: &mut Subs,
     pool: &mut Pool,
@@ -772,7 +781,7 @@ fn unify_opaque<M: MetaCollector>(
             // Alias wins
             merge(subs, ctx, Alias(symbol, args, real_var, kind))
         }
-        FlexAbleVar(_, ability) if args.is_empty() => {
+        FlexAbleVar(_, ability) => {
             // Opaque type wins
             merge_flex_able_with_concrete(
                 subs,
@@ -780,7 +789,7 @@ fn unify_opaque<M: MetaCollector>(
                 ctx.second,
                 *ability,
                 Alias(symbol, args, real_var, kind),
-                Obligated::Opaque(symbol),
+                opaque_obligation(symbol, ctx.first),
             )
         }
         Alias(_, _, other_real_var, AliasKind::Structural) => {
@@ -1062,12 +1071,12 @@ struct SeparatedUnionLambdas {
     joined: Vec<(Symbol, VariableSubsSlice)>,
 }
 
-fn separate_union_lambdas(
+fn separate_union_lambdas<M: MetaCollector>(
     subs: &mut Subs,
     pool: &mut Pool,
     fields1: UnionLambdas,
     fields2: UnionLambdas,
-) -> SeparatedUnionLambdas {
+) -> (Outcome<M>, SeparatedUnionLambdas) {
     debug_assert!(
         fields1.is_sorted_allow_duplicates(subs),
         "not sorted: {:?}",
@@ -1124,6 +1133,7 @@ fn separate_union_lambdas(
         }
     }
 
+    let mut whole_outcome = Outcome::default();
     let mut only_in_left = Vec::with_capacity(fields1.len());
     let mut only_in_right = Vec::with_capacity(fields2.len());
     let mut joined = Vec::with_capacity(fields1.len() + fields2.len());
@@ -1172,13 +1182,14 @@ fn separate_union_lambdas(
                             maybe_mark_union_recursive(subs, var1);
                             maybe_mark_union_recursive(subs, var2);
 
-                            let outcome =
-                                unify_pool::<NoCollector>(subs, pool, var1, var2, Mode::EQ);
+                            let outcome = unify_pool(subs, pool, var1, var2, Mode::EQ);
 
                             if !outcome.mismatches.is_empty() {
                                 subs.rollback_to(snapshot);
                                 continue 'try_next_right;
                             }
+
+                            whole_outcome.union(outcome);
                         }
 
                         // All the variables unified, so we can join the left + right.
@@ -1202,11 +1213,14 @@ fn separate_union_lambdas(
         }
     }
 
-    SeparatedUnionLambdas {
-        only_in_left,
-        only_in_right,
-        joined,
-    }
+    (
+        whole_outcome,
+        SeparatedUnionLambdas {
+            only_in_left,
+            only_in_right,
+            joined,
+        },
+    )
 }
 
 fn unify_unspecialized_lambdas<M: MetaCollector>(
@@ -1214,7 +1228,7 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
     pool: &mut Pool,
     uls1: SubsSlice<Uls>,
     uls2: SubsSlice<Uls>,
-) -> Result<SubsSlice<Uls>, Outcome<M>> {
+) -> Result<(SubsSlice<Uls>, Outcome<M>), Outcome<M>> {
     // For now we merge all variables of unspecialized lambdas in a lambda set that share the same
     // ability member/region.
     // See the section "A property that's lost, and how we can hold on to it" of
@@ -1225,9 +1239,9 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
     // resolves to itself or re-points to lset2.
     // In either case the merged unspecialized lambda sets will be there.
     match (uls1.is_empty(), uls2.is_empty()) {
-        (true, true) => Ok(SubsSlice::default()),
-        (false, true) => Ok(uls1),
-        (true, false) => Ok(uls2),
+        (true, true) => Ok((SubsSlice::default(), Default::default())),
+        (false, true) => Ok((uls1, Default::default())),
+        (true, false) => Ok((uls2, Default::default())),
         (false, false) => {
             let mut all_uls = (subs.get_subs_slice(uls1).iter())
                 .chain(subs.get_subs_slice(uls2))
@@ -1241,6 +1255,7 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
 
             // Now merge the variables of unspecialized lambdas pointing to the same
             // member/region.
+            let mut whole_outcome = Outcome::default();
             let mut j = 1;
             while j < all_uls.len() {
                 let i = j - 1;
@@ -1251,6 +1266,7 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
                     if !outcome.mismatches.is_empty() {
                         return Err(outcome);
                     }
+                    whole_outcome.union(outcome);
                     // Keep the Uls in position `i` and remove the one in position `j`.
                     all_uls.remove(j);
                 } else {
@@ -1259,9 +1275,9 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
                 }
             }
 
-            Ok(SubsSlice::extend_new(
-                &mut subs.unspecialized_lambda_sets,
-                all_uls,
+            Ok((
+                SubsSlice::extend_new(&mut subs.unspecialized_lambda_sets, all_uls),
+                whole_outcome,
             ))
         }
     }
@@ -1302,11 +1318,14 @@ fn unify_lambda_set_help<M: MetaCollector>(
         "Recursion var is present, but it doesn't have a recursive content!"
     );
 
-    let SeparatedUnionLambdas {
-        only_in_left,
-        only_in_right,
-        joined,
-    } = separate_union_lambdas(subs, pool, solved1, solved2);
+    let (
+        mut whole_outcome,
+        SeparatedUnionLambdas {
+            only_in_left,
+            only_in_right,
+            joined,
+        },
+    ) = separate_union_lambdas(subs, pool, solved1, solved2);
 
     let all_lambdas = joined
         .into_iter()
@@ -1334,7 +1353,10 @@ fn unify_lambda_set_help<M: MetaCollector>(
     };
 
     let merged_unspecialized = match unify_unspecialized_lambdas(subs, pool, uls1, uls2) {
-        Ok(merged) => merged,
+        Ok((merged, outcome)) => {
+            whole_outcome.union(outcome);
+            merged
+        }
         Err(outcome) => {
             debug_assert!(!outcome.mismatches.is_empty());
             return outcome;
@@ -1349,7 +1371,9 @@ fn unify_lambda_set_help<M: MetaCollector>(
         ambient_function: ambient_function_var,
     });
 
-    merge(subs, ctx, new_lambda_set)
+    let merge_outcome = merge(subs, ctx, new_lambda_set);
+    whole_outcome.union(merge_outcome);
+    whole_outcome
 }
 
 /// Ensures that a non-recursive tag union, when unified with a recursion var to become a recursive
@@ -1882,6 +1906,8 @@ fn unify_tag_unions<M: MetaCollector>(
         let flat_type = FlatType::TagUnion(unique_tags1, ext1);
         let sub_record = fresh(subs, pool, ctx, Structure(flat_type));
 
+        let mut total_outcome = Outcome::default();
+
         // In a presence context, we don't care about ext2 being equal to tags1
         if ctx.mode.is_eq() {
             let ext_outcome = unify_pool(subs, pool, sub_record, ext2, ctx.mode);
@@ -1889,9 +1915,10 @@ fn unify_tag_unions<M: MetaCollector>(
             if !ext_outcome.mismatches.is_empty() {
                 return ext_outcome;
             }
+            total_outcome.union(ext_outcome);
         }
 
-        unify_shared_tags_new(
+        let shared_tags_outcome = unify_shared_tags_new(
             subs,
             pool,
             ctx,
@@ -1899,7 +1926,9 @@ fn unify_tag_unions<M: MetaCollector>(
             OtherTags2::Empty,
             sub_record,
             recursion_var,
-        )
+        );
+        total_outcome.union(shared_tags_outcome);
+        total_outcome
     } else {
         let other_tags = OtherTags2::Union(separate.only_in_1.clone(), separate.only_in_2.clone());
 
@@ -1932,6 +1961,7 @@ fn unify_tag_unions<M: MetaCollector>(
         //  without rolling back, the mismatch is between `[Blue, Red, Green]a` and `[Red, Green]`.
         //  TODO is this also required for the other cases?
 
+        let mut total_outcome = Outcome::default();
         let snapshot = subs.snapshot();
 
         let ext1_outcome = unify_pool(subs, pool, ext1, sub2, ctx.mode);
@@ -1939,6 +1969,7 @@ fn unify_tag_unions<M: MetaCollector>(
             subs.rollback_to(snapshot);
             return ext1_outcome;
         }
+        total_outcome.union(ext1_outcome);
 
         if ctx.mode.is_eq() {
             let ext2_outcome = unify_pool(subs, pool, sub1, ext2, ctx.mode);
@@ -1946,11 +1977,15 @@ fn unify_tag_unions<M: MetaCollector>(
                 subs.rollback_to(snapshot);
                 return ext2_outcome;
             }
+            total_outcome.union(ext2_outcome);
         }
 
         subs.commit_snapshot(snapshot);
 
-        unify_shared_tags_new(subs, pool, ctx, shared_tags, other_tags, ext, recursion_var)
+        let shared_tags_outcome =
+            unify_shared_tags_new(subs, pool, ctx, shared_tags, other_tags, ext, recursion_var);
+        total_outcome.union(shared_tags_outcome);
+        total_outcome
     }
 }
 
@@ -2015,6 +2050,8 @@ fn unify_shared_tags_new<M: MetaCollector>(
     let mut matching_tags = Vec::default();
     let num_shared_tags = shared_tags.len();
 
+    let mut total_outcome = Outcome::default();
+
     for (name, (actual_vars, expected_vars)) in shared_tags {
         let mut matching_vars = Vec::with_capacity(actual_vars.len());
 
@@ -2069,6 +2106,8 @@ fn unify_shared_tags_new<M: MetaCollector>(
             } else if outcome.mismatches.is_empty() {
                 matching_vars.push(actual);
             }
+
+            total_outcome.union(outcome);
         }
 
         // only do this check after unification so the error message has more info
@@ -2119,7 +2158,11 @@ fn unify_shared_tags_new<M: MetaCollector>(
             }
         };
 
-        unify_shared_tags_merge_new(subs, ctx, new_tags, new_ext_var, recursion_var)
+        let merge_outcome =
+            unify_shared_tags_merge_new(subs, ctx, new_tags, new_ext_var, recursion_var);
+
+        total_outcome.union(merge_outcome);
+        total_outcome
     } else {
         mismatch!(
             "Problem with Tag Union\nThere should be {:?} matching tags, but I only got \n{:?}",
@@ -2528,20 +2571,16 @@ fn unify_flex_able<M: MetaCollector>(
         RecursionVar { .. } => mismatch!("FlexAble with RecursionVar"),
         LambdaSet(..) => mismatch!("FlexAble with LambdaSet"),
 
-        Alias(name, args, _real_var, AliasKind::Opaque) => {
-            if args.is_empty() {
-                // Opaque type wins
-                merge_flex_able_with_concrete(
-                    subs,
-                    ctx,
-                    ctx.first,
-                    ability,
-                    *other,
-                    Obligated::Opaque(*name),
-                )
-            } else {
-                mismatch!("FlexAble vs Opaque with type vars")
-            }
+        Alias(name, _args, _real_var, AliasKind::Opaque) => {
+            // Opaque type wins
+            merge_flex_able_with_concrete(
+                subs,
+                ctx,
+                ctx.first,
+                ability,
+                *other,
+                opaque_obligation(*name, ctx.second),
+            )
         }
 
         Structure(_) | Alias(_, _, _, AliasKind::Structural) | RangedNumber(..) => {

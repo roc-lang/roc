@@ -40,23 +40,15 @@ fn main() {
     // Copy libc to where Cargo expects the output of this crate
     fs::copy(&libc_path, &out_file).unwrap();
 
-    // Generate some Rust code to indicate where the file is
-    let generated_rust = [
-        "pub const WASI_LIBC_PATH: &str =",
-        &format!(
-            "    \"{}\";",
-            out_file.to_str().unwrap().replace('\\', "\\\\")
-        ),
-        "pub const WASI_COMPILER_RT_PATH: &str =",
-        &format!(
-            "  \"{}\";",
-            compiler_rt_path.to_str().unwrap().replace('\\', "\\\\")
-        ),
-        "",
-    ]
-    .join("\n");
+    println!(
+        "cargo:rustc-env=WASI_LIBC_PATH={}",
+        out_file.to_str().unwrap()
+    );
 
-    fs::write("src/generated.rs", generated_rust).unwrap();
+    println!(
+        "cargo:rustc-env=WASI_COMPILER_RT_PATH={}",
+        compiler_rt_path.to_str().unwrap()
+    );
 }
 
 fn zig_executable() -> String {

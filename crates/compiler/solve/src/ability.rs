@@ -55,7 +55,7 @@ pub enum Unfulfilled {
     },
 }
 
-/// Indexes a deriving of an ability for an opaque type.
+/// Indexes a requested deriving of an ability for an opaque type.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct RequestedDeriveKey {
     pub opaque: Symbol,
@@ -553,6 +553,34 @@ impl ObligationCache<'_> {
                     }
                     Erroneous(_) => return Err(var),
                 },
+                #[rustfmt::skip]
+                Alias(
+                      Symbol::NUM_U8   | Symbol::NUM_UNSIGNED8
+                    | Symbol::NUM_U16  | Symbol::NUM_UNSIGNED16
+                    | Symbol::NUM_U32  | Symbol::NUM_UNSIGNED32
+                    | Symbol::NUM_U64  | Symbol::NUM_UNSIGNED64
+                    | Symbol::NUM_U128 | Symbol::NUM_UNSIGNED128
+                    | Symbol::NUM_I8   | Symbol::NUM_SIGNED8
+                    | Symbol::NUM_I16  | Symbol::NUM_SIGNED16
+                    | Symbol::NUM_I32  | Symbol::NUM_SIGNED32
+                    | Symbol::NUM_I64  | Symbol::NUM_SIGNED64
+                    | Symbol::NUM_I128 | Symbol::NUM_SIGNED128
+                    | Symbol::NUM_NAT  | Symbol::NUM_NATURAL
+                    | Symbol::NUM_F32  | Symbol::NUM_BINARY32
+                    | Symbol::NUM_F64  | Symbol::NUM_BINARY64
+                    | Symbol::NUM_DEC  | Symbol::NUM_DECIMAL,
+                    _,
+                    _,
+                    _,
+                ) => {
+                    // yes
+                }
+                Alias(
+                    Symbol::NUM_NUM | Symbol::NUM_INTEGER | Symbol::NUM_FLOATINGPOINT,
+                    _,
+                    real_var,
+                    _,
+                ) => stack.push(*real_var),
                 Alias(name, _, _, AliasKind::Opaque) => {
                     let opaque = *name;
                     if self
@@ -561,27 +589,6 @@ impl ObligationCache<'_> {
                     {
                         return Err(var);
                     }
-                }
-                Alias(
-                    Symbol::NUM_U8
-                    | Symbol::NUM_U16
-                    | Symbol::NUM_U32
-                    | Symbol::NUM_U64
-                    | Symbol::NUM_U128
-                    | Symbol::NUM_I8
-                    | Symbol::NUM_I16
-                    | Symbol::NUM_I32
-                    | Symbol::NUM_I64
-                    | Symbol::NUM_I128
-                    | Symbol::NUM_NAT
-                    | Symbol::NUM_F32
-                    | Symbol::NUM_F64
-                    | Symbol::NUM_DEC,
-                    _,
-                    _,
-                    _,
-                ) => {
-                    // yes
                 }
                 Alias(_, arguments, real_type_var, _) => {
                     push_var_slice!(arguments.all_variables());

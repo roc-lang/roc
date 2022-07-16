@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const math = std.math;
 const utils = @import("utils.zig");
+const expect = @import("expect.zig");
 
 const ROC_BUILTINS = "roc_builtins";
 const NUM = "num";
@@ -52,31 +53,6 @@ comptime {
     exportListFn(list.listReplaceInPlace, "replace_in_place");
     exportListFn(list.listSwap, "swap");
     exportListFn(list.listIsUnique, "is_unique");
-}
-
-// Dict Module
-const dict = @import("dict.zig");
-const hash = @import("hash.zig");
-
-comptime {
-    exportDictFn(dict.dictLen, "len");
-    exportDictFn(dict.dictEmpty, "empty");
-    exportDictFn(dict.dictInsert, "insert");
-    exportDictFn(dict.dictRemove, "remove");
-    exportDictFn(dict.dictContains, "contains");
-    exportDictFn(dict.dictGet, "get");
-    exportDictFn(dict.elementsRc, "elementsRc");
-    exportDictFn(dict.dictKeys, "keys");
-    exportDictFn(dict.dictValues, "values");
-    exportDictFn(dict.dictUnion, "union");
-    exportDictFn(dict.dictIntersection, "intersection");
-    exportDictFn(dict.dictDifference, "difference");
-    exportDictFn(dict.dictWalk, "walk");
-
-    exportDictFn(dict.setFromList, "set_from_list");
-
-    exportDictFn(hash.wyhash, "hash");
-    exportDictFn(hash.wyhash_rocstr, "hash_str");
 }
 
 // Num Module
@@ -188,6 +164,11 @@ comptime {
     exportUtilsFn(utils.allocateWithRefcountC, "allocate_with_refcount");
 
     @export(utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .Weak });
+
+    if (builtin.target.cpu.arch != .wasm32) {
+        exportUtilsFn(expect.expectFailedStart, "expect_failed_start");
+        exportUtilsFn(expect.expectFailedFinalize, "expect_failed_finalize");
+    }
 
     if (builtin.target.cpu.arch == .aarch64) {
         @export(__roc_force_setjmp, .{ .name = "__roc_force_setjmp", .linkage = .Weak });

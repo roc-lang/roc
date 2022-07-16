@@ -1,4 +1,6 @@
-interface AStar exposes [findPath, Model, initialModel, cheapestOpen, reconstructPath] imports [Quicksort]
+interface AStar
+    exposes [findPath, Model, initialModel, cheapestOpen, reconstructPath]
+    imports [Quicksort]
 
 findPath = \costFn, moveFn, start, end ->
     astar costFn moveFn end (initialModel start)

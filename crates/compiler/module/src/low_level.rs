@@ -48,22 +48,6 @@ pub enum LowLevel {
     ListSwap,
     ListIsUnique,
     ListGetCapacity,
-    DictSize,
-    DictEmpty,
-    DictInsert,
-    DictRemove,
-    DictContains,
-    DictGetUnsafe,
-    DictKeys,
-    DictValues,
-    DictUnion,
-    DictIntersection,
-    DictDifference,
-    DictWalk,
-    DictGetCapacity,
-    SetFromList,
-    SetToDict,
-    SetGetCapacity,
     NumAdd,
     NumAddWrap,
     NumAddChecked,
@@ -130,7 +114,7 @@ pub enum LowLevel {
 
 macro_rules! higher_order {
     () => {
-        ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith | DictWalk
+        ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith
     };
 }
 
@@ -152,7 +136,6 @@ impl LowLevel {
             ListMap3 => 3,
             ListMap4 => 4,
             ListSortWith => 1,
-            DictWalk => 2,
             _ => unreachable!(),
         }
     }
@@ -211,7 +194,6 @@ macro_rules! map_symbol_to_lowlevel {
                 LowLevel::ListMap3 => unreachable!(),
                 LowLevel::ListMap4 => unreachable!(),
                 LowLevel::ListSortWith => unreachable!(),
-                LowLevel::DictWalk => unreachable!(),
 
                 // (un)boxing is handled in a custom way
                 LowLevel::BoxExpr => unreachable!(),
@@ -223,7 +205,6 @@ macro_rules! map_symbol_to_lowlevel {
                 LowLevel::NumToIntChecked => unreachable!(),
                 LowLevel::NumToFloatChecked => unreachable!(),
                 LowLevel::NumDivUnchecked => unreachable!(),
-                LowLevel::DictEmpty => unreachable!(),
 
                 // these are used internally and not tied to a symbol
                 LowLevel::Hash => unimplemented!(),
@@ -281,20 +262,6 @@ map_symbol_to_lowlevel! {
     ListSublist <= LIST_SUBLIST_LOWLEVEL,
     ListDropAt <= LIST_DROP_AT,
     ListSwap <= LIST_SWAP,
-    DictSize <= DICT_LEN,
-    DictInsert <= DICT_INSERT,
-    DictRemove <= DICT_REMOVE,
-    DictContains <= DICT_CONTAINS,
-    DictGetUnsafe <= DICT_GET_LOWLEVEL,
-    DictKeys <= DICT_KEYS,
-    DictValues <= DICT_VALUES,
-    DictUnion <= DICT_UNION,
-    DictIntersection <= DICT_INTERSECTION,
-    DictDifference <= DICT_DIFFERENCE,
-    DictGetCapacity <= DICT_CAPACITY,
-    SetFromList <= SET_FROM_LIST,
-    SetToDict <= SET_TO_DICT,
-    SetGetCapacity <= SET_CAPACITY,
     NumAdd <= NUM_ADD,
     NumAddWrap <= NUM_ADD_WRAP,
     NumAddChecked <= NUM_ADD_CHECKED_LOWLEVEL,

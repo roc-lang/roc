@@ -359,24 +359,12 @@ impl IAbilitiesStore<Resolved> {
     }
 
     pub fn insert_resolved(&mut self, id: SpecializationId, specialization: Symbol) {
-        // May not be a thing in mono
-        // debug_assert!(self.is_specialization_name(specialization));
-
         let old_specialization = self.resolved_specializations.insert(id, specialization);
 
         debug_assert!(
             old_specialization.is_none(),
             "Existing resolution: {:?}",
             old_specialization
-        );
-    }
-
-    pub fn remove_resolved(&mut self, id: SpecializationId) {
-        let old_specialization = self.resolved_specializations.remove(&id);
-
-        debug_assert!(
-            old_specialization.is_some(),
-            "Trying to remove a resolved specialization that was never there!",
         );
     }
 

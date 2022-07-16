@@ -155,7 +155,7 @@ enum PendingTypeDef<'a> {
         name: Loc<Symbol>,
         vars: Vec<Loc<Lowercase>>,
         ann: &'a Loc<ast::TypeAnnotation<'a>>,
-        derived: Option<&'a Loc<ast::Derived<'a>>>,
+        derived: Option<&'a Loc<ast::HasAbilities<'a>>>,
     },
 
     Ability {
@@ -425,7 +425,7 @@ fn canonicalize_opaque<'a>(
     name: Loc<Symbol>,
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
     vars: &[Loc<Lowercase>],
-    derives: Option<&'a Loc<ast::Derived<'a>>>,
+    has_abilities: Option<&'a Loc<ast::HasAbilities<'a>>>,
 ) -> Result<Alias, ()> {
     let alias = canonicalize_alias(
         env,
@@ -439,18 +439,22 @@ fn canonicalize_opaque<'a>(
         AliasKind::Opaque,
     )?;
 
-    if let Some(derives) = derives {
-        let derives = derives.value.collection();
+    if let Some(has_abilities) = has_abilities {
+        let has_abilities = has_abilities.value.collection();
 
-        let mut can_derives = vec![];
+        let mut can_abilities = vec![];
 
-        for derived in derives.items {
-            let region = derived.region;
-            match derived.value.extract_spaces().item {
+        for has_ability in has_abilities.items {
+            let region = has_ability.region;
+            let (ability, _impls) = match has_ability.value.extract_spaces().item {
+                ast::HasAbility::HasAbility { ability, impls } => (ability, impls),
+                _ => internal_error!("spaces not extracted"),
+            };
+            match ability.value {
                 ast::TypeAnnotation::Apply(module_name, ident, []) => {
                     match make_apply_symbol(env, region, scope, module_name, ident) {
                         Ok(ability) if ability.is_builtin_ability() => {
-                            can_derives.push(Loc::at(region, ability));
+                            can_abilities.push(Loc::at(region, ability));
                         }
                         Ok(_) => {
                             // Register the problem but keep going, we may still be able to compile the
@@ -471,7 +475,7 @@ fn canonicalize_opaque<'a>(
             }
         }
 
-        if !can_derives.is_empty() {
+        if !can_abilities.is_empty() {
             // Fresh instance of this opaque to be checked for derivability during solving.
             let fresh_inst = Type::DelayedAlias(AliasCommon {
                 symbol: name.value,
@@ -489,7 +493,7 @@ fn canonicalize_opaque<'a>(
 
             let old = output
                 .pending_derives
-                .insert(name.value, (fresh_inst, can_derives));
+                .insert(name.value, (fresh_inst, can_abilities));
             debug_assert!(old.is_none());
         }
     }
@@ -701,7 +705,7 @@ fn canonicalize_type_defs<'a>(
             Loc<Symbol>,
             Vec<Loc<Lowercase>>,
             &'a Loc<ast::TypeAnnotation<'a>>,
-            Option<&'a Loc<ast::Derived<'a>>>,
+            Option<&'a Loc<ast::HasAbilities<'a>>>,
         ),
         Ability(Loc<Symbol>, &'a [AbilityMember<'a>]),
     }
@@ -1885,7 +1889,7 @@ fn to_pending_alias_or_opaque<'a>(
     name: &'a Loc<&'a str>,
     vars: &'a [Loc<ast::Pattern<'a>>],
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
-    opt_derived: Option<&'a Loc<ast::Derived<'a>>>,
+    opt_derived: Option<&'a Loc<ast::HasAbilities<'a>>>,
     kind: AliasKind,
 ) -> PendingTypeDef<'a> {
     let shadow_kind = match kind {
