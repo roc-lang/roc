@@ -3836,8 +3836,9 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
     return_layout: Layout<'a>,
     c_function_name: &str,
 ) -> FunctionValue<'ctx> {
-    let it = arguments.iter().map(|l| basic_type_from_layout(env, l));
+    let it = arguments.iter().map(|l| to_cc_type(env, l));
     let argument_types = Vec::from_iter_in(it, env.arena);
+
     let return_type = basic_type_from_layout(env, &return_layout);
 
     let cc_return = to_cc_return(env, &return_layout);
@@ -3888,15 +3889,46 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
         param_types.len()
     );
 
-    let it = params.iter().zip(param_types).map(|(arg, fastcc_type)| {
-        let arg_type = arg.get_type();
-        if arg_type == *fastcc_type {
-            // the C and Fast calling conventions agree
-            *arg
-        } else {
-            complex_bitcast_check_size(env, *arg, *fastcc_type, "to_fastcc_type_2")
-        }
-    });
+    let it = params
+        .iter()
+        .zip(param_types)
+        .enumerate()
+        .map(|(i, (arg, fastcc_type))| {
+            let arg_type = arg.get_type();
+            if arg_type == *fastcc_type {
+                // the C and Fast calling conventions agree
+                *arg
+            } else {
+                // not pretty, but seems to cover all our current cases
+                if arg_type.is_pointer_type() && !fastcc_type.is_pointer_type() {
+                    // Modify the argument to specify it is passed by value and nonnull
+                    let byval = context.create_type_attribute(
+                        Attribute::get_named_enum_kind_id("byval"),
+                        arg_type.into_pointer_type().get_element_type(),
+                    );
+                    let nonnull = context.create_type_attribute(
+                        Attribute::get_named_enum_kind_id("nonnull"),
+                        arg_type.into_pointer_type().get_element_type(),
+                    );
+                    c_function.add_attribute(AttributeLoc::Param((i + 1) as u32), byval);
+                    c_function.add_attribute(AttributeLoc::Param((i + 1) as u32), nonnull);
+                    // bitcast the ptr
+                    let fastcc_ptr = env
+                        .builder
+                        .build_bitcast(
+                            *arg,
+                            fastcc_type.ptr_type(AddressSpace::Generic),
+                            "bitcast_arg",
+                        )
+                        .into_pointer_value();
+
+                    let loaded = env.builder.build_load(fastcc_ptr, "load_arg");
+                    loaded
+                } else {
+                    complex_bitcast_check_size(env, *arg, *fastcc_type, "to_fastcc_type_2")
+                }
+            }
+        });
 
     let arguments = Vec::from_iter_in(it, env.arena);
 

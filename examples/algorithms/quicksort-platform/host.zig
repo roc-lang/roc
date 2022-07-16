@@ -23,7 +23,7 @@ comptime {
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed(input: *RocList) RocList;
+extern fn roc__mainForHost_1_exposed(input: RocList) callconv(.C) RocList;
 
 const Align = 2 * @alignOf(usize);
 extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
@@ -83,7 +83,7 @@ export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
 // warning! the array is currently stack-allocated so don't make this too big
 const NUM_NUMS = 100;
 
-const RocList = extern struct { elements: [*]i64, length: usize };
+const RocList = extern struct { elements: [*]i64, length: usize, capacity: usize };
 
 const Unit = extern struct {};
 
@@ -101,16 +101,14 @@ pub export fn main() u8 {
         numbers[i] = @mod(@intCast(i64, i), 12);
     }
 
-    var roc_list = RocList{ .elements = numbers, .length = NUM_NUMS };
+    var roc_list = RocList{ .elements = numbers, .length = NUM_NUMS, .capacity = NUM_NUMS };
 
     // start time
     var ts1: std.os.timespec = undefined;
     std.os.clock_gettime(std.os.CLOCK.REALTIME, &ts1) catch unreachable;
 
     // actually call roc to populate the callresult
-    var callresult: RocList = roc__mainForHost_1_exposed(&roc_list);
-
-    // const callresult: RocList = roc__mainForHost_1_exposed_generic(&roc_list);
+    const callresult: RocList = roc__mainForHost_1_exposed(roc_list);
 
     // stdout the result
     const length = std.math.min(20, callresult.length);
