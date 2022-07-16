@@ -1455,19 +1455,9 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     let field_layouts = tag_layouts[*tag_id as usize];
 
-                    let tag_id_type =
-                        basic_type_from_layout(env, &union_layout.tag_id_layout()).into_int_type();
-
                     let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
 
-                    lookup_at_index_ptr2(
-                        env,
-                        union_layout,
-                        tag_id_type,
-                        field_layouts,
-                        *index as usize,
-                        ptr,
-                    )
+                    lookup_at_index_ptr2(env, union_layout, field_layouts, *index as usize, ptr)
                 }
                 UnionLayout::NonNullableUnwrapped(field_layouts) => {
                     let struct_layout = Layout::struct_no_name_order(field_layouts);
@@ -1498,18 +1488,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     let field_layouts = other_tags[tag_index as usize];
 
-                    let tag_id_type =
-                        basic_type_from_layout(env, &union_layout.tag_id_layout()).into_int_type();
-
                     let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
-                    lookup_at_index_ptr2(
-                        env,
-                        union_layout,
-                        tag_id_type,
-                        field_layouts,
-                        *index as usize,
-                        ptr,
-                    )
+                    lookup_at_index_ptr2(env, union_layout, field_layouts, *index as usize, ptr)
                 }
                 UnionLayout::NullableUnwrapped {
                     nullable_id,
@@ -2093,7 +2073,6 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
 fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     union_layout: &UnionLayout<'a>,
-    tag_id_type: IntType<'ctx>,
     field_layouts: &[Layout<'_>],
     index: usize,
     value: PointerValue<'ctx>,
