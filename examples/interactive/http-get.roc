@@ -5,11 +5,7 @@ app "http-get"
 
 main : Task.Task {} [] [Write [Stdout], Network [Http]]
 main =
-    request : HttpTypes.Request
-    request = { Http.defaultRequest & url: "https://httpbin.org/get" }
-
-    output <- Http.send request
-            |> Task.onFail (\err -> err |> Http.errorToString |> Task.succeed)
-            |> Task.await
-
-    Stdout.line output
+     Http.send { Http.defaultRequest & url: "https://httpbin.org/get" }
+        |> Task.onFail (\err -> err |> Http.errorToString |> Task.succeed)
+        |> Task.await
+        |> Stdout.line

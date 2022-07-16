@@ -55,7 +55,6 @@ stringBody = \mimeType, str ->
 # jsonBody : a -> Body | a has Encoding
 # jsonBody = \val ->
 #     Body (MimeType "application/json") (Encode.toBytes val Json.format)
-
 multiPartBody : List Part -> Body
 multiPartBody = \parts ->
     boundary = "7MA4YWxkTrZu0gW" # TODO: what's this exactly? a hash of all the part bodies?
