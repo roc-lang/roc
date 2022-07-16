@@ -5,10 +5,8 @@ use roc_gen_wasm::wasm32_result::Wasm32Result;
 use roc_gen_wasm::wasm_module::{Export, ExportType};
 use roc_gen_wasm::DEBUG_SETTINGS;
 use roc_load::Threading;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Mutex;
 use wasm3::{Environment, Module, Runtime};
@@ -49,17 +47,11 @@ pub fn compile_to_wasm_bytes<'a, T: Wasm32Result>(
         compile_roc_to_wasm_bytes(arena, platform_bytes, src, test_wrapper_type_info);
 
     if DEBUG_SETTINGS.keep_test_binary {
-        let build_dir_hash = src_hash(src);
-        save_wasm_file(&compiled_bytes, build_dir_hash)
+        let build_dir_hash = crate::helpers::src_hash(src);
+        crate::helpers::save_wasm_file(&compiled_bytes, build_dir_hash)
     };
 
     compiled_bytes
-}
-
-fn src_hash(src: &str) -> u64 {
-    let mut hash_state = DefaultHasher::new();
-    src.hash(&mut hash_state);
-    hash_state.finish()
 }
 
 fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
@@ -153,20 +145,6 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
     module.serialize(&mut app_module_bytes);
 
     app_module_bytes
-}
-
-fn save_wasm_file(app_module_bytes: &[u8], build_dir_hash: u64) {
-    let debug_dir_str = format!("/tmp/roc/gen_wasm/{:016x}", build_dir_hash);
-    let debug_dir_path = Path::new(&debug_dir_str);
-    let final_wasm_file = debug_dir_path.join("final.wasm");
-
-    std::fs::create_dir_all(debug_dir_path).unwrap();
-    std::fs::write(&final_wasm_file, app_module_bytes).unwrap();
-
-    println!(
-        "Debug command:\n\twasm-objdump -dx {}",
-        final_wasm_file.to_str().unwrap()
-    );
 }
 
 #[allow(dead_code)]
