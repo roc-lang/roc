@@ -56,8 +56,7 @@ use roc_mono::ir::{
     ModifyRc, OptLevel, ProcLayout,
 };
 use roc_mono::layout::{
-    round_up_to_alignment, Builtin, CapturesNiche, LambdaName, LambdaSet, Layout, LayoutIds,
-    TagIdIntType, UnionLayout,
+    Builtin, CapturesNiche, LambdaName, LambdaSet, Layout, LayoutIds, TagIdIntType, UnionLayout,
 };
 use roc_std::RocDec;
 use roc_target::{PtrWidth, TargetInfo};
@@ -2551,8 +2550,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             let width = layout.stack_size(target_info);
                             let size = env.ptr_int().const_int(width as _, false);
 
-                            let call = env
-                                .builder
+                            env.builder
                                 .build_memcpy(
                                     destination,
                                     align_bytes,
