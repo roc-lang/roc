@@ -27,14 +27,32 @@ CSVField : RawStr
 CSVRecord : List CSVField
 CSV : List CSVRecord
 
-parseStr : Parser CSVRecord a, Str -> Result (List a) [ParsingFailure Str, ParsingIncomplete RawStr]
+parseStr : Parser CSVRecord a, Str -> Result (List a) [ParsingFailure Str, SyntaxError (List U8), ParsingIncomplete CSVRecord]
 parseStr = \csvParser, input ->
-  csvData <- Result.after (parseStrToCSV input)
-  parseCSV csvParser csvData
+  when parseStrToCSV input is
+    Err (ParsingIncomplete rest) ->
+      Err (SyntaxError rest)
+    Err (ParsingFailure str) ->
+      Err (ParsingFailure str)
+    Ok csvData ->
+      when parseCSV csvParser csvData is
+        Err (ParsingFailure str) ->
+          Err (ParsingFailure str)
+        Err (ParsingIncomplete problem) ->
+          Err (ParsingIncomplete problem)
+        Ok vals ->
+          Ok vals
 
-parseCSV : Parser CSVRecord a, CSV -> Result (List a) [ParsingFailure Str, ParsingIncomplete RawStr]
+parseCSV : Parser CSVRecord a, CSV -> Result (List a) [ParsingFailure Str, ParsingIncomplete CSVRecord]
 parseCSV = \csvParser, csvData ->
-  parse (many csvParser) csvData (\leftover -> leftover == [])
+  List.walkUntil csvData (Ok []) \state, recordList ->
+    when parse csvParser recordList (\leftover -> leftover == []) is
+      Err problem ->
+        Break (Err problem)
+      Ok val ->
+        state
+        |> Result.map (\vals -> List.append vals val)
+        |> Continue
 
 record : a -> Parser CSVRecord a
 record = Parser.Core.const
