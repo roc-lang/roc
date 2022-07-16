@@ -9,6 +9,7 @@ use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_can::abilities::SpecializationId;
 use roc_can::expr::{AnnotatedMark, ClosureData, IntValue};
+use roc_can::module::ExposedByModule;
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
 use roc_collections::VecMap;
 use roc_debug_flags::dbg_do;
@@ -17,7 +18,7 @@ use roc_debug_flags::{
     ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
     ROC_PRINT_RUNTIME_ERROR_GEN,
 };
-use roc_derive_key::GlobalDerivedSymbols;
+use roc_derive::SharedDerivedModule;
 use roc_error_macros::{internal_error, todo_abilities};
 use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
@@ -918,7 +919,7 @@ impl<'a> SymbolSpecializations<'a> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ProcsBase<'a> {
     pub partial_procs: BumpMap<Symbol, PartialProc<'a>>,
     pub module_thunks: &'a [Symbol],
@@ -1293,8 +1294,10 @@ pub struct Env<'a, 'i> {
     pub target_info: TargetInfo,
     pub update_mode_ids: &'i mut UpdateModeIds,
     pub call_specialization_counter: u32,
+    // TODO: WorldAbilities and exposed_by_module share things, think about how to combine them
     pub abilities: AbilitiesView<'i>,
-    pub derived_symbols: &'i GlobalDerivedSymbols,
+    pub exposed_by_module: &'i ExposedByModule,
+    pub derived_module: &'i SharedDerivedModule,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
@@ -1319,18 +1322,43 @@ impl<'a, 'i> Env<'a, 'i> {
     }
 
     pub fn is_imported_symbol(&self, symbol: Symbol) -> bool {
-        symbol.module_id() != self.home
+        let sym_module = symbol.module_id();
+        sym_module != self.home
+            // The Derived_gen module takes responsibility for code-generating symbols in the
+            // Derived_synth module.
+            && !(self.home == ModuleId::DERIVED_GEN && sym_module == ModuleId::DERIVED_SYNTH)
+    }
+
+    /// While specializing the Derived_gen module, derived implementation symbols from the
+    /// Derived_synth module may be discovered. These implementations may not have yet been loaded
+    /// into the Derived_gen module, because we only load them before making specializations, and
+    /// not during mono itself (yet).
+    ///
+    /// When this procedure returns `true`, the symbol should be marked as an external specialization,
+    /// so that a subsequent specializations pass loads the derived implementation into Derived_gen
+    /// and then code-generates appropriately.
+    pub fn is_unloaded_derived_symbol(&self, symbol: Symbol, procs: &Procs<'a>) -> bool {
+        self.home == ModuleId::DERIVED_GEN
+            && symbol.module_id() == ModuleId::DERIVED_SYNTH
+            && !procs.partial_procs.contains_key(symbol)
     }
 
     /// Unifies two variables and performs lambda set compaction.
     /// Use this rather than [roc_unify::unify] directly!
     fn unify(&mut self, left: Variable, right: Variable) -> Result<(), UnificationFailed> {
+        debug_assert_ne!(
+            self.home,
+            ModuleId::DERIVED_SYNTH,
+            "should never be monomorphizing the derived synth module!"
+        );
+
         roc_late_solve::unify(
             self.home,
             self.arena,
             self.subs,
             &self.abilities,
-            self.derived_symbols,
+            self.derived_module,
+            self.exposed_by_module,
             left,
             right,
         )
@@ -2347,7 +2375,7 @@ fn from_can_let<'a>(
                         for (_specialization_mark, (var, specialized_symbol)) in
                             needed_specializations
                         {
-                            use crate::copy::deep_copy_type_vars_into_expr;
+                            use roc_can::copy::deep_copy_type_vars_into_expr;
 
                             let (new_def_expr_var, specialized_expr) = deep_copy_type_vars_into_expr(
                             env.subs,
@@ -2625,6 +2653,7 @@ fn specialize_suspended<'a>(
                 None => {
                     // TODO this assumes the specialization is done by another module
                     // make sure this does not become a problem down the road!
+                    debug_assert!(name.name().module_id() != name.name().module_id());
                     continue;
                 }
             }
@@ -5040,57 +5069,6 @@ pub fn with_hole<'a>(
                 }};
             }
 
-            macro_rules! walk {
-                ($oh:ident) => {{
-                    debug_assert_eq!(arg_symbols.len(), 3);
-
-                    const LIST_INDEX: usize = 0;
-                    const DEFAULT_INDEX: usize = 1;
-                    const CLOSURE_INDEX: usize = 2;
-
-                    let xs = arg_symbols[LIST_INDEX];
-                    let state = arg_symbols[DEFAULT_INDEX];
-
-                    let stmt = match_on_closure_argument!($oh, [xs, state]);
-
-                    // because of a hack to implement List.product and List.sum, we need to also
-                    // assign to symbols here. Normally the arguments to a lowlevel function are
-                    // all symbols anyway, but because of this hack the closure symbol can be an
-                    // actual closure, and the default is either the number 1 or 0
-                    // this can be removed when we define builtin modules as proper modules
-
-                    let stmt = assign_to_symbol(
-                        env,
-                        procs,
-                        layout_cache,
-                        args[LIST_INDEX].0,
-                        Loc::at_zero(args[LIST_INDEX].1.clone()),
-                        arg_symbols[LIST_INDEX],
-                        stmt,
-                    );
-
-                    let stmt = assign_to_symbol(
-                        env,
-                        procs,
-                        layout_cache,
-                        args[DEFAULT_INDEX].0,
-                        Loc::at_zero(args[DEFAULT_INDEX].1.clone()),
-                        arg_symbols[DEFAULT_INDEX],
-                        stmt,
-                    );
-
-                    assign_to_symbol(
-                        env,
-                        procs,
-                        layout_cache,
-                        args[CLOSURE_INDEX].0,
-                        Loc::at_zero(args[CLOSURE_INDEX].1.clone()),
-                        arg_symbols[CLOSURE_INDEX],
-                        stmt,
-                    )
-                }};
-            }
-
             use LowLevel::*;
             match op {
                 ListMap => {
@@ -5103,7 +5081,6 @@ pub fn with_hole<'a>(
                     let xs = arg_symbols[0];
                     match_on_closure_argument!(ListSortWith, [xs])
                 }
-                DictWalk => walk!(DictWalk),
                 ListMap2 => {
                     debug_assert_eq!(arg_symbols.len(), 3);
 
@@ -7734,7 +7711,9 @@ fn call_by_name_help<'a>(
             assigned,
             hole,
         )
-    } else if env.is_imported_symbol(proc_name.name()) {
+    } else if env.is_imported_symbol(proc_name.name())
+        || env.is_unloaded_derived_symbol(proc_name.name(), procs)
+    {
         add_needed_external(procs, env, original_fn_var, proc_name);
 
         debug_assert_ne!(proc_name.name().module_id(), ModuleId::ATTR);

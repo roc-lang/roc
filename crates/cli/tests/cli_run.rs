@@ -145,6 +145,8 @@ mod cli_run {
                     vec.push(VALGRIND_FLAG);
                 }
 
+                vec.push("--max-threads=1");
+
                 vec.into_iter()
             };
 

@@ -6,7 +6,6 @@ use roc_builtins::bitcode;
 use wasi_libc_sys::{WASI_COMPILER_RT_PATH, WASI_LIBC_PATH};
 
 const PLATFORM_FILENAME: &str = "repl_platform";
-const PRE_LINKED_BINARY: [&str; 2] = ["src", "pre_linked_binary.o"];
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -20,9 +19,11 @@ fn main() {
     let out_dir = env::var("OUT_DIR").unwrap();
     let platform_obj = build_wasm_platform(&out_dir, &source_path);
 
-    let pre_linked_binary_path: PathBuf = PRE_LINKED_BINARY.iter().collect();
+    let mut pre_linked_binary_path = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    pre_linked_binary_path.extend(&["pre_linked_binary"]);
+    pre_linked_binary_path.set_extension("o");
 
-    Command::new(&zig_executable())
+    let output = Command::new(&zig_executable())
         .args([
             "wasm-ld",
             bitcode::BUILTINS_WASM32_OBJ_PATH,
@@ -37,6 +38,10 @@ fn main() {
         ])
         .output()
         .unwrap();
+
+    assert!(output.status.success(), "{:#?}", output);
+    assert!(output.stdout.is_empty(), "{:#?}", output);
+    assert!(output.stderr.is_empty(), "{:#?}", output);
 }
 
 fn zig_executable() -> String {

@@ -3,6 +3,7 @@
 use std::iter::once;
 use std::sync::{Arc, Mutex};
 
+use roc_can::abilities::SpecializationLambdaSets;
 use roc_can::expr::Expr;
 use roc_can::pattern::Pattern;
 use roc_can::{def::Def, module::ExposedByModule};
@@ -16,9 +17,7 @@ use roc_types::subs::{
 
 mod encoding;
 
-type SpecializationLambdaSets = VecMap<u8, Variable>;
-
-pub(crate) const DERIVED_MODULE: ModuleId = ModuleId::DERIVED;
+pub(crate) const DERIVED_SYNTH: ModuleId = ModuleId::DERIVED_SYNTH;
 
 pub fn synth_var(subs: &mut Subs, content: Content) -> Variable {
     let descriptor = Descriptor {
@@ -34,20 +33,13 @@ pub fn synth_var(subs: &mut Subs, content: Content) -> Variable {
 }
 
 /// Map of [`DeriveKey`]s to their derived symbols.
+///
+/// This represents the [`Derived_synth`][Symbol::DERIVED_SYNTH] module.
 #[derive(Debug, Default)]
 pub struct DerivedModule {
     map: MutMap<DeriveKey, (Symbol, Def, SpecializationLambdaSets)>,
     subs: Subs,
     derived_ident_ids: IdentIds,
-
-    /// Has someone stolen subs/ident ids from us?
-    #[cfg(debug_assertions)]
-    stolen: bool,
-}
-
-pub struct StolenFromDerived {
-    pub subs: Subs,
-    pub ident_ids: IdentIds,
 }
 
 pub(crate) struct DerivedBody {
@@ -98,51 +90,45 @@ impl DerivedModule {
         exposed_by_module: &ExposedByModule,
         key: DeriveKey,
     ) -> &(Symbol, Def, SpecializationLambdaSets) {
-        #[cfg(debug_assertions)]
-        {
-            debug_assert!(!self.stolen, "attempting to add to stolen symbols!");
+        match self.map.get(&key) {
+            Some(entry) => {
+                // rustc won't let us return an immutable reference *and* continue using
+                // `self.map` immutably below, but this is safe, because we are not returning
+                // an immutable reference to the entry.
+                return unsafe { std::mem::transmute(entry) };
+            }
+            None => {}
         }
 
-        // TODO: can we get rid of the clone?
-        let entry = self.map.entry(key.clone());
+        let ident_id = if cfg!(debug_assertions) || cfg!(feature = "debug-derived-symbols") {
+            let debug_name = key.debug_name();
+            let ident_id = self.derived_ident_ids.get_or_insert(&debug_name);
 
-        entry.or_insert_with(|| {
-            let ident_id = if cfg!(any(
-                debug_assertions,
-                test,
-                feature = "debug-derived-symbols"
-            )) {
-                let debug_name = key.debug_name();
-                debug_assert!(
-                    self.derived_ident_ids.get_id(&debug_name).is_none(),
-                    "duplicate debug name for different derive key"
-                );
-                self.derived_ident_ids.get_or_insert(&debug_name)
-            } else {
-                self.derived_ident_ids.gen_unique()
-            };
+            // This is expensive, but yields much better symbols when debugging.
+            // TODO: hide behind debug_flags?
+            DERIVED_SYNTH.register_debug_idents(&self.derived_ident_ids);
 
-            let derived_symbol = Symbol::new(DERIVED_MODULE, ident_id);
-            let (derived_def, specialization_lsets) = build_derived_body(
-                &mut self.subs,
-                &mut self.derived_ident_ids,
-                exposed_by_module,
-                derived_symbol,
-                key.clone(),
-            );
+            ident_id
+        } else {
+            self.derived_ident_ids.gen_unique()
+        };
 
-            (derived_symbol, derived_def, specialization_lsets)
-        })
+        let derived_symbol = Symbol::new(DERIVED_SYNTH, ident_id);
+        let (derived_def, specialization_lsets) = build_derived_body(
+            &mut self.subs,
+            &mut self.derived_ident_ids,
+            exposed_by_module,
+            derived_symbol,
+            key.clone(),
+        );
+
+        let triple = (derived_symbol, derived_def, specialization_lsets);
+        self.map.entry(key).or_insert(triple)
     }
 
     pub fn iter_all(
         &self,
     ) -> impl Iterator<Item = (&DeriveKey, &(Symbol, Def, SpecializationLambdaSets))> {
-        #[cfg(debug_assertions)]
-        {
-            debug_assert!(!self.stolen);
-        }
-
         self.map.iter()
     }
 
@@ -150,57 +136,25 @@ impl DerivedModule {
     /// module; other modules should use [`Self::get_or_insert`] to generate a symbol for a derived
     /// ability member usage.
     pub fn gen_unique(&mut self) -> Symbol {
-        #[cfg(debug_assertions)]
-        {
-            debug_assert!(!self.stolen);
-        }
-
         let ident_id = self.derived_ident_ids.gen_unique();
-        Symbol::new(DERIVED_MODULE, ident_id)
+        Symbol::new(DERIVED_SYNTH, ident_id)
     }
 
-    /// Steal all created derived ident Ids.
-    /// After this is called, [`Self::get_or_insert`] may no longer be called.
-    pub fn steal(&mut self) -> StolenFromDerived {
-        let mut ident_ids = Default::default();
-        std::mem::swap(&mut self.derived_ident_ids, &mut ident_ids);
-        let mut subs = Default::default();
-        std::mem::swap(&mut self.subs, &mut subs);
-
-        #[cfg(debug_assertions)]
-        {
-            debug_assert!(!self.stolen);
-            self.stolen = true;
-        }
-
-        StolenFromDerived { subs, ident_ids }
-    }
-
-    pub fn return_stolen(&mut self, stolen: StolenFromDerived) {
-        #[cfg(debug_assertions)]
-        {
-            debug_assert!(self.stolen);
-            self.stolen = false;
-        }
-
-        let StolenFromDerived { subs, ident_ids } = stolen;
-
-        self.subs = subs;
-        self.derived_ident_ids = ident_ids;
-    }
-
-    pub fn copy_lambda_set_var_to_subs(&self, var: Variable, target: &mut Subs) -> Variable {
-        #[cfg(debug_assertions)]
-        {
-            debug_assert!(!self.stolen);
-        }
+    // TODO: just pass and copy the ambient function directly, don't pass the lambda set var.
+    pub fn copy_lambda_set_ambient_function_to_subs(
+        &self,
+        lambda_set_var: Variable,
+        target: &mut Subs,
+        _target_rank: Rank,
+    ) -> Variable {
+        let ambient_function_var = self.subs.get_lambda_set(lambda_set_var).ambient_function;
 
         let copied_import = copy_import_to(
             &self.subs,
             target,
-            // bookkeep unspecialized lambda sets of var - I think don't want this here
-            false,
-            var,
+            // bookkeep unspecialized lambda sets of var - I think we want this here
+            true,
+            ambient_function_var,
             // TODO: I think this is okay because the only use of `copy_lambda_set_var_to_subs`
             // (at least right now) is for lambda set compaction, which will automatically unify
             // and lower ranks, and never generalize.
@@ -208,11 +162,52 @@ impl DerivedModule {
             // However this is a bad coupling and maybe not a good assumption, we should revisit
             // this when possible.
             Rank::import(),
+            // target_rank,
         );
 
         copied_import.variable
     }
+
+    /// Gets the derived defs that should be loaded into the derived gen module, skipping over the
+    /// defs that have already been loaded.
+    pub fn iter_load_for_gen_module(
+        &mut self,
+        gen_subs: &mut Subs,
+        should_load_def: impl Fn(Symbol) -> bool,
+    ) -> VecMap<Symbol, Expr> {
+        self.map
+            .values()
+            .filter_map(|(symbol, def, _)| {
+                if should_load_def(*symbol) {
+                    let (_new_expr_var, new_expr) = roc_can::copy::deep_copy_expr_across_subs(
+                        &mut self.subs,
+                        gen_subs,
+                        def.expr_var,
+                        &def.loc_expr.value,
+                    );
+                    Some((*symbol, new_expr))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// # Safety
+    ///
+    /// Prefer using a fresh Derived module with [`Derived::default`]. Use this only in testing.
+    pub unsafe fn from_components(subs: Subs, ident_ids: IdentIds) -> Self {
+        Self {
+            map: Default::default(),
+            subs,
+            derived_ident_ids: ident_ids,
+        }
+    }
+
+    pub fn decompose(self) -> (Subs, IdentIds) {
+        (self.subs, self.derived_ident_ids)
+    }
 }
 
-/// Thread-sharable [`DerivedMethods`].
+/// Thread-sharable [`DerivedModule`].
 pub type SharedDerivedModule = Arc<Mutex<DerivedModule>>;

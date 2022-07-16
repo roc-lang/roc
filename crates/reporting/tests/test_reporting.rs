@@ -758,10 +758,10 @@ mod test_reporting {
 
                 Did you mean one of these?
 
-                    Set
                     List
                     True
                     Box
+                    Str
                 "#
             ),
         );
@@ -4681,10 +4681,12 @@ mod test_reporting {
         dict_type_formatting,
         indoc!(
             r#"
-            myDict : Dict Num.I64 Str
+            app "dict" imports [ Dict ] provides [main] to "./platform"
+
+            myDict : Dict.Dict Num.I64 Str
             myDict = Dict.insert Dict.empty "foo" 42
 
-            myDict
+            main = myDict
             "#
         ),
         @r###"
@@ -4692,9 +4694,9 @@ mod test_reporting {
 
     Something is off with the body of the `myDict` definition:
 
-    4│      myDict : Dict Num.I64 Str
-    5│      myDict = Dict.insert Dict.empty "foo" 42
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    3│  myDict : Dict.Dict Num.I64 Str
+    4│  myDict = Dict.insert Dict.empty "foo" 42
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     This `insert` call produces:
 
@@ -4710,6 +4712,8 @@ mod test_reporting {
         alias_type_diff,
         indoc!(
             r#"
+            app "test" imports [Set.{ Set }] provides [main] to "./platform"
+
             HSet a : Set a
 
             foo : Str -> HSet {}
@@ -4717,7 +4721,7 @@ mod test_reporting {
             myDict : HSet Str
             myDict = foo "bar"
 
-            myDict
+            main = myDict
             "#
         ),
         @r###"
@@ -4725,9 +4729,9 @@ mod test_reporting {
 
     Something is off with the body of the `myDict` definition:
 
-    8│      myDict : HSet Str
-    9│      myDict = foo "bar"
-                     ^^^^^^^^^
+    7│  myDict : HSet Str
+    8│  myDict = foo "bar"
+                 ^^^^^^^^^
 
     This `foo` call produces:
 
@@ -8924,12 +8928,13 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
+        #[ignore]
         type_error_in_apply_is_circular,
         indoc!(
             r#"
-            app "test" provides [go] to "./platform"
+            app "test" imports [Set] provides [go] to "./platform"
 
-            S a : { set : Set a }
+            S a : { set : Set.Set a }
 
             go : a, S a -> Result (List a) *
             go = \goal, model ->
@@ -9050,39 +9055,6 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        unbound_type_in_record_does_not_implement_encoding,
-        indoc!(
-            r#"
-            app "test" imports [Encode] provides [main] to "./platform"
-
-            main = \x -> Encode.toEncoder { x: x }
-            "#
-        ),
-        @r#"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-        This expression has a type that does not implement the abilities it's expected to:
-
-        3│  main = \x -> Encode.toEncoder { x: x }
-                                          ^^^^^^^^
-
-        Roc can't generate an implementation of the `Encode.Encoding` ability
-        for
-
-            { x : a }
-
-        In particular, an implementation for
-
-            a
-
-        cannot be generated.
-
-        Tip: This type variable is not bound to `Encoding`. Consider adding a
-        `has` clause to bind the type variable, like `| a has Encode.Encoding`
-        "#
-    );
-
-    test_report!(
         nested_opaque_does_not_implement_encoding,
         indoc!(
             r#"
@@ -9092,7 +9064,9 @@ All branches in an `if` must have the same type!
             main = Encode.toEncoder { x: @A {} }
             "#
         ),
-        @r#"
+        // TODO: this error message is quite unfortunate. We should remove the duplication, and
+        // also support regions that point to things in other modules. See also https://github.com/rtfeldman/roc/issues/3056.
+        @r###"
         ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
         This expression has a type that does not implement the abilities it's expected to:
@@ -9113,7 +9087,17 @@ All branches in an `if` must have the same type!
 
         Tip: `A` does not implement `Encoding`. Consider adding a custom
         implementation or `has Encode.Encoding` to the definition of `A`.
-        "#
+
+        ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+        The type `A` does not fully implement the ability `Encoding`. The
+        following specializations are missing:
+
+        A specialization for `toEncoder`, which is defined here:
+
+        5│
+                                                                                                                                                                                                                                                                                                                                                                                                                                                    ^^^^^^^^^
+        "###
     );
 
     test_report!(

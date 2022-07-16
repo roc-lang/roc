@@ -346,7 +346,7 @@ impl<'a> LowLevelCall<'a> {
 
             ListIsUnique => self.load_args_and_call_zig(backend, bitcode::LIST_IS_UNIQUE),
 
-            ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith | DictWalk => {
+            ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith => {
                 internal_error!("HigherOrder lowlevels should not be handled here")
             }
 
@@ -773,12 +773,6 @@ impl<'a> LowLevelCall<'a> {
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
 
                 backend.call_host_fn_after_loading_args(bitcode::LIST_SWAP, 8, false);
-            }
-
-            DictSize | DictEmpty | DictInsert | DictRemove | DictContains | DictGetUnsafe
-            | DictKeys | DictValues | DictUnion | DictIntersection | DictDifference
-            | SetFromList | SetToDict => {
-                todo!("{:?}", self.lowlevel);
             }
 
             // Num
@@ -1812,46 +1806,6 @@ impl<'a> LowLevelCall<'a> {
                 unreachable!("The {:?} operation is turned into mono Expr", self.lowlevel)
             }
 
-            DictGetCapacity => match backend.storage.get(&self.arguments[0]) {
-                StoredValue::StackMemory { location, .. } => {
-                    let (local_id, offset) =
-                        location.local_and_offset(backend.storage.stack_frame_pointer);
-                    backend.code_builder.get_local(local_id);
-                    // Dict is stored as (pointer, length, capacity),
-                    // with each of those fields being 4 bytes on wasm.
-                    // So the capacity is 8 bytes after the start of the struct.
-                    //
-                    // WRAPPER_CAPACITY represents the index of the capacity field
-                    // (which is 2 as of the writing of this comment). If the field order
-                    // ever changes, WRAPPER_CAPACITY should be updated and this logic should
-                    // continue to work even though this comment may become inaccurate.
-                    backend
-                        .code_builder
-                        .i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_CAPACITY));
-                }
-                _ => internal_error!("invalid storage for Dict"),
-            },
-
-            SetGetCapacity => match backend.storage.get(&self.arguments[0]) {
-                StoredValue::StackMemory { location, .. } => {
-                    let (local_id, offset) =
-                        location.local_and_offset(backend.storage.stack_frame_pointer);
-                    backend.code_builder.get_local(local_id);
-                    // Set is stored as (pointer, length, capacity),
-                    // with each of those fields being 4 bytes on wasm.
-                    // So the capacity is 8 bytes after the start of the struct.
-                    //
-                    // WRAPPER_CAPACITY represents the index of the capacity field
-                    // (which is 2 as of the writing of this comment). If the field order
-                    // ever changes, WRAPPER_CAPACITY should be updated and this logic should
-                    // continue to work even though this comment may become inaccurate.
-                    backend
-                        .code_builder
-                        .i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_CAPACITY));
-                }
-                _ => internal_error!("invalid storage for Dict"),
-            },
-
             Unreachable => match self.ret_storage {
                 StoredValue::VirtualMachineStack { value_type, .. }
                 | StoredValue::Local { value_type, .. } => match value_type {
@@ -1901,7 +1855,7 @@ impl<'a> LowLevelCall<'a> {
                 backend.code_builder.i32_const(!invert_result as i32);
             }
 
-            Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_) | Builtin::List(_))
+            Layout::Builtin(Builtin::List(_))
             | Layout::Struct { .. }
             | Layout::Union(_)
             | Layout::LambdaSet(_)
@@ -2153,7 +2107,6 @@ pub fn call_higher_order_lowlevel<'a>(
             ListMap { .. } | ListMap2 { .. } | ListMap3 { .. } | ListMap4 { .. } => {
                 ProcSource::HigherOrderMapper(passed_proc_index)
             }
-            DictWalk { .. } => todo!("DictWalk"),
         }
     };
     let wrapper_sym = backend.create_symbol(&format!("#wrap#{:?}", fn_name));
@@ -2301,8 +2254,6 @@ pub fn call_higher_order_lowlevel<'a>(
 
             backend.call_host_fn_after_loading_args(bitcode::LIST_SORT_WITH, 9, false);
         }
-
-        DictWalk { .. } => todo!("{:?}", op),
     }
 }
 

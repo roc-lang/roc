@@ -3,9 +3,9 @@ use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
-        AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Derived, Expr, Has,
-        HasClause, Module, Pattern, Spaced, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef,
-        TypeHeader, ValueDef, WhenBranch,
+        AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr, Has, HasAbilities,
+        HasAbility, HasClause, HasImpls, Module, Pattern, Spaced, StrLiteral, StrSegment, Tag,
+        TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
     },
     header::{
         AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, ModuleName,
@@ -801,11 +801,36 @@ impl<'a> RemoveSpaces<'a> for Tag<'a> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for Derived<'a> {
+impl<'a> RemoveSpaces<'a> for HasImpls<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
-            Derived::Has(derived) => Derived::Has(derived.remove_spaces(arena)),
-            Derived::SpaceBefore(derived, _) | Derived::SpaceAfter(derived, _) => {
+            HasImpls::HasImpls(impls) => HasImpls::HasImpls(impls.remove_spaces(arena)),
+            HasImpls::SpaceBefore(has, _) | HasImpls::SpaceAfter(has, _) => {
+                has.remove_spaces(arena)
+            }
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for HasAbility<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        match *self {
+            HasAbility::HasAbility { ability, impls } => HasAbility::HasAbility {
+                ability: ability.remove_spaces(arena),
+                impls: impls.remove_spaces(arena),
+            },
+            HasAbility::SpaceBefore(has, _) | HasAbility::SpaceAfter(has, _) => {
+                has.remove_spaces(arena)
+            }
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for HasAbilities<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        match *self {
+            HasAbilities::Has(derived) => HasAbilities::Has(derived.remove_spaces(arena)),
+            HasAbilities::SpaceBefore(derived, _) | HasAbilities::SpaceAfter(derived, _) => {
                 derived.remove_spaces(arena)
             }
         }

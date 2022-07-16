@@ -197,6 +197,7 @@ pub fn expect_mono_module_to_dylib<'a>(
     target: Triple,
     loaded: MonomorphizedModule<'a>,
     opt_level: OptLevel,
+    mode: LlvmBackendMode,
 ) -> Result<(libloading::Library, bumpalo::collections::Vec<'a, &'a str>), libloading::Error> {
     let target_info = TargetInfo::from(&target);
 
@@ -230,7 +231,7 @@ pub fn expect_mono_module_to_dylib<'a>(
         interns,
         module,
         target_info,
-        mode: LlvmBackendMode::GenTest, // so roc_panic is generated
+        mode,
         // important! we don't want any procedures to get the C calling convention
         exposed_to_host: MutSet::default(),
     };
@@ -395,6 +396,8 @@ fn gen_and_eval_llvm<'a>(
         }
     };
 
+    let interns = loaded.interns.clone();
+
     let (lib, main_fn_name, subs) =
         mono_module_to_dylib(&arena, target, loaded, opt_level).expect("we produce a valid Dylib");
 
@@ -407,6 +410,7 @@ fn gen_and_eval_llvm<'a>(
         main_fn_layout,
         &content,
         &subs,
+        &interns,
         target_info,
     );
 

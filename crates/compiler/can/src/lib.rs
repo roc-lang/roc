@@ -5,6 +5,7 @@ pub mod abilities;
 pub mod annotation;
 pub mod builtins;
 pub mod constraint;
+pub mod copy;
 pub mod def;
 pub mod effect_module;
 pub mod env;
