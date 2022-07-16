@@ -13,7 +13,7 @@ interface Parser.CSV
   f64
   ]
   imports [
-  Parser.Core.{Parser, parse, buildPrimitiveParser, fail, const, alt, map, map2, apply, many, oneorMore, sepBy1, between, ignore, flatten},
+  Parser.Core.{Parser, parse, buildPrimitiveParser, fail, const, alt, map, map2, apply, many, maybe, oneorMore, sepBy1, between, ignore, flatten},
   Parser.Str.{RawStr, parseStrPartial, oneOf, codepoint, codepointSatisfies, scalar, digits, strFromRaw}
   ]
 
@@ -26,10 +26,11 @@ interface Parser.CSV
 ## The following however *is* supported
 ## - A simple LF ("\n") instead of CRLF ("\r\n") to separate records (and at the end).
 
-CSVField : RawStr
-CSVRecord : List CSVField
 CSV : List CSVRecord
+CSVRecord : List CSVField
+CSVField : RawStr
 
+## Attempts to parse an `a` from a `Str` that is encoded in CSV format.
 parseStr : Parser CSVRecord a, Str -> Result (List a) [ParsingFailure Str, SyntaxError Str, ParsingIncomplete CSVRecord]
 parseStr = \csvParser, input ->
   when parseStrToCSV input is
@@ -47,6 +48,7 @@ parseStr = \csvParser, input ->
         Ok vals ->
           Ok vals
 
+## Attempts to parse an `a` from a `CSV` datastructure (a list of lists of bytestring-fields).
 parseCSV : Parser CSVRecord a, CSV -> Result (List a) [ParsingFailure Str, ParsingIncomplete CSVRecord]
 parseCSV = \csvParser, csvData ->
   csvData
@@ -65,24 +67,27 @@ parseCSV = \csvParser, csvData ->
         |> Result.map (\vals -> List.append vals val)
         |> Continue
 
-
+## Attempts to parse an `a` from a `CSVRecord` datastructure (a list of bytestring-fields)
+##
+## This parser succeeds when all fields of the CSVRecord are consumed by the parser.
 parseCSVRecord : Parser CSVRecord a, CSVRecord -> Result a [ParsingFailure Str, ParsingIncomplete CSVRecord]
 parseCSVRecord = \csvParser, recordFieldsList ->
     parse csvParser recordFieldsList (\leftover -> leftover == [])
 
 
-# Wrapper function to combine a set of fields into your desired `a`
-#
-# ## Usage example
-#
-# >>> record (\firstName -> \lastName -> \age -> User {firstName, lastName, age})
-# >>> |> field string
-# >>> |> field string
-# >>> |> field nat
-#
+## Wrapper function to combine a set of fields into your desired `a`
+##
+## ## Usage example
+##
+## >>> record (\firstName -> \lastName -> \age -> User {firstName, lastName, age})
+## >>> |> field string
+## >>> |> field string
+## >>> |> field nat
+##
 record : a -> Parser CSVRecord a
 record = Parser.Core.const
 
+## Turns a parser for a `List U8` into a parser that parses part of a `CSVRecord`.
 field : Parser RawStr a -> Parser CSVRecord a
 field = \fieldParser ->
   buildPrimitiveParser \fieldsList ->
@@ -101,10 +106,11 @@ field = \fieldParser ->
             fieldsStr = fieldsList |> List.map strFromRaw |> Str.joinWith ", "
             Err (ParsingFailure "The field parser was unable to read the whole field: `\(reasonStr)` while parsing the first field of leftover \(fieldsStr))")
 
-# Parser for a field containing a UTF8-encoded string
+## Parser for a field containing a UTF8-encoded string
 string : Parser CSVField Str
 string = Parser.Str.anyString
 
+## Parse a natural number from a CSV field
 nat : Parser CSVField Nat
 nat =
   string
@@ -117,6 +123,7 @@ nat =
         )
   |> flatten
 
+## Parse a 64-bit float from a CSV field
 f64 : Parser CSVField F64
 f64 =
   string
@@ -129,10 +136,12 @@ f64 =
         )
   |> flatten
 
+## Attempts to parse a Str into the internal `CSV` datastructure (A list of lists of bytestring-fields).
 parseStrToCSV : Str -> Result CSV [ParsingFailure Str, ParsingIncomplete RawStr]
 parseStrToCSV = \input ->
   parse file (Str.toUtf8 input) (\leftover -> leftover == [])
 
+## Attempts to parse a Str into the internal `CSVRecord` datastructure (A list of bytestring-fields).
 parseStrToCSVRecord : Str -> Result CSVRecord [ParsingFailure Str, ParsingIncomplete RawStr]
 parseStrToCSVRecord = \input ->
   parse csvRecord (Str.toUtf8 input) (\leftover -> leftover == [])
@@ -145,7 +154,12 @@ file = many recordNewline
 
 # The following compiles 6x slower, but follows the RFC to the letter (allowing the final CRLF to be omitted)
 # file : Parser RawStr CSV
-# file = map2 (many recordNewline) (alt record recordNewline) (\records, finalRecord -> List.concat records [finalRecord])
+# file = map2 (many recordNewline) (maybe csvRecord) \records, finalRecord ->
+#   when finalRecord is
+#     Err Nothing ->
+#       records
+#     Ok val ->
+#       List.append records val
 
 recordNewline : Parser RawStr CSVRecord
 recordNewline = map2 csvRecord endOfLine (\rec, _ -> rec)
