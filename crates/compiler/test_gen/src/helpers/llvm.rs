@@ -425,9 +425,12 @@ fn llvm_module_to_wasm_file(
         .output()
         .unwrap();
 
+    if !output.stderr.is_empty() {
+        panic!("{}", String::from_utf8_lossy(&output.stderr));
+    }
+
     assert!(output.status.success(), "{:#?}", output);
     assert!(output.stdout.is_empty(), "{:#?}", output);
-    assert!(output.stderr.is_empty(), "{:#?}", output);
 
     test_wasm_path
 }

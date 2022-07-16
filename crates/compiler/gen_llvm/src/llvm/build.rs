@@ -175,7 +175,7 @@ impl LlvmBackendMode {
         match self {
             LlvmBackendMode::Binary => true,
             LlvmBackendMode::GenTest => false,
-            LlvmBackendMode::WasmGenTest => false,
+            LlvmBackendMode::WasmGenTest => true,
             LlvmBackendMode::CliTest => false,
         }
     }
