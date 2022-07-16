@@ -1,4 +1,4 @@
-app "network"
+app "http-get"
     packages { pf: "cli-platform/main.roc" }
     imports [pf.Http, pf.Task]
     provides [main] to pf
