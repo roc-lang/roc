@@ -5,7 +5,17 @@ app "http-get"
 
 main : Task.Task {} [] [Write [Stdout], Network [Http]]
 main =
-    output <- Http.send { Http.defaultRequest & url: "https://httpbin.org/get" }
+    request = {
+        method: "GET",
+        headers: [],
+        url: "https://httpbin.org/get",
+        body: Http.emptyBody,
+        timeout: NoTimeout,
+        tracker: NoTracker,
+        allowCookiesFromOtherDomains: False,
+    }
+
+    output <- Http.send request
             |> Task.onFail (\err -> err |> Http.errorToString |> Task.succeed)
             |> Task.await
 
