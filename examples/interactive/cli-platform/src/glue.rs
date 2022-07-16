@@ -4356,30 +4356,49 @@ impl PartialOrd for TimeoutConfig {
     }
 }
 
-impl Ord for TimeoutConfig {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        match self.discriminant().cmp(&other.discriminant()) {
-            core::cmp::Ordering::Equal => {}
-            not_eq => return not_eq,
-        }
+/*
+error[E0277]: the trait bound `TimeoutConfig: std::cmp::Eq` is not satisfied
+    --> src/glue.rs:4359:6
+     |
+4359 | impl Ord for TimeoutConfig {
+     |      ^^^ the trait `std::cmp::Eq` is not implemented for `TimeoutConfig`
+     |
+note: required by a bound in `Ord`
+    --> /nix/store/bfi7mh9z423f9bz8qh4zx8x5nxsipsz0-rust-default-1.61.0/lib/rustlib/src/rust/library/core/src/cmp.rs:764:16
+     |
+764  | pub trait Ord: Eq + PartialOrd<Self> {
+     |                ^^ required by this bound in `Ord`
+ */
+// impl Ord for TimeoutConfig {
+//     #[cfg(any(
+//         target_arch = "arm",
+//         target_arch = "aarch64",
+//         target_arch = "wasm32",
+//         target_arch = "x86",
+//         target_arch = "x86_64"
+//     ))]
+//     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+//         match self.discriminant().cmp(&other.discriminant()) {
+//             core::cmp::Ordering::Equal => {}
+//             not_eq => return not_eq,
+//         }
 
-        unsafe {
-            match self.discriminant() {
-                discriminant_TimeoutConfig::NoTimeout => core::cmp::Ordering::Equal,
-                discriminant_TimeoutConfig::Timeout => self.Timeout.cmp(&other.Timeout),
-            }
-        }
-    }
-}
+//         unsafe {
+//             match self.discriminant() {
+//                 discriminant_TimeoutConfig::NoTimeout => core::cmp::Ordering::Equal,
+//                 discriminant_TimeoutConfig::Timeout => self.Timeout.cmp(&other.Timeout),
+//             }
+//         }
+//     }
+// }
 
-impl Copy for TimeoutConfig {}
+/*
+error[E0184]: the trait `Copy` may not be implemented for this type; the type has a destructor
+    --> src/glue.rs:4642:1
+     |
+4642 | impl Copy for TimeoutConfig {}
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Copy not allowed on types with destructors
+*/
 
 impl Clone for TimeoutConfig {
     #[cfg(any(
@@ -4409,26 +4428,33 @@ impl Clone for TimeoutConfig {
     }
 }
 
-impl core::hash::Hash for TimeoutConfig {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
-        match self.discriminant() {
-            discriminant_TimeoutConfig::NoTimeout => {
-                discriminant_TimeoutConfig::NoTimeout.hash(state)
-            }
-            discriminant_TimeoutConfig::Timeout => unsafe {
-                discriminant_TimeoutConfig::Timeout.hash(state);
-                self.Timeout.hash(state);
-            },
-        }
-    }
-}
+/*
+error[E0599]: no method named `hash` found for type `f64` in the current scope
+    --> src/glue.rs:4446:30
+     |
+4446 |                 self.Timeout.hash(state);
+     |                              ^^^^ method not found in `f64`
+*/
+// impl core::hash::Hash for TimeoutConfig {
+//     #[cfg(any(
+//         target_arch = "arm",
+//         target_arch = "aarch64",
+//         target_arch = "wasm32",
+//         target_arch = "x86",
+//         target_arch = "x86_64"
+//     ))]
+//     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+//         match self.discriminant() {
+//             discriminant_TimeoutConfig::NoTimeout => {
+//                 discriminant_TimeoutConfig::NoTimeout.hash(state)
+//             }
+//             discriminant_TimeoutConfig::Timeout => unsafe {
+//                 discriminant_TimeoutConfig::Timeout.hash(state);
+//                 self.Timeout.hash(state);
+//             },
+//         }
+//     }
+// }
 
 impl core::fmt::Debug for TimeoutConfig {
     #[cfg(any(
