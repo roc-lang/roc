@@ -104,6 +104,7 @@ errorToString = \err ->
 
 send : Request -> Task Str Error [Network [Http]*]*
 send = \req ->
-    Effect.sendRequest req
+    # TODO: Fix our C ABI codegen so that we don't this Box.box heap allocation
+    Effect.sendRequest (Box.box req)
         |> Effect.map handleStringResponse
         |> InternalTask.fromEffect

@@ -7,4 +7,4 @@ putLine : Str -> Effect {}
 
 getLine : Effect Str
 
-sendRequest : Request -> Effect Response
+sendRequest : Box Request -> Effect Response
