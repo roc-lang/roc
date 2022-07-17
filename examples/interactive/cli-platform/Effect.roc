@@ -1,5 +1,5 @@
 hosted Effect
-    exposes [Effect, after, map, always, forever, loop, putLine, getLine]
+    exposes [Effect, after, map, always, forever, loop, putLine, getLine, writeFile]
     imports []
     generates Effect with [after, map, always, forever, loop]
 
