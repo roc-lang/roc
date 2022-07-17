@@ -2,10 +2,12 @@
 
 use core::alloc::Layout;
 use core::ffi::c_void;
-use core::mem::{ManuallyDrop, MaybeUninit};
+use core::mem::MaybeUninit;
 use libc;
 use roc_std::RocStr;
 use std::ffi::CStr;
+use std::fs::File;
+use std::io::Write;
 use std::os::raw::c_char;
 
 extern "C" {
@@ -122,6 +124,17 @@ pub extern "C" fn roc_fx_getLine() -> RocStr {
 pub extern "C" fn roc_fx_putLine(line: &RocStr) {
     let string = line.as_str();
     println!("{}", string);
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_writeUtf8(path: &RocStr, string: &RocStr) {
+    write_utf8(path, string)
+}
+
+fn write_utf8(path: &RocStr, string: &RocStr) {
+    // TODO return Result
+    let mut file = File::create(path.as_str()).unwrap();
+    file.write_all(string.as_str().as_bytes()).unwrap();
 }
 
 #[no_mangle]
