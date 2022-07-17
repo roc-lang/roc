@@ -17,7 +17,7 @@ app "movies"
 Movie : {
     title : Str,
     year : U16,
-    starring : List Str,
+    cast : List Str,
 }
 
 movieFromLine : Str -> Result Movie [InvalidLine Str]*
@@ -27,9 +27,9 @@ movieFromLine = \line ->
 
         title <- List.get fields 0 |> try
         year <- List.get fields 1 |> try Str.toU16 |> try
-        starring <- List.get fields 2 |> try
+        cast <- List.get fields 2 |> try
 
-        Ok { title, year, starring: Str.split starring "," }
+        Ok { title, year, cast: Str.split cast "," }
 
     Result.mapErr result \_ -> InvalidLine line
 
@@ -42,12 +42,22 @@ getMovies = \url ->
     |> Str.split "\n"
     |> mapTry movieFromLine
     |> Task.fromResult
+    # This works if you use it instead:
+    #
+    # if Str.isEmpty response then
+    #     Task.succeed []
+    # else
+    #     Task.succeed [{title: "blah", year: 2000, cast: []}]
 
 #writeOutput : List Movie -> Task {} (FileWriteErr (EncodeErr *)) [Write [Disk]*]*
 writeOutput : List Movie -> Task {} (FileWriteErr *) [Write [Disk]*]*
 writeOutput = \movies ->
+    json =
+        List.map movies \movie ->
+            { title: movie.title, starring: "" }
+
     Path.fromStr "output.json"
-    |> write movies Json.format
+    |> write json Json.format
 
 main : Task.Task {} [] [Write [Stdout, Disk], Net, Env]
 main =
@@ -55,14 +65,15 @@ main =
         apiKey <- Env.varUtf8 "API_KEY" |> Task.withDefault "" |> Task.await
         url = Url.fromStr "http://localhost:4000/movies?apiKey=\(apiKey)"
         movies <- getMovies url |> Task.await
+
         writeOutput movies
 
     Task.attempt task \result ->
         when result is
             Ok {} -> Stdout.line "Wrote the file!"
-            Err (HttpErr _) -> Stderr.line "Error reading from URL"
-            Err (FileWriteErr _) -> Stderr.line "Error writing to file"
-            Err (InvalidLine line) -> Stderr.line "The following line in the response was malformed:\n\(line)"
+            # Err (HttpErr _) -> Stderr.line "Error reading from URL"
+            # Err (FileWriteErr _) -> Stderr.line "Error writing to file"
+            # Err (InvalidLine line) -> Stderr.line "The following line in the response was malformed:\n\(line)"
             Err _ -> Stderr.line "Error!"
 
 # TODO--------------------------------------------------------------
