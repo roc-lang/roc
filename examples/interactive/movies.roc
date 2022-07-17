@@ -1,11 +1,15 @@
 app "echo"
     packages { pf: "cli-platform/main.roc" }
-    imports [pf.Stdout, pf.Stderr, pf.Task.{ Task }, pf.Path, pf.File]
+    imports [pf.Stdout, pf.Stderr, pf.Task.{ Task }, pf.Path, pf.File,
+        Encode.{ toEncoder }, Json
+    ]
     provides [main] to pf
 
 main : Task.Task {} [] [Write [Stdout, Disk]]
 main =
-    task = File.writeUtf8 (Path.fromStr "test.txt") "this is a test!"
+    lst = [{a: "foo"}, {a: "bar"}, {a: "baz"}]
+    encoded = Encode.toBytes lst Json.format
+    task = File.writeBytes (Path.fromStr "test.txt") encoded
 
     Task.attempt task \result ->
         when result is
