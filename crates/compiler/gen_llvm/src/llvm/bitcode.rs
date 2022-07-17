@@ -181,7 +181,15 @@ pub fn call_bitcode_fn_fixing_for_convention<'a, 'ctx, 'env>(
                 .try_into()
                 .expect("Zig bitcode return type is not a basic type!");
 
+            // when we write an i128 into this (happens in NumToInt), zig expects this pointer to
+            // be 16-byte aligned. Not doing so is UB and will immediately fail on CI
             let cc_return_value_ptr = env.builder.build_alloca(cc_return_type, "return_value");
+            cc_return_value_ptr
+                .as_instruction()
+                .unwrap()
+                .set_alignment(16)
+                .unwrap();
+
             let fixed_args: Vec<BasicValueEnum<'ctx>> = [cc_return_value_ptr.into()]
                 .iter()
                 .chain(args)
