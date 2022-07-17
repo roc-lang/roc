@@ -26,6 +26,9 @@ impl TypeId {
     /// have *some* TypeId value until we later in the process determine
     /// their real TypeId and can go back and fix them up.
     pub(crate) const PENDING: Self = Self(usize::MAX);
+
+    /// When adding, we check for overflow based on whether we've exceeded this.
+    const MAX: Self = Self(Self::PENDING.0 - 1);
 }
 
 #[derive(Debug, Clone)]
@@ -55,6 +58,8 @@ impl Types {
 
     pub fn add(&mut self, typ: RocType, layout: Layout<'_>) -> TypeId {
         let id = TypeId(self.types.len());
+
+        assert!(id.0 <= TypeId::MAX.0);
 
         self.types.push(typ);
         self.sizes
@@ -138,12 +143,14 @@ impl Types {
 pub enum RocType {
     RocStr,
     Bool,
+    RocResult(TypeId, TypeId),
     Num(RocNum),
     RocList(TypeId),
     RocDict(TypeId, TypeId),
     RocSet(TypeId),
     RocBox(TypeId),
     TagUnion(RocTagUnion),
+    EmptyTagUnion,
     Struct {
         name: String,
         fields: Vec<(String, TypeId)>,
@@ -157,6 +164,8 @@ pub enum RocType {
     /// and the TypeId is the TypeId of StrConsList itself.
     RecursivePointer(TypeId),
     Function(Vec<TypeId>, TypeId),
+    /// A zero-sized type, such as an empty record or a single-tag union with no payload
+    Unit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
@@ -466,16 +475,64 @@ fn add_type_help<'a>(
             todo!()
         }
         Content::Structure(FlatType::Erroneous(_)) => todo!(),
-        Content::Structure(FlatType::EmptyRecord) => todo!(),
-        Content::Structure(FlatType::EmptyTagUnion) => {
-            // This can happen when unwrapping a tag union; don't do anything.
-            todo!()
-        }
-        Content::Alias(name, _, real_var, _) => {
+        Content::Structure(FlatType::EmptyRecord) => types.add(RocType::Unit, layout),
+        Content::Structure(FlatType::EmptyTagUnion) => types.add(RocType::EmptyTagUnion, layout),
+        Content::Alias(name, alias_vars, real_var, _) => {
             if name.is_builtin() {
                 match layout {
                     Layout::Builtin(builtin) => {
                         add_builtin_type(env, builtin, var, opt_name, types, layout)
+                    }
+                    Layout::Union(union_layout) if *name == Symbol::BOOL_BOOL => {
+                        if cfg!(debug_assertions) {
+                            match union_layout {
+                                UnionLayout::NonRecursive(tag_layouts) => {
+                                    // Bool should always have exactly two tags: True and False
+                                    debug_assert_eq!(tag_layouts.len(), 2);
+
+                                    // Both tags should have no payload
+                                    debug_assert_eq!(tag_layouts[0].len(), 0);
+                                    debug_assert_eq!(tag_layouts[1].len(), 0);
+                                }
+                                _ => debug_assert!(false),
+                            }
+                        }
+
+                        types.add(RocType::Bool, layout)
+                    }
+                    Layout::Union(union_layout) if *name == Symbol::RESULT_RESULT => {
+                        match union_layout {
+                            UnionLayout::NonRecursive(tags) => {
+                                // Result should always have exactly two tags: Ok and Err
+                                debug_assert_eq!(tags.len(), 2);
+
+                                let type_vars =
+                                    env.subs.get_subs_slice(alias_vars.type_variables());
+
+                                let ok_var = type_vars[0];
+                                let ok_layout =
+                                    env.layout_cache.from_var(env.arena, ok_var, subs).unwrap();
+                                let ok_id = add_type_help(env, ok_layout, ok_var, None, types);
+
+                                let err_var = type_vars[1];
+                                let err_layout =
+                                    env.layout_cache.from_var(env.arena, err_var, subs).unwrap();
+                                let err_id = add_type_help(env, err_layout, err_var, None, types);
+
+                                let type_id = types.add(RocType::RocResult(ok_id, err_id), layout);
+
+                                types.depends(type_id, ok_id);
+                                types.depends(type_id, err_id);
+
+                                type_id
+                            }
+                            UnionLayout::Recursive(_)
+                            | UnionLayout::NonNullableUnwrapped(_)
+                            | UnionLayout::NullableWrapped { .. }
+                            | UnionLayout::NullableUnwrapped { .. } => {
+                                unreachable!();
+                            }
+                        }
                     }
                     _ => {
                         unreachable!()
