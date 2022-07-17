@@ -10,5 +10,6 @@ main =
     Task.attempt task \result ->
         when result is
             Ok {} -> Stdout.line "Wrote the file!"
-            Err (FileWriteErr (NotFound _)) -> Task.succeed {}
-            Err (FileWriteErr (FileWasDir _)) -> Task.succeed {}
+            Err (FileWriteErr _) -> Stderr.line "Error writing to file"
+            # Err (FileWriteErr (NotFound _)) -> Task.succeed {}
+            # Err (FileWriteErr (FileWasDir _)) -> Task.succeed {}

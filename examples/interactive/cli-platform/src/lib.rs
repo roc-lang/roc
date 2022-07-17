@@ -4,7 +4,7 @@ use core::alloc::Layout;
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
 use libc;
-use roc_std::RocStr;
+use roc_std::{RocList, RocStr};
 use std::ffi::CStr;
 use std::fs::File;
 use std::io::Write;
@@ -128,13 +128,18 @@ pub extern "C" fn roc_fx_putLine(line: &RocStr) {
 
 #[no_mangle]
 pub extern "C" fn roc_fx_writeUtf8(path: &RocStr, string: &RocStr) {
-    write_utf8(path, string)
+    write_bytes(path, string.as_str().as_bytes())
 }
 
-fn write_utf8(path: &RocStr, string: &RocStr) {
+#[no_mangle]
+pub extern "C" fn roc_fx_writeBytes(path: &RocStr, bytes: &RocList<u8>) {
+    write_bytes(path, bytes.as_slice())
+}
+
+fn write_bytes(path: &RocStr, bytes: &[u8]) {
     // TODO return Result
     let mut file = File::create(path.as_str()).unwrap();
-    file.write_all(string.as_str().as_bytes()).unwrap();
+    file.write_all(bytes).unwrap();
 }
 
 #[no_mangle]
