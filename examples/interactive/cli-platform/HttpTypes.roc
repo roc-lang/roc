@@ -1,5 +1,5 @@
 interface HttpTypes
-    exposes [Request, Method, Header, TimeoutConfig, TrackerConfig, Part, Body, Response, Metadata, Error]
+    exposes [Request, Method, Header, Timeout, ProgressTracking, Part, Body, Response, Metadata, Error]
     imports []
 
 Request : {
@@ -7,8 +7,8 @@ Request : {
     headers : List Header,
     url : Str,
     body : Body,
-    timeout : TimeoutConfig,
-    tracker : TrackerConfig,
+    timeout : Timeout,
+    progressTracking : ProgressTracking,
     allowCookiesFromOtherDomains : Bool,
 }
 
@@ -16,8 +16,9 @@ Method : [Options, Get, Post, Put, Delete, Head, Trace, Connect, Patch]
 
 Header : [Header Str Str]
 
-TimeoutConfig : [Timeout F64, NoTimeout]
-TrackerConfig : [Tracker Str, NoTracker]
+Timeout : [Timeout F64, NoTimeout]
+
+ProgressTracking : [ProgressTrackingId Str, NoProgressTracking]
 
 Part : [Part Str (List U8)]
 

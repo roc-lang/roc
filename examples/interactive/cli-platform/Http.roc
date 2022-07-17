@@ -19,7 +19,7 @@ interface Http
         # Json,
         Task.{ Task },
         # Encode.{ Encoding },
-        HttpTypes.{ Request, Method, Header, TimeoutConfig, TrackerConfig, Part, Body, Response, Metadata, Error },
+        HttpTypes.{ Request, Method, Header, Timeout, ProgressTracking, Part, Body, Response, Metadata, Error },
     ]
 
 defaultRequest : Request
@@ -29,7 +29,7 @@ defaultRequest = {
     url: "",
     body: Http.emptyBody,
     timeout: NoTimeout,
-    tracker: NoTracker,
+    progressTracking: NoProgressTracking,
     allowCookiesFromOtherDomains: False,
 }
 

@@ -1,18 +1,22 @@
 app "http-get"
     packages { pf: "cli-platform/main.roc" }
-    imports [pf.Http, pf.Task, pf.Stdout]
+    imports [pf.Http, pf.Task, pf.Stdin, pf.Stdout]
     provides [main] to pf
 
-main : Task.Task {} [] [Write [Stdout], Network [Http]]
+main : Task.Task {} [] [Read [Stdin], Write [Stdout], Network [Http]]
 main =
+    _ <- Task.await (Stdout.line "Please enter a URL to fetch")
+
+    url <- Task.await Stdin.line
+
     request = {
         method: Get,
-        headers: [Header "Favourite-Colour" "Mauve"],
-        url: "https://httpbin.org/get",
-        body: Http.stringBody (MimeType "text/plain") "Hello, I am the body text",
-        timeout: Timeout 1.0,
-        tracker: Tracker "some-progress-tracking-identifier",
-        allowCookiesFromOtherDomains: True,
+        headers: [],
+        url,
+        body: Http.emptyBody,
+        timeout: NoTimeout,
+        progressTracking: NoProgressTracking,
+        allowCookiesFromOtherDomains: False,
     }
 
     output <- Http.send request
