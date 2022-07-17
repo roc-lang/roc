@@ -33,16 +33,15 @@ movieFromLine = \line ->
 
     Result.mapErr result \_ -> InvalidLine line
 
-# getMovies : Url -> Task (List Movie) (HttpErr [InvalidLine Str]*) [Net]*
-# getMovies = \url ->
-#     # response <- Http.getUtf8 url |> Task.await
+getMovies : Url -> Task (List Movie) (HttpErr [InvalidLine Str]*) [Net]*
+getMovies = \url ->
+    response <- Http.getUtf8 url |> Task.await
 
-#     # response
-#     # |> Str.trim
-#     # |> Str.split "\n"
-#     # |> mapTry movieFromLine
-#     # |> Task.fromResult
-    # Task.fromResult (Ok [])
+    response
+    |> Str.trim
+    |> Str.split "\n"
+    |> mapTry movieFromLine
+    |> Task.fromResult
 
 #writeOutput : List Movie -> Task {} (FileWriteErr (EncodeErr *)) [Write [Disk]*]*
 writeOutput : List Movie -> Task {} (FileWriteErr *) [Write [Disk]*]*
@@ -53,11 +52,10 @@ writeOutput = \movies ->
 main : Task.Task {} [] [Write [Stdout, Disk], Net, Env]
 main =
     task =
-        #apiKey <- Env.varUtf8 "API_KEY" |> Task.withDefault "" |> Task.await
-        #url = Url.fromStr "http://localhost:4000/movies?apiKey=\(apiKey)"
-        movies <- Task.fromResult (Ok []) |> Task.await #getMovies url |> Task.await
-        Task.succeed {}
-        #writeOutput movies
+        apiKey <- Env.varUtf8 "API_KEY" |> Task.withDefault "" |> Task.await
+        url = Url.fromStr "http://localhost:4000/movies?apiKey=\(apiKey)"
+        movies <- getMovies url |> Task.await
+        writeOutput movies
 
     Task.attempt task \result ->
         when result is
