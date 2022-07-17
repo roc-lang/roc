@@ -1,5 +1,5 @@
 interface Task
-    exposes [Task, succeed, fail, await, map, onFail, attempt, forever, loop]
+    exposes [Task, succeed, fail, await, map, onFail, attempt, forever, loop, withDefault]
     imports [Effect, InternalTask]
 
 Task ok err fx : InternalTask.Task ok err fx
@@ -42,6 +42,10 @@ fail : err -> Task * err *
 fail = \val ->
     Effect.always (Err val)
     |> InternalTask.fromEffect
+
+withDefault : Task ok * fx, ok -> Task ok * fx
+withDefault = \task, default ->
+    onFail task \_ -> Task.succeed default
 
 attempt : Task a b fx, (Result a b -> Task c d fx) -> Task c d fx
 attempt = \task, transform ->

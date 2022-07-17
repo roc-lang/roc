@@ -1,34 +1,42 @@
 interface Http
     exposes [
-        Request,
-        Method,
-        Header,
-        Timeout,
-        ProgressTracking,
-        Body,
-        Response,
-        Metadata,
-        Error,
+        HttpErr,
+        getUtf8,
         header,
         emptyBody,
         bytesBody,
         stringBody,
+        # jsonBody,
+        multiPartBody,
+        stringPart,
+        bytesPart,
         handleStringResponse,
         defaultRequest,
         errorToString,
         send,
     ]
-    imports [Effect, InternalTask, Task.{ Task }, InternalHttp]
+    imports [
+        Effect,
+        InternalTask,
+        # Json,
+        Task.{ Task },
+        # Encode.{ Encoding },
+        HttpTypes.{ Request, Method, Header, Timeout, ProgressTracking, Part, Body, Response, Metadata, Error },
+        Url.{ Url },
+    ]
 
-Request : InternalHttp.Request
-Method : InternalHttp.Method
-Header : InternalHttp.Header
-Timeout : InternalHttp.Timeout
-ProgressTracking : InternalHttp.ProgressTracking
-Body : InternalHttp.Body
-Response : InternalHttp.Response
-Metadata : InternalHttp.Metadata
-Error : InternalHttp.Error
+HttpErr a : [
+    HttpErr [
+        NotFound Url,
+        Timeout Url,
+    ]
+]a
+
+getUtf8 : Url -> Task Str (HttpErr *) [Net]*
+getUtf8 = \url ->
+    Effect.httpGetUtf8 url
+    |> Effect.map Ok # TODO actually handle errors
+    |> InternalTask.fromEffect
 
 defaultRequest : Request
 defaultRequest = {
@@ -63,26 +71,29 @@ stringBody = \mimeType, str ->
 # jsonBody : a -> Body | a has Encoding
 # jsonBody = \val ->
 #     Body (MimeType "application/json") (Encode.toBytes val Json.format)
-#
-# multiPartBody : List Part -> Body
-# multiPartBody = \parts ->
-#     boundary = "7MA4YWxkTrZu0gW" # TODO: what's this exactly? a hash of all the part bodies?
-#     beforeName = Str.toUtf8 "-- \(boundary)\r\nContent-Disposition: form-data; name=\""
-#     afterName = Str.toUtf8 "\"\r\n"
-#     appendPart = \buffer, Part name partBytes ->
-#         buffer
-#         |> List.concat beforeName
-#         |> List.concat (Str.toUtf8 name)
-#         |> List.concat afterName
-#         |> List.concat partBytes
-#     bodyBytes = List.walk parts [] appendPart
-#     Body (MimeType "multipart/form-data;boundary=\"\(boundary)\"") bodyBytes
-# bytesPart : Str, List U8 -> Part
-# bytesPart =
-#     Part
-# stringPart : Str, Str -> Part
-# stringPart = \name, str ->
-#     Part name (Str.toUtf8 str)
+multiPartBody : List Part -> Body
+multiPartBody = \parts ->
+    boundary = "7MA4YWxkTrZu0gW" # TODO: what's this exactly? a hash of all the part bodies?
+    beforeName = Str.toUtf8 "-- \(boundary)\r\nContent-Disposition: form-data; name=\""
+    afterName = Str.toUtf8 "\"\r\n"
+    appendPart = \buffer, Part name partBytes ->
+        buffer
+        |> List.concat beforeName
+        |> List.concat (Str.toUtf8 name)
+        |> List.concat afterName
+        |> List.concat partBytes
+    bodyBytes = List.walk parts [] appendPart
+
+    Body (MimeType "multipart/form-data;boundary=\"\(boundary)\"") bodyBytes
+
+bytesPart : Str, List U8 -> Part
+bytesPart =
+    Part
+
+stringPart : Str, Str -> Part
+stringPart = \name, str ->
+    Part name (Str.toUtf8 str)
+
 handleStringResponse : Response -> Result Str Error
 handleStringResponse = \response ->
     when response is
