@@ -75,7 +75,7 @@ mod bindgen_cli_run {
                     assert_eq!(out.stderr, "");
                     assert!(
                         out.stdout.ends_with($ends_with),
-                        "Unexpected stdout ending - expected {:?} but stdout was: {:?}",
+                        "Unexpected stdout ending\n\nexpected:\n\n{}\n\nbut stdout was:\n\n{}",
                         $ends_with,
                         out.stdout
                     );
