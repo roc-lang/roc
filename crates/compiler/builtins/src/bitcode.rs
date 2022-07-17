@@ -133,9 +133,13 @@ impl IntWidth {
             U128 | I128 => {
                 // the C ABI defines 128-bit integers to always be 16B aligned,
                 // according to https://reviews.llvm.org/D28990#655487
-
-                // but, LLVM and Rust only use an 8-byte alignment
-                8
+                // but LLVM does this incorrectly, and we just follow its lead here
+                match target_info.architecture {
+                    Architecture::X86_64 => 8,
+                    Architecture::Wasm32 => 16,
+                    Architecture::Aarch64 | Architecture::Aarch32 => 16,
+                    Architecture::X86_32 => 4,
+                }
             }
         }
     }
