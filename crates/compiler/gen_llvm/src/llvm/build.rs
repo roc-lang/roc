@@ -3922,8 +3922,7 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
                         )
                         .into_pointer_value();
 
-                    let loaded = env.builder.build_load(fastcc_ptr, "load_arg");
-                    loaded
+                    env.builder.build_load(fastcc_ptr, "load_arg")
                 } else {
                     complex_bitcast_check_size(env, *arg, *fastcc_type, "to_fastcc_type_2")
                 }
