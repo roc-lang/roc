@@ -490,7 +490,7 @@ fn encode_derived_record_one_field_string() {
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"a":"foo",}"#),
+        RocStr::from(r#"{"a":"foo"}"#),
         RocStr
     )
 }
@@ -513,7 +513,7 @@ fn encode_derived_record_two_fields_strings() {
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"a":"foo","b":"bar",}"#),
+        RocStr::from(r#"{"a":"foo","b":"bar"}"#),
         RocStr
     )
 }
@@ -537,7 +537,7 @@ fn encode_derived_nested_record_string() {
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"a":{"b":"bar",},}"#),
+        RocStr::from(r#"{"a":{"b":"bar"}}"#),
         RocStr
     )
 }
@@ -561,7 +561,7 @@ fn encode_derived_tag_one_payload_string() {
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"A":["foo",]}"#),
+        RocStr::from(r#"{"A":["foo"]}"#),
         RocStr
     )
 }
@@ -585,7 +585,7 @@ fn encode_derived_tag_two_payloads_string() {
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"A":["foo","bar",]}"#),
+        RocStr::from(r#"{"A":["foo","bar"]}"#),
         RocStr
     )
 }
@@ -610,7 +610,7 @@ fn encode_derived_nested_tag_string() {
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"A":[{"B":["foo","bar",]},]}"#),
+        RocStr::from(r#"{"A":[{"B":["foo","bar"]}]}"#),
         RocStr
     )
 }
@@ -635,7 +635,7 @@ fn encode_derived_nested_record_tag_record() {
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"a":{"B":[{"c":"foo",},]},}"#),
+        RocStr::from(r#"{"a":{"B":[{"c":"foo"}]}}"#),
         RocStr
     )
 }
@@ -683,7 +683,7 @@ fn encode_derived_list_of_records() {
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"[{"a":"foo",},{"a":"bar",},{"a":"baz",}]"#),
+        RocStr::from(r#"[{"a":"foo"},{"a":"bar"},{"a":"baz"}]"#),
         RocStr
     )
 }

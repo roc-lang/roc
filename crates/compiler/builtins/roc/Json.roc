@@ -80,18 +80,18 @@ string = \s -> custom \bytes, @Json {} ->
 
 list = \lst, encodeElem ->
     custom \bytes, @Json {} ->
-        writeList = \{ buffer, elemIndex }, elem ->
-            bufferWithPrefix =
-                if elemIndex > 0 then
-                    List.append buffer (Num.toU8 ',')
+        writeList = \{ buffer, elemsLeft }, elem ->
+            bufferWithElem = appendWith buffer (encodeElem elem) (@Json {})
+            bufferWithSuffix =
+                if elemsLeft > 1 then
+                    List.append bufferWithElem (Num.toU8 ',')
                 else
-                    buffer
-            bufferWithElem = appendWith bufferWithPrefix (encodeElem elem) (@Json {})
+                    bufferWithElem
 
-            { buffer: bufferWithElem, elemIndex: elemIndex + 1 }
+            { buffer: bufferWithSuffix, elemsLeft: elemsLeft - 1 }
 
         head = List.append bytes (Num.toU8 '[')
-        { buffer: withList } = List.walk lst { buffer: head, elemIndex: 0 } writeList
+        { buffer: withList } = List.walk lst { buffer: head, elemsLeft: List.len lst } writeList
 
         List.append withList (Num.toU8 ']')
 
@@ -106,7 +106,7 @@ record = \fields ->
                 |> appendWith value (@Json {})
 
             bufferWithSuffix =
-                if fieldsLeft > 0 then
+                if fieldsLeft > 1 then
                     List.append bufferWithKeyValue (Num.toU8 ',')
                 else
                     bufferWithKeyValue
@@ -124,7 +124,7 @@ tag = \name, payload ->
         writePayload = \{ buffer, itemsLeft }, encoder ->
             bufferWithValue = appendWith buffer encoder (@Json {})
             bufferWithSuffix =
-                if itemsLeft > 0 then
+                if itemsLeft > 1 then
                     List.append bufferWithValue (Num.toU8 ',')
                 else
                     bufferWithValue
