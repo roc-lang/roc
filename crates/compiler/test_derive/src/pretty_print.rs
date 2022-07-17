@@ -138,12 +138,17 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
                 Free,
                 p,
                 expr(c, CallArg, f, &fun.value)
-                    .append(f.softline())
-                    .append(f.intersperse(
-                        args.iter().map(|le| expr(c, CallArg, f, &le.1.value)),
-                        f.softline()
-                    ))
+                    .append(
+                        f.concat(args.iter().map(|le| f.line().append(expr(
+                            c,
+                            CallArg,
+                            f,
+                            &le.1.value
+                        ))))
+                        .group()
+                    )
                     .group()
+                    .nest(2)
             )
         }
         RunLowLevel { .. } => todo!(),
