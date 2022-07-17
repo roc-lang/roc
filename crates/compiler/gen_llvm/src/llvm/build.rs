@@ -6091,6 +6091,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                             let int_type = convert::int_type_from_int_width(env, *int_width);
                             build_int_unary_op(
                                 env,
+                                parent,
                                 arg.into_int_value(),
                                 *int_width,
                                 int_type,
@@ -7366,6 +7367,7 @@ fn int_type_signed_min(int_type: IntType) -> IntValue {
 
 fn build_int_unary_op<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
     arg: IntValue<'ctx>,
     arg_width: IntWidth,
     arg_int_type: IntType<'ctx>,
@@ -7462,7 +7464,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
 
                 r.into_struct_value().into()
             } else {
-                let bitcode_fn = if !arg_width.is_signed() {
+                let intrinsic = if !arg_width.is_signed() {
                     // We are trying to convert from unsigned to signed/unsigned of same or lesser width, e.g.
                     // u16 -> i16, u16 -> i8, or u16 -> u8. We only need to check that the argument
                     // value fits in the MAX target type value.
@@ -7474,12 +7476,63 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                     &bitcode::NUM_INT_TO_INT_CHECKING_MAX_AND_MIN[target_int_width][arg_width]
                 };
 
-                let result = call_bitcode_fn_fixing_for_convention(
-                    env,
-                    &[arg.into()],
-                    return_layout,
-                    bitcode_fn,
-                );
+                let result = match env.target_info.ptr_width() {
+                    PtrWidth::Bytes4 => {
+                        let zig_function = env.module.get_function(intrinsic).unwrap();
+                        let zig_function_type = zig_function.get_type();
+
+                        match zig_function_type.get_return_type() {
+                            Some(_) => call_str_bitcode_fn(
+                                env,
+                                &[],
+                                &[arg.into()],
+                                BitcodeReturns::Basic,
+                                intrinsic,
+                            ),
+                            None => {
+                                let return_type = zig_function_type.get_param_types()[0]
+                                    .into_pointer_type()
+                                    .get_element_type()
+                                    .into_struct_type()
+                                    .into();
+
+                                let zig_return_alloca = create_entry_block_alloca(
+                                    env,
+                                    parent,
+                                    return_type,
+                                    "num_to_int",
+                                );
+
+                                call_void_bitcode_fn(
+                                    env,
+                                    &[zig_return_alloca.into(), arg.into()],
+                                    intrinsic,
+                                );
+
+                                let roc_return_type = basic_type_from_layout(env, return_layout)
+                                    .ptr_type(AddressSpace::Generic);
+
+                                let roc_return_alloca = env.builder.build_pointer_cast(
+                                    zig_return_alloca,
+                                    roc_return_type,
+                                    "cast_to_roc",
+                                );
+
+                                load_roc_value(env, *return_layout, roc_return_alloca, "num_to_int")
+                            }
+                        }
+                    }
+                    PtrWidth::Bytes8 => {
+                        // call_bitcode_fn_fixing_for_convention(env, &[string], layout, intrinsic)
+
+                        call_bitcode_fn_fixing_for_convention(
+                            env,
+                            &[arg.into()],
+                            return_layout,
+                            intrinsic,
+                        )
+                    }
+                };
 
                 complex_bitcast_check_size(env, result, return_type.into(), "cast_bitpacked")
             }
