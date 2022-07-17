@@ -114,9 +114,9 @@ displayUtf8 = \path ->
 isEq : Path, Path -> Bool
 isEq = \p1, p2 ->
     when InternalPath.unwrap p1 is
-        FromOperatingSystem bytes1 | ArbitraryBytes bytes1 ->
+        NoInteriorNul bytes1 | ArbitraryBytes bytes1 ->
             when InternalPath.unwrap p2 is
-                FromOperatingSystem bytes2 | ArbitraryBytes bytes2 -> bytes1 == bytes2
+                NoInteriorNul bytes2 | ArbitraryBytes bytes2 -> bytes1 == bytes2
                 # We can't know the encoding that was originally used in the path, so we convert
                 # the string to bytes and see if those bytes are equal to the path's bytes.
                 #
@@ -127,21 +127,21 @@ isEq = \p1, p2 ->
 
         FromStr str1 ->
             when InternalPath.unwrap p2 is
-                FromOperatingSystem bytes2 | ArbitraryBytes bytes2 -> Str.isEqUtf8 str1 bytes2
+                NoInteriorNul bytes2 | ArbitraryBytes bytes2 -> Str.isEqUtf8 str1 bytes2
                 FromStr str2 -> str1 == str2
 
 compare : Path, Path -> [Lt, Eq, Gt]
 compare = \p1, p2 ->
     when InternalPath.unwrap p1 is
-        FromOperatingSystem bytes1 | ArbitraryBytes bytes1 ->
+        NoInteriorNul bytes1 | ArbitraryBytes bytes1 ->
             when InternalPath.unwrap p2 is
-                FromOperatingSystem bytes2 | ArbitraryBytes bytes2 -> Ord.compare bytes1 bytes2
-                FromStr str2 -> Str.compareUtf8 str2 bytes1
+                NoInteriorNul bytes2 | ArbitraryBytes bytes2 -> Ord.compare bytes1 bytes2
+                FromStr str2 -> Str.compareUtf8 str2 bytes1 |> Ord.reverse
 
         FromStr str1 ->
             when InternalPath.unwrap p2 is
-                FromOperatingSystem bytes2 | ArbitraryBytes bytes2 -> Ord.compare str1 bytes2
-                FromStr str2 -> str1 == str2
+                NoInteriorNul bytes2 | ArbitraryBytes bytes2 -> Str.compareUtf8 str1 bytes2
+                FromStr str2 -> Ord.compare str1 str2
 
 ## ## Path Components
 PathComponent : [
@@ -191,15 +191,15 @@ append : Path, Path -> Path
 append = \prefix, suffix ->
     content =
         when InternalPath.unwrap prefix is
-            FromOperatingSystem prefixBytes ->
-                when suffix is
+            NoInteriorNul prefixBytes ->
+                when InternalPath.unwrap suffix is
                     NoInteriorNul suffixBytes ->
                         # Neither prefix nor suffix had interior nuls, so the answer won't either
-                        List.append prefixBytes suffixBytes
+                        List.concat prefixBytes suffixBytes
                         |> NoInteriorNul
 
                     ArbitraryBytes suffixBytes ->
-                        List.append prefixBytes suffixBytes
+                        List.concat prefixBytes suffixBytes
                         |> ArbitraryBytes
 
                     FromStr suffixStr ->
@@ -209,8 +209,8 @@ append = \prefix, suffix ->
 
             ArbitraryBytes prefixBytes ->
                 when InternalPath.unwrap suffix is
-                    ArbitraryBytes suffixBytes | FromOperatingSystem suffixBytes ->
-                        List.append prefixBytes suffixBytes
+                    ArbitraryBytes suffixBytes | NoInteriorNul suffixBytes ->
+                        List.concat prefixBytes suffixBytes
                         |> ArbitraryBytes
 
                     FromStr suffixStr ->
@@ -220,12 +220,12 @@ append = \prefix, suffix ->
 
             FromStr prefixStr ->
                 when InternalPath.unwrap suffix is
-                    ArbitraryBytes suffixBytes | FromOperatingSystem suffixBytes ->
-                        List.append (Str.toUtf8 prefixStr) suffixBytes
+                    ArbitraryBytes suffixBytes | NoInteriorNul suffixBytes ->
+                        List.concat suffixBytes (Str.toUtf8 prefixStr)
                         |> ArbitraryBytes
 
                     FromStr suffixStr ->
-                        Str.append prefixStr suffixStr
+                        Str.concat prefixStr suffixStr
                         |> FromStr
 
     InternalPath.wrap content
@@ -234,13 +234,13 @@ appendStr : Path, Str -> Path
 appendStr = \prefix, suffixStr ->
     content =
         when InternalPath.unwrap prefix is
-            FromOperatingSystem prefixBytes | ArbitraryBytes prefixBytes ->
+            NoInteriorNul prefixBytes | ArbitraryBytes prefixBytes ->
                 # Append suffixStr by writing it to the end of prefixBytes
                 Str.writeUtf8 suffixStr prefixBytes (List.len prefixBytes)
                 |> ArbitraryBytes
 
             FromStr prefixStr ->
-                Str.append prefixStr suffixStr
+                Str.concat prefixStr suffixStr
                 |> FromStr
 
     InternalPath.wrap content
@@ -249,13 +249,13 @@ appendStr = \prefix, suffixStr ->
 startsWith : Path, Path -> Bool
 startsWith = \path, prefix ->
     when InternalPath.unwrap path is
-        FromOperatingSystem pathBytes | ArbitraryBytes pathBytes ->
+        NoInteriorNul pathBytes | ArbitraryBytes pathBytes ->
             when InternalPath.unwrap prefix is
-                FromOperatingSystem prefixBytes | ArbitraryBytes prefixBytes ->
+                NoInteriorNul prefixBytes | ArbitraryBytes prefixBytes ->
                     List.startsWith pathBytes prefixBytes
 
                 FromStr prefixStr ->
-                    strLen = Str.byteCount str
+                    strLen = Str.countUtf8Bytes str
 
                     if strLen == List.len pathBytes then
                         # Grab the first N bytes of the list, where N = byte length of string.
@@ -268,7 +268,7 @@ startsWith = \path, prefix ->
 
         FromStr pathStr ->
             when InternalPath.unwrap prefix is
-                FromOperatingSystem prefixBytes | ArbitraryBytes prefixBytes ->
+                NoInteriorNul prefixBytes | ArbitraryBytes prefixBytes ->
                     Str.startsWithUtf8 pathStr prefixBytes
 
                 FromStr prefixStr ->
@@ -278,13 +278,13 @@ startsWith = \path, prefix ->
 endsWith : Path, Path -> Bool
 endsWith = \path, prefix ->
     when InternalPath.unwrap path is
-        FromOperatingSystem pathBytes | ArbitraryBytes pathBytes ->
+        NoInteriorNul pathBytes | ArbitraryBytes pathBytes ->
             when InternalPath.unwrap suffix is
-                FromOperatingSystem suffixBytes | ArbitraryBytes suffixBytes ->
+                NoInteriorNul suffixBytes | ArbitraryBytes suffixBytes ->
                     List.endsWith pathBytes suffixBytes
 
                 FromStr suffixStr ->
-                    strLen = Str.byteCount suffixStr
+                    strLen = Str.countUtf8Bytes suffixStr
 
                     if strLen == List.len pathBytes then
                         # Grab the last N bytes of the list, where N = byte length of string.
@@ -297,7 +297,7 @@ endsWith = \path, prefix ->
 
         FromStr pathStr ->
             when InternalPath.unwrap suffix is
-                FromOperatingSystem suffixBytes | ArbitraryBytes suffixBytes ->
+                NoInteriorNul suffixBytes | ArbitraryBytes suffixBytes ->
                     Str.endsWithUtf8 pathStr suffixBytes
 
                 FromStr suffixStr ->
@@ -317,11 +317,11 @@ endsWith = \path, prefix ->
 withExtension : Path, Str -> Path
 withExtension = \path, extension ->
     when InternalPath.unwrap path is
-        FromOperatingSystem bytes | ArbitraryBytes bytes ->
+        NoInteriorNul bytes | ArbitraryBytes bytes ->
             beforeDot =
                 when List.splitLast '.' is
                     Ok { before } -> before
-                    Err NotFound -> list
+                    Err NotFound -> bytes
 
             beforeDot
             |> List.reserve (1 + List.len bytes)
@@ -337,8 +337,8 @@ withExtension = \path, extension ->
                     Err NotFound -> str
 
             beforeDot
-            |> Str.reserve (1 + Str.byteCount str)
-            |> Str.append "."
+            |> Str.reserve (1 + Str.countUtf8Bytes str)
+            |> Str.concat "."
             |> Str.concat str
             |> FromStr
             |> InternalPath.wrap
