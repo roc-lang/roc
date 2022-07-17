@@ -22,16 +22,7 @@ Movie : {
 
 movieFromLine : Str -> Result Movie [InvalidLine Str]*
 movieFromLine = \line ->
-    result =
-        fields = Str.split line "|"
-
-        title <- List.get fields 0 |> try
-        year <- List.get fields 1 |> try Str.toU16 |> try
-        cast <- List.get fields 2 |> try
-
-        Ok { title, year, cast: Str.split cast "," }
-
-    Result.mapErr result \_ -> InvalidLine line
+    Ok { title: line, year: 0, cast: [] }
 
 getMovies : Url -> Task (List Movie) (HttpErr [InvalidLine Str]*) [Net]*
 getMovies = \url ->
