@@ -6,7 +6,7 @@ app "http-get"
 main : Task.Task {} [] [Write [Stdout], Network [Http]]
 main =
     request = {
-        method: "GET",
+        method: Get,
         headers: [Header "Favourite-Colour" "Mauve"],
         url: "https://httpbin.org/get",
         body: Http.stringBody (MimeType "text/plain") "Hello, I am the body text",

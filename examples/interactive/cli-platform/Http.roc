@@ -19,12 +19,12 @@ interface Http
         # Json,
         Task.{ Task },
         # Encode.{ Encoding },
-        HttpTypes.{ Request, Header, TimeoutConfig, TrackerConfig, Part, Body, Response, Metadata, Error },
+        HttpTypes.{ Request, Method, Header, TimeoutConfig, TrackerConfig, Part, Body, Response, Metadata, Error },
     ]
 
 defaultRequest : Request
 defaultRequest = {
-    method: "GET",
+    method: Get,
     headers: [],
     url: "",
     body: Http.emptyBody,

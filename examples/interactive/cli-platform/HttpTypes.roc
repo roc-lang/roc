@@ -1,9 +1,9 @@
 interface HttpTypes
-    exposes [Request, Header, TimeoutConfig, TrackerConfig, Part, Body, Response, Metadata, Error]
+    exposes [Request, Method, Header, TimeoutConfig, TrackerConfig, Part, Body, Response, Metadata, Error]
     imports []
 
 Request : {
-    method : Str,
+    method : Method,
     headers : List Header,
     url : Str,
     body : Body,
@@ -11,6 +11,8 @@ Request : {
     tracker : TrackerConfig,
     allowCookiesFromOtherDomains : Bool,
 }
+
+Method : [Options, Get, Post, Put, Delete, Head, Trace, Connect, Patch]
 
 Header : [Header Str Str]
 
