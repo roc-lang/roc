@@ -123,3 +123,9 @@ pub extern "C" fn roc_fx_putLine(line: &RocStr) {
     let string = line.as_str();
     println!("{}", string);
 }
+
+#[no_mangle]
+pub extern "C" fn roc_fx_errLine(line: &RocStr) {
+    let string = line.as_str();
+    eprintln!("{}", string);
+}
