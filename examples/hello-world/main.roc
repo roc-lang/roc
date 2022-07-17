@@ -1,15 +1,9 @@
 app "helloWorld"
-    imports [Encode.{ toEncoder }, Json]
-    provides [main] to "./platform"
+    packages { pf: "platform/main.roc" }
+    imports []
+    provides [main] to pf
 
-HelloWorld := {}
-
-toEncoder = \@HelloWorld {} ->
-    Encode.custom \bytes, fmt ->
-        bytes
-            |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
-
-result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.format)
-when result is
-    Ok s -> s
-    _ -> "<bad>"
+main =
+    when Wrapper (Payload "err") is
+        Wrapper (Payload str) -> str
+        Wrapper NoPayload -> ""
