@@ -330,7 +330,28 @@ impl<'ctx> RocUnion<'ctx> {
 
         let mut struct_value = self.struct_type().const_zero();
 
+        let tag_alloca = env
+            .builder
+            .build_alloca(struct_value.get_type(), "tag_alloca");
+        env.builder.build_store(tag_alloca, struct_value);
+
+        let cast_pointer = env.builder.build_pointer_cast(
+            tag_alloca,
+            data.get_type().ptr_type(AddressSpace::Generic),
+            "to_data_ptr",
+        );
+
+        env.builder.build_store(cast_pointer, data);
+
+        struct_value = env
+            .builder
+            .build_load(tag_alloca, "load_tag")
+            .into_struct_value();
+
         // set the tag id
+        //
+        // NOTE: setting the tag id initially happened before writing the data into it.
+        // That turned out to expose UB. More info at https://github.com/rtfeldman/roc/issues/3554
         if let Some(tag_id) = tag_id {
             let tag_id_type = match self.tag_type.unwrap() {
                 TagType::I8 => env.context.i8_type(),
@@ -346,22 +367,7 @@ impl<'ctx> RocUnion<'ctx> {
                 .into_struct_value();
         }
 
-        let tag_alloca = env
-            .builder
-            .build_alloca(struct_value.get_type(), "tag_alloca");
-        env.builder.build_store(tag_alloca, struct_value);
-
-        let cast_pointer = env.builder.build_pointer_cast(
-            tag_alloca,
-            data.get_type().ptr_type(AddressSpace::Generic),
-            "to_data_ptr",
-        );
-
-        env.builder.build_store(cast_pointer, data);
-
-        env.builder
-            .build_load(tag_alloca, "load_tag")
-            .into_struct_value()
+        struct_value
     }
 }
 

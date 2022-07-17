@@ -2554,9 +2554,9 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             //
                             // Hence, we explicitly memcpy source to destination, and rely on
                             // LLVM optimizing away any inefficiencies.
-                            let size = env
-                                .ptr_int()
-                                .const_int(layout.stack_size(env.target_info) as u64, false);
+                            let target_info = env.target_info;
+                            let width = layout.stack_size(target_info);
+                            let size = env.ptr_int().const_int(width as _, false);
 
                             env.builder
                                 .build_memcpy(
