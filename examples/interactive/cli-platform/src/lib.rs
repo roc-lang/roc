@@ -129,17 +129,7 @@ pub extern "C" fn roc_fx_putLine(line: &RocStr) {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_send_request(roc_request: &glue::Request) -> glue::Response {
-    // let (mimetype, body_bytes_slice): (String, Vec<u8>) = match roc_request.body.discriminant() {
-    //     glue::discriminant_Body::EmptyBody => ("".into(), vec![]),
-    //     glue::discriminant_Body::Body => {
-    //         let (mimetype_union, body_roclist) = unsafe { roc_request.body.as_Body() };
-    //         let mimetype_string: String = unsafe { mimetype_union.as_MimeType() }.as_str().into();
-    //         let body_bytes: &[u8] = body_roclist.as_slice();
-    //         (mimetype_string, Vec::from(body_bytes))
-    //     }
-    // };
-
+pub extern "C" fn roc_fx_sendRequest(roc_request: &glue::Request) -> glue::Response {
     let url = roc_request.url.as_str();
     match ureq::get(url).call() {
         Ok(response) => {
@@ -174,43 +164,12 @@ pub extern "C" fn roc_fx_send_request(roc_request: &glue::Request) -> glue::Resp
 
             glue::Response::BadStatus(metadata, body)
         }
-        Err(transortError) => {
+        Err(transportError) => {
             use ureq::ErrorKind::*;
-            match transortError.kind() {
+            match transportError.kind() {
                 InvalidUrl | UnknownScheme => glue::Response::BadUrl(RocStr::from(url)),
                 _ => glue::Response::NetworkError,
             }
         }
     }
 }
-
-/*
-pub enum Error {
-    Status(u16, Response),
-    Transport(Transport),
-}
-match ureq::get("http://mypage.example.com/").call() {
-    Ok(response) => { /* it worked */},
-    Err(Error::Status(code, response)) => {
-        /* the server returned an unexpected status
-           code (such as 400, 500 etc) */
-    }
-    Err(_) => { /* some kind of io/transport error */ }
-}
-
-enum ErrorKind {
-    InvalidUrl,
-    UnknownScheme,
-    Dns,
-    InsecureRequestHttpsOnly,
-    ConnectionFailed,
-    TooManyRedirects,
-    BadStatus,
-    BadHeader,
-    Io,
-    InvalidProxyUrl,
-    ProxyConnect,
-    ProxyUnauthorized,
-    HTTP,
-}
-*/
