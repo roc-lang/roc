@@ -14,10 +14,10 @@ main =
             optimized = eval (constFolding (reassoc e))
 
             unoptimized
-                |> Num.toStr
-                |> Str.concat " & "
-                |> Str.concat (Num.toStr optimized)
-                |> Task.putLine
+            |> Num.toStr
+            |> Str.concat " & "
+            |> Str.concat (Num.toStr optimized)
+            |> Task.putLine
 
 Expr : [
     Add Expr Expr,

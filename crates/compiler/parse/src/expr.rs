@@ -2085,7 +2085,7 @@ mod when {
         }
     }
 
-    /// Parsing alternative patterns in when branches.
+    /// Parsing alternative patterns in `when` branches.
     fn branch_alternatives<'a>(
         min_indent: u32,
         options: ExprParseOptions,
@@ -2180,7 +2180,7 @@ mod when {
 
                             let parser = sep_by1(
                                 word1(b'|', EWhen::Bar),
-                                branch_single_alternative(pattern_indent + 1),
+                                branch_single_alternative(pattern_indent),
                             );
 
                             match parser.parse(arena, state) {

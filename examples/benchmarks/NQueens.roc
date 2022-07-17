@@ -9,8 +9,8 @@ main =
         Task.getInt
         \n ->
             queens n # original koka 13
-                |> Num.toStr
-                |> Task.putLine
+            |> Num.toStr
+            |> Task.putLine
 
 ConsList a : [Nil, Cons a (ConsList a)]
 

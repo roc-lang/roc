@@ -49,7 +49,7 @@ encode = \encoder ->
     output = List.repeat 0 (getWidth encoder)
 
     encodeHelp encoder 0 output
-        |> .output
+    |> .output
 
 encodeHelp : Encoder, Nat, List U8 -> { output : List U8, offset : Nat }
 encodeHelp = \encoder, offset, output ->
@@ -80,13 +80,13 @@ encodeHelp = \encoder, offset, output ->
                 when endianness is
                     BE ->
                         output
-                            |> List.set (offset + 0) a
-                            |> List.set (offset + 1) b
+                        |> List.set (offset + 0) a
+                        |> List.set (offset + 1) b
 
                     LE ->
                         output
-                            |> List.set (offset + 0) b
-                            |> List.set (offset + 1) a
+                        |> List.set (offset + 0) b
+                        |> List.set (offset + 1) a
 
             {
                 output: newOutput,
@@ -104,13 +104,13 @@ encodeHelp = \encoder, offset, output ->
                 when endianness is
                     BE ->
                         output
-                            |> List.set (offset + 0) a
-                            |> List.set (offset + 1) b
+                        |> List.set (offset + 0) a
+                        |> List.set (offset + 1) b
 
                     LE ->
                         output
-                            |> List.set (offset + 0) b
-                            |> List.set (offset + 1) a
+                        |> List.set (offset + 0) b
+                        |> List.set (offset + 1) a
 
             {
                 output: newOutput,

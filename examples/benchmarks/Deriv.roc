@@ -18,7 +18,7 @@ main =
             f = pow x x
 
             nest deriv n f # original koka n = 10
-                |> Task.map (\_ -> {})
+            |> Task.map \_ -> {}
 
 nest : (I64, Expr -> IO Expr), I64, Expr -> IO Expr
 nest = \f, n, e -> Task.loop { s: n, f, m: n, x: e } nestHelp
@@ -160,8 +160,8 @@ deriv = \i, f ->
     fprime = d "x" f
     line =
         Num.toStr (i + 1)
-            |> Str.concat " count: "
-            |> Str.concat (Num.toStr (count fprime))
+        |> Str.concat " count: "
+        |> Str.concat (Num.toStr (count fprime))
 
     Task.putLine line
-        |> Task.after \_ -> Task.succeed fprime
+    |> Task.after \_ -> Task.succeed fprime
