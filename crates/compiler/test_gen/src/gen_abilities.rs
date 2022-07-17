@@ -340,7 +340,7 @@ fn encode_use_stdlib() {
                         |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.format)
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.toUtf8)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -365,7 +365,7 @@ fn encode_use_stdlib_without_wrapping_custom() {
             toEncoder = \@HelloWorld {} -> Encode.string "Hello, World!\n"
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.format)
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.toUtf8)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -393,7 +393,7 @@ fn to_encoder_encode_custom_has_capture() {
                         |> Encode.appendWith (Encode.string s1) fmt
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld "Hello, World!\n") Json.format)
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld "Hello, World!\n") Json.toUtf8)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -423,7 +423,7 @@ mod encode_immediate {
                 app "test" imports [Encode.{ toEncoder }, Json] provides [main] to "./platform"
 
                 main =
-                    when Str.fromUtf8 (Encode.toBytes "foo" Json.format) is
+                    when Str.fromUtf8 (Encode.toBytes "foo" Json.toUtf8) is
                         Ok s -> s
                         _ -> "<bad>"
                 "#
@@ -444,7 +444,7 @@ mod encode_immediate {
                         app "test" imports [Encode.{{ toEncoder }}, Json] provides [main] to "./platform"
 
                         main =
-                            when Str.fromUtf8 (Encode.toBytes {}{} Json.format) is
+                            when Str.fromUtf8 (Encode.toBytes {}{} Json.toUtf8) is
                                 Ok s -> s
                                 _ -> "<bad>"
                         "#
@@ -484,7 +484,7 @@ fn encode_derived_record_one_field_string() {
                 provides [main] to "./platform"
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes {a: "foo"} Json.format)
+                result = Str.fromUtf8 (Encode.toBytes {a: "foo"} Json.toUtf8)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -507,7 +507,7 @@ fn encode_derived_record_two_fields_strings() {
 
             main =
                 rcd = {a: "foo", b: "bar"}
-                result = Str.fromUtf8 (Encode.toBytes rcd Json.format)
+                result = Str.fromUtf8 (Encode.toBytes rcd Json.toUtf8)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -530,7 +530,7 @@ fn encode_derived_nested_record_string() {
 
             main =
                 rcd = {a: {b: "bar"}}
-                encoded = Encode.toBytes rcd Json.format
+                encoded = Encode.toBytes rcd Json.toUtf8
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
@@ -555,7 +555,7 @@ fn encode_derived_tag_one_payload_string() {
             main =
                 x : [A Str]
                 x = A "foo"
-                result = Str.fromUtf8 (Encode.toBytes x Json.format)
+                result = Str.fromUtf8 (Encode.toBytes x Json.toUtf8)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -579,7 +579,7 @@ fn encode_derived_tag_two_payloads_string() {
             main =
                 x : [A Str Str]
                 x = A "foo" "bar"
-                result = Str.fromUtf8 (Encode.toBytes x Json.format)
+                result = Str.fromUtf8 (Encode.toBytes x Json.toUtf8)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -603,7 +603,7 @@ fn encode_derived_nested_tag_string() {
             main =
                 x : [A [B Str Str]]
                 x = A (B "foo" "bar")
-                encoded = Encode.toBytes x Json.format
+                encoded = Encode.toBytes x Json.toUtf8
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
@@ -628,7 +628,7 @@ fn encode_derived_nested_record_tag_record() {
             main =
                 x : {a: [B {c: Str}]}
                 x = {a: (B ({c: "foo"}))}
-                encoded = Encode.toBytes x Json.format
+                encoded = Encode.toBytes x Json.toUtf8
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
@@ -652,7 +652,7 @@ fn encode_derived_list_string() {
 
             main =
                 lst = ["foo", "bar", "baz"]
-                encoded = Encode.toBytes lst Json.format
+                encoded = Encode.toBytes lst Json.toUtf8
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
@@ -676,7 +676,7 @@ fn encode_derived_list_of_records() {
 
             main =
                 lst = [{a: "foo"}, {a: "bar"}, {a: "baz"}]
-                encoded = Encode.toBytes lst Json.format
+                encoded = Encode.toBytes lst Json.toUtf8
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
