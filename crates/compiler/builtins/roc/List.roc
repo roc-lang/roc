@@ -38,6 +38,7 @@ interface List
         min,
         max,
         map4,
+        mapTry,
         dropFirst,
         joinMap,
         any,
@@ -857,6 +858,32 @@ split = \elements, userSplitIndex ->
     others = List.sublist elements { start: splitIndex, len: length - splitIndex }
 
     { before, others }
+
+## Like [List.map], except the transformation function returns a [Result].
+## If that function ever returns `Err`, [mapTry] immediately returns `Err`.
+## If it returns `Ok` for every element, [mapTry] returns `Ok` with the transformed list.
+mapTry : List elem, (elem -> Result ok err) -> Result (List ok) err
+mapTry = \list, toResult ->
+    walkTry list [] \state, elem ->
+        Result.map (toResult elem) \ok ->
+            List.append state ok
+
+## This is the same as `iterate` but with Result instead of [Continue, Break].
+## Using `Result` saves a conditional in `mapTry`.
+## It might be useful to expose this in userspace?
+walkTry : List elem, state, (state, elem -> Result state err) -> Result state err
+walkTry = \list, init, func ->
+    walkTryHelp list init func 0 (List.len list)
+
+## internal helper
+walkTryHelp : List elem, state, (state, elem -> Result state err), Nat, Nat -> Result state err
+walkTryHelp = \list, state, f, index, length ->
+    if index < length then
+        when f state (List.getUnsafe list index) is
+            Ok nextState -> walkTryHelp list nextState f (index + 1) length
+            Err b -> Err b
+    else
+        Ok state
 
 ## Primitive for iterating over a List, being able to decide at every element whether to continue
 iterate : List elem, s, (s, elem -> [Continue s, Break b]) -> [Continue s, Break b]
