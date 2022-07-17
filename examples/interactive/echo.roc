@@ -1,33 +1,23 @@
 app "echo"
     packages { pf: "cli-platform/main.roc" }
-    imports [pf.Stdin, pf.Stdout, pf.Task]
+    imports [pf.Stdout, pf.Stderr, pf.Task.{ Task }, pf.Path, pf.File]
     provides [main] to pf
 
-main : Task.Task {} [] [Read [Stdin], Write [Stdout]]
+main : Task.Task {} [] [Write [Stdout, Disk]]
 main =
-    _ <- Task.await (Stdout.line "🗣  Shout into this cave and hear the echo! 👂👂👂")
-    Task.loop {} (\_ -> Task.map tick Step)
+    task =
+        _ <- Stdout.line "Writing the file..." |> Task.await
+        File.writeUtf8 (Path.fromStr "test.txt") "this is a test!"
 
-tick : Task.Task {} [] [Read [Stdin]*, Write [Stdout]*]*
-tick =
-    shout <- Task.await Stdin.line
-    Stdout.line (echo shout)
+    result <- Task.attempt task
 
-echo : Str -> Str
-echo = \shout ->
-    silence = \length ->
-        spaceInUtf8 = 32
+    when result is
+        Ok {} -> Stdout.line "Wrote the file!"
+        Err (FileWriteErr (NotFound path)) ->
+            pathStr = Path.display path
+            Stderr.line "Not found: \(pathStr)"
+        Err (FileWriteErr (FileWasDir path)) ->
+            pathStr = Path.display path
+            Stderr.line "Path was a directory, not a file: \(pathStr)"
 
-        List.repeat spaceInUtf8 length
 
-    shout
-    |> Str.toUtf8
-    |> List.mapWithIndex
-        (\_, i ->
-            length = (List.len (Str.toUtf8 shout) - i)
-            phrase = (List.split (Str.toUtf8 shout) length).before
-
-            List.concat (silence (if i == 0 then 2 * length else length)) phrase)
-    |> List.join
-    |> Str.fromUtf8
-    |> Result.withDefault ""
