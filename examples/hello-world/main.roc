@@ -3,4 +3,7 @@ app "helloWorld"
     imports []
     provides [main] to pf
 
-main = "Hello, World!\n"
+main =
+    when Wrapper (Payload "err") is
+        Wrapper (Payload str) -> str
+        Wrapper NoPayload -> ""

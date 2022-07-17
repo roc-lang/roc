@@ -5,20 +5,10 @@ app "echo"
 
 main : Task.Task {} [] [Write [Stdout, Disk]]
 main =
-    task =
-        _ <- Stdout.line "Writing the file..." |> Task.await
-        File.writeUtf8 (Path.fromStr "test.txt") "this is a test!"
+    task = File.writeUtf8 (Path.fromStr "test.txt") "this is a test!"
 
-    result <- Task.attempt task
-
-    when result is
-        Ok {} -> Stdout.line "Wrote the file!"
-        Err _ -> Stderr.line "Error!"
-        # Err (FileWriteErr (NotFound path)) ->
-        #     pathStr = Path.display path
-        #     Stderr.line "Not found: \(pathStr)"
-        # Err (FileWriteErr (FileWasDir path)) ->
-        #     pathStr = Path.display path
-        #     Stderr.line "Path was a directory, not a file: \(pathStr)"
-
-
+    Task.attempt task \result ->
+        when result is
+            Ok {} -> Stdout.line "Wrote the file!"
+            Err (FileWriteErr (NotFound _)) -> Task.succeed {}
+            Err (FileWriteErr (FileWasDir _)) -> Task.succeed {}
