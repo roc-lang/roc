@@ -162,9 +162,9 @@ pub extern "C" fn roc_fx_sendRequest(roc_request: &glue::Request) -> glue::Respo
             let body = RocList::from_slice(&bytes);
 
             let metadata = Metadata {
-                headers: RocList::empty(),
-                statusText: RocStr::empty(),
-                url: RocStr::empty(),
+                headers: RocList::empty(),   // TODO
+                statusText: RocStr::empty(), // TODO
+                url: RocStr::empty(),        // TODO
                 statusCode,
             };
 
@@ -177,9 +177,9 @@ pub extern "C" fn roc_fx_sendRequest(roc_request: &glue::Request) -> glue::Respo
             let body = RocList::from_slice(&buffer);
 
             let metadata = Metadata {
-                headers: RocList::empty(),
-                statusText: RocStr::empty(),
-                url: RocStr::empty(),
+                headers: RocList::empty(),   // TODO
+                statusText: RocStr::empty(), // TODO
+                url: RocStr::empty(),        // TODO
                 statusCode,
             };
 
