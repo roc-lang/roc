@@ -261,8 +261,12 @@ fn create_llvm_module<'a>(
 
     // Verify the module
     if let Err(errors) = env.module.verify() {
-        env.module.print_to_file("/tmp/test.ll").unwrap();
-        panic!("Errors defining module:\n\n{}", errors.to_string());
+        let path = "/tmp/test.ll";
+        env.module.print_to_file(path).unwrap();
+        panic!(
+            "Errors defining module:\n\n{}\n\nI have written the full module to `{path}`",
+            errors.to_string()
+        );
     }
 
     // Uncomment this to see the module's optimized LLVM instruction output:
