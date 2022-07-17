@@ -12,7 +12,7 @@ Request : {
     allowCookiesFromOtherDomains : Bool,
 }
 
-Header : { name : Str, value : Str }
+Header : [Header Str Str]
 
 TimeoutConfig : [Timeout F64, NoTimeout]
 TrackerConfig : [Tracker Str, NoTracker]

@@ -37,8 +37,8 @@ defaultRequest = {
 ## [here](https://en.wikipedia.org/wiki/List_of_HTTP_header_fields).
 ##
 header : Str, Str -> Header
-header = \name, value ->
-    { name, value }
+header =
+    Header
 
 emptyBody : Body
 emptyBody =
