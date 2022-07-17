@@ -138,15 +138,15 @@ displayUtf8 : Path -> Str
 displayUtf8 = \@Path path ->
     when path is
         FromStr str -> str
-        NoInteriorNul bytes | ArbitraryBytes bytes ->
+        FromOperatingSystem bytes | ArbitraryBytes bytes ->
             Str.displayUtf8 bytes
 
 isEq : Path, Path -> Bool
 isEq = \@Path p1, @Path p2 ->
     when p1 is
-        NoInteriorNul bytes1 | ArbitraryBytes bytes1 ->
+        FromOperatingSystem bytes1 | ArbitraryBytes bytes1 ->
             when p2 is
-                NoInteriorNul bytes2 | ArbitraryBytes bytes2 -> bytes1 == bytes2
+                FromOperatingSystem bytes2 | ArbitraryBytes bytes2 -> bytes1 == bytes2
                 # We can't know the encoding that was originally used in the path, so we convert
                 # the string to bytes and see if those bytes are equal to the path's bytes.
                 #
@@ -157,20 +157,20 @@ isEq = \@Path p1, @Path p2 ->
 
         FromStr str1 ->
             when p2 is
-                NoInteriorNul bytes2 | ArbitraryBytes bytes2 -> Str.isEqUtf8 str1 bytes2
+                FromOperatingSystem bytes2 | ArbitraryBytes bytes2 -> Str.isEqUtf8 str1 bytes2
                 FromStr str2 -> str1 == str2
 
 compare : Path, Path -> [Lt, Eq, Gt]
 compare = \@Path p1, @Path p2 ->
     when p1 is
-        NoInteriorNul bytes1 | ArbitraryBytes bytes1 ->
+        FromOperatingSystem bytes1 | ArbitraryBytes bytes1 ->
             when p2 is
-                NoInteriorNul bytes2 | ArbitraryBytes bytes2 -> Ord.compare bytes1 bytes2
+                FromOperatingSystem bytes2 | ArbitraryBytes bytes2 -> Ord.compare bytes1 bytes2
                 FromStr str2 -> Str.compareUtf8 str2 bytes1
 
         FromStr str1 ->
             when p2 is
-                NoInteriorNul bytes2 | ArbitraryBytes bytes2 -> Ord.compare str1 bytes2
+                FromOperatingSystem bytes2 | ArbitraryBytes bytes2 -> Ord.compare str1 bytes2
                 FromStr str2 -> str1 == str2
 
 ## ## Path Components
@@ -221,12 +221,12 @@ append : Path, Path -> Path
 append = \@Path prefix, @Path suffix ->
     content =
         when prefix is
-            NoInteriorNul prefixBytes ->
+            FromOperatingSystem prefixBytes ->
                 when suffix is
-                    NoInteriorNul suffixBytes ->
+                    FromOperatingSystem suffixBytes ->
                         # Neither prefix nor suffix had interior nuls, so the answer won't either
                         List.append prefixBytes suffixBytes
-                        |> NoInteriorNul
+                        |> FromOperatingSystem
 
                     ArbitraryBytes suffixBytes ->
                         List.append prefixBytes suffixBytes
@@ -239,7 +239,7 @@ append = \@Path prefix, @Path suffix ->
 
             ArbitraryBytes prefixBytes ->
                 when suffix is
-                    ArbitraryBytes suffixBytes | NoInteriorNul suffixBytes ->
+                    ArbitraryBytes suffixBytes | FromOperatingSystem suffixBytes ->
                         List.append prefixBytes suffixBytes
                         |> ArbitraryBytes
 
@@ -250,7 +250,7 @@ append = \@Path prefix, @Path suffix ->
 
             FromStr prefixStr ->
                 when suffix is
-                    ArbitraryBytes suffixBytes | NoInteriorNul suffixBytes ->
+                    ArbitraryBytes suffixBytes | FromOperatingSystem suffixBytes ->
                         List.append (Str.toUtf8 prefixStr) suffixBytes
                         |> ArbitraryBytes
 
@@ -264,7 +264,7 @@ appendStr : Path, Str -> Path
 appendStr = \@Path prefix, suffixStr ->
     content =
         when prefix is
-            NoInteriorNul prefixBytes | ArbitraryBytes prefixBytes ->
+            FromOperatingSystem prefixBytes | ArbitraryBytes prefixBytes ->
                 # Append suffixStr by writing it to the end of prefixBytes
                 Str.writeUtf8 suffixStr prefixBytes (List.len prefixBytes)
                 |> ArbitraryBytes
@@ -279,9 +279,9 @@ appendStr = \@Path prefix, suffixStr ->
 startsWith : Path, Path -> Bool
 startsWith = \@Path path, @Path prefix ->
     when path is
-        NoInteriorNul pathBytes | ArbitraryBytes pathBytes ->
+        FromOperatingSystem pathBytes | ArbitraryBytes pathBytes ->
             when prefix is
-                NoInteriorNul prefixBytes | ArbitraryBytes prefixBytes ->
+                FromOperatingSystem prefixBytes | ArbitraryBytes prefixBytes ->
                     List.startsWith pathBytes prefixBytes
 
                 FromStr prefixStr ->
@@ -298,7 +298,7 @@ startsWith = \@Path path, @Path prefix ->
 
         FromStr pathStr ->
             when prefix is
-                NoInteriorNul prefixBytes | ArbitraryBytes prefixBytes ->
+                FromOperatingSystem prefixBytes | ArbitraryBytes prefixBytes ->
                     Str.startsWithUtf8 pathStr prefixBytes
 
                 FromStr prefixStr ->
@@ -308,9 +308,9 @@ startsWith = \@Path path, @Path prefix ->
 endsWith : Path, Path -> Bool
 endsWith = \@Path path, @Path prefix ->
     when path is
-        NoInteriorNul pathBytes | ArbitraryBytes pathBytes ->
+        FromOperatingSystem pathBytes | ArbitraryBytes pathBytes ->
             when suffix is
-                NoInteriorNul suffixBytes | ArbitraryBytes suffixBytes ->
+                FromOperatingSystem suffixBytes | ArbitraryBytes suffixBytes ->
                     List.endsWith pathBytes suffixBytes
 
                 FromStr suffixStr ->
@@ -327,7 +327,7 @@ endsWith = \@Path path, @Path prefix ->
 
         FromStr pathStr ->
             when suffix is
-                NoInteriorNul suffixBytes | ArbitraryBytes suffixBytes ->
+                FromOperatingSystem suffixBytes | ArbitraryBytes suffixBytes ->
                     Str.endsWithUtf8 pathStr suffixBytes
 
                 FromStr suffixStr ->
@@ -347,16 +347,18 @@ endsWith = \@Path path, @Path prefix ->
 withExtension : Path, Str -> Path
 withExtension = \@Path path, extension ->
     when path is
-        NoInteriorNul bytes | ArbitraryBytes bytes ->
+        FromOperatingSystem bytes | ArbitraryBytes bytes ->
             beforeDot =
-                when List.splitLast '.' is
+                when List.splitLast bytes (Num.toU8 '.') is
                     Ok { before } -> before
                     Err NotFound -> list
 
             beforeDot
             |> List.reserve (1 + List.len bytes)
-            |> List.append '.'
+            |> List.append (Num.toU8 '.')
             |> List.concat bytes
+            |> ArbitraryBytes
+            |> @Path
 
         FromStr str ->
             beforeDot =
@@ -368,6 +370,8 @@ withExtension = \@Path path, extension ->
             |> Str.reserve (1 + Str.byteCount str)
             |> Str.append "."
             |> Str.concat str
+            |> FromStr
+            |> @Path
 
 # NOTE: no withExtensionBytes because it's too narrow. If you really need to get some
 # non-Unicode in there, do it with
