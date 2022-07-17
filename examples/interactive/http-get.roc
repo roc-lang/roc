@@ -5,15 +5,15 @@ app "http-get"
 
 main : Task.Task {} [] [Write [Stdout], Network [Http]]
 main =
-    method = "GET",
-    headers = [{name: "Favourite-Colour", value: "Mauve"}],
-    url = "https://httpbin.org/get",
-    body = Http.stringBody (MimeType "text/plain") "Hello, I am the body text",
-    timeout = Timeout 1.0,
-    tracker = Tracker "some-progress-tracking-identifier",
-    allowCookiesFromOtherDomains = True,
-
-    request = { method, headers, url, body, timeout, tracker, allowCookiesFromOtherDomains }
+    request = {
+        method: "GET",
+        headers: [],
+        url: "https://httpbin.org/get",
+        body: Http.emptyBody,
+        timeout: NoTimeout,
+        tracker: NoTracker,
+        allowCookiesFromOtherDomains: False,
+    }
 
     output <- Http.send request
             |> Task.onFail (\err -> err |> Http.errorToString |> Task.succeed)
