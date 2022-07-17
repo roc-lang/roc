@@ -308,7 +308,7 @@ fn roc_result_after_err() {
         r#"
             result : Result Str I64
             result =
-              Result.tryErr (Ok "already a string") \num ->
+              Result.onErr (Ok "already a string") \num ->
                 if num < 0 then Ok "negative!" else Err -num
 
             result
@@ -321,7 +321,7 @@ fn roc_result_after_err() {
         r#"
             result : Result Str I64
             result =
-              Result.tryErr (Err 100) \num ->
+              Result.onErr (Err 100) \num ->
                 if num < 0 then Ok "negative!" else Err -num
 
             result
