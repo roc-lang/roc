@@ -4758,6 +4758,7 @@ dependencies = [
  "either",
  "indoc",
  "inkwell 0.1.0",
+ "lazy_static",
  "libc",
  "libloading",
  "roc_build",

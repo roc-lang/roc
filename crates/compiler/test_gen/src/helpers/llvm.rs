@@ -365,6 +365,10 @@ fn write_final_wasm() -> bool {
     false
 }
 
+lazy_static::lazy_static! {
+    static ref TEMP_DIR: tempfile::TempDir = tempfile::tempdir().unwrap();
+}
+
 #[allow(dead_code)]
 fn compile_to_wasm_bytes<'a>(
     arena: &'a bumpalo::Bump,
@@ -377,13 +381,12 @@ fn compile_to_wasm_bytes<'a>(
     let (_main_fn_name, _delayed_errors, llvm_module) =
         create_llvm_module(arena, src, config, context, &target);
 
-    let temp_dir = tempfile::tempdir().unwrap();
-    let wasm_file = llvm_module_to_wasm_file(&temp_dir, llvm_module);
+    let content_hash = crate::helpers::src_hash(src);
+    let wasm_file = llvm_module_to_wasm_file(&TEMP_DIR, content_hash, llvm_module);
     let compiled_bytes = std::fs::read(wasm_file).unwrap();
 
     if write_final_wasm() {
-        let build_dir_hash = crate::helpers::src_hash(src);
-        crate::helpers::save_wasm_file(&compiled_bytes, build_dir_hash)
+        crate::helpers::save_wasm_file(&compiled_bytes, content_hash)
     };
 
     compiled_bytes
@@ -392,14 +395,15 @@ fn compile_to_wasm_bytes<'a>(
 #[allow(dead_code)]
 fn llvm_module_to_wasm_file(
     temp_dir: &tempfile::TempDir,
+    content_hash: u64,
     llvm_module: &inkwell::module::Module,
 ) -> PathBuf {
     use inkwell::targets::{InitializationConfig, Target, TargetTriple};
 
     let dir_path = temp_dir.path();
 
-    let test_a_path = dir_path.join("test.a");
-    let test_wasm_path = dir_path.join("libmain.wasm");
+    let test_a_path = dir_path.join(format!("test_{content_hash}.a"));
+    let test_wasm_path = dir_path.join(format!("libmain_{content_hash}.wasm"));
 
     Target::initialize_webassembly(&InitializationConfig::default());
 
