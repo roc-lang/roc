@@ -44,7 +44,8 @@ libloading = "0.7.1"
 tempfile = "3.2.0"
 indoc = "1.0.3"
 criterion = { git = "https://github.com/Anton-4/criterion.rs" }
-wasm3 = "0.3.1"
+wasm3 = { version = "0.3.1", features = [ "build-bindgen" ] }
+lazy_static = "1.4.0"
 
 [features]
 default = ["gen-llvm"]
