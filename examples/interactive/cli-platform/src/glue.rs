@@ -256,8 +256,8 @@ pub union Response {
 pub struct Request {
     pub body: Body,
     pub headers: roc_std::RocList<Header>,
-    pub timeout: TimeoutConfig,
-    pub tracker: TrackerConfig,
+    pub progressTracking: ProgressTracking,
+    pub timeout: Timeout,
     pub url: roc_std::RocStr,
     pub allowCookiesFromOtherDomains: bool,
     pub method: Method,
@@ -532,25 +532,25 @@ impl core::fmt::Debug for Method {
 ))]
 #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(u8)]
-pub enum discriminant_TrackerConfig {
-    NoTracker = 0,
-    Tracker = 1,
+pub enum discriminant_Timeout {
+    NoTimeout = 0,
+    Timeout = 1,
 }
 
-impl core::fmt::Debug for discriminant_TrackerConfig {
+impl core::fmt::Debug for discriminant_Timeout {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::NoTracker => f.write_str("discriminant_TrackerConfig::NoTracker"),
-            Self::Tracker => f.write_str("discriminant_TrackerConfig::Tracker"),
+            Self::NoTimeout => f.write_str("discriminant_Timeout::NoTimeout"),
+            Self::Timeout => f.write_str("discriminant_Timeout::Timeout"),
         }
     }
 }
 
-#[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+#[cfg(any(target_arch = "arm", target_arch = "x86"))]
 #[repr(C)]
-pub union TrackerConfig {
-    Tracker: core::mem::ManuallyDrop<roc_std::RocStr>,
-    _sizer: [u8; 16],
+pub union Timeout {
+    Timeout: f64,
+    _sizer: [u8; 12],
 }
 
 #[cfg(any(
@@ -562,25 +562,29 @@ pub union TrackerConfig {
 ))]
 #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(u8)]
-pub enum discriminant_TimeoutConfig {
-    NoTimeout = 0,
-    Timeout = 1,
+pub enum discriminant_ProgressTracking {
+    NoProgressTracking = 0,
+    ProgressTrackingId = 1,
 }
 
-impl core::fmt::Debug for discriminant_TimeoutConfig {
+impl core::fmt::Debug for discriminant_ProgressTracking {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::NoTimeout => f.write_str("discriminant_TimeoutConfig::NoTimeout"),
-            Self::Timeout => f.write_str("discriminant_TimeoutConfig::Timeout"),
+            Self::NoProgressTracking => {
+                f.write_str("discriminant_ProgressTracking::NoProgressTracking")
+            }
+            Self::ProgressTrackingId => {
+                f.write_str("discriminant_ProgressTracking::ProgressTrackingId")
+            }
         }
     }
 }
 
-#[cfg(any(target_arch = "arm", target_arch = "x86"))]
+#[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
 #[repr(C)]
-pub union TimeoutConfig {
-    Timeout: f64,
-    _sizer: [u8; 12],
+pub union ProgressTracking {
+    ProgressTrackingId: core::mem::ManuallyDrop<roc_std::RocStr>,
+    _sizer: [u8; 16],
 }
 
 #[cfg(any(
@@ -669,32 +673,32 @@ pub union Response {
     _sizer: [u8; 112],
 }
 
-#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-#[repr(C)]
-pub union TrackerConfig {
-    Tracker: core::mem::ManuallyDrop<roc_std::RocStr>,
-    _sizer: [u8; 32],
-}
-
 #[cfg(any(
     target_arch = "aarch64",
     target_arch = "wasm32",
     target_arch = "x86_64"
 ))]
 #[repr(C)]
-pub union TimeoutConfig {
+pub union Timeout {
     Timeout: f64,
     _sizer: [u8; 16],
+}
+
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+#[repr(C)]
+pub union ProgressTracking {
+    ProgressTrackingId: core::mem::ManuallyDrop<roc_std::RocStr>,
+    _sizer: [u8; 32],
 }
 
 #[cfg(target_arch = "wasm32")]
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct Request {
-    pub timeout: TimeoutConfig,
+    pub timeout: Timeout,
     pub body: Body,
     pub headers: roc_std::RocList<Header>,
-    pub tracker: TrackerConfig,
+    pub progressTracking: ProgressTracking,
     pub url: roc_std::RocStr,
     pub allowCookiesFromOtherDomains: bool,
     pub method: Method,
@@ -4179,309 +4183,7 @@ impl core::fmt::Debug for U2 {
     }
 }
 
-impl TrackerConfig {
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
-    /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_TrackerConfig {
-        unsafe {
-            let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
-
-            core::mem::transmute::<u8, discriminant_TrackerConfig>(*bytes.as_ptr().add(12))
-        }
-    }
-
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
-    /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_TrackerConfig) {
-        let discriminant_ptr: *mut discriminant_TrackerConfig = (self as *mut TrackerConfig).cast();
-
-        unsafe {
-            *(discriminant_ptr.add(12)) = discriminant;
-        }
-    }
-
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
-    /// A tag named NoTracker, which has no payload.
-    pub const NoTracker: Self = unsafe {
-        let mut bytes = [0; core::mem::size_of::<TrackerConfig>()];
-
-        bytes[12] = discriminant_TrackerConfig::NoTracker as u8;
-
-        core::mem::transmute::<[u8; core::mem::size_of::<TrackerConfig>()], TrackerConfig>(bytes)
-    };
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `into_` methods return a payload, but since the NoTracker tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_NoTracker(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the NoTracker tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub unsafe fn as_NoTracker(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Construct a tag named `Tracker`, with the appropriate payload
-    pub fn Tracker(arg: roc_std::RocStr) -> Self {
-        let mut answer = Self {
-            Tracker: core::mem::ManuallyDrop::new(arg),
-        };
-
-        answer.set_discriminant(discriminant_TrackerConfig::Tracker);
-
-        answer
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Unsafely assume the given `TrackerConfig` has a `.discriminant()` of `Tracker` and convert it to `Tracker`'s payload.
-    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-    /// Panics in debug builds if the `.discriminant()` doesn't return `Tracker`.
-    pub unsafe fn into_Tracker(mut self) -> roc_std::RocStr {
-        debug_assert_eq!(self.discriminant(), discriminant_TrackerConfig::Tracker);
-
-        let payload = core::mem::ManuallyDrop::take(&mut self.Tracker);
-
-        payload
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Unsafely assume the given `TrackerConfig` has a `.discriminant()` of `Tracker` and return its payload.
-    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-    /// Panics in debug builds if the `.discriminant()` doesn't return `Tracker`.
-    pub unsafe fn as_Tracker(&self) -> &roc_std::RocStr {
-        debug_assert_eq!(self.discriminant(), discriminant_TrackerConfig::Tracker);
-
-        let payload = &self.Tracker;
-
-        &payload
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_TrackerConfig {
-        unsafe {
-            let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
-
-            core::mem::transmute::<u8, discriminant_TrackerConfig>(*bytes.as_ptr().add(24))
-        }
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_TrackerConfig) {
-        let discriminant_ptr: *mut discriminant_TrackerConfig = (self as *mut TrackerConfig).cast();
-
-        unsafe {
-            *(discriminant_ptr.add(24)) = discriminant;
-        }
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// A tag named NoTracker, which has no payload.
-    pub const NoTracker: Self = unsafe {
-        let mut bytes = [0; core::mem::size_of::<TrackerConfig>()];
-
-        bytes[24] = discriminant_TrackerConfig::NoTracker as u8;
-
-        core::mem::transmute::<[u8; core::mem::size_of::<TrackerConfig>()], TrackerConfig>(bytes)
-    };
-}
-
-impl Drop for TrackerConfig {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn drop(&mut self) {
-        // Drop the payloads
-        match self.discriminant() {
-            discriminant_TrackerConfig::NoTracker => {}
-            discriminant_TrackerConfig::Tracker => unsafe {
-                core::mem::ManuallyDrop::drop(&mut self.Tracker)
-            },
-        }
-    }
-}
-
-impl Eq for TrackerConfig {}
-
-impl PartialEq for TrackerConfig {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn eq(&self, other: &Self) -> bool {
-        if self.discriminant() != other.discriminant() {
-            return false;
-        }
-
-        unsafe {
-            match self.discriminant() {
-                discriminant_TrackerConfig::NoTracker => true,
-                discriminant_TrackerConfig::Tracker => self.Tracker == other.Tracker,
-            }
-        }
-    }
-}
-
-impl PartialOrd for TrackerConfig {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        match self.discriminant().partial_cmp(&other.discriminant()) {
-            Some(core::cmp::Ordering::Equal) => {}
-            not_eq => return not_eq,
-        }
-
-        unsafe {
-            match self.discriminant() {
-                discriminant_TrackerConfig::NoTracker => Some(core::cmp::Ordering::Equal),
-                discriminant_TrackerConfig::Tracker => self.Tracker.partial_cmp(&other.Tracker),
-            }
-        }
-    }
-}
-
-impl Ord for TrackerConfig {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        match self.discriminant().cmp(&other.discriminant()) {
-            core::cmp::Ordering::Equal => {}
-            not_eq => return not_eq,
-        }
-
-        unsafe {
-            match self.discriminant() {
-                discriminant_TrackerConfig::NoTracker => core::cmp::Ordering::Equal,
-                discriminant_TrackerConfig::Tracker => self.Tracker.cmp(&other.Tracker),
-            }
-        }
-    }
-}
-
-impl Clone for TrackerConfig {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn clone(&self) -> Self {
-        let mut answer = unsafe {
-            match self.discriminant() {
-                discriminant_TrackerConfig::NoTracker => {
-                    core::mem::transmute::<core::mem::MaybeUninit<TrackerConfig>, TrackerConfig>(
-                        core::mem::MaybeUninit::uninit(),
-                    )
-                }
-                discriminant_TrackerConfig::Tracker => Self {
-                    Tracker: self.Tracker.clone(),
-                },
-            }
-        };
-
-        answer.set_discriminant(self.discriminant());
-
-        answer
-    }
-}
-
-impl core::hash::Hash for TrackerConfig {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
-        match self.discriminant() {
-            discriminant_TrackerConfig::NoTracker => {
-                discriminant_TrackerConfig::NoTracker.hash(state)
-            }
-            discriminant_TrackerConfig::Tracker => unsafe {
-                discriminant_TrackerConfig::Tracker.hash(state);
-                self.Tracker.hash(state);
-            },
-        }
-    }
-}
-
-impl core::fmt::Debug for TrackerConfig {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("TrackerConfig::")?;
-
-        unsafe {
-            match self.discriminant() {
-                discriminant_TrackerConfig::NoTracker => f.write_str("NoTracker"),
-                discriminant_TrackerConfig::Tracker => {
-                    f.debug_tuple("Tracker").field(&*self.Tracker).finish()
-                }
-            }
-        }
-    }
-}
-
-impl TimeoutConfig {
+impl Timeout {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -4490,11 +4192,11 @@ impl TimeoutConfig {
         target_arch = "x86_64"
     ))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_TimeoutConfig {
+    pub fn discriminant(&self) -> discriminant_Timeout {
         unsafe {
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
-            core::mem::transmute::<u8, discriminant_TimeoutConfig>(*bytes.as_ptr().add(8))
+            core::mem::transmute::<u8, discriminant_Timeout>(*bytes.as_ptr().add(8))
         }
     }
 
@@ -4506,8 +4208,8 @@ impl TimeoutConfig {
         target_arch = "x86_64"
     ))]
     /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_TimeoutConfig) {
-        let discriminant_ptr: *mut discriminant_TimeoutConfig = (self as *mut TimeoutConfig).cast();
+    fn set_discriminant(&mut self, discriminant: discriminant_Timeout) {
+        let discriminant_ptr: *mut discriminant_Timeout = (self as *mut Timeout).cast();
 
         unsafe {
             *(discriminant_ptr.add(8)) = discriminant;
@@ -4523,11 +4225,11 @@ impl TimeoutConfig {
     ))]
     /// A tag named NoTimeout, which has no payload.
     pub const NoTimeout: Self = unsafe {
-        let mut bytes = [0; core::mem::size_of::<TimeoutConfig>()];
+        let mut bytes = [0; core::mem::size_of::<Timeout>()];
 
-        bytes[8] = discriminant_TimeoutConfig::NoTimeout as u8;
+        bytes[8] = discriminant_Timeout::NoTimeout as u8;
 
-        core::mem::transmute::<[u8; core::mem::size_of::<TimeoutConfig>()], TimeoutConfig>(bytes)
+        core::mem::transmute::<[u8; core::mem::size_of::<Timeout>()], Timeout>(bytes)
     };
 
     #[cfg(any(
@@ -4567,7 +4269,7 @@ impl TimeoutConfig {
     pub fn Timeout(arg: f64) -> Self {
         let mut answer = Self { Timeout: arg };
 
-        answer.set_discriminant(discriminant_TimeoutConfig::Timeout);
+        answer.set_discriminant(discriminant_Timeout::Timeout);
 
         answer
     }
@@ -4579,11 +4281,11 @@ impl TimeoutConfig {
         target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Unsafely assume the given `TimeoutConfig` has a `.discriminant()` of `Timeout` and convert it to `Timeout`'s payload.
+    /// Unsafely assume the given `Timeout` has a `.discriminant()` of `Timeout` and convert it to `Timeout`'s payload.
     /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
     /// Panics in debug builds if the `.discriminant()` doesn't return `Timeout`.
     pub unsafe fn into_Timeout(self) -> f64 {
-        debug_assert_eq!(self.discriminant(), discriminant_TimeoutConfig::Timeout);
+        debug_assert_eq!(self.discriminant(), discriminant_Timeout::Timeout);
 
         let payload = self.Timeout;
 
@@ -4597,11 +4299,11 @@ impl TimeoutConfig {
         target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Unsafely assume the given `TimeoutConfig` has a `.discriminant()` of `Timeout` and return its payload.
+    /// Unsafely assume the given `Timeout` has a `.discriminant()` of `Timeout` and return its payload.
     /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
     /// Panics in debug builds if the `.discriminant()` doesn't return `Timeout`.
     pub unsafe fn as_Timeout(&self) -> &f64 {
-        debug_assert_eq!(self.discriminant(), discriminant_TimeoutConfig::Timeout);
+        debug_assert_eq!(self.discriminant(), discriminant_Timeout::Timeout);
 
         let payload = &self.Timeout;
 
@@ -4609,7 +4311,7 @@ impl TimeoutConfig {
     }
 }
 
-impl Drop for TimeoutConfig {
+impl Drop for Timeout {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -4620,13 +4322,13 @@ impl Drop for TimeoutConfig {
     fn drop(&mut self) {
         // Drop the payloads
         match self.discriminant() {
-            discriminant_TimeoutConfig::NoTimeout => {}
-            discriminant_TimeoutConfig::Timeout => {}
+            discriminant_Timeout::NoTimeout => {}
+            discriminant_Timeout::Timeout => {}
         }
     }
 }
 
-impl PartialEq for TimeoutConfig {
+impl PartialEq for Timeout {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -4641,14 +4343,14 @@ impl PartialEq for TimeoutConfig {
 
         unsafe {
             match self.discriminant() {
-                discriminant_TimeoutConfig::NoTimeout => true,
-                discriminant_TimeoutConfig::Timeout => self.Timeout == other.Timeout,
+                discriminant_Timeout::NoTimeout => true,
+                discriminant_Timeout::Timeout => self.Timeout == other.Timeout,
             }
         }
     }
 }
 
-impl PartialOrd for TimeoutConfig {
+impl PartialOrd for Timeout {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -4664,27 +4366,22 @@ impl PartialOrd for TimeoutConfig {
 
         unsafe {
             match self.discriminant() {
-                discriminant_TimeoutConfig::NoTimeout => Some(core::cmp::Ordering::Equal),
-                discriminant_TimeoutConfig::Timeout => self.Timeout.partial_cmp(&other.Timeout),
+                discriminant_Timeout::NoTimeout => Some(core::cmp::Ordering::Equal),
+                discriminant_Timeout::Timeout => self.Timeout.partial_cmp(&other.Timeout),
             }
         }
     }
 }
 
-/*
-error[E0277]: the trait bound `TimeoutConfig: std::cmp::Eq` is not satisfied
-    --> src/glue.rs:4359:6
-     |
-4359 | impl Ord for TimeoutConfig {
-     |      ^^^ the trait `std::cmp::Eq` is not implemented for `TimeoutConfig`
-     |
-note: required by a bound in `Ord`
-    --> /nix/store/bfi7mh9z423f9bz8qh4zx8x5nxsipsz0-rust-default-1.61.0/lib/rustlib/src/rust/library/core/src/cmp.rs:764:16
-     |
-764  | pub trait Ord: Eq + PartialOrd<Self> {
-     |                ^^ required by this bound in `Ord`
- */
-// impl Ord for TimeoutConfig {
+// error[E0184]: the trait `Copy` may not be implemented for this type; the type has a destructor
+//     --> src/glue.rs:4399:1
+//      |
+// 4399 | impl Copy for Timeout {}
+//      | ^^^^^^^^^^^^^^^^^^^^^^^^ Copy not allowed on types with destructors
+//
+// For more information about this error, try `rustc --explain E0184`.
+//
+// impl Ord for Timeout {
 //     #[cfg(any(
 //         target_arch = "arm",
 //         target_arch = "aarch64",
@@ -4700,22 +4397,16 @@ note: required by a bound in `Ord`
 
 //         unsafe {
 //             match self.discriminant() {
-//                 discriminant_TimeoutConfig::NoTimeout => core::cmp::Ordering::Equal,
-//                 discriminant_TimeoutConfig::Timeout => self.Timeout.cmp(&other.Timeout),
+//                 discriminant_Timeout::NoTimeout => core::cmp::Ordering::Equal,
+//                 discriminant_Timeout::Timeout => self.Timeout.cmp(&other.Timeout),
 //             }
 //         }
 //     }
 // }
 
-/*
-error[E0184]: the trait `Copy` may not be implemented for this type; the type has a destructor
-    --> src/glue.rs:4642:1
-     |
-4642 | impl Copy for TimeoutConfig {}
-     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Copy not allowed on types with destructors
-*/
+// impl Copy for Timeout {}
 
-impl Clone for TimeoutConfig {
+impl Clone for Timeout {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -4726,12 +4417,12 @@ impl Clone for TimeoutConfig {
     fn clone(&self) -> Self {
         let mut answer = unsafe {
             match self.discriminant() {
-                discriminant_TimeoutConfig::NoTimeout => {
-                    core::mem::transmute::<core::mem::MaybeUninit<TimeoutConfig>, TimeoutConfig>(
+                discriminant_Timeout::NoTimeout => {
+                    core::mem::transmute::<core::mem::MaybeUninit<Timeout>, Timeout>(
                         core::mem::MaybeUninit::uninit(),
                     )
                 }
-                discriminant_TimeoutConfig::Timeout => Self {
+                discriminant_Timeout::Timeout => Self {
                     Timeout: self.Timeout.clone(),
                 },
             }
@@ -4743,14 +4434,15 @@ impl Clone for TimeoutConfig {
     }
 }
 
-/*
-error[E0599]: no method named `hash` found for type `f64` in the current scope
-    --> src/glue.rs:4446:30
-     |
-4446 |                 self.Timeout.hash(state);
-     |                              ^^^^ method not found in `f64`
-*/
-// impl core::hash::Hash for TimeoutConfig {
+// error[E0599]: no method named `hash` found for type `f64` in the current scope
+//     --> src/glue.rs:4450:30
+//      |
+// 4450 |                 self.Timeout.hash(state);
+//      |                              ^^^^ method not found in `f64`
+//
+// For more information about this error, try `rustc --explain E0599`.
+//
+// impl core::hash::Hash for Timeout {
 //     #[cfg(any(
 //         target_arch = "arm",
 //         target_arch = "aarch64",
@@ -4760,18 +4452,16 @@ error[E0599]: no method named `hash` found for type `f64` in the current scope
 //     ))]
 //     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
 //         match self.discriminant() {
-//             discriminant_TimeoutConfig::NoTimeout => {
-//                 discriminant_TimeoutConfig::NoTimeout.hash(state)
-//             }
-//             discriminant_TimeoutConfig::Timeout => unsafe {
-//                 discriminant_TimeoutConfig::Timeout.hash(state);
+//             discriminant_Timeout::NoTimeout => discriminant_Timeout::NoTimeout.hash(state),
+//             discriminant_Timeout::Timeout => unsafe {
+//                 discriminant_Timeout::Timeout.hash(state);
 //                 self.Timeout.hash(state);
 //             },
 //         }
 //     }
 // }
 
-impl core::fmt::Debug for TimeoutConfig {
+impl core::fmt::Debug for Timeout {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -4780,14 +4470,339 @@ impl core::fmt::Debug for TimeoutConfig {
         target_arch = "x86_64"
     ))]
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("TimeoutConfig::")?;
+        f.write_str("Timeout::")?;
 
         unsafe {
             match self.discriminant() {
-                discriminant_TimeoutConfig::NoTimeout => f.write_str("NoTimeout"),
-                discriminant_TimeoutConfig::Timeout => {
+                discriminant_Timeout::NoTimeout => f.write_str("NoTimeout"),
+                discriminant_Timeout::Timeout => {
                     f.debug_tuple("Timeout").field(&self.Timeout).finish()
                 }
+            }
+        }
+    }
+}
+
+impl ProgressTracking {
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    /// Returns which variant this tag union holds. Note that this never includes a payload!
+    pub fn discriminant(&self) -> discriminant_ProgressTracking {
+        unsafe {
+            let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
+
+            core::mem::transmute::<u8, discriminant_ProgressTracking>(*bytes.as_ptr().add(12))
+        }
+    }
+
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    /// Internal helper
+    fn set_discriminant(&mut self, discriminant: discriminant_ProgressTracking) {
+        let discriminant_ptr: *mut discriminant_ProgressTracking =
+            (self as *mut ProgressTracking).cast();
+
+        unsafe {
+            *(discriminant_ptr.add(12)) = discriminant;
+        }
+    }
+
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    /// A tag named NoProgressTracking, which has no payload.
+    pub const NoProgressTracking: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<ProgressTracking>()];
+
+        bytes[12] = discriminant_ProgressTracking::NoProgressTracking as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<ProgressTracking>()], ProgressTracking>(
+            bytes,
+        )
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the NoProgressTracking tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_NoProgressTracking(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the NoProgressTracking tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub unsafe fn as_NoProgressTracking(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Construct a tag named `ProgressTrackingId`, with the appropriate payload
+    pub fn ProgressTrackingId(arg: roc_std::RocStr) -> Self {
+        let mut answer = Self {
+            ProgressTrackingId: core::mem::ManuallyDrop::new(arg),
+        };
+
+        answer.set_discriminant(discriminant_ProgressTracking::ProgressTrackingId);
+
+        answer
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Unsafely assume the given `ProgressTracking` has a `.discriminant()` of `ProgressTrackingId` and convert it to `ProgressTrackingId`'s payload.
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `ProgressTrackingId`.
+    pub unsafe fn into_ProgressTrackingId(mut self) -> roc_std::RocStr {
+        debug_assert_eq!(
+            self.discriminant(),
+            discriminant_ProgressTracking::ProgressTrackingId
+        );
+
+        let payload = core::mem::ManuallyDrop::take(&mut self.ProgressTrackingId);
+
+        payload
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Unsafely assume the given `ProgressTracking` has a `.discriminant()` of `ProgressTrackingId` and return its payload.
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `ProgressTrackingId`.
+    pub unsafe fn as_ProgressTrackingId(&self) -> &roc_std::RocStr {
+        debug_assert_eq!(
+            self.discriminant(),
+            discriminant_ProgressTracking::ProgressTrackingId
+        );
+
+        let payload = &self.ProgressTrackingId;
+
+        &payload
+    }
+
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+    /// Returns which variant this tag union holds. Note that this never includes a payload!
+    pub fn discriminant(&self) -> discriminant_ProgressTracking {
+        unsafe {
+            let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
+
+            core::mem::transmute::<u8, discriminant_ProgressTracking>(*bytes.as_ptr().add(24))
+        }
+    }
+
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+    /// Internal helper
+    fn set_discriminant(&mut self, discriminant: discriminant_ProgressTracking) {
+        let discriminant_ptr: *mut discriminant_ProgressTracking =
+            (self as *mut ProgressTracking).cast();
+
+        unsafe {
+            *(discriminant_ptr.add(24)) = discriminant;
+        }
+    }
+
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+    /// A tag named NoProgressTracking, which has no payload.
+    pub const NoProgressTracking: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<ProgressTracking>()];
+
+        bytes[24] = discriminant_ProgressTracking::NoProgressTracking as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<ProgressTracking>()], ProgressTracking>(
+            bytes,
+        )
+    };
+}
+
+impl Drop for ProgressTracking {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    fn drop(&mut self) {
+        // Drop the payloads
+        match self.discriminant() {
+            discriminant_ProgressTracking::NoProgressTracking => {}
+            discriminant_ProgressTracking::ProgressTrackingId => unsafe {
+                core::mem::ManuallyDrop::drop(&mut self.ProgressTrackingId)
+            },
+        }
+    }
+}
+
+impl Eq for ProgressTracking {}
+
+impl PartialEq for ProgressTracking {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    fn eq(&self, other: &Self) -> bool {
+        if self.discriminant() != other.discriminant() {
+            return false;
+        }
+
+        unsafe {
+            match self.discriminant() {
+                discriminant_ProgressTracking::NoProgressTracking => true,
+                discriminant_ProgressTracking::ProgressTrackingId => {
+                    self.ProgressTrackingId == other.ProgressTrackingId
+                }
+            }
+        }
+    }
+}
+
+impl PartialOrd for ProgressTracking {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        match self.discriminant().partial_cmp(&other.discriminant()) {
+            Some(core::cmp::Ordering::Equal) => {}
+            not_eq => return not_eq,
+        }
+
+        unsafe {
+            match self.discriminant() {
+                discriminant_ProgressTracking::NoProgressTracking => {
+                    Some(core::cmp::Ordering::Equal)
+                }
+                discriminant_ProgressTracking::ProgressTrackingId => self
+                    .ProgressTrackingId
+                    .partial_cmp(&other.ProgressTrackingId),
+            }
+        }
+    }
+}
+
+impl Ord for ProgressTracking {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        match self.discriminant().cmp(&other.discriminant()) {
+            core::cmp::Ordering::Equal => {}
+            not_eq => return not_eq,
+        }
+
+        unsafe {
+            match self.discriminant() {
+                discriminant_ProgressTracking::NoProgressTracking => core::cmp::Ordering::Equal,
+                discriminant_ProgressTracking::ProgressTrackingId => {
+                    self.ProgressTrackingId.cmp(&other.ProgressTrackingId)
+                }
+            }
+        }
+    }
+}
+
+impl Clone for ProgressTracking {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    fn clone(&self) -> Self {
+        let mut answer = unsafe {
+            match self.discriminant() {
+                discriminant_ProgressTracking::NoProgressTracking => {
+                    core::mem::transmute::<core::mem::MaybeUninit<ProgressTracking>, ProgressTracking>(
+                        core::mem::MaybeUninit::uninit(),
+                    )
+                }
+                discriminant_ProgressTracking::ProgressTrackingId => Self {
+                    ProgressTrackingId: self.ProgressTrackingId.clone(),
+                },
+            }
+        };
+
+        answer.set_discriminant(self.discriminant());
+
+        answer
+    }
+}
+
+impl core::hash::Hash for ProgressTracking {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        match self.discriminant() {
+            discriminant_ProgressTracking::NoProgressTracking => {
+                discriminant_ProgressTracking::NoProgressTracking.hash(state)
+            }
+            discriminant_ProgressTracking::ProgressTrackingId => unsafe {
+                discriminant_ProgressTracking::ProgressTrackingId.hash(state);
+                self.ProgressTrackingId.hash(state);
+            },
+        }
+    }
+}
+
+impl core::fmt::Debug for ProgressTracking {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("ProgressTracking::")?;
+
+        unsafe {
+            match self.discriminant() {
+                discriminant_ProgressTracking::NoProgressTracking => {
+                    f.write_str("NoProgressTracking")
+                }
+                discriminant_ProgressTracking::ProgressTrackingId => f
+                    .debug_tuple("ProgressTrackingId")
+                    .field(&*self.ProgressTrackingId)
+                    .finish(),
             }
         }
     }
