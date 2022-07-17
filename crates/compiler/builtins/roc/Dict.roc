@@ -34,11 +34,11 @@ interface Dict
 ##
 ##     populationByCity =
 ##         Dict.empty
-##             |> Dict.insert "London" 8_961_989
-##             |> Dict.insert "Philadelphia" 1_603_797
-##             |> Dict.insert "Shanghai" 24_870_895
-##             |> Dict.insert "Delhi" 16_787_941
-##             |> Dict.insert "Amsterdam" 872_680
+##         |> Dict.insert "London" 8_961_989
+##         |> Dict.insert "Philadelphia" 1_603_797
+##         |> Dict.insert "Shanghai" 24_870_895
+##         |> Dict.insert "Delhi" 16_787_941
+##         |> Dict.insert "Amsterdam" 872_680
 ##
 ## ### Accessing keys or values
 ##
@@ -100,8 +100,8 @@ insert = \@Dict list, k, v ->
 
         Ok index ->
             list
-                |> List.set index (Pair k v)
-                |> @Dict
+            |> List.set index (Pair k v)
+            |> @Dict
 
 len : Dict k v -> Nat
 len = \@Dict list ->
@@ -117,9 +117,9 @@ remove = \@Dict list, key ->
             lastIndex = List.len list - 1
 
             list
-                |> List.swap index lastIndex
-                |> List.dropLast
-                |> @Dict
+            |> List.swap index lastIndex
+            |> List.dropLast
+            |> @Dict
 
 contains : Dict k v, k -> Bool
 contains = \@Dict list, needle ->
@@ -156,7 +156,7 @@ insertAll = \xs, @Dict ys ->
 keepShared : Dict k v, Dict k v -> Dict k v
 keepShared = \@Dict xs, ys ->
     List.keepIf xs (\Pair k _ -> Dict.contains ys k)
-        |> @Dict
+    |> @Dict
 
 # difference : Dict k v, Dict k v -> Dict k v
 removeAll : Dict k v, Dict k v -> Dict k v
@@ -169,8 +169,8 @@ removeAll = \xs, @Dict ys ->
 insertFresh : Dict k v, k, v -> Dict k v
 insertFresh = \@Dict list, k, v ->
     list
-        |> List.append (Pair k v)
-        |> @Dict
+    |> List.append (Pair k v)
+    |> @Dict
 
 insertIfVacant : Dict k v, k, v -> Dict k v
 insertIfVacant = \dict, key, value ->

@@ -8,15 +8,15 @@ InvalidChar : U8
 toBytes : Str -> List U8
 toBytes = \str ->
     str
-        |> Str.toUtf8
-        |> encodeChunks
-        |> Bytes.Encode.sequence
-        |> Bytes.Encode.encode
+    |> Str.toUtf8
+    |> encodeChunks
+    |> Bytes.Encode.sequence
+    |> Bytes.Encode.encode
 
 encodeChunks : List U8 -> List Encoder
 encodeChunks = \bytes ->
     List.walk bytes { output: [], accum: None } folder
-        |> encodeResidual
+    |> encodeResidual
 
 coerce : Nat, a -> a
 coerce = \_, x -> x

@@ -226,37 +226,37 @@ append = \@Path prefix, @Path suffix ->
                     NoInteriorNul suffixBytes ->
                         # Neither prefix nor suffix had interior nuls, so the answer won't either
                         List.append prefixBytes suffixBytes
-                            |> NoInteriorNul
+                        |> NoInteriorNul
 
                     ArbitraryBytes suffixBytes ->
                         List.append prefixBytes suffixBytes
-                            |> ArbitraryBytes
+                        |> ArbitraryBytes
 
                     FromStr suffixStr ->
                         # Append suffixStr by writing it to the end of prefixBytes
                         Str.writeUtf8 suffixStr prefixBytes (List.len prefixBytes)
-                            |> ArbitraryBytes
+                        |> ArbitraryBytes
 
             ArbitraryBytes prefixBytes ->
                 when suffix is
                     ArbitraryBytes suffixBytes | NoInteriorNul suffixBytes ->
                         List.append prefixBytes suffixBytes
-                            |> ArbitraryBytes
+                        |> ArbitraryBytes
 
                     FromStr suffixStr ->
                         # Append suffixStr by writing it to the end of prefixBytes
                         Str.writeUtf8 suffixStr prefixBytes (List.len prefixBytes)
-                            |> ArbitraryBytes
+                        |> ArbitraryBytes
 
             FromStr prefixStr ->
                 when suffix is
                     ArbitraryBytes suffixBytes | NoInteriorNul suffixBytes ->
                         List.append (Str.toUtf8 prefixStr) suffixBytes
-                            |> ArbitraryBytes
+                        |> ArbitraryBytes
 
                     FromStr suffixStr ->
                         Str.append prefixStr suffixStr
-                            |> FromStr
+                        |> FromStr
 
     @Path content
 
@@ -267,11 +267,11 @@ appendStr = \@Path prefix, suffixStr ->
             NoInteriorNul prefixBytes | ArbitraryBytes prefixBytes ->
                 # Append suffixStr by writing it to the end of prefixBytes
                 Str.writeUtf8 suffixStr prefixBytes (List.len prefixBytes)
-                    |> ArbitraryBytes
+                |> ArbitraryBytes
 
             FromStr prefixStr ->
                 Str.append prefixStr suffixStr
-                    |> FromStr
+                |> FromStr
 
     @Path content
 
@@ -354,9 +354,9 @@ withExtension = \@Path path, extension ->
                     Err NotFound -> list
 
             beforeDot
-                |> List.reserve (1 + List.len bytes)
-                |> List.append '.'
-                |> List.concat bytes
+            |> List.reserve (1 + List.len bytes)
+            |> List.append '.'
+            |> List.concat bytes
 
         FromStr str ->
             beforeDot =
@@ -365,9 +365,9 @@ withExtension = \@Path path, extension ->
                     Err NotFound -> str
 
             beforeDot
-                |> Str.reserve (1 + Str.byteCount str)
-                |> Str.append "."
-                |> Str.concat str
+            |> Str.reserve (1 + Str.byteCount str)
+            |> Str.append "."
+            |> Str.concat str
 
 # NOTE: no withExtensionBytes because it's too narrow. If you really need to get some
 # non-Unicode in there, do it with

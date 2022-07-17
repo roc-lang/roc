@@ -532,17 +532,14 @@ fn fmt_binops<'a, 'buf>(
         || (&loc_right_side.value).is_multiline()
         || lefts.iter().any(|(expr, _)| expr.value.is_multiline());
 
-    let mut curr_indent = indent;
-
     for (loc_left_side, loc_binop) in lefts {
         let binop = loc_binop.value;
 
-        loc_left_side.format_with_options(buf, apply_needs_parens, Newlines::No, curr_indent);
+        loc_left_side.format_with_options(buf, apply_needs_parens, Newlines::No, indent);
 
         if is_multiline {
             buf.ensure_ends_with_newline();
-            curr_indent = indent + INDENT;
-            buf.indent(curr_indent);
+            buf.indent(indent);
         } else {
             buf.spaces(1);
         }
@@ -552,13 +549,7 @@ fn fmt_binops<'a, 'buf>(
         buf.spaces(1);
     }
 
-    let next_indent = if is_multiline {
-        indent + INDENT
-    } else {
-        indent
-    };
-
-    loc_right_side.format_with_options(buf, apply_needs_parens, Newlines::Yes, next_indent);
+    loc_right_side.format_with_options(buf, apply_needs_parens, Newlines::Yes, indent);
 }
 
 fn format_spaces<'a, 'buf>(
@@ -760,10 +751,7 @@ fn fmt_when<'a, 'buf>(
             } else {
                 if is_multiline_patterns {
                     buf.ensure_ends_with_newline();
-                    // Indent an extra level for the `|`;
-                    // otherwise it'll be at the start of the line,
-                    // and will be incorrectly parsed as a pattern
-                    buf.indent(indent + INDENT + INDENT);
+                    buf.indent(indent + INDENT);
                     buf.push('|');
                 } else {
                     buf.push_str(" |");

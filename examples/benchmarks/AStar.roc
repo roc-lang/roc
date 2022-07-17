@@ -23,17 +23,17 @@ initialModel = \start -> {
 cheapestOpen : (position -> F64), Model position -> Result position {}
 cheapestOpen = \costFn, model ->
     model.openSet
-        |> Set.toList
-        |> List.keepOks
-            (\position ->
-                when Dict.get model.costs position is
-                    Err _ -> Err {}
-                    Ok cost -> Ok { cost: cost + costFn position, position }
-            )
-        |> Quicksort.sortBy .cost
-        |> List.first
-        |> Result.map .position
-        |> Result.mapErr (\_ -> {})
+    |> Set.toList
+    |> List.keepOks
+        (\position ->
+            when Dict.get model.costs position is
+                Err _ -> Err {}
+                Ok cost -> Ok { cost: cost + costFn position, position }
+        )
+    |> Quicksort.sortBy .cost
+    |> List.first
+    |> Result.map .position
+    |> Result.mapErr (\_ -> {})
 
 reconstructPath : Dict position position, position -> List position
 reconstructPath = \cameFrom, goal ->
@@ -51,8 +51,8 @@ updateCost = \current, neighbor, model ->
 
     distanceTo =
         reconstructPath newCameFrom neighbor
-            |> List.len
-            |> Num.toFrac
+        |> List.len
+        |> Num.toFrac
 
     newModel =
         { model &

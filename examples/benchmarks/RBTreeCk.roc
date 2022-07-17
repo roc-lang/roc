@@ -52,8 +52,8 @@ main =
                     val = fold (\_, v, r -> if v then r + 1 else r) head 0
 
                     val
-                        |> Num.toStr
-                        |> Task.putLine
+                    |> Num.toStr
+                    |> Task.putLine
 
                 Nil ->
                     Task.putLine "fail"
