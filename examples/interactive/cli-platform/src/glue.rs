@@ -85,11 +85,30 @@ pub union Part {
     target_arch = "x86",
     target_arch = "x86_64"
 ))]
-#[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
+#[repr(u8)]
+pub enum discriminant_Header {
+    Header = 0,
+}
+
+impl core::fmt::Debug for discriminant_Header {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Header => f.write_str("discriminant_Header::Header"),
+        }
+    }
+}
+
+#[cfg(any(
+    target_arch = "arm",
+    target_arch = "aarch64",
+    target_arch = "wasm32",
+    target_arch = "x86",
+    target_arch = "x86_64"
+))]
 #[repr(C)]
-pub struct Header {
-    pub name: roc_std::RocStr,
-    pub value: roc_std::RocStr,
+pub union Header {
+    Header: core::mem::ManuallyDrop<Header_Header>,
 }
 
 #[cfg(any(
@@ -237,11 +256,11 @@ pub union Response {
 pub struct Request {
     pub body: Body,
     pub headers: roc_std::RocList<Header>,
-    pub method: roc_std::RocStr,
     pub timeout: TimeoutConfig,
     pub tracker: TrackerConfig,
     pub url: roc_std::RocStr,
     pub allowCookiesFromOtherDomains: bool,
+    pub method: Method,
 }
 
 #[cfg(any(
@@ -430,7 +449,7 @@ struct Part_Part {
     target_arch = "x86",
     target_arch = "x86_64"
 ))]
-#[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 struct Response_GoodStatus {
     pub f0: Metadata,
@@ -444,7 +463,7 @@ struct Response_GoodStatus {
     target_arch = "x86",
     target_arch = "x86_64"
 ))]
-#[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 struct Response_BadStatus {
     pub f0: Metadata,
@@ -458,13 +477,50 @@ struct Response_BadStatus {
     target_arch = "x86",
     target_arch = "x86_64"
 ))]
-#[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct Metadata {
     pub headers: roc_std::RocList<Header>,
     pub statusText: roc_std::RocStr,
     pub url: roc_std::RocStr,
     pub statusCode: u16,
+}
+
+#[cfg(any(
+    target_arch = "arm",
+    target_arch = "aarch64",
+    target_arch = "wasm32",
+    target_arch = "x86",
+    target_arch = "x86_64"
+))]
+#[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
+#[repr(u8)]
+pub enum Method {
+    Connect = 0,
+    Delete = 1,
+    Get = 2,
+    Head = 3,
+    Options = 4,
+    Patch = 5,
+    Post = 6,
+    Put = 7,
+    Trace = 8,
+}
+
+impl core::fmt::Debug for Method {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Connect => f.write_str("Method::Connect"),
+            Self::Delete => f.write_str("Method::Delete"),
+            Self::Get => f.write_str("Method::Get"),
+            Self::Head => f.write_str("Method::Head"),
+            Self::Options => f.write_str("Method::Options"),
+            Self::Patch => f.write_str("Method::Patch"),
+            Self::Post => f.write_str("Method::Post"),
+            Self::Put => f.write_str("Method::Put"),
+            Self::Trace => f.write_str("Method::Trace"),
+        }
+    }
 }
 
 #[cfg(any(
@@ -525,6 +581,20 @@ impl core::fmt::Debug for discriminant_TimeoutConfig {
 pub union TimeoutConfig {
     Timeout: f64,
     _sizer: [u8; 12],
+}
+
+#[cfg(any(
+    target_arch = "arm",
+    target_arch = "aarch64",
+    target_arch = "wasm32",
+    target_arch = "x86",
+    target_arch = "x86_64"
+))]
+#[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
+#[repr(C)]
+struct Header_Header {
+    pub f0: roc_std::RocStr,
+    pub f1: roc_std::RocStr,
 }
 
 #[cfg(any(
@@ -624,10 +694,10 @@ pub struct Request {
     pub timeout: TimeoutConfig,
     pub body: Body,
     pub headers: roc_std::RocList<Header>,
-    pub method: roc_std::RocStr,
     pub tracker: TrackerConfig,
     pub url: roc_std::RocStr,
     pub allowCookiesFromOtherDomains: bool,
+    pub method: Method,
 }
 
 impl Error {
@@ -1357,6 +1427,251 @@ impl core::fmt::Debug for Part {
                     .debug_tuple("Part")
                     .field(&(&*self.Part).f0)
                     .field(&(&*self.Part).f1)
+                    .finish(),
+            }
+        }
+    }
+}
+
+impl Header {
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    /// Returns which variant this tag union holds. Note that this never includes a payload!
+    pub fn discriminant(&self) -> discriminant_Header {
+        unsafe {
+            let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
+
+            core::mem::transmute::<u8, discriminant_Header>(*bytes.as_ptr().add(23))
+        }
+    }
+
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    /// Internal helper
+    fn set_discriminant(&mut self, discriminant: discriminant_Header) {
+        let discriminant_ptr: *mut discriminant_Header = (self as *mut Header).cast();
+
+        unsafe {
+            *(discriminant_ptr.add(23)) = discriminant;
+        }
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Construct a tag named `Header`, with the appropriate payload
+    pub fn Header(arg0: roc_std::RocStr, arg1: roc_std::RocStr) -> Self {
+        let mut answer = Self {
+            Header: core::mem::ManuallyDrop::new(Header_Header { f0: arg0, f1: arg1 }),
+        };
+
+        answer.set_discriminant(discriminant_Header::Header);
+
+        answer
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Unsafely assume the given `Header` has a `.discriminant()` of `Header` and convert it to `Header`'s payload.
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `Header`.
+    pub unsafe fn into_Header(mut self) -> (roc_std::RocStr, roc_std::RocStr) {
+        debug_assert_eq!(self.discriminant(), discriminant_Header::Header);
+
+        let payload = core::mem::ManuallyDrop::take(&mut self.Header);
+
+        (payload.f0, payload.f1)
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Unsafely assume the given `Header` has a `.discriminant()` of `Header` and return its payload.
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `Header`.
+    pub unsafe fn as_Header(&self) -> (&roc_std::RocStr, &roc_std::RocStr) {
+        debug_assert_eq!(self.discriminant(), discriminant_Header::Header);
+
+        let payload = &self.Header;
+
+        (&payload.f0, &payload.f1)
+    }
+
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+    /// Returns which variant this tag union holds. Note that this never includes a payload!
+    pub fn discriminant(&self) -> discriminant_Header {
+        unsafe {
+            let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
+
+            core::mem::transmute::<u8, discriminant_Header>(*bytes.as_ptr().add(47))
+        }
+    }
+
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+    /// Internal helper
+    fn set_discriminant(&mut self, discriminant: discriminant_Header) {
+        let discriminant_ptr: *mut discriminant_Header = (self as *mut Header).cast();
+
+        unsafe {
+            *(discriminant_ptr.add(47)) = discriminant;
+        }
+    }
+}
+
+impl Drop for Header {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    fn drop(&mut self) {
+        // Drop the payloads
+        match self.discriminant() {
+            discriminant_Header::Header => unsafe {
+                core::mem::ManuallyDrop::drop(&mut self.Header)
+            },
+        }
+    }
+}
+
+impl Eq for Header {}
+
+impl PartialEq for Header {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    fn eq(&self, other: &Self) -> bool {
+        if self.discriminant() != other.discriminant() {
+            return false;
+        }
+
+        unsafe {
+            match self.discriminant() {
+                discriminant_Header::Header => self.Header == other.Header,
+            }
+        }
+    }
+}
+
+impl PartialOrd for Header {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        match self.discriminant().partial_cmp(&other.discriminant()) {
+            Some(core::cmp::Ordering::Equal) => {}
+            not_eq => return not_eq,
+        }
+
+        unsafe {
+            match self.discriminant() {
+                discriminant_Header::Header => self.Header.partial_cmp(&other.Header),
+            }
+        }
+    }
+}
+
+impl Ord for Header {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        match self.discriminant().cmp(&other.discriminant()) {
+            core::cmp::Ordering::Equal => {}
+            not_eq => return not_eq,
+        }
+
+        unsafe {
+            match self.discriminant() {
+                discriminant_Header::Header => self.Header.cmp(&other.Header),
+            }
+        }
+    }
+}
+
+impl Clone for Header {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    fn clone(&self) -> Self {
+        let mut answer = unsafe {
+            match self.discriminant() {
+                discriminant_Header::Header => Self {
+                    Header: self.Header.clone(),
+                },
+            }
+        };
+
+        answer.set_discriminant(self.discriminant());
+
+        answer
+    }
+}
+
+impl core::hash::Hash for Header {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        match self.discriminant() {
+            discriminant_Header::Header => unsafe {
+                discriminant_Header::Header.hash(state);
+                self.Header.hash(state);
+            },
+        }
+    }
+}
+
+impl core::fmt::Debug for Header {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Header::")?;
+
+        unsafe {
+            match self.discriminant() {
+                discriminant_Header::Header => f
+                    .debug_tuple("Header")
+                    .field(&(&*self.Header).f0)
+                    .field(&(&*self.Header).f1)
                     .finish(),
             }
         }
