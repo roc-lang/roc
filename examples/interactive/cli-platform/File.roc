@@ -15,7 +15,6 @@ writeUtf8 = \path, str ->
     |> Effect.map  (\_ -> Ok {}) # TODO actually handle errors
     |> InternalTask.fromEffect
 
-
 writeBytes : Path, List U8 -> Task {} (FileWriteErr *) [Write [Disk]*]*
 writeBytes = \path, bytes ->
     Effect.writeBytes path bytes
