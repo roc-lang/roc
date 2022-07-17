@@ -1,15 +1,15 @@
 interface Http
-    exposes [getUtf8]
+    exposes [HttpErr, getUtf8]
     imports [Effect, Url.{ Url }, Task.{ Task }, InternalTask]
 
-HttpGetErr a : [
+HttpErr a : [
     HttpGetErr [
         NotFound Url,
         Timeout Url,
     ]
 ]a
 
-getUtf8 : Url -> Task Str (HttpGetErr *) [Net]*
+getUtf8 : Url -> Task Str (HttpErr *) [Net]*
 getUtf8 = \url ->
     Effect.httpGetUtf8 url
     |> Effect.map Ok # TODO actually handle errors

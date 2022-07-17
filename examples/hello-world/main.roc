@@ -4,11 +4,18 @@ app "helloWorld"
     provides [main] to pf
 
 main =
-    toBytes "blah" Json.format
-    |> .val
-    |> Str.fromUtf8
-    |> Result.withDefault ""
+    ["Hello, world!"]
+    |> mapTry (\str -> Ok str)
+    |> Result.after List.first
+    |> Result.withDefault "hi"
 
-toBytes : {}
-toBytes = \path, val, fmt ->
-    { thing: path, val: Encode.toBytes val fmt }
+mapTry : List elem, (elem -> Result ok err) -> Result (List ok) err
+mapTry = \list, transform ->
+    List.walkUntil list (Ok []) \state, elem ->
+        when transform elem is
+            Ok ok ->
+                Result.map state (\elems -> List.append elems ok)
+                |> Continue
+
+            Err err -> Break (Err err)
+
