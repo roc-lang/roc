@@ -128,17 +128,38 @@ pub extern "C" fn roc_fx_putLine(line: &RocStr) {
     println!("{}", string);
 }
 
+const BODY_MAX_BYTES: usize = 10 * 1024 * 1024;
+
 #[no_mangle]
 pub extern "C" fn roc_fx_sendRequest(roc_request: &glue::Request) -> glue::Response {
+    use std::io::Read;
+
     let url = roc_request.url.as_str();
     match ureq::get(url).call() {
         Ok(response) => {
             let statusCode = response.status();
 
-            let mut buffer: Vec<u8> = vec![];
-            let mut reader = response.into_reader();
-            reader.read(&mut buffer).expect("can't read response");
-            let body = RocList::from_slice(&buffer);
+            let len: usize = response
+                .header("Content-Length")
+                .and_then(|val| val.parse::<usize>().ok())
+                .map(|val| val.max(BODY_MAX_BYTES))
+                .unwrap_or(BODY_MAX_BYTES);
+
+            let mut bytes: Vec<u8> = Vec::with_capacity(len);
+            match response
+                .into_reader()
+                .take(len as u64)
+                .read_to_end(&mut bytes)
+            {
+                Ok(_read_bytes) => {}
+                Err(_) => {
+                    // Not totally accurate, but let's deal with this later when we do async
+                    return glue::Response::NetworkError;
+                }
+            }
+
+            // Note: we could skip a full memcpy if we had `RocList::from_iter`.
+            let body = RocList::from_slice(&bytes);
 
             let metadata = Metadata {
                 headers: RocList::empty(),
