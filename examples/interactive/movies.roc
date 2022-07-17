@@ -1,4 +1,4 @@
-app "echo"
+app "movies"
     packages { pf: "cli-platform/main.roc" }
     imports [
         pf.Stdout,
@@ -13,9 +13,10 @@ app "echo"
 
 main : Task.Task {} [] [Write [Stdout, Disk]]
 main =
-    lst = [{ a: "foo" }, { a: "bar" }, { a: "baz" }]
-    encoded = Encode.toBytes lst Json.format
-    task = File.writeBytes (Path.fromStr "test.txt") encoded
+    lst = [{ title: "foo", starring: "blah" }, { title: "bar", starring: "foo" }]
+    task =
+        Path.fromStr "test.txt"
+            |> write lst Json.format
 
     Task.attempt task \result ->
         when result is
@@ -23,3 +24,8 @@ main =
             Err (FileWriteErr _) -> Stderr.line "Error writing to file"
 # Err (FileWriteErr (NotFound _)) -> Task.succeed {}
 # Err (FileWriteErr (FileWasDir _)) -> Task.succeed {}
+
+
+# TODO annotating this with write : {} throws a compiler panic
+write = \path, val, fmt ->
+    File.writeBytes path (Encode.toBytes val fmt)

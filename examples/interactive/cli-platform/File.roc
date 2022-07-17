@@ -21,3 +21,8 @@ writeBytes = \path, bytes ->
     Effect.writeBytes path bytes
     |> Effect.map  (\_ -> Ok {}) # TODO actually handle errors
     |> InternalTask.fromEffect
+
+# #
+# write = \path, val, fmt ->
+#     foo = Str.concat "" ""
+#     writeBytes path (Encode.toBytes val fmt)
