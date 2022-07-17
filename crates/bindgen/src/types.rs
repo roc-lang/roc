@@ -710,7 +710,7 @@ fn add_type_help<'a>(
                 }
             }
         },
-        Content::Structure(FlatType::Func(args, _closure_var, ret_var)) => {
+        Content::Structure(FlatType::Func(args, closure_var, ret_var)) => {
             let args = env.subs.get_subs_slice(*args);
             let mut arg_type_ids = Vec::with_capacity(args.len());
 
@@ -732,7 +732,7 @@ fn add_type_help<'a>(
                 add_type_help(env, ret_layout, *ret_var, None, types)
             };
 
-            let name = "TODO_roc_function".to_string();
+            let name = format!("TODO_roc_function_{:?}", closure_var);
             let fn_type_id = types.add_named(
                 name.clone(),
                 RocType::Function {
