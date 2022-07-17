@@ -157,7 +157,7 @@ pub extern "C" fn roc_fx_httpGetUtf8(url: &RocStr) -> RocStr {
 
 #[no_mangle]
 pub extern "C" fn roc_fx_envVarUtf8(key: &RocStr) -> RocStr {
-    let val: String = dbg!(std::env::var(dbg!(key.as_str()))).unwrap();
+    let val: String = std::env::var(key.as_str()).unwrap_or_default();
 
     RocStr::from(val.as_str())
 }
