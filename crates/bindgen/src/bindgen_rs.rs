@@ -1268,7 +1268,7 @@ fn add_struct<S: Display>(
 fn type_name(id: TypeId, types: &Types) -> String {
     match types.get_type(id) {
         RocType::Unit => "()".to_string(),
-        RocType::EmptyTagUnion => "()".to_string(), // In the future, this can be `!` - https://doc.rust-lang.org/std/primitive.never.html
+        RocType::EmptyTagUnion => "std::convert::Infallible".to_string(),
         RocType::RocStr => "roc_std::RocStr".to_string(),
         RocType::Bool => "bool".to_string(),
         RocType::Num(RocNum::U8) => "u8".to_string(),

@@ -40,9 +40,37 @@ When(
                     ],
                 ),
                 @43-48 SpaceBefore(
+                    SpaceAfter(
+                        StrLiteral(
+                            PlainLine(
+                                "bar",
+                            ),
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+                @51-56 StrLiteral(
+                    PlainLine(
+                        "baz",
+                    ),
+                ),
+            ],
+            value: @60-61 Num(
+                "2",
+            ),
+            guard: None,
+        },
+        WhenBranch {
+            patterns: [
+                @63-70 SpaceBefore(
                     StrLiteral(
                         PlainLine(
-                            "bar",
+                            "stuff",
                         ),
                     ),
                     [
@@ -50,8 +78,8 @@ When(
                     ],
                 ),
             ],
-            value: @52-53 Num(
-                "2",
+            value: @74-75 Num(
+                "4",
             ),
             guard: None,
         },

@@ -788,10 +788,6 @@ fn add_type_help<'a>(
                                 // Result should always have exactly two tags: Ok and Err
                                 debug_assert_eq!(tags.len(), 2);
 
-                                // Both tags should have exactly 1 payload
-                                debug_assert_eq!(tags[0].len(), 1);
-                                debug_assert_eq!(tags[1].len(), 1);
-
                                 let type_vars =
                                     env.subs.get_subs_slice(alias_vars.type_variables());
 
