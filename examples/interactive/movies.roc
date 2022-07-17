@@ -42,38 +42,12 @@ getMovies = \url ->
     |> Str.split "\n"
     |> mapTry movieFromLine
     |> Task.fromResult
-    # This works if you use it instead:
-    #
-    # if Str.isEmpty response then
-    #     Task.succeed []
-    # else
-    #     Task.succeed [{title: "blah", year: 2000, cast: []}]
-
-#writeOutput : List Movie -> Task {} (FileWriteErr (EncodeErr *)) [Write [Disk]*]*
-writeOutput : List Movie -> Task {} (FileWriteErr *) [Write [Disk]*]*
-writeOutput = \movies ->
-    json =
-        List.map movies \movie ->
-            { title: movie.title, starring: "" }
-
-    Path.fromStr "output.json"
-    |> write json Json.format
 
 main : Task.Task {} [] [Write [Stdout, Disk], Net, Env]
 main =
-    task =
-        apiKey <- Env.varUtf8 "API_KEY" |> Task.withDefault "" |> Task.await
-        url = Url.fromStr "http://localhost:4000/movies?apiKey=\(apiKey)"
-        movies <- getMovies url |> Task.await
-
-        writeOutput movies
-
-    Task.attempt task \result ->
+    Task.attempt (getMovies (Url.fromStr "http://localhost:4000/movies")) \result ->
         when result is
-            Ok {} -> Stdout.line "Wrote the file!"
-            # Err (HttpErr _) -> Stderr.line "Error reading from URL"
-            # Err (FileWriteErr _) -> Stderr.line "Error writing to file"
-            # Err (InvalidLine line) -> Stderr.line "The following line in the response was malformed:\n\(line)"
+            Ok _ -> Stdout.line "Wrote the file!"
             Err _ -> Stderr.line "Error!"
 
 # TODO--------------------------------------------------------------
