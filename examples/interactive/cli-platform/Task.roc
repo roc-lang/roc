@@ -49,10 +49,7 @@ withDefault = \task, default ->
 
 fromResult : Result ok err -> Task ok err *
 fromResult = \result ->
-    when result is
-        Ok ok -> Task.succeed ok
-        Err err -> Task.fail err
-    #InternalTask.fromEffect (Effect.always result)
+    InternalTask.fromEffect (Effect.always result)
 
 attempt : Task a b fx, (Result a b -> Task c d fx) -> Task c d fx
 attempt = \task, transform ->
