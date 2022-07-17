@@ -225,28 +225,28 @@ pub enum RocTagUnion {
     Enumeration {
         name: String,
         tags: Vec<String>,
+        size: u32,
     },
     /// A non-recursive tag union
     /// e.g. `Result a e : [Ok a, Err e]`
     NonRecursive {
         name: String,
         tags: Vec<(String, Option<TypeId>)>,
-        discriminant_type: RocNum,
+        discriminant_size: u32,
+        discriminant_offset: u32,
     },
     /// A recursive tag union (general case)
     /// e.g. `Expr : [Sym Str, Add Expr Expr]`
     Recursive {
         name: String,
         tags: Vec<(String, Option<TypeId>)>,
-        discriminant_type: RocNum,
+        discriminant_size: u32,
+        discriminant_offset: u32,
     },
     /// A recursive tag union with just one constructor
     /// Optimization: No need to store a tag ID (the payload is "unwrapped")
     /// e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
-    NonNullableUnwrapped {
-        name: String,
-        content: TypeId,
-    },
+    NonNullableUnwrapped { name: String, content: TypeId },
 
     /// A recursive tag union that has an empty variant
     /// Optimization: Represent the empty variant as null pointer => no memory usage & fast comparison
@@ -257,6 +257,7 @@ pub enum RocTagUnion {
         name: String,
         null_tag: String,
         non_null_tags: Vec<(u16, String, Option<TypeId>)>,
+        discriminant_offset: u32,
     },
 
     /// A recursive tag union with only two variants, where one is empty.
@@ -676,23 +677,27 @@ fn add_tag_union<'a>(
                 // A non-recursive tag union
                 // e.g. `Result ok err : [Ok ok, Err err]`
                 NonRecursive(_) => {
-                    let discriminant_type = UnionLayout::discriminant_size(tags.len()).into();
+                    let discriminant_size = UnionLayout::discriminant_size(tags.len()).stack_size();
+                    let discriminant_offset = union_layout.tag_id_offset(env.target).unwrap();
 
                     RocType::TagUnion(RocTagUnion::NonRecursive {
                         name,
                         tags,
-                        discriminant_type,
+                        discriminant_size,
+                        discriminant_offset,
                     })
                 }
                 // A recursive tag union (general case)
                 // e.g. `Expr : [Sym Str, Add Expr Expr]`
                 Recursive(_) => {
-                    let discriminant_type = UnionLayout::discriminant_size(tags.len()).into();
+                    let discriminant_size = UnionLayout::discriminant_size(tags.len()).stack_size();
+                    let discriminant_offset = union_layout.tag_id_offset(env.target).unwrap();
 
                     RocType::TagUnion(RocTagUnion::Recursive {
                         name,
                         tags,
-                        discriminant_type,
+                        discriminant_size,
+                        discriminant_offset,
                     })
                 }
                 // A recursive tag union with just one constructor
@@ -745,9 +750,10 @@ fn add_tag_union<'a>(
                 }
             }
         }
-        Layout::Builtin(Builtin::Int(_)) => RocType::TagUnion(RocTagUnion::Enumeration {
+        Layout::Builtin(Builtin::Int(int_width)) => RocType::TagUnion(RocTagUnion::Enumeration {
             name,
             tags: tags.into_iter().map(|(tag_name, _)| tag_name).collect(),
+            size: int_width.stack_size(),
         }),
         Layout::Builtin(_)
         | Layout::Struct { .. }
@@ -762,7 +768,9 @@ fn add_tag_union<'a>(
             RocType::TagUnion(RocTagUnion::NonRecursive {
                 name,
                 tags,
-                discriminant_type: RocNum::U8,
+                // These actually have no discriminant, since there's only one tag.
+                discriminant_size: 1,
+                discriminant_offset: 0,
             })
         }
     };
