@@ -277,7 +277,7 @@ fn roc_result_after_on_ok() {
             input : Result I64 Str
             input = Ok 1
 
-            Result.after input \num ->
+            Result.try input \num ->
                 if num < 0 then Err "negative!" else Ok -num
             "#),
         RocResult::ok(-1),
@@ -293,7 +293,7 @@ fn roc_result_after_on_err() {
             input : Result I64 Str
             input = (Err "already a string")
 
-            Result.after input \num ->
+            Result.try input \num ->
                 if num < 0 then Err "negative!" else Ok -num
         "#),
         RocResult::err(RocStr::from("already a string")),
@@ -308,7 +308,7 @@ fn roc_result_after_err() {
         r#"
             result : Result Str I64
             result =
-              Result.afterErr (Ok "already a string") \num ->
+              Result.tryErr (Ok "already a string") \num ->
                 if num < 0 then Ok "negative!" else Err -num
 
             result
@@ -321,7 +321,7 @@ fn roc_result_after_err() {
         r#"
             result : Result Str I64
             result =
-              Result.afterErr (Err 100) \num ->
+              Result.tryErr (Err 100) \num ->
                 if num < 0 then Ok "negative!" else Err -num
 
             result
