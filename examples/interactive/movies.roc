@@ -35,11 +35,9 @@ movieFromLine = \line ->
 
 getMovies : Url -> Task (List Movie) (HttpErr [InvalidLine Str]*) [Net]*
 getMovies = \url ->
-    #response <- Http.getUtf8 url |> Task.await
-    response <- Task.succeed "Airplane!|1980|Robert Hays,Julie Hagerty\nCaddyshack|1980|Chevy Chase,Rodney Dangerfield,Ted Knight,Michael O'Keefe,Bill Murray\n" |> Task.await
+    response <- Http.getUtf8 url |> Task.await
 
     response
-    |> Str.trim
     |> Str.split "\n"
     |> mapTry movieFromLine
     |> Task.fromResult
@@ -47,24 +45,24 @@ getMovies = \url ->
 #writeOutput : List Movie -> Task {} (FileWriteErr (EncodeErr *)) [Write [Disk]*]*
 writeOutput : List Movie -> Task {} (FileWriteErr *) [Write [Disk]*]*
 writeOutput = \movies ->
-    json : List { title : Str, starring : Str }
-    json = List.map movies \movie ->
-        starring = List.first movie.cast |> Result.withDefault "(no actors)"
+    path = Path.fromStr "output.json"
 
-        { title: movie.title, starring }
+    json = List.keepOks movies \movie ->
+        when List.first movie.cast is
+            Ok starring if movie.year < 1980 ->
+                Ok { title: movie.title, starring }
 
-    Path.fromStr "output.json"
-    |> write json Json.toUtf8
+            _ -> Err {}
+
+    write path json Json.toUtf8
 
 main : Task.Task {} [] [Write [Stdout, Disk], Net, Env]
 main =
     task =
         apiKey <- Env.varUtf8 "API_KEY" |> Task.withDefault "" |> Task.await
         url = Url.fromStr "http://localhost:4000/movies?apiKey=\(apiKey)"
-        response <- Http.getUtf8 url |> Task.await
-        Stdout.line (response |> Str.trim |> Str.split "\n" |> Str.joinWith "\n")
-        # movies <- getMovies url |> Task.await
-        # writeOutput movies
+        movies <- getMovies url |> Task.await
+        writeOutput movies
 
     Task.attempt task \result ->
         when result is
