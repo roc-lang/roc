@@ -20,8 +20,6 @@ Movie : {
     cast : List Str,
 }
 
-foo = \{} -> 1 + ""
-
 movieFromLine : Str -> Result Movie [InvalidLine Str]*
 movieFromLine = \line ->
     result =
@@ -31,7 +29,10 @@ movieFromLine = \line ->
         year <- List.get fields 1 |> Result.try Str.toU16 |> Result.try
         cast <- List.get fields 2 |> Result.try
 
-        x = if False then (\_ -> "") (foo {}) else "Hello, World!\n"
+        f : I64 -> I64
+        f = \x -> x
+
+        f {}
 
         Ok { title, year, cast: Str.split cast "," }
 
