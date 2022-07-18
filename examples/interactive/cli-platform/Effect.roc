@@ -1,6 +1,6 @@
 hosted Effect
-    exposes [Effect, after, map, always, forever, loop, putLine, errLine, getLine, writeUtf8, writeBytes, httpGetUtf8, envVarUtf8]
-    imports [Path.{ Path }, Url.{ Url }]
+    exposes [Effect, after, map, always, forever, loop, putLine, errLine, getLine, writeUtf8, writeBytes, httpGetUtf8, envVarUtf8, sendRequest]
+    imports [Path.{ Path }, Url.{ Url }, HttpTypes.{ Request, Response }]
     generates Effect with [after, map, always, forever, loop]
 
 envVarUtf8 : Str -> Effect Str
@@ -15,3 +15,5 @@ putLine : Str -> Effect {}
 errLine : Str -> Effect {}
 
 getLine : Effect Str
+
+sendRequest : Box Request -> Effect Response

@@ -29,11 +29,6 @@ movieFromLine = \line ->
         year <- List.get fields 1 |> Result.try Str.toU16 |> Result.try
         cast <- List.get fields 2 |> Result.try
 
-        f : I64 -> I64
-        f = \x -> x
-
-        f {}
-
         Ok { title, year, cast: Str.split cast "," }
 
     Result.mapErr result \_ -> InvalidLine line
