@@ -1367,10 +1367,17 @@ pub(crate) fn sort_can_defs_new(
 
     // because of the ordering of declarations, expects should come first because they are
     // independent, but can rely on all other top-level symbols in the module
-    for (condition, region) in expects.conditions.into_iter().zip(expects.regions) {
+    let it = expects
+        .conditions
+        .into_iter()
+        .zip(expects.regions)
+        .zip(expects.preceding_comment);
+
+    for ((condition, region), preceding_comment) in it {
         // an `expect` does not have a user-defined name, but we'll need a name to call the expectation
         let name = scope.gen_unique_symbol();
-        declarations.push_expect(name, Loc::at(region, condition));
+
+        declarations.push_expect(preceding_comment, name, Loc::at(region, condition));
     }
 
     for (symbol, alias) in aliases.into_iter() {
