@@ -9,7 +9,7 @@ use roc_collections::VecMap;
 use roc_error_macros::{internal_error, user_error};
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{Expectations, LoadingProblem, Threading};
-use roc_module::symbol::{Interns, ModuleId};
+use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::OptLevel;
 use roc_region::all::Region;
 use roc_repl_cli::expect_mono_module_to_dylib;
@@ -404,7 +404,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let arena = &bumpalo::Bump::new();
     let interns = arena.alloc(interns);
 
-    use roc_gen_llvm::run_jit_function;
+    use roc_gen_llvm::try_run_jit_function;
 
     let mut failed = 0;
     let mut passed = 0;
@@ -423,16 +423,26 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
             0,
         );
 
-        for expect in expects {
+        for (expect_symbol, expect_name) in expects {
             libc::memset(shared_ptr.cast(), 0, SHM_SIZE as _);
 
-            run_jit_function!(lib, expect, (), |v: ()| v);
+            let result: Result<(), String> = try_run_jit_function!(lib, expect_name, (), |v: ()| v);
 
             let shared_memory_ptr: *const u8 = shared_ptr.cast();
 
             let buffer = std::slice::from_raw_parts(shared_memory_ptr, SHM_SIZE as _);
 
-            if buffer.iter().any(|b| *b != 0) {
+            if let Err(roc_panic_message) = result {
+                failed += 1;
+                render_expect_panic(
+                    arena,
+                    expect_symbol,
+                    &roc_panic_message,
+                    &mut expectations,
+                    interns,
+                );
+                println!();
+            } else if buffer.iter().any(|b| *b != 0) {
                 failed += 1;
                 render_expect_failure(arena, &mut expectations, interns, shared_memory_ptr);
                 println!();
@@ -1009,6 +1019,16 @@ unsafe fn roc_run_native_debug(
         }
         _ => unreachable!(),
     }
+}
+
+fn render_expect_panic<'a>(
+    _arena: &'a Bump,
+    _expect_symbol: Symbol,
+    message: &str,
+    _expectations: &mut VecMap<ModuleId, Expectations>,
+    _interns: &'a Interns,
+) {
+    println!("Expect panicked: {}", message);
 }
 
 fn render_expect_failure<'a>(
