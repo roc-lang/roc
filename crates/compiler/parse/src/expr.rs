@@ -1992,9 +1992,10 @@ mod when {
     /// Parsing when with indentation.
     fn when_with_indent<'a>() -> impl Parser<'a, u32, EWhen<'a>> {
         move |arena, state: State<'a>| {
+            let min_indent = state.column();
             parser::keyword_e(keyword::WHEN, EWhen::When)
                 .parse(arena, state)
-                .map(|(progress, (), state)| (progress, state.indent_column, state))
+                .map(|(progress, (), state)| (progress, min_indent, state))
         }
     }
 
@@ -2003,22 +2004,18 @@ mod when {
         options: ExprParseOptions,
     ) -> impl Parser<'a, Vec<'a, &'a WhenBranch<'a>>, EWhen<'a>> {
         move |arena, state: State<'a>| {
-            let when_indent = state.indent_column;
-
             let mut branches: Vec<'a, &'a WhenBranch<'a>> = Vec::with_capacity_in(2, arena);
 
             // 1. Parse the first branch and get its indentation level. (It must be >= min_indent.)
             // 2. Parse the other branches. Their indentation levels must be == the first branch's.
 
-            let (_, ((pattern_indent_level, loc_first_patterns), loc_first_guard), mut state): (
+            let (_, ((pattern_indent_level, loc_first_patterns), loc_first_guard), state): (
                 _,
                 ((_, _), _),
                 State<'a>,
             ) = branch_alternatives(min_indent, options, None).parse(arena, state)?;
 
             let original_indent = pattern_indent_level;
-
-            state.indent_column = pattern_indent_level;
 
             // Parse the first "->" and the expression after it.
             let (_, loc_first_expr, mut state) =
@@ -2077,9 +2074,6 @@ mod when {
                     }
                 }
             }
-
-            let mut state = state;
-            state.indent_column = when_indent;
 
             Ok((MadeProgress, branches, state))
         }
@@ -2382,7 +2376,7 @@ where
     E: 'a,
 {
     move |arena, state: State<'a>| {
-        let indent_column = state.indent_column;
+        let indent_column = state.column();
 
         let (progress, _, state) = parser.parse(arena, state)?;
 
