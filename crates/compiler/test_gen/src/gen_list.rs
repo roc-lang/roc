@@ -16,7 +16,7 @@ use crate::helpers::with_larger_debug_stack;
 #[allow(unused_imports)]
 use indoc::indoc;
 #[allow(unused_imports)]
-use roc_std::{RocList, RocStr};
+use roc_std::{RocList, RocResult, RocStr};
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
@@ -254,6 +254,59 @@ fn list_sublist() {
         "List.sublist [1, 2, 3] { start: 0 , len: 5 } ",
         RocList::from_slice(&[1, 2, 3]),
         RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_map_try_ok() {
+    assert_evals_to!(
+        // No transformation
+        r#"
+            List.mapTry [1, 2, 3] \elem -> Ok elem
+        "#,
+        RocResult::ok(RocList::<i64>::from_slice(&[1, 2, 3])),
+        RocResult<RocList<i64>, ()>
+    );
+    assert_evals_to!(
+        // Transformation
+        r#"
+            List.mapTry [1, 2, 3] \num ->
+                str = Num.toStr (num * 2)
+
+                Ok "\(str)!"
+        "#,
+        RocResult::ok(RocList::<RocStr>::from_slice(&[
+            RocStr::from("2!"),
+            RocStr::from("4!"),
+            RocStr::from("6!"),
+        ])),
+        RocResult<RocList<RocStr>, ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_map_try_err() {
+    assert_evals_to!(
+        r#"
+            List.mapTry [1, 2, 3] \_ -> Err -1
+        "#,
+        RocResult::err(-1),
+        RocResult<(), i64>
+    );
+
+    assert_evals_to!(
+        // If any element returns Err, the whole thing returns Err
+        r#"
+            List.mapTry [1, 2, 3] \num ->
+                if num > 2 then
+                    Err -1
+                else
+                    Ok num
+        "#,
+        RocResult::err(-1),
+        RocResult<RocList<i64>, i64>
     );
 }
 
