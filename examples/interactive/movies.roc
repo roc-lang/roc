@@ -20,6 +20,14 @@ Movie : {
     cast : List Str,
 }
 
+exclaim : Str -> Str
+exclaim = \title ->
+    if Str.endsWith title "!" then
+        title
+    else
+        "\(title)!"
+
+
 movieFromLine : Str -> Result Movie [InvalidLine Str]*
 movieFromLine = \line ->
     if Str.isEmpty line then
@@ -28,7 +36,7 @@ movieFromLine = \line ->
         result =
             fields = Str.split line "|"
 
-            title <- List.get fields 0 |> Result.try
+            title <- List.get fields 0 |> Result.map exclaim |> Result.try
             year <- List.get fields 1 |> Result.try Str.toU16 |> Result.try
             cast <- List.get fields 2 |> Result.try
 
@@ -75,13 +83,17 @@ main =
             Err (InvalidLine line) -> Stderr.line "The following line in the response was malformed:\n\(line)"
             Err _ -> Stderr.line "Error!"
 
+expect exclaim "ha!" == "ha!"
+
+expect exclaim "ha" == "ha!"
+
 # decoding title from valid line succeeds
 expect
     title =
         movieFromLine "title goes here|1234|first star,second star,third star"
         |> Result.map .title
 
-    title == Ok "title goes here"
+    title == Ok "title goes here!"
 
 # decoding title from empty line fails
 expect
