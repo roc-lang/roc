@@ -6166,11 +6166,11 @@ mod solve_expr {
 
                 mulHashes = \x, y -> hash x * hash y
 
-                Id := U64
-                hash = \@Id n -> n
+                Id := U64 has [Hash { hash: hashId }]
+                hashId = \@Id n -> n
 
-                Three := {}
-                hash = \@Three _ -> 3
+                Three := {} has [Hash { hash: hashThree }]
+                hashThree = \@Three _ -> 3
 
                 result = mulHashes (@Id 100) (@Three {})
                 "#

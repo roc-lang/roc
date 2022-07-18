@@ -42,14 +42,14 @@ procedure Num.22 (#Attr.2, #Attr.3):
     ret Num.257;
 
 procedure Str.27 (Str.89):
-    let Str.195 : [C Int1, C I64] = CallByName Str.68 Str.89;
+    let Str.195 : [C Int1, C I64] = CallByName Str.62 Str.89;
     ret Str.195;
 
 procedure Str.47 (#Attr.2):
     let Str.203 : {I64, U8} = lowlevel StrToNum #Attr.2;
     ret Str.203;
 
-procedure Str.68 (Str.190):
+procedure Str.62 (Str.190):
     let Str.191 : {I64, U8} = CallByName Str.47 Str.190;
     let Str.201 : U8 = StructAtIndex 1 Str.191;
     let Str.202 : U8 = 0i64;
