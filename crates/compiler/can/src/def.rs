@@ -508,6 +508,11 @@ fn canonicalize_claimed_ability_impl<'a>(
                 }
             };
 
+            // TODO: get rid of register_specializing_symbol
+            scope
+                .abilities_store
+                .register_specializing_symbol(impl_symbol, member_symbol);
+
             Ok((member_symbol, impl_symbol))
         }
         AssignedField::OptionalValue(_, _, _) => {
