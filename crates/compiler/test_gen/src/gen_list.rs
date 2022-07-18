@@ -18,6 +18,8 @@ use indoc::indoc;
 #[allow(unused_imports)]
 use roc_std::{RocList, RocResult, RocStr};
 
+use core::convert::Infallible;
+
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn roc_list_construction() {
@@ -293,7 +295,7 @@ fn list_map_try_err() {
             List.mapTry [1, 2, 3] \_ -> Err -1
         "#,
         RocResult::err(-1),
-        RocResult<(), i64>
+        RocResult<RocList<Infallible>, i64>
     );
 
     assert_evals_to!(
