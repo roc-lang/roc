@@ -48,6 +48,7 @@ const ABILITY_NOT_ON_TOPLEVEL: &str = "ABILITY NOT ON TOP-LEVEL";
 const SPECIALIZATION_NOT_ON_TOPLEVEL: &str = "SPECIALIZATION NOT ON TOP-LEVEL";
 const ABILITY_USED_AS_TYPE: &str = "ABILITY USED AS TYPE";
 const ILLEGAL_DERIVE: &str = "ILLEGAL DERIVE";
+const IMPLEMENTATION_NOT_FOUND: &str = "IMPLEMENTATION NOT FOUND";
 const NOT_AN_ABILITY_MEMBER: &str = "NOT AN ABILITY MEMBER";
 const OPTIONAL_ABILITY_IMPLEMENTATION: &str = "OPTIONAL ABILITY IMPLEMENTATION";
 const QUALIFIED_ABILITY_IMPLEMENTATION: &str = "QUALIFIED ABILITY IMPLEMENTATION";
@@ -767,6 +768,18 @@ pub fn can_problem<'b>(
                 alloc.reflow("Only implementations for members an ability has can be specified in this location.")
             ]);
             title = NOT_AN_ABILITY_MEMBER.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::ImplementationNotFound { member, region } => {
+            let member_str = member.as_str(alloc.interns);
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("An implementation of "), alloc.symbol_unqualified(member), alloc.reflow(" could not be found in this scope:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.tip().append(alloc.concat([alloc.reflow("consider adding a value of name "), alloc.symbol_unqualified(member), alloc.reflow(" in this scope, or using another variable that implements this ability member, like "), alloc.type_str(&format!("{{ {}: my{} }}", member_str, member_str))]))
+            ]);
+            title = IMPLEMENTATION_NOT_FOUND.to_string();
             severity = Severity::RuntimeError;
         }
         Problem::OptionalAbilityImpl { ability, region } => {

@@ -131,6 +131,10 @@ pub enum Problem {
     AbilityUsedAsType(Lowercase, Symbol, Region),
     NestedSpecialization(Symbol, Region),
     IllegalClaimedAbility(Region),
+    ImplementationNotFound {
+        member: Symbol,
+        region: Region,
+    },
     NotAnAbilityMember {
         ability: Symbol,
         name: String,

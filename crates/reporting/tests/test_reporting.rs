@@ -9134,11 +9134,10 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        #[ignore="TODO"]
         opaque_ability_impl_not_found_shorthand_syntax,
         indoc!(
             r#"
-            app "test" provides [] to "./platform"
+            app "test" provides [A] to "./platform"
 
             Eq has eq : a, a -> U64 | a has Eq
 
@@ -9146,6 +9145,16 @@ All branches in an `if` must have the same type!
             "#
         ),
         @r###"
+    ── IMPLEMENTATION NOT FOUND ────────────────────────────── /code/proj/Main.roc ─
+
+    An implementation of `eq` could not be found in this scope:
+
+    5│  A := U8 has [Eq {eq}]
+                         ^^
+
+    Tip: consider adding a value of name `eq` in this scope, or using
+    another variable that implements this ability member, like
+    { eq: myeq }
     "###
     );
 

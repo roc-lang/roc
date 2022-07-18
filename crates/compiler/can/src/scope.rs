@@ -30,6 +30,12 @@ pub struct Scope {
     /// Identifiers that are imported (and introduced in the header)
     imports: Vec<(Ident, Symbol, Region)>,
 
+    /// Shadows of an ability member, for example a local specialization of `eq` for the ability
+    /// member `Eq has eq : a, a -> Bool` gets a shadow symbol it can use for its implementation.
+    ///
+    /// Only one shadow of an ability member is permitted per scope.
+    shadows: VecMap<Symbol, Loc<Symbol>>,
+
     /// Identifiers that are in scope, and defined in the current module
     pub locals: ScopedIdentIds,
 }
@@ -51,12 +57,17 @@ impl Scope {
             locals: ScopedIdentIds::from_ident_ids(home, initial_ident_ids),
             aliases: VecMap::default(),
             abilities_store: starting_abilities_store,
+            shadows: VecMap::default(),
             imports,
         }
     }
 
     pub fn lookup(&self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
         self.lookup_str(ident.as_str(), region)
+    }
+
+    pub fn lookup_ability_member_shadow(&self, member: Symbol) -> Option<Symbol> {
+        self.shadows.get(&member).map(|loc_shadow| loc_shadow.value)
     }
 
     pub fn add_docs_imports(&mut self) {
@@ -306,11 +317,26 @@ impl Scope {
                         .iter()
                         .any(|(_, members)| members.iter().any(|m| *m == original_symbol))
                 {
-                    // TODO: remove register_specializing_symbol
-                    self.abilities_store
-                        .register_specializing_symbol(shadow_symbol, original_symbol);
+                    match self.shadows.get(&original_symbol) {
+                        Some(loc_original_shadow) => {
+                            // Duplicate shadow of an ability members; that's illegal.
+                            let shadow = Loc {
+                                value: ident.clone(),
+                                region,
+                            };
+                            Err((loc_original_shadow.region, shadow, shadow_symbol))
+                        }
+                        None => {
+                            // TODO: remove register_specializing_symbol
+                            self.abilities_store
+                                .register_specializing_symbol(shadow_symbol, original_symbol);
 
-                    Ok((shadow_symbol, Some(original_symbol)))
+                            self.shadows
+                                .insert(original_symbol, Loc::at(region, shadow_symbol));
+
+                            Ok((shadow_symbol, Some(original_symbol)))
+                        }
+                    }
                 } else {
                     // This is an illegal shadow.
                     let shadow = Loc {

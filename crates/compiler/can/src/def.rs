@@ -436,7 +436,7 @@ fn canonicalize_claimed_ability_impl<'a>(
             let label_str = label.value;
             let region = label.region;
 
-            let _member_symbol =
+            let member_symbol =
                 match env.qualified_lookup_with_module_id(scope, ability_home, label_str, region) {
                     Ok(symbol) => symbol,
                     Err(_) => {
@@ -449,21 +449,18 @@ fn canonicalize_claimed_ability_impl<'a>(
                     }
                 };
 
-            todo!();
-            // match scope.lookup(&label_str.into(), label.region) {
-            //     Ok(symbol) => {
-            //         return Ok((member_symbol, symbol));
-            //     }
-            //     Err(_) => {
-            //         // [Eq { eq }]
-
-            //         env.problem(Problem::ImplementationNotFound {
-            //             ability,
-            //             member: scope.lookup(),
-            //             region: label.region,
-            //         });
-            //     }
-            // }
+            match scope.lookup_ability_member_shadow(member_symbol) {
+                Some(symbol) => {
+                    return Ok((member_symbol, symbol));
+                }
+                None => {
+                    env.problem(Problem::ImplementationNotFound {
+                        member: member_symbol,
+                        region: label.region,
+                    });
+                    Err(())
+                }
+            }
         }
         AssignedField::RequiredValue(label, _spaces, value) => {
             let impl_ident = match value.value {
