@@ -20,6 +20,7 @@ use std::io;
 use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::process;
+use std::time::Instant;
 use target_lexicon::BinaryFormat;
 use target_lexicon::{
     Architecture, Environment, OperatingSystem, Triple, Vendor, X86_32Architecture,
@@ -288,6 +289,7 @@ pub enum FormatMode {
 const SHM_SIZE: i64 = 1024;
 
 pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
+    let start_time = Instant::now();
     let arena = Bump::new();
     let filename = matches.value_of_os(ROC_FILE).unwrap();
     let opt_level = match (
@@ -439,12 +441,31 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         }
     }
 
-    if failed > 0 {
-        println!("test result: failed. {passed} passed; {failed} failed;");
-        Ok(1)
+    let total_time = start_time.elapsed();
+
+    if failed == 0 && passed == 0 {
+        // TODO print this in a more nicely formatted way!
+        println!("No expectations were found.");
+
+        // If no tests ran, treat that as an error. This is perhaps
+        // briefly annoying at the very beginning of a project when
+        // you actually have zero tests, but it can save you from
+        // having a change to your CI script accidentally stop
+        // running tests altogether!
+        Ok(2)
     } else {
-        println!("test result: ok. {passed} passed; {failed} failed;");
-        Ok(0)
+        let failed_color = if failed == 0 {
+            32 // green
+        } else {
+            31 // red
+        };
+
+        println!(
+            "\x1B[{failed_color}m{failed}\x1B[39m failed and \x1B[32m{passed}\x1B[39m passed in {} ms.\n",
+            total_time.as_millis(),
+        );
+
+        Ok((failed > 0) as i32)
     }
 }
 
@@ -1075,14 +1096,13 @@ fn render_expect_failure<'a>(
         alloc.stack([
             alloc.text("This expectation failed:"),
             alloc.region(line_col_region),
-            alloc.text("The variables used in this expression are:"),
+            alloc.text("When it failed, these variables had these values:"),
             alloc.stack(it),
         ])
     } else {
         alloc.stack([
             alloc.text("This expectation failed:"),
             alloc.region(line_col_region),
-            alloc.text("I did not record any variables in this expression."),
         ])
     };
 
