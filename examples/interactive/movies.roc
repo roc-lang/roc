@@ -22,7 +22,16 @@ Movie : {
 
 movieFromLine : Str -> Result Movie [InvalidLine Str]*
 movieFromLine = \line ->
-    Ok { title: line, year: 0, cast: [] }
+    result =
+        fields = Str.split line "|"
+
+        title <- List.get fields 0 |> try
+        year <- List.get fields 1 |> try Str.toU16 |> try
+        cast <- List.get fields 2 |> try
+
+        Ok { title, year, cast: Str.split cast "," }
+
+    Result.mapErr result \_ -> InvalidLine line
 
 getMovies : Url -> Task (List Movie) (HttpErr [InvalidLine Str]*) [Net]*
 getMovies = \url ->
@@ -34,11 +43,26 @@ getMovies = \url ->
     |> mapTry movieFromLine
     |> Task.fromResult
 
+#writeOutput : List Movie -> Task {} (FileWriteErr (EncodeErr *)) [Write [Disk]*]*
+writeOutput : List Movie -> Task {} (FileWriteErr *) [Write [Disk]*]*
+writeOutput = \movies ->
+    Path.fromStr "output.json"
+    |> write movies Json.format
+
 main : Task.Task {} [] [Write [Stdout, Disk], Net, Env]
 main =
-    Task.attempt (getMovies (Url.fromStr "http://localhost:4000/movies")) \result ->
+    task =
+        apiKey <- Env.varUtf8 "API_KEY" |> Task.withDefault "" |> Task.await
+        url = Url.fromStr "http://localhost:4000/movies?apiKey=\(apiKey)"
+        movies <- getMovies url |> Task.await
+        writeOutput movies
+
+    Task.attempt task \result ->
         when result is
-            Ok _ -> Stdout.line "Wrote the file!"
+            Ok {} -> Stdout.line "Wrote the file!"
+            Err (HttpErr _) -> Stderr.line "Error reading from URL"
+            Err (FileWriteErr _) -> Stderr.line "Error writing to file"
+            Err (InvalidLine line) -> Stderr.line "The following line in the response was malformed:\n\(line)"
             Err _ -> Stderr.line "Error!"
 
 # TODO--------------------------------------------------------------
