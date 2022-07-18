@@ -1,9 +1,6 @@
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
 
-#[cfg(feature = "gen-llvm")]
-use crate::helpers::llvm::expect_runtime_error_panic;
-
 // #[cfg(feature = "gen-dev")]
 // use crate::helpers::dev::assert_evals_to;
 
@@ -2725,18 +2722,8 @@ fn list_any() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[should_panic(expected = r#"Roc failed with message: "UnresolvedTypeVar"#)]
 fn list_any_empty_with_unknown_element_type() {
-    // Segfaults with invalid memory reference. Running this as a stand-alone
-    // Roc program, generates the following error message:
-    //
-    //     Application crashed with message
-    //     UnresolvedTypeVar compiler/mono/src/ir.rs line 3775
-    //     Shutting down
-    //
-    // TODO: eventually we should insert the empty type for unresolved type
-    // variables, since that means they're unbound.
-    expect_runtime_error_panic!("List.any [] (\\_ -> True)");
+    assert_evals_to!("List.any [] (\\_ -> True)", false, bool);
 }
 
 #[test]
@@ -2750,18 +2737,8 @@ fn list_all() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[should_panic(expected = r#"Roc failed with message: "UnresolvedTypeVar"#)]
 fn list_all_empty_with_unknown_element_type() {
-    // Segfaults with invalid memory reference. Running this as a stand-alone
-    // Roc program, generates the following error message:
-    //
-    //     Application crashed with message
-    //     UnresolvedTypeVar compiler/mono/src/ir.rs line 3775
-    //     Shutting down
-    //
-    // TODO: eventually we should insert the empty type for unresolved type
-    // variables, since that means they're unbound.
-    expect_runtime_error_panic!("List.all [] (\\_ -> True)");
+    assert_evals_to!("List.all [] (\\_ -> True)", true, bool);
 }
 
 #[test]
@@ -3030,9 +3007,6 @@ fn call_function_in_empty_list() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-// TODO to be improved, if we can generate the void function type for the function in the list,
-// this should succeed.
-#[should_panic(expected = r#"Roc failed with message: "#)]
 fn call_function_in_empty_list_unbound() {
     assert_evals_to!(
         indoc!(
