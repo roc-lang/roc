@@ -8047,35 +8047,6 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        ability_member_not_defined,
-        indoc!(
-            r#"
-            app "test" provides [] to "./platform"
-
-            Eq has
-                eq : a, a -> U64 | a has Eq
-
-            Hash has
-                hash : a, a -> U64 | a has Hash
-
-            A := U8 has [Eq {eq}, Hash {hash}]
-            "#
-        ),
-        @r###"
-    ── NAMING ERROR ── tmp/ability_first_demand_not_indented_enough/Test.roc ─
-
-    I was partway through parsing an ability definition, but I got stuck
-    here:
-
-    4│      Eq has
-    5│      eq : a, a -> U64 | a has Eq
-            ^
-
-    I suspect this line is not indented enough (by 1 spaces)
-    "###
-    );
-
-    test_report!(
         wildcard_in_alias,
         indoc!(
             r#"
@@ -9163,6 +9134,22 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
+        #[ignore="TODO"]
+        opaque_ability_impl_not_found_shorthand_syntax,
+        indoc!(
+            r#"
+            app "test" provides [] to "./platform"
+
+            Eq has eq : a, a -> U64 | a has Eq
+
+            A := U8 has [Eq {eq}]
+            "#
+        ),
+        @r###"
+    "###
+    );
+
+    test_report!(
         opaque_ability_impl_not_found,
         indoc!(
             r#"
@@ -9176,14 +9163,27 @@ All branches in an `if` must have the same type!
             "#
         ),
         @r###"
-        "###
+    ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
+
+    Nothing is named `aEq` in this scope.
+
+    5│  A := U8 has [ Eq {eq: aEq} ]
+                              ^^^
+
+    Did you mean one of these?
+
+        Eq
+        myEq
+        eq
+        U8
+    "###
     );
 
     test_report!(
         opaque_ability_impl_optional,
         indoc!(
             r#"
-            app "test" provides [myEq] to "./platform"
+            app "test" provides [A, myEq] to "./platform"
 
             Eq has eq : a, a -> Bool | a has Eq
 
@@ -9193,7 +9193,17 @@ All branches in an `if` must have the same type!
             "#
         ),
         @r###"
-        "###
+    ── OPTIONAL ABILITY IMPLEMENTATION ─────────────────────── /code/proj/Main.roc ─
+
+    Ability implementations cannot be optional:
+
+    5│  A := U8 has [ Eq {eq ? aEq} ]
+                          ^^^^^^^^
+
+    Custom implementations must be supplied fully.
+
+
+    "###
     );
 
     test_report!(
@@ -9210,7 +9220,19 @@ All branches in an `if` must have the same type!
             "#
         ),
         @r###"
-        "###
+    ── OPTIONAL ABILITY IMPLEMENTATION ─────────────────────── /code/proj/Main.roc ─
+
+    Ability implementations cannot be optional:
+
+    5│  A := U8 has [ Encoding {toEncoder ? myEncoder} ]
+                                ^^^^^^^^^^^^^^^^^^^^^
+
+    Custom implementations must be supplied fully.
+
+    Hint: if you want this implementation to be derived, don't include a
+    record of implementations. For example,    has [Encoding] will attempt
+    to derive `Encoding`
+    "###
     );
 
     test_report!(
@@ -9225,7 +9247,16 @@ All branches in an `if` must have the same type!
             "#
         ),
         @r###"
-        "###
+    ── QUALIFIED ABILITY IMPLEMENTATION ────────────────────── /code/proj/Main.roc ─
+
+    This ability implementation is qualified:
+
+    5│  A := U8 has [ Eq {eq : Bool.eq} ]
+                               ^^^^^^^
+
+    Custom implementations must be defined in the local scope, and
+    unqualified.
+    "###
     );
 
     test_report!(
@@ -9240,7 +9271,18 @@ All branches in an `if` must have the same type!
             "#
         ),
         @r###"
-        "###
+    ── ABILITY IMPLEMENTATION NOT IDENTIFIER ───────────────── /code/proj/Main.roc ─
+
+    This ability implementation is not an identifier:
+
+    5│  A := U8 has [ Eq {eq : \m, n -> m == n} ]
+                               ^^^^^^^^^^^^^^^
+
+    Custom ability implementations defined in this position can only be
+    unqualified identifiers, not arbitrary expressions.
+
+    Tip: consider defining this expression as a variable.
+    "###
     );
 
     test_report!(
