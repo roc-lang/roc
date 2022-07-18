@@ -2479,9 +2479,9 @@ fn backpassing_result() {
             main : I64
             main =
                 helper =
-                    x <- Result.after a
-                    y <- Result.after (f x)
-                    z <- Result.after (g y)
+                    x <- Result.try a
+                    y <- Result.try (f x)
+                    z <- Result.try (g y)
 
                     Ok z
 
@@ -3610,7 +3610,7 @@ fn lambda_capture_niches_have_captured_function_in_closure() {
             g = \{ s1 } -> \_ -> s1
 
             fun = \x ->
-                h = 
+                h =
                     when x is
                         True -> after (\{} -> "") f
                         False -> after (\{} -> {s1: "s1"}) g

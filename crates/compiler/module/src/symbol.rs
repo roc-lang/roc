@@ -1300,10 +1300,10 @@ define_builtins! {
         3 RESULT_MAP: "map"
         4 RESULT_MAP_ERR: "mapErr"
         5 RESULT_WITH_DEFAULT: "withDefault"
-        6 RESULT_AFTER: "after"
+        6 RESULT_TRY: "try"
         7 RESULT_IS_OK: "isOk"
         8 RESULT_IS_ERR: "isErr"
-        9 RESULT_AFTER_ERR: "afterErr"
+        9 RESULT_ON_ERR: "onErr"
     }
     8 DICT: "Dict" => {
         0 DICT_DICT: "Dict" // the Dict.Dict type alias
