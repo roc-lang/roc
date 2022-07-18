@@ -1,5 +1,5 @@
 interface File
-    exposes [writeUtf8, writeBytes]
+    exposes [writeUtf8, writeBytes, write]
     imports [Effect, Path.{ Path }, Task.{ Task }, InternalTask]
 
 FileWriteErr a : [
@@ -21,7 +21,5 @@ writeBytes = \path, bytes ->
     |> Effect.map  (\_ -> Ok {}) # TODO actually handle errors
     |> InternalTask.fromEffect
 
-# #
-# write = \path, val, fmt ->
-#     foo = Str.concat "" ""
-#     writeBytes path (Encode.toBytes val fmt)
+write = \path, val, fmt ->
+    writeBytes path (Encode.toBytes val fmt)

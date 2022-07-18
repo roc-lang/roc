@@ -5,7 +5,7 @@ app "movies"
         pf.Stderr,
         pf.Task.{ Task },
         pf.Path.{ Path },
-        pf.File.{ FileWriteErr },
+        pf.File.{ write, FileWriteErr },
         pf.Url.{ Url },
         pf.Http.{ HttpErr },
         pf.Env,
@@ -73,10 +73,6 @@ main =
             Err _ -> Stderr.line "Error!"
 
 # TODO--------------------------------------------------------------
-
-# TODO annotating this with write : {} throws a compiler panic
-write = \path, val, fmt ->
-    File.writeBytes path (Encode.toBytes val fmt)
 
 mapTry : List elem, (elem -> Result ok err) -> Result (List ok) err
 mapTry = \list, transform ->
