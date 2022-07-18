@@ -4026,6 +4026,7 @@ dependencies = [
  "arrayvec 0.7.2",
  "bumpalo",
  "indoc",
+ "insta",
  "lazy_static",
  "pretty_assertions",
  "regex",
