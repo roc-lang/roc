@@ -9,10 +9,10 @@ use roc_collections::VecMap;
 use roc_error_macros::{internal_error, user_error};
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{Expectations, LoadingProblem, Threading};
-use roc_module::symbol::{Interns, ModuleId, Symbol};
+use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_region::all::Region;
-use roc_repl_cli::expect_mono_module_to_dylib;
+use roc_repl_cli::{expect_mono_module_to_dylib, ToplevelExpect};
 use roc_target::TargetInfo;
 use std::env;
 use std::ffi::{CString, OsStr};
@@ -423,10 +423,10 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
             0,
         );
 
-        for (expect_symbol, expect_name) in expects {
+        for expect in expects {
             libc::memset(shared_ptr.cast(), 0, SHM_SIZE as _);
 
-            let result: Result<(), String> = try_run_jit_function!(lib, expect_name, (), |v: ()| v);
+            let result: Result<(), String> = try_run_jit_function!(lib, expect.name, (), |v: ()| v);
 
             let shared_memory_ptr: *const u8 = shared_ptr.cast();
 
@@ -436,7 +436,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
                 failed += 1;
                 render_expect_panic(
                     arena,
-                    expect_symbol,
+                    expect,
                     &roc_panic_message,
                     &mut expectations,
                     interns,
@@ -1023,12 +1023,53 @@ unsafe fn roc_run_native_debug(
 
 fn render_expect_panic<'a>(
     _arena: &'a Bump,
-    _expect_symbol: Symbol,
+    expect: ToplevelExpect,
     message: &str,
-    _expectations: &mut VecMap<ModuleId, Expectations>,
-    _interns: &'a Interns,
+    expectations: &mut VecMap<ModuleId, Expectations>,
+    interns: &'a Interns,
 ) {
-    println!("Expect panicked: {}", message);
+    use roc_reporting::report::Report;
+    use roc_reporting::report::RocDocAllocator;
+    use ven_pretty::DocAllocator;
+
+    let module_id = expect.symbol.module_id();
+    let data = expectations.get_mut(&module_id).unwrap();
+
+    // TODO cache these line offsets?
+    let path = &data.path;
+    let filename = data.path.to_owned();
+    let file_string = std::fs::read_to_string(path).unwrap();
+    let src_lines: Vec<_> = file_string.lines().collect();
+
+    let line_info = roc_region::all::LineInfo::new(&file_string);
+    let line_col_region = line_info.convert_region(expect.region);
+
+    let alloc = RocDocAllocator::new(&src_lines, module_id, interns);
+
+    let doc = alloc.stack([
+        alloc.text("This expectation panicked:"),
+        alloc.region(line_col_region),
+        alloc.text("With this panic message:"),
+        alloc.text(message),
+    ]);
+
+    let report = Report {
+        title: "EXPECT FAILED".into(),
+        doc,
+        filename,
+        severity: roc_reporting::report::Severity::RuntimeError,
+    };
+
+    let mut buf = String::new();
+
+    report.render(
+        roc_reporting::report::RenderTarget::ColorTerminal,
+        &mut buf,
+        &alloc,
+        &roc_reporting::report::DEFAULT_PALETTE,
+    );
+
+    println!("{}", buf);
 }
 
 fn render_expect_failure<'a>(
