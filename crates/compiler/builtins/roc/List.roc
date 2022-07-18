@@ -860,7 +860,7 @@ split = \elements, userSplitIndex ->
     { before, others }
 
 ## Like [List.map], except the transformation function returns a [Result].
-## If that function ever returns `Err`, [mapTry] immediately returns `Err`.
+## If that function ever returns `Err`, [mapTry] immediately returns that `Err`.
 ## If it returns `Ok` for every element, [mapTry] returns `Ok` with the transformed list.
 mapTry : List elem, (elem -> Result ok err) -> Result (List ok) err
 mapTry = \list, toResult ->
