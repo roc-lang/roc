@@ -66,6 +66,7 @@ main =
     Task.attempt task \result ->
         when result is
             Ok {} -> Stdout.line "Wrote the file!"
+            Err (EnvErr _) -> Stderr.line "Could not find API_KEY environment variable"
             Err (HttpErr _) -> Stderr.line "Error reading from URL"
             Err (FileWriteErr _) -> Stderr.line "Error writing to file"
             Err (InvalidLine line) -> Stderr.line "The following line in the response was malformed:\n\(line)"

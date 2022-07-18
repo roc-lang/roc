@@ -3,7 +3,7 @@ interface Env
     imports [Effect, Task.{ Task }, InternalTask]
 
 EnvErr a : [
-    GetEnvErr [
+    EnvErr [
         VarNotFound Str,
         VarNotUtf8 #Str.Utf8Problem
     ]
