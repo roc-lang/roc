@@ -72,17 +72,10 @@ main =
             Err (InvalidLine line) -> Stderr.line "The following line in the response was malformed:\n\(line)"
             Err _ -> Stderr.line "Error!"
 
-# decode movie
+# decode title
 expect
-    actual = #movieFromLine "title goes here|1234|first star,second star,third star"
-        Ok {
-            title: "title goes here!",
-            year: 1234,
-            starring: ["first star", "second star", "third star"]
-        }
+    title =
+        movieFromLine "title goes here|1234|first star,second star,third star"
+        |> Result.map .title
 
-    actual == Ok {
-        title: "title goes here",
-        year: 1234,
-        starring: ["first star", "second star", "third star"]
-    }
+    title == Ok "title goes here"
