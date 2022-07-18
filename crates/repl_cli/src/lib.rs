@@ -3,6 +3,7 @@ use const_format::concatcp;
 use inkwell::context::Context;
 use libloading::Library;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
+use roc_module::symbol::Symbol;
 use roc_types::subs::Subs;
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
@@ -198,7 +199,13 @@ pub fn expect_mono_module_to_dylib<'a>(
     loaded: MonomorphizedModule<'a>,
     opt_level: OptLevel,
     mode: LlvmBackendMode,
-) -> Result<(libloading::Library, bumpalo::collections::Vec<'a, &'a str>), libloading::Error> {
+) -> Result<
+    (
+        libloading::Library,
+        bumpalo::collections::Vec<'a, (Symbol, &'a str)>,
+    ),
+    libloading::Error,
+> {
     let target_info = TargetInfo::from(&target);
 
     let MonomorphizedModule {
@@ -240,12 +247,17 @@ pub fn expect_mono_module_to_dylib<'a>(
     // platform to provide them.
     add_default_roc_externs(&env);
 
-    let expects = roc_gen_llvm::llvm::build::build_procedures_expose_expects(
+    let expect_names = roc_gen_llvm::llvm::build::build_procedures_expose_expects(
         &env,
         opt_level,
         &toplevel_expects,
         procedures,
         entry_point,
+    );
+
+    let expects = bumpalo::collections::Vec::from_iter_in(
+        toplevel_expects.into_iter().zip(expect_names.into_iter()),
+        env.arena,
     );
 
     env.dibuilder.finalize();
