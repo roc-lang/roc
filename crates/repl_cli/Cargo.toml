@@ -22,7 +22,6 @@ rustyline = {git = "https://github.com/rtfeldman/rustyline", rev = "e74333c"}
 rustyline-derive = {git = "https://github.com/rtfeldman/rustyline", rev = "e74333c"}
 target-lexicon = "0.12.2"
 
-# TODO: make llvm optional
 roc_build = {path = "../compiler/build"}
 roc_builtins = {path = "../compiler/builtins"}
 roc_collections = {path = "../compiler/collections"}
@@ -35,7 +34,7 @@ roc_reporting = {path = "../reporting"}
 roc_std = {path = "../roc_std", default-features = false}
 roc_target = {path = "../compiler/roc_target"}
 roc_types = {path = "../compiler/types"}
-
+roc_region = { path = "../compiler/region" }
 roc_module = { path = "../compiler/module" }
 
 [lib]
