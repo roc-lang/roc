@@ -6336,17 +6336,23 @@ fn substitute_in_stmt_help<'a>(
             layouts,
             remainder,
         } => {
-            // TODO should we substitute in the ModifyRc?
-            match substitute_in_stmt_help(arena, remainder, subs) {
-                Some(cont) => Some(arena.alloc(Expect {
-                    condition: *condition,
-                    region: *region,
-                    lookups,
-                    layouts,
-                    remainder: cont,
-                })),
-                None => None,
-            }
+            let new_remainder =
+                substitute_in_stmt_help(arena, remainder, subs).unwrap_or(remainder);
+
+            let new_lookups = Vec::from_iter_in(
+                lookups.iter().map(|s| substitute(subs, *s).unwrap_or(*s)),
+                arena,
+            );
+
+            let expect = Expect {
+                condition: substitute(subs, *condition).unwrap_or(*condition),
+                region: *region,
+                lookups: new_lookups.into_bump_slice(),
+                layouts,
+                remainder: new_remainder,
+            };
+
+            Some(arena.alloc(expect))
         }
 
         Jump(id, args) => {
