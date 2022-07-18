@@ -445,13 +445,19 @@ fn canonicalize_claimed_ability_impl<'a>(
                             name: label_str.to_owned(),
                             region,
                         });
+
                         return Err(());
                     }
                 };
 
             match scope.lookup_ability_member_shadow(member_symbol) {
-                Some(symbol) => {
-                    return Ok((member_symbol, symbol));
+                Some(impl_symbol) => {
+                    // TODO: get rid of register_specializing_symbol
+                    scope
+                        .abilities_store
+                        .register_specializing_symbol(impl_symbol, member_symbol);
+
+                    Ok((member_symbol, impl_symbol))
                 }
                 None => {
                     env.problem(Problem::ImplementationNotFound {

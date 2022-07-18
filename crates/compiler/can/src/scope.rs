@@ -327,10 +327,6 @@ impl Scope {
                             Err((loc_original_shadow.region, shadow, shadow_symbol))
                         }
                         None => {
-                            // TODO: remove register_specializing_symbol
-                            self.abilities_store
-                                .register_specializing_symbol(shadow_symbol, original_symbol);
-
                             self.shadows
                                 .insert(original_symbol, Loc::at(region, shadow_symbol));
 

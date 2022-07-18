@@ -5940,7 +5940,7 @@ mod solve_expr {
 
                 Hash has hash : a -> U64 | a has Hash
 
-                Id := U64
+                Id := U64 has [Hash {hash}]
 
                 hash = \@Id n -> n
                 "#
@@ -5960,7 +5960,7 @@ mod solve_expr {
                     hash : a -> U64 | a has Hash
                     hash32 : a -> U32 | a has Hash
 
-                Id := U64
+                Id := U64 has [Hash {hash, hash32}]
 
                 hash = \@Id n -> n
                 hash32 = \@Id n -> Num.toU32 n
@@ -5985,7 +5985,7 @@ mod solve_expr {
                     eq : a, a -> Bool | a has Ord
                     le : a, a -> Bool | a has Ord
 
-                Id := U64
+                Id := U64 has [Hash {hash, hash32}, Ord {eq, le}]
 
                 hash = \@Id n -> n
                 hash32 = \@Id n -> Num.toU32 n
@@ -6013,7 +6013,7 @@ mod solve_expr {
                 Hash has
                     hash : a -> U64 | a has Hash
 
-                Id := U64
+                Id := U64 has [Hash {hash}]
 
                 hash : Id -> U64
                 hash = \@Id n -> n
@@ -6033,7 +6033,7 @@ mod solve_expr {
                 Hash has
                     hash : a -> U64 | a has Hash
 
-                Id := U64
+                Id := U64 has [Hash {hash}]
 
                 hash : Id -> U64
                 "#
@@ -6052,7 +6052,7 @@ mod solve_expr {
                 Hash has
                     hash : a -> U64 | a has Hash
 
-                Id := U64
+                Id := U64 has [Hash {hash}]
 
                 hash = \@Id n -> n
 
@@ -6146,7 +6146,7 @@ mod solve_expr {
 
                 hashEq = \x, y -> hash x == hash y
 
-                Id := U64
+                Id := U64 has [Hash {hash}]
                 hash = \@Id n -> n
 
                 result = hashEq (@Id 100) (@Id 101)
@@ -6331,15 +6331,13 @@ mod solve_expr {
                 toBytes = \val, fmt -> appendWith [] (toEncoder val) fmt
 
 
-                Linear := {}
+                Linear := {} has [Format {u8}]
 
-                # impl Format for Linear
                 u8 = \n -> @Encoder (\lst, @Linear {} -> List.append lst n)
                 #^^{-1}
 
-                MyU8 := U8
+                MyU8 := U8 has [Encoding {toEncoder}]
 
-                # impl Encoding for MyU8
                 toEncoder = \@MyU8 n -> u8 n
                 #^^^^^^^^^{-1}
 
@@ -6385,18 +6383,16 @@ mod solve_expr {
                                 Err e -> Err e
 
 
-                Linear := {}
+                Linear := {} has [DecoderFormatting {u8}]
 
-                # impl DecoderFormatting for Linear
                 u8 = @Decoder \lst, @Linear {} ->
                 #^^{-1}
                         when List.first lst is
                             Ok n -> { result: Ok n, rest: List.dropFirst lst }
                             Err _ -> { result: Err TooShort, rest: [] }
 
-                MyU8 := U8
+                MyU8 := U8 has [Decoder {decoder}]
 
-                # impl Decoding for MyU8
                 decoder = @Decoder \lst, fmt ->
                 #^^^^^^^{-1}
                     when decodeWith lst u8 fmt is
@@ -6446,7 +6442,7 @@ mod solve_expr {
 
                 Default has default : {} -> a | a has Default
 
-                A := {}
+                A := {} has [Default {default}]
                 default = \{} -> @A {}
 
                 main =
@@ -6466,10 +6462,10 @@ mod solve_expr {
             indoc!(
                 r#"
                 app "test"
-                    imports [Encode.{ toEncoder }, Json]
+                    imports [Encode.{ Encoding, toEncoder }, Json]
                     provides [main] to "./platform"
 
-                HelloWorld := {}
+                HelloWorld := {} has [Encoding {toEncoder}]
 
                 toEncoder = \@HelloWorld {} ->
                     Encode.custom \bytes, fmt ->
@@ -6538,7 +6534,7 @@ mod solve_expr {
 
                 Id has id : a -> a | a has Id
 
-                A := {}
+                A := {} has [Id {id}]
                 id = \@A {} -> @A {}
                 #^^{-1}
 
@@ -6574,7 +6570,7 @@ mod solve_expr {
                 Id1 has id1 : a -> a | a has Id1
                 Id2 has id2 : a -> a | a has Id2
 
-                A := {}
+                A := {} has [Id1 {id1}, Id2 {id2}]
                 id1 = \@A {} -> @A {}
                 #^^^{-1}
 
@@ -6607,7 +6603,7 @@ mod solve_expr {
 
                 Id has id : a -> a | a has Id
 
-                A := {}
+                A := {} has [Id {id}]
                 id = \@A {} -> @A {}
                 #^^{-1}
 
@@ -6645,7 +6641,7 @@ mod solve_expr {
 
                 Id has id : a -> a | a has Id
 
-                A := {}
+                A := {} has [Id {id}]
                 id = \@A {} -> @A {}
                 #^^{-1}
 
@@ -6681,7 +6677,7 @@ mod solve_expr {
 
                 Id has id : a -> Thunk a | a has Id
 
-                A := {}
+                A := {} has [Id {id}]
                 id = \@A {} -> \{} -> @A {}
                 #^^{-1}
 
@@ -6716,7 +6712,7 @@ mod solve_expr {
 
                 Id has id : a -> Thunk a | a has Id
 
-                A := {}
+                A := {} has [Id {id}]
                 id = \@A {} -> @Thunk (\{} -> @A {})
                 #^^{-1}
 
@@ -6746,7 +6742,7 @@ mod solve_expr {
 
                 Id has id : a -> Thunk a | a has Id
 
-                A := {}
+                A := {} has [Id {id}]
                 id = \@A {} -> \{} -> @A {}
                 #^^{-1}
 
@@ -6775,7 +6771,7 @@ mod solve_expr {
 
                 Diverge has diverge : a -> a | a has Diverge
 
-                A := {}
+                A := {} has [Diverge {diverge}]
                 diverge = \@A {} -> diverge (@A {})
                 #^^^^^^^{-1}        ^^^^^^^
 
@@ -6806,7 +6802,7 @@ mod solve_expr {
                     ping : a -> a | a has Bounce
                     pong : a -> a | a has Bounce
 
-                A := {}
+                A := {} has [Bounce {ping, pong}]
 
                 ping = \@A {} -> pong (@A {})
                 #^^^^{-1}        ^^^^
@@ -7109,11 +7105,11 @@ mod solve_expr {
                 F has f : a -> (b -> {}) | a has F, b has G
                 G has g : b -> {} | b has G
 
-                Fo := {}
+                Fo := {} has [F {f}]
                 f = \@Fo {} -> g
                 #^{-1}
 
-                Go := {}
+                Go := {} has [G {g}]
                 g = \@Go {} -> {}
                 #^{-1}
 
@@ -7141,11 +7137,11 @@ mod solve_expr {
                 F has f : a -> ({} -> b) | a has F, b has G
                 G has g : {} -> b | b has G
 
-                Fo := {}
+                Fo := {} has [F {f}]
                 f = \@Fo {} -> g
                 #^{-1}
 
-                Go := {}
+                Go := {} has [G {g}]
                 g = \{} -> @Go {}
                 #^{-1}
 
@@ -7177,11 +7173,11 @@ mod solve_expr {
                 F has f : a -> (b -> {}) | a has F, b has G
                 G has g : b -> {} | b has G
 
-                Fo := {}
+                Fo := {} has [F {f}]
                 f = \@Fo {} -> g
                 #^{-1}
 
-                Go := {}
+                Go := {} has [G {g}]
                 g = \@Go {} -> {}
                 #^{-1}
 
@@ -7225,11 +7221,11 @@ mod solve_expr {
                 F has f : a -> (b -> {}) | a has F, b has G
                 G has g : b -> {} | b has G
 
-                Fo := {}
+                Fo := {} has [F {f}]
                 f = \@Fo {} -> g
                 #^{-1}
 
-                Go := {}
+                Go := {} has [G {g}]
                 g = \@Go {} -> {}
                 #^{-1}
 
@@ -7260,11 +7256,11 @@ mod solve_expr {
                 F has f : a, b -> ({} -> ({} -> {})) | a has F, b has G
                 G has g : b -> ({} -> {}) | b has G
 
-                Fo := {}
+                Fo := {} has [F {f}]
                 f = \@Fo {}, b -> \{} -> g b
                 #^{-1}
 
-                Go := {}
+                Go := {} has [G {g}]
                 g = \@Go {} -> \{} -> {}
                 #^{-1}
 
