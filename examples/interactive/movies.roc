@@ -26,8 +26,11 @@ movieFromLine = \line ->
         fields = Str.split line "|"
 
         title <- List.get fields 0 |> Result.try
-        year <- List.get fields 1 |> Result.try Str.toU16 |> Result.try
         cast <- List.get fields 2 |> Result.try
+
+        getYear = \x -> x
+
+        year = getYear {}
 
         Ok { title, year, cast: Str.split cast "," }
 
