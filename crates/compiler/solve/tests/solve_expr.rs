@@ -7357,4 +7357,24 @@ mod solve_expr {
             "List (A U8)",
         );
     }
+
+    #[test]
+    fn issue_3560_nested_tag_union() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test"
+                    imports [Encode.{ toEncoder }, Json]
+                    provides [main] to "./platform"
+
+                main =
+                    when Wrapper (Payload "err") is
+                    #    ^^^^^^^^^^^^^^^^^^^^^^^
+                        Wrapper (Payload str) -> str
+                        Wrapper (AlternatePayload str) -> str
+                "#
+            ),
+            &[r#"Wrapper (Payload "err") : [Wrapper [AlternatePayload Str, Payload Str]]"#,]
+        )
+    }
 }

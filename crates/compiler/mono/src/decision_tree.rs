@@ -1343,7 +1343,7 @@ fn test_to_equality<'a>(
                         }),
                     )
                 }
-                _ => unreachable!("{:?}", (cond_layout, union)),
+                _ => unreachable!("{:#?}", (cond_layout, union, test_layout, path)),
             }
         }
 
