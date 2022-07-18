@@ -39,7 +39,7 @@ getMovies = \url ->
 
     response
     |> Str.split "\n"
-    |> mapTry movieFromLine
+    |> List.mapTry movieFromLine
     |> Task.fromResult
 
 #writeOutput : List Movie -> Task {} (FileWriteErr (EncodeErr *)) [Write [Disk]*]*
@@ -71,16 +71,3 @@ main =
             Err (FileWriteErr _) -> Stderr.line "Error writing to file"
             Err (InvalidLine line) -> Stderr.line "The following line in the response was malformed:\n\(line)"
             Err _ -> Stderr.line "Error!"
-
-# TODO--------------------------------------------------------------
-
-mapTry : List elem, (elem -> Result ok err) -> Result (List ok) err
-mapTry = \list, transform ->
-    List.walkUntil list (Ok []) \state, elem ->
-        when transform elem is
-            Ok ok ->
-                Result.map state (\elems -> List.append elems ok)
-                |> Continue
-
-            Err err -> Break (Err err)
-
