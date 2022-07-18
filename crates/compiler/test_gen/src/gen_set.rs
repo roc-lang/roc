@@ -117,17 +117,17 @@ fn union() {
     assert_evals_to!(
         indoc!(
             r#"
-            set1 : Set I64
+            set1 : Set.Set I64
             set1 = Set.fromList [1,2]
 
-            set2 : Set I64
+            set2 : Set.Set I64
             set2 = Set.fromList [1,3,4]
 
             Set.union set1 set2
                 |> Set.toList
             "#
         ),
-        RocList::from_slice(&[4, 2, 3, 1]),
+        RocList::from_slice(&[1, 2, 3, 4]),
         RocList<i64>
     );
 }
@@ -138,10 +138,10 @@ fn difference() {
     assert_evals_to!(
         indoc!(
             r#"
-            set1 : Set I64
+            set1 : Set.Set I64
             set1 = Set.fromList [1,2]
 
-            set2 : Set I64
+            set2 : Set.Set I64
             set2 = Set.fromList [1,3,4]
 
             Set.difference set1 set2
@@ -159,10 +159,10 @@ fn intersection() {
     assert_evals_to!(
         indoc!(
             r#"
-            set1 : Set I64
+            set1 : Set.Set I64
             set1 = Set.fromList [1,2]
 
-            set2 : Set I64
+            set2 : Set.Set I64
             set2 = Set.fromList [1,3,4]
 
             Set.intersection set1 set2
@@ -223,7 +223,7 @@ fn from_list() {
                 |> Set.toList
             "#
         ),
-        RocList::from_slice(&[4, 2, 3, 1]),
+        RocList::from_slice(&[1, 2, 3, 4]),
         RocList<i64>
     );
 
@@ -244,6 +244,7 @@ fn from_list() {
 }
 
 #[test]
+#[ignore]
 #[cfg(any(feature = "gen-llvm"))]
 fn from_list_void() {
     assert_evals_to!(

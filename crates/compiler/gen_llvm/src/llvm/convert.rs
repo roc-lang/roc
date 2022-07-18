@@ -103,8 +103,6 @@ pub fn basic_type_from_builtin<'a, 'ctx, 'env>(
         Float(float_width) => float_type_from_float_width(env, *float_width).as_basic_type_enum(),
         Bool => context.bool_type().as_basic_type_enum(),
         Decimal => context.i128_type().as_basic_type_enum(),
-        Dict(_, _) => zig_dict_type(env).into(),
-        Set(_) => zig_dict_type(env).into(),
         List(_) => zig_list_type(env).into(),
         Str => zig_str_type(env).into(),
     }
@@ -258,10 +256,6 @@ pub fn str_list_int(ctx: &Context, target_info: TargetInfo) -> IntType<'_> {
         roc_target::PtrWidth::Bytes4 => ctx.i64_type(),
         roc_target::PtrWidth::Bytes8 => ctx.i128_type(),
     }
-}
-
-pub fn zig_dict_type<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> StructType<'ctx> {
-    env.module.get_struct_type("dict.RocDict").unwrap()
 }
 
 pub fn zig_list_type<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> StructType<'ctx> {

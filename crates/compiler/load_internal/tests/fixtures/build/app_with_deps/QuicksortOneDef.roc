@@ -7,8 +7,8 @@ quicksort = \originalList ->
             when partition low high list is
                 Pair partitionIndex partitioned ->
                     partitioned
-                        |> quicksortHelp low (partitionIndex - 1)
-                        |> quicksortHelp (partitionIndex + 1) high
+                    |> quicksortHelp low (partitionIndex - 1)
+                    |> quicksortHelp (partitionIndex + 1) high
         else
             list
 
@@ -18,8 +18,8 @@ quicksort = \originalList ->
         when Pair (List.get list i) (List.get list j) is
             Pair (Ok atI) (Ok atJ) ->
                 list
-                    |> List.set i atJ
-                    |> List.set j atI
+                |> List.set i atJ
+                |> List.set j atI
 
             _ ->
                 []

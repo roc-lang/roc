@@ -246,8 +246,8 @@ set = \list, index, value ->
 append : List a, a -> List a
 append = \list, element ->
     list
-        |> List.reserve 1
-        |> List.appendUnsafe element
+    |> List.reserve 1
+    |> List.appendUnsafe element
 
 ## Writes the element after the current last element unconditionally.
 ## In other words, it is assumed that
@@ -825,7 +825,7 @@ sublist = \list, config ->
     else
         sublistLowlevel list config.start config.len
 
-
+## low-level slicing operation that does no bounds checking
 sublistLowlevel : List elem, Nat, Nat -> List elem
 
 ## Intersperses `sep` between the elements of `list`
@@ -837,8 +837,8 @@ intersperse = \list, sep ->
     newList =
         List.walk list init \acc, elem ->
             acc
-                |> List.appendUnsafe elem
-                |> List.appendUnsafe sep
+            |> List.appendUnsafe elem
+            |> List.appendUnsafe sep
 
     List.dropLast newList
 

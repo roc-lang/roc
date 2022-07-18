@@ -2,18 +2,13 @@ use crate::llvm::bitcode::{
     call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_list_bitcode_fn,
     call_str_bitcode_fn, call_void_bitcode_fn,
 };
-use crate::llvm::build_dict::{
-    self, dict_contains, dict_difference, dict_empty, dict_get, dict_insert, dict_intersection,
-    dict_keys, dict_len, dict_remove, dict_union, dict_values, dict_walk, set_from_list,
-};
-use crate::llvm::build_hash::generic_hash;
 use crate::llvm::build_list::{
-    self, allocate_list, empty_polymorphic_list, list_append_unsafe, list_concat, list_drop_at,
-    list_get_unsafe, list_len, list_map, list_map2, list_map3, list_map4, list_prepend,
-    list_replace_unsafe, list_reserve, list_sort_with, list_sublist, list_swap,
+    self, allocate_list, empty_polymorphic_list, list_append_unsafe, list_capacity, list_concat,
+    list_drop_at, list_get_unsafe, list_len, list_map, list_map2, list_map3, list_map4,
+    list_prepend, list_replace_unsafe, list_reserve, list_sort_with, list_sublist, list_swap,
     list_symbol_to_c_abi, list_to_c_abi, list_with_capacity, pass_update_mode,
 };
-use crate::llvm::build_str::{str_from_float, str_from_int};
+use crate::llvm::build_str::{dec_to_str, str_from_float, str_from_int};
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
     self, argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout,
@@ -172,6 +167,41 @@ pub enum LlvmBackendMode {
     /// Provides a testing implementation of primitives (roc_alloc, roc_panic, etc)
     GenTest,
     WasmGenTest,
+    CliTest,
+}
+
+impl LlvmBackendMode {
+    pub(crate) fn has_host(self) -> bool {
+        match self {
+            LlvmBackendMode::Binary => true,
+            LlvmBackendMode::GenTest => false,
+            LlvmBackendMode::WasmGenTest => false,
+            LlvmBackendMode::CliTest => false,
+        }
+    }
+
+    /// In other words, catches exceptions and returns a result
+    fn returns_roc_result(self) -> bool {
+        match self {
+            LlvmBackendMode::Binary => false,
+            LlvmBackendMode::GenTest => true,
+            LlvmBackendMode::WasmGenTest => true,
+            LlvmBackendMode::CliTest => true,
+        }
+    }
+
+    fn runs_expects(self) -> bool {
+        match self {
+            LlvmBackendMode::Binary => false,
+            LlvmBackendMode::GenTest => false,
+            LlvmBackendMode::WasmGenTest => false,
+            LlvmBackendMode::CliTest => true,
+        }
+    }
+
+    fn runs_expects_in_separate_process(self) -> bool {
+        false
+    }
 }
 
 pub struct Env<'a, 'ctx, 'env> {
@@ -2265,15 +2295,6 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
         .into_pointer_value()
 }
 
-macro_rules! dict_key_value_layout {
-    ($dict_layout:expr) => {
-        match $dict_layout {
-            Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => (key_layout, value_layout),
-            _ => unreachable!("invalid dict layout"),
-        }
-    };
-}
-
 macro_rules! list_element_layout {
     ($list_layout:expr) => {
         match $list_layout {
@@ -2823,20 +2844,6 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
                             build_list::decref(env, value.into_struct_value(), alignment);
                         }
-                        Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
-                            debug_assert!(value.is_struct_value());
-                            let alignment = key_layout
-                                .alignment_bytes(env.target_info)
-                                .max(value_layout.alignment_bytes(env.target_info));
-
-                            build_dict::decref(env, value.into_struct_value(), alignment);
-                        }
-                        Layout::Builtin(Builtin::Set(key_layout)) => {
-                            debug_assert!(value.is_struct_value());
-                            let alignment = key_layout.alignment_bytes(env.target_info);
-
-                            build_dict::decref(env, value.into_struct_value(), alignment);
-                        }
 
                         _ if layout.is_refcounted() => {
                             if value.is_pointer_value() {
@@ -2875,18 +2882,16 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
         }
 
         Expect {
-            condition: cond,
-            region: _,
-            lookups: _,
+            condition: cond_symbol,
+            region,
+            lookups,
             layouts: _,
             remainder,
         } => {
-            // do stuff
-
             let bd = env.builder;
             let context = env.context;
 
-            let (cond, _cond_layout) = load_symbol_and_layout(scope, cond);
+            let (cond, _cond_layout) = load_symbol_and_layout(scope, cond_symbol);
 
             let condition = bd.build_int_compare(
                 IntPredicate::EQ,
@@ -2900,19 +2905,131 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
             bd.build_conditional_branch(condition, then_block, throw_block);
 
-            {
+            if env.mode.runs_expects() {
                 bd.position_at_end(throw_block);
 
                 match env.target_info.ptr_width() {
                     roc_target::PtrWidth::Bytes8 => {
-                        // temporary native implementation
-                        throw_exception(env, "An expectation failed!");
+                        let func = env
+                            .module
+                            .get_function(bitcode::UTILS_EXPECT_FAILED_START)
+                            .unwrap();
+
+                        let call_result = bd.build_call(func, &[], "call_expect_start_failed");
+
+                        let mut ptr = call_result
+                            .try_as_basic_value()
+                            .left()
+                            .unwrap()
+                            .into_pointer_value();
+
+                        {
+                            let value = env
+                                .context
+                                .i32_type()
+                                .const_int(region.start().offset as _, false);
+
+                            let cast_ptr = env.builder.build_pointer_cast(
+                                ptr,
+                                value.get_type().ptr_type(AddressSpace::Generic),
+                                "to_store_pointer",
+                            );
+
+                            env.builder.build_store(cast_ptr, value);
+
+                            // let increment = layout.stack_size(env.target_info);
+                            let increment = 4;
+                            let increment = env.ptr_int().const_int(increment as _, false);
+
+                            ptr = unsafe {
+                                env.builder.build_gep(ptr, &[increment], "increment_ptr")
+                            };
+                        }
+
+                        {
+                            let value = env
+                                .context
+                                .i32_type()
+                                .const_int(region.end().offset as _, false);
+
+                            let cast_ptr = env.builder.build_pointer_cast(
+                                ptr,
+                                value.get_type().ptr_type(AddressSpace::Generic),
+                                "to_store_pointer",
+                            );
+
+                            env.builder.build_store(cast_ptr, value);
+
+                            // let increment = layout.stack_size(env.target_info);
+                            let increment = 4;
+                            let increment = env.ptr_int().const_int(increment as _, false);
+
+                            ptr = unsafe {
+                                env.builder.build_gep(ptr, &[increment], "increment_ptr")
+                            };
+                        }
+
+                        {
+                            let region_bytes: u32 =
+                                unsafe { std::mem::transmute(cond_symbol.module_id()) };
+                            let value = env.context.i32_type().const_int(region_bytes as _, false);
+
+                            let cast_ptr = env.builder.build_pointer_cast(
+                                ptr,
+                                value.get_type().ptr_type(AddressSpace::Generic),
+                                "to_store_pointer",
+                            );
+
+                            env.builder.build_store(cast_ptr, value);
+
+                            // let increment = layout.stack_size(env.target_info);
+                            let increment = 4;
+                            let increment = env.ptr_int().const_int(increment as _, false);
+
+                            ptr = unsafe {
+                                env.builder.build_gep(ptr, &[increment], "increment_ptr")
+                            };
+                        }
+
+                        for lookup in lookups.iter() {
+                            let (value, layout) = load_symbol_and_layout(scope, lookup);
+
+                            let cast_ptr = env.builder.build_pointer_cast(
+                                ptr,
+                                value.get_type().ptr_type(AddressSpace::Generic),
+                                "to_store_pointer",
+                            );
+
+                            store_roc_value(env, *layout, cast_ptr, value);
+
+                            let increment = layout.stack_size(env.target_info);
+                            let increment = env.ptr_int().const_int(increment as _, false);
+
+                            ptr = unsafe {
+                                env.builder.build_gep(ptr, &[increment], "increment_ptr")
+                            };
+                        }
+
+                        // NOTE: signals to the parent process that an expect failed
+                        if env.mode.runs_expects_in_separate_process() {
+                            let func = env
+                                .module
+                                .get_function(bitcode::UTILS_EXPECT_FAILED_FINALIZE)
+                                .unwrap();
+
+                            bd.build_call(func, &[], "call_expect_finalize_failed");
+                        }
+
+                        bd.build_unconditional_branch(then_block);
                     }
                     roc_target::PtrWidth::Bytes4 => {
                         // temporary WASM implementation
                         throw_exception(env, "An expectation failed!");
                     }
                 }
+            } else {
+                bd.position_at_end(throw_block);
+                bd.build_unconditional_branch(then_block);
             }
 
             bd.position_at_end(then_block);
@@ -3537,24 +3654,21 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
 
     let arguments_for_call = &arguments_for_call.into_bump_slice();
 
-    let call_result = match env.mode {
-        LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest => {
-            debug_assert_eq!(args.len(), roc_function.get_params().len());
+    let call_result = if env.mode.returns_roc_result() {
+        debug_assert_eq!(args.len(), roc_function.get_params().len());
 
-            let roc_wrapper_function = make_exception_catcher(env, roc_function, return_layout);
-            debug_assert_eq!(
-                arguments_for_call.len(),
-                roc_wrapper_function.get_params().len()
-            );
+        let roc_wrapper_function = make_exception_catcher(env, roc_function, return_layout);
+        debug_assert_eq!(
+            arguments_for_call.len(),
+            roc_wrapper_function.get_params().len()
+        );
 
-            builder.position_at_end(entry);
+        builder.position_at_end(entry);
 
-            let wrapped_layout = roc_result_layout(env.arena, return_layout, env.target_info);
-            call_roc_function(env, roc_function, &wrapped_layout, arguments_for_call)
-        }
-        LlvmBackendMode::Binary => {
-            call_roc_function(env, roc_function, &return_layout, arguments_for_call)
-        }
+        let wrapped_layout = roc_result_layout(env.arena, return_layout, env.target_info);
+        call_roc_function(env, roc_function, &wrapped_layout, arguments_for_call)
+    } else {
+        call_roc_function(env, roc_function, &return_layout, arguments_for_call)
     };
 
     let output_arg_index = 0;
@@ -3823,7 +3937,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
     c_function_name: &str,
 ) -> FunctionValue<'ctx> {
     match env.mode {
-        LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest => {
+        LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest | LlvmBackendMode::CliTest => {
             return expose_function_to_host_help_c_abi_gen_test(
                 env,
                 ident_string,
@@ -3881,7 +3995,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
     debug_info_init!(env, size_function);
 
     let return_type = match env.mode {
-        LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest => {
+        LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest | LlvmBackendMode::CliTest => {
             roc_result_type(env, roc_function.get_type().get_return_type().unwrap()).into()
         }
 
@@ -4629,44 +4743,39 @@ pub fn build_closure_caller<'a, 'ctx, 'env>(
         }
     }
 
-    match env.mode {
-        LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest => {
-            let call_result = set_jump_and_catch_long_jump(
-                env,
-                function_value,
-                evaluator,
-                &evaluator_arguments,
-                *return_layout,
-            );
+    if env.mode.returns_roc_result() {
+        let call_result = set_jump_and_catch_long_jump(
+            env,
+            function_value,
+            evaluator,
+            &evaluator_arguments,
+            *return_layout,
+        );
 
-            builder.build_store(output, call_result);
-        }
+        builder.build_store(output, call_result);
+    } else {
+        let call_result = call_roc_function(env, evaluator, return_layout, &evaluator_arguments);
 
-        LlvmBackendMode::Binary => {
-            let call_result =
-                call_roc_function(env, evaluator, return_layout, &evaluator_arguments);
+        if return_layout.is_passed_by_reference(env.target_info) {
+            let align_bytes = return_layout.alignment_bytes(env.target_info);
 
-            if return_layout.is_passed_by_reference(env.target_info) {
-                let align_bytes = return_layout.alignment_bytes(env.target_info);
+            if align_bytes > 0 {
+                let size = env
+                    .ptr_int()
+                    .const_int(return_layout.stack_size(env.target_info) as u64, false);
 
-                if align_bytes > 0 {
-                    let size = env
-                        .ptr_int()
-                        .const_int(return_layout.stack_size(env.target_info) as u64, false);
-
-                    env.builder
-                        .build_memcpy(
-                            output,
-                            align_bytes,
-                            call_result.into_pointer_value(),
-                            align_bytes,
-                            size,
-                        )
-                        .unwrap();
-                }
-            } else {
-                builder.build_store(output, call_result);
+                env.builder
+                    .build_memcpy(
+                        output,
+                        align_bytes,
+                        call_result.into_pointer_value(),
+                        align_bytes,
+                        size,
+                    )
+                    .unwrap();
             }
+        } else {
+            builder.build_store(output, call_result);
         }
     };
 
@@ -5341,40 +5450,6 @@ fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!("invalid list layout"),
             }
         }
-        DictWalk { xs, state } => {
-            let (dict, dict_layout) = load_symbol_and_layout(scope, xs);
-            let (default, default_layout) = load_symbol_and_layout(scope, state);
-
-            let (function, closure, closure_layout) = function_details!();
-
-            match dict_layout {
-                Layout::Builtin(Builtin::Dict(key_layout, value_layout)) => {
-                    let argument_layouts = &[*default_layout, **key_layout, **value_layout];
-
-                    let roc_function_call = roc_function_call(
-                        env,
-                        layout_ids,
-                        function,
-                        closure,
-                        closure_layout,
-                        function_owns_closure_data,
-                        argument_layouts,
-                        result_layout,
-                    );
-
-                    dict_walk(
-                        env,
-                        roc_function_call,
-                        dict,
-                        default,
-                        key_layout,
-                        value_layout,
-                        default_layout,
-                    )
-                }
-                _ => unreachable!("invalid dict layout"),
-            }
-        }
     }
 }
 
@@ -5496,7 +5571,14 @@ fn run_low_level<'a, 'ctx, 'env>(
             // Str.fromFloat : Float * -> Str
             debug_assert_eq!(args.len(), 1);
 
-            str_from_float(env, scope, args[0])
+            let (float, float_layout) = load_symbol_and_layout(scope, &args[0]);
+
+            let float_width = match float_layout {
+                Layout::Builtin(Builtin::Float(float_width)) => *float_width,
+                _ => unreachable!(),
+            };
+
+            str_from_float(env, float, float_width)
         }
         StrFromUtf8Range => {
             debug_assert_eq!(args.len(), 3);
@@ -5586,11 +5668,18 @@ fn run_low_level<'a, 'ctx, 'env>(
             call_bitcode_fn(env, &[string, index], bitcode::STR_GET_SCALAR_UNSAFE)
         }
         StrCountUtf8Bytes => {
-            // Str.countGraphemes : Str -> Nat
+            // Str.countUtf8Bytes : Str -> Nat
             debug_assert_eq!(args.len(), 1);
 
             let string = load_symbol(scope, &args[0]);
             call_bitcode_fn(env, &[string], bitcode::STR_COUNT_UTF8_BYTES)
+        }
+        StrGetCapacity => {
+            // Str.capacity : Str -> Nat
+            debug_assert_eq!(args.len(), 1);
+
+            let string = load_symbol(scope, &args[0]);
+            call_bitcode_fn(env, &[string], bitcode::STR_CAPACITY)
         }
         StrSubstringUnsafe => {
             // Str.substringUnsafe : Str, Nat, Nat -> Str
@@ -5639,12 +5728,20 @@ fn run_low_level<'a, 'ctx, 'env>(
             call_str_bitcode_fn(env, &[string], bitcode::STR_TRIM_RIGHT)
         }
         ListLen => {
-            // List.len : List * -> Int
+            // List.len : List * -> Nat
             debug_assert_eq!(args.len(), 1);
 
             let arg = load_symbol(scope, &args[0]);
 
             list_len(env.builder, arg.into_struct_value()).into()
+        }
+        ListGetCapacity => {
+            // List.capacity : List * -> Nat
+            debug_assert_eq!(args.len(), 1);
+
+            let arg = load_symbol(scope, &args[0]);
+
+            list_capacity(env.builder, arg.into_struct_value()).into()
         }
         ListWithCapacity => {
             // List.withCapacity : Nat -> List a
@@ -5815,9 +5912,10 @@ fn run_low_level<'a, 'ctx, 'env>(
 
                     str_from_int(env, int, *int_width)
                 }
-                Layout::Builtin(Builtin::Float(_float_width)) => {
-                    str_from_float(env, scope, args[0])
+                Layout::Builtin(Builtin::Float(float_width)) => {
+                    str_from_float(env, num, *float_width)
                 }
+                Layout::Builtin(Builtin::Decimal) => dec_to_str(env, num),
                 _ => unreachable!(),
             }
         }
@@ -6127,117 +6225,10 @@ fn run_low_level<'a, 'ctx, 'env>(
             BasicValueEnum::IntValue(bool_val)
         }
         Hash => {
-            debug_assert_eq!(args.len(), 2);
-            let seed = load_symbol(scope, &args[0]);
-            let (value, layout) = load_symbol_and_layout(scope, &args[1]);
-
-            debug_assert!(seed.is_int_value());
-
-            generic_hash(env, layout_ids, seed.into_int_value(), value, layout).into()
-        }
-        DictSize => {
-            debug_assert_eq!(args.len(), 1);
-            dict_len(env, scope, args[0])
-        }
-        DictEmpty => {
-            debug_assert_eq!(args.len(), 0);
-            dict_empty(env)
-        }
-        DictInsert => {
-            debug_assert_eq!(args.len(), 3);
-
-            let (dict, _) = load_symbol_and_layout(scope, &args[0]);
-            let (key, key_layout) = load_symbol_and_layout(scope, &args[1]);
-            let (value, value_layout) = load_symbol_and_layout(scope, &args[2]);
-            dict_insert(env, layout_ids, dict, key, key_layout, value, value_layout)
-        }
-        DictRemove => {
-            debug_assert_eq!(args.len(), 2);
-
-            let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
-            let key = load_symbol(scope, &args[1]);
-
-            let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
-            dict_remove(env, layout_ids, dict, key, key_layout, value_layout)
-        }
-        DictContains => {
-            debug_assert_eq!(args.len(), 2);
-
-            let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
-            let key = load_symbol(scope, &args[1]);
-
-            let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
-            dict_contains(env, layout_ids, dict, key, key_layout, value_layout)
-        }
-        DictGetUnsafe => {
-            debug_assert_eq!(args.len(), 2);
-
-            let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
-            let key = load_symbol(scope, &args[1]);
-
-            let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
-            dict_get(env, layout_ids, dict, key, key_layout, value_layout)
-        }
-        DictKeys => {
-            debug_assert_eq!(args.len(), 1);
-
-            let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
-            dict_keys(env, layout_ids, dict, key_layout, value_layout)
-        }
-        DictValues => {
-            debug_assert_eq!(args.len(), 1);
-
-            let (dict, dict_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
-            dict_values(env, layout_ids, dict, key_layout, value_layout)
-        }
-        DictUnion => {
-            debug_assert_eq!(args.len(), 2);
-
-            let (dict1, dict_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (dict2, _) = load_symbol_and_layout(scope, &args[1]);
-
-            let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
-            dict_union(env, layout_ids, dict1, dict2, key_layout, value_layout)
-        }
-        DictDifference => {
-            debug_assert_eq!(args.len(), 2);
-
-            let (dict1, dict_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (dict2, _) = load_symbol_and_layout(scope, &args[1]);
-
-            let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
-            dict_difference(env, layout_ids, dict1, dict2, key_layout, value_layout)
-        }
-        DictIntersection => {
-            debug_assert_eq!(args.len(), 2);
-
-            let (dict1, dict_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (dict2, _) = load_symbol_and_layout(scope, &args[1]);
-
-            let (key_layout, value_layout) = dict_key_value_layout!(dict_layout);
-            dict_intersection(env, layout_ids, dict1, dict2, key_layout, value_layout)
-        }
-        SetFromList => {
-            debug_assert_eq!(args.len(), 1);
-
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            let key_layout = list_element_layout!(list_layout);
-            set_from_list(env, layout_ids, list, key_layout)
-        }
-        SetToDict => {
-            debug_assert_eq!(args.len(), 1);
-
-            let (set, _set_layout) = load_symbol_and_layout(scope, &args[0]);
-
-            set
+            unimplemented!()
         }
 
-        ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith | DictWalk => {
+        ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith => {
             unreachable!("these are higher order, and are handled elsewhere")
         }
 
@@ -6301,10 +6292,6 @@ fn to_cc_type_builtin<'a, 'ctx, 'env>(
             let struct_type = env.context.struct_type(&field_types, false);
 
             struct_type.ptr_type(address_space).into()
-        }
-        Builtin::Dict(_, _) | Builtin::Set(_) => {
-            // TODO verify this is what actually happens
-            basic_type_from_builtin(env, builtin)
         }
     }
 }

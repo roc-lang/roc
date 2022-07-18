@@ -33,7 +33,7 @@ pub fn generate_bindings(decl_src: &str) -> String {
         let mut file = File::create(file_path).unwrap();
         writeln!(file, "{}", &src).unwrap();
 
-        let result = load_types(full_file_path, dir.path().to_path_buf(), Threading::Single);
+        let result = load_types(full_file_path, Threading::Single);
 
         dir.close().expect("Unable to close tempdir");
 

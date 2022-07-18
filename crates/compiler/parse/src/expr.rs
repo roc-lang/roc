@@ -1,6 +1,6 @@
 use crate::ast::{
-    AssignedField, Collection, CommentOrNewline, Defs, Derived, Expr, ExtractSpaces, Has, Pattern,
-    Spaceable, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, Has, HasAbilities,
+    Pattern, Spaceable, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     space0_after_e, space0_around_ee, space0_before_e, space0_before_optional_after, space0_e,
@@ -953,7 +953,7 @@ fn alias_signature_with_space_before<'a>(
 
 fn opaque_signature_with_space_before<'a>(
     min_indent: u32,
-) -> impl Parser<'a, (Loc<TypeAnnotation<'a>>, Option<Loc<Derived<'a>>>), EExpr<'a>> {
+) -> impl Parser<'a, (Loc<TypeAnnotation<'a>>, Option<Loc<HasAbilities<'a>>>), EExpr<'a>> {
     and!(
         specialize(
             EExpr::Type,
@@ -966,7 +966,7 @@ fn opaque_signature_with_space_before<'a>(
         optional(specialize(
             EExpr::Type,
             space0_before_e(
-                type_annotation::has_derived(min_indent),
+                type_annotation::has_abilities(min_indent),
                 min_indent,
                 EType::TIndentStart,
             ),
@@ -2085,7 +2085,7 @@ mod when {
         }
     }
 
-    /// Parsing alternative patterns in when branches.
+    /// Parsing alternative patterns in `when` branches.
     fn branch_alternatives<'a>(
         min_indent: u32,
         options: ExprParseOptions,
@@ -2180,7 +2180,7 @@ mod when {
 
                             let parser = sep_by1(
                                 word1(b'|', EWhen::Bar),
-                                branch_single_alternative(pattern_indent + 1),
+                                branch_single_alternative(pattern_indent),
                             );
 
                             match parser.parse(arena, state) {

@@ -228,6 +228,7 @@ fn create_llvm_module<'a>(
 
     let (main_fn_name, main_fn) = match config.mode {
         LlvmBackendMode::Binary => unreachable!(),
+        LlvmBackendMode::CliTest => unreachable!(),
         LlvmBackendMode::WasmGenTest => roc_gen_llvm::llvm::build::build_wasm_test_wrapper(
             &env,
             config.opt_level,

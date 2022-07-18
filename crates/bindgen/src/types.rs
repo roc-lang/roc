@@ -1,6 +1,7 @@
 use crate::enums::Enums;
 use crate::structs::Structs;
 use bumpalo::Bump;
+use fnv::FnvHashMap;
 use roc_builtins::bitcode::{
     FloatWidth::*,
     IntWidth::{self, *},
@@ -26,6 +27,9 @@ impl TypeId {
     /// have *some* TypeId value until we later in the process determine
     /// their real TypeId and can go back and fix them up.
     pub(crate) const PENDING: Self = Self(usize::MAX);
+
+    /// When adding, we check for overflow based on whether we've exceeded this.
+    const MAX: Self = Self(Self::PENDING.0 - 1);
 }
 
 #[derive(Debug, Clone)]
@@ -34,6 +38,9 @@ pub struct Types {
     types: Vec<RocType>,
     sizes: Vec<u32>,
     aligns: Vec<u32>,
+
+    // Needed to check for duplicates
+    types_by_name: FnvHashMap<String, TypeId>,
 
     /// Dependencies - that is, which type depends on which other type.
     /// This is important for declaration order in C; we need to output a
@@ -47,14 +54,280 @@ impl Types {
         Self {
             target: target_info,
             types: Vec::with_capacity(cap),
+            types_by_name: FnvHashMap::with_capacity_and_hasher(10, Default::default()),
             sizes: Vec::new(),
             aligns: Vec::new(),
             deps: VecMap::with_capacity(cap),
         }
     }
 
-    pub fn add(&mut self, typ: RocType, layout: Layout<'_>) -> TypeId {
+    pub fn is_equivalent(&self, a: &RocType, b: &RocType) -> bool {
+        use RocType::*;
+
+        match (a, b) {
+            (RocStr, RocStr) | (Bool, Bool) | (EmptyTagUnion, EmptyTagUnion) | (Unit, Unit) => true,
+            (RocResult(ok_a, err_a), RocResult(ok_b, err_b)) => {
+                self.is_equivalent(self.get_type(*ok_a), self.get_type(*ok_b))
+                    && self.is_equivalent(self.get_type(*err_a), self.get_type(*err_b))
+            }
+            (Num(num_a), Num(num_b)) => num_a == num_b,
+            (RocList(elem_a), RocList(elem_b))
+            | (RocSet(elem_a), RocSet(elem_b))
+            | (RocBox(elem_a), RocBox(elem_b))
+            | (RecursivePointer(elem_a), RecursivePointer(elem_b)) => {
+                self.is_equivalent(self.get_type(*elem_a), self.get_type(*elem_b))
+            }
+            (RocDict(key_a, val_a), RocDict(key_b, val_b)) => {
+                self.is_equivalent(self.get_type(*key_a), self.get_type(*key_b))
+                    && self.is_equivalent(self.get_type(*val_a), self.get_type(*val_b))
+            }
+            (TagUnion(union_a), TagUnion(union_b)) => {
+                use RocTagUnion::*;
+
+                match (union_a, union_b) {
+                    (Enumeration { tags: tags_a, .. }, Enumeration { tags: tags_b, .. }) => {
+                        tags_a == tags_b
+                    }
+                    (
+                        NonRecursive {
+                            tags: tags_a,
+                            discriminant_type: disc_a,
+                            ..
+                        },
+                        NonRecursive {
+                            tags: tags_b,
+                            discriminant_type: disc_b,
+                            ..
+                        },
+                    )
+                    | (
+                        Recursive {
+                            tags: tags_a,
+                            discriminant_type: disc_a,
+                            ..
+                        },
+                        Recursive {
+                            tags: tags_b,
+                            discriminant_type: disc_b,
+                            ..
+                        },
+                    ) => {
+                        if disc_a != disc_b || tags_a.len() != tags_b.len() {
+                            false
+                        } else {
+                            tags_a.iter().zip(tags_b.iter()).all(
+                                |((name_a, opt_id_a), (name_b, opt_id_b))| {
+                                    name_a == name_b
+                                        && match (opt_id_a, opt_id_b) {
+                                            (Some(id_a), Some(id_b)) => self.is_equivalent(
+                                                self.get_type(*id_a),
+                                                self.get_type(*id_b),
+                                            ),
+                                            (None, None) => true,
+                                            (None, Some(_)) | (Some(_), None) => false,
+                                        }
+                                },
+                            )
+                        }
+                    }
+                    (
+                        NonNullableUnwrapped {
+                            content: content_a, ..
+                        },
+                        NonNullableUnwrapped {
+                            content: content_b, ..
+                        },
+                    ) => content_a == content_b,
+                    (
+                        NullableWrapped {
+                            null_tag: null_a,
+                            non_null_tags: non_null_a,
+                            ..
+                        },
+                        NullableWrapped {
+                            null_tag: null_b,
+                            non_null_tags: non_null_b,
+                            ..
+                        },
+                    ) => {
+                        if null_a != null_b || non_null_a.len() != non_null_b.len() {
+                            false
+                        } else {
+                            non_null_a.iter().zip(non_null_b.iter()).all(
+                                |((disc_a, name_a, opt_id_a), (disc_b, name_b, opt_id_b))| {
+                                    disc_a == disc_b
+                                        && name_a == name_b
+                                        && match (opt_id_a, opt_id_b) {
+                                            (Some(id_a), Some(id_b)) => self.is_equivalent(
+                                                self.get_type(*id_a),
+                                                self.get_type(*id_b),
+                                            ),
+                                            (None, None) => true,
+                                            (None, Some(_)) | (Some(_), None) => false,
+                                        }
+                                },
+                            )
+                        }
+                    }
+                    (
+                        NullableUnwrapped {
+                            null_tag: null_tag_a,
+                            non_null_tag: non_null_tag_a,
+                            non_null_payload: non_null_payload_a,
+                            null_represents_first_tag: null_represents_first_tag_a,
+                            ..
+                        },
+                        NullableUnwrapped {
+                            null_tag: null_tag_b,
+                            non_null_tag: non_null_tag_b,
+                            non_null_payload: non_null_payload_b,
+                            null_represents_first_tag: null_represents_first_tag_b,
+                            ..
+                        },
+                    ) => {
+                        null_tag_a == null_tag_b
+                            && non_null_tag_a == non_null_tag_b
+                            && non_null_payload_a == non_null_payload_b
+                            && null_represents_first_tag_a == null_represents_first_tag_b
+                    }
+                    // These are all listed explicitly so that if we ever add a new variant,
+                    // we'll get an exhaustiveness error here.
+                    (Enumeration { .. }, _)
+                    | (_, Enumeration { .. })
+                    | (NonRecursive { .. }, _)
+                    | (_, NonRecursive { .. })
+                    | (Recursive { .. }, _)
+                    | (_, Recursive { .. })
+                    | (NonNullableUnwrapped { .. }, _)
+                    | (_, NonNullableUnwrapped { .. })
+                    | (NullableUnwrapped { .. }, _)
+                    | (_, NullableUnwrapped { .. }) => false,
+                }
+            }
+            (
+                Struct {
+                    fields: fields_a, ..
+                },
+                Struct {
+                    fields: fields_b, ..
+                },
+            ) => {
+                if fields_a.len() == fields_b.len() {
+                    fields_a
+                        .iter()
+                        .zip(fields_b.iter())
+                        .all(|((name_a, id_a), (name_b, id_b))| {
+                            name_a == name_b
+                                && self.is_equivalent(self.get_type(*id_a), self.get_type(*id_b))
+                        })
+                } else {
+                    false
+                }
+            }
+            (
+                TagUnionPayload {
+                    fields: fields_a, ..
+                },
+                TagUnionPayload {
+                    fields: fields_b, ..
+                },
+            ) => {
+                if fields_a.len() == fields_b.len() {
+                    fields_a
+                        .iter()
+                        .zip(fields_b.iter())
+                        .all(|((name_a, id_a), (name_b, id_b))| {
+                            name_a == name_b
+                                && self.is_equivalent(self.get_type(*id_a), self.get_type(*id_b))
+                        })
+                } else {
+                    false
+                }
+            }
+            (
+                Function {
+                    name: name_a,
+                    args: args_a,
+                    ret: ret_a,
+                },
+                Function {
+                    name: name_b,
+                    args: args_b,
+                    ret: ret_b,
+                },
+            ) => {
+                // for functions, the name is actually important because two functions
+                // with the same type could have completely different implementations!
+                if name_a == name_b
+                    && args_a.len() == args_b.len()
+                    && self.is_equivalent(self.get_type(*ret_a), self.get_type(*ret_b))
+                {
+                    args_a.iter().zip(args_b.iter()).all(|(id_a, id_b)| {
+                        self.is_equivalent(self.get_type(*id_a), self.get_type(*id_b))
+                    })
+                } else {
+                    false
+                }
+            }
+            // These are all listed explicitly so that if we ever add a new variant,
+            // we'll get an exhaustiveness error here.
+            (RocStr, _)
+            | (_, RocStr)
+            | (Bool, _)
+            | (_, Bool)
+            | (RocResult(_, _), _)
+            | (_, RocResult(_, _))
+            | (Num(_), _)
+            | (_, Num(_))
+            | (RocList(_), _)
+            | (_, RocList(_))
+            | (RocDict(_, _), _)
+            | (_, RocDict(_, _))
+            | (RocSet(_), _)
+            | (_, RocSet(_))
+            | (RocBox(_), _)
+            | (_, RocBox(_))
+            | (TagUnion(_), _)
+            | (_, TagUnion(_))
+            | (EmptyTagUnion, _)
+            | (_, EmptyTagUnion)
+            | (Struct { .. }, _)
+            | (_, Struct { .. })
+            | (TagUnionPayload { .. }, _)
+            | (_, TagUnionPayload { .. })
+            | (RecursivePointer(_), _)
+            | (_, RecursivePointer(_))
+            | (Function { .. }, _)
+            | (_, Function { .. }) => false,
+        }
+    }
+
+    pub fn add_named(&mut self, name: String, typ: RocType, layout: Layout<'_>) -> TypeId {
+        if let Some(existing_type_id) = self.types_by_name.get(&name) {
+            let existing_type = self.get_type(*existing_type_id);
+
+            if self.is_equivalent(existing_type, &typ) {
+                *existing_type_id
+            } else {
+                // TODO report this gracefully!
+                panic!(
+                    "Duplicate name detected - {:?} could refer to either {:?} or {:?}",
+                    name, existing_type, typ
+                );
+            }
+        } else {
+            let id = self.add_anonymous(typ, layout);
+
+            self.types_by_name.insert(name, id);
+
+            id
+        }
+    }
+
+    pub fn add_anonymous(&mut self, typ: RocType, layout: Layout<'_>) -> TypeId {
         let id = TypeId(self.types.len());
+
+        assert!(id.0 <= TypeId::MAX.0);
 
         self.types.push(typ);
         self.sizes
@@ -138,12 +411,14 @@ impl Types {
 pub enum RocType {
     RocStr,
     Bool,
+    RocResult(TypeId, TypeId),
     Num(RocNum),
     RocList(TypeId),
     RocDict(TypeId, TypeId),
     RocSet(TypeId),
     RocBox(TypeId),
     TagUnion(RocTagUnion),
+    EmptyTagUnion,
     Struct {
         name: String,
         fields: Vec<(String, TypeId)>,
@@ -156,6 +431,13 @@ pub enum RocType {
     /// this would be the field of Cons containing the (recursive) StrConsList type,
     /// and the TypeId is the TypeId of StrConsList itself.
     RecursivePointer(TypeId),
+    Function {
+        name: String,
+        args: Vec<TypeId>,
+        ret: TypeId,
+    },
+    /// A zero-sized type, such as an empty record or a single-tag union with no payload
+    Unit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
@@ -199,136 +481,6 @@ impl RocNum {
         };
 
         answer as u32
-    }
-}
-
-impl RocType {
-    /// Useful when determining whether to derive Copy in a Rust type.
-    pub fn has_pointer(&self, types: &Types) -> bool {
-        match self {
-            RocType::Bool
-            | RocType::Num(_)
-            | RocType::TagUnion(RocTagUnion::Enumeration { .. }) => false,
-            RocType::RocStr
-            | RocType::RocList(_)
-            | RocType::RocDict(_, _)
-            | RocType::RocSet(_)
-            | RocType::RocBox(_)
-            | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { .. })
-            | RocType::TagUnion(RocTagUnion::NullableUnwrapped { .. })
-            | RocType::TagUnion(RocTagUnion::NullableWrapped { .. })
-            | RocType::TagUnion(RocTagUnion::Recursive { .. })
-            | RocType::RecursivePointer { .. } => true,
-            RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => {
-                tags.iter().any(|(_, payloads)| {
-                    payloads
-                        .iter()
-                        .any(|id| types.get_type(*id).has_pointer(types))
-                })
-            }
-            RocType::Struct { fields, .. } => fields
-                .iter()
-                .any(|(_, type_id)| types.get_type(*type_id).has_pointer(types)),
-            RocType::TagUnionPayload { fields, .. } => fields
-                .iter()
-                .any(|(_, type_id)| types.get_type(*type_id).has_pointer(types)),
-        }
-    }
-
-    /// Useful when determining whether to derive Eq, Ord, and Hash in a Rust type.
-    pub fn has_float(&self, types: &Types) -> bool {
-        self.has_float_help(types, &[])
-    }
-
-    fn has_float_help(&self, types: &Types, do_not_recurse: &[TypeId]) -> bool {
-        match self {
-            RocType::Num(num) => {
-                use RocNum::*;
-
-                match num {
-                    F32 | F64 | F128 => true,
-                    I8 | U8 | I16 | U16 | I32 | U32 | I64 | U64 | I128 | U128 | Dec => false,
-                }
-            }
-            RocType::RocStr
-            | RocType::Bool
-            | RocType::TagUnion(RocTagUnion::Enumeration { .. }) => false,
-            RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
-                types.get_type(*id).has_float_help(types, do_not_recurse)
-            }
-            RocType::RocDict(key_id, val_id) => {
-                types
-                    .get_type(*key_id)
-                    .has_float_help(types, do_not_recurse)
-                    || types
-                        .get_type(*val_id)
-                        .has_float_help(types, do_not_recurse)
-            }
-            RocType::Struct { fields, .. } => fields.iter().any(|(_, type_id)| {
-                types
-                    .get_type(*type_id)
-                    .has_float_help(types, do_not_recurse)
-            }),
-            RocType::TagUnionPayload { fields, .. } => fields.iter().any(|(_, type_id)| {
-                types
-                    .get_type(*type_id)
-                    .has_float_help(types, do_not_recurse)
-            }),
-            RocType::TagUnion(RocTagUnion::Recursive { tags, .. })
-            | RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => {
-                tags.iter().any(|(_, payloads)| {
-                    payloads
-                        .iter()
-                        .any(|id| types.get_type(*id).has_float_help(types, do_not_recurse))
-                })
-            }
-            RocType::TagUnion(RocTagUnion::NullableWrapped { non_null_tags, .. }) => {
-                non_null_tags.iter().any(|(_, _, payloads)| {
-                    payloads
-                        .iter()
-                        .any(|id| types.get_type(*id).has_float_help(types, do_not_recurse))
-                })
-            }
-            RocType::TagUnion(RocTagUnion::NullableUnwrapped {
-                non_null_payload: content,
-                ..
-            })
-            | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { content, .. })
-            | RocType::RecursivePointer(content) => {
-                if do_not_recurse.contains(content) {
-                    false
-                } else {
-                    let mut do_not_recurse: Vec<TypeId> = do_not_recurse.into();
-
-                    do_not_recurse.push(*content);
-
-                    types
-                        .get_type(*content)
-                        .has_float_help(types, &do_not_recurse)
-                }
-            }
-        }
-    }
-
-    /// Useful when determining whether to derive Default in a Rust type.
-    pub fn has_enumeration(&self, types: &Types) -> bool {
-        match self {
-            RocType::TagUnion { .. } | RocType::RecursivePointer { .. } => true,
-            RocType::RocStr | RocType::Bool | RocType::Num(_) => false,
-            RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
-                types.get_type(*id).has_enumeration(types)
-            }
-            RocType::RocDict(key_id, val_id) => {
-                types.get_type(*key_id).has_enumeration(types)
-                    || types.get_type(*val_id).has_enumeration(types)
-            }
-            RocType::Struct { fields, .. } => fields
-                .iter()
-                .any(|(_, type_id)| types.get_type(*type_id).has_enumeration(types)),
-            RocType::TagUnionPayload { fields, .. } => fields
-                .iter()
-                .any(|(_, type_id)| types.get_type(*type_id).has_enumeration(types)),
-        }
     }
 }
 
@@ -558,23 +710,112 @@ fn add_type_help<'a>(
                 }
             }
         },
-        Content::Structure(FlatType::Func(_, _, _)) => {
-            todo!()
+        Content::Structure(FlatType::Func(args, closure_var, ret_var)) => {
+            let args = env.subs.get_subs_slice(*args);
+            let mut arg_type_ids = Vec::with_capacity(args.len());
+
+            for arg_var in args {
+                let arg_layout = env
+                    .layout_cache
+                    .from_var(env.arena, *arg_var, env.subs)
+                    .expect("Something weird ended up in the content");
+
+                arg_type_ids.push(add_type_help(env, arg_layout, *arg_var, None, types));
+            }
+
+            let ret_type_id = {
+                let ret_layout = env
+                    .layout_cache
+                    .from_var(env.arena, *ret_var, env.subs)
+                    .expect("Something weird ended up in the content");
+
+                add_type_help(env, ret_layout, *ret_var, None, types)
+            };
+
+            let name = format!("TODO_roc_function_{:?}", closure_var);
+            let fn_type_id = types.add_named(
+                name.clone(),
+                RocType::Function {
+                    name,
+                    args: arg_type_ids.clone(),
+                    ret: ret_type_id,
+                },
+                layout,
+            );
+
+            types.depends(fn_type_id, ret_type_id);
+
+            for arg_type_id in arg_type_ids {
+                types.depends(fn_type_id, arg_type_id);
+            }
+
+            fn_type_id
         }
         Content::Structure(FlatType::FunctionOrTagUnion(_, _, _)) => {
             todo!()
         }
         Content::Structure(FlatType::Erroneous(_)) => todo!(),
-        Content::Structure(FlatType::EmptyRecord) => todo!(),
+        Content::Structure(FlatType::EmptyRecord) => types.add_anonymous(RocType::Unit, layout),
         Content::Structure(FlatType::EmptyTagUnion) => {
-            // This can happen when unwrapping a tag union; don't do anything.
-            todo!()
+            types.add_anonymous(RocType::EmptyTagUnion, layout)
         }
-        Content::Alias(name, _, real_var, _) => {
+        Content::Alias(name, alias_vars, real_var, _) => {
             if name.is_builtin() {
                 match layout {
                     Layout::Builtin(builtin) => {
                         add_builtin_type(env, builtin, var, opt_name, types, layout)
+                    }
+                    Layout::Union(union_layout) if *name == Symbol::BOOL_BOOL => {
+                        if cfg!(debug_assertions) {
+                            match union_layout {
+                                UnionLayout::NonRecursive(tag_layouts) => {
+                                    // Bool should always have exactly two tags: True and False
+                                    debug_assert_eq!(tag_layouts.len(), 2);
+
+                                    // Both tags should have no payload
+                                    debug_assert_eq!(tag_layouts[0].len(), 0);
+                                    debug_assert_eq!(tag_layouts[1].len(), 0);
+                                }
+                                _ => debug_assert!(false),
+                            }
+                        }
+
+                        types.add_anonymous(RocType::Bool, layout)
+                    }
+                    Layout::Union(union_layout) if *name == Symbol::RESULT_RESULT => {
+                        match union_layout {
+                            UnionLayout::NonRecursive(tags) => {
+                                // Result should always have exactly two tags: Ok and Err
+                                debug_assert_eq!(tags.len(), 2);
+
+                                let type_vars =
+                                    env.subs.get_subs_slice(alias_vars.type_variables());
+
+                                let ok_var = type_vars[0];
+                                let ok_layout =
+                                    env.layout_cache.from_var(env.arena, ok_var, subs).unwrap();
+                                let ok_id = add_type_help(env, ok_layout, ok_var, None, types);
+
+                                let err_var = type_vars[1];
+                                let err_layout =
+                                    env.layout_cache.from_var(env.arena, err_var, subs).unwrap();
+                                let err_id = add_type_help(env, err_layout, err_var, None, types);
+
+                                let type_id =
+                                    types.add_anonymous(RocType::RocResult(ok_id, err_id), layout);
+
+                                types.depends(type_id, ok_id);
+                                types.depends(type_id, err_id);
+
+                                type_id
+                            }
+                            UnionLayout::Recursive(_)
+                            | UnionLayout::NonNullableUnwrapped(_)
+                            | UnionLayout::NullableWrapped { .. }
+                            | UnionLayout::NullableUnwrapped { .. } => {
+                                unreachable!();
+                            }
+                        }
                     }
                     _ => {
                         unreachable!()
@@ -589,7 +830,7 @@ fn add_type_help<'a>(
         Content::RangedNumber(_) => todo!(),
         Content::Error => todo!(),
         Content::RecursionVar { structure, .. } => {
-            let type_id = types.add(RocType::RecursivePointer(TypeId::PENDING), layout);
+            let type_id = types.add_anonymous(RocType::RecursivePointer(TypeId::PENDING), layout);
             let structure_layout = env
                 .layout_cache
                 .from_var(env.arena, *structure, subs)
@@ -619,55 +860,31 @@ fn add_builtin_type<'a>(
 
     match (builtin, builtin_type) {
         (Builtin::Int(width), _) => match width {
-            U8 => types.add(RocType::Num(RocNum::U8), layout),
-            U16 => types.add(RocType::Num(RocNum::U16), layout),
-            U32 => types.add(RocType::Num(RocNum::U32), layout),
-            U64 => types.add(RocType::Num(RocNum::U64), layout),
-            U128 => types.add(RocType::Num(RocNum::U128), layout),
-            I8 => types.add(RocType::Num(RocNum::I8), layout),
-            I16 => types.add(RocType::Num(RocNum::I16), layout),
-            I32 => types.add(RocType::Num(RocNum::I32), layout),
-            I64 => types.add(RocType::Num(RocNum::I64), layout),
-            I128 => types.add(RocType::Num(RocNum::I128), layout),
+            U8 => types.add_anonymous(RocType::Num(RocNum::U8), layout),
+            U16 => types.add_anonymous(RocType::Num(RocNum::U16), layout),
+            U32 => types.add_anonymous(RocType::Num(RocNum::U32), layout),
+            U64 => types.add_anonymous(RocType::Num(RocNum::U64), layout),
+            U128 => types.add_anonymous(RocType::Num(RocNum::U128), layout),
+            I8 => types.add_anonymous(RocType::Num(RocNum::I8), layout),
+            I16 => types.add_anonymous(RocType::Num(RocNum::I16), layout),
+            I32 => types.add_anonymous(RocType::Num(RocNum::I32), layout),
+            I64 => types.add_anonymous(RocType::Num(RocNum::I64), layout),
+            I128 => types.add_anonymous(RocType::Num(RocNum::I128), layout),
         },
         (Builtin::Float(width), _) => match width {
-            F32 => types.add(RocType::Num(RocNum::F32), layout),
-            F64 => types.add(RocType::Num(RocNum::F64), layout),
-            F128 => types.add(RocType::Num(RocNum::F128), layout),
+            F32 => types.add_anonymous(RocType::Num(RocNum::F32), layout),
+            F64 => types.add_anonymous(RocType::Num(RocNum::F64), layout),
+            F128 => types.add_anonymous(RocType::Num(RocNum::F128), layout),
         },
-        (Builtin::Decimal, _) => types.add(RocType::Num(RocNum::Dec), layout),
-        (Builtin::Bool, _) => types.add(RocType::Bool, layout),
-        (Builtin::Str, _) => types.add(RocType::RocStr, layout),
-        (Builtin::Dict(key_layout, val_layout), Structure(Apply(Symbol::DICT_DICT, args))) => {
-            let args = env.subs.get_subs_slice(*args);
-            debug_assert_eq!(args.len(), 2);
-
-            let key_id = add_type_help(env, *key_layout, args[0], opt_name, types);
-            let val_id = add_type_help(env, *val_layout, args[1], opt_name, types);
-            let dict_id = types.add(RocType::RocDict(key_id, val_id), layout);
-
-            types.depends(dict_id, key_id);
-            types.depends(dict_id, val_id);
-
-            dict_id
-        }
-        (Builtin::Set(elem_layout), Structure(Apply(Symbol::SET_SET, args))) => {
-            let args = env.subs.get_subs_slice(*args);
-            debug_assert_eq!(args.len(), 1);
-
-            let elem_id = add_type_help(env, *elem_layout, args[0], opt_name, types);
-            let set_id = types.add(RocType::RocSet(elem_id), layout);
-
-            types.depends(set_id, elem_id);
-
-            set_id
-        }
+        (Builtin::Decimal, _) => types.add_anonymous(RocType::Num(RocNum::Dec), layout),
+        (Builtin::Bool, _) => types.add_anonymous(RocType::Bool, layout),
+        (Builtin::Str, _) => types.add_anonymous(RocType::RocStr, layout),
         (Builtin::List(elem_layout), Structure(Apply(Symbol::LIST_LIST, args))) => {
             let args = env.subs.get_subs_slice(*args);
             debug_assert_eq!(args.len(), 1);
 
             let elem_id = add_type_help(env, *elem_layout, args[0], opt_name, types);
-            let list_id = types.add(RocType::RocList(elem_id), layout);
+            let list_id = types.add_anonymous(RocType::RocList(elem_id), layout);
 
             types.depends(list_id, elem_id);
 
@@ -724,7 +941,7 @@ where
         })
         .collect::<Vec<(L, TypeId)>>();
 
-    types.add(to_type(name, fields), layout)
+    types.add_named(name.clone(), to_type(name, fields), layout)
 }
 
 fn add_tag_union<'a>(
@@ -778,7 +995,7 @@ fn add_tag_union<'a>(
                 }
                 _ => {
                     // create a RocType for the payload and save it
-                    let struct_name = format!("{}_{}", name, tag_name); // e.g. "MyUnion_MyVariant"
+                    let struct_name = format!("{}_{}", &name, tag_name); // e.g. "MyUnion_MyVariant"
                     let fields = payload_vars.iter().copied().enumerate();
                     let struct_id =
                         add_struct(env, struct_name, fields, types, layout, |name, fields| {
@@ -802,7 +1019,7 @@ fn add_tag_union<'a>(
                     let discriminant_type = UnionLayout::discriminant_size(tags.len()).into();
 
                     RocType::TagUnion(RocTagUnion::NonRecursive {
-                        name,
+                        name: name.clone(),
                         tags,
                         discriminant_type,
                     })
@@ -813,7 +1030,7 @@ fn add_tag_union<'a>(
                     let discriminant_type = UnionLayout::discriminant_size(tags.len()).into();
 
                     RocType::TagUnion(RocTagUnion::Recursive {
-                        name,
+                        name: name.clone(),
                         tags,
                         discriminant_type,
                     })
@@ -859,7 +1076,7 @@ fn add_tag_union<'a>(
                     let (non_null_tag, non_null_payload) = non_null;
 
                     RocType::TagUnion(RocTagUnion::NullableUnwrapped {
-                        name,
+                        name: name.clone(),
                         null_tag,
                         non_null_tag,
                         non_null_payload: non_null_payload.unwrap(),
@@ -869,7 +1086,7 @@ fn add_tag_union<'a>(
             }
         }
         Layout::Builtin(Builtin::Int(_)) => RocType::TagUnion(RocTagUnion::Enumeration {
-            name,
+            name: name.clone(),
             tags: tags.into_iter().map(|(tag_name, _)| tag_name).collect(),
         }),
         Layout::Builtin(_)
@@ -883,14 +1100,14 @@ fn add_tag_union<'a>(
             // This should be a very rare use case, and it's not worth overcomplicating
             // the rest of bindgen to make it do something different.
             RocType::TagUnion(RocTagUnion::NonRecursive {
-                name,
+                name: name.clone(),
                 tags,
                 discriminant_type: RocNum::U8,
             })
         }
     };
 
-    let type_id = types.add(typ, layout);
+    let type_id = types.add_named(name, typ, layout);
 
     if is_recursive {
         env.known_recursive_types.insert(layout, type_id);

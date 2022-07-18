@@ -1118,6 +1118,10 @@ impl<'a> ElementSection<'a> {
     pub fn size(&self) -> usize {
         self.segments.iter().map(|seg| seg.size()).sum()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.segments.iter().all(|seg| seg.fn_indices.is_empty())
+    }
 }
 
 impl<'a> Parse<&'a Bump> for ElementSection<'a> {
@@ -1148,9 +1152,11 @@ impl<'a> Parse<&'a Bump> for ElementSection<'a> {
 
 impl<'a> Serialize for ElementSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        let header_indices = write_section_header(buffer, Self::ID);
-        self.segments.serialize(buffer);
-        update_section_size(buffer, header_indices);
+        if !self.is_empty() {
+            let header_indices = write_section_header(buffer, Self::ID);
+            self.segments.serialize(buffer);
+            update_section_size(buffer, header_indices);
+        }
     }
 }
 

@@ -103,7 +103,6 @@ pub fn refcount_generic<'a>(
     structure: Symbol,
 ) -> Stmt<'a> {
     debug_assert!(is_rc_implemented_yet(&layout));
-    let rc_todo = || todo!("Please update is_rc_implemented_yet for `{:?}`", layout);
 
     match layout {
         Layout::Builtin(Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal) => {
@@ -115,7 +114,6 @@ pub fn refcount_generic<'a>(
         Layout::Builtin(Builtin::List(elem_layout)) => {
             refcount_list(root, ident_ids, ctx, &layout, elem_layout, structure)
         }
-        Layout::Builtin(Builtin::Dict(_, _) | Builtin::Set(_)) => rc_todo(),
         Layout::Struct { field_layouts, .. } => {
             refcount_struct(root, ident_ids, ctx, field_layouts, structure)
         }
@@ -322,7 +320,6 @@ pub fn is_rc_implemented_yet(layout: &Layout) -> bool {
     use UnionLayout::*;
 
     match layout {
-        Layout::Builtin(Builtin::Dict(..) | Builtin::Set(_)) => false,
         Layout::Builtin(Builtin::List(elem_layout)) => is_rc_implemented_yet(elem_layout),
         Layout::Builtin(_) => true,
         Layout::Struct { field_layouts, .. } => field_layouts.iter().all(is_rc_implemented_yet),

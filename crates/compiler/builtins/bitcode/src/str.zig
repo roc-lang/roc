@@ -749,12 +749,18 @@ fn strFromIntHelp(comptime T: type, int: T) RocStr {
 }
 
 // Str.fromFloat
-pub fn strFromFloatC(float: f64) callconv(.C) RocStr {
-    return @call(.{ .modifier = always_inline }, strFromFloatHelp, .{ f64, float });
+pub fn exportFromFloat(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(float: T) callconv(.C) RocStr {
+            return @call(.{ .modifier = always_inline }, strFromFloatHelp, .{ T, float });
+        }
+    }.func;
+
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }
 
 fn strFromFloatHelp(comptime T: type, float: T) RocStr {
-    var buf: [100]u8 = undefined;
+    var buf: [400]u8 = undefined;
     const result = std.fmt.bufPrint(&buf, "{d}", .{float}) catch unreachable;
 
     return RocStr.init(&buf, result.len);
@@ -1208,6 +1214,10 @@ test "countGraphemeClusters: emojis, ut8, and ascii characters" {
 
 pub fn countUtf8Bytes(string: RocStr) callconv(.C) usize {
     return string.len();
+}
+
+pub fn getCapacity(string: RocStr) callconv(.C) usize {
+    return string.getCapacity();
 }
 
 pub fn substringUnsafe(string: RocStr, start: usize, length: usize) callconv(.C) RocStr {
@@ -1684,11 +1694,17 @@ pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: Upda
             };
         }
     } else {
+        const temp = errorToProblem(@ptrCast([*]u8, arg.bytes), arg.length);
+
         // decref the list
         utils.decref(arg.bytes, arg.len(), 1);
 
-        const temp = errorToProblem(@ptrCast([*]u8, arg.bytes), arg.length);
-        return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = temp.index, .problem_code = temp.problem };
+        return FromUtf8Result{
+            .is_ok = false,
+            .string = RocStr.empty(),
+            .byte_index = temp.index,
+            .problem_code = temp.problem,
+        };
     }
 }
 

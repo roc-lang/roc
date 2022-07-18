@@ -13,8 +13,8 @@ chunk = \@Handle handle -> Effect.after (Effect.getFileBytes handle) Task.succee
 open : Str -> Task.Task Handle *
 open = \path ->
     Effect.openFile path
-        |> Effect.map (\id -> @Handle id)
-        |> Effect.after Task.succeed
+    |> Effect.map (\id -> @Handle id)
+    |> Effect.after Task.succeed
 
 close : Handle -> Task.Task {} *
 close = \@Handle handle -> Effect.after (Effect.closeFile handle) Task.succeed

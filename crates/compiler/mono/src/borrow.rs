@@ -602,17 +602,6 @@ impl<'a> BorrowInfState<'a> {
                         // always own the input list
                         self.own_var(*xs);
                     }
-                    DictWalk { xs, state } => {
-                        // own the default value if the function wants to own it
-                        if !function_ps[0].borrow {
-                            self.own_var(*state);
-                        }
-
-                        // own the data structure if the function wants to own the element
-                        if !function_ps[1].borrow {
-                            self.own_var(*xs);
-                        }
-                    }
                 }
 
                 // own the closure environment if the function needs to own it
@@ -885,9 +874,8 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
     // - other refcounted arguments are Borrowed
     match op {
         Unreachable => arena.alloc_slice_copy(&[irrelevant]),
-        ListLen | StrIsEmpty | StrToScalars | StrCountGraphemes | StrCountUtf8Bytes => {
-            arena.alloc_slice_copy(&[borrowed])
-        }
+        ListLen | StrIsEmpty | StrToScalars | StrCountGraphemes | StrCountUtf8Bytes
+        | StrGetCapacity | ListGetCapacity => arena.alloc_slice_copy(&[borrowed]),
         ListWithCapacity => arena.alloc_slice_copy(&[irrelevant]),
         ListReplaceUnsafe => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
         StrGetUnsafe | ListGetUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),
@@ -939,20 +927,6 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
         StrRepeat => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrFromInt | StrFromFloat => arena.alloc_slice_copy(&[irrelevant]),
         Hash => arena.alloc_slice_copy(&[borrowed, irrelevant]),
-        DictSize => arena.alloc_slice_copy(&[borrowed]),
-        DictEmpty => &[],
-        DictInsert => arena.alloc_slice_copy(&[owned, owned, owned]),
-        DictRemove => arena.alloc_slice_copy(&[owned, borrowed]),
-        DictContains => arena.alloc_slice_copy(&[borrowed, borrowed]),
-        DictGetUnsafe => arena.alloc_slice_copy(&[borrowed, borrowed]),
-        DictKeys | DictValues => arena.alloc_slice_copy(&[borrowed]),
-        DictUnion | DictDifference | DictIntersection => arena.alloc_slice_copy(&[owned, borrowed]),
-
-        // borrow function argument so we don't have to worry about RC of the closure
-        DictWalk => arena.alloc_slice_copy(&[owned, owned, function, closure_data]),
-
-        SetFromList => arena.alloc_slice_copy(&[owned]),
-        SetToDict => arena.alloc_slice_copy(&[owned]),
 
         ListIsUnique => arena.alloc_slice_copy(&[borrowed]),
 

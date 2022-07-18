@@ -572,8 +572,8 @@ fn quicksort_help() {
             (Pair partitionIndex partitioned) = Pair 0 []
 
             partitioned
-                |> quicksortHelp low (partitionIndex - 1)
-                |> quicksortHelp (partitionIndex + 1) high
+            |> quicksortHelp low (partitionIndex - 1)
+            |> quicksortHelp (partitionIndex + 1) high
         else
             list
 
@@ -591,8 +591,8 @@ fn quicksort_swap() {
             when Pair (List.get list 0) (List.get list 0) is
                 Pair (Ok atI) (Ok atJ) ->
                     list
-                        |> List.set 0 atJ
-                        |> List.set 0 atI
+                    |> List.set 0 atJ
+                    |> List.set 0 atI
 
                 _ ->
                     []
@@ -1458,7 +1458,7 @@ fn encode_custom_type() {
                     |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.format)
+            result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.toUtf8)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1467,7 +1467,24 @@ fn encode_custom_type() {
 }
 
 #[mono_test]
-#[ignore]
+fn encode_derived_string() {
+    indoc!(
+        r#"
+        app "test"
+            imports [Encode.{ toEncoder }, Json]
+            provides [main] to "./platform"
+
+        main =
+            result = Str.fromUtf8 (Encode.toBytes "abc" Json.toUtf8)
+            when result is
+                Ok s -> s
+                _ -> "<bad>"
+        "#
+    )
+}
+
+#[mono_test]
+#[ignore = "TODO"]
 fn encode_derived_record() {
     indoc!(
         r#"
@@ -1476,7 +1493,7 @@ fn encode_derived_record() {
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: "fieldA", b: "fieldB"} Json.format)
+            result = Str.fromUtf8 (Encode.toBytes {a: "a"} Json.toUtf8)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1777,6 +1794,95 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
             v2 = foo
 
             {v1, v2}
+        "#
+    )
+}
+
+#[mono_test]
+fn encode_derived_record_one_field_string() {
+    indoc!(
+        r#"
+        app "test"
+            imports [Encode.{ toEncoder }, Json]
+            provides [main] to "./platform"
+
+        main =
+            result = Str.fromUtf8 (Encode.toBytes {a: "foo"} Json.toUtf8)
+            when result is
+                Ok s -> s
+                _ -> "<bad>"
+        "#
+    )
+}
+
+#[mono_test]
+fn encode_derived_record_two_field_strings() {
+    indoc!(
+        r#"
+        app "test"
+            imports [Encode.{ toEncoder }, Json]
+            provides [main] to "./platform"
+
+        main =
+            result = Str.fromUtf8 (Encode.toBytes {a: "foo", b: "bar"} Json.toUtf8)
+            when result is
+                Ok s -> s
+                _ -> "<bad>"
+        "#
+    )
+}
+
+#[mono_test]
+fn encode_derived_nested_record_string() {
+    indoc!(
+        r#"
+        app "test"
+            imports [Encode.{ toEncoder }, Json]
+            provides [main] to "./platform"
+
+        main =
+            result = Str.fromUtf8 (Encode.toBytes {a: {b: "bar"}} Json.toUtf8)
+            when result is
+                Ok s -> s
+                _ -> "<bad>"
+        "#
+    )
+}
+
+#[mono_test]
+fn encode_derived_tag_one_field_string() {
+    indoc!(
+        r#"
+        app "test"
+            imports [Encode.{ toEncoder }, Json]
+            provides [main] to "./platform"
+
+        main =
+            x : [A Str]
+            x = A "foo"
+            result = Str.fromUtf8 (Encode.toBytes x Json.toUtf8)
+            when result is
+                Ok s -> s
+                _ -> "<bad>"
+        "#
+    )
+}
+
+#[mono_test]
+fn encode_derived_tag_two_payloads_string() {
+    indoc!(
+        r#"
+        app "test"
+            imports [Encode.{ toEncoder }, Json]
+            provides [main] to "./platform"
+
+        main =
+            x : [A Str Str]
+            x = A "foo" "foo"
+            result = Str.fromUtf8 (Encode.toBytes x Json.toUtf8)
+            when result is
+                Ok s -> s
+                _ -> "<bad>"
         "#
     )
 }

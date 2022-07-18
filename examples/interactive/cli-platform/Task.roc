@@ -1,6 +1,6 @@
 interface Task
     exposes [Task, succeed, fail, await, map, onFail, attempt, forever, loop]
-    imports [pf.Effect, pf.InternalTask]
+    imports [Effect, InternalTask]
 
 Task ok err fx : InternalTask.Task ok err fx
 
@@ -8,40 +8,40 @@ forever : Task val err fx -> Task * err fx
 forever = \task ->
     looper = \{} ->
         task
-            |> InternalTask.toEffect
-            |> Effect.map
-                \res ->
-                    when res is
-                        Ok _ -> Step {}
-                        Err e -> Done (Err e)
+        |> InternalTask.toEffect
+        |> Effect.map
+            \res ->
+                when res is
+                    Ok _ -> Step {}
+                    Err e -> Done (Err e)
 
     Effect.loop {} looper
-        |> InternalTask.fromEffect
+    |> InternalTask.fromEffect
 
 loop : state, (state -> Task [Step state, Done done] err fx) -> Task done err fx
 loop = \state, step ->
     looper = \current ->
         step current
-            |> InternalTask.toEffect
-            |> Effect.map
-                \res ->
-                    when res is
-                        Ok (Step newState) -> Step newState
-                        Ok (Done result) -> Done (Ok result)
-                        Err e -> Done (Err e)
+        |> InternalTask.toEffect
+        |> Effect.map
+            \res ->
+                when res is
+                    Ok (Step newState) -> Step newState
+                    Ok (Done result) -> Done (Ok result)
+                    Err e -> Done (Err e)
 
     Effect.loop state looper
-        |> InternalTask.fromEffect
+    |> InternalTask.fromEffect
 
 succeed : val -> Task val * *
 succeed = \val ->
     Effect.always (Ok val)
-        |> InternalTask.fromEffect
+    |> InternalTask.fromEffect
 
 fail : err -> Task * err *
 fail = \val ->
     Effect.always (Err val)
-        |> InternalTask.fromEffect
+    |> InternalTask.fromEffect
 
 attempt : Task a b fx, (Result a b -> Task c d fx) -> Task c d fx
 attempt = \task, transform ->

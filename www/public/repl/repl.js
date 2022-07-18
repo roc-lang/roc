@@ -41,7 +41,7 @@ const repl = {
 // Initialise
 repl.elemSourceInput.addEventListener("change", onInputChange);
 repl.elemSourceInput.addEventListener("keyup", onInputKeyup);
-roc_repl_wasm.default('./roc_repl_wasm_bg.wasm').then((instance) => {
+roc_repl_wasm.default('/repl/roc_repl_wasm_bg.wasm').then((instance) => {
   repl.compiler = instance;
 });
 

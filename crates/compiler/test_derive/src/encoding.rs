@@ -22,12 +22,12 @@ use roc_can::{
 use roc_collections::VecSet;
 use roc_constrain::expr::constrain_decls;
 use roc_debug_flags::dbg_do;
-use roc_derive::{synth_var, DerivedModule, StolenFromDerived};
+use roc_derive::{synth_var, DerivedModule};
 use roc_derive_key::{DeriveKey, Derived};
 use roc_load_internal::file::{add_imports, default_aliases, LoadedModule, Threading};
 use roc_module::{
     ident::TagName,
-    symbol::{Interns, ModuleId, Symbol},
+    symbol::{IdentIds, Interns, ModuleId, Symbol},
 };
 use roc_region::all::LineInfo;
 use roc_reporting::report::{type_problem, RocDocAllocator};
@@ -40,7 +40,7 @@ use roc_types::{
     types::{AliasKind, RecordField},
 };
 
-const DERIVED_MODULE: ModuleId = ModuleId::DERIVED;
+const DERIVED_MODULE: ModuleId = ModuleId::DERIVED_SYNTH;
 
 fn encode_path() -> PathBuf {
     let repo_root = std::env::var("ROC_WORKSPACE_DIR").expect("are you running with `cargo test`?");
@@ -145,7 +145,7 @@ fn check_derived_typechecks_and_golden(
         test_module,
         &mut test_subs,
         pending_abilities,
-        exposed_for_module,
+        &exposed_for_module,
         &mut def_types,
         &mut rigid_vars,
     );
@@ -158,6 +158,7 @@ fn check_derived_typechecks_and_golden(
         std::env::set_var(roc_debug_flags::ROC_PRINT_UNIFICATIONS_DERIVED, "1")
     );
     let (mut solved_subs, _, problems, _) = roc_solve::module::run_solve(
+        test_module,
         &constraints,
         constr,
         RigidVariables::default(),
@@ -165,6 +166,7 @@ fn check_derived_typechecks_and_golden(
         default_aliases(),
         abilities_store,
         Default::default(),
+        &exposed_for_module.exposed_by_module,
         Default::default(),
     );
     let subs = solved_subs.inner_mut();
@@ -242,12 +244,12 @@ where
     )
     .unwrap();
 
-    let mut derived_module = DerivedModule::default();
+    let mut subs = Subs::new();
+    let ident_ids = IdentIds::default();
+    let source_var = synth_input(&mut subs);
+    let key = get_key(&subs, source_var);
 
-    let mut stolen = derived_module.steal();
-    let source_var = synth_input(&mut stolen.subs);
-    let key = get_key(&stolen.subs, source_var);
-    derived_module.return_stolen(stolen);
+    let mut derived_module = unsafe { DerivedModule::from_components(subs, ident_ids) };
 
     let mut exposed_by_module = ExposedByModule::default();
     exposed_by_module.insert(
@@ -263,7 +265,7 @@ where
     let specialization_lsets = specialization_lsets.clone();
     let derived_def = derived_def.clone();
 
-    let StolenFromDerived { ident_ids, subs } = derived_module.steal();
+    let (subs, ident_ids) = derived_module.decompose();
 
     interns.all_ident_ids.insert(DERIVED_MODULE, ident_ids);
     DERIVED_MODULE.register_debug_idents(interns.all_ident_ids.get(&DERIVED_MODULE).unwrap());
@@ -513,25 +515,7 @@ fn immediates() {
     check_immediate(v!(DEC), Symbol::ENCODE_DEC);
     check_immediate(v!(F32), Symbol::ENCODE_F32);
     check_immediate(v!(F64), Symbol::ENCODE_F64);
-}
-
-#[test]
-fn string() {
-    derive_test(v!(STR), |golden| {
-        assert_snapshot!(golden, @r###"
-        # derived for Str
-        # Str -[[toEncoder_string(0)]]-> Encoder fmt | fmt has EncoderFormatting
-        # Str -[[toEncoder_string(0)]]-> (List U8, fmt -[[custom(2) Str]]-> List U8) | fmt has EncoderFormatting
-        # Specialization lambda sets:
-        #   @<1>: [[toEncoder_string(0)]]
-        #   @<2>: [[custom(2) Str]]
-        #Derived.toEncoder_string =
-          \#Derived.s ->
-            Encode.custom \#Derived.bytes, #Derived.fmt ->
-              Encode.appendWith #Derived.bytes (Encode.string #Derived.s) #Derived.fmt
-        "###
-        )
-    })
+    check_immediate(v!(STR), Symbol::ENCODE_STRING);
 }
 
 #[test]
@@ -546,8 +530,9 @@ fn empty_record() {
         #   @<2>: [[custom(2) {}]]
         #Derived.toEncoder_{} =
           \#Derived.rcd ->
-            Encode.custom \#Derived.bytes, #Derived.fmt ->
-              Encode.appendWith #Derived.bytes (Encode.record []) #Derived.fmt
+            Encode.custom
+              \#Derived.bytes, #Derived.fmt ->
+                Encode.appendWith #Derived.bytes (Encode.record []) #Derived.fmt
         "###
         )
     })
@@ -565,8 +550,9 @@ fn zero_field_record() {
         #   @<2>: [[custom(2) {}]]
         #Derived.toEncoder_{} =
           \#Derived.rcd ->
-            Encode.custom \#Derived.bytes, #Derived.fmt ->
-              Encode.appendWith #Derived.bytes (Encode.record []) #Derived.fmt
+            Encode.custom
+              \#Derived.bytes, #Derived.fmt ->
+                Encode.appendWith #Derived.bytes (Encode.record []) #Derived.fmt
         "###
         )
     })
@@ -584,10 +570,15 @@ fn one_field_record() {
         #   @<2>: [[custom(2) { a : val }]] | val has Encoding
         #Derived.toEncoder_{a} =
           \#Derived.rcd ->
-            Encode.custom \#Derived.bytes, #Derived.fmt ->
-              Encode.appendWith #Derived.bytes (Encode.record [
-                { value: Encode.toEncoder #Derived.rcd.a, key: "a", },
-              ]) #Derived.fmt
+            Encode.custom
+              \#Derived.bytes, #Derived.fmt ->
+                Encode.appendWith
+                  #Derived.bytes
+                  (Encode.record
+                    [
+                      { value: Encode.toEncoder #Derived.rcd.a, key: "a", },
+                    ])
+                  #Derived.fmt
         "###
         )
     })
@@ -641,9 +632,12 @@ fn tag_one_label_zero_args() {
         #   @<2>: [[custom(2) [A]]]
         #Derived.toEncoder_[A 0] =
           \#Derived.tag ->
-            Encode.custom \#Derived.bytes, #Derived.fmt ->
-              Encode.appendWith #Derived.bytes (when #Derived.tag is
-                A -> Encode.tag "A" []) #Derived.fmt
+            Encode.custom
+              \#Derived.bytes, #Derived.fmt ->
+                Encode.appendWith
+                  #Derived.bytes
+                  (when #Derived.tag is A -> Encode.tag "A" [])
+                  #Derived.fmt
         "###
         )
     })
@@ -723,6 +717,31 @@ fn recursive_tag_union() {
                     Encode.toEncoder #Derived.3,
                   ]
                 Nil -> Encode.tag "Nil" []) #Derived.fmt
+        "###
+        )
+    })
+}
+
+#[test]
+fn list() {
+    derive_test(v!(Symbol::LIST_LIST v!(STR)), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for List Str
+        # List val -[[toEncoder_list(0)]]-> Encoder fmt | fmt has EncoderFormatting, val has Encoding
+        # List val -[[toEncoder_list(0)]]-> (List U8, fmt -[[custom(4) (List val)]]-> List U8) | fmt has EncoderFormatting, val has Encoding
+        # Specialization lambda sets:
+        #   @<1>: [[toEncoder_list(0)]]
+        #   @<2>: [[custom(4) (List val)]] | val has Encoding
+        #Derived.toEncoder_list =
+          \#Derived.lst ->
+            Encode.custom
+              \#Derived.bytes, #Derived.fmt ->
+                Encode.appendWith
+                  #Derived.bytes
+                  (Encode.list
+                    #Derived.lst
+                    \#Derived.elem -> Encode.toEncoder #Derived.elem)
+                  #Derived.fmt
         "###
         )
     })

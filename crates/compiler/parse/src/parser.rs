@@ -103,6 +103,7 @@ impl_space_problem! {
     ETypeRecord<'a>,
     ETypeTagUnion<'a>,
     ETypedIdent<'a>,
+    ETypeAbilityImpl<'a>,
     EWhen<'a>,
     EAbility<'a>,
     PInParens<'a>,
@@ -578,6 +579,7 @@ pub enum EType<'a> {
     TFunctionArgument(Position),
     TWhereBar(Position),
     THasClause(Position),
+    TAbilityImpl(ETypeAbilityImpl<'a>, Position),
     ///
     TIndentStart(Position),
     TIndentEnd(Position),
@@ -646,6 +648,42 @@ pub enum ETypeInlineAlias {
     NotAnAlias(Position),
     Qualified(Position),
     ArgumentNotLowercase(Position),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ETypeAbilityImpl<'a> {
+    End(Position),
+    Open(Position),
+
+    Field(Position),
+    Colon(Position),
+    Optional(Position),
+    Type(&'a EType<'a>, Position),
+
+    Space(BadInputError, Position),
+
+    IndentOpen(Position),
+    IndentColon(Position),
+    IndentOptional(Position),
+    IndentEnd(Position),
+}
+
+impl<'a> From<ETypeRecord<'a>> for ETypeAbilityImpl<'a> {
+    fn from(e: ETypeRecord<'a>) -> Self {
+        match e {
+            ETypeRecord::End(p) => ETypeAbilityImpl::End(p),
+            ETypeRecord::Open(p) => ETypeAbilityImpl::Open(p),
+            ETypeRecord::Field(p) => ETypeAbilityImpl::Field(p),
+            ETypeRecord::Colon(p) => ETypeAbilityImpl::Colon(p),
+            ETypeRecord::Optional(p) => ETypeAbilityImpl::Optional(p),
+            ETypeRecord::Type(t, p) => ETypeAbilityImpl::Type(t, p),
+            ETypeRecord::Space(s, p) => ETypeAbilityImpl::Space(s, p),
+            ETypeRecord::IndentOpen(p) => ETypeAbilityImpl::IndentOpen(p),
+            ETypeRecord::IndentColon(p) => ETypeAbilityImpl::IndentColon(p),
+            ETypeRecord::IndentOptional(p) => ETypeAbilityImpl::IndentOptional(p),
+            ETypeRecord::IndentEnd(p) => ETypeAbilityImpl::IndentEnd(p),
+        }
+    }
 }
 
 #[derive(Debug)]

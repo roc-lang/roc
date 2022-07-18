@@ -86,7 +86,6 @@ mod test_reporting {
             let result = roc_load::load_and_typecheck(
                 arena,
                 full_file_path,
-                dir.path().to_path_buf(),
                 exposed_types,
                 roc_target::TargetInfo::default_x86_64(),
                 RenderTarget::Generic,
@@ -759,10 +758,10 @@ mod test_reporting {
 
                 Did you mean one of these?
 
-                    Set
                     List
                     True
                     Box
+                    Str
                 "#
             ),
         );
@@ -4682,10 +4681,12 @@ mod test_reporting {
         dict_type_formatting,
         indoc!(
             r#"
-            myDict : Dict Num.I64 Str
+            app "dict" imports [ Dict ] provides [main] to "./platform"
+
+            myDict : Dict.Dict Num.I64 Str
             myDict = Dict.insert Dict.empty "foo" 42
 
-            myDict
+            main = myDict
             "#
         ),
         @r###"
@@ -4693,9 +4694,9 @@ mod test_reporting {
 
     Something is off with the body of the `myDict` definition:
 
-    4│      myDict : Dict Num.I64 Str
-    5│      myDict = Dict.insert Dict.empty "foo" 42
-                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    3│  myDict : Dict.Dict Num.I64 Str
+    4│  myDict = Dict.insert Dict.empty "foo" 42
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     This `insert` call produces:
 
@@ -4711,6 +4712,8 @@ mod test_reporting {
         alias_type_diff,
         indoc!(
             r#"
+            app "test" imports [Set.{ Set }] provides [main] to "./platform"
+
             HSet a : Set a
 
             foo : Str -> HSet {}
@@ -4718,7 +4721,7 @@ mod test_reporting {
             myDict : HSet Str
             myDict = foo "bar"
 
-            myDict
+            main = myDict
             "#
         ),
         @r###"
@@ -4726,9 +4729,9 @@ mod test_reporting {
 
     Something is off with the body of the `myDict` definition:
 
-    8│      myDict : HSet Str
-    9│      myDict = foo "bar"
-                     ^^^^^^^^^
+    7│  myDict : HSet Str
+    8│  myDict = foo "bar"
+                 ^^^^^^^^^
 
     This `foo` call produces:
 
@@ -7479,14 +7482,14 @@ All branches in an `if` must have the same type!
         // and checking it during can. The reason the error appears is because it is parsed as
         // Apply(Error(OtherModule), [@Age, 21])
         @r###"
-    ── OPAQUE TYPE NOT APPLIED ─────────────────────────────── /code/proj/Main.roc ─
+    ── OPAQUE TYPE NOT DEFINED ─────────────────────────────── /code/proj/Main.roc ─
 
-    This opaque type is not applied to an argument:
+    The opaque type Age referenced here is not defined:
 
     4│      OtherModule.@Age 21
                         ^^^^
 
-    Note: Opaque types always wrap exactly one argument!
+    Note: It looks like there are no opaque types declared in this scope yet!
 
     ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
@@ -8925,12 +8928,13 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
+        #[ignore]
         type_error_in_apply_is_circular,
         indoc!(
             r#"
-            app "test" provides [go] to "./platform"
+            app "test" imports [Set] provides [go] to "./platform"
 
-            S a : { set : Set a }
+            S a : { set : Set.Set a }
 
             go : a, S a -> Result (List a) *
             go = \goal, model ->
@@ -9051,39 +9055,6 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        unbound_type_in_record_does_not_implement_encoding,
-        indoc!(
-            r#"
-            app "test" imports [Encode] provides [main] to "./platform"
-
-            main = \x -> Encode.toEncoder { x: x }
-            "#
-        ),
-        @r#"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-        This expression has a type that does not implement the abilities it's expected to:
-
-        3│  main = \x -> Encode.toEncoder { x: x }
-                                          ^^^^^^^^
-
-        Roc can't generate an implementation of the `Encode.Encoding` ability
-        for
-
-            { x : a }
-
-        In particular, an implementation for
-
-            a
-
-        cannot be generated.
-
-        Tip: This type variable is not bound to `Encoding`. Consider adding a
-        `has` clause to bind the type variable, like `| a has Encode.Encoding`
-        "#
-    );
-
-    test_report!(
         nested_opaque_does_not_implement_encoding,
         indoc!(
             r#"
@@ -9093,7 +9064,9 @@ All branches in an `if` must have the same type!
             main = Encode.toEncoder { x: @A {} }
             "#
         ),
-        @r#"
+        // TODO: this error message is quite unfortunate. We should remove the duplication, and
+        // also support regions that point to things in other modules. See also https://github.com/rtfeldman/roc/issues/3056.
+        @r###"
         ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
         This expression has a type that does not implement the abilities it's expected to:
@@ -9114,7 +9087,17 @@ All branches in an `if` must have the same type!
 
         Tip: `A` does not implement `Encoding`. Consider adding a custom
         implementation or `has Encode.Encoding` to the definition of `A`.
-        "#
+
+        ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+        The type `A` does not fully implement the ability `Encoding`. The
+        following specializations are missing:
+
+        A specialization for `toEncoder`, which is defined here:
+
+        5│
+                                                                                                                                                                                                                                                                                                                                                                                                                                                    ^^^^^^^^^
+        "###
     );
 
     test_report!(
@@ -9544,6 +9527,32 @@ All branches in an `if` must have the same type!
     both types are the same opaque type. Did you mean to create an opaque
     type by wrapping it? If I have an opaque type Age := U32 I can create
     an instance of this opaque type by doing @Age 23.
+    "###
+    );
+
+    test_report!(
+        opaque_wrap_function_mismatch,
+        indoc!(
+            r#"
+            A := U8
+            List.map [1u16, 2u16, 3u16] @A
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    The 2nd argument to `map` is not what I expect:
+
+    5│      List.map [1u16, 2u16, 3u16] @A
+                                        ^^
+
+    This A opaque wrapping has the type:
+
+        U8 -> A
+
+    But `map` needs the 2nd argument to be:
+
+        U16 -> A
     "###
     );
 }

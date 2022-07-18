@@ -10,6 +10,7 @@ use crate::llvm::build_list::{layout_width, pass_as_opaque};
 use crate::llvm::convert::{basic_type_from_layout, zig_dict_type};
 use crate::llvm::refcounting::Mode;
 use inkwell::attributes::{Attribute, AttributeLoc};
+use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::types::BasicType;
 use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, IntValue, StructValue};
@@ -58,25 +59,7 @@ pub fn dict_len<'a, 'ctx, 'env>(
     let (_, dict_layout) = load_symbol_and_layout(scope, &dict_symbol);
 
     match dict_layout {
-        Layout::Builtin(Builtin::Dict(_, _)) => {
-            // let dict_as_int = dict_symbol_to_i128(env, scope, dict_symbol);
-            let dict_as_zig_dict = dict_symbol_to_zig_dict(env, scope, dict_symbol);
-
-            let length_i64 = call_bitcode_fn(
-                env,
-                &[pass_dict_c_abi(env, dict_as_zig_dict.into())],
-                bitcode::DICT_LEN,
-            );
-
-            env.builder
-                .build_int_cast_sign_flag(
-                    length_i64.into_int_value(),
-                    env.ptr_int(),
-                    false,
-                    "to_usize",
-                )
-                .into()
-        }
+        Layout::Builtin(Builtin::Dict(_, _)) => 
         _ => unreachable!("Invalid layout given to Dict.len : {:?}", dict_layout),
     }
 }
@@ -695,6 +678,28 @@ pub fn dict_values<'a, 'ctx, 'env>(
         ],
         bitcode::DICT_VALUES,
     )
+}
+
+/// Dict.capacity : Dict * * -> Nat
+pub fn dict_capacity<'ctx>(
+    builder: &Builder<'ctx>,
+    wrapper_struct: StructValue<'ctx>,
+) -> IntValue<'ctx> {
+    builder
+        .build_extract_value(wrapper_struct, Builtin::WRAPPER_CAPACITY, "dict_capacity")
+        .unwrap()
+        .into_int_value()
+}
+
+/// Set.capacity : Set * -> Nat
+pub fn set_capacity<'ctx>(
+    builder: &Builder<'ctx>,
+    wrapper_struct: StructValue<'ctx>,
+) -> IntValue<'ctx> {
+    builder
+        .build_extract_value(wrapper_struct, Builtin::WRAPPER_CAPACITY, "set_capacity")
+        .unwrap()
+        .into_int_value()
 }
 
 #[allow(clippy::too_many_arguments)]

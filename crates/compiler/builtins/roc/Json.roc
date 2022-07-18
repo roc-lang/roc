@@ -1,7 +1,7 @@
 interface Json
     exposes [
         Json,
-        format,
+        toUtf8,
     ]
     imports [
         List,
@@ -33,7 +33,7 @@ interface Json
 
 Json := {}
 
-format = @Json {}
+toUtf8 = @Json {}
 
 numToBytes = \n ->
     n |> Num.toStr |> Str.toUtf8
@@ -75,13 +75,23 @@ bool = \b -> custom \bytes, @Json {} ->
 
 string = \s -> custom \bytes, @Json {} ->
         List.append bytes (Num.toU8 '"')
-            |> List.concat (Str.toUtf8 s)
-            |> List.append (Num.toU8 '"')
+        |> List.concat (Str.toUtf8 s)
+        |> List.append (Num.toU8 '"')
 
 list = \lst, encodeElem ->
     custom \bytes, @Json {} ->
+        writeList = \{ buffer, elemsLeft }, elem ->
+            bufferWithElem = appendWith buffer (encodeElem elem) (@Json {})
+            bufferWithSuffix =
+                if elemsLeft > 1 then
+                    List.append bufferWithElem (Num.toU8 ',')
+                else
+                    bufferWithElem
+
+            { buffer: bufferWithSuffix, elemsLeft: elemsLeft - 1 }
+
         head = List.append bytes (Num.toU8 '[')
-        withList = List.walk lst head (\bytes1, elem -> appendWith bytes1 (encodeElem elem) (@Json {}))
+        { buffer: withList } = List.walk lst { buffer: head, elemsLeft: List.len lst } writeList
 
         List.append withList (Num.toU8 ']')
 
@@ -90,13 +100,13 @@ record = \fields ->
         writeRecord = \{ buffer, fieldsLeft }, { key, value } ->
             bufferWithKeyValue =
                 List.append buffer (Num.toU8 '"')
-                    |> List.concat (Str.toUtf8 key)
-                    |> List.append (Num.toU8 '"')
-                    |> List.append (Num.toU8 ':')
-                    |> appendWith value (@Json {})
+                |> List.concat (Str.toUtf8 key)
+                |> List.append (Num.toU8 '"')
+                |> List.append (Num.toU8 ':')
+                |> appendWith value (@Json {})
 
             bufferWithSuffix =
-                if fieldsLeft > 0 then
+                if fieldsLeft > 1 then
                     List.append bufferWithKeyValue (Num.toU8 ',')
                 else
                     bufferWithKeyValue
@@ -114,7 +124,7 @@ tag = \name, payload ->
         writePayload = \{ buffer, itemsLeft }, encoder ->
             bufferWithValue = appendWith buffer encoder (@Json {})
             bufferWithSuffix =
-                if itemsLeft > 0 then
+                if itemsLeft > 1 then
                     List.append bufferWithValue (Num.toU8 ',')
                 else
                     bufferWithValue
@@ -123,13 +133,13 @@ tag = \name, payload ->
 
         bytesHead =
             List.append bytes (Num.toU8 '{')
-                |> List.append (Num.toU8 '"')
-                |> List.concat (Str.toUtf8 name)
-                |> List.append (Num.toU8 '"')
-                |> List.append (Num.toU8 ':')
-                |> List.append (Num.toU8 '[')
+            |> List.append (Num.toU8 '"')
+            |> List.concat (Str.toUtf8 name)
+            |> List.append (Num.toU8 '"')
+            |> List.append (Num.toU8 ':')
+            |> List.append (Num.toU8 '[')
 
         { buffer: bytesWithPayload } = List.walk payload { buffer: bytesHead, itemsLeft: List.len payload } writePayload
 
         List.append bytesWithPayload (Num.toU8 ']')
-            |> List.append (Num.toU8 '}')
+        |> List.append (Num.toU8 '}')

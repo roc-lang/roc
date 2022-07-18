@@ -104,17 +104,17 @@ append = \@Url urlStr, suffixUnencoded ->
         Ok { before, after } ->
             bytes =
                 Str.countUtf8Bytes before
-                    + 1 # for "/"
-                    + Str.countUtf8Bytes suffix
-                    + 1 # for "?"
-                    + Str.countUtf8Bytes after
+                + 1 # for "/"
+                + Str.countUtf8Bytes suffix
+                + 1 # for "?"
+                + Str.countUtf8Bytes after
 
             before
-                |> Str.reserve bytes
-                |> appendHelp suffix
-                |> Str.concat "?"
-                |> Str.concat after
-                |> @Url
+            |> Str.reserve bytes
+            |> appendHelp suffix
+            |> Str.concat "?"
+            |> Str.concat after
+            |> @Url
 
         Err NotFound ->
             # There wasn't a query, but there might still be a fragment
@@ -122,17 +122,17 @@ append = \@Url urlStr, suffixUnencoded ->
                 Ok { before, after } ->
                     bytes =
                         Str.countUtf8Bytes before
-                            + 1 # for "/"
-                            + Str.countUtf8Bytes suffix
-                            + 1 # for "#"
-                            + Str.countUtf8Bytes after
+                        + 1 # for "/"
+                        + Str.countUtf8Bytes suffix
+                        + 1 # for "#"
+                        + Str.countUtf8Bytes after
 
                     before
-                        |> Str.reserve bytes
-                        |> appendHelp suffix
-                        |> Str.concat "#"
-                        |> Str.concat after
-                        |> @Url
+                    |> Str.reserve bytes
+                    |> appendHelp suffix
+                    |> Str.concat "#"
+                    |> Str.concat after
+                    |> @Url
 
                 Err NotFound ->
                     # No query and no fragment, so just append it
@@ -169,8 +169,8 @@ appendHelp = \prefix, suffix ->
     else
         # Neither is empty, but neither has a "/", so add one in between.
         prefix
-            |> Str.concat "/"
-            |> Str.concat suffix
+        |> Str.concat "/"
+        |> Str.concat suffix
 
 ## Internal helper. This is intentionally unexposed so that you don't accidentally
 ## double-encode things. If you really want to percent-encode an arbitrary string,
@@ -194,30 +194,30 @@ percentEncode = \input ->
         # Spec for percent-encoding: https://www.ietf.org/rfc/rfc3986.txt
         if
             (byte >= 97 && byte <= 122) # lowercase ASCII
-                || (byte >= 65 && byte <= 90) # uppercase ASCII
-                || (byte >= 48 && byte <= 57) # digit
+            || (byte >= 65 && byte <= 90) # uppercase ASCII
+            || (byte >= 48 && byte <= 57) # digit
         then
             # This is the most common case: an unreserved character,
             # which needs no encoding in a path
             Str.appendScalar output (Num.toU32 byte)
-                |> Result.withDefault "" # this will never fail
+            |> Result.withDefault "" # this will never fail
         else
             when byte is
                 46 # '.'
-                    | 95 # '_'
-                    | 126 # '~'
-                    | 150 -> # '-'
+                | 95 # '_'
+                | 126 # '~'
+                | 150 -> # '-'
                     # These special characters can all be unescaped in paths
                     Str.appendScalar output (Num.toU32 byte)
-                        |> Result.withDefault "" # this will never fail
+                    |> Result.withDefault "" # this will never fail
 
                 _ ->
                     # This needs encoding in a path
                     suffix =
                         Str.toUtf8 percentEncoded
-                            |> List.sublist { len: 3, start: 3 * Num.toNat byte }
-                            |> Str.fromUtf8
-                            |> Result.withDefault "" # This will never fail
+                        |> List.sublist { len: 3, start: 3 * Num.toNat byte }
+                        |> Str.fromUtf8
+                        |> Result.withDefault "" # This will never fail
 
                     Str.concat output suffix
 
@@ -251,20 +251,20 @@ appendParam = \@Url urlStr, key, value ->
 
     bytes =
         Str.countUtf8Bytes withoutFragment
-            + 1 # for "?" or "&"
-            + Str.countUtf8Bytes encodedKey
-            + 1 # for "="
-            + Str.countUtf8Bytes encodedValue
-            + Str.countUtf8Bytes afterQuery
+        + 1 # for "?" or "&"
+        + Str.countUtf8Bytes encodedKey
+        + 1 # for "="
+        + Str.countUtf8Bytes encodedValue
+        + Str.countUtf8Bytes afterQuery
 
     withoutFragment
-        |> Str.reserve bytes
-        |> Str.concat (if hasQuery (@Url withoutFragment) then "&" else "?")
-        |> Str.concat encodedKey
-        |> Str.concat "="
-        |> Str.concat encodedValue
-        |> Str.concat afterQuery
-        |> @Url
+    |> Str.reserve bytes
+    |> Str.concat (if hasQuery (@Url withoutFragment) then "&" else "?")
+    |> Str.concat encodedKey
+    |> Str.concat "="
+    |> Str.concat encodedValue
+    |> Str.concat afterQuery
+    |> @Url
 
 ## Replaces the URL's [query](https://en.wikipedia.org/wiki/URL#Syntax)—the part after
 ## the `?`, if it has one, but before any `#` it might have.
@@ -300,16 +300,16 @@ withQuery = \@Url urlStr, queryStr ->
     else
         bytes =
             Str.countUtf8Bytes beforeQuery
-                + 1 # for "?"
-                + Str.countUtf8Bytes queryStr
-                + Str.countUtf8Bytes afterQuery
+            + 1 # for "?"
+            + Str.countUtf8Bytes queryStr
+            + Str.countUtf8Bytes afterQuery
 
         beforeQuery
-            |> Str.reserve bytes
-            |> Str.concat "?"
-            |> Str.concat queryStr
-            |> Str.concat afterQuery
-            |> @Url
+        |> Str.reserve bytes
+        |> Str.concat "?"
+        |> Str.concat queryStr
+        |> Str.concat afterQuery
+        |> @Url
 
 ## Returns the URL's [query](https://en.wikipedia.org/wiki/URL#Syntax)—the part after
 ## the `?`, if it has one, but before any `#` it might have.
@@ -348,7 +348,7 @@ hasQuery = \@Url urlStr ->
     # TODO use Str.contains once it exists. It should have a "fast path"
     # with SIMD iteration if the string is small enough to fit in a SIMD register.
     Str.toUtf8 urlStr
-        |> List.contains (Num.toU8 '?')
+    |> List.contains (Num.toU8 '?')
 
 ## Returns the URL's [fragment](https://en.wikipedia.org/wiki/URL#Syntax)—the part after
 ## the `#`, if it has one.
@@ -418,7 +418,7 @@ hasFragment = \@Url urlStr ->
     # TODO use Str.contains once it exists. It should have a "fast path"
     # with SIMD iteration if the string is small enough to fit in a SIMD register.
     Str.toUtf8 urlStr
-        |> List.contains (Num.toU8 '#')
+    |> List.contains (Num.toU8 '#')
 
 strWithCapacity : Nat -> Str
 strWithCapacity = \cap ->

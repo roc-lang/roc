@@ -2769,8 +2769,16 @@ fn instantiate_lambda_sets_as_unspecialized(
     able_var: Variable,
     ability_member: Symbol,
 ) {
-    // We want to pop and assign lambda sets pre-order for readability, so types
-    // should be pushed onto the stack in post-order
+    // REGION-ORDERING: done in pre-order via the following pseudo code:
+    //
+    // Type_function = \region ->
+    // 	let left_type, new_region = Type (region + 1)
+    //   let right_type, new_region = Type (new_region)
+    //   let func_type = left_type -[Lambda region]-> right_type
+    //   (func_type, new_region)
+    //
+    // Since we want to pop types in pre-order, they should be pushed onto the
+    // stack in post-order
     let mut stack = vec![typ];
     let mut region = 0;
 
