@@ -3772,7 +3772,7 @@ dependencies = [
  "clap 3.2.11",
  "iced-x86",
  "mach_object",
- "memmap2 0.5.4",
+ "memmap2 0.5.5",
  "object 0.26.2",
  "roc_build",
  "roc_collections",
