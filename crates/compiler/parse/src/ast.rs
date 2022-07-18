@@ -331,7 +331,10 @@ pub enum ValueDef<'a> {
         body_expr: &'a Loc<Expr<'a>>,
     },
 
-    Expect(&'a Loc<Expr<'a>>),
+    Expect {
+        condition: &'a Loc<Expr<'a>>,
+        preceding_comment: Region,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]

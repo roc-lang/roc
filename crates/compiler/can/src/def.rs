@@ -2157,9 +2157,12 @@ fn to_pending_value_def<'a>(
             }
         }
 
-        Expect(condition) => PendingValue::Expect(PendingExpect {
+        Expect {
             condition,
-            preceding_comment: Region::zero(),
+            preceding_comment,
+        } => PendingValue::Expect(PendingExpect {
+            condition,
+            preceding_comment: *preceding_comment,
         }),
     }
 }
