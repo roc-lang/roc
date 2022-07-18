@@ -1047,9 +1047,9 @@ fn render_expect_panic<'a>(
     let alloc = RocDocAllocator::new(&src_lines, module_id, interns);
 
     let doc = alloc.stack([
-        alloc.text("This expectation panicked:"),
+        alloc.text("This expectation crashed while running:"),
         alloc.region(line_col_region),
-        alloc.text("With this panic message:"),
+        alloc.text("The crash reported this message:"),
         alloc.text(message),
     ]);
 
