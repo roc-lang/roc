@@ -71,3 +71,18 @@ main =
             Err (FileWriteErr _) -> Stderr.line "Error writing to file"
             Err (InvalidLine line) -> Stderr.line "The following line in the response was malformed:\n\(line)"
             Err _ -> Stderr.line "Error!"
+
+# decode movie
+expect
+    actual = #movieFromLine "title goes here|1234|first star,second star,third star"
+        Ok {
+            title: "title goes here!",
+            year: 1234,
+            starring: ["first star", "second star", "third star"]
+        }
+
+    actual == Ok {
+        title: "title goes here",
+        year: 1234,
+        starring: ["first star", "second star", "third star"]
+    }
