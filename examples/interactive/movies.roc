@@ -25,9 +25,9 @@ movieFromLine = \line ->
     result =
         fields = Str.split line "|"
 
-        title <- List.get fields 0 |> try
-        year <- List.get fields 1 |> try Str.toU16 |> try
-        cast <- List.get fields 2 |> try
+        title <- List.get fields 0 |> Result.try
+        year <- List.get fields 1 |> Result.try Str.toU16 |> Result.try
+        cast <- List.get fields 2 |> Result.try
 
         Ok { title, year, cast: Str.split cast "," }
 
@@ -70,9 +70,6 @@ main =
 # TODO annotating this with write : {} throws a compiler panic
 write = \path, val, fmt ->
     File.writeBytes path (Encode.toBytes val fmt)
-
-try : Result a err, (a -> Result b err) -> Result b err
-try = Result.after
 
 mapTry : List elem, (elem -> Result ok err) -> Result (List ok) err
 mapTry = \list, transform ->
