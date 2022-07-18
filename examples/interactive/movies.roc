@@ -35,7 +35,8 @@ movieFromLine = \line ->
 
 getMovies : Url -> Task (List Movie) (HttpErr [InvalidLine Str]*) [Net]*
 getMovies = \url ->
-    response <- Http.getUtf8 url |> Task.await
+    #response <- Http.getUtf8 url |> Task.await
+    response <- Task.succeed "Airplane!|1980|Robert Hays,Julie Hagerty\nCaddyshack|1980|Chevy Chase,Rodney Dangerfield,Ted Knight,Michael O'Keefe,Bill Murray\n" |> Task.await
 
     response
     |> Str.trim
@@ -53,15 +54,17 @@ writeOutput = \movies ->
         { title: movie.title, starring }
 
     Path.fromStr "output.json"
-    |> write json Json.format
+    |> write json Json.toUtf8
 
 main : Task.Task {} [] [Write [Stdout, Disk], Net, Env]
 main =
     task =
         apiKey <- Env.varUtf8 "API_KEY" |> Task.withDefault "" |> Task.await
         url = Url.fromStr "http://localhost:4000/movies?apiKey=\(apiKey)"
-        movies <- getMovies url |> Task.await
-        writeOutput movies
+        response <- Http.getUtf8 url |> Task.await
+        Stdout.line (response |> Str.trim |> Str.split "\n" |> Str.joinWith "\n")
+        # movies <- getMovies url |> Task.await
+        # writeOutput movies
 
     Task.attempt task \result ->
         when result is
