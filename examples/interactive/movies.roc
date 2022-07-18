@@ -46,8 +46,14 @@ getMovies = \url ->
 #writeOutput : List Movie -> Task {} (FileWriteErr (EncodeErr *)) [Write [Disk]*]*
 writeOutput : List Movie -> Task {} (FileWriteErr *) [Write [Disk]*]*
 writeOutput = \movies ->
+    json : List { title : Str, starring : Str }
+    json = List.map movies \movie ->
+        starring = List.first movie.cast |> Result.withDefault "(no actors)"
+
+        { title: movie.title, starring }
+
     Path.fromStr "output.json"
-    |> write movies Json.format
+    |> write json Json.format
 
 main : Task.Task {} [] [Write [Stdout, Disk], Net, Env]
 main =
