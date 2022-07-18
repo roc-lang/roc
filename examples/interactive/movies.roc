@@ -5,7 +5,7 @@ app "movies"
         pf.Stderr,
         pf.Task.{ Task },
         pf.Path.{ Path },
-        pf.File.{ write, FileWriteErr },
+        pf.File.{ FileWriteErr },
         pf.Url.{ Url },
         pf.Http.{ HttpErr },
         pf.Env,
@@ -54,7 +54,7 @@ writeOutput = \movies ->
 
             _ -> Err {}
 
-    write path json Json.toUtf8
+    File.write path json Json.toUtf8
 
 main : Task.Task {} [] [Write [Stdout, Disk], Net, Env]
 main =
