@@ -58,7 +58,7 @@ writeOutput = \movies ->
 main : Task.Task {} [] [Write [Stdout, Disk], Net, Env]
 main =
     task =
-        apiKey <- Env.varUtf8 "API_KEY" |> Task.withDefault "" |> Task.await
+        apiKey <- Env.varUtf8 "API_KEY" |> Task.await
         url = Url.fromStr "http://localhost:4000/movies?apiKey=\(apiKey)"
         movies <- getMovies url |> Task.await
         writeOutput movies
