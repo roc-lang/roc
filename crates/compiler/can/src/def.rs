@@ -42,7 +42,6 @@ use roc_types::types::AliasCommon;
 use roc_types::types::AliasKind;
 use roc_types::types::AliasVar;
 use roc_types::types::LambdaSet;
-use roc_types::types::Opaque;
 use roc_types::types::OpaqueSupports;
 use roc_types::types::OptAbleType;
 use roc_types::types::{Alias, Type};
@@ -416,6 +415,116 @@ fn canonicalize_alias<'a>(
     ))
 }
 
+/// Canonicalizes a claimed ability implementation like `{ eq }` or `{ eq: myEq }`.
+/// Returns a mapping of the ability member to the implementation symbol.
+/// If there was an error, a problem will be recorded and nothing is returned.
+fn canonicalize_claimed_ability_impl<'a>(
+    env: &mut Env<'a>,
+    scope: &mut Scope,
+    ability: Symbol,
+    loc_impl: &Loc<ast::AssignedField<'a, ast::Expr<'a>>>,
+) -> Result<(Symbol, Symbol), ()> {
+    let ability_home = ability.module_id();
+
+    match loc_impl.extract_spaces().item {
+        AssignedField::LabelOnly(label) => {
+            let label_str = label.value;
+            let region = label.region;
+
+            let _member_symbol =
+                match env.qualified_lookup_with_module_id(scope, ability_home, label_str, region) {
+                    Ok(symbol) => symbol,
+                    Err(_) => {
+                        env.problem(Problem::NotAnAbilityMember {
+                            ability,
+                            name: label_str.to_owned(),
+                            region,
+                        });
+                        return Err(());
+                    }
+                };
+
+            todo!();
+            // match scope.lookup(&label_str.into(), label.region) {
+            //     Ok(symbol) => {
+            //         return Ok((member_symbol, symbol));
+            //     }
+            //     Err(_) => {
+            //         // [Eq { eq }]
+
+            //         env.problem(Problem::ImplementationNotFound {
+            //             ability,
+            //             member: scope.lookup(),
+            //             region: label.region,
+            //         });
+            //     }
+            // }
+        }
+        AssignedField::RequiredValue(label, _spaces, value) => {
+            let impl_ident = match value.value {
+                ast::Expr::Var { module_name, ident } => {
+                    if module_name.is_empty() {
+                        ident
+                    } else {
+                        env.problem(Problem::QualifiedAbilityImpl {
+                            region: value.region,
+                        });
+                        return Err(());
+                    }
+                }
+                _ => {
+                    env.problem(Problem::AbilityImplNotIdent {
+                        region: value.region,
+                    });
+                    return Err(());
+                }
+            };
+            let impl_region = value.region;
+
+            let member_symbol = match env.qualified_lookup_with_module_id(
+                scope,
+                ability_home,
+                label.value,
+                label.region,
+            ) {
+                Ok(symbol) => symbol,
+                Err(_) => {
+                    env.problem(Problem::NotAnAbilityMember {
+                        ability,
+                        name: label.value.to_owned(),
+                        region: label.region,
+                    });
+                    return Err(());
+                }
+            };
+
+            let impl_symbol = match scope.lookup(&impl_ident.into(), impl_region) {
+                Ok(symbol) => symbol,
+                Err(err) => {
+                    env.problem(Problem::RuntimeError(err));
+                    return Err(());
+                }
+            };
+
+            Ok((member_symbol, impl_symbol))
+        }
+        AssignedField::OptionalValue(_, _, _) => {
+            env.problem(Problem::OptionalAbilityImpl {
+                ability,
+                region: loc_impl.region,
+            });
+            Err(())
+        }
+        AssignedField::Malformed(_) => {
+            // An error will already have been reported
+            Err(())
+        }
+        AssignedField::SpaceBefore(_, _) | AssignedField::SpaceAfter(_, _) => {
+            internal_error!("unreachable")
+        }
+    }
+}
+
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
 fn canonicalize_opaque<'a>(
@@ -429,7 +538,7 @@ fn canonicalize_opaque<'a>(
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
     vars: &[Loc<Lowercase>],
     has_abilities: Option<&'a Loc<ast::HasAbilities<'a>>>,
-) -> Result<Opaque, ()> {
+) -> Result<Alias, ()> {
     let alias = canonicalize_alias(
         env,
         output,
@@ -454,107 +563,58 @@ fn canonicalize_opaque<'a>(
                 ast::HasAbility::HasAbility { ability, impls } => (ability, impls),
                 _ => internal_error!("spaces not extracted"),
             };
-            match ability.value {
+
+            let ability = match ability.value {
                 ast::TypeAnnotation::Apply(module_name, ident, []) => {
                     match make_apply_symbol(env, region, scope, module_name, ident) {
-                        Ok(ability) => {
-                            if let Some(impls) = opt_impls {
-                                // #[derive(Debug, Copy, Clone, PartialEq)]
-                                // pub enum HasImpls<'a> {
-                                //     // `{ eq: myEq }`
-                                //     HasImpls(Collection<'a, Loc<AssignedField<'a, TypeAnnotation<'a>>>>),
-
-                                //     // We preserve this for the formatter; canonicalization ignores it.
-                                //     SpaceBefore(&'a HasImpls<'a>, &'a [CommentOrNewline<'a>]),
-                                //     SpaceAfter(&'a HasImpls<'a>, &'a [CommentOrNewline<'a>]),
-                                // }
-                                let mut impl_map: VecMap<Symbol, Symbol> = VecMap::default();
-
-                                let ability_home = ability.module_id();
-
-                                for loc_field in impls.extract_spaces().item.items {
-                                    match loc_field.value {
-                                        AssignedField::LabelOnly(label) => {
-                                            let label_ident = label.into();
-                                            let region = label.region;
-
-        let member_symbol = match env.qualified_lookup_with_module_id(scope, ability_home, label_ident, region) {
-            Ok(symbol) => {
-                symbol
-            }
-                Err(_) => {
-                    env.problem(Problem::NotAnAbilityMember {
-                        ability,
-                        region,
-                    });
-                }
-        }
-
-                                            match scope.lookup(label.value.into(), label.region) {
-                                                Ok(symbol) => {
-                                                    impl_map.insert(symbol, symbol);
-                                                }
-                                                Err(_) => {
-                                                    // [Eq { eq }]
-
-                                                    env.problem(Problem::ImplementationNotFound{
-
-                                                        ability,
-                                                        member: scope.lookup()
-                                                        region: label.region,
-                                                    });
-                                                }
-                                            }
-                                        }
-                                        AssignedField::RequiredValue(
-                                            label,
-                                            _spaces,
-                                            Loc {
-                                                value: Expr::Var(var_name),
-                                                ..
-                                            },
-                                        ) => {
-                                            let key_sym: Symbol = todo!(); // label
-                                            let value_sym: Symbol = todo!(); // var_name
-
-                                            impl_map.insert(key_sym, value_sym);
-                                        }
-                                    }
-                                }
-
-                                supported_abilities.push(OpaqueSupports::Implemented {
-                                    ability_name: ability,
-                                    impls: impl_map,
-                                });
-                            } else {
-                                if ability.is_builtin_ability() {
-                                    derived_abilities.push(Loc::at(region, ability));
-                                    supported_abilities.push(OpaqueSupports::Derived(ability));
-                                } else {
-                                    // There was no record specified of functions to use for
-                                    // members, but also this isn't a builtin ability, so we don't
-                                    // know how to auto-derive it.
-                                    //
-                                    // Register the problem but keep going, we may still be able to compile the
-                                    // program even if a derive is missing.
-                                    env.problem(Problem::IllegalDerive(region));
-                                }
-                            }
-                        }
+                        Ok(ability) => ability,
                         Err(_) => {
                             // This is bad apply; an error will have been reported for it
                             // already.
+                            continue;
                         }
                     }
                 }
                 _ => {
+                    // Register the problem but keep going.
+                    env.problem(Problem::IllegalClaimedAbility(region));
+                    continue;
+                }
+            };
+
+            if let Some(impls) = opt_impls {
+                let mut impl_map: VecMap<Symbol, Symbol> = VecMap::default();
+
+                for loc_impl in impls.extract_spaces().item.items {
+                    match canonicalize_claimed_ability_impl(env, scope, ability, loc_impl) {
+                        Ok((member, opaque_impl)) => {
+                            impl_map.insert(member, opaque_impl);
+                        }
+                        Err(()) => continue,
+                    }
+                }
+
+                supported_abilities.push(OpaqueSupports::Implemented {
+                    ability_name: ability,
+                    impls: impl_map,
+                });
+            } else {
+                if ability.is_builtin_ability() {
+                    derived_abilities.push(Loc::at(region, ability));
+                    supported_abilities.push(OpaqueSupports::Derived(ability));
+                } else {
+                    // There was no record specified of functions to use for
+                    // members, but also this isn't a builtin ability, so we don't
+                    // know how to auto-derive it.
+                    //
                     // Register the problem but keep going, we may still be able to compile the
                     // program even if a derive is missing.
-                    env.problem(Problem::IllegalDerive(region));
+                    env.problem(Problem::IllegalClaimedAbility(region));
                 }
             }
         }
 
+        // TODO: properly validate all supported_abilities
         if !derived_abilities.is_empty() {
             // Fresh instance of this opaque to be checked for derivability during solving.
             let fresh_inst = Type::DelayedAlias(AliasCommon {
@@ -610,8 +670,6 @@ pub(crate) fn canonicalize_defs<'a>(
     let mut pending_type_defs = Vec::with_capacity(loc_defs.type_defs.len());
     let mut pending_value_defs = Vec::with_capacity(loc_defs.value_defs.len());
 
-    let mut output = Output::default();
-
     for (index, either_index) in loc_defs.tags.iter().enumerate() {
         match either_index.split() {
             Ok(type_index) => {
@@ -656,7 +714,7 @@ pub(crate) fn canonicalize_defs<'a>(
         output,
         var_store,
         scope,
-        &pending_value_defs,
+        pending_value_defs,
         pattern_type,
         aliases,
         symbols_introduced,
@@ -669,7 +727,7 @@ fn canonicalize_value_defs<'a>(
     mut output: Output,
     var_store: &mut VarStore,
     scope: &mut Scope,
-    value_defs: &[Loc<PendingValue<'a>>],
+    value_defs: Vec<Loc<PendingValue<'a>>>,
     pattern_type: PatternType,
     mut aliases: VecMap<Symbol, Alias>,
     mut symbols_introduced: MutMap<Symbol, Region>,

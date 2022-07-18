@@ -298,6 +298,7 @@ impl Scope {
                 let shadow_symbol = self.scopeless_symbol(ident, region);
 
                 if self.abilities_store.is_ability_member_name(original_symbol) {
+                    // TODO: remove register_specializing_symbol
                     self.abilities_store
                         .register_specializing_symbol(shadow_symbol, original_symbol);
 

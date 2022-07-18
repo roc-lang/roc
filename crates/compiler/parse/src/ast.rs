@@ -1173,7 +1173,7 @@ impl<'a> ExtractSpaces<'a> for HasImpls<'a> {
             },
             HasImpls::SpaceBefore(item, before) => match item {
                 HasImpls::HasImpls(inner) => Spaces {
-                    before: before,
+                    before,
                     item: *inner,
                     after: &[],
                 },

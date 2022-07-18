@@ -130,14 +130,20 @@ pub enum Problem {
     },
     AbilityUsedAsType(Lowercase, Symbol, Region),
     NestedSpecialization(Symbol, Region),
-    IllegalDerive(Region),
-    ImplementationNotFound {
-        ability: Symbol,
-        member: Symbol,
-        region: Region,
-    },
+    IllegalClaimedAbility(Region),
     NotAnAbilityMember {
         ability: Symbol,
+        name: String,
+        region: Region,
+    },
+    OptionalAbilityImpl {
+        ability: Symbol,
+        region: Region,
+    },
+    QualifiedAbilityImpl {
+        region: Region,
+    },
+    AbilityImplNotIdent {
         region: Region,
     },
 }

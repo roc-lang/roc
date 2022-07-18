@@ -2057,21 +2057,6 @@ impl From<&AliasVar> for OptAbleVar {
 }
 
 #[derive(Clone, Debug)]
-pub struct Opaque {
-    pub region: Region,
-    pub type_variables: Vec<Loc<AliasVar>>,
-
-    /// lambda set variables, e.g. the one annotating the arrow in
-    /// a |c|-> b
-    pub lambda_set_variables: Vec<LambdaSet>,
-    pub recursion_variables: MutSet<Variable>,
-    pub typ: Type,
-    pub kind: AliasKind,
-
-    pub supports: Vec<OpaqueSupports>,
-}
-
-#[derive(Clone, Debug)]
 pub enum OpaqueSupports {
     Derived(Symbol),
     Implemented {

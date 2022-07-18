@@ -9163,6 +9163,87 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
+        opaque_ability_impl_not_found,
+        indoc!(
+            r#"
+            app "test" provides [A, myEq] to "./platform"
+
+            Eq has eq : a, a -> Bool | a has Eq
+
+            A := U8 has [ Eq {eq: aEq} ]
+
+            myEq = \m, n -> m == n
+            "#
+        ),
+        @r###"
+        "###
+    );
+
+    test_report!(
+        opaque_ability_impl_optional,
+        indoc!(
+            r#"
+            app "test" provides [myEq] to "./platform"
+
+            Eq has eq : a, a -> Bool | a has Eq
+
+            A := U8 has [ Eq {eq ? aEq} ]
+
+            myEq = \m, n -> m == n
+            "#
+        ),
+        @r###"
+        "###
+    );
+
+    test_report!(
+        opaque_builtin_ability_impl_optional,
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ Encoding }]
+                provides [A, myEncoder] to "./platform"
+
+            A := U8 has [ Encoding {toEncoder ? myEncoder} ]
+
+            myEncoder = 1
+            "#
+        ),
+        @r###"
+        "###
+    );
+
+    test_report!(
+        opaque_ability_impl_qualified,
+        indoc!(
+            r#"
+            app "test" provides [A] to "./platform"
+
+            Eq has eq : a, a -> Bool | a has Eq
+
+            A := U8 has [ Eq {eq : Bool.eq} ]
+            "#
+        ),
+        @r###"
+        "###
+    );
+
+    test_report!(
+        opaque_ability_impl_not_identifier,
+        indoc!(
+            r#"
+            app "test" provides [A] to "./platform"
+
+            Eq has eq : a, a -> Bool | a has Eq
+
+            A := U8 has [ Eq {eq : \m, n -> m == n} ]
+            "#
+        ),
+        @r###"
+        "###
+    );
+
+    test_report!(
         derive_non_builtin_ability,
         indoc!(
             r#"
