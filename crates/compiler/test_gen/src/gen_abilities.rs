@@ -291,7 +291,7 @@ fn decode() {
             fromBytes = \lst, fmt ->
                 when decodeWith lst decoder fmt is
                     { result, rest } ->
-                        Result.after result \val ->
+                        Result.try result \val ->
                             if List.isEmpty rest
                             then Ok val
                             else Err (Leftover rest)
