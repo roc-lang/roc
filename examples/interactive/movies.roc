@@ -22,19 +22,16 @@ Movie : {
 
 movieFromLine : Str -> Result Movie [InvalidLine Str]*
 movieFromLine = \line ->
-    if Str.isEmpty line then
-        Err (InvalidLine "")
-    else
-        result =
-            fields = Str.split line "|"
+    result =
+        fields = Str.split line "|"
 
-            title <- List.get fields 0 |> Result.try
-            year = "a string"
-            cast <- List.get fields 2 |> Result.try
+        title <- List.get fields 0 |> Result.try
+        year <- List.get fields 1 |> Result.try Str.toU16 |> Result.try
+        cast <- List.get fields 2 |> Result.try
 
-            Ok { title, year, cast: Str.split cast "," }
+        Ok { title, year, cast: Str.split cast "," }
 
-        Result.mapErr result \_ -> InvalidLine line
+    Result.mapErr result \_ -> InvalidLine line
 
 getMovies : Url -> Task (List Movie) (HttpErr [InvalidLine Str]*) [Net]*
 getMovies = \url ->
@@ -77,18 +74,8 @@ main =
 
 # decode title
 expect
-    actual =
+    title =
         movieFromLine "title goes here|1234|first star,second star,third star"
         |> Result.map .title
 
-    actual == Ok "title goes here"
-
-# decode empty title
-expect
-    actual =
-        movieFromLine ""
-        |> Result.map .title
-
-    actual == Err (InvalidLine "")
-
-expect 1 == 1
+    title == Ok "title goes here"
