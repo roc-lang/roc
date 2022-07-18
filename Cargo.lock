@@ -3323,6 +3323,7 @@ dependencies = [
  "cli_utils",
  "ctor",
  "dircpy",
+ "fnv",
  "indexmap",
  "indoc",
  "pretty_assertions",
