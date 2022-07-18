@@ -46,13 +46,13 @@ fn hash_specialization_multiple_add() {
             Hash has
                 hash : a -> U64 | a has Hash
 
-            Id := U64
+            Id := U64 has [ Hash {hash: hashId} ]
 
-            hash = \@Id n -> n
+            hashId = \@Id n -> n
 
-            One := {}
+            One := {} has [ Hash {hash: hashOne} ]
 
-            hash = \@One _ -> 1
+            hashOne = \@One _ -> 1
 
             main = hash (@Id 1234) + hash (@One {})
             "#
@@ -150,11 +150,11 @@ fn ability_constrained_in_non_member_multiple_specializations() {
             mulHashes : a, b -> U64 | a has Hash, b has Hash
             mulHashes = \x, y -> hash x * hash y
 
-            Id := U64
-            hash = \@Id n -> n
+            Id := U64 has [Hash { hash: hashId }]
+            hashId = \@Id n -> n
 
-            Three := {}
-            hash = \@Three _ -> 3
+            Three := {} has [Hash { hash: hashThree }]
+            hashThree = \@Three _ -> 3
 
             result = mulHashes (@Id 100) (@Three {})
             "#
@@ -177,11 +177,11 @@ fn ability_constrained_in_non_member_multiple_specializations_inferred() {
 
             mulHashes = \x, y -> hash x * hash y
 
-            Id := U64
-            hash = \@Id n -> n
+            Id := U64 has [Hash { hash: hashId }]
+            hashId = \@Id n -> n
 
-            Three := {}
-            hash = \@Three _ -> 3
+            Three := {} has [Hash { hash: hashThree }]
+            hashThree = \@Three _ -> 3
 
             result = mulHashes (@Id 100) (@Three {})
             "#
@@ -205,11 +205,11 @@ fn ability_used_as_type_still_compiles() {
             mulHashes : Hash, Hash -> U64
             mulHashes = \x, y -> hash x * hash y
 
-            Id := U64
-            hash = \@Id n -> n
+            Id := U64 has [Hash { hash: hashId }]
+            hashId = \@Id n -> n
 
-            Three := {}
-            hash = \@Three _ -> 3
+            Three := {} has [Hash { hash: hashThree }]
+            hashThree = \@Three _ -> 3
 
             result = mulHashes (@Id 100) (@Three {})
             "#
