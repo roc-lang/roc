@@ -1,10 +1,19 @@
 interface Http
     exposes [
+        Request,
+        Method,
+        Header,
+        Timeout,
+        ProgressTracking,
+        Part,
+        Body,
+        Response,
+        Metadata,
+        Error,
         header,
         emptyBody,
         bytesBody,
         stringBody,
-        # jsonBody,
         multiPartBody,
         stringPart,
         bytesPart,
@@ -13,14 +22,18 @@ interface Http
         errorToString,
         send,
     ]
-    imports [
-        Effect,
-        InternalTask,
-        # Json,
-        Task.{ Task },
-        # Encode.{ Encoding },
-        HttpTypes.{ Request, Method, Header, Timeout, ProgressTracking, Part, Body, Response, Metadata, Error },
-    ]
+    imports [Effect, InternalTask, Task.{ Task }, InternalHttp]
+
+Request : InternalHttp.Request
+Method : InternalHttp.Method
+Header : InternalHttp.Header
+Timeout : InternalHttp.Timeout
+ProgressTracking : InternalHttp.ProgressTracking
+Part : InternalHttp.Part
+Body : InternalHttp.Body
+Response : InternalHttp.Response
+Metadata : InternalHttp.Metadata
+Error : InternalHttp.Error
 
 defaultRequest : Request
 defaultRequest = {

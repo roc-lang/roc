@@ -1,4 +1,4 @@
-interface HttpTypes
+interface InternalHttp
     exposes [Request, Method, Header, Timeout, ProgressTracking, Part, Body, Response, Metadata, Error]
     imports []
 
