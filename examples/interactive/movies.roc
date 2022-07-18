@@ -42,7 +42,6 @@ getMovies = \url ->
     |> List.mapTry movieFromLine
     |> Task.fromResult
 
-#writeOutput : List Movie -> Task {} (FileWriteErr (EncodeErr *)) [Write [Disk]*]*
 writeOutput : List Movie -> Task {} (FileWriteErr *) [Write [Disk]*]*
 writeOutput = \movies ->
     path = Path.fromStr "output.json"
