@@ -9,6 +9,9 @@ use crate::abilities::PendingAbilitiesStore;
 
 use bitvec::vec::BitVec;
 
+// ability -> member names
+pub(crate) type PendingAbilitiesInScope = VecMap<Symbol, Vec<Symbol>>;
+
 #[derive(Clone, Debug)]
 pub struct Scope {
     /// The type aliases currently in scope
@@ -288,6 +291,7 @@ impl Scope {
     #[allow(clippy::type_complexity)]
     pub fn introduce_or_shadow_ability_member(
         &mut self,
+        pending_abilities_in_scope: &PendingAbilitiesInScope,
         ident: Ident,
         region: Region,
     ) -> Result<(Symbol, Option<Symbol>), (Region, Loc<Ident>, Symbol)> {
@@ -297,7 +301,11 @@ impl Scope {
             Err((original_symbol, original_region)) => {
                 let shadow_symbol = self.scopeless_symbol(ident, region);
 
-                if self.abilities_store.is_ability_member_name(original_symbol) {
+                if self.abilities_store.is_ability_member_name(original_symbol)
+                    || pending_abilities_in_scope
+                        .iter()
+                        .any(|(_, members)| members.iter().any(|m| *m == original_symbol))
+                {
                     // TODO: remove register_specializing_symbol
                     self.abilities_store
                         .register_specializing_symbol(shadow_symbol, original_symbol);

@@ -16,7 +16,7 @@ use crate::expr::{canonicalize_expr, Output, Recursive};
 use crate::pattern::{canonicalize_def_header_pattern, BindingsFromPattern, Pattern};
 use crate::procedure::References;
 use crate::scope::create_alias;
-use crate::scope::Scope;
+use crate::scope::{PendingAbilitiesInScope, Scope};
 use roc_collections::ReferenceMatrix;
 use roc_collections::VecMap;
 use roc_collections::{ImSet, MutMap, SendMap};
@@ -27,7 +27,6 @@ use roc_module::symbol::IdentId;
 use roc_module::symbol::ModuleId;
 use roc_module::symbol::Symbol;
 use roc_parse::ast;
-use roc_parse::ast::AbilityMember;
 use roc_parse::ast::AssignedField;
 use roc_parse::ast::Defs;
 use roc_parse::ast::ExtractSpaces;
@@ -144,6 +143,12 @@ impl PendingValueDef<'_> {
 }
 
 #[derive(Debug, Clone)]
+struct PendingAbilityMember<'a> {
+    name: Loc<Symbol>,
+    typ: Loc<ast::TypeAnnotation<'a>>,
+}
+
+#[derive(Debug, Clone)]
 enum PendingTypeDef<'a> {
     /// A structural type alias, e.g. `Ints : List Int`
     Alias {
@@ -162,7 +167,7 @@ enum PendingTypeDef<'a> {
 
     Ability {
         name: Loc<Symbol>,
-        members: &'a [ast::AbilityMember<'a>],
+        members: Vec<PendingAbilityMember<'a>>,
     },
 
     /// An invalid alias, that is ignored in the rest of the pipeline
@@ -669,28 +674,46 @@ pub(crate) fn canonicalize_defs<'a>(
 
     let mut pending_type_defs = Vec::with_capacity(loc_defs.type_defs.len());
     let mut pending_value_defs = Vec::with_capacity(loc_defs.value_defs.len());
+    let mut pending_abilities_in_scope = PendingAbilitiesInScope::default();
+
+    // Convert the type defs into pending defs first, then all the value defs.
+    // Follow this order because we need all value symbols to fully canonicalize type defs (in case
+    // there are opaques that implement an ability using a value symbol). But, value symbols might
+    // shadow symbols defined in a local ability def.
+
+    for (_, either_index) in loc_defs.tags.iter().enumerate() {
+        if let Ok(type_index) = either_index.split() {
+            let type_def = &loc_defs.type_defs[type_index.index()];
+            let pending_type_def = to_pending_type_def(env, type_def, scope, pattern_type);
+            match &pending_type_def {
+                PendingTypeDef::Ability { name, members } => {
+                    pending_abilities_in_scope.insert(
+                        name.value,
+                        members.iter().map(|mem| mem.name.value).collect(),
+                    );
+                }
+                _ => {}
+            }
+            pending_type_defs.push(pending_type_def);
+        }
+    }
 
     for (index, either_index) in loc_defs.tags.iter().enumerate() {
-        match either_index.split() {
-            Ok(type_index) => {
-                let type_def = &loc_defs.type_defs[type_index.index()];
-                pending_type_defs.push(to_pending_type_def(env, type_def, scope, pattern_type));
-            }
-            Err(value_index) => {
-                let value_def = &loc_defs.value_defs[value_index.index()];
-                let region = loc_defs.regions[index];
+        if let Err(value_index) = either_index.split() {
+            let value_def = &loc_defs.value_defs[value_index.index()];
+            let region = loc_defs.regions[index];
 
-                let pending = to_pending_value_def(
-                    env,
-                    var_store,
-                    &value_def,
-                    scope,
-                    &mut output,
-                    pattern_type,
-                );
+            let pending = to_pending_value_def(
+                env,
+                var_store,
+                &value_def,
+                scope,
+                &pending_abilities_in_scope,
+                &mut output,
+                pattern_type,
+            );
 
-                pending_value_defs.push(Loc::at(region, pending));
-            }
+            pending_value_defs.push(Loc::at(region, pending));
         }
     }
 
@@ -698,14 +721,8 @@ pub(crate) fn canonicalize_defs<'a>(
         scope.register_debug_idents();
     }
 
-    let (aliases, symbols_introduced) = canonicalize_type_defs(
-        env,
-        &mut output,
-        var_store,
-        scope,
-        pending_type_defs,
-        pattern_type,
-    );
+    let (aliases, symbols_introduced) =
+        canonicalize_type_defs(env, &mut output, var_store, scope, pending_type_defs);
 
     // Now that we have the scope completely assembled, and shadowing resolved,
     // we're ready to canonicalize any body exprs.
@@ -832,7 +849,6 @@ fn canonicalize_type_defs<'a>(
     var_store: &mut VarStore,
     scope: &mut Scope,
     pending_type_defs: Vec<PendingTypeDef<'a>>,
-    pattern_type: PatternType,
 ) -> (VecMap<Symbol, Alias>, MutMap<Symbol, Region>) {
     enum TypeDef<'a> {
         Alias(
@@ -846,7 +862,7 @@ fn canonicalize_type_defs<'a>(
             &'a Loc<ast::TypeAnnotation<'a>>,
             Option<&'a Loc<ast::HasAbilities<'a>>>,
         ),
-        Ability(Loc<Symbol>, &'a [AbilityMember<'a>]),
+        Ability(Loc<Symbol>, Vec<PendingAbilityMember<'a>>),
     }
 
     let mut type_defs = MutMap::default();
@@ -952,7 +968,7 @@ fn canonicalize_type_defs<'a>(
             TypeDef::Ability(name, members) => {
                 // For now we enforce that aliases cannot reference abilities, so let's wait to
                 // resolve ability definitions until aliases are resolved and in scope below.
-                abilities.insert(name.value, (name, members));
+                abilities.insert(name.value, members);
             }
         }
     }
@@ -979,7 +995,6 @@ fn canonicalize_type_defs<'a>(
         scope,
         abilities,
         &pending_abilities_in_scope,
-        pattern_type,
     );
 
     (aliases, symbols_introduced)
@@ -992,19 +1007,26 @@ fn resolve_abilities<'a>(
     output: &mut Output,
     var_store: &mut VarStore,
     scope: &mut Scope,
-    abilities: MutMap<Symbol, (Loc<Symbol>, &[AbilityMember])>,
+    abilities: MutMap<Symbol, Vec<PendingAbilityMember>>,
     pending_abilities_in_scope: &[Symbol],
-    pattern_type: PatternType,
 ) {
-    for (loc_ability_name, members) in abilities.into_values() {
+    for (ability, members) in abilities {
         let mut can_members = Vec::with_capacity(members.len());
 
-        for member in members {
+        for PendingAbilityMember {
+            name:
+                Loc {
+                    value: member_sym,
+                    region: member_name_region,
+                },
+            typ,
+        } in members
+        {
             let member_annot = canonicalize_annotation(
                 env,
                 scope,
-                &member.typ.value,
-                member.typ.region,
+                &typ.value,
+                typ.region,
                 var_store,
                 pending_abilities_in_scope,
             );
@@ -1012,26 +1034,6 @@ fn resolve_abilities<'a>(
             // Record all the annotation's references in output.references.lookups
             for symbol in member_annot.references {
                 output.references.insert_type_lookup(symbol);
-            }
-
-            let name_region = member.name.region;
-            let member_name = member.name.extract_spaces().item;
-
-            let member_sym = match scope.introduce(member_name.into(), name_region) {
-                Ok(sym) => sym,
-                Err((original_region, shadow, _new_symbol)) => {
-                    env.problem(roc_problem::can::Problem::Shadowing {
-                        original_region,
-                        shadow,
-                        kind: ShadowKind::Variable,
-                    });
-                    // Pretend the member isn't a part of the ability
-                    continue;
-                }
-            };
-
-            if pattern_type == PatternType::TopLevelDef {
-                env.top_level_symbols.insert(member_sym);
             }
 
             // What variables in the annotation are bound to the parent ability, and what variables
@@ -1043,7 +1045,7 @@ fn resolve_abilities<'a>(
                 .introduced_variables
                 .able
                 .iter()
-                .partition(|av| av.ability == loc_ability_name.value);
+                .partition(|av| av.ability == ability);
 
             let var_bound_to_ability = match variables_bound_to_ability.as_slice() {
                 [one] => one.variable,
@@ -1052,8 +1054,8 @@ fn resolve_abilities<'a>(
                     // need to be a part of the ability.
                     env.problem(Problem::AbilityMemberMissingHasClause {
                         member: member_sym,
-                        ability: loc_ability_name.value,
-                        region: name_region,
+                        ability,
+                        region: member_name_region,
                     });
                     // Pretend the member isn't a part of the ability
                     continue;
@@ -1072,7 +1074,7 @@ fn resolve_abilities<'a>(
                         .collect();
                     env.problem(Problem::AbilityMemberMultipleBoundVars {
                         member: member_sym,
-                        ability: loc_ability_name.value,
+                        ability,
                         span_has_clauses,
                         bound_var_names,
                     });
@@ -1104,8 +1106,8 @@ fn resolve_abilities<'a>(
             can_members.push((
                 member_sym,
                 AbilityMemberData {
-                    parent_ability: loc_ability_name.value,
-                    region: name_region,
+                    parent_ability: ability,
+                    region: member_name_region,
                     typ: PendingMemberType::Local {
                         variables,
                         signature,
@@ -1116,9 +1118,7 @@ fn resolve_abilities<'a>(
         }
 
         // Store what symbols a type must define implementations for to have this ability.
-        scope
-            .abilities_store
-            .register_ability(loc_ability_name.value, can_members);
+        scope.abilities_store.register_ability(ability, can_members);
     }
 }
 
@@ -2175,10 +2175,38 @@ fn to_pending_type_def<'a>(
                 };
             }
 
+            let mut named_members = Vec::with_capacity(members.len());
+
+            for member in *members {
+                let name_region = member.name.region;
+                let member_name = member.name.extract_spaces().item;
+
+                let member_sym = match scope.introduce(member_name.into(), name_region) {
+                    Ok(sym) => sym,
+                    Err((original_region, shadow, _new_symbol)) => {
+                        env.problem(roc_problem::can::Problem::Shadowing {
+                            original_region,
+                            shadow,
+                            kind: ShadowKind::Variable,
+                        });
+                        // Pretend the member isn't a part of the ability
+                        continue;
+                    }
+                };
+
+                named_members.push(PendingAbilityMember {
+                    name: Loc::at(name_region, member_sym),
+                    typ: member.typ,
+                });
+
+                if pattern_type == PatternType::TopLevelDef {
+                    env.top_level_symbols.insert(member_sym);
+                }
+            }
+
             PendingTypeDef::Ability {
                 name,
-                // We'll handle adding the member symbols later on when we do all value defs.
-                members,
+                members: named_members,
             }
         }
     }
@@ -2200,6 +2228,7 @@ fn to_pending_value_def<'a>(
     var_store: &mut VarStore,
     def: &'a ast::ValueDef<'a>,
     scope: &mut Scope,
+    pending_abilities_in_scope: &PendingAbilitiesInScope,
     output: &mut Output,
     pattern_type: PatternType,
 ) -> PendingValue<'a> {
@@ -2212,6 +2241,7 @@ fn to_pending_value_def<'a>(
                 env,
                 var_store,
                 scope,
+                pending_abilities_in_scope,
                 output,
                 pattern_type,
                 &loc_pattern.value,
@@ -2230,6 +2260,7 @@ fn to_pending_value_def<'a>(
                 env,
                 var_store,
                 scope,
+                pending_abilities_in_scope,
                 output,
                 pattern_type,
                 &loc_pattern.value,
@@ -2262,6 +2293,7 @@ fn to_pending_value_def<'a>(
                     env,
                     var_store,
                     scope,
+                    pending_abilities_in_scope,
                     output,
                     pattern_type,
                     &body_pattern.value,
