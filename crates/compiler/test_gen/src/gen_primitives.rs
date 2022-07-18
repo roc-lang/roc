@@ -2589,8 +2589,7 @@ fn module_thunk_is_function() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[should_panic(expected = "Roc failed with message: ")]
-fn hit_unresolved_type_variable() {
+fn pass_through_unresolved_type_variable() {
     assert_evals_to!(
         indoc!(
             r#"

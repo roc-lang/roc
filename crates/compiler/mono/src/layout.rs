@@ -1227,12 +1227,21 @@ impl<'a> Layout<'a> {
 
     fn new_help<'b>(
         env: &mut Env<'a, 'b>,
-        var: Variable,
+        _var: Variable,
         content: Content,
     ) -> Result<Self, LayoutProblem> {
         use roc_types::subs::Content::*;
         match content {
-            FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar(var)),
+            FlexVar(_) | RigidVar(_) => {
+                roc_debug_flags::dbg_do!(roc_debug_flags::ROC_NO_UNBOUND_LAYOUT, {
+                    return Err(LayoutProblem::UnresolvedTypeVar(_var));
+                });
+
+                // If we encounter an unbound type var (e.g. `*` or `a`)
+                // then it's zero-sized; In the future we may drop this argument
+                // completely, but for now we represent it with the empty tag union
+                Ok(Layout::VOID)
+            }
             FlexAbleVar(_, _) | RigidAbleVar(_, _) => todo_abilities!("Not reachable yet"),
             RecursionVar { structure, .. } => {
                 let structure_content = env.subs.get_content_without_compacting(structure);

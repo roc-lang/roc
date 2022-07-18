@@ -110,6 +110,10 @@ flags! {
     /// Print to stderr when a runtime error function is generated.
     ROC_PRINT_RUNTIME_ERROR_GEN
 
+    /// Generate a layout error when an unbound type variable is found, rather than generating the
+    /// void layout.
+    ROC_NO_UNBOUND_LAYOUT
+
     // ===LLVM Gen===
 
     /// Prints LLVM function verification output.
