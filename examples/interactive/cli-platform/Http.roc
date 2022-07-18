@@ -62,10 +62,10 @@ multiPartBody = \parts ->
     afterName = Str.toUtf8 "\"\r\n"
     appendPart = \buffer, Part name partBytes ->
         buffer
-            |> List.concat beforeName
-            |> List.concat (Str.toUtf8 name)
-            |> List.concat afterName
-            |> List.concat partBytes
+        |> List.concat beforeName
+        |> List.concat (Str.toUtf8 name)
+        |> List.concat afterName
+        |> List.concat partBytes
     bodyBytes = List.walk parts [] appendPart
 
     Body (MimeType "multipart/form-data;boundary=\"\(boundary)\"") bodyBytes
@@ -87,11 +87,11 @@ handleStringResponse = \response ->
         BadStatus metadata _ -> Err (BadStatus metadata.statusCode)
         GoodStatus _ bodyBytes ->
             Str.fromUtf8 bodyBytes
-                |> Result.mapErr
-                    \BadUtf8 _ pos ->
-                        position = Num.toStr pos
+            |> Result.mapErr
+                \BadUtf8 _ pos ->
+                    position = Num.toStr pos
 
-                        BadBody "Invalid UTF-8 at byte offset \(position)"
+                    BadBody "Invalid UTF-8 at byte offset \(position)"
 
 errorToString : Error -> Str
 errorToString = \err ->
@@ -106,5 +106,5 @@ send : Request -> Task Str Error [Network [Http]*]*
 send = \req ->
     # TODO: Fix our C ABI codegen so that we don't this Box.box heap allocation
     Effect.sendRequest (Box.box req)
-        |> Effect.map handleStringResponse
-        |> InternalTask.fromEffect
+    |> Effect.map handleStringResponse
+    |> InternalTask.fromEffect
