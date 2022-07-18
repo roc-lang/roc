@@ -1,7 +1,7 @@
 interface Json
     exposes [
         Json,
-        format,
+        toUtf8,
     ]
     imports [
         List,
@@ -33,7 +33,7 @@ interface Json
 
 Json := {}
 
-format = @Json {}
+toUtf8 = @Json {}
 
 numToBytes = \n ->
     n |> Num.toStr |> Str.toUtf8

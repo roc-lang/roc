@@ -6475,7 +6475,7 @@ mod solve_expr {
                         |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
 
                 main =
-                    when Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.format) is
+                    when Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.toUtf8) is
                         Ok s -> s
                         _ -> "<bad>"
                 "#
@@ -7157,7 +7157,7 @@ mod solve_expr {
 
                 main =
                     foo = 1
-                    @Go it = (f (@Fo {})) {} 
+                    @Go it = (f (@Fo {})) {}
                     #         ^
                     #         ^^^^^^^^^^
 
