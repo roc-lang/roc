@@ -1227,14 +1227,14 @@ impl<'a> Layout<'a> {
 
     fn new_help<'b>(
         env: &mut Env<'a, 'b>,
-        var: Variable,
+        _var: Variable,
         content: Content,
     ) -> Result<Self, LayoutProblem> {
         use roc_types::subs::Content::*;
         match content {
             FlexVar(_) | RigidVar(_) => {
                 roc_debug_flags::dbg_do!(roc_debug_flags::ROC_NO_UNBOUND_LAYOUT, {
-                    return Err(LayoutProblem::UnresolvedTypeVar(var));
+                    return Err(LayoutProblem::UnresolvedTypeVar(_var));
                 });
 
                 // If we encounter an unbound type var (e.g. `*` or `a`)
