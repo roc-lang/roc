@@ -75,10 +75,18 @@ main =
             Err (InvalidLine line) -> Stderr.line "The following line in the response was malformed:\n\(line)"
             Err _ -> Stderr.line "Error!"
 
-# decode title
+# decoding title from valid line succeeds
 expect
     title =
         movieFromLine "title goes here|1234|first star,second star,third star"
         |> Result.map .title
 
     title == Ok "title goes here"
+
+# decoding title from empty line fails
+expect
+    title =
+        movieFromLine ""
+        |> Result.map .title
+
+    title == Err (InvalidLine "")
