@@ -50,6 +50,7 @@ const ABILITY_USED_AS_TYPE: &str = "ABILITY USED AS TYPE";
 const ILLEGAL_DERIVE: &str = "ILLEGAL DERIVE";
 const IMPLEMENTATION_NOT_FOUND: &str = "IMPLEMENTATION NOT FOUND";
 const NOT_AN_ABILITY_MEMBER: &str = "NOT AN ABILITY MEMBER";
+const NOT_AN_ABILITY: &str = "NOT AN ABILITY";
 const OPTIONAL_ABILITY_IMPLEMENTATION: &str = "OPTIONAL ABILITY IMPLEMENTATION";
 const QUALIFIED_ABILITY_IMPLEMENTATION: &str = "QUALIFIED ABILITY IMPLEMENTATION";
 const ABILITY_IMPLEMENTATION_NOT_IDENTIFIER: &str = "ABILITY IMPLEMENTATION NOT IDENTIFIER";
@@ -744,7 +745,7 @@ pub fn can_problem<'b>(
             title = SPECIALIZATION_NOT_ON_TOPLEVEL.to_string();
             severity = Severity::Warning;
         }
-        Problem::IllegalClaimedAbility(region) => {
+        Problem::IllegalDerivedAbility(region) => {
             doc = alloc.stack([
                 alloc.reflow("This ability cannot be derived:"),
                 alloc.region(lines.convert_region(region)),
@@ -754,6 +755,15 @@ pub fn can_problem<'b>(
                     .append(list_builtin_abilities(alloc)),
             ]);
             title = ILLEGAL_DERIVE.to_string();
+            severity = Severity::Warning;
+        }
+        Problem::NotAnAbility(region) => {
+            doc = alloc.stack([
+                alloc.reflow("This identifier is not an ability in scope:"),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("Only abilities can be implemented."),
+            ]);
+            title = NOT_AN_ABILITY.to_string();
             severity = Severity::Warning;
         }
         Problem::NotAnAbilityMember {

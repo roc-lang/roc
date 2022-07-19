@@ -565,10 +565,23 @@ fn canonicalize_opaque<'a>(
                 _ => internal_error!("spaces not extracted"),
             };
 
+            let ability_region = ability.region;
+
             let ability = match ability.value {
                 ast::TypeAnnotation::Apply(module_name, ident, []) => {
                     match make_apply_symbol(env, region, scope, module_name, ident) {
-                        Ok(ability) => ability,
+                        Ok(ability) => {
+                            if scope.abilities_store.is_ability(ability)
+                                || pending_abilities_in_scope.contains(&ability)
+                            {
+                                // This is an ability we already imported into the scope,
+                                // or which is also undergoing canonicalization at the moment.
+                                ability
+                            } else {
+                                env.problem(Problem::NotAnAbility(ability_region));
+                                continue;
+                            }
+                        }
                         Err(_) => {
                             // This is bad apply; an error will have been reported for it
                             // already.
@@ -578,7 +591,7 @@ fn canonicalize_opaque<'a>(
                 }
                 _ => {
                     // Register the problem but keep going.
-                    env.problem(Problem::IllegalClaimedAbility(region));
+                    env.problem(Problem::NotAnAbility(ability_region));
                     continue;
                 }
             };
@@ -628,7 +641,7 @@ fn canonicalize_opaque<'a>(
                 //
                 // Register the problem but keep going, we may still be able to compile the
                 // program even if a derive is missing.
-                env.problem(Problem::IllegalClaimedAbility(region));
+                env.problem(Problem::IllegalDerivedAbility(region));
             }
         }
 

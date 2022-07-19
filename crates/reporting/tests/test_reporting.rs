@@ -9345,6 +9345,29 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
+        implements_type_not_ability,
+        indoc!(
+            r#"
+            app "test" provides [A, Foo] to "./platform"
+
+            Foo := {}
+
+            A := U8 has [ Foo {} ]
+            "#
+        ),
+        @r###"
+    ── NOT AN ABILITY ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This identifier is not an ability in scope:
+
+    5│  A := U8 has [ Foo {} ]
+                      ^^^
+
+    Only abilities can be implemented.
+    "###
+    );
+
+    test_report!(
         derive_non_builtin_ability,
         indoc!(
             r#"
