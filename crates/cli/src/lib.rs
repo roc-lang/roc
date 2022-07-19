@@ -185,7 +185,8 @@ pub fn build_app<'a>() -> Command<'a> {
                 Arg::new(ROC_FILE)
                     .help("The .roc file for the root module")
                     .allow_invalid_utf8(true)
-                    .required(true),
+                    .required(false)
+                    .default_value(DEFAULT_ROC_FILENAME)
             )
             .arg(args_for_app.clone())
         )
