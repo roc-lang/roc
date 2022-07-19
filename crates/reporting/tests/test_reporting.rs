@@ -9315,6 +9315,36 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
+        opaque_ability_impl_duplicate,
+        indoc!(
+            r#"
+            app "test" provides [A] to "./platform"
+
+            Eq has eq : a, a -> Bool | a has Eq
+
+            A := U8 has [ Eq {eq: eqA, eq: eqA} ]
+
+            eqA = \@A m, @A n -> m == n
+            "#
+        ),
+        @r###"
+    ── DUPLICATE IMPLEMENTATION ────────────────────────────── /code/proj/Main.roc ─
+
+    This ability member implementation is duplicate:
+
+    5│  A := U8 has [ Eq {eq: eqA, eq: eqA} ]
+                                   ^^^^^^^
+
+    The first implementation was defined here:
+
+    5│  A := U8 has [ Eq {eq: eqA, eq: eqA} ]
+                          ^^^^^^^
+
+    Only one custom implementation can be defined for an ability member.
+    "###
+    );
+
+    test_report!(
         derive_non_builtin_ability,
         indoc!(
             r#"

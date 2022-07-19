@@ -53,6 +53,7 @@ const NOT_AN_ABILITY_MEMBER: &str = "NOT AN ABILITY MEMBER";
 const OPTIONAL_ABILITY_IMPLEMENTATION: &str = "OPTIONAL ABILITY IMPLEMENTATION";
 const QUALIFIED_ABILITY_IMPLEMENTATION: &str = "QUALIFIED ABILITY IMPLEMENTATION";
 const ABILITY_IMPLEMENTATION_NOT_IDENTIFIER: &str = "ABILITY IMPLEMENTATION NOT IDENTIFIER";
+const DUPLICATE_IMPLEMENTATION: &str = "DUPLICATE IMPLEMENTATION";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -822,6 +823,21 @@ pub fn can_problem<'b>(
                 alloc.tip().append(alloc.reflow("consider defining this expression as a variable."))
             ]);
             title = ABILITY_IMPLEMENTATION_NOT_IDENTIFIER.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::DuplicateImpl {
+            original,
+            duplicate,
+        } => {
+            doc = alloc.stack([
+                alloc.reflow("This ability member implementation is duplicate:"),
+                alloc.region(lines.convert_region(duplicate)),
+                alloc.reflow("The first implementation was defined here:"),
+                alloc.region(lines.convert_region(original)),
+                alloc
+                    .reflow("Only one custom implementation can be defined for an ability member."),
+            ]);
+            title = DUPLICATE_IMPLEMENTATION.to_string();
             severity = Severity::RuntimeError;
         }
     };

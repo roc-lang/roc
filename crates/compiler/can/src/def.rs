@@ -451,14 +451,7 @@ fn canonicalize_claimed_ability_impl<'a>(
                 };
 
             match scope.lookup_ability_member_shadow(member_symbol) {
-                Some(impl_symbol) => {
-                    // TODO: get rid of register_specializing_symbol
-                    scope
-                        .abilities_store
-                        .register_specializing_symbol(impl_symbol, member_symbol);
-
-                    Ok((member_symbol, impl_symbol))
-                }
+                Some(impl_symbol) => Ok((member_symbol, impl_symbol)),
                 None => {
                     env.problem(Problem::ImplementationNotFound {
                         member: member_symbol,
@@ -513,11 +506,6 @@ fn canonicalize_claimed_ability_impl<'a>(
                     return Err(());
                 }
             };
-
-            // TODO: get rid of register_specializing_symbol
-            scope
-                .abilities_store
-                .register_specializing_symbol(impl_symbol, member_symbol);
 
             Ok((member_symbol, impl_symbol))
         }
@@ -596,20 +584,37 @@ fn canonicalize_opaque<'a>(
             };
 
             if let Some(impls) = opt_impls {
-                let mut impl_map: VecMap<Symbol, Symbol> = VecMap::default();
+                let mut impl_map: VecMap<Symbol, Loc<Symbol>> = VecMap::default();
 
                 for loc_impl in impls.extract_spaces().item.items {
-                    match canonicalize_claimed_ability_impl(env, scope, ability, loc_impl) {
-                        Ok((member, opaque_impl)) => {
-                            impl_map.insert(member, opaque_impl);
+                    let (member, impl_symbol) =
+                        match canonicalize_claimed_ability_impl(env, scope, ability, loc_impl) {
+                            Ok((member, impl_symbol)) => (member, impl_symbol),
+                            Err(()) => continue,
+                        };
+
+                    match impl_map.insert(member, Loc::at(loc_impl.region, impl_symbol)) {
+                        None => {
+                            // TODO: get rid of register_specializing_symbol
+                            scope
+                                .abilities_store
+                                .register_specializing_symbol(impl_symbol, member);
                         }
-                        Err(()) => continue,
+                        Some(old_impl_symbol) => {
+                            env.problem(Problem::DuplicateImpl {
+                                original: old_impl_symbol.region,
+                                duplicate: loc_impl.region,
+                            });
+                        }
                     }
                 }
 
                 supported_abilities.push(OpaqueSupports::Implemented {
                     ability_name: ability,
-                    impls: impl_map,
+                    impls: impl_map
+                        .into_iter()
+                        .map(|(member, def)| (member, def.value))
+                        .collect(),
                 });
             } else if ability.is_builtin_ability() {
                 derived_abilities.push(Loc::at(region, ability));

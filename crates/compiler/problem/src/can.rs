@@ -150,6 +150,10 @@ pub enum Problem {
     AbilityImplNotIdent {
         region: Region,
     },
+    DuplicateImpl {
+        original: Region,
+        duplicate: Region,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
