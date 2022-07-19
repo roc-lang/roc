@@ -89,7 +89,7 @@ expect exclaim "ha" == "ha!"
 # decoding title from valid line succeeds
 expect
     title =
-        movieFromLine "title goes here|1234|first star,second star,third star"
+        movieFromLine "title goes here|blah|first star,second star,third star"
         |> Result.map .title
 
     title == Ok "title goes here!"
