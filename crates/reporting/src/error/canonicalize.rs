@@ -55,6 +55,8 @@ const OPTIONAL_ABILITY_IMPLEMENTATION: &str = "OPTIONAL ABILITY IMPLEMENTATION";
 const QUALIFIED_ABILITY_IMPLEMENTATION: &str = "QUALIFIED ABILITY IMPLEMENTATION";
 const ABILITY_IMPLEMENTATION_NOT_IDENTIFIER: &str = "ABILITY IMPLEMENTATION NOT IDENTIFIER";
 const DUPLICATE_IMPLEMENTATION: &str = "DUPLICATE IMPLEMENTATION";
+const UNNECESSARY_IMPLEMENTATIONS: &str = "UNNECESSARY IMPLEMENTATIONS";
+const INCOMPLETE_ABILITY_IMPLEMENTATION: &str = "INCOMPLETE ABILITY IMPLEMENTATION";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -848,6 +850,56 @@ pub fn can_problem<'b>(
                     .reflow("Only one custom implementation can be defined for an ability member."),
             ]);
             title = DUPLICATE_IMPLEMENTATION.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::ImplementsNonRequired {
+            region,
+            ability,
+            not_required,
+        } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This type implements members that are not part of the "),
+                    alloc.symbol_unqualified(ability),
+                    alloc.reflow(" ability:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("The following implemented members should not be listed:"),
+                alloc.type_block(
+                    alloc.intersperse(
+                        not_required
+                            .into_iter()
+                            .map(|sym| alloc.symbol_unqualified(sym)),
+                        alloc.string(",".to_string()).append(alloc.space()),
+                    ),
+                ),
+            ]);
+            title = UNNECESSARY_IMPLEMENTATIONS.to_string();
+            severity = Severity::Warning;
+        }
+        Problem::DoesNotImplementAbility {
+            region,
+            ability,
+            not_implemented,
+        } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This type does not fully implement the "),
+                    alloc.symbol_unqualified(ability),
+                    alloc.reflow(" ability:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("The following necessary members are missing implementations:"),
+                alloc.type_block(
+                    alloc.intersperse(
+                        not_implemented
+                            .into_iter()
+                            .map(|sym| alloc.symbol_unqualified(sym)),
+                        alloc.string(",".to_string()).append(alloc.space()),
+                    ),
+                ),
+            ]);
+            title = INCOMPLETE_ABILITY_IMPLEMENTATION.to_string();
             severity = Severity::RuntimeError;
         }
     };

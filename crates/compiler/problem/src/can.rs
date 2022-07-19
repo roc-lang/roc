@@ -155,6 +155,16 @@ pub enum Problem {
         duplicate: Region,
     },
     NotAnAbility(Region),
+    ImplementsNonRequired {
+        region: Region,
+        ability: Symbol,
+        not_required: Vec<Symbol>,
+    },
+    DoesNotImplementAbility {
+        region: Region,
+        ability: Symbol,
+        not_implemented: Vec<Symbol>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]

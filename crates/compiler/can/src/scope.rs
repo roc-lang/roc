@@ -1,4 +1,4 @@
-use roc_collections::VecMap;
+use roc_collections::{VecMap, VecSet};
 use roc_module::ident::Ident;
 use roc_module::symbol::{IdentId, IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
@@ -10,7 +10,7 @@ use crate::abilities::PendingAbilitiesStore;
 use bitvec::vec::BitVec;
 
 // ability -> member names
-pub(crate) type PendingAbilitiesInScope = VecMap<Symbol, Vec<Symbol>>;
+pub(crate) type PendingAbilitiesInScope = VecMap<Symbol, VecSet<Symbol>>;
 
 #[derive(Clone, Debug)]
 pub struct Scope {

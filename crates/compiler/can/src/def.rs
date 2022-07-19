@@ -19,6 +19,7 @@ use crate::scope::create_alias;
 use crate::scope::{PendingAbilitiesInScope, Scope};
 use roc_collections::ReferenceMatrix;
 use roc_collections::VecMap;
+use roc_collections::VecSet;
 use roc_collections::{ImSet, MutMap, SendMap};
 use roc_error_macros::internal_error;
 use roc_module::ident::Ident;
@@ -302,7 +303,7 @@ fn canonicalize_alias<'a>(
     output: &mut Output,
     var_store: &mut VarStore,
     scope: &mut Scope,
-    pending_abilities_in_scope: &[Symbol],
+    pending_abilities_in_scope: &PendingAbilitiesInScope,
 
     name: Loc<Symbol>,
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
@@ -526,6 +527,65 @@ fn canonicalize_claimed_ability_impl<'a>(
     }
 }
 
+struct SeparatedMembers {
+    not_required: Vec<Symbol>,
+    not_implemented: Vec<Symbol>,
+}
+
+/// Partitions ability members in a `has [ Ability {...members} ]` clause into the members the
+/// opaque type claims to implement but are not part of the ability, and the ones it does not
+/// implement.
+fn separate_implemented_and_required_members(
+    implemented: VecSet<Symbol>,
+    required: VecSet<Symbol>,
+) -> SeparatedMembers {
+    use std::cmp::Ordering;
+
+    let mut implemented = implemented.into_vec();
+    let mut required = required.into_vec();
+
+    implemented.sort();
+    required.sort();
+
+    let mut implemented = implemented.into_iter().peekable();
+    let mut required = required.into_iter().peekable();
+
+    let mut not_required = vec![];
+    let mut not_implemented = vec![];
+
+    loop {
+        // Equal => both required and implemented
+        // Less => implemented but not required
+        // Greater => required but not implemented
+
+        let ord = match (implemented.peek(), required.peek()) {
+            (Some(implemented), Some(required)) => Some(implemented.cmp(required)),
+            (Some(_), None) => Some(Ordering::Less),
+            (None, Some(_)) => Some(Ordering::Greater),
+            (None, None) => None,
+        };
+
+        match ord {
+            Some(Ordering::Less) => {
+                not_required.push(implemented.next().unwrap());
+            }
+            Some(Ordering::Greater) => {
+                not_implemented.push(required.next().unwrap());
+            }
+            Some(Ordering::Equal) => {
+                _ = implemented.next().unwrap();
+                _ = required.next().unwrap();
+            }
+            None => break,
+        }
+    }
+
+    SeparatedMembers {
+        not_required,
+        not_implemented,
+    }
+}
+
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
 fn canonicalize_opaque<'a>(
@@ -533,7 +593,7 @@ fn canonicalize_opaque<'a>(
     output: &mut Output,
     var_store: &mut VarStore,
     scope: &mut Scope,
-    pending_abilities_in_scope: &[Symbol],
+    pending_abilities_in_scope: &PendingAbilitiesInScope,
 
     name: Loc<Symbol>,
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
@@ -567,16 +627,20 @@ fn canonicalize_opaque<'a>(
 
             let ability_region = ability.region;
 
-            let ability = match ability.value {
+            let (ability, members) = match ability.value {
                 ast::TypeAnnotation::Apply(module_name, ident, []) => {
                     match make_apply_symbol(env, region, scope, module_name, ident) {
                         Ok(ability) => {
-                            if scope.abilities_store.is_ability(ability)
-                                || pending_abilities_in_scope.contains(&ability)
-                            {
+                            let opt_members = scope
+                                .abilities_store
+                                .members_of_ability(ability)
+                                .map(|members| members.iter().copied().collect())
+                                .or_else(|| pending_abilities_in_scope.get(&ability).cloned());
+
+                            if let Some(members) = opt_members {
                                 // This is an ability we already imported into the scope,
                                 // or which is also undergoing canonicalization at the moment.
-                                ability
+                                (ability, members)
                             } else {
                                 env.problem(Problem::NotAnAbility(ability_region));
                                 continue;
@@ -622,6 +686,44 @@ fn canonicalize_opaque<'a>(
                             });
                         }
                     }
+                }
+
+                // Check that the members this opaque claims to implement corresponds 1-to-1 with
+                // the members the ability offers.
+                let SeparatedMembers {
+                    not_required,
+                    not_implemented,
+                } = separate_implemented_and_required_members(
+                    impl_map.iter().map(|(member, _)| *member).collect(),
+                    members,
+                );
+
+                if !not_required.is_empty() {
+                    for sym in not_required.iter() {
+                        impl_map.remove(sym);
+                    }
+                    env.problem(Problem::ImplementsNonRequired {
+                        region,
+                        ability,
+                        not_required,
+                    });
+                    // Implementing something that's not required is a recoverable error, we don't
+                    // need to skip association of the implemented abilities.
+                }
+
+                if !not_implemented.is_empty() {
+                    env.problem(Problem::DoesNotImplementAbility {
+                        region,
+                        ability,
+                        not_implemented,
+                    });
+                    // However not implementing something that is required is not recoverable for
+                    // an ability, so skip association.
+                    // TODO: can we "partially" associate members of an ability and generate
+                    // RuntimeErrors for unimplemented members?
+                    // TODO: can we derive implementations of unimplemented members for builtin
+                    // abilities?
+                    continue;
                 }
 
                 supported_abilities.push(OpaqueSupports::Implemented {
@@ -744,8 +846,14 @@ pub(crate) fn canonicalize_defs<'a>(
         scope.register_debug_idents();
     }
 
-    let (aliases, symbols_introduced) =
-        canonicalize_type_defs(env, &mut output, var_store, scope, pending_type_defs);
+    let (aliases, symbols_introduced) = canonicalize_type_defs(
+        env,
+        &mut output,
+        var_store,
+        scope,
+        &pending_abilities_in_scope,
+        pending_type_defs,
+    );
 
     // Now that we have the scope completely assembled, and shadowing resolved,
     // we're ready to canonicalize any body exprs.
@@ -871,6 +979,7 @@ fn canonicalize_type_defs<'a>(
     output: &mut Output,
     var_store: &mut VarStore,
     scope: &mut Scope,
+    pending_abilities_in_scope: &PendingAbilitiesInScope,
     pending_type_defs: Vec<PendingTypeDef<'a>>,
 ) -> (VecMap<Symbol, Alias>, MutMap<Symbol, Region>) {
     enum TypeDef<'a> {
@@ -889,8 +998,6 @@ fn canonicalize_type_defs<'a>(
     }
 
     let mut type_defs = MutMap::default();
-    let mut pending_abilities_in_scope = Vec::new();
-
     let mut referenced_type_symbols = VecMap::default();
 
     // Determine which idents we introduced in the course of this process.
@@ -936,7 +1043,6 @@ fn canonicalize_type_defs<'a>(
 
                 referenced_type_symbols.insert(name.value, referenced_symbols);
                 type_defs.insert(name.value, TypeDef::Ability(name, members));
-                pending_abilities_in_scope.push(name.value);
             }
             PendingTypeDef::InvalidAlias { .. }
             | PendingTypeDef::InvalidAbility { .. }
@@ -976,7 +1082,7 @@ fn canonicalize_type_defs<'a>(
                     output,
                     var_store,
                     scope,
-                    &pending_abilities_in_scope,
+                    pending_abilities_in_scope,
                     name,
                     ann,
                     &vars,
@@ -1031,7 +1137,7 @@ fn resolve_abilities<'a>(
     var_store: &mut VarStore,
     scope: &mut Scope,
     abilities: MutMap<Symbol, Vec<PendingAbilityMember>>,
-    pending_abilities_in_scope: &[Symbol],
+    pending_abilities_in_scope: &PendingAbilitiesInScope,
 ) {
     for (ability, members) in abilities {
         let mut can_members = Vec::with_capacity(members.len());
@@ -1684,7 +1790,7 @@ fn canonicalize_pending_value_def<'a>(
     use PendingValueDef::*;
 
     // All abilities should be resolved by the time we're canonicalizing value defs.
-    let pending_abilities_in_scope = &[];
+    let pending_abilities_in_scope = &Default::default();
 
     let output = match pending_def {
         AnnotationOnly(_, loc_can_pattern, loc_ann) => {
