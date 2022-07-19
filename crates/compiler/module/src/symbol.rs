@@ -1290,6 +1290,7 @@ define_builtins! {
         66 LIST_APPEND_UNSAFE: "appendUnsafe"
         67 LIST_SUBLIST_LOWLEVEL: "sublistLowlevel"
         68 LIST_CAPACITY: "capacity"
+        69 LIST_MAP_TRY: "mapTry"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" // the Result.Result type alias

@@ -2165,6 +2165,14 @@ fn update<'a>(
                 header
                     .imported_modules
                     .insert(ModuleId::LIST, Region::zero());
+
+                header
+                    .package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(ModuleId::ENCODE));
+
+                header
+                    .imported_modules
+                    .insert(ModuleId::ENCODE, Region::zero());
             }
 
             state

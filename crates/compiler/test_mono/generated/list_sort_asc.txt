@@ -1,16 +1,16 @@
 procedure List.28 (#Attr.2, #Attr.3):
-    let List.297 : List I64 = lowlevel ListSortWith { xs: `#Attr.#arg1` } #Attr.2 Num.46 #Attr.3;
+    let List.319 : List I64 = lowlevel ListSortWith { xs: `#Attr.#arg1` } #Attr.2 Num.46 #Attr.3;
     let #Derived_gen.0 : Int1 = lowlevel ListIsUnique #Attr.2;
     if #Derived_gen.0 then
-        ret List.297;
+        ret List.319;
     else
         decref #Attr.2;
-        ret List.297;
+        ret List.319;
 
-procedure List.54 (List.202):
-    let List.296 : {} = Struct {};
-    let List.295 : List I64 = CallByName List.28 List.202 List.296;
-    ret List.295;
+procedure List.54 (List.205):
+    let List.318 : {} = Struct {};
+    let List.317 : List I64 = CallByName List.28 List.205 List.318;
+    ret List.317;
 
 procedure Num.46 (#Attr.2, #Attr.3):
     let Num.257 : U8 = lowlevel NumCompare #Attr.2 #Attr.3;

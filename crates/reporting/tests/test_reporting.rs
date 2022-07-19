@@ -8368,35 +8368,6 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        ability_specialization_with_non_implementing_type,
-        indoc!(
-            r#"
-            app "test" provides [hash] to "./platform"
-
-            Hash has hash : a -> Num.U64 | a has Hash
-
-            hash = \{} -> 0u64
-            "#
-        ),
-        @r#"
-        ── ILLEGAL SPECIALIZATION ──────────────────────────────── /code/proj/Main.roc ─
-
-        This specialization of `hash` is for a non-opaque type:
-
-        5│  hash = \{} -> 0u64
-            ^^^^
-
-        It is specialized for
-
-            {}a
-
-        but structural types can never specialize abilities!
-
-        Note: `hash` is a member of `#UserApp.Hash`
-        "#
-    );
-
-    test_report!(
         ability_specialization_does_not_match_type,
         indoc!(
             r#"
@@ -8404,7 +8375,7 @@ All branches in an `if` must have the same type!
 
             Hash has hash : a -> U64 | a has Hash
 
-            Id := U32
+            Id := U32 has [Hash {hash}]
 
             hash = \@Id n -> n
             "#
@@ -8437,7 +8408,7 @@ All branches in an `if` must have the same type!
                 eq : a, a -> Bool | a has Eq
                 le : a, a -> Bool | a has Eq
 
-            Id := U64
+            Id := U64 has [Eq {eq}]
 
             eq = \@Id m, @Id n -> m == n
             "#
@@ -8456,7 +8427,7 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        ability_specialization_overly_generalized,
+        ability_specialization_is_unused,
         indoc!(
             r#"
             app "test" provides [hash] to "./platform"
@@ -8467,29 +8438,78 @@ All branches in an `if` must have the same type!
             hash = \_ -> 0u64
             "#
         ),
-        @r#"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
 
-        This specialization of `hash` is overly general:
+    `hash` is not used anywhere in your code.
 
-        6│  hash = \_ -> 0u64
-            ^^^^
+    6│  hash = \_ -> 0u64
+        ^^^^
 
-        This value is a declared specialization of type:
+    If you didn't intend on using `hash` then remove it so future readers of
+    your code don't wonder why it is there.
+    "###
+    );
 
-            a -> U64
+    test_report!(
+        ability_specialization_is_duplicated,
+        indoc!(
+            r#"
+            app "test" provides [hash, One, Two] to "./platform"
 
-        But the type annotation on `hash` says it must match:
+            Hash has
+                hash : a -> U64 | a has Hash
 
-            a -> U64 | a has Hash
+            One := {} has [Hash {hash}]
+            Two := {} has [Hash {hash}]
 
-        Note: The specialized type is too general, and does not provide a
-        concrete type where a type variable is bound to an ability.
+            hash = \_ -> 0u64
+            "#
+        ),
+        // TODO: the error message here could be seriously improved!
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        Specializations can only be made for concrete types. If you have a
-        generic implementation for this value, perhaps you don't need an
-        ability?
-        "#
+    This specialization of `hash` is overly general:
+
+    9│  hash = \_ -> 0u64
+        ^^^^
+
+    This value is a declared specialization of type:
+
+        a -> U64
+
+    But the type annotation on `hash` says it must match:
+
+        a -> U64 | a has Hash
+
+    Note: The specialized type is too general, and does not provide a
+    concrete type where a type variable is bound to an ability.
+
+    Specializations can only be made for concrete types. If you have a
+    generic implementation for this value, perhaps you don't need an
+    ability?
+    "###
+    );
+
+    test_report!(
+        #[ignore = "TODO does not error yet"]
+        ability_specialization_is_duplicated_with_type_mismatch,
+        indoc!(
+            r#"
+            app "test" provides [hash, One, Two] to "./platform"
+
+            Hash has
+                hash : a -> U64 | a has Hash
+
+            One := {} has [Hash {hash}]
+            Two := {} has [Hash {hash}]
+
+            hash = \@One _ -> 0u64
+            "#
+        ),
+        @r###"
+    "###
     );
 
     test_report!(
@@ -8501,7 +8521,7 @@ All branches in an `if` must have the same type!
             Eq has
                 eq : a, a -> Bool | a has Eq
 
-            You := {}
+            You := {} has [Eq {eq}]
             AndI := {}
 
             eq = \@You {}, @AndI {} -> False
@@ -8539,7 +8559,7 @@ All branches in an `if` must have the same type!
             Hash has
                 hash : a -> U64 | a has Hash
 
-            Id := U64
+            Id := U64 has [Hash {hash}]
 
             hash : Id -> U32
             hash = \@Id n -> n
@@ -8588,7 +8608,7 @@ All branches in an `if` must have the same type!
             Hash has
                 hash : a -> U64 | a has Hash
 
-            Id := U64
+            Id := U64 has [Hash {hash}]
 
             hash = \@Id n -> n
 
@@ -8666,7 +8686,7 @@ All branches in an `if` must have the same type!
             Hash has
                 hash : a -> U64 | a has Hash
 
-            Id := U64
+            Id := U64 has [Hash {hash}]
             hash = \@Id n -> n
 
             hashable : a | a has Hash
@@ -8710,11 +8730,11 @@ All branches in an `if` must have the same type!
             mulHashes : Hash, Hash -> U64
             mulHashes = \x, y -> hash x * hash y
 
-            Id := U64
-            hash = \@Id n -> n
+            Id := U64 has [Hash {hash: hashId}]
+            hashId = \@Id n -> n
 
-            Three := {}
-            hash = \@Three _ -> 3
+            Three := {} has [Hash {hash: hashThree}]
+            hashThree = \@Three _ -> 3
 
             result = mulHashes (@Id 100) (@Three {})
             "#
@@ -8879,7 +8899,7 @@ All branches in an `if` must have the same type!
             Default has default : {} -> a | a has Default
 
             main =
-                A := {}
+                A := {} has [Default {default}]
                 default = \{} -> @A {}
                 default {}
             "#
@@ -9134,6 +9154,167 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
+        opaque_ability_impl_not_found_shorthand_syntax,
+        indoc!(
+            r#"
+            app "test" provides [A] to "./platform"
+
+            Eq has eq : a, a -> U64 | a has Eq
+
+            A := U8 has [Eq {eq}]
+            "#
+        ),
+        @r###"
+    ── IMPLEMENTATION NOT FOUND ────────────────────────────── /code/proj/Main.roc ─
+
+    An implementation of `eq` could not be found in this scope:
+
+    5│  A := U8 has [Eq {eq}]
+                         ^^
+
+    Tip: consider adding a value of name `eq` in this scope, or using
+    another variable that implements this ability member, like
+    { eq: myeq }
+    "###
+    );
+
+    test_report!(
+        opaque_ability_impl_not_found,
+        indoc!(
+            r#"
+            app "test" provides [A, myEq] to "./platform"
+
+            Eq has eq : a, a -> Bool | a has Eq
+
+            A := U8 has [ Eq {eq: aEq} ]
+
+            myEq = \m, n -> m == n
+            "#
+        ),
+        @r###"
+    ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
+
+    Nothing is named `aEq` in this scope.
+
+    5│  A := U8 has [ Eq {eq: aEq} ]
+                              ^^^
+
+    Did you mean one of these?
+
+        Eq
+        myEq
+        eq
+        U8
+    "###
+    );
+
+    test_report!(
+        opaque_ability_impl_optional,
+        indoc!(
+            r#"
+            app "test" provides [A, myEq] to "./platform"
+
+            Eq has eq : a, a -> Bool | a has Eq
+
+            A := U8 has [ Eq {eq ? aEq} ]
+
+            myEq = \m, n -> m == n
+            "#
+        ),
+        @r###"
+    ── OPTIONAL ABILITY IMPLEMENTATION ─────────────────────── /code/proj/Main.roc ─
+
+    Ability implementations cannot be optional:
+
+    5│  A := U8 has [ Eq {eq ? aEq} ]
+                          ^^^^^^^^
+
+    Custom implementations must be supplied fully.
+
+
+    "###
+    );
+
+    test_report!(
+        opaque_builtin_ability_impl_optional,
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ Encoding }]
+                provides [A, myEncoder] to "./platform"
+
+            A := U8 has [ Encoding {toEncoder ? myEncoder} ]
+
+            myEncoder = 1
+            "#
+        ),
+        @r###"
+    ── OPTIONAL ABILITY IMPLEMENTATION ─────────────────────── /code/proj/Main.roc ─
+
+    Ability implementations cannot be optional:
+
+    5│  A := U8 has [ Encoding {toEncoder ? myEncoder} ]
+                                ^^^^^^^^^^^^^^^^^^^^^
+
+    Custom implementations must be supplied fully.
+
+    Hint: if you want this implementation to be derived, don't include a
+    record of implementations. For example,    has [Encoding] will attempt
+    to derive `Encoding`
+    "###
+    );
+
+    test_report!(
+        opaque_ability_impl_qualified,
+        indoc!(
+            r#"
+            app "test" provides [A] to "./platform"
+
+            Eq has eq : a, a -> Bool | a has Eq
+
+            A := U8 has [ Eq {eq : Bool.eq} ]
+            "#
+        ),
+        @r###"
+    ── QUALIFIED ABILITY IMPLEMENTATION ────────────────────── /code/proj/Main.roc ─
+
+    This ability implementation is qualified:
+
+    5│  A := U8 has [ Eq {eq : Bool.eq} ]
+                               ^^^^^^^
+
+    Custom implementations must be defined in the local scope, and
+    unqualified.
+    "###
+    );
+
+    test_report!(
+        opaque_ability_impl_not_identifier,
+        indoc!(
+            r#"
+            app "test" provides [A] to "./platform"
+
+            Eq has eq : a, a -> Bool | a has Eq
+
+            A := U8 has [ Eq {eq : \m, n -> m == n} ]
+            "#
+        ),
+        @r###"
+    ── ABILITY IMPLEMENTATION NOT IDENTIFIER ───────────────── /code/proj/Main.roc ─
+
+    This ability implementation is not an identifier:
+
+    5│  A := U8 has [ Eq {eq : \m, n -> m == n} ]
+                               ^^^^^^^^^^^^^^^
+
+    Custom ability implementations defined in this position can only be
+    unqualified identifiers, not arbitrary expressions.
+
+    Tip: consider defining this expression as a variable.
+    "###
+    );
+
+    test_report!(
         derive_non_builtin_ability,
         indoc!(
             r#"
@@ -9259,40 +9440,6 @@ All branches in an `if` must have the same type!
         
         Since these variables have the same name, it's easy to use the wrong
         one on accident. Give one of them a new name.
-        "#
-    );
-
-    test_report!(
-        has_encoding_dominated_by_custom,
-        indoc!(
-            r#"
-            app "test" imports [Encode.{ Encoding, toEncoder, custom }] provides [A] to "./platform"
-
-            A := {} has [Encode.Encoding]
-
-            toEncoder = \@A {} -> custom \l, _ -> l
-            "#
-        ),
-        @r#"
-        ── CONFLICTING DERIVE AND IMPLEMENTATION ───────────────── /code/proj/Main.roc ─
-
-        `A` both derives and custom-implements `Encode.Encoding`. We found the
-        derive here:
-
-        3│  A := {} has [Encode.Encoding]
-                         ^^^^^^^^^^^^^^^
-
-        and one custom implementation of `Encode.Encoding` here:
-
-        5│  toEncoder = \@A {} -> custom \l, _ -> l
-            ^^^^^^^^^
-
-        Derived and custom implementations can conflict, so one of them needs
-        to be removed!
-
-        Note: We'll try to compile your program using the custom
-        implementation first, and fall-back on the derived implementation if
-        needed. Make sure to disambiguate which one you want!
         "#
     );
 

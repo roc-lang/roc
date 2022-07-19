@@ -1,3 +1,3 @@
 procedure Test.0 ():
-    let Test.5 : [<rnu><null>, C List *self] = TagId(1) ;
-    ret Test.5;
+    let Test.3 : [<rnu><null>, C List *self] = TagId(1) ;
+    ret Test.3;

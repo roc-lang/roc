@@ -1977,23 +1977,26 @@ pub fn strTrim(string: RocStr) callconv(.C) RocStr {
         const small_or_shared = new_len <= SMALL_STR_MAX_LENGTH or !string.isRefcountOne();
         if (small_or_shared) {
             return RocStr.init(string.asU8ptr() + leading_bytes, new_len);
-        }
+        } else {
+            // nonempty, large, and unique: shift everything over in-place if necessary.
+            // Note: must use memmove over memcpy, because the bytes definitely overlap!
+            if (leading_bytes > 0) {
+                // Zig doesn't seem to have `memmove` in the stdlib anymore; this is based on:
+                // https://github.com/ziglang/zig/blob/52ba2c3a43a88a4db30cff47f2f3eff8c3d5be19/lib/std/special/c.zig#L115
+                // Copyright Andrew Kelley, MIT licensed.
+                const src = bytes_ptr + leading_bytes;
+                var index: usize = 0;
 
-        // nonempty, large, and unique:
-
-        if (leading_bytes > 0) {
-            var i: usize = 0;
-            while (i < new_len) : (i += 1) {
-                const dest = bytes_ptr + i;
-                const source = dest + leading_bytes;
-                @memcpy(dest, source, 1);
+                while (index != new_len) : (index += 1) {
+                    bytes_ptr[index] = src[index];
+                }
             }
+
+            var new_string = string;
+            new_string.str_len = new_len;
+
+            return new_string;
         }
-
-        var new_string = string;
-        new_string.str_len = new_len;
-
-        return new_string;
     }
 
     return RocStr.empty();
@@ -2014,23 +2017,26 @@ pub fn strTrimLeft(string: RocStr) callconv(.C) RocStr {
         const small_or_shared = new_len <= SMALL_STR_MAX_LENGTH or !string.isRefcountOne();
         if (small_or_shared) {
             return RocStr.init(string.asU8ptr() + leading_bytes, new_len);
-        }
+        } else {
+            // nonempty, large, and unique: shift everything over in-place if necessary.
+            // Note: must use memmove over memcpy, because the bytes definitely overlap!
+            if (leading_bytes > 0) {
+                // Zig doesn't seem to have `memmove` in the stdlib anymore; this is based on:
+                // https://github.com/ziglang/zig/blob/52ba2c3a43a88a4db30cff47f2f3eff8c3d5be19/lib/std/special/c.zig#L115
+                // Copyright Andrew Kelley, MIT licensed.
+                const src = bytes_ptr + leading_bytes;
+                var index: usize = 0;
 
-        // nonempty, large, and unique:
-
-        if (leading_bytes > 0) {
-            var i: usize = 0;
-            while (i < new_len) : (i += 1) {
-                const dest = bytes_ptr + i;
-                const source = dest + leading_bytes;
-                @memcpy(dest, source, 1);
+                while (index != new_len) : (index += 1) {
+                    bytes_ptr[index] = src[index];
+                }
             }
+
+            var new_string = string;
+            new_string.str_len = new_len;
+
+            return new_string;
         }
-
-        var new_string = string;
-        new_string.str_len = new_len;
-
-        return new_string;
     }
 
     return RocStr.empty();

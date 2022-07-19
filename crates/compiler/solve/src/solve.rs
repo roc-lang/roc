@@ -2984,6 +2984,15 @@ fn type_to_variable<'a>(
                         let copy_var = helper!(arg_type);
                         subs.variables[target_index] = copy_var;
                     }
+                    let it = (new_variables.indices().skip(type_arguments.len()))
+                        .zip(lambda_set_variables);
+                    for (target_index, ls) in it {
+                        // We MUST do this now, otherwise when linking the ambient function during
+                        // instantiation of the real var, there will be nothing to link against.
+                        let copy_var =
+                            type_to_variable(subs, rank, pools, arena, aliases, &ls.0, true);
+                        subs.variables[target_index] = copy_var;
+                    }
 
                     AliasVariables {
                         variables_start: new_variables.start,
