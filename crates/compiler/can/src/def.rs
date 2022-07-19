@@ -1064,7 +1064,7 @@ fn canonicalize_type_defs<'a>(
                     output,
                     var_store,
                     scope,
-                    &pending_abilities_in_scope,
+                    pending_abilities_in_scope,
                     name,
                     ann,
                     &vars,
@@ -1123,7 +1123,7 @@ fn canonicalize_type_defs<'a>(
         var_store,
         scope,
         abilities,
-        &pending_abilities_in_scope,
+        pending_abilities_in_scope,
     );
 
     (aliases, symbols_introduced)
