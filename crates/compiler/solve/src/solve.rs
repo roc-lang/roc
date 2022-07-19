@@ -4,7 +4,7 @@ use crate::ability::{
 };
 use crate::module::Solved;
 use bumpalo::Bump;
-use roc_can::abilities::{AbilitiesStore, MemberSpecialization};
+use roc_can::abilities::{AbilitiesStore, MemberSpecializationInfo};
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::{Constraints, Cycle, LetConstraint, OpportunisticResolve};
 use roc_can::expected::{Expected, PExpected};
@@ -16,7 +16,7 @@ use roc_debug_flags::dbg_do;
 use roc_debug_flags::{ROC_TRACE_COMPACTION, ROC_VERIFY_RIGID_LET_GENERALIZED};
 use roc_derive::SharedDerivedModule;
 use roc_derive_key::{DeriveError, DeriveKey};
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, todo_abilities};
 use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_problem::can::CycleEntry;
@@ -28,8 +28,8 @@ use roc_types::subs::{
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, ErrorType, OptAbleType,
-    OptAbleVar, PatternCategory, Reason, TypeExtension, Uls,
+    gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, ErrorType, MemberImpl,
+    OptAbleType, OptAbleVar, PatternCategory, Reason, TypeExtension, Uls,
 };
 use roc_unify::unify::{
     unify, unify_introduced_ability_specialization, Mode, MustImplementConstraints, Obligated,
@@ -1755,12 +1755,11 @@ fn check_ability_specialization(
 
                         let specialization_region = symbol_loc_var.region;
                         let specialization =
-                            MemberSpecialization::new(symbol, specialization_lambda_sets);
-                        abilities_store.register_specialization_for_type(
-                            ability_member,
-                            opaque,
-                            specialization,
-                        );
+                            MemberSpecializationInfo::new(symbol, specialization_lambda_sets);
+
+                        abilities_store
+                            .mark_implementation(ability_member, opaque, Ok(specialization))
+                            .expect("marked as a custom implementation, but not recorded as such");
 
                         // Make sure we check that the opaque has specialized all members of the
                         // ability, after we finish solving the module.
@@ -2301,7 +2300,7 @@ fn get_specialization_lambda_set_ambient_function<P: Phase>(
             let external_specialized_lset =
                 phase.with_module_abilities_store(opaque_home, |abilities_store| {
                     let opt_specialization =
-                        abilities_store.get_specialization(ability_member, opaque);
+                        abilities_store.get_implementation(ability_member, opaque);
                     match (P::IS_LATE, opt_specialization) {
                         (false, None) => {
                             // doesn't specialize, we'll have reported an error for this
@@ -2314,13 +2313,20 @@ fn get_specialization_lambda_set_ambient_function<P: Phase>(
                             ability_member,
                         );
                         }
-                        (_, Some(specialization)) => {
-                            let specialized_lambda_set = *specialization
-                                .specialization_lambda_sets
-                                .get(&lset_region)
-                                .expect("lambda set region not resolved");
-                            Ok(specialized_lambda_set)
-                        }
+                        (_, Some(member_impl)) => match member_impl {
+                            MemberImpl::Impl(spec_symbol) => {
+                                let specialization =
+                                    abilities_store.specialization_info(*spec_symbol).expect("expected custom implementations to always have complete specialization info by this point");
+
+                                let specialized_lambda_set = *specialization
+                                    .specialization_lambda_sets
+                                    .get(&lset_region)
+                                    .expect("lambda set region not resolved");
+                                Ok(specialized_lambda_set)
+                            }
+                            MemberImpl::Derived => todo_abilities!(),
+                            MemberImpl::Error => todo_abilities!(),
+                        },
                     }
                 })?;
 

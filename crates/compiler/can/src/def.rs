@@ -42,7 +42,7 @@ use roc_types::types::AliasCommon;
 use roc_types::types::AliasKind;
 use roc_types::types::AliasVar;
 use roc_types::types::LambdaSet;
-use roc_types::types::OpaqueSupports;
+use roc_types::types::MemberImpl;
 use roc_types::types::OptAbleType;
 use roc_types::types::{Alias, Type};
 use std::fmt::Debug;
@@ -616,7 +616,6 @@ fn canonicalize_opaque<'a>(
         let has_abilities = has_abilities.value.collection();
 
         let mut derived_abilities = vec![];
-        let mut supported_abilities = vec![];
 
         for has_ability in has_abilities.items {
             let region = has_ability.region;
@@ -661,7 +660,7 @@ fn canonicalize_opaque<'a>(
             };
 
             if let Some(impls) = opt_impls {
-                let mut impl_map: VecMap<Symbol, Loc<Symbol>> = VecMap::default();
+                let mut impl_map: VecMap<Symbol, Loc<MemberImpl>> = VecMap::default();
 
                 // First up canonicalize all the claimed implementations, building a map of ability
                 // member -> implementation.
@@ -672,19 +671,16 @@ fn canonicalize_opaque<'a>(
                             Err(()) => continue,
                         };
 
-                    match impl_map.insert(member, Loc::at(loc_impl.region, impl_symbol)) {
-                        None => {
-                            // TODO: get rid of register_specializing_symbol
-                            scope
-                                .abilities_store
-                                .register_specializing_symbol(impl_symbol, member);
-                        }
-                        Some(old_impl_symbol) => {
-                            env.problem(Problem::DuplicateImpl {
-                                original: old_impl_symbol.region,
-                                duplicate: loc_impl.region,
-                            });
-                        }
+                    let member_impl = MemberImpl::Impl(impl_symbol);
+
+                    let opt_old_impl_symbol =
+                        impl_map.insert(member, Loc::at(loc_impl.region, member_impl));
+
+                    if let Some(old_impl_symbol) = opt_old_impl_symbol {
+                        env.problem(Problem::DuplicateImpl {
+                            original: old_impl_symbol.region,
+                            duplicate: loc_impl.region,
+                        });
                     }
                 }
 
@@ -699,55 +695,56 @@ fn canonicalize_opaque<'a>(
                 );
 
                 if !not_required.is_empty() {
+                    // Implementing something that's not required is a recoverable error, we don't
+                    // need to skip association of the implemented abilities. Just remove the
+                    // unneeded members.
                     for sym in not_required.iter() {
                         impl_map.remove(sym);
                     }
+
                     env.problem(Problem::ImplementsNonRequired {
                         region,
                         ability,
                         not_required,
                     });
-                    // Implementing something that's not required is a recoverable error, we don't
-                    // need to skip association of the implemented abilities.
                 }
 
                 if !not_implemented.is_empty() {
+                    // We'll generate runtime errors for the members that are needed but
+                    // unspecified.
+                    for sym in not_implemented.iter() {
+                        impl_map.insert(*sym, Loc::at_zero(MemberImpl::Error));
+                    }
+
                     env.problem(Problem::DoesNotImplementAbility {
                         region,
                         ability,
                         not_implemented,
                     });
-                    // However not implementing something that is required is not recoverable for
-                    // an ability, so skip association.
-                    // TODO: can we "partially" associate members of an ability and generate
-                    // RuntimeErrors for unimplemented members?
-                    // TODO: can we derive implementations of unimplemented members for builtin
-                    // abilities?
-                    continue;
                 }
 
-                supported_abilities.push(OpaqueSupports::Implemented {
-                    ability_name: ability,
-                    impls: impl_map
-                        .into_iter()
-                        .map(|(member, def)| (member, def.value))
-                        .collect(),
-                });
-            } else if ability.is_derivable_ability() {
-                derived_abilities.push(Loc::at(region, ability));
-                supported_abilities.push(OpaqueSupports::Derived(ability));
+                let impls = impl_map
+                    .into_iter()
+                    .map(|(member, def)| (member, def.value));
+
+                scope
+                    .abilities_store
+                    .register_declared_implementations(name.value, impls);
+            } else if let Some((_, members)) = ability.derivable_ability() {
+                let impls = members.iter().map(|member| (*member, MemberImpl::Derived));
+                scope
+                    .abilities_store
+                    .register_declared_implementations(name.value, impls);
+
+                derived_abilities.push(Loc::at(ability_region, ability));
             } else {
                 // There was no record specified of functions to use for
                 // members, but also this isn't a builtin ability, so we don't
                 // know how to auto-derive it.
-                //
-                // Register the problem but keep going, we may still be able to compile the
-                // program even if a derive is missing.
                 env.problem(Problem::IllegalDerivedAbility(region));
             }
         }
 
-        // TODO: properly validate all supported_abilities
         if !derived_abilities.is_empty() {
             // Fresh instance of this opaque to be checked for derivability during solving.
             let fresh_inst = Type::DelayedAlias(AliasCommon {
@@ -767,6 +764,7 @@ fn canonicalize_opaque<'a>(
             let old = output
                 .pending_derives
                 .insert(name.value, (fresh_inst, derived_abilities));
+
             debug_assert!(old.is_none());
         }
     }

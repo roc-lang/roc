@@ -1,8 +1,8 @@
 use crate::solve::{self, Aliases};
-use roc_can::abilities::{AbilitiesStore, ResolvedSpecializations};
+use roc_can::abilities::AbilitiesStore;
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::expr::PendingDerives;
-use roc_can::module::{ExposedByModule, RigidVariables};
+use roc_can::module::{ExposedByModule, ResolvedSpecializations, RigidVariables};
 use roc_collections::all::MutMap;
 use roc_collections::VecMap;
 use roc_derive::SharedDerivedModule;

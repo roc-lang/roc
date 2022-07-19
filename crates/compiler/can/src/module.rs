@@ -1,4 +1,4 @@
-use crate::abilities::{PendingAbilitiesStore, ResolvedSpecializations};
+use crate::abilities::{MemberSpecializationInfo, PendingAbilitiesStore, Resolved};
 use crate::annotation::canonicalize_annotation;
 use crate::def::{canonicalize_defs, Def};
 use crate::effect_module::HostedGeneratedFunctions;
@@ -102,6 +102,8 @@ impl ExposedForModule {
         }
     }
 }
+
+pub type ResolvedSpecializations = VecMap<Symbol, MemberSpecializationInfo<Resolved>>;
 
 /// The types of all exposed values/functions of a module. This includes ability member
 /// specializations.

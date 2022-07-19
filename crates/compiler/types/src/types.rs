@@ -4,7 +4,6 @@ use crate::subs::{
     GetSubsSlice, RecordFields, Subs, UnionTags, VarStore, Variable, VariableSubsSlice,
 };
 use roc_collections::all::{HumanIndex, ImMap, ImSet, MutMap, MutSet, SendMap};
-use roc_collections::VecMap;
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
@@ -2056,13 +2055,15 @@ impl From<&AliasVar> for OptAbleVar {
     }
 }
 
-#[derive(Clone, Debug)]
-pub enum OpaqueSupports {
-    Derived(Symbol),
-    Implemented {
-        ability_name: Symbol,
-        impls: VecMap<Symbol, Symbol>,
-    },
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MemberImpl {
+    /// The implementation is claimed to be at the given symbol.
+    /// During solving we validate that the impl is really there.
+    Impl(Symbol),
+    /// The implementation should be derived.
+    Derived,
+    /// The implementation is not present or does not match the expected member type.
+    Error,
 }
 
 #[derive(Clone, Debug)]

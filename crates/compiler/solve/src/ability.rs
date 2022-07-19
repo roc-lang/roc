@@ -394,7 +394,7 @@ impl ObligationCache<'_> {
         for &member in members_of_ability {
             if self
                 .abilities_store
-                .get_specialization(member, opaque)
+                .get_implementation(member, opaque)
                 .is_none()
             {
                 let root_data = self.abilities_store.member_def(member).unwrap();
@@ -671,9 +671,15 @@ pub fn resolve_ability_specialization(
 
     let resolved = match obligated {
         Obligated::Opaque(symbol) => {
-            let specialization = abilities_store.get_specialization(ability_member, symbol)?;
-
-            Resolved::Specialization(specialization.symbol)
+            match abilities_store.get_implementation(ability_member, symbol)? {
+                roc_types::types::MemberImpl::Impl(spec_symbol) => {
+                    Resolved::Specialization(*spec_symbol)
+                }
+                roc_types::types::MemberImpl::Derived => Resolved::NeedsGenerated,
+                // TODO this is not correct. We can replace `Resolved` with `MemberImpl` entirely,
+                // which will make this simpler.
+                roc_types::types::MemberImpl::Error => Resolved::Specialization(Symbol::UNDERSCORE),
+            }
         }
         Obligated::Adhoc(_) => {
             // TODO: more rules need to be validated here, like is this a builtin ability?

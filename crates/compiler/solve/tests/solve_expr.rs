@@ -361,7 +361,7 @@ mod solve_expr {
         if !type_problems.is_empty() {
             eprintln!("{:?}", type_problems);
             panic!();
-        }
+        }iter_declared_impls
 
         let known_specializations = abilities_store.iter_specializations();
         use std::collections::HashSet;

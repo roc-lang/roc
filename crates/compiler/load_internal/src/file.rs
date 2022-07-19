@@ -4166,7 +4166,7 @@ fn run_solve_solve(
 
         // Figure out what specializations belong to this module
         let solved_specializations: ResolvedSpecializations = abilities_store
-            .iter_specializations()
+            .iter_declared_implementations()
             .filter(|((member, typ), _)| {
                 // This module solved this specialization if either the member or the type comes from the
                 // module.
