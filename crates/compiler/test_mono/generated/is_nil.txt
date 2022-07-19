@@ -1,4 +1,4 @@
-procedure Test.3 (Test.4):
+procedure Test.2 (Test.4):
     let Test.13 : Int1 = 1i64;
     let Test.14 : Int1 = GetTagId Test.4;
     let Test.15 : Int1 = lowlevel Eq Test.13 Test.14;
@@ -13,6 +13,6 @@ procedure Test.0 ():
     let Test.16 : I64 = 2i64;
     let Test.17 : [<rnu><null>, C I64 *self] = TagId(1) ;
     let Test.10 : [<rnu><null>, C I64 *self] = TagId(0) Test.16 Test.17;
-    let Test.9 : Int1 = CallByName Test.3 Test.10;
+    let Test.9 : Int1 = CallByName Test.2 Test.10;
     dec Test.10;
     ret Test.9;

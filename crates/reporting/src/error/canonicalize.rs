@@ -48,6 +48,11 @@ const ABILITY_NOT_ON_TOPLEVEL: &str = "ABILITY NOT ON TOP-LEVEL";
 const SPECIALIZATION_NOT_ON_TOPLEVEL: &str = "SPECIALIZATION NOT ON TOP-LEVEL";
 const ABILITY_USED_AS_TYPE: &str = "ABILITY USED AS TYPE";
 const ILLEGAL_DERIVE: &str = "ILLEGAL DERIVE";
+const IMPLEMENTATION_NOT_FOUND: &str = "IMPLEMENTATION NOT FOUND";
+const NOT_AN_ABILITY_MEMBER: &str = "NOT AN ABILITY MEMBER";
+const OPTIONAL_ABILITY_IMPLEMENTATION: &str = "OPTIONAL ABILITY IMPLEMENTATION";
+const QUALIFIED_ABILITY_IMPLEMENTATION: &str = "QUALIFIED ABILITY IMPLEMENTATION";
+const ABILITY_IMPLEMENTATION_NOT_IDENTIFIER: &str = "ABILITY IMPLEMENTATION NOT IDENTIFIER";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -738,7 +743,7 @@ pub fn can_problem<'b>(
             title = SPECIALIZATION_NOT_ON_TOPLEVEL.to_string();
             severity = Severity::Warning;
         }
-        Problem::IllegalDerive(region) => {
+        Problem::IllegalClaimedAbility(region) => {
             doc = alloc.stack([
                 alloc.reflow("This ability cannot be derived:"),
                 alloc.region(lines.convert_region(region)),
@@ -749,6 +754,75 @@ pub fn can_problem<'b>(
             ]);
             title = ILLEGAL_DERIVE.to_string();
             severity = Severity::Warning;
+        }
+        Problem::NotAnAbilityMember {
+            ability,
+            name,
+            region,
+        } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("The "), alloc.symbol_unqualified(ability), alloc.reflow(" ability does not have a member "), alloc.string(name),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("Only implementations for members an ability has can be specified in this location.")
+            ]);
+            title = NOT_AN_ABILITY_MEMBER.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::ImplementationNotFound { member, region } => {
+            let member_str = member.as_str(alloc.interns);
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("An implementation of "), alloc.symbol_unqualified(member), alloc.reflow(" could not be found in this scope:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.tip().append(alloc.concat([alloc.reflow("consider adding a value of name "), alloc.symbol_unqualified(member), alloc.reflow(" in this scope, or using another variable that implements this ability member, like "), alloc.type_str(&format!("{{ {}: my{} }}", member_str, member_str))]))
+            ]);
+            title = IMPLEMENTATION_NOT_FOUND.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::OptionalAbilityImpl { ability, region } => {
+            let hint = if ability.is_builtin() {
+                alloc.hint("").append(
+                    alloc.reflow("if you want this implementation to be derived, don't include a record of implementations. For example,")
+                        .append(alloc.type_block(alloc.concat([alloc.type_str("has ["), alloc.symbol_unqualified(ability), alloc.type_str("]")])))
+                        .append(alloc.reflow(" will attempt to derive ").append(alloc.symbol_unqualified(ability))))
+            } else {
+                alloc.nil()
+            };
+
+            doc = alloc.stack([
+                alloc.reflow("Ability implementations cannot be optional:"),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("Custom implementations must be supplied fully."),
+                hint,
+            ]);
+            title = OPTIONAL_ABILITY_IMPLEMENTATION.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::QualifiedAbilityImpl { region } => {
+            doc = alloc.stack([
+                alloc.reflow("This ability implementation is qualified:"),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow(
+                    "Custom implementations must be defined in the local scope, and unqualified.",
+                ),
+            ]);
+            title = QUALIFIED_ABILITY_IMPLEMENTATION.to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::AbilityImplNotIdent { region } => {
+            doc = alloc.stack([
+                alloc.reflow("This ability implementation is not an identifier:"),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow(
+                    "Custom ability implementations defined in this position can only be unqualified identifiers, not arbitrary expressions.",
+                ),
+                alloc.tip().append(alloc.reflow("consider defining this expression as a variable."))
+            ]);
+            title = ABILITY_IMPLEMENTATION_NOT_IDENTIFIER.to_string();
+            severity = Severity::RuntimeError;
         }
     };
 

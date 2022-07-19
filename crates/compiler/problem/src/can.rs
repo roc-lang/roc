@@ -130,7 +130,26 @@ pub enum Problem {
     },
     AbilityUsedAsType(Lowercase, Symbol, Region),
     NestedSpecialization(Symbol, Region),
-    IllegalDerive(Region),
+    IllegalClaimedAbility(Region),
+    ImplementationNotFound {
+        member: Symbol,
+        region: Region,
+    },
+    NotAnAbilityMember {
+        ability: Symbol,
+        name: String,
+        region: Region,
+    },
+    OptionalAbilityImpl {
+        ability: Symbol,
+        region: Region,
+    },
+    QualifiedAbilityImpl {
+        region: Region,
+    },
+    AbilityImplNotIdent {
+        region: Region,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
