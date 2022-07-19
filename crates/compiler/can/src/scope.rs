@@ -31,7 +31,8 @@ pub struct Scope {
     imports: Vec<(Ident, Symbol, Region)>,
 
     /// Shadows of an ability member, for example a local specialization of `eq` for the ability
-    /// member `Eq has eq : a, a -> Bool` gets a shadow symbol it can use for its implementation.
+    /// member `Eq has eq : a, a -> Bool | a has Eq` gets a shadow symbol it can use for its
+    /// implementation.
     ///
     /// Only one shadow of an ability member is permitted per scope.
     shadows: VecMap<Symbol, Loc<Symbol>>,
