@@ -1,0 +1,43 @@
+[package]
+name = "roc-bindgen"
+version = "0.1.0"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+repository = "https://github.com/rtfeldman/roc"
+edition = "2021"
+description = "A CLI for roc-bindgen"
+
+[[bin]]
+name = "roc-bindgen"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+roc_std = { path = "../roc_std" }
+roc_can = { path = "../compiler/can" }
+roc_mono = { path = "../compiler/mono" }
+roc_load = { path = "../compiler/load" }
+roc_reporting = { path = "../reporting" }
+roc_types = { path = "../compiler/types" }
+roc_builtins = { path = "../compiler/builtins" }
+roc_module = { path = "../compiler/module" }
+roc_collections = { path = "../compiler/collections" }
+roc_target = { path = "../compiler/roc_target" }
+roc_error_macros = { path = "../error_macros" }
+bumpalo = { version = "3.8.0", features = ["collections"] }
+target-lexicon = "0.12.3"
+clap = { version = "3.1.15", default-features = false, features = ["std", "color", "suggestions", "derive"] }
+strum = "0.24.0"
+strum_macros = "0.24"
+indexmap = "1.8.1"
+fnv = "1.0.7"
+
+[dev-dependencies]
+pretty_assertions = "1.0.0"
+tempfile = "3.2.0"
+indoc = "1.0.3"
+cli_utils = { path = "../cli_utils" }
+roc_test_utils = { path = "../test_utils" }
+dircpy = "0.3.9"
+ctor = "0.1.22"

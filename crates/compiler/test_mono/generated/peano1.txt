@@ -1,0 +1,15 @@
+procedure Test.0 ():
+    let Test.15 : [<rnu><null>, C *self] = TagId(1) ;
+    let Test.14 : [<rnu><null>, C *self] = TagId(0) Test.15;
+    let Test.13 : [<rnu><null>, C *self] = TagId(0) Test.14;
+    let Test.3 : [<rnu><null>, C *self] = TagId(0) Test.13;
+    let Test.10 : Int1 = 1i64;
+    let Test.11 : Int1 = GetTagId Test.3;
+    dec Test.3;
+    let Test.12 : Int1 = lowlevel Eq Test.10 Test.11;
+    if Test.12 then
+        let Test.8 : I64 = 0i64;
+        ret Test.8;
+    else
+        let Test.9 : I64 = 1i64;
+        ret Test.9;

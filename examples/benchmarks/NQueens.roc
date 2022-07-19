@@ -1,19 +1,20 @@
 app "nqueens"
-    packages { base: "platform" }
-    imports [base.Task]
-    provides [ main ] to base
+    packages { pf: "platform/main.roc" }
+    imports [pf.Task]
+    provides [main] to pf
 
 main : Task.Task {} []
 main =
-    Task.after Task.getInt \n ->
-        queens n # original koka 13
-            |> Str.fromInt
+    Task.after
+        Task.getInt
+        \n ->
+            queens n # original koka 13
+            |> Num.toStr
             |> Task.putLine
 
-ConsList a : [ Nil, Cons a (ConsList a) ]
+ConsList a : [Nil, Cons a (ConsList a)]
 
 queens = \n -> length (findSolutions n n)
-
 
 length : ConsList a -> I64
 length = \xs -> lengthHelp xs 0
@@ -27,9 +28,7 @@ lengthHelp = \foobar, acc ->
 safe : I64, I64, ConsList I64 -> Bool
 safe = \queen, diagonal, xs ->
     when xs is
-        Nil ->
-            True
-
+        Nil -> True
         Cons q t ->
             queen != q && queen != q + diagonal && queen != q - diagonal && safe queen (diagonal + 1) t
 
@@ -50,6 +49,5 @@ extend = \n, acc, solutions ->
 findSolutions = \n, k ->
     if k == 0 then
         Cons Nil Nil
-
     else
         extend n Nil (findSolutions n (k - 1))

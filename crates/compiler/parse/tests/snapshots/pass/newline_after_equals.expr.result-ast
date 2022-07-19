@@ -1,0 +1,42 @@
+Defs(
+    Defs {
+        tags: [
+            Index(2147483648),
+        ],
+        regions: [
+            @0-9,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Body(
+                @0-1 Identifier(
+                    "x",
+                ),
+                @8-9 SpaceBefore(
+                    Num(
+                        "5",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ),
+        ],
+    },
+    @11-13 SpaceBefore(
+        Num(
+            "42",
+        ),
+        [
+            Newline,
+            Newline,
+        ],
+    ),
+)

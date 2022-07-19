@@ -1,0 +1,13 @@
+Closure(
+    [
+        @1-11 MalformedIdent(
+            "the_answer",
+            Underscore(
+                @5,
+            ),
+        ),
+    ],
+    @15-17 Num(
+        "42",
+    ),
+)

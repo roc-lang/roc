@@ -1,0 +1,34 @@
+Platform {
+    header: PlatformHeader {
+        name: @9-25 PackageName(
+            "rtfeldman/blah",
+        ),
+        requires: PlatformRequires {
+            rigids: [],
+            signature: @40-49 TypedIdent {
+                ident: @40-44 "main",
+                spaces_before_colon: [],
+                ann: @47-49 Record {
+                    fields: [],
+                    ext: None,
+                },
+            },
+        },
+        exposes: [],
+        packages: [],
+        imports: [],
+        provides: [],
+        before_header: [],
+        after_platform_keyword: [],
+        before_requires: [],
+        after_requires: [],
+        before_exposes: [],
+        after_exposes: [],
+        before_packages: [],
+        after_packages: [],
+        before_imports: [],
+        after_imports: [],
+        before_provides: [],
+        after_provides: [],
+    },
+}

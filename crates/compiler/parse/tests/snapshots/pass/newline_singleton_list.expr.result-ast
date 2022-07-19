@@ -1,0 +1,17 @@
+List(
+    [
+        @2-3 SpaceBefore(
+            SpaceAfter(
+                Num(
+                    "1",
+                ),
+                [
+                    Newline,
+                ],
+            ),
+            [
+                Newline,
+            ],
+        ),
+    ],
+)

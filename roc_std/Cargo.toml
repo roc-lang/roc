@@ -1,9 +1,0 @@
-[package]
-name = "roc_std"
-version = "0.1.0"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
-repository = "https://github.com/rtfeldman/roc"
-readme = "README.md"
-edition = "2018"
-description = "Rust representations of Roc data structures"

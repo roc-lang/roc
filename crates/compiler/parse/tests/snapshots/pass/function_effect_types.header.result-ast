@@ -1,0 +1,71 @@
+Platform {
+    header: PlatformHeader {
+        name: @9-14 PackageName(
+            "cli",
+        ),
+        requires: PlatformRequires {
+            rigids: [],
+            signature: @32-49 TypedIdent {
+                ident: @32-36 "main",
+                spaces_before_colon: [],
+                ann: @39-49 Apply(
+                    "",
+                    "Task",
+                    [
+                        @44-46 Record {
+                            fields: [],
+                            ext: None,
+                        },
+                        @47-49 TagUnion {
+                            ext: None,
+                            tags: [],
+                        },
+                    ],
+                ),
+            },
+        },
+        exposes: [],
+        packages: [],
+        imports: [
+            @110-123 Module(
+                ModuleName(
+                    "Task",
+                ),
+                [
+                    @117-121 ExposedName(
+                        "Task",
+                    ),
+                ],
+            ),
+        ],
+        provides: [
+            @141-152 ExposedName(
+                "mainForHost",
+            ),
+        ],
+        before_header: [],
+        after_platform_keyword: [],
+        before_requires: [
+            Newline,
+        ],
+        after_requires: [],
+        before_exposes: [
+            LineComment(
+                " TODO FIXME",
+            ),
+        ],
+        after_exposes: [],
+        before_packages: [
+            Newline,
+        ],
+        after_packages: [],
+        before_imports: [
+            Newline,
+        ],
+        after_imports: [],
+        before_provides: [
+            Newline,
+        ],
+        after_provides: [],
+    },
+}

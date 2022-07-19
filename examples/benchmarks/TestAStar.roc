@@ -1,7 +1,7 @@
 app "test-astar"
-    packages { base: "platform" }
-    imports [base.Task, AStar]
-    provides [ main ] to base
+    packages { pf: "platform/main.roc" }
+    imports [pf.Task, AStar]
+    provides [main] to pf
 
 main : Task.Task {} []
 main =
@@ -9,13 +9,12 @@ main =
 
 #     Task.after Task.getInt \n ->
 #         when n is
-#             1 -> 
+#             1 ->
 #                 Task.putLine (showBool test1)
-# 
-#             _ -> 
-#                 ns = Str.fromInt n
+#
+#             _ ->
+#                 ns = Num.toStr n
 #                 Task.putLine "No test \(ns)"
-
 showBool : Bool -> Str
 showBool = \b ->
     when b is
@@ -23,7 +22,7 @@ showBool = \b ->
         False -> "False"
 
 test1 : Bool
-test1 = 
+test1 =
     example1 == [2, 4]
 
 example1 : List I64
@@ -31,14 +30,14 @@ example1 =
     step : I64 -> Set I64
     step = \n ->
         when n is
-            1 -> Set.fromList [ 2,3 ]
+            1 -> Set.fromList [2, 3]
             2 -> Set.fromList [4]
             3 -> Set.fromList [4]
             _ -> Set.fromList []
 
     cost : I64, I64 -> F64
-    cost = \_, _ -> 1 
+    cost = \_, _ -> 1
 
-    when AStar.findPath cost step 1 4 is 
+    when AStar.findPath cost step 1 4 is
         Ok path -> path
         Err _ -> []

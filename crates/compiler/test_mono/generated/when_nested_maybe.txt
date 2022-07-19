@@ -1,0 +1,30 @@
+procedure Num.19 (#Attr.2, #Attr.3):
+    let Num.257 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.257;
+
+procedure Test.0 ():
+    let Test.19 : I64 = 41i64;
+    let Test.18 : [C I64, C ] = TagId(0) Test.19;
+    let Test.2 : [C [C I64, C ], C ] = TagId(0) Test.18;
+    joinpoint Test.15:
+        let Test.8 : I64 = 1i64;
+        ret Test.8;
+    in
+    let Test.13 : U8 = 0i64;
+    let Test.14 : U8 = GetTagId Test.2;
+    let Test.17 : Int1 = lowlevel Eq Test.13 Test.14;
+    if Test.17 then
+        let Test.10 : [C I64, C ] = UnionAtIndex (Id 0) (Index 0) Test.2;
+        let Test.11 : U8 = 0i64;
+        let Test.12 : U8 = GetTagId Test.10;
+        let Test.16 : Int1 = lowlevel Eq Test.11 Test.12;
+        if Test.16 then
+            let Test.9 : [C I64, C ] = UnionAtIndex (Id 0) (Index 0) Test.2;
+            let Test.5 : I64 = UnionAtIndex (Id 0) (Index 0) Test.9;
+            let Test.7 : I64 = 1i64;
+            let Test.6 : I64 = CallByName Num.19 Test.5 Test.7;
+            ret Test.6;
+        else
+            jump Test.15;
+    else
+        jump Test.15;

@@ -1,0 +1,18 @@
+BinOps(
+    [
+        (
+            @0-1 SpaceAfter(
+                Num(
+                    "3",
+                ),
+                [
+                    Newline,
+                ],
+            ),
+            @2-3 Minus,
+        ),
+    ],
+    @4-5 Num(
+        "4",
+    ),
+)

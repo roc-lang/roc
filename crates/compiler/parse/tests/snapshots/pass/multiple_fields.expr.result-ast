@@ -1,0 +1,13 @@
+Access(
+    Access(
+        Access(
+            Var {
+                module_name: "",
+                ident: "rec",
+            },
+            "abc",
+        ),
+        "def",
+    ),
+    "ghi",
+)

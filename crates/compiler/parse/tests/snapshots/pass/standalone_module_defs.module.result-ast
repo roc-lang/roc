@@ -1,0 +1,68 @@
+Defs {
+    tags: [
+        Index(2147483648),
+        Index(2147483649),
+        Index(2147483650),
+    ],
+    regions: [
+        @12-19,
+        @33-43,
+        @44-57,
+    ],
+    space_before: [
+        Slice(start = 0, length = 1),
+        Slice(start = 1, length = 3),
+        Slice(start = 4, length = 1),
+    ],
+    space_after: [
+        Slice(start = 1, length = 0),
+        Slice(start = 4, length = 0),
+        Slice(start = 5, length = 2),
+    ],
+    spaces: [
+        LineComment(
+            " comment 1",
+        ),
+        Newline,
+        Newline,
+        LineComment(
+            " comment 2",
+        ),
+        Newline,
+        Newline,
+        LineComment(
+            " comment n",
+        ),
+    ],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @12-15 Identifier(
+                "foo",
+            ),
+            @18-19 Num(
+                "1",
+            ),
+        ),
+        Body(
+            @33-36 Identifier(
+                "bar",
+            ),
+            @39-43 Str(
+                PlainLine(
+                    "hi",
+                ),
+            ),
+        ),
+        Body(
+            @44-47 Identifier(
+                "baz",
+            ),
+            @50-57 Str(
+                PlainLine(
+                    "stuff",
+                ),
+            ),
+        ),
+    ],
+}

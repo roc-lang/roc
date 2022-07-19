@@ -1,0 +1,19 @@
+[package]
+name = "roc_fmt"
+version = "0.1.0"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+edition = "2021"
+
+[dependencies]
+roc_collections = { path = "../collections" }
+roc_region = { path = "../region" }
+roc_module = { path = "../module" }
+roc_parse = { path = "../parse" }
+bumpalo = { version = "3.8.0", features = ["collections"] }
+
+[dev-dependencies]
+pretty_assertions = "1.0.0"
+indoc = "1.0.3"
+roc_test_utils = { path = "../../test_utils" }
+walkdir = "2.3.2"

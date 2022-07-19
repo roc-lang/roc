@@ -1,6 +1,0 @@
-procedure Test.0 ():
-    let Test.4 = 1i64;
-    let Test.5 = 3.14f64;
-    let Test.2 = Struct {Test.4, Test.5};
-    let Test.1 = StructAtIndex 0 Test.2;
-    ret Test.1;

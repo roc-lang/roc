@@ -1,0 +1,58 @@
+Defs(
+    Defs {
+        tags: [
+            Index(2147483648),
+        ],
+        regions: [
+            @0-26,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Body(
+                @0-7 Malformed(
+                    "my_list",
+                ),
+                @10-26 List(
+                    Collection {
+                        items: [
+                            @16-17 SpaceBefore(
+                                Num(
+                                    "0",
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                            @23-24 SpaceBefore(
+                                Num(
+                                    "1",
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                        ],
+                        final_comments: [
+                            Newline,
+                        ],
+                    },
+                ),
+            ),
+        ],
+    },
+    @27-29 SpaceBefore(
+        Num(
+            "42",
+        ),
+        [
+            Newline,
+        ],
+    ),
+)

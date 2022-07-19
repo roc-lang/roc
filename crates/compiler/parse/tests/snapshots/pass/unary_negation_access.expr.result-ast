@@ -1,0 +1,10 @@
+UnaryOp(
+    @1-11 Access(
+        Var {
+            module_name: "",
+            ident: "rec1",
+        },
+        "field",
+    ),
+    @0-1 Negate,
+)

@@ -1,0 +1,95 @@
+Defs(
+    Defs {
+        tags: [
+            Index(2147483648),
+        ],
+        regions: [
+            @0-67,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Annotation(
+                @0-1 Identifier(
+                    "f",
+                ),
+                @4-67 Where(
+                    @4-16 SpaceBefore(
+                        Function(
+                            [
+                                @4-5 BoundVariable(
+                                    "a",
+                                ),
+                            ],
+                            @10-16 Function(
+                                [
+                                    @10-11 BoundVariable(
+                                        "b",
+                                    ),
+                                ],
+                                @15-16 BoundVariable(
+                                    "c",
+                                ),
+                            ),
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                    [
+                        @24-34 HasClause {
+                            var: @24-25 "a",
+                            ability: @30-34 Apply(
+                                "",
+                                "Hash",
+                                [],
+                            ),
+                        },
+                        @42-50 HasClause {
+                            var: @42-43 SpaceBefore(
+                                "b",
+                                [
+                                    Newline,
+                                ],
+                            ),
+                            ability: @48-50 Apply(
+                                "",
+                                "Eq",
+                                [],
+                            ),
+                        },
+                        @58-67 HasClause {
+                            var: @58-59 SpaceBefore(
+                                "c",
+                                [
+                                    Newline,
+                                ],
+                            ),
+                            ability: @64-67 Apply(
+                                "",
+                                "Ord",
+                                [],
+                            ),
+                        },
+                    ],
+                ),
+            ),
+        ],
+    },
+    @69-70 SpaceBefore(
+        Var {
+            module_name: "",
+            ident: "f",
+        },
+        [
+            Newline,
+            Newline,
+        ],
+    ),
+)

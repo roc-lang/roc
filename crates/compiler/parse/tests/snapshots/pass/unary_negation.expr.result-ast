@@ -1,0 +1,7 @@
+UnaryOp(
+    @1-4 Var {
+        module_name: "",
+        ident: "foo",
+    },
+    @0-1 Negate,
+)

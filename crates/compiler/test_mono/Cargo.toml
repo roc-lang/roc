@@ -1,0 +1,23 @@
+[package]
+name = "test_mono"
+version = "0.1.0"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+edition = "2021"
+
+[[test]]
+name = "test_mono"
+path = "src/tests.rs"
+
+[dev-dependencies]
+roc_collections = { path = "../collections" }
+roc_module = { path = "../module" }
+roc_builtins = { path = "../builtins" }
+roc_load = { path = "../load" }
+roc_can = { path = "../can" }
+roc_mono = { path = "../mono" }
+roc_target = { path = "../roc_target" }
+roc_reporting = { path = "../../reporting" }
+test_mono_macros = { path = "../test_mono_macros" }
+bumpalo = { version = "3.8.0", features = ["collections"] }
+indoc = "1.0.3"

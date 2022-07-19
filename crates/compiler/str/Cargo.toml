@@ -1,0 +1,26 @@
+[package]
+name = "roc_str"
+version = "0.1.0"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+edition = "2021"
+
+[dependencies]
+roc_collections = { path = "../collections" }
+roc_region = { path = "../region" }
+roc_module = { path = "../module" }
+roc_types = { path = "../types" }
+roc_can = { path = "../can" }
+roc_unify = { path = "../unify" }
+roc_problem = { path = "../problem" }
+bumpalo = { version = "3.6.1", features = ["collections"] }
+
+[dev-dependencies]
+roc_constrain = { path = "../constrain" }
+roc_builtins = { path = "../builtins" }
+roc_parse = { path = "../parse" }
+roc_solve = { path = "../solve" }
+pretty_assertions = "0.5.1"
+indoc = "0.3.3"
+quickcheck = "0.8"
+quickcheck_macros = "0.8"

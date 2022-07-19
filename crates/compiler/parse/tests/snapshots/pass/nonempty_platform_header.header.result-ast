@@ -1,0 +1,60 @@
+Platform {
+    header: PlatformHeader {
+        name: @9-21 PackageName(
+            "foo/barbaz",
+        ),
+        requires: PlatformRequires {
+            rigids: [
+                @36-41 UppercaseIdent(
+                    "Model",
+                ),
+            ],
+            signature: @45-54 TypedIdent {
+                ident: @45-49 "main",
+                spaces_before_colon: [],
+                ann: @52-54 Record {
+                    fields: [],
+                    ext: None,
+                },
+            },
+        },
+        exposes: [],
+        packages: [
+            @87-99 PackageEntry {
+                shorthand: "foo",
+                spaces_after_shorthand: [],
+                package_name: @92-99 PackageName(
+                    "./foo",
+                ),
+            },
+        ],
+        imports: [],
+        provides: [
+            @132-143 ExposedName(
+                "mainForHost",
+            ),
+        ],
+        before_header: [],
+        after_platform_keyword: [],
+        before_requires: [
+            Newline,
+        ],
+        after_requires: [],
+        before_exposes: [
+            Newline,
+        ],
+        after_exposes: [],
+        before_packages: [
+            Newline,
+        ],
+        after_packages: [],
+        before_imports: [
+            Newline,
+        ],
+        after_imports: [],
+        before_provides: [
+            Newline,
+        ],
+        after_provides: [],
+    },
+}

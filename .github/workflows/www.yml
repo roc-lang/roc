@@ -9,7 +9,7 @@ on:
 jobs:
   deploy:
     name: 'Deploy to Netlify'
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, linux]
     steps:
       - uses: jsmrcaga/action-netlify-deploy@v1.6.0
         with:

@@ -13,7 +13,7 @@ fn bench_group(c: &mut Criterion<Perf>, hw_event_str: &str) {
     // calculate statistics based on a fixed(flat) 100 runs
     group.sampling_mode(SamplingMode::Flat);
 
-    let bench_funcs: Vec<fn(Option<&mut BenchmarkGroup<Perf>>) -> ()> = vec![
+    let bench_funcs: Vec<fn(Option<&mut BenchmarkGroup<Perf>>)> = vec![
         bench_nqueens,
         bench_cfold,
         bench_deriv,

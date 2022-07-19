@@ -1,0 +1,14 @@
+BinOps(
+    [
+        (
+            @0-1 Var {
+                module_name: "",
+                ident: "x",
+            },
+            @1-2 Minus,
+        ),
+    ],
+    @2-3 Num(
+        "2",
+    ),
+)

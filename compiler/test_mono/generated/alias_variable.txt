@@ -1,4 +1,0 @@
-procedure Test.0 ():
-    let Test.1 = 5i64;
-    let Test.3 = 3i64;
-    ret Test.3;

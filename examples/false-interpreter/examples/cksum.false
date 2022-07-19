@@ -8,7 +8,7 @@ With the interpreter, it currently runs about 350x slower though and requires ex
 Load 256 constants from https://github.com/wertarbyte/coreutils/blob/f70c7b785b93dd436788d34827b209453157a6f2/src/cksum.c#L117
 To support the original false interpreter, numbers must be less than 32000.
 To deal with loading, just split all the numbers in two chunks.
-First chunk is lower 16 bits, second chunk is higher 16 bits shift to the right. 
+First chunk is lower 16 bits, second chunk is higher 16 bits shift to the right.
 Its values are then shifted back and merged together.
 }
 16564 45559 65536*| 23811 46390 65536*| 31706 47221 65536*| 26221 48308 65536*|
@@ -199,7 +199,7 @@ i;
 
     {left shift it by 8 (multiply by 0x100)}
     256*
-    
+
     {xor with the loaded constant}
     x;!
 

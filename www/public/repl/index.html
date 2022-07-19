@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <title>Roc REPL</title>
+    <link rel="stylesheet" href="/repl/repl.css" />
+  </head>
+
+  <body>
+    <div class="body-wrapper">
+      <section class="text">
+        <h1>The rockin' Roc REPL</h1>
+      </section>
+
+      <section class="history">
+        <div class="scroll-wrap">
+          <div id="history-text" class="scroll code"></div>
+        </div>
+      </section>
+
+      <section class="source">
+        <textarea
+          rows="5"
+          autofocus
+          id="source-input"
+          class="code"
+          placeholder="Type some Roc code and press Enter. (Use Shift+Enter for multi-line input)"
+        ></textarea>
+      </section>
+    </div>
+    <script type="module" src="/repl/repl.js"></script>
+  </body>
+</html>

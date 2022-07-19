@@ -1,0 +1,76 @@
+Defs(
+    Defs {
+        tags: [
+            Index(2147483648),
+        ],
+        regions: [
+            @0-29,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Body(
+                @0-1 Identifier(
+                    "x",
+                ),
+                @4-29 Apply(
+                    @4-7 Var {
+                        module_name: "",
+                        ident: "foo",
+                    },
+                    [
+                        @9-28 ParensAround(
+                            Apply(
+                                @9-12 Var {
+                                    module_name: "",
+                                    ident: "baz",
+                                },
+                                [
+                                    @13-28 Record(
+                                        Collection {
+                                            items: [
+                                                @17-26 SpaceBefore(
+                                                    RequiredValue(
+                                                        @17-20 "bar",
+                                                        [],
+                                                        @22-26 Var {
+                                                            module_name: "",
+                                                            ident: "blah",
+                                                        },
+                                                    ),
+                                                    [
+                                                        Newline,
+                                                    ],
+                                                ),
+                                            ],
+                                            final_comments: [
+                                                Newline,
+                                            ],
+                                        },
+                                    ),
+                                ],
+                                Space,
+                            ),
+                        ),
+                    ],
+                    Space,
+                ),
+            ),
+        ],
+    },
+    @30-31 SpaceBefore(
+        Var {
+            module_name: "",
+            ident: "x",
+        },
+        [
+            Newline,
+        ],
+    ),
+)

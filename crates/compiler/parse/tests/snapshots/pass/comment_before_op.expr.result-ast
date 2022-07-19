@@ -1,0 +1,20 @@
+BinOps(
+    [
+        (
+            @0-1 SpaceAfter(
+                Num(
+                    "3",
+                ),
+                [
+                    LineComment(
+                        " test!",
+                    ),
+                ],
+            ),
+            @11-12 Plus,
+        ),
+    ],
+    @13-14 Num(
+        "4",
+    ),
+)

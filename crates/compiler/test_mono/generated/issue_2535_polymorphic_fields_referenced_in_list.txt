@@ -1,0 +1,19 @@
+procedure Test.1 ():
+    let Test.11 : I64 = 2i64;
+    let Test.12 : U8 = 1i64;
+    let Test.10 : {I64, U8} = Struct {Test.11, Test.12};
+    ret Test.10;
+
+procedure Test.1 ():
+    let Test.7 : I64 = 1i64;
+    let Test.8 : U8 = 2i64;
+    let Test.6 : {I64, U8} = Struct {Test.7, Test.8};
+    ret Test.6;
+
+procedure Test.0 ():
+    let Test.9 : {I64, U8} = CallByName Test.1;
+    let Test.3 : U8 = StructAtIndex 1 Test.9;
+    let Test.5 : {I64, U8} = CallByName Test.1;
+    let Test.4 : U8 = StructAtIndex 1 Test.5;
+    let Test.2 : List U8 = Array [Test.3, Test.4];
+    ret Test.2;

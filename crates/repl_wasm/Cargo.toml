@@ -1,0 +1,36 @@
+[package]
+edition = "2021"
+name = "roc_repl_wasm"
+version = "0.1.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[build-dependencies]
+roc_builtins = {path = "../compiler/builtins"}
+wasi_libc_sys = { path = "../wasi-libc-sys" }
+
+[dependencies]
+bumpalo = {version = "3.8.0", features = ["collections"]}
+console_error_panic_hook = {version = "0.1.7", optional = true}
+futures = {version = "0.3.17", optional = true}
+js-sys = "0.3.56"
+wasm-bindgen = "0.2.79"
+wasm-bindgen-futures = "0.4.29"
+
+roc_collections = {path = "../compiler/collections"}
+roc_gen_wasm = {path = "../compiler/gen_wasm"}
+roc_load = {path = "../compiler/load"}
+roc_parse = {path = "../compiler/parse"}
+roc_repl_eval = {path = "../repl_eval"}
+roc_reporting = {path = "../reporting"}
+roc_target = {path = "../compiler/roc_target"}
+roc_types = {path = "../compiler/types"}
+
+[features]
+wasmer = ["futures"]
+
+# Tell wasm-pack not to run wasm-opt automatically. We run it explicitly when we need to.
+# (Workaround for a CI install issue with wasm-pack https://github.com/rustwasm/wasm-pack/issues/864)
+[package.metadata.wasm-pack.profile.profiling]
+wasm-opt = false

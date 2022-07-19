@@ -1,0 +1,57 @@
+Defs(
+    Defs {
+        tags: [
+            Index(2147483648),
+        ],
+        regions: [
+            @0-17,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Body(
+                @0-1 Identifier(
+                    "a",
+                ),
+                @4-17 List(
+                    Collection {
+                        items: [
+                            @8-9 SpaceBefore(
+                                Num(
+                                    "1",
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                            @11-12 Num(
+                                "2",
+                            ),
+                            @14-15 Num(
+                                "3",
+                            ),
+                        ],
+                        final_comments: [
+                            Newline,
+                        ],
+                    },
+                ),
+            ),
+        ],
+    },
+    @18-19 SpaceBefore(
+        Var {
+            module_name: "",
+            ident: "a",
+        },
+        [
+            Newline,
+        ],
+    ),
+)

@@ -1,8 +1,0 @@
-procedure Test.0 ():
-    let Test.3 = true;
-    if Test.3 then
-        let Test.4 = 1i64;
-        ret Test.4;
-    else
-        let Test.2 = 2i64;
-        ret Test.2;

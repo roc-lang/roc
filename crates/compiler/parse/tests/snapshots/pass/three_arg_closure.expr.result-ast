@@ -1,0 +1,16 @@
+Closure(
+    [
+        @1-2 Identifier(
+            "a",
+        ),
+        @4-5 Identifier(
+            "b",
+        ),
+        @7-8 Identifier(
+            "c",
+        ),
+    ],
+    @12-14 Num(
+        "42",
+    ),
+)

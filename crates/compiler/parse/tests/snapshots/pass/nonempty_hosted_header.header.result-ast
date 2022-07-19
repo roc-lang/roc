@@ -1,0 +1,130 @@
+Hosted {
+    header: HostedHeader {
+        name: @7-10 ModuleName(
+            "Foo",
+        ),
+        exposes: Collection {
+            items: [
+                @45-50 SpaceBefore(
+                    ExposedName(
+                        "Stuff",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+                @64-70 SpaceBefore(
+                    ExposedName(
+                        "Things",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+                @84-97 SpaceBefore(
+                    ExposedName(
+                        "somethingElse",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ],
+            final_comments: [
+                Newline,
+            ],
+        },
+        imports: Collection {
+            items: [
+                @143-147 SpaceBefore(
+                    Module(
+                        ModuleName(
+                            "Blah",
+                        ),
+                        [],
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+                @161-182 SpaceBefore(
+                    Module(
+                        ModuleName(
+                            "Baz",
+                        ),
+                        [
+                            @167-172 ExposedName(
+                                "stuff",
+                            ),
+                            @174-180 ExposedName(
+                                "things",
+                            ),
+                        ],
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ],
+            final_comments: [
+                Newline,
+            ],
+        },
+        generates: UppercaseIdent(
+            "Bar",
+        ),
+        generates_with: Collection {
+            items: [
+                @239-242 SpaceBefore(
+                    ExposedName(
+                        "map",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+                @256-261 SpaceBefore(
+                    ExposedName(
+                        "after",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+                @275-279 SpaceBefore(
+                    ExposedName(
+                        "loop",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ],
+            final_comments: [
+                Newline,
+            ],
+        },
+        before_header: [],
+        after_hosted_keyword: [],
+        before_exposes: [
+            Newline,
+        ],
+        after_exposes: [
+            Newline,
+        ],
+        before_imports: [
+            Newline,
+        ],
+        after_imports: [
+            Newline,
+        ],
+        before_generates: [
+            Newline,
+        ],
+        after_generates: [],
+        before_with: [],
+        after_with: [
+            Newline,
+        ],
+    },
+}

@@ -1,9 +1,0 @@
-procedure Test.0 ():
-    let Test.2 = 0i64;
-    let Test.5 = 1i64;
-    let Test.6 = lowlevel Eq Test.5 Test.2;
-    if Test.6 then
-        let Test.3 = 12i64;
-        ret Test.3;
-    else
-        ret Test.2;

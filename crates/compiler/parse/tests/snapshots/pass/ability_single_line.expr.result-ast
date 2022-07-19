@@ -1,0 +1,65 @@
+Defs(
+    Defs {
+        tags: [
+            Index(0),
+        ],
+        regions: [
+            @0-37,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [
+            Ability {
+                header: TypeHeader {
+                    name: @0-4 "Hash",
+                    vars: [],
+                },
+                loc_has: @5-8 Has,
+                members: [
+                    AbilityMember {
+                        name: @9-13 "hash",
+                        typ: @16-37 Where(
+                            @16-24 Function(
+                                [
+                                    @16-17 BoundVariable(
+                                        "a",
+                                    ),
+                                ],
+                                @21-24 Apply(
+                                    "",
+                                    "U64",
+                                    [],
+                                ),
+                            ),
+                            [
+                                @27-37 HasClause {
+                                    var: @27-28 "a",
+                                    ability: @33-37 Apply(
+                                        "",
+                                        "Hash",
+                                        [],
+                                    ),
+                                },
+                            ],
+                        ),
+                    },
+                ],
+            },
+        ],
+        value_defs: [],
+    },
+    @39-40 SpaceBefore(
+        Num(
+            "1",
+        ),
+        [
+            Newline,
+            Newline,
+        ],
+    ),
+)

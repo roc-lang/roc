@@ -1,0 +1,33 @@
+procedure Bool.7 (#Attr.2, #Attr.3):
+    let Bool.9 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
+    ret Bool.9;
+
+procedure Num.39 (#Attr.2, #Attr.3):
+    let Num.263 : I64 = lowlevel NumDivUnchecked #Attr.2 #Attr.3;
+    ret Num.263;
+
+procedure Num.40 (Num.229, Num.230):
+    let Num.262 : I64 = 0i64;
+    let Num.259 : Int1 = CallByName Bool.7 Num.230 Num.262;
+    if Num.259 then
+        let Num.261 : {} = Struct {};
+        let Num.260 : [C {}, C I64] = TagId(0) Num.261;
+        ret Num.260;
+    else
+        let Num.258 : I64 = CallByName Num.39 Num.229 Num.230;
+        let Num.257 : [C {}, C I64] = TagId(1) Num.258;
+        ret Num.257;
+
+procedure Test.0 ():
+    let Test.8 : I64 = 1000i64;
+    let Test.9 : I64 = 10i64;
+    let Test.2 : [C {}, C I64] = CallByName Num.40 Test.8 Test.9;
+    let Test.5 : U8 = 1i64;
+    let Test.6 : U8 = GetTagId Test.2;
+    let Test.7 : Int1 = lowlevel Eq Test.5 Test.6;
+    if Test.7 then
+        let Test.1 : I64 = UnionAtIndex (Id 1) (Index 0) Test.2;
+        ret Test.1;
+    else
+        let Test.4 : I64 = -1i64;
+        ret Test.4;

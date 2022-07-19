@@ -1,0 +1,19 @@
+Apply(
+    @0-5 UnaryOp(
+        @1-5 Var {
+            module_name: "",
+            ident: "whee",
+        },
+        @0-1 Not,
+    ),
+    [
+        @7-9 Num(
+            "12",
+        ),
+        @10-13 Var {
+            module_name: "",
+            ident: "foo",
+        },
+    ],
+    Space,
+)

@@ -1,0 +1,7 @@
+[toolchain]
+channel = "1.61.0" # make sure to update the rust version in Earthfile as well
+profile = "default"
+components = [
+    # for usages of rust-analyzer or similar tools inside `nix develop`
+    "rust-src"
+]

@@ -1,0 +1,80 @@
+Defs(
+    Defs {
+        tags: [
+            Index(2147483648),
+        ],
+        regions: [
+            @0-48,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Annotation(
+                @0-1 Identifier(
+                    "f",
+                ),
+                @4-48 Where(
+                    @4-16 Function(
+                        [
+                            @4-5 BoundVariable(
+                                "a",
+                            ),
+                        ],
+                        @10-16 Function(
+                            [
+                                @10-11 BoundVariable(
+                                    "b",
+                                ),
+                            ],
+                            @15-16 BoundVariable(
+                                "c",
+                            ),
+                        ),
+                    ),
+                    [
+                        @20-27 HasClause {
+                            var: @20-21 "a",
+                            ability: @26-27 Apply(
+                                "",
+                                "A",
+                                [],
+                            ),
+                        },
+                        @29-37 HasClause {
+                            var: @29-30 "b",
+                            ability: @35-37 Apply(
+                                "",
+                                "Eq",
+                                [],
+                            ),
+                        },
+                        @39-48 HasClause {
+                            var: @39-40 "c",
+                            ability: @45-48 Apply(
+                                "",
+                                "Ord",
+                                [],
+                            ),
+                        },
+                    ],
+                ),
+            ),
+        ],
+    },
+    @50-51 SpaceBefore(
+        Var {
+            module_name: "",
+            ident: "f",
+        },
+        [
+            Newline,
+            Newline,
+        ],
+    ),
+)

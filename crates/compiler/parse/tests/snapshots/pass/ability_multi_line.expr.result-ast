@@ -1,0 +1,78 @@
+Defs(
+    Defs {
+        tags: [
+            Index(0),
+        ],
+        regions: [
+            @0-45,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [
+            Ability {
+                header: TypeHeader {
+                    name: @0-4 "Hash",
+                    vars: [],
+                },
+                loc_has: @5-8 Has,
+                members: [
+                    AbilityMember {
+                        name: @11-15 SpaceBefore(
+                            "hash",
+                            [
+                                Newline,
+                            ],
+                        ),
+                        typ: @18-26 Function(
+                            [
+                                @18-19 BoundVariable(
+                                    "a",
+                                ),
+                            ],
+                            @23-26 Apply(
+                                "",
+                                "U64",
+                                [],
+                            ),
+                        ),
+                    },
+                    AbilityMember {
+                        name: @29-34 SpaceBefore(
+                            "hash2",
+                            [
+                                Newline,
+                            ],
+                        ),
+                        typ: @37-45 Function(
+                            [
+                                @37-38 BoundVariable(
+                                    "a",
+                                ),
+                            ],
+                            @42-45 Apply(
+                                "",
+                                "U64",
+                                [],
+                            ),
+                        ),
+                    },
+                ],
+            },
+        ],
+        value_defs: [],
+    },
+    @47-48 SpaceBefore(
+        Num(
+            "1",
+        ),
+        [
+            Newline,
+            Newline,
+        ],
+    ),
+)

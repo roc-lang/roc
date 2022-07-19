@@ -1,0 +1,15 @@
+Interface {
+    header: InterfaceHeader {
+        name: @10-11 ModuleName(
+            "T",
+        ),
+        exposes: [],
+        imports: [],
+        before_header: [],
+        after_interface_keyword: [],
+        before_exposes: [],
+        after_exposes: [],
+        before_imports: [],
+        after_imports: [],
+    },
+}

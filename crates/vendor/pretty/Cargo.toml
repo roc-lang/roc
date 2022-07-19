@@ -1,0 +1,19 @@
+[package]
+name = "ven_pretty"
+version = "0.9.1-alpha.0"
+authors = [ "Jonathan Sterling <jon@jonmsterling.com>", "Darin Morrison <darinmorrison+git@gmail.com>", "Markus Westerlind <marwes91@gmail.com>"]
+description = "Wadler-style pretty-printing combinators in Rust"
+documentation = "https://docs.rs/pretty/"
+keywords = ["console", "functional", "pretty-printing"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/Marwes/pretty.rs"
+edition = "2018"
+
+[package.metadata.docs.rs]
+features = ["termcolor"]
+
+[dependencies]
+arrayvec = "0.7.2"
+typed-arena = "2.0.1"
+termcolor = { version = "1.1.2", optional = true }

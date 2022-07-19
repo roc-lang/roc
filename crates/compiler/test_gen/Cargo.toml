@@ -1,0 +1,57 @@
+[package]
+name = "test_gen"
+version = "0.1.0"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+edition = "2021"
+
+[[test]]
+name = "test_gen"
+path = "src/tests.rs"
+
+[build-dependencies]
+roc_builtins = { path = "../builtins" }
+wasi_libc_sys = { path = "../../wasi-libc-sys" }
+
+[dev-dependencies]
+roc_gen_llvm = { path = "../gen_llvm" }
+roc_gen_dev = { path = "../gen_dev" }
+roc_gen_wasm = { path = "../gen_wasm" }
+roc_collections = { path = "../collections" }
+roc_region = { path = "../region" }
+roc_module = { path = "../module" }
+roc_problem = { path = "../problem" }
+roc_types = { path = "../types" }
+roc_builtins = { path = "../builtins" }
+roc_constrain = { path = "../constrain" }
+roc_unify = { path = "../unify" }
+roc_solve = { path = "../solve" }
+roc_mono = { path = "../mono" }
+roc_reporting = { path = "../../reporting" }
+roc_load = { path = "../load" }
+roc_can = { path = "../can" }
+roc_parse = { path = "../parse" }
+roc_build = { path = "../build", features = ["target-aarch64", "target-x86_64", "target-wasm32"]  }
+roc_target = { path = "../roc_target" }
+roc_std = { path = "../../roc_std" }
+bumpalo = { version = "3.8.0", features = ["collections"] }
+either = "1.6.1"
+libc = "0.2.106"
+inkwell = { path = "../../vendor/inkwell" }
+target-lexicon = "0.12.3"
+libloading = "0.7.1"
+tempfile = "3.2.0"
+indoc = "1.0.3"
+criterion = { git = "https://github.com/Anton-4/criterion.rs" }
+wasm3 = "0.3.1"
+
+[features]
+default = ["gen-llvm"]
+gen-llvm = []
+gen-dev = []
+gen-wasm = []
+gen-llvm-wasm = ["gen-llvm"]
+
+[[bench]]
+name = "list_map"
+harness = false

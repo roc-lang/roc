@@ -1,0 +1,13 @@
+[package]
+name = "roc_problem"
+version = "0.1.0"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+edition = "2021"
+
+[dependencies]
+roc_collections = { path = "../collections" }
+roc_region = { path = "../region" }
+roc_module = { path = "../module" }
+roc_types = { path = "../types" }
+roc_parse = { path = "../parse" }

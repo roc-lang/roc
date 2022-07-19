@@ -1,0 +1,15 @@
+BinOps(
+    [
+        (
+            @0-1 Var {
+                module_name: "",
+                ident: "x",
+            },
+            @1-3 Equals,
+        ),
+    ],
+    @3-4 Var {
+        module_name: "",
+        ident: "y",
+    },
+)

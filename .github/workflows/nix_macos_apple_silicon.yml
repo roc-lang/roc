@@ -1,0 +1,33 @@
+on: [pull_request]
+
+name: Nix apple silicon cargo test
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_BACKTRACE: 1
+
+jobs:
+  nix-apple-silicon:
+    name: nix-apple-silicon
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          clean: "true"
+
+      - name: check code style with clippy
+        run: nix develop -c cargo clippy --workspace --tests -- --deny warnings
+
+      - name: check code style with clippy --release
+        run: cargo clippy --workspace --tests --release -- --deny warnings
+
+      # this needs to be done after clippy because of code generation in wasi-libc-sys
+      - name: check formatting with rustfmt
+        run: nix develop -c cargo fmt --all -- --check
+
+      - name: execute tests with --release
+        run: nix develop -c cargo test --locked --release

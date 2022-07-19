@@ -1,11 +1,70 @@
 # Building the Roc compiler from source
 
+Installation should be a smooth process, let us now if anything does not work perfectly on [Roc Zulip](https://roc.zulipchat.com) or by creating an issue.
 
-## Installing LLVM, Zig, valgrind, and Python 2.7
+## Using Nix
+
+We highly recommend Using [nix](https://nixos.org/download.html) to quickly install all dependencies necessary to build roc.
+
+### On Linux x86_64/aarch64 or MacOS aarch64/arm64/x86_64
+
+#### Install
+
+If you are running ArchLinux or a derivative like Manjaro, you'll need to run `sudo sysctl -w kernel.unprivileged_userns_clone=1` before installing nix.
+
+Install nix (not necessary on NixOS):
+```
+sh <(curl -L https://nixos.org/nix/install) --daemon
+```
+
+Open a new terminal and install nixFlakes in your environment:
+```
+nix-env -iA nixpkgs.nixFlakes
+```
+
+Edit either `~/.config/nix/nix.conf` or `/etc/nix/nix.conf` and add:
+```
+experimental-features = nix-command flakes
+```
+
+If Nix was installed in multi-user mode, make sure to restart the nix-daemon.
+If you don't know how to do this, restarting your computer will also do the job.
+
+#### Usage
+
+Now with nix set up, you just need to run one command from the roc project root directory:
+```
+nix develop
+```
+You should be in a shell with everything needed to build already installed.
+Use `cargo run help` to see all subcommands.
+To use the `repl` subcommand, execute `cargo run repl`.
+Use `cargo build` to build the whole project.
+
+#### Extra tips
+
+If you want to load all dependencies automatically whenever you `cd` into `roc`, check out [direnv](https://direnv.net/).
+Then you will no longer need to execute `nix develop` first.
+
+### Editor
+
+The editor is a :construction:WIP:construction: and not ready yet to replace your favorite editor, although if you want to try it out on nix, read on.
+`cargo run edit` should work on NixOS and MacOS. If you use Linux x86_64, follow the instructions below.
+
+If you're not already in a nix shell, execute `nix develop` at the the root of the repo folder and then execute:
+```
+nixVulkanIntel cargo run edit
+```
+
+## Troubleshooting
+
+Create an issue if you run into problems not listed here.
+That will help us improve this document for everyone who reads it in the future!
+
+## Manual Install
 
 To build the compiler, you need these installed:
 
-* Python 2.7 (Windows only), `python-is-python3` (Ubuntu)
 * [Zig](https://ziglang.org/), see below for version
 * `libxkbcommon` - macOS seems to have it already; on Ubuntu or Debian you can get it with `apt-get install libxkbcommon-dev`
 * On Debian/Ubuntu `sudo apt-get install pkg-config`
@@ -16,9 +75,9 @@ To run the test suite (via `cargo test`), you additionally need to install:
 * [`valgrind`](https://www.valgrind.org/) (needs special treatment to [install on macOS](https://stackoverflow.com/a/61359781)
 Alternatively, you can use `cargo test --no-fail-fast` or `cargo test -p specific_tests` to skip over the valgrind failures & tests.
 
-For debugging LLVM IR, we use [DebugIR](https://github.com/vaivaswatha/debugir). This dependency is only required to build with the `--debug` flag, and for normal developtment you should be fine without it. 
+For debugging LLVM IR, we use [DebugIR](https://github.com/vaivaswatha/debugir). This dependency is only required to build with the `--debug` flag, and for normal development you should be fine without it.
 
-### libcxb libraries
+### libxcb libraries
 
 You may see an error like this during builds:
 
@@ -35,7 +94,7 @@ sudo apt-get install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 ```
 
 ### Zig
-**version: 0.8.0**
+**version: 0.9.1**
 
 For any OS, you can use [`zigup`](https://github.com/marler8997/zigup) to manage zig installations.
 
@@ -47,107 +106,40 @@ If you prefer a package manager, you can try the following:
 If you want to install it manually, you can also download Zig directly [here](https://ziglang.org/download/). Just make sure you download the right version, the bleeding edge master build is the first download link on this page.
 
 ### LLVM
-**version: 12.0.x**
+**version: 13.0.x**
 
-For macOS, you can install LLVM 12 using `brew install llvm@12` and then adding
-`/usr/local/opt/llvm/bin` to your `PATH`. You can confirm this worked by
-running `llc --version` - it should mention "LLVM version 12.0.0" at the top.
+For macOS, you can install LLVM 13 using `brew install llvm@13` and then adding
+`$(brew --prefix llvm@13)/bin` to your `PATH`. You can confirm this worked by
+running `llc --version` - it should mention "LLVM version 13.0.0" at the top.
+You may also need to manually specify a prefix env var like so:
+```
+export LLVM_SYS_130_PREFIX=/usr/local/opt/llvm@13
+```
 
 For Ubuntu and Debian:
 ```
 sudo apt -y install lsb-release software-properties-common gnupg
 wget https://apt.llvm.org/llvm.sh
 chmod +x llvm.sh
-./llvm.sh 12
+./llvm.sh 13
 ```
 
-If you use this script, you'll need to add `clang` and `llvm-as` to your `PATH`.
-By default, the script installs them as `llvm-as-12` and `clang-12`,
-respectively. You can address this with symlinks like so:
+If you use this script, you'll need to add `clang` to your `PATH`.
+By default, the script installs it as `clang-13`. You can address this with symlinks like so:
 
 ```
-sudo ln -s /usr/bin/clang-12 /usr/bin/clang
+sudo ln -s /usr/bin/clang-13 /usr/bin/clang
 ```
-```
-sudo ln -s /usr/bin/llvm-as-12 /usr/bin/llvm-as
-````
 
 There are also alternative installation options at http://releases.llvm.org/download.html
 
 [Troubleshooting](#troubleshooting)
 
-## Using Nix
+### Building
 
-:exclamation: **Our Nix setup is currently broken, you'll have to install manually for now** :exclamation:
-
-### Install
-
-Using [nix](https://nixos.org/download.html) is a quick way to get an environment bootstrapped with a single command.
-
-Anyone having trouble installing the proper version of LLVM themselves might also prefer this method.
-
-First, install nix:
-
-`curl -L https://nixos.org/nix/install | sh`
-
-If MacOS and using a version >= 10.15:
-
-`sh <(curl -L https://nixos.org/nix/install) --darwin-use-unencrypted-nix-store-volume`
-
-You may prefer to setup up the volume manually by following nix documentation.
-
-> You may need to restart your terminal
-
-### Usage
-
-Now with nix installed you just need to run one command:
-
-`nix-shell`
-
-> This may not output anything for a little while. This is normal, hang in there. Also make sure you are in the roc project root.
-
-> Also, if you're on NixOS you'll need to enable opengl at the system-wide level. You can do this in configuration.nix with `hardware.opengl.enable = true;`. If you don't do this, nix-shell will fail!
-
-You should be in a shell with everything needed to build already installed. Next run:
-
-`cargo run repl`
-
-You should be in a repl now. Have fun!
-
-### Extra tips
-
-If you plan on using `nix-shell` regularly, check out [direnv](https://direnv.net/) and [lorri](https://github.com/target/lorri). Whenever you `cd` into `roc/`, they will automatically load the Nix dependecies into your current shell, so you never have to run nix-shell directly!
-
-### Editor
-
-When you want to run the editor from Ubuntu inside nix you need to install [nixGL](https://github.com/guibou/nixGL) as well:
-
-```bash
-nix-shell
-git clone https://github.com/guibou/nixGL
-cd nixGL
-```
-
-If you have an Nvidia graphics card, run:
-```
-nix-env -f ./ -iA nixVulkanNvidia
-```
-If you have integrated Intel graphics, run:
-```
-nix-env -f ./ -iA nixVulkanIntel
-```
-Check the [nixGL repo](https://github.com/guibou/nixGL) for other configurations.
-
-Now you should be able to run the editor:
-```bash
-cd roc
-nixVulkanNvidia cargo run edit `# replace Nvidia with the config you chose in the previous step`
-```
-
-## Troubleshooting
-
-Create an issue if you run into problems not listed here.
-That will help us improve this document for everyone who reads it in the future!
+Use `cargo build` to build the whole project.
+Use `cargo run help` to see all subcommands.
+To use the `repl` subcommand, execute `cargo run repl`.
 
 ### LLVM installation on Linux
 
@@ -161,9 +153,9 @@ If you encounter `cannot find -lz` run `sudo apt install zlib1g-dev`.
 If you encounter:
 ```
 error: No suitable version of LLVM was found system-wide or pointed
-       to by LLVM_SYS_120_PREFIX.
+       to by LLVM_SYS_130_PREFIX.
 ```
-Add `export LLVM_SYS_120_PREFIX=/usr/lib/llvm-12` to your `~/.bashrc` or equivalent file for your shell.
+Add `export LLVM_SYS_130_PREFIX=/usr/lib/llvm-13` to your `~/.bashrc` or equivalent file for your shell.
 
 ### LLVM installation on macOS
 
@@ -178,20 +170,29 @@ export CPPFLAGS="-I/usr/local/opt/llvm/include"
 
 ### LLVM installation on Windows
 
-Installing LLVM's prebuilt binaries doesn't seem to be enough for the `llvm-sys` crate that Roc depends on, so I had to build LLVM from source
-on Windows. After lots of help from [**@IanMacKenzie**](https://github.com/IanMacKenzie) (thank you, Ian!), here's what worked for me:
+**Warning** While `cargo build` works on windows, linking roc programs does not yet, see issue #2608. This also means the repl, the editor and many tests will not work on windows.
+Installing LLVM's prebuilt binaries doesn't seem to be enough for the `llvm-sys` crate that Roc depends on, so I had to follow the steps below:
 
-1. I downloaded and installed [Build Tools for Visual Studio 2019](https://visualstudio.microsoft.com/thank-you-downloading-visual-studio/?sku=BuildTools&rel=16) (a full Visual Studio install should work tool; the Build Tools are just the CLI tools, which is all I wanted)
-1. In the installation configuration, under "additional components" I had to check both "C++ ATL for latest v142 build tools (x86 & x64)" and also "C++/CLI support for v142 build tools" [note: as of September 2021 this should no longer be necessary - the next time anyone tries this, please try it without this step and make a PR to delete this step if it's no longer needed!]
-1. I launched the "x64 Native Tools Command Prompt for Visual Studio 2019" application (note: not the similarly-named "x86" one!)
-1. Make sure [Python 2.7](https://www.python.org/) and [CMake 3.17](http://cmake.org/) are installed on your system.
-1. I followed most of the steps under LLVM's [building from source instructions](https://github.com/llvm/llvm-project#getting-the-source-code-and-building-llvm) up to the `cmake -G ...` command, which didn't work for me. Instead, at that point I did the following step.
-1. I ran `cmake -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release ../llvm` to generate a NMake makefile.
-1. Once that completed, I ran `nmake` to build LLVM. (This took about 2 hours on my laptop.)
-1. Finally, I set an environment variable `LLVM_SYS_100_PREFIX` to point to the `build` directory where I ran the `cmake` command.
+1. I downloaded and installed [Build Tools for Visual Studio 2019](https://visualstudio.microsoft.com/thank-you-downloading-visual-studio/?sku=BuildTools&rel=16) (a full Visual Studio install should work too; the Build Tools are just the CLI tools, which is all I wanted)
+1. Download the custom LLVM 7z archive [here](https://github.com/PLC-lang/llvm-package-windows/releases/tag/v13.0.0).
+1. [Download 7-zip](https://www.7-zip.org/) to be able to extract this archive.
+1. Extract the 7z file to where you want to permanently keep the folder.
+1. In powershell, set the `LLVM_SYS_130_PREFIX` environment variable (check [here](https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables?view=powershell-7.2#saving-changes-to-environment-variables) to make this a permanent environment variable):
+```
+[Environment]::SetEnvironmentVariable(
+   "Path",
+   [Environment]::GetEnvironmentVariable("Path", "User") + ";C:\Users\anton\Downloads\LLVM-13.0.0-win64\bin",
+   "User"
+)
+```
 
 
-Once all that was done, `cargo` ran successfully for Roc!
+Once all that was done, `cargo build` ran successfully for Roc!
+
+### Build speed on WSL/WSL2
+
+If your Roc project folder is in the Windows filesystem but you're compiling from Linux, rebuilds may be as much as 20x slower than they should be!
+Disk access during linking seems to be the bottleneck. It's recommended to move your folder to the Linux filesystem.
 
 ## Use LLD for the linker
 
@@ -207,8 +208,8 @@ Create `~/.cargo/config.toml` if it does not exist and add this to it:
 rustflags = ["-C", "link-arg=-fuse-ld=lld", "-C", "target-cpu=native"]
 ```
 
-Then install `lld` version 12 (e.g. with `$ sudo apt-get install lld-12`)
+Then install `lld` version 13 (e.g. with `$ sudo apt-get install lld-13`)
 and add make sure there's a `ld.lld` executable on your `PATH` which
-is symlinked to `lld-12`.
+is symlinked to `lld-13`.
 
 That's it! Enjoy the faster builds.

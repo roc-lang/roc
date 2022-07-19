@@ -5,9 +5,11 @@ zig-cache
 .envrc
 *.rs.bk
 *.o
+*.obj
 *.tmp
+*.wasm
 
-# llvm human-readable output 
+# llvm human-readable output
 *.ll
 *.bc
 
@@ -18,6 +20,9 @@ vgcore.*
 .idea/
 .vscode/
 .ignore
+.exrc
+.vimrc
+.nvimrc
 
 #files too big to track in git
 editor/benches/resources/100000_lines.roc
@@ -42,3 +47,11 @@ earthly_log.txt
 
 # created to test release
 roc_linux_x86_64.tar.gz
+
+# macOS .DS_Store files
+.DS_Store
+
+# files geneated when formatting fails
+*.roc-format-failed
+*.roc-format-failed-ast-after
+*.roc-format-failed-ast-before

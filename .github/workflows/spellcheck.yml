@@ -2,13 +2,17 @@ on: [pull_request]
 
 name: SpellCheck
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   RUST_BACKTRACE: 1
 
 jobs:
   spell-check:
     name: spell check
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, linux]
     timeout-minutes: 10
     env:
       FORCE_COLOR: 1

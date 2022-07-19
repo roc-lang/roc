@@ -1,0 +1,23 @@
+Hosted {
+    header: HostedHeader {
+        name: @7-10 ModuleName(
+            "Foo",
+        ),
+        exposes: [],
+        imports: [],
+        generates: UppercaseIdent(
+            "Bar",
+        ),
+        generates_with: [],
+        before_header: [],
+        after_hosted_keyword: [],
+        before_exposes: [],
+        after_exposes: [],
+        before_imports: [],
+        after_imports: [],
+        before_generates: [],
+        after_generates: [],
+        before_with: [],
+        after_with: [],
+    },
+}

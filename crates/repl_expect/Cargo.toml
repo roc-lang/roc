@@ -1,0 +1,26 @@
+[package]
+name = "roc_repl_expect"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bumpalo = {version = "3.8.0", features = ["collections"]}
+target-lexicon = "0.12.2"
+
+roc_builtins = {path = "../compiler/builtins"}
+roc_collections = {path = "../compiler/collections"}
+roc_load = {path = "../compiler/load"}
+roc_mono = {path = "../compiler/mono"}
+roc_parse = {path = "../compiler/parse"}
+roc_module = {path = "../compiler/module"}
+roc_repl_eval = {path = "../repl_eval"}
+roc_reporting = {path = "../reporting"}
+roc_std = {path = "../roc_std", default-features = false}
+roc_target = {path = "../compiler/roc_target"}
+roc_types = {path = "../compiler/types"}
+
+[lib]
+name = "roc_repl_expect"
+path = "src/lib.rs"

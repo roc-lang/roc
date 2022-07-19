@@ -1,4 +1,4 @@
-use clap::{AppSettings, Clap};
+use clap::Parser;
 use data_encoding::HEXUPPER;
 use is_executable::IsExecutable;
 use regex::Regex;
@@ -65,7 +65,7 @@ fn finish(all_regressed_benches: HashSet<String>, nr_repeat_benchmarks: usize) {
             r#"
 
     FAILED: The following benchmarks have shown a regression {:?} times: {:?}
-    
+
     "#,
             nr_repeat_benchmarks, all_regressed_benches
         );
@@ -160,8 +160,7 @@ fn remove(file_or_folder: &str) {
         .unwrap_or_else(|_| panic!("Something went wrong trying to remove {}", file_or_folder));
 }
 
-#[derive(Clap)]
-#[clap(setting = AppSettings::ColoredHelp)]
+#[derive(Parser)]
 struct OptionalArgs {
     /// How many times to repeat the benchmarks. A single benchmark has to fail every for a regression to be reported.
     #[clap(long, default_value = "3")]

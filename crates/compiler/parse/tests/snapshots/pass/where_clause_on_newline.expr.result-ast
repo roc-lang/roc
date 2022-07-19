@@ -1,0 +1,64 @@
+Defs(
+    Defs {
+        tags: [
+            Index(2147483648),
+        ],
+        regions: [
+            @0-29,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Annotation(
+                @0-1 Identifier(
+                    "f",
+                ),
+                @4-29 Where(
+                    @4-12 SpaceBefore(
+                        Function(
+                            [
+                                @4-5 BoundVariable(
+                                    "a",
+                                ),
+                            ],
+                            @9-12 Apply(
+                                "",
+                                "U64",
+                                [],
+                            ),
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                    [
+                        @19-29 HasClause {
+                            var: @19-20 "a",
+                            ability: @25-29 Apply(
+                                "",
+                                "Hash",
+                                [],
+                            ),
+                        },
+                    ],
+                ),
+            ),
+        ],
+    },
+    @31-32 SpaceBefore(
+        Var {
+            module_name: "",
+            ident: "f",
+        },
+        [
+            Newline,
+            Newline,
+        ],
+    ),
+)

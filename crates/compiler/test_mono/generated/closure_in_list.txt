@@ -1,0 +1,20 @@
+procedure List.6 (#Attr.2):
+    let List.295 : U64 = lowlevel ListLen #Attr.2;
+    ret List.295;
+
+procedure Test.1 (Test.5):
+    let Test.2 : I64 = 41i64;
+    let Test.10 : {I64} = Struct {Test.2};
+    let Test.9 : List {I64} = Array [Test.10];
+    ret Test.9;
+
+procedure Test.3 (Test.8, #Attr.12):
+    let Test.2 : I64 = StructAtIndex 0 #Attr.12;
+    ret Test.2;
+
+procedure Test.0 ():
+    let Test.7 : {} = Struct {};
+    let Test.4 : List {I64} = CallByName Test.1 Test.7;
+    let Test.6 : U64 = CallByName List.6 Test.4;
+    dec Test.4;
+    ret Test.6;

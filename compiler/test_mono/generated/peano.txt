@@ -1,6 +1,0 @@
-procedure Test.0 ():
-    let Test.10 = Z ;
-    let Test.9 = S Test.10;
-    let Test.8 = S Test.9;
-    let Test.2 = S Test.8;
-    ret Test.2;
