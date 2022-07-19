@@ -31,6 +31,11 @@ impl Wasm32Sized for () {
     const ALIGN_OF_WASM: usize = 0;
 }
 
+impl Wasm32Sized for std::convert::Infallible {
+    const SIZE_OF_WASM: usize = 0;
+    const ALIGN_OF_WASM: usize = 0;
+}
+
 impl Wasm32Sized for RocStr {
     const SIZE_OF_WASM: usize = 12;
     const ALIGN_OF_WASM: usize = 4;

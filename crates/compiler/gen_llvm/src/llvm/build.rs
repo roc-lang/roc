@@ -56,7 +56,8 @@ use roc_mono::ir::{
     ModifyRc, OptLevel, ProcLayout,
 };
 use roc_mono::layout::{
-    Builtin, CapturesNiche, LambdaName, LambdaSet, Layout, LayoutIds, TagIdIntType, UnionLayout,
+    Builtin, CapturesNiche, LambdaName, LambdaSet, Layout, LayoutIds, RawFunctionLayout,
+    TagIdIntType, UnionLayout,
 };
 use roc_std::RocDec;
 use roc_target::{PtrWidth, TargetInfo};
@@ -4707,7 +4708,92 @@ fn build_proc_header<'a, 'ctx, 'env>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn build_closure_caller<'a, 'ctx, 'env>(
+fn expose_alias_to_host<'a, 'ctx, 'env>(
+    env: &'a Env<'a, 'ctx, 'env>,
+    mod_solutions: &'a ModSolutions,
+    proc_name: LambdaName,
+    alias_symbol: Symbol,
+    exposed_function_symbol: Symbol,
+    top_level: ProcLayout<'a>,
+    layout: RawFunctionLayout<'a>,
+) {
+    let ident_string = proc_name.name().as_str(&env.interns);
+    let fn_name: String = format!("{}_1", ident_string);
+
+    match layout {
+        RawFunctionLayout::Function(arguments, closure, result) => {
+            // define closure size and return value size, e.g.
+            //
+            // * roc__mainForHost_1_Update_size() -> i64
+            // * roc__mainForHost_1_Update_result_size() -> i64
+
+            let it = top_level.arguments.iter().copied();
+            let bytes = roc_alias_analysis::func_name_bytes_help(
+                exposed_function_symbol,
+                it,
+                CapturesNiche::no_niche(),
+                &top_level.result,
+            );
+            let func_name = FuncName(&bytes);
+            let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
+
+            let mut it = func_solutions.specs();
+            let evaluator = match it.next() {
+                Some(func_spec) => {
+                    debug_assert!(
+                        it.next().is_none(),
+                        "we expect only one specialization of this symbol"
+                    );
+
+                    function_value_by_func_spec(
+                        env,
+                        *func_spec,
+                        exposed_function_symbol,
+                        top_level.arguments,
+                        CapturesNiche::no_niche(),
+                        &top_level.result,
+                    )
+                }
+                None => {
+                    // morphic did not generate a specialization for this function,
+                    // therefore it must actually be unused.
+                    // An example is our closure callers
+                    panic!("morphic did not specialize {:?}", exposed_function_symbol);
+                }
+            };
+
+            build_closure_caller(
+                env,
+                &fn_name,
+                evaluator,
+                alias_symbol,
+                arguments,
+                result,
+                closure,
+                result,
+            )
+        }
+
+        RawFunctionLayout::ZeroArgumentThunk(result) => {
+            // Define only the return value size, since this is a thunk
+            //
+            // * roc__mainForHost_1_Update_result_size() -> i64
+
+            let result_type = basic_type_from_layout(env, &result);
+
+            build_host_exposed_alias_size_help(
+                env,
+                &fn_name,
+                alias_symbol,
+                Some("result"),
+                result_type,
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_closure_caller<'a, 'ctx, 'env>(
     env: &'a Env<'a, 'ctx, 'env>,
     def_name: &str,
     evaluator: FunctionValue<'ctx>,
@@ -4899,69 +4985,32 @@ pub fn build_proc<'a, 'ctx, 'env>(
     fn_val: FunctionValue<'ctx>,
 ) {
     use roc_mono::ir::HostExposedLayouts;
-    use roc_mono::layout::RawFunctionLayout;
-    let copy = proc.host_exposed_layouts.clone();
-    match copy {
+
+    match &proc.host_exposed_layouts {
         HostExposedLayouts::NotHostExposed => {}
-        HostExposedLayouts::HostExposed { rigids: _, aliases } => {
-            for (name, (symbol, top_level, layout)) in aliases {
-                match layout {
-                    RawFunctionLayout::Function(arguments, closure, result) => {
-                        // define closure size and return value size, e.g.
-                        //
-                        // * roc__mainForHost_1_Update_size() -> i64
-                        // * roc__mainForHost_1_Update_result_size() -> i64
+        HostExposedLayouts::HostExposed { aliases, .. } => {
+            use LlvmBackendMode::*;
 
-                        let it = top_level.arguments.iter().copied();
-                        let bytes = roc_alias_analysis::func_name_bytes_help(
-                            symbol,
-                            it,
-                            CapturesNiche::no_niche(),
-                            &top_level.result,
-                        );
-                        let func_name = FuncName(&bytes);
-                        let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
-
-                        let mut it = func_solutions.specs();
-                        let evaluator = match it.next() {
-                            Some(func_spec) => {
-                                debug_assert!(
-                                    it.next().is_none(),
-                                    "we expect only one specialization of this symbol"
-                                );
-
-                                function_value_by_func_spec(
-                                    env,
-                                    *func_spec,
-                                    symbol,
-                                    top_level.arguments,
-                                    CapturesNiche::no_niche(),
-                                    &top_level.result,
-                                )
-                            }
-                            None => {
-                                // morphic did not generate a specialization for this function,
-                                // therefore it must actually be unused.
-                                // An example is our closure callers
-                                panic!("morphic did not specialize {:?}", symbol);
-                            }
-                        };
-
-                        let ident_string = proc.name.name().as_str(&env.interns);
-                        let fn_name: String = format!("{}_1", ident_string);
-
-                        build_closure_caller(
-                            env, &fn_name, evaluator, name, arguments, result, closure, result,
+            match env.mode {
+                GenTest | WasmGenTest | CliTest => {
+                    /* no host, or exposing types is not supported */
+                }
+                Binary => {
+                    for (alias_name, (generated_function, top_level, layout)) in aliases.iter() {
+                        expose_alias_to_host(
+                            env,
+                            mod_solutions,
+                            proc.name,
+                            *alias_name,
+                            *generated_function,
+                            *top_level,
+                            *layout,
                         )
-                    }
-
-                    RawFunctionLayout::ZeroArgumentThunk(_) => {
-                        // do nothing
                     }
                 }
             }
         }
-    }
+    };
 
     let args = proc.args;
     let context = &env.context;
