@@ -20,7 +20,6 @@ Movie : {
     cast : List Str,
 }
 
-exclaim : Str -> Str
 exclaim = \title ->
     if Str.endsWith title "!" then
         title
@@ -28,7 +27,6 @@ exclaim = \title ->
         "\(title)!"
 
 
-movieFromLine : Str -> Result Movie [InvalidLine Str]*
 movieFromLine = \line ->
     if Str.isEmpty line then
         Err (InvalidLine "")
@@ -44,7 +42,6 @@ movieFromLine = \line ->
 
         Result.mapErr result \_ -> InvalidLine line
 
-getMovies : Url -> Task (List Movie) (HttpErr [InvalidLine Str]*) [Net]*
 getMovies = \url ->
     response <- Http.getUtf8 url |> Task.await
 
@@ -53,7 +50,6 @@ getMovies = \url ->
     |> List.mapTry movieFromLine
     |> Task.fromResult
 
-writeOutput : List Movie -> Task {} (FileWriteErr *) [Write [Disk]*]*
 writeOutput = \movies ->
     path = Path.fromStr "output.json"
 
@@ -66,7 +62,6 @@ writeOutput = \movies ->
 
     File.write path json Json.toUtf8
 
-main : Task.Task {} [] [Write [Stdout, Disk], Net, Env]
 main =
     task =
         apiKey <- Env.varUtf8 "API_KEY" |> Task.await
