@@ -66,7 +66,7 @@ writeOutput = \movies ->
 
     File.write path json Json.toUtf8
 
-main : Task.Task {} [] [Write [Stdout, Disk], Net, Env]
+main : Task.Task {} [] [Write [Stdout, Stderr, Disk], Net, Env]
 main =
     task =
         apiKey <- Env.varUtf8 "API_KEY" |> Task.await
@@ -81,7 +81,6 @@ main =
             Err (HttpErr _) -> Stderr.line "Error reading from URL"
             Err (FileWriteErr _) -> Stderr.line "Error writing to file"
             Err (InvalidLine line) -> Stderr.line "The following line in the response was malformed:\n\(line)"
-            Err _ -> Stderr.line "Error!"
 
 expect exclaim "ha!" == "ha!"
 

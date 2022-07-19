@@ -26,7 +26,7 @@ interface Http
     ]
 
 HttpErr a : [
-    HttpGetErr [
+    HttpErr [
         NotFound Url,
         Timeout Url,
     ]
