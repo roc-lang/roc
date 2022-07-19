@@ -5014,11 +5014,11 @@ fn build_pending_specializations<'a>(
                     is_self_recursive: false,
                 };
 
-                // TODO use the region of the preceding comment (stored as the Symbol's regino)
-                // let name_region = declarations.symbols[index].region;
-                // let expr_region = declarations.expressions[index].region;
-                // let region = Region::span_across(&name_region, &expr_region);
-                let region = declarations.expressions[index].region;
+                // extend the region of the expect expression with the region of the preceding
+                // comment, so it is shown in failure/panic messages
+                let name_region = declarations.symbols[index].region;
+                let expr_region = declarations.expressions[index].region;
+                let region = Region::span_across(&name_region, &expr_region);
 
                 toplevel_expects.insert(symbol, region);
                 procs_base.partial_procs.insert(symbol, proc);
