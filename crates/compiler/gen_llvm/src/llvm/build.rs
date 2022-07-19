@@ -3955,7 +3955,7 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
         CCReturn::ByPointer => {
             let out_ptr = c_function.get_nth_param(0).unwrap().into_pointer_value();
 
-            env.builder.build_store(out_ptr, value);
+            store_roc_value(env, return_layout, out_ptr, value);
             env.builder.build_return(None);
         }
         CCReturn::Void => {
