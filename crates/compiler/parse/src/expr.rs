@@ -626,6 +626,21 @@ fn parse_defs_end<'a>(
                         let end = loc_def_expr.region.end();
                         let region = Region::new(start, end);
 
+                        // drop newlines before the preceding comment
+                        let spaces_before_start = spaces_before_current_start.offset as usize;
+                        let spaces_before_end = start.offset as usize;
+                        let mut spaces_before_current_start = spaces_before_current_start;
+
+                        for byte in &state.original_bytes()[spaces_before_start..spaces_before_end]
+                        {
+                            match byte {
+                                b' ' | b'\n' => {
+                                    spaces_before_current_start.offset += 1;
+                                }
+                                _ => break,
+                            }
+                        }
+
                         let preceding_comment = Region::new(spaces_before_current_start, start);
 
                         let value_def = ValueDef::Expect {
