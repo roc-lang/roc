@@ -175,6 +175,7 @@ pub enum DestructType {
     Guard(Variable, Loc<Pattern>),
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn canonicalize_def_header_pattern<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,

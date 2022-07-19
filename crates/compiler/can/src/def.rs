@@ -611,19 +611,17 @@ fn canonicalize_opaque<'a>(
                     ability_name: ability,
                     impls: impl_map,
                 });
+            } else if ability.is_builtin_ability() {
+                derived_abilities.push(Loc::at(region, ability));
+                supported_abilities.push(OpaqueSupports::Derived(ability));
             } else {
-                if ability.is_builtin_ability() {
-                    derived_abilities.push(Loc::at(region, ability));
-                    supported_abilities.push(OpaqueSupports::Derived(ability));
-                } else {
-                    // There was no record specified of functions to use for
-                    // members, but also this isn't a builtin ability, so we don't
-                    // know how to auto-derive it.
-                    //
-                    // Register the problem but keep going, we may still be able to compile the
-                    // program even if a derive is missing.
-                    env.problem(Problem::IllegalClaimedAbility(region));
-                }
+                // There was no record specified of functions to use for
+                // members, but also this isn't a builtin ability, so we don't
+                // know how to auto-derive it.
+                //
+                // Register the problem but keep going, we may still be able to compile the
+                // program even if a derive is missing.
+                env.problem(Problem::IllegalClaimedAbility(region));
             }
         }
 
@@ -693,14 +691,11 @@ pub(crate) fn canonicalize_defs<'a>(
         if let Ok(type_index) = either_index.split() {
             let type_def = &loc_defs.type_defs[type_index.index()];
             let pending_type_def = to_pending_type_def(env, type_def, scope, pattern_type);
-            match &pending_type_def {
-                PendingTypeDef::Ability { name, members } => {
-                    pending_abilities_in_scope.insert(
-                        name.value,
-                        members.iter().map(|mem| mem.name.value).collect(),
-                    );
-                }
-                _ => {}
+            if let PendingTypeDef::Ability { name, members } = &pending_type_def {
+                pending_abilities_in_scope.insert(
+                    name.value,
+                    members.iter().map(|mem| mem.name.value).collect(),
+                );
             }
             pending_type_defs.push(pending_type_def);
         }
@@ -714,7 +709,7 @@ pub(crate) fn canonicalize_defs<'a>(
             let pending = to_pending_value_def(
                 env,
                 var_store,
-                &value_def,
+                value_def,
                 scope,
                 &pending_abilities_in_scope,
                 &mut output,
