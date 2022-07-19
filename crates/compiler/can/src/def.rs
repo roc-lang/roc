@@ -586,6 +586,8 @@ fn canonicalize_opaque<'a>(
             if let Some(impls) = opt_impls {
                 let mut impl_map: VecMap<Symbol, Loc<Symbol>> = VecMap::default();
 
+                // First up canonicalize all the claimed implementations, building a map of ability
+                // member -> implementation.
                 for loc_impl in impls.extract_spaces().item.items {
                     let (member, impl_symbol) =
                         match canonicalize_claimed_ability_impl(env, scope, ability, loc_impl) {
