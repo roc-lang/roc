@@ -1216,15 +1216,15 @@ fn to_expr_report<'b>(
                     region,
                     Some(expr_region),
                     alloc.concat([
-                        alloc.string(format!("The {ith} argument to ")),
+                        alloc.string(format!("This {ith} argument to ")),
                         this_function.clone(),
-                        alloc.text(" is not what I expect:"),
+                        alloc.text(" has an unexpected type:"),
                     ]),
-                    alloc.text("This argument is"),
+                    alloc.text("The argument is"),
                     alloc.concat([
                         alloc.text("But "),
                         this_function,
-                        alloc.string(format!(" needs the {ith} argument to be:")),
+                        alloc.string(format!(" needs its {ith} argument to be:")),
                     ]),
                     None,
                 )
