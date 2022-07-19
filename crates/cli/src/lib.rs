@@ -444,7 +444,13 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
                 println!();
             } else if buffer.iter().any(|b| *b != 0) {
                 failed += 1;
-                render_expect_failure(arena, &mut expectations, interns, shared_memory_ptr);
+                render_expect_failure(
+                    arena,
+                    Some(expect),
+                    &mut expectations,
+                    interns,
+                    shared_memory_ptr,
+                );
                 println!();
             } else {
                 passed += 1;
@@ -1011,7 +1017,13 @@ unsafe fn roc_run_native_debug(
 
                         let shared_memory_ptr: *const u8 = shared_ptr.cast();
 
-                        render_expect_failure(arena, &mut expectations, interns, shared_memory_ptr);
+                        render_expect_failure(
+                            arena,
+                            None,
+                            &mut expectations,
+                            interns,
+                            shared_memory_ptr,
+                        );
                     }
                     _ => println!("received signal {}", sig),
                 }
@@ -1074,6 +1086,7 @@ fn render_expect_panic<'a>(
 
 fn render_expect_failure<'a>(
     arena: &'a Bump,
+    expect: Option<ToplevelExpect>,
     expectations: &mut VecMap<ModuleId, Expectations>,
     interns: &'a Interns,
     start: *const u8,
@@ -1102,7 +1115,11 @@ fn render_expect_failure<'a>(
     let src_lines: Vec<_> = file_string.lines().collect();
 
     let line_info = roc_region::all::LineInfo::new(&file_string);
-    let line_col_region = line_info.convert_region(region);
+    let display_region = match expect {
+        Some(expect) => Region::span_across(&expect.region, &region),
+        None => region,
+    };
+    let line_col_region = line_info.convert_region(display_region);
 
     let alloc = RocDocAllocator::new(&src_lines, module_id, interns);
 
