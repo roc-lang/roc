@@ -23,7 +23,7 @@ fn hash_specialization() {
             Hash has
                 hash : a -> U64 | a has Hash
 
-            Id := U64
+            Id := U64 has [Hash {hash}]
 
             hash = \@Id n -> n
 
@@ -73,7 +73,7 @@ fn alias_member_specialization() {
             Hash has
                 hash : a -> U64 | a has Hash
 
-            Id := U64
+            Id := U64 has [Hash {hash}]
 
             hash = \@Id n -> n
 
@@ -101,7 +101,7 @@ fn ability_constrained_in_non_member_usage() {
             mulHashes : a, a -> U64 | a has Hash
             mulHashes = \x, y -> hash x * hash y
 
-            Id := U64
+            Id := U64 has [Hash {hash}]
             hash = \@Id n -> n
 
             result = mulHashes (@Id 5) (@Id 7)
@@ -125,7 +125,7 @@ fn ability_constrained_in_non_member_usage_inferred() {
 
             mulHashes = \x, y -> hash x * hash y
 
-            Id := U64
+            Id := U64 has [Hash {hash}]
             hash = \@Id n -> n
 
             result = mulHashes (@Id 5) (@Id 7)
@@ -242,14 +242,12 @@ fn encode() {
             toBytes = \val, fmt -> appendWith [] (toEncoder val) fmt
 
 
-            Linear := {}
+            Linear := {} has [Format {u8}]
 
-            # impl Format for Linear
             u8 = \n -> @Encoder (\lst, @Linear {} -> List.append lst n)
 
-            Rgba := { r : U8, g : U8, b : U8, a : U8 }
+            Rgba := { r : U8, g : U8, b : U8, a : U8 } has [Encoding {toEncoder}]
 
-            # impl Encoding for Rgba
             toEncoder = \@Rgba {r, g, b, a} ->
                 @Encoder \lst, fmt -> lst
                     |> appendWith (u8 r) fmt
@@ -297,15 +295,14 @@ fn decode() {
                             else Err (Leftover rest)
 
 
-            Linear := {}
+            Linear := {} has [DecoderFormatting {u8}]
 
-            # impl DecoderFormatting for Linear
             u8 = @Decoder \lst, @Linear {} ->
                     when List.first lst is
                         Ok n -> { result: Ok n, rest: List.dropFirst lst }
                         Err _ -> { result: Err TooShort, rest: [] }
 
-            MyU8 := U8
+            MyU8 := U8 has [Decoding {decoder}]
 
             # impl Decoding for MyU8
             decoder = @Decoder \lst, fmt ->
@@ -330,10 +327,10 @@ fn encode_use_stdlib() {
         indoc!(
             r#"
             app "test"
-                imports [Encode.{ toEncoder }, Json]
+                imports [Encode.{ Encoding, toEncoder }, Json]
                 provides [main] to "./platform"
 
-            HelloWorld := {}
+            HelloWorld := {} has [Encoding {toEncoder}]
             toEncoder = \@HelloWorld {} ->
                 Encode.custom \bytes, fmt ->
                     bytes
@@ -358,10 +355,10 @@ fn encode_use_stdlib_without_wrapping_custom() {
         indoc!(
             r#"
             app "test"
-                imports [Encode.{ toEncoder }, Json]
+                imports [Encode.{ Encoding, toEncoder }, Json]
                 provides [main] to "./platform"
 
-            HelloWorld := {}
+            HelloWorld := {} has [Encoding {toEncoder}]
             toEncoder = \@HelloWorld {} -> Encode.string "Hello, World!\n"
 
             main =
@@ -383,10 +380,10 @@ fn to_encoder_encode_custom_has_capture() {
         indoc!(
             r#"
             app "test"
-                imports [Encode.{ toEncoder }, Json]
+                imports [Encode.{ Encoding, toEncoder }, Json]
                 provides [main] to "./platform"
 
-            HelloWorld := Str
+            HelloWorld := Str has [Encoding {toEncoder}]
             toEncoder = \@HelloWorld s1 ->
                 Encode.custom \bytes, fmt ->
                     bytes
