@@ -733,7 +733,7 @@ fn canonicalize_opaque<'a>(
                         .map(|(member, def)| (member, def.value))
                         .collect(),
                 });
-            } else if ability.is_builtin_ability() {
+            } else if ability.is_derivable_ability() {
                 derived_abilities.push(Loc::at(region, ability));
                 supported_abilities.push(OpaqueSupports::Derived(ability));
             } else {

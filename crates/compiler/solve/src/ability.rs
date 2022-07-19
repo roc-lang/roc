@@ -86,7 +86,7 @@ impl PendingDerivesTable {
             } in derives
             {
                 debug_assert!(
-                    ability.is_builtin_ability(),
+                    ability.is_derivable_ability(),
                     "Not a builtin - should have been caught during can"
                 );
                 let derive_key = RequestedDeriveKey { opaque, ability };

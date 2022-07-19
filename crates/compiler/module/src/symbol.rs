@@ -47,7 +47,8 @@ const SYMBOL_HAS_NICHE: () =
 #[cfg(debug_assertions)]
 const PRETTY_PRINT_DEBUG_SYMBOLS: bool = true;
 
-pub const BUILTIN_ABILITIES: &[Symbol] = &[Symbol::ENCODE_ENCODING];
+pub const DERIVABLE_ABILITIES: &[(Symbol, &[Symbol])] =
+    &[(Symbol::ENCODE_ENCODING, &[Symbol::ENCODE_TO_ENCODER])];
 
 /// In Debug builds only, Symbol has a name() method that lets
 /// you look up its name in a global intern table. This table is
@@ -86,8 +87,12 @@ impl Symbol {
         self.module_id().is_builtin()
     }
 
-    pub fn is_builtin_ability(self) -> bool {
-        BUILTIN_ABILITIES.contains(&self)
+    pub fn is_derivable_ability(self) -> bool {
+        self.derivable_ability().is_some()
+    }
+
+    pub fn derivable_ability(self) -> Option<&'static (Symbol, &'static [Symbol])> {
+        DERIVABLE_ABILITIES.iter().find(|(name, _)| *name == self)
     }
 
     pub fn module_string<'a>(&self, interns: &'a Interns) -> &'a ModuleName {
