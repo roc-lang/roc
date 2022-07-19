@@ -6460,10 +6460,13 @@ impl<'ctx> FunctionSpec<'ctx> {
             let sret_attribute_id = Attribute::get_named_enum_kind_id("sret");
             debug_assert!(sret_attribute_id > 0);
             let ret_typ = self.typ.get_param_types()[param_index as usize];
-            // ret_typ is a pointer type. We need the base type here.
-            let ret_base_typ = ret_typ.into_pointer_type().get_element_type();
-            let sret_attribute =
-                ctx.create_type_attribute(sret_attribute_id, ret_base_typ.as_any_type_enum());
+            // if ret_typ is a pointer type. We need the base type here.
+            let ret_base_typ = if ret_typ.is_pointer_type() {
+                ret_typ.into_pointer_type().get_element_type()
+            } else {
+                ret_typ.as_any_type_enum()
+            };
+            let sret_attribute = ctx.create_type_attribute(sret_attribute_id, ret_base_typ);
             fn_val.add_attribute(AttributeLoc::Param(0), sret_attribute);
         }
     }
