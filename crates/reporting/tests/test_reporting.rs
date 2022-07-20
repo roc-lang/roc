@@ -8413,17 +8413,28 @@ All branches in an `if` must have the same type!
             eq = \@Id m, @Id n -> m == n
             "#
         ),
-        @r#"
-        ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-        The type `Id` does not fully implement the ability `Eq`. The following
-        specializations are missing:
+    This type does not fully implement the `Eq` ability:
 
-        A specialization for `le`, which is defined here:
+    7│  Id := U64 has [Eq {eq}]
+                       ^^^^^^^
 
-        5│      le : a, a -> Bool | a has Eq
-                ^^
-        "#
+    The following necessary members are missing implementations:
+
+        le
+
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    The type `Id` does not fully implement the ability `Eq`. The following
+    specializations are missing:
+
+    A specialization for `le`, which is defined here:
+
+    5│      le : a, a -> Bool | a has Eq
+            ^^
+    "###
     );
 
     test_report!(
@@ -9175,6 +9186,17 @@ All branches in an `if` must have the same type!
     Tip: consider adding a value of name `eq` in this scope, or using
     another variable that implements this ability member, like
     { eq: myeq }
+
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    This type does not fully implement the `Eq` ability:
+
+    5│  A := U8 has [Eq {eq}]
+                     ^^^^^^^
+
+    The following necessary members are missing implementations:
+
+        eq
     "###
     );
 
@@ -9205,6 +9227,17 @@ All branches in an `if` must have the same type!
         myEq
         eq
         U8
+
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    This type does not fully implement the `Eq` ability:
+
+    5│  A := U8 has [ Eq {eq: aEq} ]
+                      ^^^^^^^^^^^^
+
+    The following necessary members are missing implementations:
+
+        eq
     "###
     );
 
@@ -9232,6 +9265,17 @@ All branches in an `if` must have the same type!
     Custom implementations must be supplied fully.
 
 
+
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    This type does not fully implement the `Eq` ability:
+
+    5│  A := U8 has [ Eq {eq ? aEq} ]
+                      ^^^^^^^^^^^^^
+
+    The following necessary members are missing implementations:
+
+        eq
     "###
     );
 
@@ -9261,6 +9305,17 @@ All branches in an `if` must have the same type!
     Hint: if you want this implementation to be derived, don't include a
     record of implementations. For example,    has [Encoding] will attempt
     to derive `Encoding`
+
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    This type does not fully implement the `Encoding` ability:
+
+    5│  A := U8 has [ Encoding {toEncoder ? myEncoder} ]
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    The following necessary members are missing implementations:
+
+        toEncoder
     "###
     );
 
@@ -9285,6 +9340,17 @@ All branches in an `if` must have the same type!
 
     Custom implementations must be defined in the local scope, and
     unqualified.
+
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    This type does not fully implement the `Eq` ability:
+
+    5│  A := U8 has [ Eq {eq : Bool.eq} ]
+                      ^^^^^^^^^^^^^^^^^
+
+    The following necessary members are missing implementations:
+
+        eq
     "###
     );
 
@@ -9311,6 +9377,70 @@ All branches in an `if` must have the same type!
     unqualified identifiers, not arbitrary expressions.
 
     Tip: consider defining this expression as a variable.
+
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    This type does not fully implement the `Eq` ability:
+
+    5│  A := U8 has [ Eq {eq : \m, n -> m == n} ]
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    The following necessary members are missing implementations:
+
+        eq
+    "###
+    );
+
+    test_report!(
+        opaque_ability_impl_duplicate,
+        indoc!(
+            r#"
+            app "test" provides [A] to "./platform"
+
+            Eq has eq : a, a -> Bool | a has Eq
+
+            A := U8 has [ Eq {eq: eqA, eq: eqA} ]
+
+            eqA = \@A m, @A n -> m == n
+            "#
+        ),
+        @r###"
+    ── DUPLICATE IMPLEMENTATION ────────────────────────────── /code/proj/Main.roc ─
+
+    This ability member implementation is duplicate:
+
+    5│  A := U8 has [ Eq {eq: eqA, eq: eqA} ]
+                                   ^^^^^^^
+
+    The first implementation was defined here:
+
+    5│  A := U8 has [ Eq {eq: eqA, eq: eqA} ]
+                          ^^^^^^^
+
+    Only one custom implementation can be defined for an ability member.
+    "###
+    );
+
+    test_report!(
+        implements_type_not_ability,
+        indoc!(
+            r#"
+            app "test" provides [A, Foo] to "./platform"
+
+            Foo := {}
+
+            A := U8 has [ Foo {} ]
+            "#
+        ),
+        @r###"
+    ── NOT AN ABILITY ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This identifier is not an ability in scope:
+
+    5│  A := U8 has [ Foo {} ]
+                      ^^^
+
+    Only abilities can be implemented.
     "###
     );
 

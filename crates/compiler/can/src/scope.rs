@@ -1,4 +1,4 @@
-use roc_collections::VecMap;
+use roc_collections::{VecMap, VecSet};
 use roc_module::ident::Ident;
 use roc_module::symbol::{IdentId, IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
@@ -10,7 +10,7 @@ use crate::abilities::PendingAbilitiesStore;
 use bitvec::vec::BitVec;
 
 // ability -> member names
-pub(crate) type PendingAbilitiesInScope = VecMap<Symbol, Vec<Symbol>>;
+pub(crate) type PendingAbilitiesInScope = VecMap<Symbol, VecSet<Symbol>>;
 
 #[derive(Clone, Debug)]
 pub struct Scope {
@@ -31,7 +31,8 @@ pub struct Scope {
     imports: Vec<(Ident, Symbol, Region)>,
 
     /// Shadows of an ability member, for example a local specialization of `eq` for the ability
-    /// member `Eq has eq : a, a -> Bool` gets a shadow symbol it can use for its implementation.
+    /// member `Eq has eq : a, a -> Bool | a has Eq` gets a shadow symbol it can use for its
+    /// implementation.
     ///
     /// Only one shadow of an ability member is permitted per scope.
     shadows: VecMap<Symbol, Loc<Symbol>>,

@@ -6391,7 +6391,7 @@ mod solve_expr {
                             Ok n -> { result: Ok n, rest: List.dropFirst lst }
                             Err _ -> { result: Err TooShort, rest: [] }
 
-                MyU8 := U8 has [Decoder {decoder}]
+                MyU8 := U8 has [Decoding {decoder}]
 
                 decoder = @Decoder \lst, fmt ->
                 #^^^^^^^{-1}
