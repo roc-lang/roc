@@ -266,6 +266,7 @@ pub fn build_app<'a>() -> Command<'a> {
                 .arg(
                     Arg::new(DIRECTORY_OR_FILES)
                         .multiple_values(true)
+                        .allow_invalid_utf8(true)
                         .required(false)
                         .help("(optional) The directory or files to open on launch."),
                 ),
