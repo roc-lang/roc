@@ -458,9 +458,9 @@ pub fn can_problem<'b>(
         } => {
             doc = alloc.stack([
                 alloc.concat([
-                    alloc.reflow("This pattern in the definition of "),
+                    alloc.reflow("This definition of "),
                     alloc.symbol_unqualified(type_name),
-                    alloc.reflow(" is not what I expect:"),
+                    alloc.reflow(" has an unexpected pattern:"),
                 ]),
                 alloc.region(lines.convert_region(region)),
                 alloc.concat([

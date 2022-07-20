@@ -3058,7 +3058,7 @@ mod test_reporting {
         @r###"
     ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    This pattern in the definition of `MyAlias` is not what I expect:
+    This definition of `MyAlias` has an unexpected pattern:
 
     4│      MyAlias 1 : Num.I64
                     ^
@@ -3090,7 +3090,7 @@ mod test_reporting {
         @r###"
     ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    This pattern in the definition of `Age` is not what I expect:
+    This definition of `Age` has an unexpected pattern:
 
     4│      Age 1 := Num.I64
                 ^
