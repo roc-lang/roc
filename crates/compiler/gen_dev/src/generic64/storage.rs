@@ -632,9 +632,9 @@ impl<
         // TODO: This can be optimized. We just need to add the ability to set a stack value to zero or load an immediate to the stack.
         self.with_tmp_general_reg(buf, |_storage_manager, buf, reg| {
             ASM::mov_reg64_imm64(buf, reg, 0);
-            ASM::mov_reg64_base32(buf, reg, base_offset);
-            ASM::mov_reg64_base32(buf, reg, base_offset + 8);
-            ASM::mov_reg64_base32(buf, reg, base_offset + 16);
+            ASM::mov_base32_reg64(buf, base_offset, reg);
+            ASM::mov_base32_reg64(buf, base_offset + 8, reg);
+            ASM::mov_base32_reg64(buf, base_offset + 16, reg);
         });
     }
 
