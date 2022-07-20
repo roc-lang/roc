@@ -126,7 +126,7 @@ pub fn constrain_expr<'a>(
                 region,
             ));
 
-            and_constraints.push(Eq(num_type, expected, Category::Float, region));
+            and_constraints.push(Eq(num_type, expected, Category::Frac, region));
 
             let defs_constraint = And(and_constraints);
 
