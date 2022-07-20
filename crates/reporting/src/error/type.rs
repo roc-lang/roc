@@ -1600,8 +1600,8 @@ fn format_category<'b>(
             alloc.concat([this_is, alloc.text(" an integer")]),
             alloc.text(" of type:"),
         ),
-        Float => (
-            alloc.concat([this_is, alloc.text(" a frac")]),
+        Frac => (
+            alloc.concat([this_is, alloc.text(" a fraction")]),
             alloc.text(" of type:"),
         ),
         Str => (

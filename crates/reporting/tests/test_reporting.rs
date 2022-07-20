@@ -6712,7 +6712,7 @@ All branches in an `if` must have the same type!
                     let bad_type = if $suffix == "u8" { "I8" } else { "U8" };
                     let carets = "^".repeat(number.len() + $suffix.len());
                     let kind = match $suffix {
-                        "dec"|"f32"|"f64" => "a frac",
+                        "dec"|"f32"|"f64" => "a fraction",
                         _ => "an integer",
                     };
 
