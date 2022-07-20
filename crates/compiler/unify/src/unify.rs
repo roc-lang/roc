@@ -5,7 +5,7 @@ use roc_debug_flags::dbg_do;
 use roc_debug_flags::{ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName};
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_types::num::{FloatWidth, IntLitWidth, NumericRange};
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
@@ -755,6 +755,15 @@ fn unify_alias<M: MetaCollector>(
 }
 
 #[inline(always)]
+fn opaque_obligation(opaque: Symbol, opaque_var: Variable) -> Obligated {
+    match opaque.module_id() {
+        // Numbers should be treated as ad-hoc obligations for ability checking.
+        ModuleId::NUM => Obligated::Adhoc(opaque_var),
+        _ => Obligated::Opaque(opaque),
+    }
+}
+
+#[inline(always)]
 fn unify_opaque<M: MetaCollector>(
     subs: &mut Subs,
     pool: &mut Pool,
@@ -772,7 +781,7 @@ fn unify_opaque<M: MetaCollector>(
             // Alias wins
             merge(subs, ctx, Alias(symbol, args, real_var, kind))
         }
-        FlexAbleVar(_, ability) if args.is_empty() => {
+        FlexAbleVar(_, ability) => {
             // Opaque type wins
             merge_flex_able_with_concrete(
                 subs,
@@ -780,7 +789,7 @@ fn unify_opaque<M: MetaCollector>(
                 ctx.second,
                 *ability,
                 Alias(symbol, args, real_var, kind),
-                Obligated::Opaque(symbol),
+                opaque_obligation(symbol, ctx.first),
             )
         }
         Alias(_, _, other_real_var, AliasKind::Structural) => {
@@ -881,15 +890,7 @@ fn unify_structure<M: MetaCollector>(
         RecursionVar { structure, .. } => match flat_type {
             FlatType::TagUnion(_, _) => {
                 // unify the structure with this unrecursive tag union
-                let mut outcome = unify_pool(subs, pool, ctx.first, *structure, ctx.mode);
-
-                if outcome.mismatches.is_empty() {
-                    outcome.union(fix_tag_union_recursion_variable(
-                        subs, ctx, ctx.first, other,
-                    ));
-                }
-
-                outcome
+                unify_pool(subs, pool, ctx.first, *structure, ctx.mode)
             }
             FlatType::RecursiveTagUnion(rec, _, _) => {
                 debug_assert!(is_recursion_var(subs, *rec));
@@ -898,15 +899,7 @@ fn unify_structure<M: MetaCollector>(
             }
             FlatType::FunctionOrTagUnion(_, _, _) => {
                 // unify the structure with this unrecursive tag union
-                let mut outcome = unify_pool(subs, pool, ctx.first, *structure, ctx.mode);
-
-                if outcome.mismatches.is_empty() {
-                    outcome.union(fix_tag_union_recursion_variable(
-                        subs, ctx, ctx.first, other,
-                    ));
-                }
-
-                outcome
+                unify_pool(subs, pool, ctx.first, *structure, ctx.mode)
             }
             // Only tag unions can be recursive; everything else is an error.
             _ => mismatch!(
@@ -1365,57 +1358,6 @@ fn unify_lambda_set_help<M: MetaCollector>(
     let merge_outcome = merge(subs, ctx, new_lambda_set);
     whole_outcome.union(merge_outcome);
     whole_outcome
-}
-
-/// Ensures that a non-recursive tag union, when unified with a recursion var to become a recursive
-/// tag union, properly contains a recursion variable that recurses on itself.
-//
-// When might this not be the case? For example, in the code
-//
-//   Indirect : [Indirect ConsList]
-//
-//   ConsList : [Nil, Cons Indirect]
-//
-//   l : ConsList
-//   l = Cons (Indirect (Cons (Indirect Nil)))
-//   #   ^^^^^^^^^^^^^^^~~~~~~~~~~~~~~~~~~~~~^ region-a
-//   #                  ~~~~~~~~~~~~~~~~~~~~~  region-b
-//   l
-//
-// Suppose `ConsList` has the expanded type `[Nil, Cons [Indirect <rec>]] as <rec>`.
-// After unifying the tag application annotated "region-b" with the recursion variable `<rec>`,
-// the tentative total-type of the application annotated "region-a" would be
-// `<v> = [Nil, Cons [Indirect <v>]] as <rec>`. That is, the type of the recursive tag union
-// would be inlined at the site "v", rather than passing through the correct recursion variable
-// "rec" first.
-//
-// This is not incorrect from a type perspective, but causes problems later on for e.g. layout
-// determination, which expects recursion variables to be placed correctly. Attempting to detect
-// this during layout generation does not work so well because it may be that there *are* recursive
-// tag unions that should be inlined, and not pass through recursion variables. So instead, try to
-// resolve these cases here.
-//
-// See tests labeled "issue_2810" for more examples.
-fn fix_tag_union_recursion_variable<M: MetaCollector>(
-    subs: &mut Subs,
-    ctx: &Context,
-    tag_union_promoted_to_recursive: Variable,
-    recursion_var: &Content,
-) -> Outcome<M> {
-    debug_assert!(matches!(
-        subs.get_content_without_compacting(tag_union_promoted_to_recursive),
-        Structure(FlatType::RecursiveTagUnion(..))
-    ));
-
-    let has_recursing_recursive_variable = subs
-        .occurs_including_recursion_vars(tag_union_promoted_to_recursive)
-        .is_err();
-
-    if !has_recursing_recursive_variable {
-        merge(subs, ctx, *recursion_var)
-    } else {
-        Outcome::default()
-    }
 }
 
 fn unify_record<M: MetaCollector>(
@@ -2088,14 +2030,47 @@ fn unify_shared_tags_new<M: MetaCollector>(
 
             outcome.union(unify_pool(subs, pool, actual, expected, ctx.mode));
 
-            // clearly, this is very suspicious: these variables have just been unified. And yet,
-            // not doing this leads to stack overflows
-            if let Rec::Right(_) = recursion_var {
-                if outcome.mismatches.is_empty() {
-                    matching_vars.push(expected);
-                }
-            } else if outcome.mismatches.is_empty() {
-                matching_vars.push(actual);
+            if outcome.mismatches.is_empty() {
+                // If one of the variables is a recursion var, keep that one, so that we avoid inlining
+                // a recursive tag union type content where we should have a recursion var instead.
+                //
+                // When might this happen? For example, in the code
+                //
+                //   Indirect : [Indirect ConsList]
+                //
+                //   ConsList : [Nil, Cons Indirect]
+                //
+                //   l : ConsList
+                //   l = Cons (Indirect (Cons (Indirect Nil)))
+                //   #   ^^^^^^^^^^^^^^^~~~~~~~~~~~~~~~~~~~~~^ region-a
+                //   #                  ~~~~~~~~~~~~~~~~~~~~~  region-b
+                //   l
+                //
+                // Suppose `ConsList` has the expanded type `[Nil, Cons [Indirect <rec>]] as <rec>`.
+                // After unifying the tag application annotated "region-b" with the recursion variable `<rec>`,
+                // we might have that e.g. `actual` is `<rec>` and `expected` is `[Cons (Indirect ...)]`.
+                //
+                // Now, we need to be careful to set the type we choose to represent the merged type
+                // here to be `<rec>`, not the tag union content of `expected`! Otherwise, we will
+                // have lost a recursion variable in the recursive tag union.
+                //
+                // This would not be incorrect from a type perspective, but causes problems later on for e.g.
+                // layout generation, which expects recursion variables to be placed correctly. Attempting to detect
+                // this during layout generation does not work so well because it may be that there *are* recursive
+                // tag unions that should be inlined, and not pass through recursion variables. So instead, resolve
+                // these cases here.
+                //
+                // See tests labeled "issue_2810" for more examples.
+                let merged_var = match (
+                    (actual, subs.get_content_unchecked(actual)),
+                    (expected, subs.get_content_unchecked(expected)),
+                ) {
+                    ((var, Content::RecursionVar { .. }), _)
+                    | (_, (var, Content::RecursionVar { .. })) => var,
+                    _ => actual,
+                };
+
+                matching_vars.push(merged_var);
             }
 
             total_outcome.union(outcome);
@@ -2562,20 +2537,16 @@ fn unify_flex_able<M: MetaCollector>(
         RecursionVar { .. } => mismatch!("FlexAble with RecursionVar"),
         LambdaSet(..) => mismatch!("FlexAble with LambdaSet"),
 
-        Alias(name, args, _real_var, AliasKind::Opaque) => {
-            if args.is_empty() {
-                // Opaque type wins
-                merge_flex_able_with_concrete(
-                    subs,
-                    ctx,
-                    ctx.first,
-                    ability,
-                    *other,
-                    Obligated::Opaque(*name),
-                )
-            } else {
-                mismatch!("FlexAble vs Opaque with type vars")
-            }
+        Alias(name, _args, _real_var, AliasKind::Opaque) => {
+            // Opaque type wins
+            merge_flex_able_with_concrete(
+                subs,
+                ctx,
+                ctx.first,
+                ability,
+                *other,
+                opaque_obligation(*name, ctx.second),
+            )
         }
 
         Structure(_) | Alias(_, _, _, AliasKind::Structural) | RangedNumber(..) => {

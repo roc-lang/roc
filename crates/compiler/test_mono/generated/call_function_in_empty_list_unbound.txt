@@ -1,6 +1,14 @@
 procedure List.5 (#Attr.2, #Attr.3):
-    Error UnresolvedTypeVar: match_on_closure_argument
+    let List.317 : List [] = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.2 #Attr.3;
+    decref #Attr.2;
+    ret List.317;
+
+procedure Test.2 (Test.3):
+    let Test.7 : {} = Struct {};
+    Error a Lambda Set is empty. Most likely there is a type error in your program.
 
 procedure Test.0 ():
     let Test.1 : List [] = Array [];
-    Error UnresolvedTypeVar: Expr::Closure
+    let Test.5 : {} = Struct {};
+    let Test.4 : List [] = CallByName List.5 Test.1 Test.5;
+    ret Test.4;

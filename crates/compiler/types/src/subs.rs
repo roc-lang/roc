@@ -706,6 +706,12 @@ impl GetSubsSlice<Variable> for Subs {
     }
 }
 
+impl GetSubsSlice<VariableSubsSlice> for Subs {
+    fn get_subs_slice(&self, subs_slice: SubsSlice<VariableSubsSlice>) -> &[VariableSubsSlice] {
+        subs_slice.get_slice(&self.variable_slices)
+    }
+}
+
 impl GetSubsSlice<RecordField<()>> for Subs {
     fn get_subs_slice(&self, subs_slice: SubsSlice<RecordField<()>>) -> &[RecordField<()>] {
         subs_slice.get_slice(&self.record_fields)
@@ -1899,18 +1905,9 @@ impl Subs {
     /// reference chain r -> t1 -> t2 -> r, [occurs] will return `Err(r, [t2, t1, r])`.
     ///
     /// This ignores [Content::RecursionVar]s that occur recursively, because those are
-    /// already priced in and expected to occur. Use [Subs::occurs_including_recursion_vars] if you
-    /// need to check for recursion var occurrence.
+    /// already priced in and expected to occur.
     pub fn occurs(&self, var: Variable) -> Result<(), (Variable, Vec<Variable>)> {
-        occurs(self, &[], var, false)
-    }
-
-    /// Like [Subs::occurs], but also errors when recursion vars occur.
-    pub fn occurs_including_recursion_vars(
-        &self,
-        var: Variable,
-    ) -> Result<(), (Variable, Vec<Variable>)> {
-        occurs(self, &[], var, true)
+        occurs(self, &[], var)
     }
 
     pub fn mark_tag_union_recursive(
@@ -3066,7 +3063,6 @@ fn occurs(
     subs: &Subs,
     seen: &[Variable],
     input_var: Variable,
-    include_recursion_var: bool,
 ) -> Result<(), (Variable, Vec<Variable>)> {
     use self::Content::*;
     use self::FlatType::*;
@@ -3090,53 +3086,34 @@ fn occurs(
                 new_seen.push(root_var);
 
                 match flat_type {
-                    Apply(_, args) => short_circuit(
-                        subs,
-                        root_var,
-                        &new_seen,
-                        subs.get_subs_slice(*args).iter(),
-                        include_recursion_var,
-                    ),
+                    Apply(_, args) => {
+                        short_circuit(subs, root_var, &new_seen, subs.get_subs_slice(*args).iter())
+                    }
                     Func(arg_vars, closure_var, ret_var) => {
                         let it = once(ret_var)
                             .chain(once(closure_var))
                             .chain(subs.get_subs_slice(*arg_vars).iter());
-                        short_circuit(subs, root_var, &new_seen, it, include_recursion_var)
+                        short_circuit(subs, root_var, &new_seen, it)
                     }
                     Record(vars_by_field, ext_var) => {
                         let slice =
                             SubsSlice::new(vars_by_field.variables_start, vars_by_field.length);
                         let it = once(ext_var).chain(subs.get_subs_slice(slice).iter());
-                        short_circuit(subs, root_var, &new_seen, it, include_recursion_var)
+                        short_circuit(subs, root_var, &new_seen, it)
                     }
                     TagUnion(tags, ext_var) => {
-                        occurs_union(subs, root_var, &new_seen, include_recursion_var, tags)?;
+                        occurs_union(subs, root_var, &new_seen, tags)?;
 
-                        short_circuit_help(
-                            subs,
-                            root_var,
-                            &new_seen,
-                            *ext_var,
-                            include_recursion_var,
-                        )
+                        short_circuit_help(subs, root_var, &new_seen, *ext_var)
                     }
                     FunctionOrTagUnion(_, _, ext_var) => {
                         let it = once(ext_var);
-                        short_circuit(subs, root_var, &new_seen, it, include_recursion_var)
+                        short_circuit(subs, root_var, &new_seen, it)
                     }
-                    RecursiveTagUnion(rec_var, tags, ext_var) => {
-                        if include_recursion_var {
-                            new_seen.push(subs.get_root_key_without_compacting(*rec_var));
-                        }
-                        occurs_union(subs, root_var, &new_seen, include_recursion_var, tags)?;
+                    RecursiveTagUnion(_, tags, ext_var) => {
+                        occurs_union(subs, root_var, &new_seen, tags)?;
 
-                        short_circuit_help(
-                            subs,
-                            root_var,
-                            &new_seen,
-                            *ext_var,
-                            include_recursion_var,
-                        )
+                        short_circuit_help(subs, root_var, &new_seen, *ext_var)
                     }
                     EmptyRecord | EmptyTagUnion | Erroneous(_) => Ok(()),
                 }
@@ -3147,30 +3124,24 @@ fn occurs(
 
                 for var_index in args.into_iter() {
                     let var = subs[var_index];
-                    short_circuit_help(subs, root_var, &new_seen, var, include_recursion_var)?;
+                    short_circuit_help(subs, root_var, &new_seen, var)?;
                 }
 
                 Ok(())
             }
             LambdaSet(self::LambdaSet {
                 solved,
-                recursion_var,
+                recursion_var: _,
                 unspecialized: _,
                 ambient_function: _,
             }) => {
                 let mut new_seen = seen.to_owned();
                 new_seen.push(root_var);
 
-                if include_recursion_var {
-                    if let Some(v) = recursion_var.into_variable() {
-                        new_seen.push(subs.get_root_key_without_compacting(v));
-                    }
-                }
-
                 // unspecialized lambda vars excluded because they are not explicitly part of the
                 // type (they only matter after being resolved).
 
-                occurs_union(subs, root_var, &new_seen, include_recursion_var, solved)
+                occurs_union(subs, root_var, &new_seen, solved)
             }
             RangedNumber(_range_vars) => Ok(()),
         }
@@ -3182,14 +3153,13 @@ fn occurs_union<L: Label>(
     subs: &Subs,
     root_var: Variable,
     seen: &[Variable],
-    include_recursion_var: bool,
     tags: &UnionLabels<L>,
 ) -> Result<(), (Variable, Vec<Variable>)> {
     for slice_index in tags.variables() {
         let slice = subs[slice_index];
         for var_index in slice {
             let var = subs[var_index];
-            short_circuit_help(subs, root_var, seen, var, include_recursion_var)?;
+            short_circuit_help(subs, root_var, seen, var)?;
         }
     }
     Ok(())
@@ -3201,13 +3171,12 @@ fn short_circuit<'a, T>(
     root_key: Variable,
     seen: &[Variable],
     iter: T,
-    include_recursion_var: bool,
 ) -> Result<(), (Variable, Vec<Variable>)>
 where
     T: Iterator<Item = &'a Variable>,
 {
     for var in iter {
-        short_circuit_help(subs, root_key, seen, *var, include_recursion_var)?;
+        short_circuit_help(subs, root_key, seen, *var)?;
     }
 
     Ok(())
@@ -3219,9 +3188,8 @@ fn short_circuit_help(
     root_key: Variable,
     seen: &[Variable],
     var: Variable,
-    include_recursion_var: bool,
 ) -> Result<(), (Variable, Vec<Variable>)> {
-    if let Err((v, mut vec)) = occurs(subs, seen, var, include_recursion_var) {
+    if let Err((v, mut vec)) = occurs(subs, seen, var) {
         vec.push(root_key);
         return Err((v, vec));
     }
@@ -3953,12 +3921,15 @@ fn get_fresh_var_name(state: &mut ErrorTypeState) -> Lowercase {
 /// - all implicitly exposed variables, which include
 ///   - ability member specializations
 ///   - specialization lambda sets under specialization ability members
+///   - lambda sets under ability members defined in the module
 #[derive(Clone, Debug)]
 pub struct ExposedTypesStorageSubs {
     pub storage_subs: StorageSubs,
     pub stored_vars_by_symbol: VecMap<Symbol, Variable>,
-    /// lambda set var in other module -> var in storage subs
+    /// specialization lambda set var in other module -> var in storage subs
     pub stored_specialization_lambda_set_vars: VecMap<Variable, Variable>,
+    /// ability member signature in other module -> var in storage subs
+    pub stored_ability_member_vars: VecMap<Variable, Variable>,
 }
 
 #[derive(Clone, Debug)]
@@ -5281,4 +5252,82 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
             }
         });
     }
+}
+
+/// Finds the lambda set of the ability member type (not specialization) at the region `r`,
+/// or all lambda sets if no region is specified.
+///
+/// Panics if the given function type does not correspond with what's expected of an ability
+/// member, namely its lambda sets have more than a single unspecialized lambda set.
+pub fn get_member_lambda_sets_at_region(subs: &Subs, var: Variable, target_region: u8) -> Variable {
+    let mut stack = vec![var];
+
+    while let Some(var) = stack.pop() {
+        match subs.get_content_without_compacting(var) {
+            Content::LambdaSet(LambdaSet {
+                solved,
+                recursion_var,
+                unspecialized,
+                ambient_function: _,
+            }) => {
+                debug_assert!(solved.is_empty());
+                debug_assert!(recursion_var.is_none());
+                debug_assert_eq!(unspecialized.len(), 1);
+                let Uls(_, _, region) = subs.get_subs_slice(*unspecialized)[0];
+                if region == target_region {
+                    return var;
+                }
+            }
+            Content::Structure(flat_type) => match flat_type {
+                FlatType::Apply(_, vars) => {
+                    stack.extend(subs.get_subs_slice(*vars));
+                }
+                FlatType::Func(args, lset, ret) => {
+                    stack.extend(subs.get_subs_slice(*args));
+                    stack.push(*lset);
+                    stack.push(*ret);
+                }
+                FlatType::Record(fields, ext) => {
+                    stack.extend(subs.get_subs_slice(fields.variables()));
+                    stack.push(*ext);
+                }
+                FlatType::TagUnion(tags, ext) => {
+                    stack.extend(
+                        subs.get_subs_slice(tags.variables())
+                            .iter()
+                            .flat_map(|slice| subs.get_subs_slice(*slice)),
+                    );
+                    stack.push(*ext);
+                }
+                FlatType::FunctionOrTagUnion(_, _, ext) => {
+                    stack.push(*ext);
+                }
+                FlatType::RecursiveTagUnion(rec, tags, ext) => {
+                    stack.push(*rec);
+                    stack.extend(
+                        subs.get_subs_slice(tags.variables())
+                            .iter()
+                            .flat_map(|slice| subs.get_subs_slice(*slice)),
+                    );
+                    stack.push(*ext);
+                }
+                FlatType::Erroneous(_) | FlatType::EmptyRecord | FlatType::EmptyTagUnion => {}
+            },
+            Content::Alias(_, _, real_var, _) => {
+                stack.push(*real_var);
+            }
+            Content::RangedNumber(_)
+            | Content::Error
+            | Content::FlexVar(_)
+            | Content::RigidVar(_)
+            | Content::FlexAbleVar(_, _)
+            | Content::RigidAbleVar(_, _)
+            | Content::RecursionVar {
+                structure: _,
+                opt_name: _,
+            } => {}
+        }
+    }
+
+    internal_error!("No lambda set at region {} found", target_region);
 }

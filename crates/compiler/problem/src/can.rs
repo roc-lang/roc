@@ -130,7 +130,41 @@ pub enum Problem {
     },
     AbilityUsedAsType(Lowercase, Symbol, Region),
     NestedSpecialization(Symbol, Region),
-    IllegalDerive(Region),
+    IllegalDerivedAbility(Region),
+    ImplementationNotFound {
+        member: Symbol,
+        region: Region,
+    },
+    NotAnAbilityMember {
+        ability: Symbol,
+        name: String,
+        region: Region,
+    },
+    OptionalAbilityImpl {
+        ability: Symbol,
+        region: Region,
+    },
+    QualifiedAbilityImpl {
+        region: Region,
+    },
+    AbilityImplNotIdent {
+        region: Region,
+    },
+    DuplicateImpl {
+        original: Region,
+        duplicate: Region,
+    },
+    NotAnAbility(Region),
+    ImplementsNonRequired {
+        region: Region,
+        ability: Symbol,
+        not_required: Vec<Symbol>,
+    },
+    DoesNotImplementAbility {
+        region: Region,
+        ability: Symbol,
+        not_implemented: Vec<Symbol>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]

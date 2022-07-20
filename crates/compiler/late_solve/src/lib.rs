@@ -11,7 +11,7 @@ use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
 use roc_module::symbol::ModuleId;
 use roc_solve::solve::{compact_lambda_sets_of_vars, Phase, Pools};
-use roc_types::subs::{Content, FlatType, LambdaSet};
+use roc_types::subs::{get_member_lambda_sets_at_region, Content, FlatType, LambdaSet};
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, Variable};
 use roc_unify::unify::{unify as unify_unify, Mode, Unified};
 
@@ -150,6 +150,86 @@ impl Phase for LatePhase<'_> {
                     // of this.
                     .export_variable_to_directly_to_use_site(target_subs, ambient_function);
                 let our_ambient_function_var = copied.variable;
+
+                debug_assert!(matches!(
+                    target_subs.get_content_without_compacting(our_ambient_function_var),
+                    Content::Structure(FlatType::Func(..))
+                ));
+
+                our_ambient_function_var
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn get_and_copy_ability_member_ambient_function(
+        &self,
+        ability_member: roc_module::symbol::Symbol,
+        region: u8,
+        target_subs: &mut Subs,
+    ) -> Variable {
+        match self.abilities {
+            AbilitiesView::Module(abilities_store) => {
+                // No option other than that the var must be in our module store.
+                // Even if the specialization lambda set comes from another module,
+                // we should have taken care to import it before starting solving in this module.
+                let member_def = abilities_store
+                    .member_def(ability_member)
+                    .unwrap_or_else(|| {
+                        internal_error!(
+                            "{:?} is not resolved, or not an ability member!",
+                            ability_member
+                        )
+                    });
+                let member_var = member_def.signature_var();
+
+                let region_lset = get_member_lambda_sets_at_region(target_subs, member_var, region);
+
+                let LambdaSet {
+                    ambient_function, ..
+                } = target_subs.get_lambda_set(region_lset);
+
+                ambient_function
+            }
+            AbilitiesView::World(wa) => {
+                let member_home = ability_member.module_id();
+                let mut world = wa.world.write().unwrap();
+                let (module_store, module_types) = world.get_mut(&member_home).unwrap();
+
+                let member_def = module_store.member_def(ability_member).unwrap_or_else(|| {
+                    internal_error!(
+                        "{:?} is not resolved, or not an ability member!",
+                        ability_member
+                    )
+                });
+                let member_var = member_def.signature_var();
+                let storage_member_var = module_types
+                    .stored_ability_member_vars
+                    .get(&member_var)
+                    .unwrap();
+
+                let storage_lambda_set_var = get_member_lambda_sets_at_region(
+                    module_types.storage_subs.as_inner(),
+                    *storage_member_var,
+                    region,
+                );
+
+                let LambdaSet {
+                    ambient_function, ..
+                } = module_types
+                    .storage_subs
+                    .as_inner()
+                    .get_lambda_set(storage_lambda_set_var);
+
+                let copied = module_types
+                    .storage_subs
+                    // TODO: I think this is always okay, but revisit later when we're in a more
+                    // stable position to see if we can get rid of the bookkeeping done as a result
+                    // of this.
+                    .export_variable_to_directly_to_use_site(target_subs, ambient_function);
+
+                let our_ambient_function_var = copied.variable;
+                instantiate_rigids(target_subs, our_ambient_function_var);
 
                 debug_assert!(matches!(
                     target_subs.get_content_without_compacting(our_ambient_function_var),

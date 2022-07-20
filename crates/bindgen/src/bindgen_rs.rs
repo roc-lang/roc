@@ -240,8 +240,11 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
             }
         }
         // These types don't need to be declared in Rust.
-        RocType::Num(_)
+        RocType::Unit
+        | RocType::EmptyTagUnion
+        | RocType::Num(_)
         | RocType::Bool
+        | RocType::RocResult(_, _)
         | RocType::RocStr
         | RocType::RocDict(_, _)
         | RocType::RocSet(_)
@@ -251,7 +254,7 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
             // This is recursively pointing to a type that should already have been added,
             // so no extra work needs to happen.
         }
-        RocType::Function(_, _) => {
+        RocType::Function { .. } => {
             // TODO actually bindgen functions!
         }
     }
@@ -605,7 +608,9 @@ pub struct {name} {{
                 }
 
                 match payload_type {
-                    RocType::RocStr
+                    RocType::Unit
+                    | RocType::EmptyTagUnion
+                    | RocType::RocStr
                     | RocType::Bool
                     | RocType::Num(_)
                     | RocType::RocList(_)
@@ -613,6 +618,7 @@ pub struct {name} {{
                     | RocType::RocSet(_)
                     | RocType::RocBox(_)
                     | RocType::TagUnion(_)
+                    | RocType::RocResult(_, _)
                     | RocType::RecursivePointer { .. } => {
                         owned_ret_type = type_name(*payload_id, types);
                         borrowed_ret_type = format!("&{}", owned_ret_type);
@@ -647,7 +653,7 @@ pub struct {name} {{
                         payload_args = answer.payload_args;
                         args_to_payload = answer.args_to_payload;
                     }
-                    RocType::Function(_, _) => todo!(),
+                    RocType::Function { .. } => todo!(),
                 };
 
                 {
@@ -1096,7 +1102,9 @@ pub struct {name} {{
                     };
 
                     let fields_str = match payload_type {
-                        RocType::RocStr
+                        RocType::Unit
+                        | RocType::EmptyTagUnion
+                        | RocType::RocStr
                         | RocType::Bool
                         | RocType::Num(_)
                         | RocType::RocList(_)
@@ -1104,6 +1112,7 @@ pub struct {name} {{
                         | RocType::RocSet(_)
                         | RocType::RocBox(_)
                         | RocType::TagUnion(_)
+                        | RocType::RocResult(_, _)
                         | RocType::Struct { .. }
                         | RocType::RecursivePointer { .. } => {
                             format!(".field({deref_str}{actual_self}.{tag_name})")
@@ -1120,7 +1129,7 @@ pub struct {name} {{
 
                             buf.join("\n")
                         }
-                        RocType::Function(_, _) => todo!(),
+                        RocType::Function { .. } => todo!(),
                     };
 
                     format!(
@@ -1250,6 +1259,8 @@ fn add_struct<S: Display>(
 
 fn type_name(id: TypeId, types: &Types) -> String {
     match types.get_type(id) {
+        RocType::Unit => "()".to_string(),
+        RocType::EmptyTagUnion => "std::convert::Infallible".to_string(),
         RocType::RocStr => "roc_std::RocStr".to_string(),
         RocType::Bool => "bool".to_string(),
         RocType::Num(RocNum::U8) => "u8".to_string(),
@@ -1274,6 +1285,13 @@ fn type_name(id: TypeId, types: &Types) -> String {
         RocType::RocSet(elem_id) => format!("roc_std::RocSet<{}>", type_name(*elem_id, types)),
         RocType::RocList(elem_id) => format!("roc_std::RocList<{}>", type_name(*elem_id, types)),
         RocType::RocBox(elem_id) => format!("roc_std::RocBox<{}>", type_name(*elem_id, types)),
+        RocType::RocResult(ok_id, err_id) => {
+            format!(
+                "roc_std::RocResult<{}, {}>",
+                type_name(*ok_id, types),
+                type_name(*err_id, types)
+            )
+        }
         RocType::Struct { name, .. }
         | RocType::TagUnionPayload { name, .. }
         | RocType::TagUnion(RocTagUnion::NonRecursive { name, .. })
@@ -1283,7 +1301,7 @@ fn type_name(id: TypeId, types: &Types) -> String {
         | RocType::TagUnion(RocTagUnion::NullableUnwrapped { name, .. })
         | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { name, .. }) => name.clone(),
         RocType::RecursivePointer(content) => type_name(*content, types),
-        RocType::Function(_, _) => todo!(),
+        RocType::Function { name, .. } => name.clone(),
     }
 }
 
@@ -1390,13 +1408,16 @@ pub struct {name} {{
         let borrowed_ret;
 
         match payload_type {
-            RocType::RocStr
+            RocType::Unit
+            | RocType::EmptyTagUnion
+            | RocType::RocStr
             | RocType::Bool
             | RocType::Num(_)
             | RocType::RocList(_)
             | RocType::RocDict(_, _)
             | RocType::RocSet(_)
             | RocType::RocBox(_)
+            | RocType::RocResult(_, _)
             | RocType::TagUnion(_)
             | RocType::RecursivePointer { .. } => {
                 owned_ret_type = type_name(non_null_payload, types);
@@ -1428,7 +1449,7 @@ pub struct {name} {{
                 owned_ret_type = answer.owned_ret_type;
                 borrowed_ret_type = answer.borrowed_ret_type;
             }
-            RocType::Function(_, _) => todo!(),
+            RocType::Function { .. } => todo!(),
         };
 
         // Add a convenience constructor function for the tag with the payload, e.g.
@@ -1626,13 +1647,16 @@ pub struct {name} {{
         let extra_deref = if cannot_derive_copy { "*" } else { "" };
 
         let fields_str = match payload_type {
-            RocType::RocStr
+            RocType::Unit
+            | RocType::EmptyTagUnion
+            | RocType::RocStr
             | RocType::Bool
             | RocType::Num(_)
             | RocType::RocList(_)
             | RocType::RocDict(_, _)
             | RocType::RocSet(_)
             | RocType::RocBox(_)
+            | RocType::RocResult(_, _)
             | RocType::TagUnion(_)
             | RocType::RecursivePointer { .. } => {
                 format!(
@@ -1658,7 +1682,7 @@ pub struct {name} {{
 
                 buf.join(&format!("\n{INDENT}{INDENT}{INDENT}{INDENT}{INDENT}"))
             }
-            RocType::Function(_, _) => todo!(),
+            RocType::Function { .. } => todo!(),
         };
 
         let body = format!(
@@ -1855,9 +1879,12 @@ fn tag_union_struct_help<'a, I: Iterator<Item = &'a (L, TypeId)>, L: Display + P
 
 fn cannot_derive_default(roc_type: &RocType, types: &Types) -> bool {
     match roc_type {
-        RocType::TagUnion { .. } | RocType::RecursivePointer { .. } | RocType::Function(_, _) => {
-            true
-        }
+        RocType::Unit
+        | RocType::EmptyTagUnion
+        | RocType::TagUnion { .. }
+        | RocType::RocResult(_, _)
+        | RocType::RecursivePointer { .. }
+        | RocType::Function { .. } => true,
         RocType::RocStr | RocType::Bool | RocType::Num(_) => false,
         RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
             cannot_derive_default(types.get_type(*id), types)
@@ -1878,10 +1905,12 @@ fn cannot_derive_default(roc_type: &RocType, types: &Types) -> bool {
 /// Useful when determining whether to derive Copy in a Rust type.
 fn cannot_derive_copy(roc_type: &RocType, types: &Types) -> bool {
     match roc_type {
-        RocType::Bool
+        RocType::Unit
+        | RocType::EmptyTagUnion
+        | RocType::Bool
         | RocType::Num(_)
         | RocType::TagUnion(RocTagUnion::Enumeration { .. })
-        | RocType::Function(_, _) => false,
+        | RocType::Function { .. } => false,
         RocType::RocStr
         | RocType::RocList(_)
         | RocType::RocDict(_, _)
@@ -1898,6 +1927,10 @@ fn cannot_derive_copy(roc_type: &RocType, types: &Types) -> bool {
                     .iter()
                     .any(|id| cannot_derive_copy(types.get_type(*id), types))
             })
+        }
+        RocType::RocResult(ok_id, err_id) => {
+            cannot_derive_copy(types.get_type(*ok_id), types)
+                || cannot_derive_copy(types.get_type(*err_id), types)
         }
         RocType::Struct { fields, .. } => fields
             .iter()
@@ -1923,12 +1956,18 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
                 I8 | U8 | I16 | U16 | I32 | U32 | I64 | U64 | I128 | U128 | Dec => false,
             }
         }
-        RocType::RocStr
+        RocType::Unit
+        | RocType::EmptyTagUnion
+        | RocType::RocStr
         | RocType::Bool
         | RocType::TagUnion(RocTagUnion::Enumeration { .. })
-        | RocType::Function(_, _) => false,
+        | RocType::Function { .. } => false,
         RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
             has_float_help(types.get_type(*id), types, do_not_recurse)
+        }
+        RocType::RocResult(ok_id, err_id) => {
+            has_float_help(types.get_type(*ok_id), types, do_not_recurse)
+                || has_float_help(types.get_type(*err_id), types, do_not_recurse)
         }
         RocType::RocDict(key_id, val_id) => {
             has_float_help(types.get_type(*key_id), types, do_not_recurse)

@@ -2165,6 +2165,14 @@ fn update<'a>(
                 header
                     .imported_modules
                     .insert(ModuleId::LIST, Region::zero());
+
+                header
+                    .package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(ModuleId::ENCODE));
+
+                header
+                    .imported_modules
+                    .insert(ModuleId::ENCODE, Region::zero());
             }
 
             state
@@ -4260,9 +4268,11 @@ fn run_solve<'a>(
 
     let mut solved_subs = solved_subs;
     let exposed_types = roc_solve::module::exposed_types_storage_subs(
+        module_id,
         &mut solved_subs,
         &exposed_vars_by_symbol,
         &solved_specializations,
+        &abilities_store,
     );
 
     let solved_module = SolvedModule {

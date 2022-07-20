@@ -38,8 +38,8 @@ single = \key ->
 insert : Set k, k -> Set k
 insert = \@Set dict, key ->
     dict
-        |> Dict.insert key {}
-        |> @Set
+    |> Dict.insert key {}
+    |> @Set
 
 len : Set k -> Nat
 len = \@Set dict ->
@@ -53,8 +53,8 @@ remove = \@Set dict, key ->
 contains : Set k, k -> Bool
 contains = \set, key ->
     set
-        |> Set.toDict
-        |> Dict.contains key
+    |> Set.toDict
+    |> Dict.contains key
 
 toList : Set k -> List k
 toList = \@Set dict ->

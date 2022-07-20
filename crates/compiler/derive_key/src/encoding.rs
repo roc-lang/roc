@@ -14,7 +14,6 @@ pub enum FlatEncodable {
 
 #[derive(Hash, PartialEq, Eq, Debug, Clone)]
 pub enum FlatEncodableKey {
-    String,
     List(/* takes one variable */),
     Set(/* takes one variable */),
     Dict(/* takes two variables */),
@@ -26,7 +25,6 @@ pub enum FlatEncodableKey {
 impl FlatEncodableKey {
     pub(crate) fn debug_name(&self) -> String {
         match self {
-            FlatEncodableKey::String => "string".to_string(),
             FlatEncodableKey::List() => "list".to_string(),
             FlatEncodableKey::Set() => "set".to_string(),
             FlatEncodableKey::Dict() => "dict".to_string(),
@@ -84,7 +82,7 @@ impl FlatEncodable {
                     Symbol::LIST_LIST => Ok(Key(FlatEncodableKey::List())),
                     Symbol::SET_SET => Ok(Key(FlatEncodableKey::Set())),
                     Symbol::DICT_DICT => Ok(Key(FlatEncodableKey::Dict())),
-                    Symbol::STR_STR => Ok(Key(FlatEncodableKey::String)),
+                    Symbol::STR_STR => Ok(Immediate(Symbol::ENCODE_STRING)),
                     _ => Err(Underivable),
                 },
                 FlatType::Record(fields, ext) => {
@@ -134,19 +132,19 @@ impl FlatEncodable {
                 FlatType::Func(..) => Err(Underivable),
             },
             Content::Alias(sym, _, real_var, _) => match sym {
-                Symbol::NUM_U8 => Ok(Immediate(Symbol::ENCODE_U8)),
-                Symbol::NUM_U16 => Ok(Immediate(Symbol::ENCODE_U16)),
-                Symbol::NUM_U32 => Ok(Immediate(Symbol::ENCODE_U32)),
-                Symbol::NUM_U64 => Ok(Immediate(Symbol::ENCODE_U64)),
-                Symbol::NUM_U128 => Ok(Immediate(Symbol::ENCODE_U128)),
-                Symbol::NUM_I8 => Ok(Immediate(Symbol::ENCODE_I8)),
-                Symbol::NUM_I16 => Ok(Immediate(Symbol::ENCODE_I16)),
-                Symbol::NUM_I32 => Ok(Immediate(Symbol::ENCODE_I32)),
-                Symbol::NUM_I64 => Ok(Immediate(Symbol::ENCODE_I64)),
-                Symbol::NUM_I128 => Ok(Immediate(Symbol::ENCODE_I128)),
-                Symbol::NUM_DEC => Ok(Immediate(Symbol::ENCODE_DEC)),
-                Symbol::NUM_F32 => Ok(Immediate(Symbol::ENCODE_F32)),
-                Symbol::NUM_F64 => Ok(Immediate(Symbol::ENCODE_F64)),
+                Symbol::NUM_U8 | Symbol::NUM_UNSIGNED8 => Ok(Immediate(Symbol::ENCODE_U8)),
+                Symbol::NUM_U16 | Symbol::NUM_UNSIGNED16 => Ok(Immediate(Symbol::ENCODE_U16)),
+                Symbol::NUM_U32 | Symbol::NUM_UNSIGNED32 => Ok(Immediate(Symbol::ENCODE_U32)),
+                Symbol::NUM_U64 | Symbol::NUM_UNSIGNED64 => Ok(Immediate(Symbol::ENCODE_U64)),
+                Symbol::NUM_U128 | Symbol::NUM_UNSIGNED128 => Ok(Immediate(Symbol::ENCODE_U128)),
+                Symbol::NUM_I8 | Symbol::NUM_SIGNED8 => Ok(Immediate(Symbol::ENCODE_I8)),
+                Symbol::NUM_I16 | Symbol::NUM_SIGNED16 => Ok(Immediate(Symbol::ENCODE_I16)),
+                Symbol::NUM_I32 | Symbol::NUM_SIGNED32 => Ok(Immediate(Symbol::ENCODE_I32)),
+                Symbol::NUM_I64 | Symbol::NUM_SIGNED64 => Ok(Immediate(Symbol::ENCODE_I64)),
+                Symbol::NUM_I128 | Symbol::NUM_SIGNED128 => Ok(Immediate(Symbol::ENCODE_I128)),
+                Symbol::NUM_DEC | Symbol::NUM_DECIMAL => Ok(Immediate(Symbol::ENCODE_DEC)),
+                Symbol::NUM_F32 | Symbol::NUM_BINARY32 => Ok(Immediate(Symbol::ENCODE_F32)),
+                Symbol::NUM_F64 | Symbol::NUM_BINARY64 => Ok(Immediate(Symbol::ENCODE_F64)),
                 // TODO: I believe it is okay to unwrap opaques here because derivers are only used
                 // by the backend, and the backend treats opaques like structural aliases.
                 _ => Self::from_var(subs, real_var),

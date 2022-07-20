@@ -14,10 +14,6 @@ pub struct State<'a> {
 
     /// Position of the start of the current line
     pub(crate) line_start: Position,
-
-    /// Current indentation level, in columns
-    /// (so no indent is col 1 - this saves an arithmetic operation.)
-    pub(crate) indent_column: u32,
 }
 
 impl<'a> State<'a> {
@@ -26,7 +22,6 @@ impl<'a> State<'a> {
             original_bytes: bytes,
             offset: 0,
             line_start: Position::zero(),
-            indent_column: 0,
         }
     }
 
@@ -86,7 +81,6 @@ impl<'a> fmt::Debug for State<'a> {
         }
 
         write!(f, "\n\t(offset): {:?},", self.pos())?;
-        write!(f, "\n\tindent_column: {}", self.indent_column)?;
         write!(f, "\n}}")
     }
 }

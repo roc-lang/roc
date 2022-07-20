@@ -4,6 +4,7 @@ use crate::subs::{
     GetSubsSlice, RecordFields, Subs, UnionTags, VarStore, Variable, VariableSubsSlice,
 };
 use roc_collections::all::{HumanIndex, ImMap, ImSet, MutMap, MutSet, SendMap};
+use roc_collections::VecMap;
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
@@ -2055,7 +2056,16 @@ impl From<&AliasVar> for OptAbleVar {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
+pub enum OpaqueSupports {
+    Derived(Symbol),
+    Implemented {
+        ability_name: Symbol,
+        impls: VecMap<Symbol, Symbol>,
+    },
+}
+
+#[derive(Clone, Debug)]
 pub struct Alias {
     pub region: Region,
     pub type_variables: Vec<Loc<AliasVar>>,
@@ -2769,8 +2779,16 @@ fn instantiate_lambda_sets_as_unspecialized(
     able_var: Variable,
     ability_member: Symbol,
 ) {
-    // We want to pop and assign lambda sets pre-order for readability, so types
-    // should be pushed onto the stack in post-order
+    // REGION-ORDERING: done in pre-order via the following pseudo code:
+    //
+    // Type_function = \region ->
+    // 	let left_type, new_region = Type (region + 1)
+    //   let right_type, new_region = Type (new_region)
+    //   let func_type = left_type -[Lambda region]-> right_type
+    //   (func_type, new_region)
+    //
+    // Since we want to pop types in pre-order, they should be pushed onto the
+    // stack in post-order
     let mut stack = vec![typ];
     let mut region = 0;
 

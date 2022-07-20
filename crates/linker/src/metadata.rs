@@ -34,4 +34,5 @@ pub struct Metadata {
     pub dynamic_symbol_table_section_offset: u64,
     pub symbol_table_section_offset: u64,
     pub symbol_table_size: u64,
+    pub macho_cmd_loc: u64,
 }

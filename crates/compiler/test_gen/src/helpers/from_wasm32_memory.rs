@@ -228,3 +228,9 @@ where
         (t, u, v, w)
     }
 }
+
+impl FromWasm32Memory for std::convert::Infallible {
+    fn decode(_memory_bytes: &[u8], _offset: u32) -> Self {
+        unreachable!()
+    }
+}

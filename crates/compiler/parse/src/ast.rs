@@ -298,7 +298,7 @@ pub enum TypeDef<'a> {
     Opaque {
         header: TypeHeader<'a>,
         typ: Loc<TypeAnnotation<'a>>,
-        derived: Option<Loc<Derived<'a>>>,
+        derived: Option<Loc<HasAbilities<'a>>>,
     },
 
     /// An ability definition. E.g.
@@ -435,17 +435,41 @@ pub struct HasClause<'a> {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub enum Derived<'a> {
-    /// `has [Eq, Hash]`
-    Has(Collection<'a, AbilityName<'a>>),
+pub enum HasImpls<'a> {
+    // `{ eq: myEq }`
+    HasImpls(Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>),
 
     // We preserve this for the formatter; canonicalization ignores it.
-    SpaceBefore(&'a Derived<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a Derived<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceBefore(&'a HasImpls<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a HasImpls<'a>, &'a [CommentOrNewline<'a>]),
 }
 
-impl Derived<'_> {
-    pub fn collection(&self) -> &Collection<AbilityName> {
+/// `Eq` or `Eq { eq: myEq }`
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum HasAbility<'a> {
+    HasAbility {
+        /// Should be a zero-argument `Apply` or an error; we'll check this in canonicalization
+        ability: Loc<TypeAnnotation<'a>>,
+        impls: Option<Loc<HasImpls<'a>>>,
+    },
+
+    // We preserve this for the formatter; canonicalization ignores it.
+    SpaceBefore(&'a HasAbility<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a HasAbility<'a>, &'a [CommentOrNewline<'a>]),
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum HasAbilities<'a> {
+    /// `has [Eq { eq: myEq }, Hash]`
+    Has(Collection<'a, Loc<HasAbility<'a>>>),
+
+    // We preserve this for the formatter; canonicalization ignores it.
+    SpaceBefore(&'a HasAbilities<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a HasAbilities<'a>, &'a [CommentOrNewline<'a>]),
+}
+
+impl HasAbilities<'_> {
+    pub fn collection(&self) -> &Collection<Loc<HasAbility>> {
         let mut it = self;
         loop {
             match it {
@@ -879,6 +903,12 @@ impl<'a, T: Debug> Debug for Collection<'a, T> {
     }
 }
 
+impl<'a, T> Default for Collection<'a, T> {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
 pub trait Spaceable<'a> {
     fn before(&'a self, _: &'a [CommentOrNewline<'a>]) -> Self;
     fn after(&'a self, _: &'a [CommentOrNewline<'a>]) -> Self;
@@ -967,12 +997,30 @@ impl<'a> Spaceable<'a> for Has<'a> {
     }
 }
 
-impl<'a> Spaceable<'a> for Derived<'a> {
+impl<'a> Spaceable<'a> for HasImpls<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        Derived::SpaceBefore(self, spaces)
+        HasImpls::SpaceBefore(self, spaces)
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        Derived::SpaceAfter(self, spaces)
+        HasImpls::SpaceAfter(self, spaces)
+    }
+}
+
+impl<'a> Spaceable<'a> for HasAbility<'a> {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        HasAbility::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        HasAbility::SpaceAfter(self, spaces)
+    }
+}
+
+impl<'a> Spaceable<'a> for HasAbilities<'a> {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        HasAbilities::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        HasAbilities::SpaceAfter(self, spaces)
     }
 }
 
@@ -1059,6 +1107,7 @@ impl_extract_spaces!(Pattern);
 impl_extract_spaces!(Tag);
 impl_extract_spaces!(AssignedField<T>);
 impl_extract_spaces!(TypeAnnotation);
+impl_extract_spaces!(HasAbility);
 
 impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
     type Item = T;
@@ -1107,6 +1156,48 @@ impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
                 before: &[],
                 item: *item,
                 after: &[],
+            },
+        }
+    }
+}
+
+impl<'a> ExtractSpaces<'a> for HasImpls<'a> {
+    type Item = Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>;
+
+    fn extract_spaces(&self) -> Spaces<'a, Self::Item> {
+        match self {
+            HasImpls::HasImpls(inner) => Spaces {
+                before: &[],
+                item: *inner,
+                after: &[],
+            },
+            HasImpls::SpaceBefore(item, before) => match item {
+                HasImpls::HasImpls(inner) => Spaces {
+                    before,
+                    item: *inner,
+                    after: &[],
+                },
+                HasImpls::SpaceBefore(_, _) => todo!(),
+                HasImpls::SpaceAfter(HasImpls::HasImpls(inner), after) => Spaces {
+                    before,
+                    item: *inner,
+                    after,
+                },
+                HasImpls::SpaceAfter(_, _) => todo!(),
+            },
+            HasImpls::SpaceAfter(item, after) => match item {
+                HasImpls::HasImpls(inner) => Spaces {
+                    before: &[],
+                    item: *inner,
+                    after,
+                },
+                HasImpls::SpaceBefore(HasImpls::HasImpls(inner), before) => Spaces {
+                    before,
+                    item: *inner,
+                    after,
+                },
+                HasImpls::SpaceBefore(_, _) => todo!(),
+                HasImpls::SpaceAfter(_, _) => todo!(),
             },
         }
     }

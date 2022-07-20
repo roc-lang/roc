@@ -19,5 +19,6 @@ path = "src/main.rs"
 [dependencies]
 roc_std = { path = "../../../crates/roc_std" }
 libc = "0.2"
+ureq = "2.5.0"
 
 [workspace]
