@@ -1075,6 +1075,10 @@ impl<
         ASM::add_reg64_reg64_imm32(&mut self.buf, dst_reg, CC::BASE_PTR_REG, offset);
     }
 
+    fn create_empty_array(&mut self, sym: &Symbol) {
+        self.storage_manager.create_empty_array(&mut self.buf, sym);
+    }
+
     fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]) {
         self.storage_manager
             .create_struct(&mut self.buf, sym, layout, fields);

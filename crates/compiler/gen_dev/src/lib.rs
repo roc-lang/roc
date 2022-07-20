@@ -310,6 +310,9 @@ trait Backend<'a> {
                     x => todo!("the call type, {:?}", x),
                 }
             }
+            Expr::EmptyArray => {
+                self.create_empty_array(sym);
+            }
             Expr::Struct(fields) => {
                 self.load_literal_symbols(fields);
                 self.create_struct(sym, layout, fields);
@@ -771,6 +774,9 @@ trait Backend<'a> {
 
     /// load_literal sets a symbol to be equal to a literal.
     fn load_literal(&mut self, sym: &Symbol, layout: &Layout<'a>, lit: &Literal<'a>);
+
+    /// create_empyt_array creates an empyt array with nullptr, zero length, and zero capacity.
+    fn create_empty_array(&mut self, sym: &Symbol);
 
     /// create_struct creates a struct with the elements specified loaded into it as data.
     fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]);
