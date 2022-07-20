@@ -8979,7 +8979,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 1st argument to `remove` is not what I expect:
+    This 1st argument to `remove` has an unexpected type:
 
     10│              new = { model & set : Set.remove goal model.set }
                                                       ^^^^
