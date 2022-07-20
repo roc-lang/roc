@@ -433,14 +433,15 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
         arguments_cast.push(argument);
     }
 
-    match closure_data_layout.runtime_representation() {
-        Layout::Struct {
-            field_layouts: &[], ..
-        } => {
-            // nothing to add
+    match (
+        closure_data_layout.is_represented().is_some(),
+        closure_data_layout.runtime_representation(),
+    ) {
+        (false, _) => {
+            // the function doesn't expect a closure argument, nothing to add
         }
-        other => {
-            let closure_type = basic_type_from_layout(env, &other).ptr_type(AddressSpace::Generic);
+        (true, layout) => {
+            let closure_type = basic_type_from_layout(env, &layout).ptr_type(AddressSpace::Generic);
 
             let closure_cast = env
                 .builder

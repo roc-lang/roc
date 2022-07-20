@@ -3019,3 +3019,35 @@ fn call_function_in_empty_list_unbound() {
         RocList<()>
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_3571_lowlevel_call_function_with_bool_lambda_set() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            apply : List (a -> b), List a -> List b
+            apply = \funs, vals ->
+              initial = List.withCapacity ((List.len funs) * (List.len vals))
+              List.walk funs initial \state, fun ->
+                mappedVals = List.map vals fun
+                List.concat state mappedVals
+
+            add2 : Str -> Str
+            add2 = \x -> "added \(x)"
+
+            mul2 : Str -> Str
+            mul2 = \x -> "multiplied \(x)"
+
+            foo = [add2, mul2]
+            bar = ["1", "2", "3", "4"]
+
+            main = foo |> apply bar |> Str.joinWith ", "
+            "#
+        ),
+        RocStr::from("added 1, added 2, added 3, added 4, multiplied 1, multiplied 2, multiplied 3, multiplied 4"),
+        RocStr
+    )
+}

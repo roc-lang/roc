@@ -800,13 +800,13 @@ impl<'a> LambdaSet<'a> {
     }
 
     pub fn is_represented(&self) -> Option<Layout<'a>> {
-        if let Layout::Struct {
-            field_layouts: &[], ..
-        } = self.representation
-        {
-            None
-        } else {
-            Some(*self.representation)
+        match self.representation {
+            Layout::Struct {
+                field_layouts: &[], ..
+            }
+            | Layout::Builtin(Builtin::Bool)
+            | Layout::Builtin(Builtin::Int(..)) => None,
+            repr => Some(*repr),
         }
     }
 
