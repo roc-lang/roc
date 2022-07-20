@@ -617,7 +617,10 @@ impl<'a> UnionLayout<'a> {
 
     fn stack_size_without_alignment(&self, target_info: TargetInfo) -> u32 {
         match self {
-            UnionLayout::NonRecursive(_) => self.data_size_and_alignment(target_info).0,
+            UnionLayout::NonRecursive(_) => {
+                let (width, align) = self.data_size_and_alignment(target_info);
+                round_up_to_alignment(width, align)
+            }
             UnionLayout::Recursive(_)
             | UnionLayout::NonNullableUnwrapped(_)
             | UnionLayout::NullableWrapped { .. }
@@ -637,17 +640,10 @@ impl<'a> UnionLayout<'a> {
     }
 
     fn tag_id_offset_help(layouts: &[&[Layout]], target_info: TargetInfo) -> u32 {
-        let tag_id_align = if layouts.len() < 256 {
-            // i8
-            1
-        } else {
-            // i16
-            2
-        };
+        let (data_width, data_align) =
+            Layout::stack_size_and_alignment_slices(layouts, target_info);
 
-        let (data_width, _) = Layout::stack_size_and_alignment_slices(layouts, target_info);
-
-        round_up_to_alignment(data_width, tag_id_align)
+        round_up_to_alignment(data_width, data_align)
     }
 }
 
@@ -1455,6 +1451,8 @@ impl<'a> Layout<'a> {
 
             data_width = data_width.max(total);
         }
+
+        data_width = round_up_to_alignment(data_width, data_align);
 
         (data_width, data_align)
     }

@@ -227,7 +227,7 @@ impl<'ctx> RocUnion<'ctx> {
         data_width: u32,
         tag_type: Option<TagType>,
     ) -> Self {
-        let bytes = data_width;
+        let bytes = round_up_to_alignment(data_width, data_align);
         let byte_array_type = context.i8_type().array_type(bytes).as_basic_type_enum();
 
         let alignment_array_type = alignment_type(context, data_align)

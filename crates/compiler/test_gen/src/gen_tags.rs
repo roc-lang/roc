@@ -981,8 +981,8 @@ fn alignment_in_multi_tag_construction_two() {
             x
             #"
         ),
-        (32i64, true, 1),
-        (i64, bool, u8)
+        ((32i64, true), 1, [0; 7]),
+        ((i64, bool), u8, [u8; 7])
     );
 }
 
@@ -998,8 +998,8 @@ fn alignment_in_multi_tag_construction_three() {
                 x
                 #"
         ),
-        (32i64, true, 2u8, 1),
-        (i64, bool, u8, u8)
+        ((32i64, true, 2u8), 1, [0; 7]),
+        ((i64, bool, u8), u8, [u8; 7])
     );
 }
 
@@ -1015,8 +1015,10 @@ fn alignment_i128() {
                 x
                 #"
         ),
-        (42, true, 1),
-        (i128, bool, u8)
+        // note: rust aligns the tuple `(i128, bool)` to 8 we align it to 16,
+        // so add 8 extra padding bytes
+        ((42, true), [0; 8], 1, [0; 15]),
+        ((i128, bool), [u8; 8], u8, [u8; 15])
     );
 }
 
