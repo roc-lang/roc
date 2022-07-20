@@ -551,6 +551,15 @@ impl<T: Clone> FromIterator<T> for RocList<T> {
     {
         let mut iter = into.into_iter();
 
+        if std::mem::size_of::<T>() == 0 {
+            let count = iter.count();
+            return Self {
+                elements: Some(Self::elems_with_capacity(count)),
+                length: count,
+                capacity: count,
+            };
+        }
+
         let mut list = {
             let (min_len, maybe_max_len) = iter.size_hint();
             let init_capacity = maybe_max_len.unwrap_or(min_len);

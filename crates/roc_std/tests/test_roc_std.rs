@@ -165,6 +165,14 @@ mod test_roc_std {
     }
 
     #[test]
+    fn list_from_iter_zero_size() {
+        let elems: [(); 5] = [(), (), (), (), ()];
+        let from_slice = RocList::from_slice(&elems);
+        let from_iter = RocList::from_iter(elems);
+        assert_eq!(from_iter, from_slice);
+    }
+
+    #[test]
     fn roc_result_to_rust_result() {
         let greeting = "Hello, World!";
         let roc_result: RocResult<String, ()> = RocResult::ok(greeting.into());
