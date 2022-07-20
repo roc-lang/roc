@@ -37,6 +37,25 @@ impl<'a> State<'a> {
         self.pos().offset - self.line_start.offset
     }
 
+    /// Mutably advance the state by a given offset
+    #[inline(always)]
+    pub(crate) fn advance_mut(&mut self, offset: usize) {
+        self.offset += offset;
+    }
+
+    /// If the next `text.len()` bytes of the input match the provided `text`,
+    /// mutably advance the state by that much.
+    #[inline(always)]
+    pub(crate) fn consume_mut(&mut self, text: &str) -> bool {
+        let found = self.bytes().starts_with(text.as_bytes());
+
+        if found {
+            self.advance_mut(text.len());
+        }
+
+        found
+    }
+
     #[must_use]
     #[inline(always)]
     pub(crate) const fn advance(mut self, offset: usize) -> State<'a> {

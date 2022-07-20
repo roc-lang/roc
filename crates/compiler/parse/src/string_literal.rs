@@ -9,7 +9,7 @@ use bumpalo::Bump;
 /// One or more ASCII hex digits. (Useful when parsing unicode escape codes,
 /// which must consist entirely of ASCII hex digits.)
 fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
-    move |arena, state: State<'a>| {
+    move |arena, mut state: State<'a>| {
         let mut buf = bumpalo::collections::String::new_in(arena);
 
         for &byte in state.bytes().iter() {
@@ -19,7 +19,7 @@ fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
                 // We didn't find any hex digits!
                 return Err((NoProgress, EString::CodePtEnd(state.pos()), state));
             } else {
-                let state = state.advance(buf.len());
+                state.advance_mut(buf.len());
 
                 return Ok((MadeProgress, buf.into_bump_str(), state));
             }
@@ -31,28 +31,25 @@ fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
 
 pub fn parse_single_quote<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
     move |arena: &'a Bump, mut state: State<'a>| {
-        if state.bytes().starts_with(b"\'") {
+        if state.consume_mut("\'") {
             // we will be parsing a single-quote-string
         } else {
             return Err((NoProgress, EString::Open(state.pos()), state));
         }
-
-        // early return did not hit, just advance one byte
-        state = state.advance(1);
 
         // Handle back slaches in byte literal
         // - starts with a backslash and used as an escape character. ex: '\n', '\t'
         // - single quote floating (un closed single quote) should be an error
         match state.bytes().first() {
             Some(b'\\') => {
-                state = state.advance(1);
+                state.advance_mut(1);
                 match state.bytes().first() {
                     Some(&ch) => {
-                        state = state.advance(1);
+                        state.advance_mut(1);
                         if (ch == b'n' || ch == b'r' || ch == b't' || ch == b'\'' || ch == b'\\')
                             && (state.bytes().first() == Some(&b'\''))
                         {
-                            state = state.advance(1);
+                            state.advance_mut(1);
                             let test = match ch {
                                 b'n' => '\n',
                                 b't' => '\t',
@@ -112,7 +109,7 @@ pub fn parse_single_quote<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
         // ending up w/ a slice of bytes that we want to convert into an integer
         let raw_bytes = &state.bytes()[0..end_index - 1];
 
-        state = state.advance(end_index);
+        state.advance_mut(end_index);
         match std::str::from_utf8(raw_bytes) {
             Ok(string) => Ok((MadeProgress, string, state)),
             Err(_) => {
@@ -128,28 +125,19 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
 
     move |arena: &'a Bump, mut state: State<'a>| {
         let is_multiline;
-        let mut bytes;
 
-        if state.bytes().starts_with(b"\"\"\"") {
-            // we will be parsing a multi-string
+        if state.consume_mut("\"\"\"") {
+            // we will be parsing a multi-line string
             is_multiline = true;
-            bytes = state.bytes()[3..].iter();
-            state = state.advance(3);
-        } else if state.bytes().starts_with(b"\"") {
-            // we will be parsing a single-string
+        } else if state.consume_mut("\"") {
+            // we will be parsing a single-line string
             is_multiline = false;
-            bytes = state.bytes()[1..].iter();
-            state = state.advance(1);
         } else {
             return Err((NoProgress, EString::Open(state.pos()), state));
         }
 
-        // At the parsing stage we keep the entire raw string, because the formatter
-        // needs the raw string. (For example, so it can "remember" whether you
-        // wrote \u{...} or the actual unicode character itself.)
-        //
-        // Since we're keeping the entire raw string, all we need to track is
-        // how many characters we've parsed. So far, that's 1 (the opening `"`).
+        let mut bytes = state.bytes().iter();
+
         let mut segment_parsed_bytes = 0;
         let mut segments = Vec::new_in(arena);
 
@@ -159,7 +147,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                 segments.push(StrSegment::EscapedChar($ch));
 
                 // Advance past the segment we just added
-                state = state.advance(segment_parsed_bytes);
+                state.advance_mut(segment_parsed_bytes);
 
                 // Reset the segment
                 segment_parsed_bytes = 0;
@@ -178,7 +166,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
 
                     match std::str::from_utf8(string_bytes) {
                         Ok(string) => {
-                            state = state.advance(string.len());
+                            state.advance_mut(string.len());
 
                             segments.push($transform(string));
                         }
@@ -295,7 +283,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                     match bytes.next() {
                         Some(b'(') => {
                             // Advance past the `\(` before using the expr parser
-                            state = state.advance(2);
+                            state.advance_mut(2);
 
                             let original_byte_count = state.bytes().len();
 
@@ -322,7 +310,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                         }
                         Some(b'u') => {
                             // Advance past the `\u` before using the expr parser
-                            state = state.advance(2);
+                            state.advance_mut(2);
 
                             let original_byte_count = state.bytes().len();
 
