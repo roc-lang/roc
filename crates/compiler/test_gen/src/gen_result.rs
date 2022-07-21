@@ -308,15 +308,17 @@ fn roc_result_after_on_err() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn roc_result_after_err() {
-    assert_evals_to!(indoc!(
-        r#"
+    assert_evals_to!(
+        indoc!(
+            r#"
             result : Result Str I64
             result =
               Result.onErr (Ok "already a string") \num ->
                 if num < 0 then Ok "negative!" else Err -num
 
             result
-            "#),
+            "#
+        ),
         RocResult::ok(RocStr::from("already a string")),
         RocResult<RocStr, i64>
     );
