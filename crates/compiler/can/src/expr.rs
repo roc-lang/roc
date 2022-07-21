@@ -1335,8 +1335,9 @@ fn canonicalize_when_branch<'a>(
     let mut patterns = Vec::with_capacity(branch.patterns.len());
     let mut multi_pattern_variables = MultiPatternVariables::new(branch.patterns.len());
 
-    // TODO report symbols not bound in all patterns
-    for loc_pattern in branch.patterns.iter() {
+    for (i, loc_pattern) in branch.patterns.iter().enumerate() {
+        let permit_shadows = PermitShadows(i > 0); // patterns can shadow symbols defined in the first pattern.
+
         let can_pattern = canonicalize_pattern(
             env,
             var_store,
@@ -1345,7 +1346,7 @@ fn canonicalize_when_branch<'a>(
             WhenBranch,
             &loc_pattern.value,
             loc_pattern.region,
-            PermitShadows(true),
+            permit_shadows,
         );
 
         multi_pattern_variables.add_pattern(&can_pattern);
