@@ -1,6 +1,6 @@
 use crate::ast::{EscapedChar, StrLiteral, StrSegment};
 use crate::expr;
-use crate::parser::Progress::*;
+use crate::parser::Progress::{self, *};
 use crate::parser::{allocated, loc, specialize_ref, word1, BadInputError, EString, Parser};
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
@@ -120,15 +120,47 @@ pub fn parse_single_quote<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
     }
 }
 
+fn consume_indent<'a>(
+    mut state: State<'a>,
+    mut indent: u32,
+) -> Result<State, (Progress, EString<'a>, State<'a>)> {
+    while indent > 0 {
+        match state.bytes().first() {
+            Some(b' ') => {
+                state.advance_mut(1);
+                indent -= 1;
+            }
+            None | Some(b'\n') => {
+                break;
+            }
+            Some(_) => {
+                return Err((
+                    MadeProgress,
+                    EString::MultilineInsufficientIndent(state.pos()),
+                    state,
+                ));
+            }
+        }
+    }
+
+    Ok(state)
+}
+
 pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
     use StrLiteral::*;
 
     move |arena: &'a Bump, mut state: State<'a>| {
         let is_multiline;
 
+        let indent = state.column();
+
         if state.consume_mut("\"\"\"") {
             // we will be parsing a multi-line string
             is_multiline = true;
+
+            if state.consume_mut("\n") {
+                state = consume_indent(state, indent)?;
+            }
         } else if state.consume_mut("\"") {
             // we will be parsing a single-line string
             is_multiline = false;

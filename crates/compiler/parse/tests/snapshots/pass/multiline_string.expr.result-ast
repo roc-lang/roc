@@ -81,7 +81,7 @@ Defs(
                 @58-92 SpaceBefore(
                     Str(
                         PlainLine(
-                            "\n    Hello,\n\n    World!\n    ",
+                            "Hello,\n\n    World!\n    ",
                         ),
                     ),
                     [
