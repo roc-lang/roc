@@ -44,17 +44,16 @@ fn write_final_wasm() -> bool {
     DEBUG_SETTINGS.keep_test_binary
 }
 
+const PLATFORM_BYTES: &[u8] = include_bytes!(host_bytes_path!());
+
 #[allow(dead_code)]
 pub fn compile_to_wasm_bytes<'a, T: Wasm32Result>(
     arena: &'a bumpalo::Bump,
     src: &str,
     test_wrapper_type_info: PhantomData<T>,
 ) -> Vec<u8> {
-    let platform_bytes = include_bytes!(host_bytes_path!());
-    println!("Loading test host {}", host_bytes_path!());
-
     let compiled_bytes =
-        compile_roc_to_wasm_bytes(arena, platform_bytes, src, test_wrapper_type_info);
+        compile_roc_to_wasm_bytes(arena, PLATFORM_BYTES, src, test_wrapper_type_info);
 
     if write_final_wasm() {
         let build_dir_hash = crate::helpers::src_hash(src);
