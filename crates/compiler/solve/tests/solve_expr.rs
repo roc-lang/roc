@@ -7409,4 +7409,22 @@ mod solve_expr {
             "###
         );
     }
+
+    #[test]
+    fn catchall_branch_for_pattern_not_last() {
+        infer_queries!(
+            indoc!(
+                r#"
+                \x -> when x is
+                #^
+                        A B _ -> ""
+                        A _ C -> ""
+                "#
+            ),
+            @r#"""
+            x : [A [B]* [C]*]
+            """#
+            allow_errors: true
+        );
+    }
 }

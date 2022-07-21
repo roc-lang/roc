@@ -735,6 +735,7 @@ pub fn constrain_expr(
             let mut pattern_vars = Vec::with_capacity(branches.len());
             let mut pattern_headers = SendMap::default();
             let mut pattern_cons = Vec::with_capacity(branches.len() + 2);
+            let mut delayed_is_open_constraints = Vec::with_capacity(2);
             let mut branch_cons = Vec::with_capacity(branches.len());
 
             for (index, when_branch) in branches.iter().enumerate() {
@@ -749,19 +750,24 @@ pub fn constrain_expr(
                     )
                 };
 
-                let (new_pattern_vars, new_pattern_headers, pattern_con, branch_con) =
-                    constrain_when_branch_help(
-                        constraints,
-                        env,
-                        region,
-                        when_branch,
-                        expected_pattern,
-                        branch_expr_reason(
-                            &expected,
-                            HumanIndex::zero_based(index),
-                            when_branch.value.region,
-                        ),
-                    );
+                let (
+                    new_pattern_vars,
+                    new_pattern_headers,
+                    pattern_con,
+                    partial_delayed_is_open_constraints,
+                    branch_con,
+                ) = constrain_when_branch_help(
+                    constraints,
+                    env,
+                    region,
+                    when_branch,
+                    expected_pattern,
+                    branch_expr_reason(
+                        &expected,
+                        HumanIndex::zero_based(index),
+                        when_branch.value.region,
+                    ),
+                );
 
                 pattern_vars.extend(new_pattern_vars);
 
@@ -780,6 +786,7 @@ pub fn constrain_expr(
 
                 pattern_headers.extend(new_pattern_headers);
                 pattern_cons.push(pattern_con);
+                delayed_is_open_constraints.extend(partial_delayed_is_open_constraints);
 
                 branch_cons.push(branch_con);
             }
@@ -792,6 +799,11 @@ pub fn constrain_expr(
             //
             // The return type of each branch must equal the return type of
             // the entire when-expression.
+
+            // Layer on the "is-open" constraints at the very end, after we know what the branch
+            // types are supposed to look like without open-ness.
+            let is_open_constr = constraints.and_constraint(delayed_is_open_constraints);
+            pattern_cons.push(is_open_constr);
 
             // After solving the condition variable with what's expected from the branch patterns,
             // check it against the condition expression.
@@ -1804,6 +1816,7 @@ fn constrain_when_branch_help(
     Vec<Variable>,
     VecMap<Symbol, Loc<Type>>,
     Constraint,
+    Vec<Constraint>,
     Constraint,
 ) {
     let ret_constraint = constrain_expr(
@@ -1869,39 +1882,41 @@ fn constrain_when_branch_help(
         }
     }
 
-    let (pattern_constraints, body_constraints) = if let Some(loc_guard) = &when_branch.guard {
-        let guard_constraint = constrain_expr(
-            constraints,
-            env,
-            region,
-            &loc_guard.value,
-            Expected::ForReason(
-                Reason::WhenGuard,
-                Type::Variable(Variable::BOOL),
-                loc_guard.region,
-            ),
-        );
+    let (pattern_constraints, delayed_is_open_constraints, body_constraints) =
+        if let Some(loc_guard) = &when_branch.guard {
+            let guard_constraint = constrain_expr(
+                constraints,
+                env,
+                region,
+                &loc_guard.value,
+                Expected::ForReason(
+                    Reason::WhenGuard,
+                    Type::Variable(Variable::BOOL),
+                    loc_guard.region,
+                ),
+            );
 
-        // must introduce the headers from the pattern before constraining the guard
-        state
-            .constraints
-            .append(&mut state.delayed_is_open_constraints);
-        let state_constraints = constraints.and_constraint(state.constraints);
-        let inner = constraints.let_constraint([], [], [], guard_constraint, ret_constraint);
+            // must introduce the headers from the pattern before constraining the guard
+            let delayed_is_open_constraints = state.delayed_is_open_constraints;
+            let state_constraints = constraints.and_constraint(state.constraints);
+            let inner = constraints.let_constraint([], [], [], guard_constraint, ret_constraint);
 
-        (state_constraints, inner)
-    } else {
-        state
-            .constraints
-            .append(&mut state.delayed_is_open_constraints);
-        let state_constraints = constraints.and_constraint(state.constraints);
-        (state_constraints, ret_constraint)
-    };
+            (state_constraints, delayed_is_open_constraints, inner)
+        } else {
+            let delayed_is_open_constraints = state.delayed_is_open_constraints;
+            let state_constraints = constraints.and_constraint(state.constraints);
+            (
+                state_constraints,
+                delayed_is_open_constraints,
+                ret_constraint,
+            )
+        };
 
     (
         state.vars,
         state.headers,
         pattern_constraints,
+        delayed_is_open_constraints,
         body_constraints,
     )
 }

@@ -9875,4 +9875,16 @@ All branches in an `if` must have the same type!
         your code don't wonder why it is there.
         "###
     );
+
+    test_report!(
+        flip_flop_catch_all_branches_not_exhaustive,
+        indoc!(
+            r#"
+            \x -> when x is
+                    A B _ -> ""
+                    A _ C -> ""
+            "#
+        ),
+        @""
+    );
 }
