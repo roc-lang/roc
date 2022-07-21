@@ -1,6 +1,5 @@
 interface Http
     exposes [
-        HttpErr,
         Request,
         Method,
         Header,
@@ -10,36 +9,16 @@ interface Http
         Response,
         Metadata,
         Error,
-        getUtf8,
         header,
         emptyBody,
         bytesBody,
         stringBody,
-        # jsonBody,
-        # multiPartBody,
-        # stringPart,
-        # bytesPart,
         handleStringResponse,
         defaultRequest,
         errorToString,
         send,
     ]
-    imports [
-        Effect,
-        InternalTask,
-        # Json,
-        Task.{ Task },
-        # Encode.{ Encoding },
-        Url.{ Url },
-        InternalHttp,
-    ]
-
-HttpErr a : [
-    HttpErr [
-        NotFound Url,
-        Timeout Url,
-    ]
-]a
+    imports [Effect, InternalTask, Task.{ Task }, InternalHttp]
 
 Request : InternalHttp.Request
 Method : InternalHttp.Method
@@ -50,12 +29,6 @@ Body : InternalHttp.Body
 Response : InternalHttp.Response
 Metadata : InternalHttp.Metadata
 Error : InternalHttp.Error
-
-getUtf8 : Url -> Task Str (HttpErr *) [Net]*
-getUtf8 = \url ->
-    Effect.httpGetUtf8 url
-    |> Effect.map Ok # TODO actually handle errors
-    |> InternalTask.fromEffect
 
 defaultRequest : Request
 defaultRequest = {
@@ -110,7 +83,6 @@ stringBody = \mimeType, str ->
 # stringPart : Str, Str -> Part
 # stringPart = \name, str ->
 #     Part name (Str.toUtf8 str)
-
 handleStringResponse : Response -> Result Str Error
 handleStringResponse = \response ->
     when response is
