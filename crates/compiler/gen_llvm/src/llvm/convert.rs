@@ -235,6 +235,17 @@ impl<'ctx> RocUnion<'ctx> {
             .as_basic_type_enum();
 
         let struct_type = if let Some(tag_type) = tag_type {
+            let tag_width = match tag_type {
+                TagType::I8 => 1,
+                TagType::I16 => 2,
+            };
+
+            let tag_padding = round_up_to_alignment(tag_width, data_align) - tag_width;
+            let tag_padding_type = context
+                .i8_type()
+                .array_type(tag_padding)
+                .as_basic_type_enum();
+
             context.struct_type(
                 &[
                     alignment_array_type,
@@ -243,6 +254,7 @@ impl<'ctx> RocUnion<'ctx> {
                         TagType::I8 => context.i8_type().into(),
                         TagType::I16 => context.i16_type().into(),
                     },
+                    tag_padding_type,
                 ],
                 false,
             )
