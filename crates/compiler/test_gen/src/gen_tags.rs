@@ -1805,3 +1805,19 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
         i64
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_3560_nested_tag_constructor_is_newtype() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Wrapper (Payload "err") is
+                Wrapper (Payload str) -> str
+                Wrapper (AlternatePayload str) -> str
+            "#
+        ),
+        RocStr::from("err"),
+        RocStr
+    )
+}

@@ -977,9 +977,16 @@ fn needs_tests(pattern: &Pattern) -> bool {
 
     match pattern {
         Identifier(_) | Underscore => false,
+        NewtypeDestructure { arguments, .. } => {
+            // Newtypes that only have one argument decay immediately into that argument, so no
+            // test for them is needed.
+            //
+            // Newtypes with > 1 argument decay into a struct of those arguments, and we'll need to
+            // read the appropriate argument in the struct when constructing the decision tree.
+            arguments.len() != 1
+        }
 
         RecordDestructure(_, _)
-        | NewtypeDestructure { .. }
         | AppliedTag { .. }
         | OpaqueUnwrap { .. }
         | BitLiteral { .. }

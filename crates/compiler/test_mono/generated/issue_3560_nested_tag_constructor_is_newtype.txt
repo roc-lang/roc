@@ -1,0 +1,13 @@
+procedure Test.0 ():
+    let Test.10 : Str = "err";
+    let Test.9 : [C Str, C Str] = TagId(1) Test.10;
+    joinpoint Test.8:
+        let Test.4 : Str = UnionAtIndex (Id 0) (Index 0) Test.9;
+        inc Test.4;
+        dec Test.9;
+        ret Test.4;
+    in
+    let Test.3 : Str = UnionAtIndex (Id 1) (Index 0) Test.9;
+    inc Test.3;
+    dec Test.9;
+    ret Test.3;

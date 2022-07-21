@@ -7418,7 +7418,9 @@ mod solve_expr {
                         Wrapper (AlternatePayload str) -> str
                 "#
             ),
-            &[r#"Wrapper (Payload "err") : [Wrapper [AlternatePayload Str, Payload Str]]"#,]
+            @r###"
+            Wrapper (Payload "err") : [Wrapper [AlternatePayload Str, Payload Str]]
+            "###
         )
     }
 }
