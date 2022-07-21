@@ -7421,10 +7421,23 @@ mod solve_expr {
                         A _ C -> ""
                 "#
             ),
-            @r#"""
-            x : [A [B]* [C]*]
-            """#
+            @r#"x : [A [B]* [C]*]"#
             allow_errors: true
         );
+    }
+
+    #[test]
+    fn catchall_branch_walk_into_nested_types() {
+        infer_queries!(
+            indoc!(
+                r#"
+                \x -> when x is
+                #^
+                        { a: A { b: B } } -> ""
+                        _ -> ""
+                "#
+            ),
+            @r#"x : { a : [A { b : [B]* }*]* }*"#
+        )
     }
 }
