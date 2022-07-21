@@ -988,21 +988,19 @@ fn is_irrelevant_to<'a>(selected_path: &[PathInstruction], branch: &Branch<'a>) 
 fn needs_tests(pattern: &Pattern) -> bool {
     use Pattern::*;
 
-    loop {
-        match pattern {
-            Identifier(_) | Underscore => return false,
+    match pattern {
+        Identifier(_) | Underscore => false,
 
-            NewtypeDestructure { .. }
-            | RecordDestructure(..)
-            | AppliedTag { .. }
-            | OpaqueUnwrap { .. }
-            | BitLiteral { .. }
-            | EnumLiteral { .. }
-            | IntLiteral(_, _)
-            | FloatLiteral(_, _)
-            | DecimalLiteral(_)
-            | StrLiteral(_) => return true,
-        }
+        NewtypeDestructure { .. }
+        | RecordDestructure(..)
+        | AppliedTag { .. }
+        | OpaqueUnwrap { .. }
+        | BitLiteral { .. }
+        | EnumLiteral { .. }
+        | IntLiteral(_, _)
+        | FloatLiteral(_, _)
+        | DecimalLiteral(_)
+        | StrLiteral(_) => true,
     }
 }
 
