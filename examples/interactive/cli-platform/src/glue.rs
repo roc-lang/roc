@@ -54,39 +54,6 @@ pub union Error {
 ))]
 #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(u8)]
-pub enum discriminant_Part {
-    Part = 0,
-}
-
-impl core::fmt::Debug for discriminant_Part {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::Part => f.write_str("discriminant_Part::Part"),
-        }
-    }
-}
-
-#[cfg(any(
-    target_arch = "arm",
-    target_arch = "aarch64",
-    target_arch = "wasm32",
-    target_arch = "x86",
-    target_arch = "x86_64"
-))]
-#[repr(C)]
-pub union Part {
-    Part: core::mem::ManuallyDrop<Part_Part>,
-}
-
-#[cfg(any(
-    target_arch = "arm",
-    target_arch = "aarch64",
-    target_arch = "wasm32",
-    target_arch = "x86",
-    target_arch = "x86_64"
-))]
-#[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
-#[repr(u8)]
 pub enum discriminant_Header {
     Header = 0,
 }
@@ -120,14 +87,14 @@ pub union Header {
 ))]
 #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(u8)]
-pub enum discriminant_U5 {
+pub enum discriminant_U4 {
     MimeType = 0,
 }
 
-impl core::fmt::Debug for discriminant_U5 {
+impl core::fmt::Debug for discriminant_U4 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::MimeType => f.write_str("discriminant_U5::MimeType"),
+            Self::MimeType => f.write_str("discriminant_U4::MimeType"),
         }
     }
 }
@@ -140,7 +107,7 @@ impl core::fmt::Debug for discriminant_U5 {
     target_arch = "x86_64"
 ))]
 #[repr(C)]
-pub union U5 {
+pub union U4 {
     MimeType: core::mem::ManuallyDrop<roc_std::RocStr>,
 }
 
@@ -183,14 +150,14 @@ pub union Body {
 ))]
 #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(u8)]
-pub enum discriminant_U3 {
+pub enum discriminant_U2 {
     MimeType = 0,
 }
 
-impl core::fmt::Debug for discriminant_U3 {
+impl core::fmt::Debug for discriminant_U2 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::MimeType => f.write_str("discriminant_U3::MimeType"),
+            Self::MimeType => f.write_str("discriminant_U2::MimeType"),
         }
     }
 }
@@ -203,7 +170,7 @@ impl core::fmt::Debug for discriminant_U3 {
     target_arch = "x86_64"
 ))]
 #[repr(C)]
-pub union U3 {
+pub union U2 {
     MimeType: core::mem::ManuallyDrop<roc_std::RocStr>,
 }
 
@@ -245,55 +212,17 @@ pub union Response {
     _sizer: [u8; 56],
 }
 
-#[cfg(any(
-    target_arch = "arm",
-    target_arch = "aarch64",
-    target_arch = "x86",
-    target_arch = "x86_64"
-))]
-#[derive(Clone, Debug, PartialEq, PartialOrd)]
+#[cfg(any(target_arch = "arm", target_arch = "wasm32"))]
+#[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct Request {
+    pub timeout: TimeoutConfig,
     pub body: Body,
     pub headers: roc_std::RocList<Header>,
     pub progressTracking: ProgressTracking,
-    pub timeout: Timeout,
     pub url: roc_std::RocStr,
     pub allowCookiesFromOtherDomains: bool,
     pub method: Method,
-}
-
-#[cfg(any(
-    target_arch = "arm",
-    target_arch = "aarch64",
-    target_arch = "wasm32",
-    target_arch = "x86",
-    target_arch = "x86_64"
-))]
-#[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
-#[repr(u8)]
-pub enum discriminant_U8 {
-    MimeType = 0,
-}
-
-impl core::fmt::Debug for discriminant_U8 {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::MimeType => f.write_str("discriminant_U8::MimeType"),
-        }
-    }
-}
-
-#[cfg(any(
-    target_arch = "arm",
-    target_arch = "aarch64",
-    target_arch = "wasm32",
-    target_arch = "x86",
-    target_arch = "x86_64"
-))]
-#[repr(C)]
-pub union U8 {
-    MimeType: core::mem::ManuallyDrop<roc_std::RocStr>,
 }
 
 #[cfg(any(
@@ -371,14 +300,14 @@ pub union U6 {
 ))]
 #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(u8)]
-pub enum discriminant_U4 {
+pub enum discriminant_U5 {
     MimeType = 0,
 }
 
-impl core::fmt::Debug for discriminant_U4 {
+impl core::fmt::Debug for discriminant_U5 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::MimeType => f.write_str("discriminant_U4::MimeType"),
+            Self::MimeType => f.write_str("discriminant_U5::MimeType"),
         }
     }
 }
@@ -391,7 +320,7 @@ impl core::fmt::Debug for discriminant_U4 {
     target_arch = "x86_64"
 ))]
 #[repr(C)]
-pub union U4 {
+pub union U5 {
     MimeType: core::mem::ManuallyDrop<roc_std::RocStr>,
 }
 
@@ -404,14 +333,14 @@ pub union U4 {
 ))]
 #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(u8)]
-pub enum discriminant_U2 {
+pub enum discriminant_U3 {
     MimeType = 0,
 }
 
-impl core::fmt::Debug for discriminant_U2 {
+impl core::fmt::Debug for discriminant_U3 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::MimeType => f.write_str("discriminant_U2::MimeType"),
+            Self::MimeType => f.write_str("discriminant_U3::MimeType"),
         }
     }
 }
@@ -424,22 +353,8 @@ impl core::fmt::Debug for discriminant_U2 {
     target_arch = "x86_64"
 ))]
 #[repr(C)]
-pub union U2 {
+pub union U3 {
     MimeType: core::mem::ManuallyDrop<roc_std::RocStr>,
-}
-
-#[cfg(any(
-    target_arch = "arm",
-    target_arch = "aarch64",
-    target_arch = "wasm32",
-    target_arch = "x86",
-    target_arch = "x86_64"
-))]
-#[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
-#[repr(C)]
-struct Part_Part {
-    pub f0: roc_std::RocStr,
-    pub f1: roc_std::RocList<u8>,
 }
 
 #[cfg(any(
@@ -521,36 +436,6 @@ impl core::fmt::Debug for Method {
             Self::Trace => f.write_str("Method::Trace"),
         }
     }
-}
-
-#[cfg(any(
-    target_arch = "arm",
-    target_arch = "aarch64",
-    target_arch = "wasm32",
-    target_arch = "x86",
-    target_arch = "x86_64"
-))]
-#[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
-#[repr(u8)]
-pub enum discriminant_Timeout {
-    NoTimeout = 0,
-    Timeout = 1,
-}
-
-impl core::fmt::Debug for discriminant_Timeout {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::NoTimeout => f.write_str("discriminant_Timeout::NoTimeout"),
-            Self::Timeout => f.write_str("discriminant_Timeout::Timeout"),
-        }
-    }
-}
-
-#[cfg(any(target_arch = "arm", target_arch = "x86"))]
-#[repr(C)]
-pub union Timeout {
-    Timeout: f64,
-    _sizer: [u8; 12],
 }
 
 #[cfg(any(
@@ -648,6 +533,43 @@ pub union U1 {
     MimeType: core::mem::ManuallyDrop<roc_std::RocStr>,
 }
 
+#[cfg(any(
+    target_arch = "arm",
+    target_arch = "aarch64",
+    target_arch = "wasm32",
+    target_arch = "x86",
+    target_arch = "x86_64"
+))]
+#[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
+#[repr(u8)]
+pub enum discriminant_TimeoutConfig {
+    NoTimeout = 0,
+    TimeoutMilliseconds = 1,
+}
+
+impl core::fmt::Debug for discriminant_TimeoutConfig {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::NoTimeout => f.write_str("discriminant_TimeoutConfig::NoTimeout"),
+            Self::TimeoutMilliseconds => {
+                f.write_str("discriminant_TimeoutConfig::TimeoutMilliseconds")
+            }
+        }
+    }
+}
+
+#[cfg(any(
+    target_arch = "arm",
+    target_arch = "aarch64",
+    target_arch = "wasm32",
+    target_arch = "x86_64"
+))]
+#[repr(C)]
+pub union TimeoutConfig {
+    TimeoutMilliseconds: u64,
+    _sizer: [u8; 16],
+}
+
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[repr(C)]
 pub union Error {
@@ -673,15 +595,17 @@ pub union Response {
     _sizer: [u8; 112],
 }
 
-#[cfg(any(
-    target_arch = "aarch64",
-    target_arch = "wasm32",
-    target_arch = "x86_64"
-))]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64"))]
+#[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
-pub union Timeout {
-    Timeout: f64,
-    _sizer: [u8; 16],
+pub struct Request {
+    pub body: Body,
+    pub headers: roc_std::RocList<Header>,
+    pub progressTracking: ProgressTracking,
+    pub timeout: TimeoutConfig,
+    pub url: roc_std::RocStr,
+    pub allowCookiesFromOtherDomains: bool,
+    pub method: Method,
 }
 
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
@@ -691,17 +615,11 @@ pub union ProgressTracking {
     _sizer: [u8; 32],
 }
 
-#[cfg(target_arch = "wasm32")]
-#[derive(Clone, Debug, PartialEq, PartialOrd)]
+#[cfg(target_arch = "x86")]
 #[repr(C)]
-pub struct Request {
-    pub timeout: Timeout,
-    pub body: Body,
-    pub headers: roc_std::RocList<Header>,
-    pub progressTracking: ProgressTracking,
-    pub url: roc_std::RocStr,
-    pub allowCookiesFromOtherDomains: bool,
-    pub method: Method,
+pub union TimeoutConfig {
+    TimeoutMilliseconds: u64,
+    _sizer: [u8; 12],
 }
 
 impl Error {
@@ -1194,249 +1112,6 @@ impl core::fmt::Debug for Error {
     }
 }
 
-impl Part {
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
-    /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_Part {
-        unsafe {
-            let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
-
-            core::mem::transmute::<u8, discriminant_Part>(*bytes.as_ptr().add(23))
-        }
-    }
-
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
-    /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_Part) {
-        let discriminant_ptr: *mut discriminant_Part = (self as *mut Part).cast();
-
-        unsafe {
-            *(discriminant_ptr.add(23)) = discriminant;
-        }
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Construct a tag named `Part`, with the appropriate payload
-    pub fn Part(arg0: roc_std::RocStr, arg1: roc_std::RocList<u8>) -> Self {
-        let mut answer = Self {
-            Part: core::mem::ManuallyDrop::new(Part_Part { f0: arg0, f1: arg1 }),
-        };
-
-        answer.set_discriminant(discriminant_Part::Part);
-
-        answer
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Unsafely assume the given `Part` has a `.discriminant()` of `Part` and convert it to `Part`'s payload.
-    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-    /// Panics in debug builds if the `.discriminant()` doesn't return `Part`.
-    pub unsafe fn into_Part(mut self) -> (roc_std::RocStr, roc_std::RocList<u8>) {
-        debug_assert_eq!(self.discriminant(), discriminant_Part::Part);
-
-        let payload = core::mem::ManuallyDrop::take(&mut self.Part);
-
-        (payload.f0, payload.f1)
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Unsafely assume the given `Part` has a `.discriminant()` of `Part` and return its payload.
-    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-    /// Panics in debug builds if the `.discriminant()` doesn't return `Part`.
-    pub unsafe fn as_Part(&self) -> (&roc_std::RocStr, &roc_std::RocList<u8>) {
-        debug_assert_eq!(self.discriminant(), discriminant_Part::Part);
-
-        let payload = &self.Part;
-
-        (&payload.f0, &payload.f1)
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_Part {
-        unsafe {
-            let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
-
-            core::mem::transmute::<u8, discriminant_Part>(*bytes.as_ptr().add(47))
-        }
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_Part) {
-        let discriminant_ptr: *mut discriminant_Part = (self as *mut Part).cast();
-
-        unsafe {
-            *(discriminant_ptr.add(47)) = discriminant;
-        }
-    }
-}
-
-impl Drop for Part {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn drop(&mut self) {
-        // Drop the payloads
-        match self.discriminant() {
-            discriminant_Part::Part => unsafe { core::mem::ManuallyDrop::drop(&mut self.Part) },
-        }
-    }
-}
-
-impl Eq for Part {}
-
-impl PartialEq for Part {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn eq(&self, other: &Self) -> bool {
-        if self.discriminant() != other.discriminant() {
-            return false;
-        }
-
-        unsafe {
-            match self.discriminant() {
-                discriminant_Part::Part => self.Part == other.Part,
-            }
-        }
-    }
-}
-
-impl PartialOrd for Part {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        match self.discriminant().partial_cmp(&other.discriminant()) {
-            Some(core::cmp::Ordering::Equal) => {}
-            not_eq => return not_eq,
-        }
-
-        unsafe {
-            match self.discriminant() {
-                discriminant_Part::Part => self.Part.partial_cmp(&other.Part),
-            }
-        }
-    }
-}
-
-impl Ord for Part {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        match self.discriminant().cmp(&other.discriminant()) {
-            core::cmp::Ordering::Equal => {}
-            not_eq => return not_eq,
-        }
-
-        unsafe {
-            match self.discriminant() {
-                discriminant_Part::Part => self.Part.cmp(&other.Part),
-            }
-        }
-    }
-}
-
-impl Clone for Part {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn clone(&self) -> Self {
-        let mut answer = unsafe {
-            match self.discriminant() {
-                discriminant_Part::Part => Self {
-                    Part: self.Part.clone(),
-                },
-            }
-        };
-
-        answer.set_discriminant(self.discriminant());
-
-        answer
-    }
-}
-
-impl core::hash::Hash for Part {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
-        match self.discriminant() {
-            discriminant_Part::Part => unsafe {
-                discriminant_Part::Part.hash(state);
-                self.Part.hash(state);
-            },
-        }
-    }
-}
-
-impl core::fmt::Debug for Part {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("Part::")?;
-
-        unsafe {
-            match self.discriminant() {
-                discriminant_Part::Part => f
-                    .debug_tuple("Part")
-                    .field(&(&*self.Part).f0)
-                    .field(&(&*self.Part).f1)
-                    .finish(),
-            }
-        }
-    }
-}
-
 impl Header {
     #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
@@ -1682,21 +1357,21 @@ impl core::fmt::Debug for Header {
     }
 }
 
-impl U5 {
+impl U4 {
     #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_U5 {
+    pub fn discriminant(&self) -> discriminant_U4 {
         unsafe {
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
-            core::mem::transmute::<u8, discriminant_U5>(*bytes.as_ptr().add(11))
+            core::mem::transmute::<u8, discriminant_U4>(*bytes.as_ptr().add(11))
         }
     }
 
     #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_U5) {
-        let discriminant_ptr: *mut discriminant_U5 = (self as *mut U5).cast();
+    fn set_discriminant(&mut self, discriminant: discriminant_U4) {
+        let discriminant_ptr: *mut discriminant_U4 = (self as *mut U4).cast();
 
         unsafe {
             *(discriminant_ptr.add(11)) = discriminant;
@@ -1716,7 +1391,7 @@ impl U5 {
             MimeType: core::mem::ManuallyDrop::new(arg),
         };
 
-        answer.set_discriminant(discriminant_U5::MimeType);
+        answer.set_discriminant(discriminant_U4::MimeType);
 
         answer
     }
@@ -1728,11 +1403,11 @@ impl U5 {
         target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Unsafely assume the given `U5` has a `.discriminant()` of `MimeType` and convert it to `MimeType`'s payload.
+    /// Unsafely assume the given `U4` has a `.discriminant()` of `MimeType` and convert it to `MimeType`'s payload.
     /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
     /// Panics in debug builds if the `.discriminant()` doesn't return `MimeType`.
     pub unsafe fn into_MimeType(mut self) -> roc_std::RocStr {
-        debug_assert_eq!(self.discriminant(), discriminant_U5::MimeType);
+        debug_assert_eq!(self.discriminant(), discriminant_U4::MimeType);
 
         let payload = core::mem::ManuallyDrop::take(&mut self.MimeType);
 
@@ -1746,11 +1421,11 @@ impl U5 {
         target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Unsafely assume the given `U5` has a `.discriminant()` of `MimeType` and return its payload.
+    /// Unsafely assume the given `U4` has a `.discriminant()` of `MimeType` and return its payload.
     /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
     /// Panics in debug builds if the `.discriminant()` doesn't return `MimeType`.
     pub unsafe fn as_MimeType(&self) -> &roc_std::RocStr {
-        debug_assert_eq!(self.discriminant(), discriminant_U5::MimeType);
+        debug_assert_eq!(self.discriminant(), discriminant_U4::MimeType);
 
         let payload = &self.MimeType;
 
@@ -1759,18 +1434,18 @@ impl U5 {
 
     #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_U5 {
+    pub fn discriminant(&self) -> discriminant_U4 {
         unsafe {
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
-            core::mem::transmute::<u8, discriminant_U5>(*bytes.as_ptr().add(23))
+            core::mem::transmute::<u8, discriminant_U4>(*bytes.as_ptr().add(23))
         }
     }
 
     #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_U5) {
-        let discriminant_ptr: *mut discriminant_U5 = (self as *mut U5).cast();
+    fn set_discriminant(&mut self, discriminant: discriminant_U4) {
+        let discriminant_ptr: *mut discriminant_U4 = (self as *mut U4).cast();
 
         unsafe {
             *(discriminant_ptr.add(23)) = discriminant;
@@ -1778,7 +1453,7 @@ impl U5 {
     }
 }
 
-impl Drop for U5 {
+impl Drop for U4 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -1789,16 +1464,16 @@ impl Drop for U5 {
     fn drop(&mut self) {
         // Drop the payloads
         match self.discriminant() {
-            discriminant_U5::MimeType => unsafe {
+            discriminant_U4::MimeType => unsafe {
                 core::mem::ManuallyDrop::drop(&mut self.MimeType)
             },
         }
     }
 }
 
-impl Eq for U5 {}
+impl Eq for U4 {}
 
-impl PartialEq for U5 {
+impl PartialEq for U4 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -1813,13 +1488,13 @@ impl PartialEq for U5 {
 
         unsafe {
             match self.discriminant() {
-                discriminant_U5::MimeType => self.MimeType == other.MimeType,
+                discriminant_U4::MimeType => self.MimeType == other.MimeType,
             }
         }
     }
 }
 
-impl PartialOrd for U5 {
+impl PartialOrd for U4 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -1835,13 +1510,13 @@ impl PartialOrd for U5 {
 
         unsafe {
             match self.discriminant() {
-                discriminant_U5::MimeType => self.MimeType.partial_cmp(&other.MimeType),
+                discriminant_U4::MimeType => self.MimeType.partial_cmp(&other.MimeType),
             }
         }
     }
 }
 
-impl Ord for U5 {
+impl Ord for U4 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -1857,13 +1532,13 @@ impl Ord for U5 {
 
         unsafe {
             match self.discriminant() {
-                discriminant_U5::MimeType => self.MimeType.cmp(&other.MimeType),
+                discriminant_U4::MimeType => self.MimeType.cmp(&other.MimeType),
             }
         }
     }
 }
 
-impl Clone for U5 {
+impl Clone for U4 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -1874,7 +1549,7 @@ impl Clone for U5 {
     fn clone(&self) -> Self {
         let mut answer = unsafe {
             match self.discriminant() {
-                discriminant_U5::MimeType => Self {
+                discriminant_U4::MimeType => Self {
                     MimeType: self.MimeType.clone(),
                 },
             }
@@ -1886,7 +1561,7 @@ impl Clone for U5 {
     }
 }
 
-impl core::hash::Hash for U5 {
+impl core::hash::Hash for U4 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -1896,15 +1571,15 @@ impl core::hash::Hash for U5 {
     ))]
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         match self.discriminant() {
-            discriminant_U5::MimeType => unsafe {
-                discriminant_U5::MimeType.hash(state);
+            discriminant_U4::MimeType => unsafe {
+                discriminant_U4::MimeType.hash(state);
                 self.MimeType.hash(state);
             },
         }
     }
 }
 
-impl core::fmt::Debug for U5 {
+impl core::fmt::Debug for U4 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -1913,11 +1588,11 @@ impl core::fmt::Debug for U5 {
         target_arch = "x86_64"
     ))]
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("U5::")?;
+        f.write_str("U4::")?;
 
         unsafe {
             match self.discriminant() {
-                discriminant_U5::MimeType => {
+                discriminant_U4::MimeType => {
                     f.debug_tuple("MimeType").field(&*self.MimeType).finish()
                 }
             }
@@ -2224,21 +1899,21 @@ impl core::fmt::Debug for Body {
     }
 }
 
-impl U3 {
+impl U2 {
     #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_U3 {
+    pub fn discriminant(&self) -> discriminant_U2 {
         unsafe {
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
-            core::mem::transmute::<u8, discriminant_U3>(*bytes.as_ptr().add(11))
+            core::mem::transmute::<u8, discriminant_U2>(*bytes.as_ptr().add(11))
         }
     }
 
     #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_U3) {
-        let discriminant_ptr: *mut discriminant_U3 = (self as *mut U3).cast();
+    fn set_discriminant(&mut self, discriminant: discriminant_U2) {
+        let discriminant_ptr: *mut discriminant_U2 = (self as *mut U2).cast();
 
         unsafe {
             *(discriminant_ptr.add(11)) = discriminant;
@@ -2258,7 +1933,7 @@ impl U3 {
             MimeType: core::mem::ManuallyDrop::new(arg),
         };
 
-        answer.set_discriminant(discriminant_U3::MimeType);
+        answer.set_discriminant(discriminant_U2::MimeType);
 
         answer
     }
@@ -2270,11 +1945,11 @@ impl U3 {
         target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Unsafely assume the given `U3` has a `.discriminant()` of `MimeType` and convert it to `MimeType`'s payload.
+    /// Unsafely assume the given `U2` has a `.discriminant()` of `MimeType` and convert it to `MimeType`'s payload.
     /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
     /// Panics in debug builds if the `.discriminant()` doesn't return `MimeType`.
     pub unsafe fn into_MimeType(mut self) -> roc_std::RocStr {
-        debug_assert_eq!(self.discriminant(), discriminant_U3::MimeType);
+        debug_assert_eq!(self.discriminant(), discriminant_U2::MimeType);
 
         let payload = core::mem::ManuallyDrop::take(&mut self.MimeType);
 
@@ -2288,11 +1963,11 @@ impl U3 {
         target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Unsafely assume the given `U3` has a `.discriminant()` of `MimeType` and return its payload.
+    /// Unsafely assume the given `U2` has a `.discriminant()` of `MimeType` and return its payload.
     /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
     /// Panics in debug builds if the `.discriminant()` doesn't return `MimeType`.
     pub unsafe fn as_MimeType(&self) -> &roc_std::RocStr {
-        debug_assert_eq!(self.discriminant(), discriminant_U3::MimeType);
+        debug_assert_eq!(self.discriminant(), discriminant_U2::MimeType);
 
         let payload = &self.MimeType;
 
@@ -2301,18 +1976,18 @@ impl U3 {
 
     #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_U3 {
+    pub fn discriminant(&self) -> discriminant_U2 {
         unsafe {
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
-            core::mem::transmute::<u8, discriminant_U3>(*bytes.as_ptr().add(23))
+            core::mem::transmute::<u8, discriminant_U2>(*bytes.as_ptr().add(23))
         }
     }
 
     #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_U3) {
-        let discriminant_ptr: *mut discriminant_U3 = (self as *mut U3).cast();
+    fn set_discriminant(&mut self, discriminant: discriminant_U2) {
+        let discriminant_ptr: *mut discriminant_U2 = (self as *mut U2).cast();
 
         unsafe {
             *(discriminant_ptr.add(23)) = discriminant;
@@ -2320,7 +1995,7 @@ impl U3 {
     }
 }
 
-impl Drop for U3 {
+impl Drop for U2 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -2331,16 +2006,16 @@ impl Drop for U3 {
     fn drop(&mut self) {
         // Drop the payloads
         match self.discriminant() {
-            discriminant_U3::MimeType => unsafe {
+            discriminant_U2::MimeType => unsafe {
                 core::mem::ManuallyDrop::drop(&mut self.MimeType)
             },
         }
     }
 }
 
-impl Eq for U3 {}
+impl Eq for U2 {}
 
-impl PartialEq for U3 {
+impl PartialEq for U2 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -2355,13 +2030,13 @@ impl PartialEq for U3 {
 
         unsafe {
             match self.discriminant() {
-                discriminant_U3::MimeType => self.MimeType == other.MimeType,
+                discriminant_U2::MimeType => self.MimeType == other.MimeType,
             }
         }
     }
 }
 
-impl PartialOrd for U3 {
+impl PartialOrd for U2 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -2377,13 +2052,13 @@ impl PartialOrd for U3 {
 
         unsafe {
             match self.discriminant() {
-                discriminant_U3::MimeType => self.MimeType.partial_cmp(&other.MimeType),
+                discriminant_U2::MimeType => self.MimeType.partial_cmp(&other.MimeType),
             }
         }
     }
 }
 
-impl Ord for U3 {
+impl Ord for U2 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -2399,13 +2074,13 @@ impl Ord for U3 {
 
         unsafe {
             match self.discriminant() {
-                discriminant_U3::MimeType => self.MimeType.cmp(&other.MimeType),
+                discriminant_U2::MimeType => self.MimeType.cmp(&other.MimeType),
             }
         }
     }
 }
 
-impl Clone for U3 {
+impl Clone for U2 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -2416,7 +2091,7 @@ impl Clone for U3 {
     fn clone(&self) -> Self {
         let mut answer = unsafe {
             match self.discriminant() {
-                discriminant_U3::MimeType => Self {
+                discriminant_U2::MimeType => Self {
                     MimeType: self.MimeType.clone(),
                 },
             }
@@ -2428,7 +2103,7 @@ impl Clone for U3 {
     }
 }
 
-impl core::hash::Hash for U3 {
+impl core::hash::Hash for U2 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -2438,15 +2113,15 @@ impl core::hash::Hash for U3 {
     ))]
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         match self.discriminant() {
-            discriminant_U3::MimeType => unsafe {
-                discriminant_U3::MimeType.hash(state);
+            discriminant_U2::MimeType => unsafe {
+                discriminant_U2::MimeType.hash(state);
                 self.MimeType.hash(state);
             },
         }
     }
 }
 
-impl core::fmt::Debug for U3 {
+impl core::fmt::Debug for U2 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -2455,11 +2130,11 @@ impl core::fmt::Debug for U3 {
         target_arch = "x86_64"
     ))]
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("U3::")?;
+        f.write_str("U2::")?;
 
         unsafe {
             match self.discriminant() {
-                discriminant_U3::MimeType => {
+                discriminant_U2::MimeType => {
                     f.debug_tuple("MimeType").field(&*self.MimeType).finish()
                 }
             }
@@ -2968,249 +2643,6 @@ impl core::fmt::Debug for Response {
     }
 }
 
-impl U8 {
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
-    /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_U8 {
-        unsafe {
-            let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
-
-            core::mem::transmute::<u8, discriminant_U8>(*bytes.as_ptr().add(11))
-        }
-    }
-
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
-    /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_U8) {
-        let discriminant_ptr: *mut discriminant_U8 = (self as *mut U8).cast();
-
-        unsafe {
-            *(discriminant_ptr.add(11)) = discriminant;
-        }
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Construct a tag named `MimeType`, with the appropriate payload
-    pub fn MimeType(arg: roc_std::RocStr) -> Self {
-        let mut answer = Self {
-            MimeType: core::mem::ManuallyDrop::new(arg),
-        };
-
-        answer.set_discriminant(discriminant_U8::MimeType);
-
-        answer
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Unsafely assume the given `U8` has a `.discriminant()` of `MimeType` and convert it to `MimeType`'s payload.
-    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-    /// Panics in debug builds if the `.discriminant()` doesn't return `MimeType`.
-    pub unsafe fn into_MimeType(mut self) -> roc_std::RocStr {
-        debug_assert_eq!(self.discriminant(), discriminant_U8::MimeType);
-
-        let payload = core::mem::ManuallyDrop::take(&mut self.MimeType);
-
-        payload
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Unsafely assume the given `U8` has a `.discriminant()` of `MimeType` and return its payload.
-    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-    /// Panics in debug builds if the `.discriminant()` doesn't return `MimeType`.
-    pub unsafe fn as_MimeType(&self) -> &roc_std::RocStr {
-        debug_assert_eq!(self.discriminant(), discriminant_U8::MimeType);
-
-        let payload = &self.MimeType;
-
-        &payload
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_U8 {
-        unsafe {
-            let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
-
-            core::mem::transmute::<u8, discriminant_U8>(*bytes.as_ptr().add(23))
-        }
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_U8) {
-        let discriminant_ptr: *mut discriminant_U8 = (self as *mut U8).cast();
-
-        unsafe {
-            *(discriminant_ptr.add(23)) = discriminant;
-        }
-    }
-}
-
-impl Drop for U8 {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn drop(&mut self) {
-        // Drop the payloads
-        match self.discriminant() {
-            discriminant_U8::MimeType => unsafe {
-                core::mem::ManuallyDrop::drop(&mut self.MimeType)
-            },
-        }
-    }
-}
-
-impl Eq for U8 {}
-
-impl PartialEq for U8 {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn eq(&self, other: &Self) -> bool {
-        if self.discriminant() != other.discriminant() {
-            return false;
-        }
-
-        unsafe {
-            match self.discriminant() {
-                discriminant_U8::MimeType => self.MimeType == other.MimeType,
-            }
-        }
-    }
-}
-
-impl PartialOrd for U8 {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        match self.discriminant().partial_cmp(&other.discriminant()) {
-            Some(core::cmp::Ordering::Equal) => {}
-            not_eq => return not_eq,
-        }
-
-        unsafe {
-            match self.discriminant() {
-                discriminant_U8::MimeType => self.MimeType.partial_cmp(&other.MimeType),
-            }
-        }
-    }
-}
-
-impl Ord for U8 {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        match self.discriminant().cmp(&other.discriminant()) {
-            core::cmp::Ordering::Equal => {}
-            not_eq => return not_eq,
-        }
-
-        unsafe {
-            match self.discriminant() {
-                discriminant_U8::MimeType => self.MimeType.cmp(&other.MimeType),
-            }
-        }
-    }
-}
-
-impl Clone for U8 {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn clone(&self) -> Self {
-        let mut answer = unsafe {
-            match self.discriminant() {
-                discriminant_U8::MimeType => Self {
-                    MimeType: self.MimeType.clone(),
-                },
-            }
-        };
-
-        answer.set_discriminant(self.discriminant());
-
-        answer
-    }
-}
-
-impl core::hash::Hash for U8 {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
-        match self.discriminant() {
-            discriminant_U8::MimeType => unsafe {
-                discriminant_U8::MimeType.hash(state);
-                self.MimeType.hash(state);
-            },
-        }
-    }
-}
-
-impl core::fmt::Debug for U8 {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("U8::")?;
-
-        unsafe {
-            match self.discriminant() {
-                discriminant_U8::MimeType => {
-                    f.debug_tuple("MimeType").field(&*self.MimeType).finish()
-                }
-            }
-        }
-    }
-}
-
 impl U7 {
     #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
@@ -3697,21 +3129,21 @@ impl core::fmt::Debug for U6 {
     }
 }
 
-impl U4 {
+impl U5 {
     #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_U4 {
+    pub fn discriminant(&self) -> discriminant_U5 {
         unsafe {
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
-            core::mem::transmute::<u8, discriminant_U4>(*bytes.as_ptr().add(11))
+            core::mem::transmute::<u8, discriminant_U5>(*bytes.as_ptr().add(11))
         }
     }
 
     #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_U4) {
-        let discriminant_ptr: *mut discriminant_U4 = (self as *mut U4).cast();
+    fn set_discriminant(&mut self, discriminant: discriminant_U5) {
+        let discriminant_ptr: *mut discriminant_U5 = (self as *mut U5).cast();
 
         unsafe {
             *(discriminant_ptr.add(11)) = discriminant;
@@ -3731,7 +3163,7 @@ impl U4 {
             MimeType: core::mem::ManuallyDrop::new(arg),
         };
 
-        answer.set_discriminant(discriminant_U4::MimeType);
+        answer.set_discriminant(discriminant_U5::MimeType);
 
         answer
     }
@@ -3743,11 +3175,11 @@ impl U4 {
         target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Unsafely assume the given `U4` has a `.discriminant()` of `MimeType` and convert it to `MimeType`'s payload.
+    /// Unsafely assume the given `U5` has a `.discriminant()` of `MimeType` and convert it to `MimeType`'s payload.
     /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
     /// Panics in debug builds if the `.discriminant()` doesn't return `MimeType`.
     pub unsafe fn into_MimeType(mut self) -> roc_std::RocStr {
-        debug_assert_eq!(self.discriminant(), discriminant_U4::MimeType);
+        debug_assert_eq!(self.discriminant(), discriminant_U5::MimeType);
 
         let payload = core::mem::ManuallyDrop::take(&mut self.MimeType);
 
@@ -3761,11 +3193,11 @@ impl U4 {
         target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Unsafely assume the given `U4` has a `.discriminant()` of `MimeType` and return its payload.
+    /// Unsafely assume the given `U5` has a `.discriminant()` of `MimeType` and return its payload.
     /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
     /// Panics in debug builds if the `.discriminant()` doesn't return `MimeType`.
     pub unsafe fn as_MimeType(&self) -> &roc_std::RocStr {
-        debug_assert_eq!(self.discriminant(), discriminant_U4::MimeType);
+        debug_assert_eq!(self.discriminant(), discriminant_U5::MimeType);
 
         let payload = &self.MimeType;
 
@@ -3774,18 +3206,18 @@ impl U4 {
 
     #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_U4 {
+    pub fn discriminant(&self) -> discriminant_U5 {
         unsafe {
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
-            core::mem::transmute::<u8, discriminant_U4>(*bytes.as_ptr().add(23))
+            core::mem::transmute::<u8, discriminant_U5>(*bytes.as_ptr().add(23))
         }
     }
 
     #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_U4) {
-        let discriminant_ptr: *mut discriminant_U4 = (self as *mut U4).cast();
+    fn set_discriminant(&mut self, discriminant: discriminant_U5) {
+        let discriminant_ptr: *mut discriminant_U5 = (self as *mut U5).cast();
 
         unsafe {
             *(discriminant_ptr.add(23)) = discriminant;
@@ -3793,7 +3225,7 @@ impl U4 {
     }
 }
 
-impl Drop for U4 {
+impl Drop for U5 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -3804,16 +3236,16 @@ impl Drop for U4 {
     fn drop(&mut self) {
         // Drop the payloads
         match self.discriminant() {
-            discriminant_U4::MimeType => unsafe {
+            discriminant_U5::MimeType => unsafe {
                 core::mem::ManuallyDrop::drop(&mut self.MimeType)
             },
         }
     }
 }
 
-impl Eq for U4 {}
+impl Eq for U5 {}
 
-impl PartialEq for U4 {
+impl PartialEq for U5 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -3828,13 +3260,13 @@ impl PartialEq for U4 {
 
         unsafe {
             match self.discriminant() {
-                discriminant_U4::MimeType => self.MimeType == other.MimeType,
+                discriminant_U5::MimeType => self.MimeType == other.MimeType,
             }
         }
     }
 }
 
-impl PartialOrd for U4 {
+impl PartialOrd for U5 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -3850,13 +3282,13 @@ impl PartialOrd for U4 {
 
         unsafe {
             match self.discriminant() {
-                discriminant_U4::MimeType => self.MimeType.partial_cmp(&other.MimeType),
+                discriminant_U5::MimeType => self.MimeType.partial_cmp(&other.MimeType),
             }
         }
     }
 }
 
-impl Ord for U4 {
+impl Ord for U5 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -3872,13 +3304,13 @@ impl Ord for U4 {
 
         unsafe {
             match self.discriminant() {
-                discriminant_U4::MimeType => self.MimeType.cmp(&other.MimeType),
+                discriminant_U5::MimeType => self.MimeType.cmp(&other.MimeType),
             }
         }
     }
 }
 
-impl Clone for U4 {
+impl Clone for U5 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -3889,7 +3321,7 @@ impl Clone for U4 {
     fn clone(&self) -> Self {
         let mut answer = unsafe {
             match self.discriminant() {
-                discriminant_U4::MimeType => Self {
+                discriminant_U5::MimeType => Self {
                     MimeType: self.MimeType.clone(),
                 },
             }
@@ -3901,7 +3333,7 @@ impl Clone for U4 {
     }
 }
 
-impl core::hash::Hash for U4 {
+impl core::hash::Hash for U5 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -3911,15 +3343,15 @@ impl core::hash::Hash for U4 {
     ))]
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         match self.discriminant() {
-            discriminant_U4::MimeType => unsafe {
-                discriminant_U4::MimeType.hash(state);
+            discriminant_U5::MimeType => unsafe {
+                discriminant_U5::MimeType.hash(state);
                 self.MimeType.hash(state);
             },
         }
     }
 }
 
-impl core::fmt::Debug for U4 {
+impl core::fmt::Debug for U5 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -3928,11 +3360,11 @@ impl core::fmt::Debug for U4 {
         target_arch = "x86_64"
     ))]
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("U4::")?;
+        f.write_str("U5::")?;
 
         unsafe {
             match self.discriminant() {
-                discriminant_U4::MimeType => {
+                discriminant_U5::MimeType => {
                     f.debug_tuple("MimeType").field(&*self.MimeType).finish()
                 }
             }
@@ -3940,21 +3372,21 @@ impl core::fmt::Debug for U4 {
     }
 }
 
-impl U2 {
+impl U3 {
     #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_U2 {
+    pub fn discriminant(&self) -> discriminant_U3 {
         unsafe {
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
-            core::mem::transmute::<u8, discriminant_U2>(*bytes.as_ptr().add(11))
+            core::mem::transmute::<u8, discriminant_U3>(*bytes.as_ptr().add(11))
         }
     }
 
     #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_U2) {
-        let discriminant_ptr: *mut discriminant_U2 = (self as *mut U2).cast();
+    fn set_discriminant(&mut self, discriminant: discriminant_U3) {
+        let discriminant_ptr: *mut discriminant_U3 = (self as *mut U3).cast();
 
         unsafe {
             *(discriminant_ptr.add(11)) = discriminant;
@@ -3974,7 +3406,7 @@ impl U2 {
             MimeType: core::mem::ManuallyDrop::new(arg),
         };
 
-        answer.set_discriminant(discriminant_U2::MimeType);
+        answer.set_discriminant(discriminant_U3::MimeType);
 
         answer
     }
@@ -3986,11 +3418,11 @@ impl U2 {
         target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Unsafely assume the given `U2` has a `.discriminant()` of `MimeType` and convert it to `MimeType`'s payload.
+    /// Unsafely assume the given `U3` has a `.discriminant()` of `MimeType` and convert it to `MimeType`'s payload.
     /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
     /// Panics in debug builds if the `.discriminant()` doesn't return `MimeType`.
     pub unsafe fn into_MimeType(mut self) -> roc_std::RocStr {
-        debug_assert_eq!(self.discriminant(), discriminant_U2::MimeType);
+        debug_assert_eq!(self.discriminant(), discriminant_U3::MimeType);
 
         let payload = core::mem::ManuallyDrop::take(&mut self.MimeType);
 
@@ -4004,11 +3436,11 @@ impl U2 {
         target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Unsafely assume the given `U2` has a `.discriminant()` of `MimeType` and return its payload.
+    /// Unsafely assume the given `U3` has a `.discriminant()` of `MimeType` and return its payload.
     /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
     /// Panics in debug builds if the `.discriminant()` doesn't return `MimeType`.
     pub unsafe fn as_MimeType(&self) -> &roc_std::RocStr {
-        debug_assert_eq!(self.discriminant(), discriminant_U2::MimeType);
+        debug_assert_eq!(self.discriminant(), discriminant_U3::MimeType);
 
         let payload = &self.MimeType;
 
@@ -4017,18 +3449,18 @@ impl U2 {
 
     #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_U2 {
+    pub fn discriminant(&self) -> discriminant_U3 {
         unsafe {
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
-            core::mem::transmute::<u8, discriminant_U2>(*bytes.as_ptr().add(23))
+            core::mem::transmute::<u8, discriminant_U3>(*bytes.as_ptr().add(23))
         }
     }
 
     #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_U2) {
-        let discriminant_ptr: *mut discriminant_U2 = (self as *mut U2).cast();
+    fn set_discriminant(&mut self, discriminant: discriminant_U3) {
+        let discriminant_ptr: *mut discriminant_U3 = (self as *mut U3).cast();
 
         unsafe {
             *(discriminant_ptr.add(23)) = discriminant;
@@ -4036,7 +3468,7 @@ impl U2 {
     }
 }
 
-impl Drop for U2 {
+impl Drop for U3 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -4047,16 +3479,16 @@ impl Drop for U2 {
     fn drop(&mut self) {
         // Drop the payloads
         match self.discriminant() {
-            discriminant_U2::MimeType => unsafe {
+            discriminant_U3::MimeType => unsafe {
                 core::mem::ManuallyDrop::drop(&mut self.MimeType)
             },
         }
     }
 }
 
-impl Eq for U2 {}
+impl Eq for U3 {}
 
-impl PartialEq for U2 {
+impl PartialEq for U3 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -4071,13 +3503,13 @@ impl PartialEq for U2 {
 
         unsafe {
             match self.discriminant() {
-                discriminant_U2::MimeType => self.MimeType == other.MimeType,
+                discriminant_U3::MimeType => self.MimeType == other.MimeType,
             }
         }
     }
 }
 
-impl PartialOrd for U2 {
+impl PartialOrd for U3 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -4093,13 +3525,13 @@ impl PartialOrd for U2 {
 
         unsafe {
             match self.discriminant() {
-                discriminant_U2::MimeType => self.MimeType.partial_cmp(&other.MimeType),
+                discriminant_U3::MimeType => self.MimeType.partial_cmp(&other.MimeType),
             }
         }
     }
 }
 
-impl Ord for U2 {
+impl Ord for U3 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -4115,13 +3547,13 @@ impl Ord for U2 {
 
         unsafe {
             match self.discriminant() {
-                discriminant_U2::MimeType => self.MimeType.cmp(&other.MimeType),
+                discriminant_U3::MimeType => self.MimeType.cmp(&other.MimeType),
             }
         }
     }
 }
 
-impl Clone for U2 {
+impl Clone for U3 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -4132,7 +3564,7 @@ impl Clone for U2 {
     fn clone(&self) -> Self {
         let mut answer = unsafe {
             match self.discriminant() {
-                discriminant_U2::MimeType => Self {
+                discriminant_U3::MimeType => Self {
                     MimeType: self.MimeType.clone(),
                 },
             }
@@ -4144,7 +3576,7 @@ impl Clone for U2 {
     }
 }
 
-impl core::hash::Hash for U2 {
+impl core::hash::Hash for U3 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -4154,15 +3586,15 @@ impl core::hash::Hash for U2 {
     ))]
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         match self.discriminant() {
-            discriminant_U2::MimeType => unsafe {
-                discriminant_U2::MimeType.hash(state);
+            discriminant_U3::MimeType => unsafe {
+                discriminant_U3::MimeType.hash(state);
                 self.MimeType.hash(state);
             },
         }
     }
 }
 
-impl core::fmt::Debug for U2 {
+impl core::fmt::Debug for U3 {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -4171,312 +3603,12 @@ impl core::fmt::Debug for U2 {
         target_arch = "x86_64"
     ))]
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("U2::")?;
+        f.write_str("U3::")?;
 
         unsafe {
             match self.discriminant() {
-                discriminant_U2::MimeType => {
+                discriminant_U3::MimeType => {
                     f.debug_tuple("MimeType").field(&*self.MimeType).finish()
-                }
-            }
-        }
-    }
-}
-
-impl Timeout {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_Timeout {
-        unsafe {
-            let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
-
-            core::mem::transmute::<u8, discriminant_Timeout>(*bytes.as_ptr().add(8))
-        }
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_Timeout) {
-        let discriminant_ptr: *mut discriminant_Timeout = (self as *mut Timeout).cast();
-
-        unsafe {
-            *(discriminant_ptr.add(8)) = discriminant;
-        }
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// A tag named NoTimeout, which has no payload.
-    pub const NoTimeout: Self = unsafe {
-        let mut bytes = [0; core::mem::size_of::<Timeout>()];
-
-        bytes[8] = discriminant_Timeout::NoTimeout as u8;
-
-        core::mem::transmute::<[u8; core::mem::size_of::<Timeout>()], Timeout>(bytes)
-    };
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `into_` methods return a payload, but since the NoTimeout tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_NoTimeout(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the NoTimeout tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub unsafe fn as_NoTimeout(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Construct a tag named `Timeout`, with the appropriate payload
-    pub fn Timeout(arg: f64) -> Self {
-        let mut answer = Self { Timeout: arg };
-
-        answer.set_discriminant(discriminant_Timeout::Timeout);
-
-        answer
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Unsafely assume the given `Timeout` has a `.discriminant()` of `Timeout` and convert it to `Timeout`'s payload.
-    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-    /// Panics in debug builds if the `.discriminant()` doesn't return `Timeout`.
-    pub unsafe fn into_Timeout(self) -> f64 {
-        debug_assert_eq!(self.discriminant(), discriminant_Timeout::Timeout);
-
-        let payload = self.Timeout;
-
-        payload
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Unsafely assume the given `Timeout` has a `.discriminant()` of `Timeout` and return its payload.
-    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-    /// Panics in debug builds if the `.discriminant()` doesn't return `Timeout`.
-    pub unsafe fn as_Timeout(&self) -> &f64 {
-        debug_assert_eq!(self.discriminant(), discriminant_Timeout::Timeout);
-
-        let payload = &self.Timeout;
-
-        &payload
-    }
-}
-
-impl Drop for Timeout {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn drop(&mut self) {
-        // Drop the payloads
-        match self.discriminant() {
-            discriminant_Timeout::NoTimeout => {}
-            discriminant_Timeout::Timeout => {}
-        }
-    }
-}
-
-impl PartialEq for Timeout {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn eq(&self, other: &Self) -> bool {
-        if self.discriminant() != other.discriminant() {
-            return false;
-        }
-
-        unsafe {
-            match self.discriminant() {
-                discriminant_Timeout::NoTimeout => true,
-                discriminant_Timeout::Timeout => self.Timeout == other.Timeout,
-            }
-        }
-    }
-}
-
-impl PartialOrd for Timeout {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        match self.discriminant().partial_cmp(&other.discriminant()) {
-            Some(core::cmp::Ordering::Equal) => {}
-            not_eq => return not_eq,
-        }
-
-        unsafe {
-            match self.discriminant() {
-                discriminant_Timeout::NoTimeout => Some(core::cmp::Ordering::Equal),
-                discriminant_Timeout::Timeout => self.Timeout.partial_cmp(&other.Timeout),
-            }
-        }
-    }
-}
-
-// error[E0184]: the trait `Copy` may not be implemented for this type; the type has a destructor
-//     --> src/glue.rs:4399:1
-//      |
-// 4399 | impl Copy for Timeout {}
-//      | ^^^^^^^^^^^^^^^^^^^^^^^^ Copy not allowed on types with destructors
-//
-// For more information about this error, try `rustc --explain E0184`.
-//
-// impl Ord for Timeout {
-//     #[cfg(any(
-//         target_arch = "arm",
-//         target_arch = "aarch64",
-//         target_arch = "wasm32",
-//         target_arch = "x86",
-//         target_arch = "x86_64"
-//     ))]
-//     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-//         match self.discriminant().cmp(&other.discriminant()) {
-//             core::cmp::Ordering::Equal => {}
-//             not_eq => return not_eq,
-//         }
-
-//         unsafe {
-//             match self.discriminant() {
-//                 discriminant_Timeout::NoTimeout => core::cmp::Ordering::Equal,
-//                 discriminant_Timeout::Timeout => self.Timeout.cmp(&other.Timeout),
-//             }
-//         }
-//     }
-// }
-
-// impl Copy for Timeout {}
-
-impl Clone for Timeout {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn clone(&self) -> Self {
-        let mut answer = unsafe {
-            match self.discriminant() {
-                discriminant_Timeout::NoTimeout => {
-                    core::mem::transmute::<core::mem::MaybeUninit<Timeout>, Timeout>(
-                        core::mem::MaybeUninit::uninit(),
-                    )
-                }
-                discriminant_Timeout::Timeout => Self {
-                    Timeout: self.Timeout.clone(),
-                },
-            }
-        };
-
-        answer.set_discriminant(self.discriminant());
-
-        answer
-    }
-}
-
-// error[E0599]: no method named `hash` found for type `f64` in the current scope
-//     --> src/glue.rs:4450:30
-//      |
-// 4450 |                 self.Timeout.hash(state);
-//      |                              ^^^^ method not found in `f64`
-//
-// For more information about this error, try `rustc --explain E0599`.
-//
-// impl core::hash::Hash for Timeout {
-//     #[cfg(any(
-//         target_arch = "arm",
-//         target_arch = "aarch64",
-//         target_arch = "wasm32",
-//         target_arch = "x86",
-//         target_arch = "x86_64"
-//     ))]
-//     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
-//         match self.discriminant() {
-//             discriminant_Timeout::NoTimeout => discriminant_Timeout::NoTimeout.hash(state),
-//             discriminant_Timeout::Timeout => unsafe {
-//                 discriminant_Timeout::Timeout.hash(state);
-//                 self.Timeout.hash(state);
-//             },
-//         }
-//     }
-// }
-
-impl core::fmt::Debug for Timeout {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("Timeout::")?;
-
-        unsafe {
-            match self.discriminant() {
-                discriminant_Timeout::NoTimeout => f.write_str("NoTimeout"),
-                discriminant_Timeout::Timeout => {
-                    f.debug_tuple("Timeout").field(&self.Timeout).finish()
                 }
             }
         }
@@ -5046,6 +4178,309 @@ impl core::fmt::Debug for U1 {
                 discriminant_U1::MimeType => {
                     f.debug_tuple("MimeType").field(&*self.MimeType).finish()
                 }
+            }
+        }
+    }
+}
+
+impl TimeoutConfig {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Returns which variant this tag union holds. Note that this never includes a payload!
+    pub fn discriminant(&self) -> discriminant_TimeoutConfig {
+        unsafe {
+            let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
+
+            core::mem::transmute::<u8, discriminant_TimeoutConfig>(*bytes.as_ptr().add(8))
+        }
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Internal helper
+    fn set_discriminant(&mut self, discriminant: discriminant_TimeoutConfig) {
+        let discriminant_ptr: *mut discriminant_TimeoutConfig = (self as *mut TimeoutConfig).cast();
+
+        unsafe {
+            *(discriminant_ptr.add(8)) = discriminant;
+        }
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// A tag named NoTimeout, which has no payload.
+    pub const NoTimeout: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<TimeoutConfig>()];
+
+        bytes[8] = discriminant_TimeoutConfig::NoTimeout as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<TimeoutConfig>()], TimeoutConfig>(bytes)
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the NoTimeout tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_NoTimeout(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the NoTimeout tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub unsafe fn as_NoTimeout(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Construct a tag named `TimeoutMilliseconds`, with the appropriate payload
+    pub fn TimeoutMilliseconds(arg: u64) -> Self {
+        let mut answer = Self {
+            TimeoutMilliseconds: arg,
+        };
+
+        answer.set_discriminant(discriminant_TimeoutConfig::TimeoutMilliseconds);
+
+        answer
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Unsafely assume the given `TimeoutConfig` has a `.discriminant()` of `TimeoutMilliseconds` and convert it to `TimeoutMilliseconds`'s payload.
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `TimeoutMilliseconds`.
+    pub unsafe fn into_TimeoutMilliseconds(self) -> u64 {
+        debug_assert_eq!(
+            self.discriminant(),
+            discriminant_TimeoutConfig::TimeoutMilliseconds
+        );
+
+        let payload = self.TimeoutMilliseconds;
+
+        payload
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Unsafely assume the given `TimeoutConfig` has a `.discriminant()` of `TimeoutMilliseconds` and return its payload.
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `TimeoutMilliseconds`.
+    pub unsafe fn as_TimeoutMilliseconds(&self) -> &u64 {
+        debug_assert_eq!(
+            self.discriminant(),
+            discriminant_TimeoutConfig::TimeoutMilliseconds
+        );
+
+        let payload = &self.TimeoutMilliseconds;
+
+        &payload
+    }
+}
+
+impl Drop for TimeoutConfig {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    fn drop(&mut self) {
+        // Drop the payloads
+        match self.discriminant() {
+            discriminant_TimeoutConfig::NoTimeout => {}
+            discriminant_TimeoutConfig::TimeoutMilliseconds => {}
+        }
+    }
+}
+
+impl Eq for TimeoutConfig {}
+
+impl PartialEq for TimeoutConfig {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    fn eq(&self, other: &Self) -> bool {
+        if self.discriminant() != other.discriminant() {
+            return false;
+        }
+
+        unsafe {
+            match self.discriminant() {
+                discriminant_TimeoutConfig::NoTimeout => true,
+                discriminant_TimeoutConfig::TimeoutMilliseconds => {
+                    self.TimeoutMilliseconds == other.TimeoutMilliseconds
+                }
+            }
+        }
+    }
+}
+
+impl PartialOrd for TimeoutConfig {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        match self.discriminant().partial_cmp(&other.discriminant()) {
+            Some(core::cmp::Ordering::Equal) => {}
+            not_eq => return not_eq,
+        }
+
+        unsafe {
+            match self.discriminant() {
+                discriminant_TimeoutConfig::NoTimeout => Some(core::cmp::Ordering::Equal),
+                discriminant_TimeoutConfig::TimeoutMilliseconds => self
+                    .TimeoutMilliseconds
+                    .partial_cmp(&other.TimeoutMilliseconds),
+            }
+        }
+    }
+}
+
+impl Ord for TimeoutConfig {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        match self.discriminant().cmp(&other.discriminant()) {
+            core::cmp::Ordering::Equal => {}
+            not_eq => return not_eq,
+        }
+
+        unsafe {
+            match self.discriminant() {
+                discriminant_TimeoutConfig::NoTimeout => core::cmp::Ordering::Equal,
+                discriminant_TimeoutConfig::TimeoutMilliseconds => {
+                    self.TimeoutMilliseconds.cmp(&other.TimeoutMilliseconds)
+                }
+            }
+        }
+    }
+}
+
+// impl Copy for TimeoutConfig {}
+
+impl Clone for TimeoutConfig {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    fn clone(&self) -> Self {
+        let mut answer = unsafe {
+            match self.discriminant() {
+                discriminant_TimeoutConfig::NoTimeout => {
+                    core::mem::transmute::<core::mem::MaybeUninit<TimeoutConfig>, TimeoutConfig>(
+                        core::mem::MaybeUninit::uninit(),
+                    )
+                }
+                discriminant_TimeoutConfig::TimeoutMilliseconds => Self {
+                    TimeoutMilliseconds: self.TimeoutMilliseconds.clone(),
+                },
+            }
+        };
+
+        answer.set_discriminant(self.discriminant());
+
+        answer
+    }
+}
+
+impl core::hash::Hash for TimeoutConfig {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        match self.discriminant() {
+            discriminant_TimeoutConfig::NoTimeout => {
+                discriminant_TimeoutConfig::NoTimeout.hash(state)
+            }
+            discriminant_TimeoutConfig::TimeoutMilliseconds => unsafe {
+                discriminant_TimeoutConfig::TimeoutMilliseconds.hash(state);
+                self.TimeoutMilliseconds.hash(state);
+            },
+        }
+    }
+}
+
+impl core::fmt::Debug for TimeoutConfig {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("TimeoutConfig::")?;
+
+        unsafe {
+            match self.discriminant() {
+                discriminant_TimeoutConfig::NoTimeout => f.write_str("NoTimeout"),
+                discriminant_TimeoutConfig::TimeoutMilliseconds => f
+                    .debug_tuple("TimeoutMilliseconds")
+                    .field(&self.TimeoutMilliseconds)
+                    .finish(),
             }
         }
     }

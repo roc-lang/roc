@@ -10,7 +10,7 @@ use libc;
 use roc_std::{RocList, RocStr};
 use std::ffi::CStr;
 use std::os::raw::c_char;
-use ureq::Error;
+use std::time::Duration;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
@@ -128,60 +128,48 @@ pub extern "C" fn roc_fx_putLine(line: &RocStr) {
     println!("{}", string);
 }
 
-const BODY_MAX_BYTES: usize = 10 * 1024 * 1024;
-
 #[no_mangle]
 pub extern "C" fn roc_fx_sendRequest(roc_request: &glue::Request) -> glue::Response {
-    use std::io::Read;
+    let mut builder = reqwest::blocking::ClientBuilder::new();
+
+    if roc_request.timeout.discriminant() == glue::discriminant_TimeoutConfig::TimeoutMilliseconds {
+        let ms: &u64 = unsafe { roc_request.timeout.as_TimeoutMilliseconds() };
+        builder = builder.timeout(Duration::from_millis(*ms));
+    }
 
     let url = roc_request.url.as_str();
-    match ureq::get(url).call() {
+    match reqwest::blocking::get(url) {
         Ok(response) => {
-            let statusCode = response.status();
+            let bytes = response.bytes().unwrap_or_default();
+            let body: RocList<u8> = RocList::from_iter(bytes.into_iter());
 
-            let len: usize = response
-                .header("Content-Length")
-                .and_then(|val| val.parse::<usize>().ok())
-                .map(|val| val.max(BODY_MAX_BYTES))
-                .unwrap_or(BODY_MAX_BYTES);
-
-            let bytes_iter = response
-                .into_reader()
-                .bytes()
-                .take(len)
-                .filter_map(|result| result.ok());
-
-            let body: RocList<u8> = RocList::from_iter(bytes_iter);
-
+            let status = response.status();
+            let status_str = status.canonical_reason().unwrap_or_else(|| status.as_str());
             let metadata = Metadata {
-                headers: RocList::empty(),   // TODO
-                statusText: RocStr::empty(), // TODO
-                url: RocStr::empty(),        // TODO
-                statusCode,
+                headers: RocList::empty(), // TODO
+                statusText: RocStr::from(status_str),
+                url: RocStr::from(url),
+                statusCode: status.as_u16(),
             };
-
             glue::Response::GoodStatus(metadata, body)
         }
-        Err(Error::Status(statusCode, response)) => {
-            let mut buffer: Vec<u8> = vec![];
-            let mut reader = response.into_reader();
-            reader.read(&mut buffer).expect("can't read response");
-            let body = RocList::from_slice(&buffer);
-
-            let metadata = Metadata {
-                headers: RocList::empty(),   // TODO
-                statusText: RocStr::empty(), // TODO
-                url: RocStr::empty(),        // TODO
-                statusCode,
-            };
-
-            glue::Response::BadStatus(metadata, body)
-        }
-        Err(transportError) => {
-            use ureq::ErrorKind::*;
-            match transportError.kind() {
-                InvalidUrl | UnknownScheme => glue::Response::BadUrl(RocStr::from(url)),
-                _ => glue::Response::NetworkError,
+        Err(err) => {
+            if err.is_timeout() {
+                glue::Response::Timeout
+            } else if let Some(status) = err.status() {
+                let body = RocList::empty(); // TODO
+                let status_str = status.canonical_reason().unwrap_or_else(|| status.as_str());
+                let metadata = Metadata {
+                    headers: RocList::empty(), // TODO
+                    statusText: RocStr::from(status_str),
+                    url: RocStr::from(url),
+                    statusCode: status.as_u16(),
+                };
+                glue::Response::BadStatus(metadata, body)
+            } else if err.is_request() {
+                glue::Response::BadUrl(RocStr::from(url))
+            } else {
+                glue::Response::NetworkError
             }
         }
     }

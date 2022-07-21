@@ -3,7 +3,7 @@ interface Http
         Request,
         Method,
         Header,
-        Timeout,
+        TimeoutConfig,
         ProgressTracking,
         Body,
         Response,
@@ -23,7 +23,7 @@ interface Http
 Request : InternalHttp.Request
 Method : InternalHttp.Method
 Header : InternalHttp.Header
-Timeout : InternalHttp.Timeout
+TimeoutConfig : InternalHttp.TimeoutConfig
 ProgressTracking : InternalHttp.ProgressTracking
 Body : InternalHttp.Body
 Response : InternalHttp.Response
