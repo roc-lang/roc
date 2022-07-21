@@ -243,7 +243,7 @@ impl Expr {
         match self {
             Self::Num(..) => Category::Num,
             Self::Int(..) => Category::Int,
-            Self::Float(..) => Category::Float,
+            Self::Float(..) => Category::Frac,
             Self::Str(..) => Category::Str,
             Self::SingleQuote(..) => Category::Character,
             Self::List { .. } => Category::List,

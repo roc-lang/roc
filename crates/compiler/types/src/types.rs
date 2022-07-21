@@ -1980,7 +1980,7 @@ pub enum Category {
     When,
 
     // types
-    Float,
+    Frac,
     Int,
     Num,
     List,
