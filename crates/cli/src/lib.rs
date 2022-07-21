@@ -715,8 +715,8 @@ pub fn build(
                         std::mem::forget(bytes);
                         x
                     } else {
-                        println!(
-                            "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.\n\nYou can run the program anyway with: \x1B[32mroc run {}\x1B[39m",
+                        let mut output = format!(
+                            "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.\n\nYou can run the program anyway with \x1B[32mroc run",
                             if problems.errors == 0 {
                                 32 // green
                             } else {
@@ -740,8 +740,15 @@ pub fn build(
                                 "warnings"
                             },
                             total_time.as_millis(),
-                            filename.to_string_lossy()
                         );
+                        // If you're running "main.roc" then you can just do `roc run`
+                        // to re-run the program.
+                        if filename != DEFAULT_ROC_FILENAME {
+                            output.push(' ');
+                            output.push_str(&filename.to_string_lossy());
+                        }
+
+                        println!("{}\x1B[39m", output);
 
                         Ok(problems.exit_code())
                     }
