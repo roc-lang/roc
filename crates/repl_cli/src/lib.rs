@@ -1,8 +1,11 @@
+use bumpalo::collections::Vec as BumpVec;
 use bumpalo::Bump;
 use const_format::concatcp;
 use inkwell::context::Context;
 use libloading::Library;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
+use roc_module::symbol::Symbol;
+use roc_region::all::Region;
 use roc_types::subs::Subs;
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
@@ -192,13 +195,20 @@ impl ReplAppMemory for CliMemory {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ToplevelExpect<'a> {
+    pub name: &'a str,
+    pub symbol: Symbol,
+    pub region: Region,
+}
+
 pub fn expect_mono_module_to_dylib<'a>(
     arena: &'a Bump,
     target: Triple,
     loaded: MonomorphizedModule<'a>,
     opt_level: OptLevel,
     mode: LlvmBackendMode,
-) -> Result<(libloading::Library, bumpalo::collections::Vec<'a, &'a str>), libloading::Error> {
+) -> Result<(libloading::Library, BumpVec<'a, ToplevelExpect<'a>>), libloading::Error> {
     let target_info = TargetInfo::from(&target);
 
     let MonomorphizedModule {
@@ -240,12 +250,24 @@ pub fn expect_mono_module_to_dylib<'a>(
     // platform to provide them.
     add_default_roc_externs(&env);
 
-    let expects = roc_gen_llvm::llvm::build::build_procedures_expose_expects(
+    let expect_names = roc_gen_llvm::llvm::build::build_procedures_expose_expects(
         &env,
         opt_level,
-        &toplevel_expects,
+        toplevel_expects.unzip_slices().0,
         procedures,
         entry_point,
+    );
+
+    let expects = bumpalo::collections::Vec::from_iter_in(
+        toplevel_expects
+            .into_iter()
+            .zip(expect_names.into_iter())
+            .map(|((symbol, region), name)| ToplevelExpect {
+                symbol,
+                region,
+                name,
+            }),
+        env.arena,
     );
 
     env.dibuilder.finalize();

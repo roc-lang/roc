@@ -158,7 +158,7 @@ impl<'a> Formattable for ValueDef<'a> {
             }
             Body(loc_pattern, loc_expr) => loc_pattern.is_multiline() || loc_expr.is_multiline(),
             AnnotatedBody { .. } => true,
-            Expect(loc_expr) => loc_expr.is_multiline(),
+            Expect { condition, .. } => condition.is_multiline(),
         }
     }
 
@@ -232,7 +232,7 @@ impl<'a> Formattable for ValueDef<'a> {
             Body(loc_pattern, loc_expr) => {
                 fmt_body(buf, &loc_pattern.value, &loc_expr.value, indent);
             }
-            Expect(condition) => fmt_expect(buf, condition, self.is_multiline(), indent),
+            Expect { condition, .. } => fmt_expect(buf, condition, self.is_multiline(), indent),
             AnnotatedBody {
                 ann_pattern,
                 ann_type,

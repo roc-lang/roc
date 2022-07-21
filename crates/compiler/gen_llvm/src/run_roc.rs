@@ -74,14 +74,14 @@ macro_rules! run_roc_dylib {
 }
 
 #[macro_export]
-macro_rules! run_jit_function {
+macro_rules! try_run_jit_function {
     ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr) => {{
         let v: String = String::new();
-        run_jit_function!($lib, $main_fn_name, $ty, $transform, v)
+        try_run_jit_function!($lib, $main_fn_name, $ty, $transform, v)
     }};
 
     ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr, $errors:expr) => {{
-        run_jit_function!($lib, $main_fn_name, $ty, $transform, $errors, &[])
+        try_run_jit_function!($lib, $main_fn_name, $ty, $transform, $errors, &[])
     }};
     ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr, $errors:expr, $expect_failures:expr) => {{
         use inkwell::context::Context;
@@ -99,15 +99,39 @@ macro_rules! run_jit_function {
             let mut main_result = MaybeUninit::uninit();
             main(main_result.as_mut_ptr());
 
-            match main_result.assume_init().into() {
-                Ok(success) => {
-                    // only if there are no exceptions thrown, check for errors
-                    assert!($errors.is_empty(), "Encountered errors:\n{}", $errors);
+            main_result.assume_init().into()
+        }
+    }};
+}
 
-                    $transform(success)
-                }
-                Err(error_msg) => panic!("Roc failed with message: {}", error_msg),
+#[macro_export]
+macro_rules! run_jit_function {
+    ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr) => {{
+        let v: String = String::new();
+        run_jit_function!($lib, $main_fn_name, $ty, $transform, v)
+    }};
+
+    ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr, $errors:expr) => {{
+        run_jit_function!($lib, $main_fn_name, $ty, $transform, $errors, &[])
+    }};
+    ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr, $errors:expr, $expect_failures:expr) => {{
+        let result = $crate::try_run_jit_function!(
+            $lib,
+            $main_fn_name,
+            $ty,
+            $transform,
+            $errors,
+            $expect_failures
+        );
+
+        match result {
+            Ok(success) => {
+                // only if there are no exceptions thrown, check for errors
+                assert!($errors.is_empty(), "Encountered errors:\n{}", $errors);
+
+                $transform(success)
             }
+            Err(error_msg) => panic!("Roc failed with message: {}", error_msg),
         }
     }};
 }
