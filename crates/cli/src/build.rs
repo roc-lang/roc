@@ -114,13 +114,7 @@ pub fn build_file<'a>(
         .exposed_to_host
         .values
         .keys()
-        .map(|x| {
-            format!(
-                "{}.{}",
-                x.module_string(&loaded.interns),
-                x.as_str(&loaded.interns)
-            )
-        })
+        .map(|x| x.as_str(&loaded.interns).to_string())
         .collect();
 
     let exposed_closure_types = loaded
@@ -129,7 +123,7 @@ pub fn build_file<'a>(
         .iter()
         .map(|x| {
             format!(
-                "{}.{}",
+                "{}_{}",
                 x.module_string(&loaded.interns),
                 x.as_str(&loaded.interns)
             )
