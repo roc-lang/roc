@@ -4793,8 +4793,9 @@ fn build_closure_caller<'a, 'ctx, 'env>(
 
     // e.g. `roc__main_1_Fx_caller`
     let function_name = format!(
-        "roc__{}_{}_caller",
+        "roc__{}_{}_{}_caller",
         def_name,
+        alias_symbol.module_string(&env.interns),
         alias_symbol.as_str(&env.interns)
     );
 
@@ -4908,15 +4909,17 @@ fn build_host_exposed_alias_size_help<'a, 'ctx, 'env>(
     let size_function_spec = FunctionSpec::cconv(env, CCReturn::Return, Some(i64), &[]);
     let size_function_name: String = if let Some(label) = opt_label {
         format!(
-            "roc__{}_{}_{}_size",
+            "roc__{}_{}_{}_{}_size",
             def_name,
+            alias_symbol.module_string(&env.interns),
             alias_symbol.as_str(&env.interns),
             label
         )
     } else {
         format!(
-            "roc__{}_{}_size",
+            "roc__{}_{}_{}_size",
             def_name,
+            alias_symbol.module_string(&env.interns),
             alias_symbol.as_str(&env.interns)
         )
     };

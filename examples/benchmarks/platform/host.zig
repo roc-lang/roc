@@ -26,9 +26,9 @@ const Allocator = mem.Allocator;
 
 extern fn roc__mainForHost_1_exposed_generic([*]u8) void;
 extern fn roc__mainForHost_size() i64;
-extern fn roc__mainForHost_1_Fx_caller(*const u8, [*]u8, [*]u8) void;
-extern fn roc__mainForHost_1_Fx_size() i64;
-extern fn roc__mainForHost_1_Fx_result_size() i64;
+extern fn roc__mainForHost_1__Fx_caller(*const u8, [*]u8, [*]u8) void;
+extern fn roc__mainForHost_1__Fx_size() i64;
+extern fn roc__mainForHost_1__Fx_result_size() i64;
 
 const Align = 2 * @alignOf(usize);
 extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
@@ -123,7 +123,7 @@ fn to_seconds(tms: std.os.timespec) f64 {
 fn call_the_closure(closure_data_pointer: [*]u8) void {
     const allocator = std.heap.page_allocator;
 
-    const size = roc__mainForHost_1_Fx_result_size();
+    const size = roc__mainForHost_1__Fx_result_size();
     const raw_output = allocator.allocAdvanced(u8, @alignOf(u64), @intCast(usize, size), .at_least) catch unreachable;
     var output = @ptrCast([*]u8, raw_output);
 
@@ -133,7 +133,7 @@ fn call_the_closure(closure_data_pointer: [*]u8) void {
 
     const flags: u8 = 0;
 
-    roc__mainForHost_1_Fx_caller(&flags, closure_data_pointer, output);
+    roc__mainForHost_1__Fx_caller(&flags, closure_data_pointer, output);
 
     // The closure returns result, nothing interesting to do with it
     return;

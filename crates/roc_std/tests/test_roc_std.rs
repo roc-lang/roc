@@ -162,6 +162,15 @@ mod test_roc_std {
         let from_slice = RocList::from_slice(&elems);
         let from_iter = RocList::from_iter(elems);
         assert_eq!(from_iter, from_slice);
+        assert_eq!(from_iter.capacity(), from_slice.capacity());
+    }
+
+    #[test]
+    fn list_from_iter_zero_size() {
+        let elems: [(); 5] = [(), (), (), (), ()];
+        let from_slice = RocList::from_slice(&elems);
+        let from_iter = RocList::from_iter(elems);
+        assert_eq!(from_iter, from_slice);
     }
 
     #[test]

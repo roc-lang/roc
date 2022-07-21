@@ -549,7 +549,16 @@ impl<T: Clone> FromIterator<T> for RocList<T> {
     where
         I: IntoIterator<Item = T>,
     {
-        let mut iter = into.into_iter();
+        let iter = into.into_iter();
+
+        if std::mem::size_of::<T>() == 0 {
+            let count = iter.count();
+            return Self {
+                elements: Some(Self::elems_with_capacity(count)),
+                length: count,
+                capacity: count,
+            };
+        }
 
         let mut list = {
             let (min_len, maybe_max_len) = iter.size_hint();
@@ -557,25 +566,23 @@ impl<T: Clone> FromIterator<T> for RocList<T> {
             Self::with_capacity(init_capacity)
         };
 
-        loop {
-            let start = list.length;
-            let elements = list.elements.unwrap().as_ptr();
-            for i in start..list.capacity {
-                if let Some(new_elem) = iter.next() {
-                    unsafe {
-                        elements
-                            .add(i)
-                            .write(ptr::read(&ManuallyDrop::new(new_elem)));
-                    }
-                    list.length += 1;
-                } else {
-                    return list;
-                }
-            }
-
+        let mut elements = list.elements.unwrap().as_ptr();
+        for new_elem in iter {
             // If the size_hint didn't give us a max, we may need to grow. 1.5x seems to be good, based on:
             // https://archive.ph/Z2R8w and https://github.com/facebook/folly/blob/1f2706/folly/docs/FBVector.md
-            list.reserve(list.capacity / 2);
+            if list.length == list.capacity {
+                list.reserve(list.capacity / 2);
+                elements = list.elements.unwrap().as_ptr();
+            }
+
+            unsafe {
+                elements
+                    .add(list.length)
+                    .write(ptr::read(&ManuallyDrop::new(new_elem)));
+            }
+            list.length += 1;
         }
+
+        list
     }
 }
