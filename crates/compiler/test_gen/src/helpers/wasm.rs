@@ -307,7 +307,6 @@ fn read_i32(memory: &[u8], ptr: usize) -> i32 {
 }
 
 fn link_module(module: &mut Module, panic_msg: Rc<Mutex<Option<(i32, i32)>>>) {
-    module.link_wasi().unwrap();
     let try_link_panic = module.link_closure(
         "env",
         "send_panic_msg_to_rust",
@@ -317,6 +316,7 @@ fn link_module(module: &mut Module, panic_msg: Rc<Mutex<Option<(i32, i32)>>>) {
             Ok(())
         },
     );
+
     match try_link_panic {
         Ok(()) => {}
         Err(wasm3::error::Error::FunctionNotFound) => {}
