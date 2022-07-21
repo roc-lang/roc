@@ -1845,3 +1845,19 @@ fn issue_3560_nested_tag_constructor_is_record_newtype() {
         (u8, u8)
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_3560_newtype_tag_constructor_has_nested_constructor_with_no_payload() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Wrapper (Payload "err") is
+                Wrapper (Payload str) -> str
+                Wrapper NoPayload -> "nothing"
+            "#
+        ),
+        RocStr::from("err"),
+        RocStr
+    )
+}
