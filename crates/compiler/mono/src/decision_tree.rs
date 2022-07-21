@@ -985,9 +985,13 @@ fn needs_tests(pattern: &Pattern) -> bool {
             // read the appropriate argument in the struct when constructing the decision tree.
             arguments.len() != 1
         }
+        RecordDestructure(arguments, _) => {
+            // Same logic as for newtype destructures - records with one argument decay into their
+            // argument.
+            arguments.len() != 1
+        }
 
-        RecordDestructure(_, _)
-        | AppliedTag { .. }
+        AppliedTag { .. }
         | OpaqueUnwrap { .. }
         | BitLiteral { .. }
         | EnumLiteral { .. }
