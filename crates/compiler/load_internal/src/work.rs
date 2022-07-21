@@ -64,7 +64,8 @@ impl MakeSpecializationsDependents {
         let entry = self.entry(module_id);
         debug_assert!(
             entry.succ.is_empty(),
-            "already added successors for this module"
+            "already added successors for module '{:?}'",
+            module_id
         );
 
         entry.succ.extend(succ.into_iter());

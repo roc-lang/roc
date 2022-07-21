@@ -121,7 +121,13 @@ pub fn build_file<'a>(
         .exposed_to_host
         .closure_types
         .iter()
-        .map(|x| x.as_str(&loaded.interns).to_string())
+        .map(|x| {
+            format!(
+                "{}_{}",
+                x.module_string(&loaded.interns),
+                x.as_str(&loaded.interns)
+            )
+        })
         .collect();
 
     let preprocessed_host_path = if emit_wasm {

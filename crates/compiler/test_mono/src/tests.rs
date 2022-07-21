@@ -1317,7 +1317,7 @@ fn specialize_ability_call() {
         Hash has
             hash : a -> U64 | a has Hash
 
-        Id := U64
+        Id := U64 has [Hash {hash}]
 
         hash : Id -> U64
         hash = \@Id n -> n
@@ -1359,14 +1359,12 @@ fn encode() {
           u8 : U8 -> Encoder fmt | fmt has Format
 
 
-        Linear := {}
+        Linear := {} has [Format {u8}]
 
-        # impl Format for Linear
         u8 = \n -> @Encoder (\lst, @Linear {} -> List.append lst n)
 
-        MyU8 := U8
+        MyU8 := U8 has [Encoding {toEncoder}]
 
-        # impl Encoding for MyU8
         toEncoder = \@MyU8 n -> u8 n
 
         myU8Bytes =
@@ -1458,7 +1456,7 @@ fn encode_custom_type() {
                     |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.format)
+            result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.toUtf8)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1475,7 +1473,7 @@ fn encode_derived_string() {
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes "abc" Json.format)
+            result = Str.fromUtf8 (Encode.toBytes "abc" Json.toUtf8)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1493,7 +1491,7 @@ fn encode_derived_record() {
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: "a"} Json.format)
+            result = Str.fromUtf8 (Encode.toBytes {a: "a"} Json.toUtf8)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1807,7 +1805,7 @@ fn encode_derived_record_one_field_string() {
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: "foo"} Json.format)
+            result = Str.fromUtf8 (Encode.toBytes {a: "foo"} Json.toUtf8)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1824,7 +1822,7 @@ fn encode_derived_record_two_field_strings() {
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: "foo", b: "bar"} Json.format)
+            result = Str.fromUtf8 (Encode.toBytes {a: "foo", b: "bar"} Json.toUtf8)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1841,7 +1839,7 @@ fn encode_derived_nested_record_string() {
             provides [main] to "./platform"
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {a: {b: "bar"}} Json.format)
+            result = Str.fromUtf8 (Encode.toBytes {a: {b: "bar"}} Json.toUtf8)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1860,7 +1858,7 @@ fn encode_derived_tag_one_field_string() {
         main =
             x : [A Str]
             x = A "foo"
-            result = Str.fromUtf8 (Encode.toBytes x Json.format)
+            result = Str.fromUtf8 (Encode.toBytes x Json.toUtf8)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1879,7 +1877,7 @@ fn encode_derived_tag_two_payloads_string() {
         main =
             x : [A Str Str]
             x = A "foo" "foo"
-            result = Str.fromUtf8 (Encode.toBytes x Json.format)
+            result = Str.fromUtf8 (Encode.toBytes x Json.toUtf8)
             when result is
                 Ok s -> s
                 _ -> "<bad>"

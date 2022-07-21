@@ -5,7 +5,7 @@ use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, FloatBound, IntBound, NumBound,
     ParsedNumResult,
 };
-use crate::scope::Scope;
+use crate::scope::{PendingAbilitiesInScope, Scope};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{self, StrLiteral, StrSegment};
@@ -175,10 +175,12 @@ pub enum DestructType {
     Guard(Variable, Loc<Pattern>),
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn canonicalize_def_header_pattern<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
     scope: &mut Scope,
+    pending_abilities_in_scope: &PendingAbilitiesInScope,
     output: &mut Output,
     pattern_type: PatternType,
     pattern: &ast::Pattern<'a>,
@@ -189,7 +191,11 @@ pub fn canonicalize_def_header_pattern<'a>(
     match pattern {
         // Identifiers that shadow ability members may appear (and may only appear) at the header of a def.
         Identifier(name) => {
-            match scope.introduce_or_shadow_ability_member((*name).into(), region) {
+            match scope.introduce_or_shadow_ability_member(
+                pending_abilities_in_scope,
+                (*name).into(),
+                region,
+            ) {
                 Ok((symbol, shadowing_ability_member)) => {
                     let can_pattern = match shadowing_ability_member {
                         // A fresh identifier.

@@ -182,3 +182,9 @@ impl<T: FromWasm32Memory, U: FromWasm32Memory, V: FromWasm32Memory> FromWasm32Me
         (t, u, v)
     }
 }
+
+impl FromWasm32Memory for std::convert::Infallible {
+    fn decode(_memory_bytes: &[u8], _offset: u32) -> Self {
+        unreachable!()
+    }
+}

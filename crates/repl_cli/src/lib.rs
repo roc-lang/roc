@@ -263,8 +263,9 @@ pub fn expect_mono_module_to_dylib<'a>(
 
     // Verify the module
     if let Err(errors) = env.module.verify() {
+        env.module.print_to_file("/tmp/test.ll").unwrap();
         panic!(
-            "Errors defining module:\n{}\n\nUncomment things nearby to see more details.",
+            "Errors defining module:\n{}\n\nUncomment things nearby to see more details. IR written to `/tmp/test.ll`",
             errors.to_string()
         );
     }

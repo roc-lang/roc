@@ -197,11 +197,7 @@ where
                 Err((MadeProgress, indent_problem(state.pos()), state))
             } else {
                 let comments_and_newlines = Vec::with_capacity_in(newlines, arena);
-                let mut spaces = eat_spaces(state, false, comments_and_newlines);
-
-                if spaces.multiline {
-                    spaces.state.indent_column = spaces.state.column();
-                }
+                let spaces = eat_spaces(state, comments_and_newlines);
 
                 Ok((
                     MadeProgress,
@@ -324,13 +320,11 @@ fn fast_eat_spaces(state: &State) -> FastSpaceState {
 
 struct SpaceState<'a> {
     state: State<'a>,
-    multiline: bool,
     comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
 }
 
 fn eat_spaces<'a>(
     mut state: State<'a>,
-    mut multiline: bool,
     mut comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
 ) -> SpaceState<'a> {
     for c in state.bytes() {
@@ -340,7 +334,6 @@ fn eat_spaces<'a>(
             }
             b'\n' => {
                 state = state.advance_newline();
-                multiline = true;
                 comments_and_newlines.push(CommentOrNewline::Newline);
             }
             b'\r' => {
@@ -350,7 +343,7 @@ fn eat_spaces<'a>(
 
             b'#' => {
                 state = state.advance(1);
-                return eat_line_comment(state, multiline, comments_and_newlines);
+                return eat_line_comment(state, comments_and_newlines);
             }
             _ => break,
         }
@@ -358,14 +351,12 @@ fn eat_spaces<'a>(
 
     SpaceState {
         state,
-        multiline,
         comments_and_newlines,
     }
 }
 
 fn eat_line_comment<'a>(
     mut state: State<'a>,
-    mut multiline: bool,
     mut comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
 ) -> SpaceState<'a> {
     let mut index = state.pos().offset as usize;
@@ -388,7 +379,6 @@ fn eat_line_comment<'a>(
                     index += 2;
 
                     comments_and_newlines.push(CommentOrNewline::DocComment(""));
-                    multiline = true;
 
                     for c in state.bytes() {
                         match c {
@@ -397,7 +387,6 @@ fn eat_line_comment<'a>(
                             }
                             b'\n' => {
                                 state = state.advance_newline();
-                                multiline = true;
                                 comments_and_newlines.push(CommentOrNewline::Newline);
                             }
                             b'\r' => {
@@ -417,7 +406,6 @@ fn eat_line_comment<'a>(
 
                     return SpaceState {
                         state,
-                        multiline,
                         comments_and_newlines,
                     };
                 }
@@ -427,7 +415,6 @@ fn eat_line_comment<'a>(
 
                     return SpaceState {
                         state,
-                        multiline,
                         comments_and_newlines,
                     };
                 }
@@ -483,7 +470,6 @@ fn eat_line_comment<'a>(
                                 comments_and_newlines.push(CommentOrNewline::LineComment(comment));
                             }
                             state = state.advance_newline();
-                            multiline = true;
 
                             index += 1;
                             while index < length {
@@ -493,7 +479,6 @@ fn eat_line_comment<'a>(
                                     }
                                     b'\n' => {
                                         state = state.advance_newline();
-                                        multiline = true;
                                         comments_and_newlines.push(CommentOrNewline::Newline);
                                     }
                                     b'\r' => {
@@ -513,7 +498,6 @@ fn eat_line_comment<'a>(
 
                             return SpaceState {
                                 state,
-                                multiline,
                                 comments_and_newlines,
                             };
                         }
@@ -550,7 +534,6 @@ fn eat_line_comment<'a>(
                         comments_and_newlines.push(CommentOrNewline::LineComment(comment));
                     }
                     state = state.advance_newline();
-                    multiline = true;
 
                     index += 1;
                     while index < length {
@@ -560,7 +543,6 @@ fn eat_line_comment<'a>(
                             }
                             b'\n' => {
                                 state = state.advance_newline();
-                                multiline = true;
                                 comments_and_newlines.push(CommentOrNewline::Newline);
                             }
                             b'\r' => {
@@ -580,7 +562,6 @@ fn eat_line_comment<'a>(
 
                     return SpaceState {
                         state,
-                        multiline,
                         comments_and_newlines,
                     };
                 }
@@ -606,7 +587,6 @@ fn eat_line_comment<'a>(
 
         return SpaceState {
             state,
-            multiline,
             comments_and_newlines,
         };
     }

@@ -2,5 +2,5 @@ procedure Test.0 ():
     let Test.19 : [C [<rnnu>C [C *self, C ]], C ] = TagId(1) ;
     let Test.17 : [<rnnu>C [C *self, C ]] = TagId(0) Test.19;
     let Test.16 : [C [<rnnu>C [C *self, C ]], C ] = TagId(0) Test.17;
-    let Test.7 : [<rnnu>C [C *self, C ]] = TagId(0) Test.16;
-    ret Test.7;
+    let Test.4 : [<rnnu>C [C *self, C ]] = TagId(0) Test.16;
+    ret Test.4;

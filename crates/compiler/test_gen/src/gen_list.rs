@@ -1,9 +1,6 @@
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
 
-#[cfg(feature = "gen-llvm")]
-use crate::helpers::llvm::expect_runtime_error_panic;
-
 // #[cfg(feature = "gen-dev")]
 // use crate::helpers::dev::assert_evals_to;
 
@@ -16,7 +13,9 @@ use crate::helpers::with_larger_debug_stack;
 #[allow(unused_imports)]
 use indoc::indoc;
 #[allow(unused_imports)]
-use roc_std::{RocList, RocStr};
+use roc_std::{RocList, RocResult, RocStr};
+
+use core::convert::Infallible;
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
@@ -254,6 +253,59 @@ fn list_sublist() {
         "List.sublist [1, 2, 3] { start: 0 , len: 5 } ",
         RocList::from_slice(&[1, 2, 3]),
         RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_map_try_ok() {
+    assert_evals_to!(
+        // No transformation
+        r#"
+            List.mapTry [1, 2, 3] \elem -> Ok elem
+        "#,
+        RocResult::ok(RocList::<i64>::from_slice(&[1, 2, 3])),
+        RocResult<RocList<i64>, ()>
+    );
+    assert_evals_to!(
+        // Transformation
+        r#"
+            List.mapTry [1, 2, 3] \num ->
+                str = Num.toStr (num * 2)
+
+                Ok "\(str)!"
+        "#,
+        RocResult::ok(RocList::<RocStr>::from_slice(&[
+            RocStr::from("2!"),
+            RocStr::from("4!"),
+            RocStr::from("6!"),
+        ])),
+        RocResult<RocList<RocStr>, ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_map_try_err() {
+    assert_evals_to!(
+        r#"
+            List.mapTry [1, 2, 3] \_ -> Err -1
+        "#,
+        RocResult::err(-1),
+        RocResult<RocList<Infallible>, i64>
+    );
+
+    assert_evals_to!(
+        // If any element returns Err, the whole thing returns Err
+        r#"
+            List.mapTry [1, 2, 3] \num ->
+                if num > 2 then
+                    Err -1
+                else
+                    Ok num
+        "#,
+        RocResult::err(-1),
+        RocResult<RocList<i64>, i64>
     );
 }
 
@@ -2670,18 +2722,8 @@ fn list_any() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[should_panic(expected = r#"Roc failed with message: "UnresolvedTypeVar"#)]
 fn list_any_empty_with_unknown_element_type() {
-    // Segfaults with invalid memory reference. Running this as a stand-alone
-    // Roc program, generates the following error message:
-    //
-    //     Application crashed with message
-    //     UnresolvedTypeVar compiler/mono/src/ir.rs line 3775
-    //     Shutting down
-    //
-    // TODO: eventually we should insert the empty type for unresolved type
-    // variables, since that means they're unbound.
-    expect_runtime_error_panic!("List.any [] (\\_ -> True)");
+    assert_evals_to!("List.any [] (\\_ -> True)", false, bool);
 }
 
 #[test]
@@ -2695,18 +2737,8 @@ fn list_all() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-#[should_panic(expected = r#"Roc failed with message: "UnresolvedTypeVar"#)]
 fn list_all_empty_with_unknown_element_type() {
-    // Segfaults with invalid memory reference. Running this as a stand-alone
-    // Roc program, generates the following error message:
-    //
-    //     Application crashed with message
-    //     UnresolvedTypeVar compiler/mono/src/ir.rs line 3775
-    //     Shutting down
-    //
-    // TODO: eventually we should insert the empty type for unresolved type
-    // variables, since that means they're unbound.
-    expect_runtime_error_panic!("List.all [] (\\_ -> True)");
+    assert_evals_to!("List.all [] (\\_ -> True)", true, bool);
 }
 
 #[test]
@@ -2975,9 +3007,6 @@ fn call_function_in_empty_list() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-// TODO to be improved, if we can generate the void function type for the function in the list,
-// this should succeed.
-#[should_panic(expected = r#"Roc failed with message: "#)]
 fn call_function_in_empty_list_unbound() {
     assert_evals_to!(
         indoc!(
@@ -2988,5 +3017,37 @@ fn call_function_in_empty_list_unbound() {
         ),
         RocList::from_slice(&[]),
         RocList<()>
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_3571_lowlevel_call_function_with_bool_lambda_set() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            apply : List (a -> b), List a -> List b
+            apply = \funs, vals ->
+              initial = List.withCapacity ((List.len funs) * (List.len vals))
+              List.walk funs initial \state, fun ->
+                mappedVals = List.map vals fun
+                List.concat state mappedVals
+
+            add2 : Str -> Str
+            add2 = \x -> "added \(x)"
+
+            mul2 : Str -> Str
+            mul2 = \x -> "multiplied \(x)"
+
+            foo = [add2, mul2]
+            bar = ["1", "2", "3", "4"]
+
+            main = foo |> apply bar |> Str.joinWith ", "
+            "#
+        ),
+        RocStr::from("added 1, added 2, added 3, added 4, multiplied 1, multiplied 2, multiplied 3, multiplied 4"),
+        RocStr
     )
 }
