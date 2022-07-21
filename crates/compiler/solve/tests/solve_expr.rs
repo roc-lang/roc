@@ -7359,7 +7359,7 @@ mod solve_expr {
     }
 
     #[test]
-    fn shared_pattern_variable_in_when_branches() {
+    fn shared_pattern_variable_in_when_patterns() {
         infer_queries!(
             indoc!(
                 r#"
@@ -7371,6 +7371,31 @@ mod solve_expr {
             ),
             @r###"
             A "" : [A Str, B Str]
+            x : Str
+            x : Str
+            x : Str
+            "###
+        );
+    }
+
+    #[test]
+    fn shared_pattern_variable_in_multiple_branch_when_patterns() {
+        infer_queries!(
+            indoc!(
+                r#"
+                when A "" is
+                #    ^^^^
+                    A x | B x -> x
+                    # ^     ^    ^
+                    C x | D x -> x
+                    # ^     ^    ^
+                "#
+            ),
+            @r###"
+            A "" : [A Str, B Str, C Str, D Str]
+            x : Str
+            x : Str
+            x : Str
             x : Str
             x : Str
             x : Str
