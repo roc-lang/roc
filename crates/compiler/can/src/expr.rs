@@ -7,7 +7,7 @@ use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, float_expr_from_result,
     int_expr_from_result, num_expr_from_result, FloatBound, IntBound, NumBound,
 };
-use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern};
+use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern, PermitShadows};
 use crate::procedure::References;
 use crate::scope::Scope;
 use crate::traverse::{walk_expr, Visitor};
@@ -1187,6 +1187,7 @@ fn canonicalize_closure_body<'a>(
             FunctionArg,
             &loc_pattern.value,
             loc_pattern.region,
+            PermitShadows(false),
         );
 
         can_args.push((
@@ -1290,6 +1291,7 @@ fn canonicalize_when_branch<'a>(
             WhenBranch,
             &loc_pattern.value,
             loc_pattern.region,
+            PermitShadows(true),
         );
 
         patterns.push(can_pattern);

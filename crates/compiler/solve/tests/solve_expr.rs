@@ -7357,4 +7357,18 @@ mod solve_expr {
             "List (A U8)",
         );
     }
+
+    #[test]
+    fn shared_pattern_variable_in_when_branches() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                when A "" is
+                    A x | B x -> x
+                    C y | D y -> y
+                "#
+            ),
+            "",
+        );
+    }
 }

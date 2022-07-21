@@ -253,7 +253,7 @@ impl Scope {
         &mut self,
         ident: Ident,
         region: Region,
-    ) -> Result<Symbol, (Region, Loc<Ident>, Symbol)> {
+    ) -> Result<Symbol, (Loc<Symbol>, Loc<Ident>, Symbol)> {
         self.introduce_str(ident.as_str(), region)
     }
 
@@ -261,17 +261,17 @@ impl Scope {
         &mut self,
         ident: &str,
         region: Region,
-    ) -> Result<Symbol, (Region, Loc<Ident>, Symbol)> {
+    ) -> Result<Symbol, (Loc<Symbol>, Loc<Ident>, Symbol)> {
         match self.introduce_help(ident, region) {
             Ok(symbol) => Ok(symbol),
-            Err((_, original_region)) => {
+            Err((shadowed_symbol, original_region)) => {
                 let shadow = Loc {
                     value: Ident::from(ident),
                     region,
                 };
                 let symbol = self.locals.scopeless_symbol(ident, region);
 
-                Err((original_region, shadow, symbol))
+                Err((Loc::at(original_region, shadowed_symbol), shadow, symbol))
             }
         }
     }
@@ -638,13 +638,13 @@ mod test {
         assert!(scope.lookup(&ident, Region::zero()).is_err());
 
         let first = scope.introduce(ident.clone(), region1).unwrap();
-        let (original_region, _ident, shadow_symbol) =
+        let (original, _ident, shadow_symbol) =
             scope.introduce(ident.clone(), region2).unwrap_err();
 
         scope.register_debug_idents();
 
         assert_ne!(first, shadow_symbol);
-        assert_eq!(original_region, region1);
+        assert_eq!(original.region, region1);
 
         let lookup = scope.lookup(&ident, Region::zero()).unwrap();
 
@@ -805,13 +805,13 @@ mod test {
 
         scope.import(ident.clone(), symbol, region1).unwrap();
 
-        let (original_region, _ident, shadow_symbol) =
+        let (original, _ident, shadow_symbol) =
             scope.introduce(ident.clone(), region2).unwrap_err();
 
         scope.register_debug_idents();
 
         assert_ne!(symbol, shadow_symbol);
-        assert_eq!(original_region, region1);
+        assert_eq!(original.region, region1);
 
         let lookup = scope.lookup(&ident, Region::zero()).unwrap();
 
