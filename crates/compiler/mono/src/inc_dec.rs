@@ -328,11 +328,13 @@ impl<'a> Context<'a> {
         match self.vars.get(&symbol) {
             Some(info) => *info,
             None => {
-                eprintln!(
-                    "Symbol {:?} {} has no info in self.vars",
-                    symbol,
-                    symbol, // self.vars
-                );
+                if cfg!(debug_assertions) {
+                    eprintln!(
+                        "Symbol {:?} {} has no info in self.vars",
+                        symbol,
+                        symbol, // self.vars
+                    );
+                }
 
                 VarInfo {
                     persistent: true,

@@ -1310,7 +1310,7 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 1st argument to `f` is not what I expect:
+    This 1st argument to `f` has an unexpected type:
 
     9│      f bar
               ^^^
@@ -1319,7 +1319,7 @@ mod test_reporting {
 
         { bar : Int a }
 
-    But `f` needs the 1st argument to be:
+    But `f` needs its 1st argument to be:
 
         { foo : Int * }
 
@@ -1344,7 +1344,7 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 1st argument to `f` is not what I expect:
+    This 1st argument to `f` has an unexpected type:
 
     7│      f Blue
               ^^^^
@@ -1353,7 +1353,7 @@ mod test_reporting {
 
         [Blue]a
 
-    But `f` needs the 1st argument to be:
+    But `f` needs its 1st argument to be:
 
         [Green, Red]
 
@@ -1378,7 +1378,7 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 1st argument to `f` is not what I expect:
+    This 1st argument to `f` has an unexpected type:
 
     7│      f (Blue 3.14)
                ^^^^^^^^^
@@ -1387,7 +1387,7 @@ mod test_reporting {
 
         [Blue (Frac a)]b
 
-    But `f` needs the 1st argument to be:
+    But `f` needs its 1st argument to be:
 
         [Green Str, Red (Int *)]
 
@@ -1418,7 +1418,7 @@ mod test_reporting {
     5│      x = if True then 3.14 else 4
                              ^^^^
 
-    The 1st branch is a frac of type:
+    The 1st branch is a fraction of type:
 
         Frac a
 
@@ -1485,7 +1485,7 @@ mod test_reporting {
     5│      x = \_ -> 3.14
                       ^^^^
 
-    The body is a frac of type:
+    The body is a fraction of type:
 
         Frac a
 
@@ -2322,16 +2322,16 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `add` is not what I expect:
+    This 2nd argument to `add` has an unexpected type:
 
     4│      0x4 + "foo"
                   ^^^^^
 
-    This argument is a string of type:
+    The argument is a string of type:
 
         Str
 
-    But `add` needs the 2nd argument to be:
+    But `add` needs its 2nd argument to be:
 
         Int a
     "###
@@ -2347,16 +2347,16 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `add` is not what I expect:
+    This 2nd argument to `add` has an unexpected type:
 
     4│      0x4 + 3.14
                   ^^^^
 
-    This argument is a frac of type:
+    The argument is a fraction of type:
 
         Frac a
 
-    But `add` needs the 2nd argument to be:
+    But `add` needs its 2nd argument to be:
 
         Int a
 
@@ -2375,7 +2375,7 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `add` is not what I expect:
+    This 2nd argument to `add` has an unexpected type:
 
     4│      42 + True
                  ^^^^
@@ -2384,7 +2384,7 @@ mod test_reporting {
 
         [True]a
 
-    But `add` needs the 2nd argument to be:
+    But `add` needs its 2nd argument to be:
 
         Num a
     "###
@@ -2761,16 +2761,16 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 1st argument to `f` is not what I expect:
+    This 1st argument to `f` has an unexpected type:
 
     9│      f { y: 3.14 }
               ^^^^^^^^^^^
 
-    This argument is a record of type:
+    The argument is a record of type:
 
         { y : Frac a }
 
-    But `f` needs the 1st argument to be:
+    But `f` needs its 1st argument to be:
 
         { x : Int a }
 
@@ -3058,7 +3058,7 @@ mod test_reporting {
         @r###"
     ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    This pattern in the definition of `MyAlias` is not what I expect:
+    This definition of `MyAlias` has an unexpected pattern:
 
     4│      MyAlias 1 : Num.I64
                     ^
@@ -3090,7 +3090,7 @@ mod test_reporting {
         @r###"
     ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    This pattern in the definition of `Age` is not what I expect:
+    This definition of `Age` has an unexpected pattern:
 
     4│      Age 1 := Num.I64
                 ^
@@ -3377,7 +3377,7 @@ mod test_reporting {
 
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `add` is not what I expect:
+    This 2nd argument to `add` has an unexpected type:
 
     14│      x + y + h + l + minlit + maxlit
                                       ^^^^^^
@@ -3386,7 +3386,7 @@ mod test_reporting {
 
         U128
 
-    But `add` needs the 2nd argument to be:
+    But `add` needs its 2nd argument to be:
 
         I128 or Dec
     "###
@@ -3664,7 +3664,7 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `add` is not what I expect:
+    This 2nd argument to `add` has an unexpected type:
 
     4│      \{ x, y ? True } -> x + y
                                     ^
@@ -3673,7 +3673,7 @@ mod test_reporting {
 
         [True]a
 
-    But `add` needs the 2nd argument to be:
+    But `add` needs its 2nd argument to be:
 
         Num a
     "###
@@ -3849,7 +3849,7 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 1st argument to this function is not what I expect:
+    This 1st argument to this function has an unexpected type:
 
     5│      f = \r -> .y r
                          ^
@@ -3858,7 +3858,7 @@ mod test_reporting {
 
         { x : I64, y ? I64 }
 
-    But this function needs the 1st argument to be:
+    But this function needs its 1st argument to be:
 
         { x : I64, y : I64 }
 
@@ -5996,17 +5996,17 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `map` is not what I expect:
+    This 2nd argument to `map` has an unexpected type:
 
     4│>      x <- List.map ["a", "b"]
     5│>
     6│>      x + 1
 
-    This argument is an anonymous function of type:
+    The argument is an anonymous function of type:
 
         Num a -> Num a
 
-    But `map` needs the 2nd argument to be:
+    But `map` needs its 2nd argument to be:
 
         Str -> Num a
     "###
@@ -6070,7 +6070,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `mul` is not what I expect:
+    This 2nd argument to `mul` has an unexpected type:
 
     5│      mult = \a, b -> a * b
                                 ^
@@ -6079,7 +6079,7 @@ All branches in an `if` must have the same type!
 
         F64
 
-    But `mul` needs the 2nd argument to be:
+    But `mul` needs its 2nd argument to be:
 
         Num *
 
@@ -6114,7 +6114,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `mul` is not what I expect:
+    This 2nd argument to `mul` has an unexpected type:
 
     5│      mult = \a, b -> a * b
                                 ^
@@ -6123,7 +6123,7 @@ All branches in an `if` must have the same type!
 
         F64
 
-    But `mul` needs the 2nd argument to be:
+    But `mul` needs its 2nd argument to be:
 
         Num a
 
@@ -6439,7 +6439,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 1st argument to `isEmpty` is not what I expect:
+    This 1st argument to `isEmpty` has an unexpected type:
 
     9│      isEmpty (Name "boo")
                      ^^^^^^^^^^
@@ -6448,7 +6448,7 @@ All branches in an `if` must have the same type!
 
         [Name Str]a
 
-    But `isEmpty` needs the 1st argument to be:
+    But `isEmpty` needs its 1st argument to be:
 
         [Email Str]
 
@@ -6475,16 +6475,16 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 1st argument to `c` is not what I expect:
+    This 1st argument to `c` has an unexpected type:
 
     8│      f = \c -> c 6
                         ^
 
-    This argument is a number of type:
+    The argument is a number of type:
 
         Num a
 
-    But `c` needs the 1st argument to be:
+    But `c` needs its 1st argument to be:
 
         a
 
@@ -6712,7 +6712,7 @@ All branches in an `if` must have the same type!
                     let bad_type = if $suffix == "u8" { "I8" } else { "U8" };
                     let carets = "^".repeat(number.len() + $suffix.len());
                     let kind = match $suffix {
-                        "dec"|"f32"|"f64" => "a frac",
+                        "dec"|"f32"|"f64" => "a fraction",
                         _ => "an integer",
                     };
 
@@ -6720,16 +6720,16 @@ All branches in an `if` must have the same type!
                         r#"
                         ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                        The 1st argument to `use` is not what I expect:
+                        This 1st argument to `use` has an unexpected type:
 
                         5│      use {}{}
                                     {}
 
-                        This argument is {} of type:
+                        The argument is {} of type:
 
                             {}
 
-                        But `use` needs the 1st argument to be:
+                        But `use` needs its 1st argument to be:
 
                             {}
                         "#
@@ -7208,16 +7208,16 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `get` is not what I expect:
+    This 2nd argument to `get` has an unexpected type:
 
     4│      List.get [1,2,3] -1
                              ^^
 
-    This argument is a number of type:
+    The argument is a number of type:
 
         I8, I16, F32, I32, F64, I64, I128, or Dec
 
-    But `get` needs the 2nd argument to be:
+    But `get` needs its 2nd argument to be:
 
         Nat
     "###
@@ -7234,7 +7234,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `get` is not what I expect:
+    This 2nd argument to `get` has an unexpected type:
 
     5│      List.get [1,2,3] a
                              ^
@@ -7243,7 +7243,7 @@ All branches in an `if` must have the same type!
 
         F64, I64, I128, or Dec
 
-    But `get` needs the 2nd argument to be:
+    But `get` needs its 2nd argument to be:
 
         Nat
     "###
@@ -7261,7 +7261,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `get` is not what I expect:
+    This 2nd argument to `get` has an unexpected type:
 
     6│      List.get [1,2,3] b
                              ^
@@ -7270,7 +7270,7 @@ All branches in an `if` must have the same type!
 
         F64, I64, I128, or Dec
 
-    But `get` needs the 2nd argument to be:
+    But `get` needs its 2nd argument to be:
 
         Nat
     "###
@@ -7818,16 +7818,16 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 1st argument to `y` is not what I expect:
+    This 1st argument to `y` has an unexpected type:
 
     9│          n = y 1u8
                       ^^^
 
-    This argument is an integer of type:
+    The argument is an integer of type:
 
         U8
 
-    But `y` needs the 1st argument to be:
+    But `y` needs its 1st argument to be:
 
         a
 
@@ -8940,22 +8940,22 @@ All branches in an `if` must have the same type!
                 Job lst -> lst == ""
             "#
         ),
-        @r#"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        The 2nd argument to `isEq` is not what I expect:
+    This 2nd argument to `isEq` has an unexpected type:
 
-        9│          Job lst -> lst == ""
-                                      ^^
+    9│          Job lst -> lst == ""
+                                  ^^
 
-        This argument is a string of type:
+    The argument is a string of type:
 
-            Str
+        Str
 
-        But `isEq` needs the 2nd argument to be:
+    But `isEq` needs its 2nd argument to be:
 
-            List [Job ∞] as ∞
-        "#
+        List [Job ∞] as ∞
+    "###
     );
 
     test_report!(
@@ -8979,7 +8979,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 1st argument to `remove` is not what I expect:
+    This 1st argument to `remove` has an unexpected type:
 
     10│              new = { model & set : Set.remove goal model.set }
                                                       ^^^^
@@ -9677,7 +9677,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 1st argument to `foo` is not what I expect:
+    This 1st argument to `foo` has an unexpected type:
 
     10│      foo x
                  ^
@@ -9686,7 +9686,7 @@ All branches in an `if` must have the same type!
 
         F U8 Str
 
-    But `foo` needs the 1st argument to be:
+    But `foo` needs its 1st argument to be:
 
         F Str Str
     "###
@@ -9722,16 +9722,16 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `isEq` is not what I expect:
+    This 2nd argument to `isEq` has an unexpected type:
 
     4│      0x80000000000000000000000000000000 == -0x80000000000000000000000000000000
                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    This argument is an integer of type:
+    The argument is an integer of type:
 
         I128
 
-    But `isEq` needs the 2nd argument to be:
+    But `isEq` needs its 2nd argument to be:
 
         U128
     "###
@@ -9747,16 +9747,16 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `isEq` is not what I expect:
+    This 2nd argument to `isEq` has an unexpected type:
 
     4│      170141183460469231731687303715884105728 == -170141183460469231731687303715884105728
                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    This argument is a number of type:
+    The argument is a number of type:
 
         I128 or Dec
 
-    But `isEq` needs the 2nd argument to be:
+    But `isEq` needs its 2nd argument to be:
 
         U128
     "###
@@ -9818,7 +9818,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `map` is not what I expect:
+    This 2nd argument to `map` has an unexpected type:
 
     5│      List.map [1u16, 2u16, 3u16] @A
                                         ^^
@@ -9827,7 +9827,7 @@ All branches in an `if` must have the same type!
 
         U8 -> A
 
-    But `map` needs the 2nd argument to be:
+    But `map` needs its 2nd argument to be:
 
         U16 -> A
     "###

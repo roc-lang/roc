@@ -1357,7 +1357,28 @@ pub(crate) fn sort_can_defs_new(
     // TODO: inefficient, but I want to make this what CanDefs contains in the future
     let mut defs: Vec<_> = defs.into_iter().map(|x| x.unwrap()).collect();
 
+    // symbols are put in declarations in dependency order, from "main" up, so
+    //
+    // x = 3
+    // y = x + 1
+    //
+    // will get ordering [ y, x ]
     let mut declarations = Declarations::with_capacity(defs.len());
+
+    // because of the ordering of declarations, expects should come first because they are
+    // independent, but can rely on all other top-level symbols in the module
+    let it = expects
+        .conditions
+        .into_iter()
+        .zip(expects.regions)
+        .zip(expects.preceding_comment);
+
+    for ((condition, region), preceding_comment) in it {
+        // an `expect` does not have a user-defined name, but we'll need a name to call the expectation
+        let name = scope.gen_unique_symbol();
+
+        declarations.push_expect(preceding_comment, name, Loc::at(region, condition));
+    }
 
     for (symbol, alias) in aliases.into_iter() {
         output.aliases.insert(symbol, alias);
@@ -1521,12 +1542,6 @@ pub(crate) fn sort_can_defs_new(
                 }
             }
         }
-    }
-
-    for (condition, region) in expects.conditions.into_iter().zip(expects.regions) {
-        // an `expect` does not have a user-defined name, but we'll need a name to call the expectation
-        let name = scope.gen_unique_symbol();
-        declarations.push_expect(name, Loc::at(region, condition));
     }
 
     (declarations, output)
@@ -2449,9 +2464,12 @@ fn to_pending_value_def<'a>(
             }
         }
 
-        Expect(condition) => PendingValue::Expect(PendingExpect {
+        Expect {
             condition,
-            preceding_comment: Region::zero(),
+            preceding_comment,
+        } => PendingValue::Expect(PendingExpect {
+            condition,
+            preceding_comment: *preceding_comment,
         }),
     }
 }

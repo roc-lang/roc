@@ -600,16 +600,16 @@ fn type_problem() {
             r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-                The 2nd argument to add is not what I expect:
+                This 2nd argument to add has an unexpected type:
 
                 4│      1 + ""
                             ^^
 
-                This argument is a string of type:
+                The argument is a string of type:
 
                     Str
 
-                But add needs the 2nd argument to be:
+                But add needs its 2nd argument to be:
 
                     Num a
                 "#
