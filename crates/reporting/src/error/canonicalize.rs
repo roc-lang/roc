@@ -902,6 +902,27 @@ pub fn can_problem<'b>(
             title = INCOMPLETE_ABILITY_IMPLEMENTATION.to_string();
             severity = Severity::RuntimeError;
         }
+        Problem::NotBoundInAllPatterns {
+            unbound_symbol,
+            region,
+        } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.symbol_unqualified(unbound_symbol),
+                    alloc.reflow(" is not bound in all patterns of this "),
+                    alloc.keyword("when"),
+                    alloc.reflow(" branch"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat([
+                    alloc.reflow("Identifiers introduced in a "),
+                    alloc.keyword("when"),
+                    alloc.reflow(" branch must be bound in all patterns of the branch. Otherwise, the program would crash when it tries to use an identifier that wasn't bound!"),
+                ]),
+            ]);
+            title = "NAME NOT BOUND IN ALL PATTERNS".to_string();
+            severity = Severity::RuntimeError;
+        }
     };
 
     Report {

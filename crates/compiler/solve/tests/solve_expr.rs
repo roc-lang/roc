@@ -7357,4 +7357,49 @@ mod solve_expr {
             "List (A U8)",
         );
     }
+
+    #[test]
+    fn shared_pattern_variable_in_when_patterns() {
+        infer_queries!(
+            indoc!(
+                r#"
+                when A "" is
+                #    ^^^^
+                    A x | B x -> x
+                    # ^     ^    ^
+                "#
+            ),
+            @r###"
+            A "" : [A Str, B Str]
+            x : Str
+            x : Str
+            x : Str
+            "###
+        );
+    }
+
+    #[test]
+    fn shared_pattern_variable_in_multiple_branch_when_patterns() {
+        infer_queries!(
+            indoc!(
+                r#"
+                when A "" is
+                #    ^^^^
+                    A x | B x -> x
+                    # ^     ^    ^
+                    C x | D x -> x
+                    # ^     ^    ^
+                "#
+            ),
+            @r###"
+            A "" : [A Str, B Str, C Str, D Str]
+            x : Str
+            x : Str
+            x : Str
+            x : Str
+            x : Str
+            x : Str
+            "###
+        );
+    }
 }

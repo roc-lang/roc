@@ -621,11 +621,11 @@ fn can_annotation_help(
             let symbol = match scope.introduce(name.value.into(), region) {
                 Ok(symbol) => symbol,
 
-                Err((original_region, shadow, _new_symbol)) => {
-                    let problem = Problem::Shadowed(original_region, shadow.clone());
+                Err((shadowed_symbol, shadow, _new_symbol)) => {
+                    let problem = Problem::Shadowed(shadowed_symbol.region, shadow.clone());
 
                     env.problem(roc_problem::can::Problem::Shadowing {
-                        original_region,
+                        original_region: shadowed_symbol.region,
                         shadow,
                         kind: ShadowKind::Variable,
                     });

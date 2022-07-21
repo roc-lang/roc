@@ -2327,9 +2327,9 @@ fn to_pending_type_def<'a>(
 
                 let member_sym = match scope.introduce(member_name.into(), name_region) {
                     Ok(sym) => sym,
-                    Err((original_region, shadow, _new_symbol)) => {
+                    Err((shadowed_symbol, shadow, _new_symbol)) => {
                         env.problem(roc_problem::can::Problem::Shadowing {
-                            original_region,
+                            original_region: shadowed_symbol.region,
                             shadow,
                             kind: ShadowKind::Variable,
                         });
