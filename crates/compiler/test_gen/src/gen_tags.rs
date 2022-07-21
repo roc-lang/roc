@@ -1825,3 +1825,23 @@ fn issue_3560_nested_tag_constructor_is_newtype() {
         (u8, u8)
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_3560_nested_tag_constructor_is_record_newtype() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            f : _ -> u8
+            f = \t ->
+                when t is
+                    {wrapper: (Payload it)} -> it
+                    {wrapper: (AlternatePayload it)} -> it
+
+            {a: f {wrapper: (Payload 15u8)}, b: f {wrapper: (AlternatePayload 31u8)}}
+            "#
+        ),
+        (15, 31),
+        (u8, u8)
+    )
+}
