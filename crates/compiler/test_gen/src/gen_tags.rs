@@ -1812,12 +1812,16 @@ fn issue_3560_nested_tag_constructor_is_newtype() {
     assert_evals_to!(
         indoc!(
             r#"
-            when Wrapper (Payload "err") is
-                Wrapper (Payload str) -> str
-                Wrapper (AlternatePayload str) -> str
+            f : _ -> u8
+            f = \t ->
+                when t is
+                    Wrapper (Payload it) -> it
+                    Wrapper (AlternatePayload it) -> it
+
+            {a: f (Wrapper (Payload 15u8)), b: f(Wrapper (AlternatePayload 31u8))}
             "#
         ),
-        RocStr::from("err"),
-        RocStr
+        (15, 31),
+        (u8, u8)
     )
 }
