@@ -1273,7 +1273,7 @@ fn canonicalize_closure_body<'a>(
 enum MultiPatternVariables {
     OnePattern,
     MultiPattern {
-        bound_occurences: VecMap<Symbol, (Region, u8)>,
+        bound_occurrences: VecMap<Symbol, (Region, u8)>,
     },
 }
 
@@ -1282,7 +1282,7 @@ impl MultiPatternVariables {
     fn new(num_patterns: usize) -> Self {
         if num_patterns > 1 {
             Self::MultiPattern {
-                bound_occurences: VecMap::with_capacity(2),
+                bound_occurrences: VecMap::with_capacity(2),
             }
         } else {
             Self::OnePattern
@@ -1293,12 +1293,12 @@ impl MultiPatternVariables {
     fn add_pattern(&mut self, pattern: &Loc<Pattern>) {
         match self {
             MultiPatternVariables::OnePattern => {}
-            MultiPatternVariables::MultiPattern { bound_occurences } => {
+            MultiPatternVariables::MultiPattern { bound_occurrences } => {
                 for (sym, region) in BindingsFromPattern::new(pattern) {
-                    if !bound_occurences.contains_key(&sym) {
-                        bound_occurences.insert(sym, (region, 0));
+                    if !bound_occurrences.contains_key(&sym) {
+                        bound_occurrences.insert(sym, (region, 0));
                     }
-                    bound_occurences.get_mut(&sym).unwrap().1 += 1;
+                    bound_occurrences.get_mut(&sym).unwrap().1 += 1;
                 }
             }
         }
@@ -1306,12 +1306,12 @@ impl MultiPatternVariables {
 
     #[inline(always)]
     fn get_unbound(self) -> impl Iterator<Item = (Symbol, Region)> {
-        let bound_occurences = match self {
+        let bound_occurrences = match self {
             MultiPatternVariables::OnePattern => Default::default(),
-            MultiPatternVariables::MultiPattern { bound_occurences } => bound_occurences,
+            MultiPatternVariables::MultiPattern { bound_occurrences } => bound_occurrences,
         };
 
-        bound_occurences
+        bound_occurrences
             .into_iter()
             .filter_map(|(sym, (region, occurs))| {
                 if occurs == 1 {
