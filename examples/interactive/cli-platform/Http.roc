@@ -12,31 +12,12 @@ interface Http
         emptyBody,
         bytesBody,
         stringBody,
-        # jsonBody,
-        # multiPartBody,
-        # stringPart,
-        # bytesPart,
         handleStringResponse,
         defaultRequest,
         errorToString,
         send,
     ]
-    imports [
-        Effect,
-        InternalTask,
-        # Json,
-        Task.{ Task },
-        # Encode.{ Encoding },
-        Url.{ Url },
-        InternalHttp,
-    ]
-
-HttpErr a : [
-    HttpErr [
-        NotFound Url,
-        Timeout Url,
-    ]
-]a
+    imports [Effect, InternalTask, Task.{ Task }, InternalHttp]
 
 Request : InternalHttp.Request
 Method : InternalHttp.Method
@@ -98,7 +79,6 @@ stringBody = \mimeType, str ->
 # stringPart : Str, Str -> Part
 # stringPart = \name, str ->
 #     Part name (Str.toUtf8 str)
-
 handleStringResponse : Response -> Result Str Error
 handleStringResponse = \response ->
     when response is

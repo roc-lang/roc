@@ -379,13 +379,6 @@ pub extern "C" fn roc_fx_sendRequest(roc_request: &glue::Request) -> glue::Respo
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_httpGetUtf8(url: &RocStr) -> RocStr {
-    let body: String = ureq::get(url).call().unwrap().into_string().unwrap();
-
-    RocStr::from(body.as_str())
-}
-
-#[no_mangle]
 pub extern "C" fn roc_fx_envVarUtf8(key: &RocStr) -> RocStr {
     let val: String = dbg!(std::env::var(dbg!(key.as_str()))).unwrap();
 
