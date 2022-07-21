@@ -1843,24 +1843,28 @@ fn constrain_when_branch_help(
         if i == 0 {
             state.headers.extend(partial_state.headers);
         } else {
-            debug_assert!(
-                state.headers.keys().all(|sym| partial_state.headers.contains_key(sym)) &&
-                partial_state.headers.keys().all(|sym| state.headers.contains_key(sym)),
-                "State and partial state headers differ in bound symbols, should have been caught in canonicalization");
-
             // Make sure the bound variables in the patterns on the same branch agree in their types.
             for (sym, typ1) in state.headers.iter() {
-                let typ2 = partial_state
-                    .headers
-                    .get(sym)
-                    .expect("bound variable in branch not bound in pattern!");
+                if let Some(typ2) = partial_state.headers.get(sym) {
+                    state.constraints.push(constraints.equal_types(
+                        typ1.value.clone(),
+                        Expected::NoExpectation(typ2.value.clone()),
+                        Category::When,
+                        typ2.region,
+                    ));
+                }
 
-                state.constraints.push(constraints.equal_types(
-                    typ1.value.clone(),
-                    Expected::NoExpectation(typ2.value.clone()),
-                    Category::When,
-                    typ2.region,
-                ));
+                // If the pattern doesn't bind all symbols introduced in the branch we'll have
+                // reported a canonicalization error, but still might reach here; that's okay.
+            }
+
+            // Add any variables this pattern binds that the other patterns don't bind.
+            // This will already have been reported as an error, but we still might be able to
+            // solve their types.
+            for (sym, ty) in partial_state.headers {
+                if !state.headers.contains_key(&sym) {
+                    state.headers.insert(sym, ty);
+                }
             }
         }
     }

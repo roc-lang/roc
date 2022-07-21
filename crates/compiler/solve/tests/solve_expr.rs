@@ -7370,11 +7370,11 @@ mod solve_expr {
                 "#
             ),
             @r###"
-        A "" : [A Str, B Str]
-        x : Str
-        x : Str
-        x : Str
-        "###
+            A "" : [A Str, B Str]
+            x : Str
+            x : Str
+            x : Str
+            "###
         );
     }
 }

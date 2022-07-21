@@ -9832,4 +9832,47 @@ All branches in an `if` must have the same type!
         U16 -> A
     "###
     );
+
+    test_report!(
+        symbols_not_bound_in_all_patterns,
+        indoc!(
+            r#"
+            when A "" is
+                A x | B y -> x
+            "#
+        ),
+        @r###"
+        ── NAME NOT BOUND IN ALL PATTERNS ──────────────────────── /code/proj/Main.roc ─
+
+        `x` is not bound in all patterns of this `when` branch
+
+        5│          A x | B y -> x
+                      ^
+
+        Identifiers introduced in a `when` branch must be bound in all patterns
+        of the branch. Otherwise, the program would crash when it tries to use
+        an identifier that wasn't bound!
+
+        ── NAME NOT BOUND IN ALL PATTERNS ──────────────────────── /code/proj/Main.roc ─
+
+        `y` is not bound in all patterns of this `when` branch
+
+        5│          A x | B y -> x
+                            ^
+
+        Identifiers introduced in a `when` branch must be bound in all patterns
+        of the branch. Otherwise, the program would crash when it tries to use
+        an identifier that wasn't bound!
+
+        ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+
+        `y` is not used anywhere in your code.
+
+        5│          A x | B y -> x
+                            ^
+
+        If you didn't intend on using `y` then remove it so future readers of
+        your code don't wonder why it is there.
+        "###
+    );
 }

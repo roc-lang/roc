@@ -1270,6 +1270,59 @@ fn canonicalize_closure_body<'a>(
     (closure_data, output)
 }
 
+enum MultiPatternVariables {
+    OnePattern,
+    MultiPattern {
+        bound_occurences: VecMap<Symbol, (Region, u8)>,
+    },
+}
+
+impl MultiPatternVariables {
+    #[inline(always)]
+    fn new(num_patterns: usize) -> Self {
+        if num_patterns > 1 {
+            Self::MultiPattern {
+                bound_occurences: VecMap::with_capacity(2),
+            }
+        } else {
+            Self::OnePattern
+        }
+    }
+
+    #[inline(always)]
+    fn add_pattern(&mut self, pattern: &Loc<Pattern>) {
+        match self {
+            MultiPatternVariables::OnePattern => {}
+            MultiPatternVariables::MultiPattern { bound_occurences } => {
+                for (sym, region) in BindingsFromPattern::new(pattern) {
+                    if !bound_occurences.contains_key(&sym) {
+                        bound_occurences.insert(sym, (region, 0));
+                    }
+                    bound_occurences.get_mut(&sym).unwrap().1 += 1;
+                }
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn get_unbound(self) -> impl Iterator<Item = (Symbol, Region)> {
+        let bound_occurences = match self {
+            MultiPatternVariables::OnePattern => Default::default(),
+            MultiPatternVariables::MultiPattern { bound_occurences } => bound_occurences,
+        };
+
+        bound_occurences
+            .into_iter()
+            .filter_map(|(sym, (region, occurs))| {
+                if occurs == 1 {
+                    Some((sym, region))
+                } else {
+                    None
+                }
+            })
+    }
+}
+
 #[inline(always)]
 fn canonicalize_when_branch<'a>(
     env: &mut Env<'a>,
@@ -1280,6 +1333,7 @@ fn canonicalize_when_branch<'a>(
     output: &mut Output,
 ) -> (WhenBranch, References) {
     let mut patterns = Vec::with_capacity(branch.patterns.len());
+    let mut multi_pattern_variables = MultiPatternVariables::new(branch.patterns.len());
 
     // TODO report symbols not bound in all patterns
     for loc_pattern in branch.patterns.iter() {
@@ -1294,7 +1348,15 @@ fn canonicalize_when_branch<'a>(
             PermitShadows(true),
         );
 
+        multi_pattern_variables.add_pattern(&can_pattern);
         patterns.push(can_pattern);
+    }
+
+    for (unbound_symbol, region) in multi_pattern_variables.get_unbound() {
+        env.problem(Problem::NotBoundInAllPatterns {
+            unbound_symbol,
+            region,
+        })
     }
 
     let (value, mut branch_output) = canonicalize_expr(
