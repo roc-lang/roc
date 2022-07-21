@@ -1494,6 +1494,56 @@ fn solve(
                     (Content::Error, _) | (_, Content::Error)
                 );
 
+                // Check exhaustiveness of the condition type, relative to the patterns.
+                {
+                    match subs.get_content_without_compacting(real_var) {
+                        &Content::Structure(FlatType::TagUnion(..)) => {
+                            let real_var =
+                                roc_can::copy::deep_copy_type_vars_unconditional(subs, real_var);
+                            let branches_var = roc_can::copy::deep_copy_type_vars_unconditional(
+                                subs,
+                                branches_var,
+                            );
+                            let real_var2 =
+                                roc_can::copy::deep_copy_type_vars_unconditional(subs, real_var);
+
+                            let tags = match subs.get_content_unchecked(real_var2) {
+                                &Content::Structure(FlatType::TagUnion(tags, _)) => tags,
+                                _ => internal_error!("copied tag to non-tag"),
+                            };
+                            let collector = subs.fresh_unnamed_flex_var();
+
+                            subs.set_content_unchecked(
+                                real_var2,
+                                Content::Structure(FlatType::TagUnion(tags, collector)),
+                            );
+
+                            if let Success { .. } =
+                                unify(&mut UEnv::new(subs), real_var, branches_var, Mode::EQ)
+                            {
+                                unify(&mut UEnv::new(subs), real_var, real_var2, Mode::EQ);
+
+                                if let Content::Structure(FlatType::TagUnion(_, _)) =
+                                    subs.get_content_unchecked(collector)
+                                {
+                                    let (maybe_redundant_patterns, _) =
+                                        subs.var_to_error_type(collector);
+
+                                    let sketched_rows =
+                                        constraints.sketched_rows[sketched_rows.index()].clone();
+
+                                    problems.push(TypeError::PatternNotInCondition(
+                                        sketched_rows.overall_region(),
+                                        maybe_redundant_patterns,
+                                    ));
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Check exhaustiveness of the patterns, relative to the condition type.
                 let snapshot = subs.snapshot();
                 let unify_cond_and_patterns_outcome = unify(
                     &mut UEnv::new(subs),

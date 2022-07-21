@@ -12446,4 +12446,42 @@ All branches in an `if` must have the same type!
     to be more general?
     "###
     );
+
+    test_reporting!(
+        condition_type_not_covered_by_patterns,
+        indoc!(
+            r#"
+            pingRoc : {} -> Result {} [RateLimited, TimeOut, NoRoc]*
+
+            when pingRoc {} is
+                Ok {} -> {}
+                Err e ->
+                    when e is
+                        RateLimited -> {}
+                        TimeOut -> {}
+                        NoCaml -> {}
+                        _ -> {}
+            "#
+        ),
+        @r###"
+    ── TYPES NOT COVERED IN CONDITION ──────────────────────── /code/proj/Main.roc ─
+
+    These patterns match cases that aren't explicitly in the type of the
+    condition:
+
+     9│>              when e is
+    10│>                  RateLimited -> {}
+    11│>                  TimeOut -> {}
+    12│>                  NoCaml -> {}
+    13│>                  _ -> {}
+
+    The cases that are covered by the patterns but aren't explicitly in
+    the condition type are:
+
+        [NoCaml]a
+
+    Note: If you intended to match those patterns, no worries! Just
+    letting you know, in case this was unintentional.
+    "###
+    );
 }

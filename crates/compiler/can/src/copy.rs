@@ -738,6 +738,20 @@ fn deep_copy_pattern_help<C: CopyEnv>(
     }
 }
 
+pub fn deep_copy_type_vars_unconditional(subs: &mut Subs, var: Variable) -> Variable {
+    let mut copied = Vec::with_capacity(16);
+
+    let copy_var = deep_copy_type_vars(subs, &mut copied, var);
+
+    // we have tracked all visited variables, and can now traverse them
+    // in one go (without looking at the UnificationTable) and clear the copy field
+    for var in copied {
+        subs.clear_source_copy(var);
+    }
+
+    copy_var
+}
+
 /// Deep copies the type variables in [`var`], returning a map of original -> new type variable for
 /// all type variables copied.
 #[inline]

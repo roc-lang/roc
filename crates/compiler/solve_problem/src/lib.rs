@@ -29,6 +29,7 @@ pub enum TypeError {
         expected_opaque: Symbol,
         found_opaque: Symbol,
     },
+    PatternNotInCondition(Region, ErrorType),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

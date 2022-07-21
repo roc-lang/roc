@@ -201,6 +201,21 @@ pub fn type_problem<'b>(
                 severity: Severity::RuntimeError,
             })
         }
+        PatternNotInCondition(region, type_not_in_condition) => {
+            let stack = [
+                alloc.reflow("These patterns match cases that aren't explicitly in the type of the condition:"),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("The cases that are covered by the patterns but aren't explicitly in the condition type are:"),
+                alloc.type_block(to_doc(alloc, Parens::Unnecessary, type_not_in_condition).0),
+                alloc.note("").append(alloc.reflow("If you intended to match those patterns, no worries! Just letting you know, in case this was unintentional.")), ];
+
+            Some(Report {
+                title: "TYPES NOT COVERED IN CONDITION".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity: Severity::Warning,
+            })
+        }
     }
 }
 

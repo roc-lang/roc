@@ -294,6 +294,10 @@ impl SketchedRows {
     ) -> Result<NonRedundantSummary, TypeError> {
         to_nonredundant_rows(subs, real_var, self)
     }
+
+    pub fn overall_region(&self) -> Region {
+        self.overall_region
+    }
 }
 
 fn sketch_pattern(pattern: &crate::pattern::Pattern) -> SketchedPattern {
