@@ -246,6 +246,7 @@ pub fn canonicalize_def_header_pattern<'a>(
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub struct PermitShadows(pub bool);
 
+#[allow(clippy::too_many_arguments)]
 pub fn canonicalize_pattern<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
