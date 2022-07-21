@@ -434,7 +434,7 @@ pub fn canonicalize_module_defs<'a>(
         .iter()
         .map(|(symbol, loc_ann)| {
             // We've already canonicalized the module, so there are no pending abilities.
-            let pending_abilities_in_scope = &[];
+            let pending_abilities_in_scope = &Default::default();
 
             let ann = canonicalize_annotation(
                 &mut env,

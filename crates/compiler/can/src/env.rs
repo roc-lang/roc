@@ -58,7 +58,6 @@ impl<'a> Env<'a> {
         }
     }
 
-    /// Returns Err if the symbol resolved, but it was not exposed by the given module
     pub fn qualified_lookup(
         &mut self,
         scope: &Scope,
@@ -72,87 +71,10 @@ impl<'a> Env<'a> {
             ident
         );
 
-        let is_type_name = ident.starts_with(|c: char| c.is_uppercase());
-
         let module_name = ModuleName::from(module_name_str);
 
         match self.module_ids.get_id(&module_name) {
-            Some(module_id) => {
-                // You can do qualified lookups on your own module, e.g.
-                // if I'm in the Foo module, I can do a `Foo.bar` lookup.
-                if module_id == self.home {
-                    match scope.locals.ident_ids.get_id(ident) {
-                        Some(ident_id) => {
-                            let symbol = Symbol::new(module_id, ident_id);
-
-                            if is_type_name {
-                                self.qualified_type_lookups.insert(symbol);
-                            } else {
-                                self.qualified_value_lookups.insert(symbol);
-                            }
-
-                            Ok(symbol)
-                        }
-                        None => {
-                            let error = RuntimeError::LookupNotInScope(
-                                Loc {
-                                    value: Ident::from(ident),
-                                    region,
-                                },
-                                scope
-                                    .locals
-                                    .ident_ids
-                                    .ident_strs()
-                                    .map(|(_, string)| string.into())
-                                    .collect(),
-                            );
-                            Err(error)
-                        }
-                    }
-                } else {
-                    match self.dep_idents.get(&module_id) {
-                        Some(exposed_ids) => match exposed_ids.get_id(ident) {
-                            Some(ident_id) => {
-                                let symbol = Symbol::new(module_id, ident_id);
-
-                                if is_type_name {
-                                    self.qualified_type_lookups.insert(symbol);
-                                } else {
-                                    self.qualified_value_lookups.insert(symbol);
-                                }
-
-                                Ok(symbol)
-                            }
-                            None => {
-                                let exposed_values = exposed_ids
-                                    .ident_strs()
-                                    .filter(|(_, ident)| {
-                                        ident.starts_with(|c: char| c.is_lowercase())
-                                    })
-                                    .map(|(_, ident)| Lowercase::from(ident))
-                                    .collect();
-                                Err(RuntimeError::ValueNotExposed {
-                                    module_name,
-                                    ident: Ident::from(ident),
-                                    region,
-                                    exposed_values,
-                                })
-                            }
-                        },
-                        None => Err(RuntimeError::ModuleNotImported {
-                            module_name,
-                            imported_modules: self
-                                .dep_idents
-                                .keys()
-                                .filter_map(|module_id| self.module_ids.get_name(*module_id))
-                                .map(|module_name| module_name.as_ref().into())
-                                .collect(),
-                            region,
-                            module_exists: true,
-                        }),
-                    }
-                }
-            }
+            Some(module_id) => self.qualified_lookup_help(scope, module_id, ident, region),
             None => Err(RuntimeError::ModuleNotImported {
                 module_name,
                 imported_modules: self
@@ -163,6 +85,108 @@ impl<'a> Env<'a> {
                 region,
                 module_exists: false,
             }),
+        }
+    }
+
+    pub fn qualified_lookup_with_module_id(
+        &mut self,
+        scope: &Scope,
+        module_id: ModuleId,
+        ident: &str,
+        region: Region,
+    ) -> Result<Symbol, RuntimeError> {
+        self.qualified_lookup_help(scope, module_id, ident, region)
+    }
+
+    /// Returns Err if the symbol resolved, but it was not exposed by the given module
+    fn qualified_lookup_help(
+        &mut self,
+        scope: &Scope,
+        module_id: ModuleId,
+        ident: &str,
+        region: Region,
+    ) -> Result<Symbol, RuntimeError> {
+        let is_type_name = ident.starts_with(|c: char| c.is_uppercase());
+
+        // You can do qualified lookups on your own module, e.g.
+        // if I'm in the Foo module, I can do a `Foo.bar` lookup.
+        if module_id == self.home {
+            match scope.locals.ident_ids.get_id(ident) {
+                Some(ident_id) => {
+                    let symbol = Symbol::new(module_id, ident_id);
+
+                    if is_type_name {
+                        self.qualified_type_lookups.insert(symbol);
+                    } else {
+                        self.qualified_value_lookups.insert(symbol);
+                    }
+
+                    Ok(symbol)
+                }
+                None => {
+                    let error = RuntimeError::LookupNotInScope(
+                        Loc {
+                            value: Ident::from(ident),
+                            region,
+                        },
+                        scope
+                            .locals
+                            .ident_ids
+                            .ident_strs()
+                            .map(|(_, string)| string.into())
+                            .collect(),
+                    );
+                    Err(error)
+                }
+            }
+        } else {
+            match self.dep_idents.get(&module_id) {
+                Some(exposed_ids) => match exposed_ids.get_id(ident) {
+                    Some(ident_id) => {
+                        let symbol = Symbol::new(module_id, ident_id);
+
+                        if is_type_name {
+                            self.qualified_type_lookups.insert(symbol);
+                        } else {
+                            self.qualified_value_lookups.insert(symbol);
+                        }
+
+                        Ok(symbol)
+                    }
+                    None => {
+                        let exposed_values = exposed_ids
+                            .ident_strs()
+                            .filter(|(_, ident)| ident.starts_with(|c: char| c.is_lowercase()))
+                            .map(|(_, ident)| Lowercase::from(ident))
+                            .collect();
+                        Err(RuntimeError::ValueNotExposed {
+                            module_name: self
+                                .module_ids
+                                .get_name(module_id)
+                                .expect("Module ID known, but not in the module IDs somehow")
+                                .clone(),
+                            ident: Ident::from(ident),
+                            region,
+                            exposed_values,
+                        })
+                    }
+                },
+                None => Err(RuntimeError::ModuleNotImported {
+                    module_name: self
+                        .module_ids
+                        .get_name(module_id)
+                        .expect("Module ID known, but not in the module IDs somehow")
+                        .clone(),
+                    imported_modules: self
+                        .dep_idents
+                        .keys()
+                        .filter_map(|module_id| self.module_ids.get_name(*module_id))
+                        .map(|module_name| module_name.as_ref().into())
+                        .collect(),
+                    region,
+                    module_exists: true,
+                }),
+            }
         }
     }
 

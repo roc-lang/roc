@@ -23,7 +23,7 @@ fn hash_specialization() {
             Hash has
                 hash : a -> U64 | a has Hash
 
-            Id := U64
+            Id := U64 has [Hash {hash}]
 
             hash = \@Id n -> n
 
@@ -46,13 +46,13 @@ fn hash_specialization_multiple_add() {
             Hash has
                 hash : a -> U64 | a has Hash
 
-            Id := U64
+            Id := U64 has [ Hash {hash: hashId} ]
 
-            hash = \@Id n -> n
+            hashId = \@Id n -> n
 
-            One := {}
+            One := {} has [ Hash {hash: hashOne} ]
 
-            hash = \@One _ -> 1
+            hashOne = \@One _ -> 1
 
             main = hash (@Id 1234) + hash (@One {})
             "#
@@ -73,7 +73,7 @@ fn alias_member_specialization() {
             Hash has
                 hash : a -> U64 | a has Hash
 
-            Id := U64
+            Id := U64 has [Hash {hash}]
 
             hash = \@Id n -> n
 
@@ -101,7 +101,7 @@ fn ability_constrained_in_non_member_usage() {
             mulHashes : a, a -> U64 | a has Hash
             mulHashes = \x, y -> hash x * hash y
 
-            Id := U64
+            Id := U64 has [Hash {hash}]
             hash = \@Id n -> n
 
             result = mulHashes (@Id 5) (@Id 7)
@@ -125,7 +125,7 @@ fn ability_constrained_in_non_member_usage_inferred() {
 
             mulHashes = \x, y -> hash x * hash y
 
-            Id := U64
+            Id := U64 has [Hash {hash}]
             hash = \@Id n -> n
 
             result = mulHashes (@Id 5) (@Id 7)
@@ -150,11 +150,11 @@ fn ability_constrained_in_non_member_multiple_specializations() {
             mulHashes : a, b -> U64 | a has Hash, b has Hash
             mulHashes = \x, y -> hash x * hash y
 
-            Id := U64
-            hash = \@Id n -> n
+            Id := U64 has [Hash { hash: hashId }]
+            hashId = \@Id n -> n
 
-            Three := {}
-            hash = \@Three _ -> 3
+            Three := {} has [Hash { hash: hashThree }]
+            hashThree = \@Three _ -> 3
 
             result = mulHashes (@Id 100) (@Three {})
             "#
@@ -177,11 +177,11 @@ fn ability_constrained_in_non_member_multiple_specializations_inferred() {
 
             mulHashes = \x, y -> hash x * hash y
 
-            Id := U64
-            hash = \@Id n -> n
+            Id := U64 has [Hash { hash: hashId }]
+            hashId = \@Id n -> n
 
-            Three := {}
-            hash = \@Three _ -> 3
+            Three := {} has [Hash { hash: hashThree }]
+            hashThree = \@Three _ -> 3
 
             result = mulHashes (@Id 100) (@Three {})
             "#
@@ -205,11 +205,11 @@ fn ability_used_as_type_still_compiles() {
             mulHashes : Hash, Hash -> U64
             mulHashes = \x, y -> hash x * hash y
 
-            Id := U64
-            hash = \@Id n -> n
+            Id := U64 has [Hash { hash: hashId }]
+            hashId = \@Id n -> n
 
-            Three := {}
-            hash = \@Three _ -> 3
+            Three := {} has [Hash { hash: hashThree }]
+            hashThree = \@Three _ -> 3
 
             result = mulHashes (@Id 100) (@Three {})
             "#
@@ -242,14 +242,12 @@ fn encode() {
             toBytes = \val, fmt -> appendWith [] (toEncoder val) fmt
 
 
-            Linear := {}
+            Linear := {} has [Format {u8}]
 
-            # impl Format for Linear
             u8 = \n -> @Encoder (\lst, @Linear {} -> List.append lst n)
 
-            Rgba := { r : U8, g : U8, b : U8, a : U8 }
+            Rgba := { r : U8, g : U8, b : U8, a : U8 } has [Encoding {toEncoder}]
 
-            # impl Encoding for Rgba
             toEncoder = \@Rgba {r, g, b, a} ->
                 @Encoder \lst, fmt -> lst
                     |> appendWith (u8 r) fmt
@@ -291,21 +289,20 @@ fn decode() {
             fromBytes = \lst, fmt ->
                 when decodeWith lst decoder fmt is
                     { result, rest } ->
-                        Result.after result \val ->
+                        Result.try result \val ->
                             if List.isEmpty rest
                             then Ok val
                             else Err (Leftover rest)
 
 
-            Linear := {}
+            Linear := {} has [DecoderFormatting {u8}]
 
-            # impl DecoderFormatting for Linear
             u8 = @Decoder \lst, @Linear {} ->
                     when List.first lst is
                         Ok n -> { result: Ok n, rest: List.dropFirst lst }
                         Err _ -> { result: Err TooShort, rest: [] }
 
-            MyU8 := U8
+            MyU8 := U8 has [Decoding {decoder}]
 
             # impl Decoding for MyU8
             decoder = @Decoder \lst, fmt ->
@@ -330,17 +327,17 @@ fn encode_use_stdlib() {
         indoc!(
             r#"
             app "test"
-                imports [Encode.{ toEncoder }, Json]
+                imports [Encode.{ Encoding, toEncoder }, Json]
                 provides [main] to "./platform"
 
-            HelloWorld := {}
+            HelloWorld := {} has [Encoding {toEncoder}]
             toEncoder = \@HelloWorld {} ->
                 Encode.custom \bytes, fmt ->
                     bytes
                         |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.format)
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.toUtf8)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -358,14 +355,14 @@ fn encode_use_stdlib_without_wrapping_custom() {
         indoc!(
             r#"
             app "test"
-                imports [Encode.{ toEncoder }, Json]
+                imports [Encode.{ Encoding, toEncoder }, Json]
                 provides [main] to "./platform"
 
-            HelloWorld := {}
+            HelloWorld := {} has [Encoding {toEncoder}]
             toEncoder = \@HelloWorld {} -> Encode.string "Hello, World!\n"
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.format)
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.toUtf8)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -383,17 +380,17 @@ fn to_encoder_encode_custom_has_capture() {
         indoc!(
             r#"
             app "test"
-                imports [Encode.{ toEncoder }, Json]
+                imports [Encode.{ Encoding, toEncoder }, Json]
                 provides [main] to "./platform"
 
-            HelloWorld := Str
+            HelloWorld := Str has [Encoding {toEncoder}]
             toEncoder = \@HelloWorld s1 ->
                 Encode.custom \bytes, fmt ->
                     bytes
                         |> Encode.appendWith (Encode.string s1) fmt
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld "Hello, World!\n") Json.format)
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld "Hello, World!\n") Json.toUtf8)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -423,7 +420,7 @@ mod encode_immediate {
                 app "test" imports [Encode.{ toEncoder }, Json] provides [main] to "./platform"
 
                 main =
-                    when Str.fromUtf8 (Encode.toBytes "foo" Json.format) is
+                    when Str.fromUtf8 (Encode.toBytes "foo" Json.toUtf8) is
                         Ok s -> s
                         _ -> "<bad>"
                 "#
@@ -444,7 +441,7 @@ mod encode_immediate {
                         app "test" imports [Encode.{{ toEncoder }}, Json] provides [main] to "./platform"
 
                         main =
-                            when Str.fromUtf8 (Encode.toBytes {}{} Json.format) is
+                            when Str.fromUtf8 (Encode.toBytes {}{} Json.toUtf8) is
                                 Ok s -> s
                                 _ -> "<bad>"
                         "#
@@ -484,13 +481,13 @@ fn encode_derived_record_one_field_string() {
                 provides [main] to "./platform"
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes {a: "foo"} Json.format)
+                result = Str.fromUtf8 (Encode.toBytes {a: "foo"} Json.toUtf8)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"a":"foo",}"#),
+        RocStr::from(r#"{"a":"foo"}"#),
         RocStr
     )
 }
@@ -507,13 +504,13 @@ fn encode_derived_record_two_fields_strings() {
 
             main =
                 rcd = {a: "foo", b: "bar"}
-                result = Str.fromUtf8 (Encode.toBytes rcd Json.format)
+                result = Str.fromUtf8 (Encode.toBytes rcd Json.toUtf8)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"a":"foo","b":"bar",}"#),
+        RocStr::from(r#"{"a":"foo","b":"bar"}"#),
         RocStr
     )
 }
@@ -530,14 +527,14 @@ fn encode_derived_nested_record_string() {
 
             main =
                 rcd = {a: {b: "bar"}}
-                encoded = Encode.toBytes rcd Json.format
+                encoded = Encode.toBytes rcd Json.toUtf8
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"a":{"b":"bar",},}"#),
+        RocStr::from(r#"{"a":{"b":"bar"}}"#),
         RocStr
     )
 }
@@ -555,13 +552,13 @@ fn encode_derived_tag_one_payload_string() {
             main =
                 x : [A Str]
                 x = A "foo"
-                result = Str.fromUtf8 (Encode.toBytes x Json.format)
+                result = Str.fromUtf8 (Encode.toBytes x Json.toUtf8)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"A":["foo",]}"#),
+        RocStr::from(r#"{"A":["foo"]}"#),
         RocStr
     )
 }
@@ -579,13 +576,13 @@ fn encode_derived_tag_two_payloads_string() {
             main =
                 x : [A Str Str]
                 x = A "foo" "bar"
-                result = Str.fromUtf8 (Encode.toBytes x Json.format)
+                result = Str.fromUtf8 (Encode.toBytes x Json.toUtf8)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"A":["foo","bar",]}"#),
+        RocStr::from(r#"{"A":["foo","bar"]}"#),
         RocStr
     )
 }
@@ -603,14 +600,14 @@ fn encode_derived_nested_tag_string() {
             main =
                 x : [A [B Str Str]]
                 x = A (B "foo" "bar")
-                encoded = Encode.toBytes x Json.format
+                encoded = Encode.toBytes x Json.toUtf8
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"A":[{"B":["foo","bar",]},]}"#),
+        RocStr::from(r#"{"A":[{"B":["foo","bar"]}]}"#),
         RocStr
     )
 }
@@ -628,14 +625,62 @@ fn encode_derived_nested_record_tag_record() {
             main =
                 x : {a: [B {c: Str}]}
                 x = {a: (B ({c: "foo"}))}
-                encoded = Encode.toBytes x Json.format
+                encoded = Encode.toBytes x Json.toUtf8
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from(r#"{"a":{"B":[{"c":"foo",},]},}"#),
+        RocStr::from(r#"{"a":{"B":[{"c":"foo"}]}}"#),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn encode_derived_list_string() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ toEncoder }, Json]
+                provides [main] to "./platform"
+
+            main =
+                lst = ["foo", "bar", "baz"]
+                encoded = Encode.toBytes lst Json.toUtf8
+                result = Str.fromUtf8 encoded
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"["foo","bar","baz"]"#),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn encode_derived_list_of_records() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ toEncoder }, Json]
+                provides [main] to "./platform"
+
+            main =
+                lst = [{a: "foo"}, {a: "bar"}, {a: "baz"}]
+                encoded = Encode.toBytes lst Json.toUtf8
+                result = Str.fromUtf8 encoded
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"[{"a":"foo"},{"a":"bar"},{"a":"baz"}]"#),
         RocStr
     )
 }

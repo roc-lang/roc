@@ -981,8 +981,8 @@ fn alignment_in_multi_tag_construction_two() {
             x
             #"
         ),
-        (32i64, true, 1),
-        (i64, bool, u8)
+        ((32i64, true), 1, [0; 7]),
+        ((i64, bool), u8, [u8; 7])
     );
 }
 
@@ -998,14 +998,14 @@ fn alignment_in_multi_tag_construction_three() {
                 x
                 #"
         ),
-        (32i64, true, 2u8, 1),
-        (i64, bool, u8, u8)
+        ((32i64, true, 2u8), 1, [0; 7]),
+        ((i64, bool, u8), u8, [u8; 7])
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
-fn alignment_i128() {
+#[cfg(all(feature = "gen-llvm", not(feature = "gen-llvm-wasm")))]
+fn alignment_i128_64bit() {
     assert_evals_to!(
         indoc!(
             r"#
@@ -1015,8 +1015,28 @@ fn alignment_i128() {
                 x
                 #"
         ),
-        (42, true, 1),
-        (i128, bool, u8)
+        // note: rust aligns the tuple `(i128, bool)` to 8 we align it to 16,
+        // so add 8 extra padding bytes
+        ((42, true), [0; 8], 1, [0; 15]),
+        ((i128, bool), [u8; 8], u8, [u8; 15])
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm-wasm", feature = "gen-wasm"))]
+fn alignment_i128_64bit() {
+    assert_evals_to!(
+        indoc!(
+            r"#
+                x : [One I128 Bool, Empty]
+                x = One 42 (1 == 1)
+
+                x
+                #"
+        ),
+        // FromWasm32 takes care of the padding between the tuple and the tag id
+        ((42, true), 1, [0; 15]),
+        ((i128, bool), u8, [u8; 15])
     );
 }
 

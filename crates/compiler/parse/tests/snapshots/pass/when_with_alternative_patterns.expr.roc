@@ -1,4 +1,6 @@
 when x is
  "blah" | "blop" -> 1
  "foo" |
-  "bar" -> 2
+  "bar"
+ |"baz" -> 2
+ "stuff" -> 4

@@ -617,7 +617,10 @@ impl<'a> UnionLayout<'a> {
 
     fn stack_size_without_alignment(&self, target_info: TargetInfo) -> u32 {
         match self {
-            UnionLayout::NonRecursive(_) => self.data_size_and_alignment(target_info).0,
+            UnionLayout::NonRecursive(_) => {
+                let (width, align) = self.data_size_and_alignment(target_info);
+                round_up_to_alignment(width, align)
+            }
             UnionLayout::Recursive(_)
             | UnionLayout::NonNullableUnwrapped(_)
             | UnionLayout::NullableWrapped { .. }
@@ -637,17 +640,10 @@ impl<'a> UnionLayout<'a> {
     }
 
     fn tag_id_offset_help(layouts: &[&[Layout]], target_info: TargetInfo) -> u32 {
-        let tag_id_align = if layouts.len() < 256 {
-            // i8
-            1
-        } else {
-            // i16
-            2
-        };
+        let (data_width, data_align) =
+            Layout::stack_size_and_alignment_slices(layouts, target_info);
 
-        let (data_width, _) = Layout::stack_size_and_alignment_slices(layouts, target_info);
-
-        round_up_to_alignment(data_width, tag_id_align)
+        round_up_to_alignment(data_width, data_align)
     }
 }
 
@@ -796,13 +792,13 @@ impl<'a> LambdaSet<'a> {
     }
 
     pub fn is_represented(&self) -> Option<Layout<'a>> {
-        if let Layout::Struct {
-            field_layouts: &[], ..
-        } = self.representation
-        {
-            None
-        } else {
-            Some(*self.representation)
+        match self.representation {
+            Layout::Struct {
+                field_layouts: &[], ..
+            }
+            | Layout::Builtin(Builtin::Bool)
+            | Layout::Builtin(Builtin::Int(..)) => None,
+            repr => Some(*repr),
         }
     }
 
@@ -1223,12 +1219,21 @@ impl<'a> Layout<'a> {
 
     fn new_help<'b>(
         env: &mut Env<'a, 'b>,
-        var: Variable,
+        _var: Variable,
         content: Content,
     ) -> Result<Self, LayoutProblem> {
         use roc_types::subs::Content::*;
         match content {
-            FlexVar(_) | RigidVar(_) => Err(LayoutProblem::UnresolvedTypeVar(var)),
+            FlexVar(_) | RigidVar(_) => {
+                roc_debug_flags::dbg_do!(roc_debug_flags::ROC_NO_UNBOUND_LAYOUT, {
+                    return Err(LayoutProblem::UnresolvedTypeVar(_var));
+                });
+
+                // If we encounter an unbound type var (e.g. `*` or `a`)
+                // then it's zero-sized; In the future we may drop this argument
+                // completely, but for now we represent it with the empty tag union
+                Ok(Layout::VOID)
+            }
             FlexAbleVar(_, _) | RigidAbleVar(_, _) => todo_abilities!("Not reachable yet"),
             RecursionVar { structure, .. } => {
                 let structure_content = env.subs.get_content_without_compacting(structure);
@@ -1455,6 +1460,8 @@ impl<'a> Layout<'a> {
 
             data_width = data_width.max(total);
         }
+
+        data_width = round_up_to_alignment(data_width, data_align);
 
         (data_width, data_align)
     }

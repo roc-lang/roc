@@ -63,23 +63,23 @@ bitsToCharsHelp = \bits, missing ->
     # any 6-bit number is a valid base64 digit, so this is actually safe
     p =
         Num.shiftRightZfBy 18 bits
-            |> Num.intCast
-            |> unsafeToChar
+        |> Num.intCast
+        |> unsafeToChar
 
     q =
         Num.bitwiseAnd (Num.shiftRightZfBy 12 bits) lowest6BitsMask
-            |> Num.intCast
-            |> unsafeToChar
+        |> Num.intCast
+        |> unsafeToChar
 
     r =
         Num.bitwiseAnd (Num.shiftRightZfBy 6 bits) lowest6BitsMask
-            |> Num.intCast
-            |> unsafeToChar
+        |> Num.intCast
+        |> unsafeToChar
 
     s =
         Num.bitwiseAnd bits lowest6BitsMask
-            |> Num.intCast
-            |> unsafeToChar
+        |> Num.intCast
+        |> unsafeToChar
 
     equals : U8
     equals = 61

@@ -1,7 +1,7 @@
-procedure Test.4 ():
+procedure Test.2 ():
     let Test.7 : [<rnu><null>, C List *self] = TagId(1) ;
     ret Test.7;
 
 procedure Test.0 ():
-    let Test.6 : [<rnu><null>, C List *self] = CallByName Test.4;
+    let Test.6 : [<rnu><null>, C List *self] = CallByName Test.2;
     ret Test.6;

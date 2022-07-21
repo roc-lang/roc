@@ -2477,9 +2477,9 @@ fn backpassing_result() {
             main : I64
             main =
                 helper =
-                    x <- Result.after a
-                    y <- Result.after (f x)
-                    z <- Result.after (g y)
+                    x <- Result.try a
+                    y <- Result.try (f x)
+                    z <- Result.try (g y)
 
                     Ok z
 
@@ -2587,8 +2587,7 @@ fn module_thunk_is_function() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[should_panic(expected = "Roc failed with message: ")]
-fn hit_unresolved_type_variable() {
+fn pass_through_unresolved_type_variable() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -3608,7 +3607,7 @@ fn lambda_capture_niches_have_captured_function_in_closure() {
             g = \{ s1 } -> \_ -> s1
 
             fun = \x ->
-                h = 
+                h =
                     when x is
                         True -> after (\{} -> "") f
                         False -> after (\{} -> {s1: "s1"}) g

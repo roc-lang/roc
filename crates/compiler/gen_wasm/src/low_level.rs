@@ -2078,14 +2078,23 @@ pub fn call_higher_order_lowlevel<'a>(
         ..
     } = passed_function;
 
-    let closure_data_layout = match backend.storage.symbol_layouts[captured_environment] {
-        Layout::LambdaSet(lambda_set) => lambda_set.runtime_representation(),
-        Layout::Struct {
-            field_layouts: &[], ..
-        } => Layout::UNIT,
-        x => internal_error!("Closure data has an invalid layout\n{:?}", x),
-    };
-    let closure_data_exists: bool = closure_data_layout != Layout::UNIT;
+    let (closure_data_layout, closure_data_exists) =
+        match backend.storage.symbol_layouts[captured_environment] {
+            Layout::LambdaSet(lambda_set) => {
+                if lambda_set.is_represented().is_some() {
+                    (lambda_set.runtime_representation(), true)
+                } else {
+                    // Closure data is a lambda set, which *itself* has no closure data!
+                    // The higher-order wrapper doesn't need to pass this down, that's
+                    // handled in other ways in the IR. Here just pretend it's Unit.
+                    (Layout::UNIT, false)
+                }
+            }
+            Layout::Struct {
+                field_layouts: &[], ..
+            } => (Layout::UNIT, false),
+            x => internal_error!("Closure data has an invalid layout\n{:?}", x),
+        };
 
     // We create a wrapper around the passed function, which just unboxes the arguments.
     // This allows Zig builtins to have a generic pointer-based interface.
@@ -2152,21 +2161,16 @@ pub fn call_higher_order_lowlevel<'a>(
     let wrapper_fn_idx =
         backend.register_helper_proc(wrapper_sym, wrapper_layout, helper_proc_source);
     let wrapper_fn_ptr = backend.get_fn_ptr(wrapper_fn_idx);
-    let inc_fn_ptr = match closure_data_layout {
-        Layout::Struct {
-            field_layouts: &[], ..
-        } => {
-            // Our code gen would ignore the Unit arg, but the Zig builtin passes a pointer for it!
-            // That results in an exception (type signature mismatch in indirect call).
-            // The workaround is to use I32 layout, treating the (ignored) pointer as an integer.
-            let inc_fn = backend
-                .get_refcount_fn_index(Layout::Builtin(Builtin::Int(IntWidth::I32)), HelperOp::Inc);
-            backend.get_fn_ptr(inc_fn)
-        }
-        _ => {
-            let inc_fn = backend.get_refcount_fn_index(closure_data_layout, HelperOp::Inc);
-            backend.get_fn_ptr(inc_fn)
-        }
+    let inc_fn_ptr = if !closure_data_exists {
+        // Our code gen would ignore the Unit arg, but the Zig builtin passes a pointer for it!
+        // That results in an exception (type signature mismatch in indirect call).
+        // The workaround is to use I32 layout, treating the (ignored) pointer as an integer.
+        let inc_fn = backend
+            .get_refcount_fn_index(Layout::Builtin(Builtin::Int(IntWidth::I32)), HelperOp::Inc);
+        backend.get_fn_ptr(inc_fn)
+    } else {
+        let inc_fn = backend.get_refcount_fn_index(closure_data_layout, HelperOp::Inc);
+        backend.get_fn_ptr(inc_fn)
     };
 
     match op {

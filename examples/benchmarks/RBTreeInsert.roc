@@ -9,8 +9,8 @@ main =
     tree = insert 0 {} Empty
 
     tree
-        |> show
-        |> Task.putLine
+    |> show
+    |> Task.putLine
 
 show : RedBlackTree I64 {} -> Str
 show = \tree -> showRBTree tree Num.toStr (\{} -> "{}")
