@@ -7360,15 +7360,21 @@ mod solve_expr {
 
     #[test]
     fn shared_pattern_variable_in_when_branches() {
-        infer_eq_without_problem(
+        infer_queries!(
             indoc!(
                 r#"
                 when A "" is
+                #    ^^^^
                     A x | B x -> x
-                    C y | D y -> y
+                    # ^     ^    ^
                 "#
             ),
-            "",
+            @r###"
+        A "" : [A Str, B Str]
+        x : Str
+        x : Str
+        x : Str
+        "###
         );
     }
 }
