@@ -361,7 +361,7 @@ fn flatten<'a>(
             } else {
                 for (index, (arg_pattern, _)) in arguments.iter().enumerate() {
                     let mut new_path = path.clone();
-                    new_path.push(PathInstruction {
+                    new_path.push(PathInstruction::TagIndex {
                         index: index as u64,
                         tag_id,
                     });
@@ -678,6 +678,7 @@ fn to_relevant_branch_help<'a>(
                 ..
             } => {
                 debug_assert!(test_name == &CtorName::Tag(TagName(RECORD_TAG_NAME.into())));
+                let destructs_len = destructs.len();
                 let sub_positions = destructs.into_iter().enumerate().map(|(index, destruct)| {
                     let pattern = match destruct.typ {
                         DestructType::Guard(guard) => guard.clone(),
@@ -685,10 +686,15 @@ fn to_relevant_branch_help<'a>(
                     };
 
                     let mut new_path = path.to_vec();
-                    new_path.push(PathInstruction {
-                        index: index as u64,
-                        tag_id: *tag_id,
-                    });
+                    let next_instr = if destructs_len == 1 {
+                        PathInstruction::NewType
+                    } else {
+                        PathInstruction::TagIndex {
+                            index: index as u64,
+                            tag_id: *tag_id,
+                        }
+                    };
+                    new_path.push(next_instr);
 
                     (new_path, pattern)
                 });
@@ -710,15 +716,13 @@ fn to_relevant_branch_help<'a>(
                 tag_id,
                 ..
             } => {
+                debug_assert_eq!(*tag_id, 0);
                 debug_assert_eq!(test_opaque_tag_name, &CtorName::Opaque(opaque));
 
                 let (argument, _) = *argument;
 
                 let mut new_path = path.to_vec();
-                new_path.push(PathInstruction {
-                    index: 0,
-                    tag_id: *tag_id,
-                });
+                new_path.push(PathInstruction::NewType);
 
                 start.push((new_path, argument));
                 start.extend(end);
@@ -744,16 +748,22 @@ fn to_relevant_branch_help<'a>(
                 let tag_id = 0;
                 debug_assert_eq!(tag_id, *test_id);
 
+                let num_args = arguments.len();
                 let sub_positions =
                     arguments
                         .into_iter()
                         .enumerate()
                         .map(|(index, (pattern, _))| {
                             let mut new_path = path.to_vec();
-                            new_path.push(PathInstruction {
-                                index: index as u64,
-                                tag_id,
-                            });
+                            let next_instr = if num_args == 1 {
+                                PathInstruction::NewType
+                            } else {
+                                PathInstruction::TagIndex {
+                                    index: index as u64,
+                                    tag_id,
+                                }
+                            };
+                            new_path.push(next_instr);
                             (new_path, pattern)
                         });
                 start.extend(sub_positions);
@@ -809,7 +819,7 @@ fn to_relevant_branch_help<'a>(
                                     .enumerate()
                                     .map(|(index, (pattern, _))| {
                                         let mut new_path = path.to_vec();
-                                        new_path.push(PathInstruction {
+                                        new_path.push(PathInstruction::TagIndex {
                                             index: index as u64,
                                             tag_id,
                                         });
@@ -828,7 +838,7 @@ fn to_relevant_branch_help<'a>(
                                     .enumerate()
                                     .map(|(index, (pattern, _))| {
                                         let mut new_path = path.to_vec();
-                                        new_path.push(PathInstruction {
+                                        new_path.push(PathInstruction::TagIndex {
                                             index: index as u64,
                                             tag_id,
                                         });
@@ -972,33 +982,27 @@ fn is_irrelevant_to<'a>(selected_path: &[PathInstruction], branch: &Branch<'a>) 
     }
 }
 
+/// Does this pattern need a branch test?
+///
+/// Keep up to date with [needs_path_instruction].
 fn needs_tests(pattern: &Pattern) -> bool {
     use Pattern::*;
 
-    match pattern {
-        Identifier(_) | Underscore => false,
-        NewtypeDestructure { arguments, .. } => {
-            // Newtypes that only have one argument decay immediately into that argument, so no
-            // test for them is needed.
-            //
-            // Newtypes with > 1 argument decay into a struct of those arguments, and we'll need to
-            // read the appropriate argument in the struct when constructing the decision tree.
-            arguments.len() != 1
-        }
-        RecordDestructure(arguments, _) => {
-            // Same logic as for newtype destructures - records with one argument decay into their
-            // argument.
-            arguments.len() != 1
-        }
+    loop {
+        match pattern {
+            Identifier(_) | Underscore => return false,
 
-        AppliedTag { .. }
-        | OpaqueUnwrap { .. }
-        | BitLiteral { .. }
-        | EnumLiteral { .. }
-        | IntLiteral(_, _)
-        | FloatLiteral(_, _)
-        | DecimalLiteral(_)
-        | StrLiteral(_) => true,
+            NewtypeDestructure { .. }
+            | RecordDestructure(..)
+            | AppliedTag { .. }
+            | OpaqueUnwrap { .. }
+            | BitLiteral { .. }
+            | EnumLiteral { .. }
+            | IntLiteral(_, _)
+            | FloatLiteral(_, _)
+            | DecimalLiteral(_)
+            | StrLiteral(_) => return true,
+        }
     }
 }
 
@@ -1240,9 +1244,9 @@ pub fn optimize_when<'a>(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PathInstruction {
-    index: u64,
-    tag_id: TagIdIntType,
+enum PathInstruction {
+    NewType,
+    TagIndex { index: u64, tag_id: TagIdIntType },
 }
 
 fn path_to_expr_help<'a>(
@@ -1257,51 +1261,60 @@ fn path_to_expr_help<'a>(
     let instructions = path;
     let mut it = instructions.iter().peekable();
 
-    while let Some(PathInstruction { index, tag_id }) = it.next() {
-        let index = *index;
-
-        match &layout {
-            Layout::Union(union_layout) => {
-                let inner_expr = Expr::UnionAtIndex {
-                    tag_id: *tag_id,
-                    structure: symbol,
-                    index,
-                    union_layout: *union_layout,
-                };
-
-                let inner_layout = union_layout.layout_at(*tag_id as TagIdIntType, index as usize);
-
-                symbol = env.unique_symbol();
-                stores.push((symbol, inner_layout, inner_expr));
-
-                layout = inner_layout;
+    while let Some(path_instr) = it.next() {
+        match path_instr {
+            PathInstruction::NewType => {
+                // pass through
             }
 
-            Layout::Struct { field_layouts, .. } => {
-                debug_assert!(field_layouts.len() > 1);
+            PathInstruction::TagIndex { index, tag_id } => {
+                let index = *index;
 
-                let inner_expr = Expr::StructAtIndex {
-                    index,
-                    field_layouts,
-                    structure: symbol,
-                };
+                match &layout {
+                    Layout::Union(union_layout) => {
+                        let inner_expr = Expr::UnionAtIndex {
+                            tag_id: *tag_id,
+                            structure: symbol,
+                            index,
+                            union_layout: *union_layout,
+                        };
 
-                let inner_layout = field_layouts[index as usize];
+                        let inner_layout =
+                            union_layout.layout_at(*tag_id as TagIdIntType, index as usize);
 
-                symbol = env.unique_symbol();
-                stores.push((symbol, inner_layout, inner_expr));
+                        symbol = env.unique_symbol();
+                        stores.push((symbol, inner_layout, inner_expr));
 
-                layout = inner_layout;
-            }
+                        layout = inner_layout;
+                    }
 
-            _ => {
-                // this MUST be an index into a single-element (hence unwrapped) record
+                    Layout::Struct { field_layouts, .. } => {
+                        debug_assert!(field_layouts.len() > 1);
 
-                debug_assert_eq!(index, 0, "{:?}", &layout);
-                debug_assert_eq!(*tag_id, 0);
-                debug_assert!(it.peek().is_none());
+                        let inner_expr = Expr::StructAtIndex {
+                            index,
+                            field_layouts,
+                            structure: symbol,
+                        };
 
-                break;
+                        let inner_layout = field_layouts[index as usize];
+
+                        symbol = env.unique_symbol();
+                        stores.push((symbol, inner_layout, inner_expr));
+
+                        layout = inner_layout;
+                    }
+
+                    _ => {
+                        // this MUST be an index into a single-element (hence unwrapped) record
+
+                        debug_assert_eq!(index, 0, "{:?}", &layout);
+                        debug_assert_eq!(*tag_id, 0);
+                        debug_assert!(it.peek().is_none());
+
+                        break;
+                    }
+                }
             }
         }
     }
