@@ -186,7 +186,7 @@ pub fn float_type_from_float_width<'a, 'ctx, 'env>(
     }
 }
 
-pub fn block_of_memory_slices<'ctx>(
+pub(crate) fn block_of_memory_slices<'ctx>(
     context: &'ctx Context,
     layouts: &[&[Layout<'_>]],
     target_info: TargetInfo,
@@ -204,7 +204,7 @@ pub fn block_of_memory_slices<'ctx>(
     block_of_memory_help(context, union_size)
 }
 
-pub fn block_of_memory<'ctx>(
+pub(crate) fn block_of_memory<'ctx>(
     context: &'ctx Context,
     layout: &Layout<'_>,
     target_info: TargetInfo,
