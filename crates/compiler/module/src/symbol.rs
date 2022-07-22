@@ -1266,7 +1266,7 @@ define_builtins! {
         42 LIST_TAKE_FIRST: "takeFirst"
         43 LIST_TAKE_LAST: "takeLast"
         44 LIST_FIND: "find"
-        45 LIST_FIND_RESULT: "#find_result" // symbol used in the definition of List.find
+        45 LIST_FIND_RESULT: "#find_result" // symbol used in the definition of List.findFirst
         46 LIST_SUBLIST: "sublist"
         47 LIST_INTERSPERSE: "intersperse"
         48 LIST_INTERSPERSE_CLOS: "#intersperseClos"
