@@ -816,19 +816,8 @@ mod cli_run {
                 // TODO: Improve this with a more-dynamic approach. (Read all subdirectories?)
                 // Some platform-switching examples live in nested directories
                 if example_dir_name == "platform-switching" {
-                    for sub_dir in [
-                        "c-platform",
-                        "rust-platform",
-                        "swift-platform",
-                        "web-assembly-platform",
-                        "zig-platform",
-                    ] {
-                        all_examples
-                            .remove(format!("{}/{}", example_dir_name, sub_dir).as_str())
-                            .unwrap_or_else(|| { /* TODO re-enable this check */ });
-
-                        // panic!("The example directory {}/{}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!", examples_dir, example_dir_name, sub_dir);
-                    }
+                    // TODO re-enable platform-switching tests
+                    continue;
                 }
 
                 // We test benchmarks separately
