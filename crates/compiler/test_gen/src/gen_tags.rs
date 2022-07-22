@@ -982,8 +982,8 @@ fn alignment_in_multi_tag_construction_two() {
 
                 #"
         ),
-        ((32i64, true), 1),
-        ((i64, bool), u8)
+        ((32i64, true), 1, [0; 7]),
+        ((i64, bool), u8, [u8; 7])
     );
 }
 
@@ -999,8 +999,8 @@ fn alignment_in_multi_tag_construction_three() {
                 x
                 #"
         ),
-        ((32i64, true, 2u8), 1),
-        ((i64, bool, u8), u8)
+        ((32i64, true, 2u8), 1, [0; 7]),
+        ((i64, bool, u8), u8, [u8; 7])
     );
 }
 
@@ -1860,4 +1860,22 @@ fn issue_3560_newtype_tag_constructor_has_nested_constructor_with_no_payload() {
         RocStr::from("err"),
         RocStr
     )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn alignment_i128() {
+    assert_evals_to!(
+        indoc!(
+            r"#
+                x : [One I128 Bool, Empty]
+                x = One 42 (1 == 1)
+                x
+                #"
+        ),
+        // note: rust aligns the tuple `(i128, bool)` to 8 we align it to 16,
+        // so add 8 extra padding bytes
+        ((42, true), [0; 8], 1, [0; 15]),
+        ((i128, bool), [u8; 8], u8, [u8; 15])
+    );
 }
