@@ -360,6 +360,7 @@ fn wasm32_target_tripple() -> Triple {
 
 #[allow(dead_code)]
 fn write_final_wasm() -> bool {
+    #[allow(unused_imports)]
     use roc_debug_flags::{dbg_do, ROC_WRITE_FINAL_WASM};
 
     dbg_do!(ROC_WRITE_FINAL_WASM, {
