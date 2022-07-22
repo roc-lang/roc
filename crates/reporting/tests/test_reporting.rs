@@ -4951,12 +4951,29 @@ mod test_reporting {
             "#
         ),
         @r###"
-    ── NOT END OF FILE ──────────────── tmp/when_over_indented_underscore/Test.roc ─
+    ── UNEXPECTED ARROW ─────────────── tmp/when_over_indented_underscore/Test.roc ─
 
-    I expected to reach the end of the file, but got stuck here:
+    I am parsing a `when` expression right now, but this arrow is confusing
+    me:
 
     6│           _ -> 2
-                 ^
+                   ^^
+
+    It makes sense to see arrows around here, so I suspect it is something
+    earlier.Maybe this pattern is indented a bit farther from the previous
+    patterns?
+
+    Note: Here is an example of a valid `when` expression for reference.
+
+        when List.first plants is
+          Ok n ->
+            n
+
+          Err _ ->
+            200
+
+    Notice the indentation. All patterns are aligned, and each branch is
+    indented a bit more than the corresponding pattern. That is important!
     "###
     );
 
