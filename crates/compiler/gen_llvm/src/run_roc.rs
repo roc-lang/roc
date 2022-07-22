@@ -75,10 +75,10 @@ macro_rules! try_run_jit_function {
         try_run_jit_function!($lib, $main_fn_name, $ty, $transform, v)
     }};
 
-    ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr, $errors:expr) => {{
-        try_run_jit_function!($lib, $main_fn_name, $ty, $transform, $errors, &[])
+    ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr) => {{
+        try_run_jit_function!($lib, $main_fn_name, $ty, $transform, &[])
     }};
-    ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr, $errors:expr, $expect_failures:expr) => {{
+    ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr, $expect_failures:expr) => {{
         use inkwell::context::Context;
         use roc_builtins::bitcode;
         use roc_gen_llvm::run_roc::RocCallResult;
@@ -110,14 +110,8 @@ macro_rules! run_jit_function {
         run_jit_function!($lib, $main_fn_name, $ty, $transform, $errors, &[])
     }};
     ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr, $errors:expr, $expect_failures:expr) => {{
-        let result = $crate::try_run_jit_function!(
-            $lib,
-            $main_fn_name,
-            $ty,
-            $transform,
-            $errors,
-            $expect_failures
-        );
+        let result =
+            $crate::try_run_jit_function!($lib, $main_fn_name, $ty, $transform, $expect_failures);
 
         match result {
             Ok(success) => {

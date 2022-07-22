@@ -516,7 +516,7 @@ macro_rules! assert_llvm_evals_to {
         use bumpalo::Bump;
         use inkwell::context::Context;
         use roc_gen_llvm::llvm::build::LlvmBackendMode;
-        use roc_gen_llvm::run_jit_function;
+        use roc_gen_llvm::try_run_jit_function;
 
         let arena = Bump::new();
         let context = Context::create();
@@ -537,7 +537,18 @@ macro_rules! assert_llvm_evals_to {
             let given = $transform(success);
             assert_eq!(&given, &expected, "LLVM test failed");
         };
-        run_jit_function!(lib, main_fn_name, $ty, transform, errors)
+
+        let result = try_run_jit_function!(lib, main_fn_name, $ty, transform, errors);
+
+        match result {
+            Ok(raw) => {
+                // only if there are no exceptions thrown, check for errors
+                assert!(errors.is_empty(), "Encountered errors:\n{}", errors);
+
+                transform(raw)
+            }
+            Err(msg) => panic!("Roc failed with message: \"{}\"", msg),
+        }
     };
 
     ($src:expr, $expected:expr, $ty:ty) => {
