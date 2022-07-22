@@ -143,6 +143,22 @@ struct ModuleCache<'a> {
     sources: MutMap<ModuleId, (PathBuf, &'a str)>,
 }
 
+impl<'a> ModuleCache<'a> {
+    pub fn total_problems(&self) -> usize {
+        let mut total = 0;
+
+        for problems in self.can_problems.values() {
+            total += problems.len();
+        }
+
+        for problems in self.type_problems.values() {
+            total += problems.len();
+        }
+
+        total
+    }
+}
+
 impl Default for ModuleCache<'_> {
     fn default() -> Self {
         let mut module_names = MutMap::default();
