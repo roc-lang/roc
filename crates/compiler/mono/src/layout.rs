@@ -629,6 +629,17 @@ impl<'a> UnionLayout<'a> {
         (size, alignment_bytes)
     }
 
+    pub fn tag_id_offset(&self, target_info: TargetInfo) -> Option<u32> {
+        let data_width = self.data_size_without_tag_id(target_info)?;
+
+        // current, broken logic
+        if data_width > 8 {
+            Some(round_up_to_alignment(data_width, 8))
+        } else {
+            Some(data_width)
+        }
+    }
+
     /// Very important to use this when doing a memcpy!
     fn stack_size_without_alignment(&self, target_info: TargetInfo) -> u32 {
         match self {
