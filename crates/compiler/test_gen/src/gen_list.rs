@@ -2926,6 +2926,18 @@ fn list_find_index() {
         1,
         usize
     );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when List.findLastIndex ["a", "bc", "def"] (\s -> Str.countGraphemes s > 1) is
+                Ok v -> v
+                Err _ -> 999
+            "#
+        ),
+        2,
+        usize
+    );
 }
 
 #[test]
@@ -2942,6 +2954,18 @@ fn list_find_index_not_found() {
         999,
         usize
     );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when List.findLastIndex ["a", "bc", "def"] (\s -> Str.countGraphemes s > 5) is
+                Ok v -> v
+                Err _ -> 999
+            "#
+        ),
+        999,
+        usize
+    );
 }
 
 #[test]
@@ -2951,6 +2975,18 @@ fn list_find_index_empty_typed_list() {
         indoc!(
             r#"
             when List.findFirstIndex [] (\s -> Str.countGraphemes s > 5) is
+                Ok v -> v
+                Err _ -> 999
+            "#
+        ),
+        999,
+        usize
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when List.findLastIndex [] (\s -> Str.countGraphemes s > 5) is
                 Ok v -> v
                 Err _ -> 999
             "#
