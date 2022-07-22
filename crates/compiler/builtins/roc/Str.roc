@@ -10,11 +10,14 @@ interface Str
         countGraphemes,
         countUtf8Bytes,
         startsWithScalar,
+        displayUtf8,
         toUtf8,
         fromUtf8,
         fromUtf8Range,
         startsWith,
         endsWith,
+        startsWithUtf8,
+        endsWithUtf8,
         trim,
         trimLeft,
         trimRight,
@@ -448,3 +451,25 @@ strToNumHelp = \string ->
         Ok result.aresult
     else
         Err InvalidNumStr
+
+## Convert some bytes to a [Str] by interpreting them as UTF-8,
+## and replacing any invalid bytes with the [Unicode replacement character](https://unicode.org/glossary/#replacement_character).
+displayUtf8 : List U8 -> Str
+
+## Interprets the given bytes as UTF-8 and returns whether they equal the given [Str].
+##
+## Returns `False` if the bytes are not valid UTF-8.
+isEqUtf8 : Str, List U8 -> Str
+
+## Interprets the given bytes as UTF-8 and returns whether this [Str] begins with them.
+##
+## Returns `False` if the bytes are not valid UTF-8.
+startsWithUtf8 : Str, List U8 -> Str
+
+## Interprets the given bytes as UTF-8 and returns whether this [Str] ends with them.
+##
+## Returns `False` if the bytes are not valid UTF-8.
+endsWithUtf8 : Str, List U8 -> Str
+
+## Concatenate the string's UTF-8 bytes to the end of the given list of bytes.
+concatUtf8To : Str, List U8 -> List U8
