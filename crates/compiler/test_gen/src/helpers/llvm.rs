@@ -267,7 +267,12 @@ fn create_llvm_module<'a>(
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
-    (main_fn_name, delayed_errors.join("\n"), env.module)
+    let delayed_errors = if config.ignore_problems {
+        String::new()
+    } else {
+        delayed_errors.join("\n")
+    };
+    (main_fn_name, delayed_errors, env.module)
 }
 
 #[derive(Debug, Clone, Copy)]
