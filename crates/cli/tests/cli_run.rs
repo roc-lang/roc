@@ -400,6 +400,14 @@ mod cli_run {
             expected_ending:"Which platform am I running on now?\n",
             use_valgrind: true,
         },
+        platformSwitchingC:"platform-switching/c-platform" => Example {
+            filename: "rocLovesC.roc",
+            executable_filename: "rocLovesC",
+            stdin: &[],
+            input_file: None,
+            expected_ending:"Roc <3 C!\n",
+            use_valgrind: true,
+        },
         platformSwitchingRust:"platform-switching/rust-platform" => Example {
             filename: "rocLovesRust.roc",
             executable_filename: "rocLovesRust",
