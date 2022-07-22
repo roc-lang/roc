@@ -1084,7 +1084,8 @@ fn type_to_union_tags<'a>(
 
     let ext = {
         let (it, ext) =
-            roc_types::types::gather_tags_unsorted_iter(subs, UnionTags::default(), temp_ext_var);
+            roc_types::types::gather_tags_unsorted_iter(subs, UnionTags::default(), temp_ext_var)
+                .expect("not a tag union");
 
         tag_vars.extend(it.map(|(n, v)| (n.clone(), v)));
         tag_vars.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));

@@ -3056,7 +3056,9 @@ pub fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
     // the ext_var is empty
     let mut ext_fields = std::vec::Vec::new();
     match roc_types::pretty_print::chase_ext_tag_union(subs, ext_var, &mut ext_fields) {
-        Ok(()) | Err((_, Content::FlexVar(_) | Content::RigidVar(_))) => ext_fields.is_empty(),
+        Ok(()) | Err((_, Content::FlexVar(_) | Content::RigidVar(_) | Content::Error)) => {
+            ext_fields.is_empty()
+        }
         Err(content) => panic!("invalid content in ext_var: {:?}", content),
     }
 }
