@@ -324,7 +324,7 @@ impl<'a> Dependencies<'a> {
         }
     }
 
-    pub fn solved_all(&self) -> bool {
+    pub fn all_statuses_done(&self) -> bool {
         debug_assert_eq!(self.notifies.is_empty(), self.waiting_for.is_empty());
 
         for status in self.status.values() {

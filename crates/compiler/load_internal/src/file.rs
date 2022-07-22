@@ -2367,14 +2367,17 @@ fn update<'a>(
                     .extend(solved_module.aliases.keys().copied());
             }
 
-            if is_host_exposed
-                && (state.goal_phase == Phase::SolveTypes
-                    || (halt_for_errors
-                        && (!state.module_cache.can_problems.is_empty()
-                            || !state.module_cache.type_problems.is_empty())))
-            {
-                debug_assert!(work.is_empty());
-                debug_assert!(state.dependencies.solved_all());
+            let has_errors = !state.module_cache.can_problems.is_empty()
+                || !state.module_cache.type_problems.is_empty();
+            let should_halt = halt_for_errors && has_errors;
+
+            if is_host_exposed && (state.goal_phase == Phase::SolveTypes || should_halt) {
+                if !should_halt {
+                    // There may be ongoing work if we halted early (e.g. specializations),
+                    // but otherwise there should not be!
+                    debug_assert!(work.is_empty());
+                    debug_assert!(state.dependencies.all_statuses_done());
+                }
 
                 state.timings.insert(module_id, module_timing);
 
@@ -2543,7 +2546,7 @@ fn update<'a>(
                 MakingInPhase,
             }
 
-            let all_work_done = work.is_empty() && state.dependencies.solved_all();
+            let all_work_done = work.is_empty() && state.dependencies.all_statuses_done();
             let next_step = if all_work_done {
                 if state
                     .module_cache
