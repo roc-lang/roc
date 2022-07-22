@@ -6039,12 +6039,17 @@ All branches in an `if` must have the same type!
             "#
         ),
         @r###"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
 
-    Underscore patterns are not allowed in definitions
+    This destructure assignment doesn't introduce any new variables:
 
     4│      _ = 3
             ^
+
+    If you don't need to use the value on the right-hand-side of this
+    assignment, consider removing the assignment. Since Roc is purely
+    functional, assignments that don't introduce variables cannot affect a
+    program's behavior!
     "###
     );
 
@@ -9572,22 +9577,34 @@ All branches in an `if` must have the same type!
             main = \n -> n + 2
             "#
         ),
-        @r#"
-        ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
-        
-        The `main` name is first defined here:
-        
-        3│  main = 1
-            ^^^^
-        
-        But then it's defined a second time here:
-        
-        5│  main = \n -> n + 2
-            ^^^^
-        
-        Since these variables have the same name, it's easy to use the wrong
-        one on accident. Give one of them a new name.
-        "#
+        @r###"
+    ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    The `main` name is first defined here:
+
+    3│  main = 1
+        ^^^^
+
+    But then it's defined a second time here:
+
+    5│  main = \n -> n + 2
+        ^^^^
+
+    Since these variables have the same name, it's easy to use the wrong
+    one on accident. Give one of them a new name.
+
+    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+
+    This destructure assignment doesn't introduce any new variables:
+
+    5│  main = \n -> n + 2
+        ^^^^
+
+    If you don't need to use the value on the right-hand-side of this
+    assignment, consider removing the assignment. Since Roc is purely
+    functional, assignments that don't introduce variables cannot affect a
+    program's behavior!
+    "###
     );
 
     test_report!(
@@ -9937,6 +9954,72 @@ All branches in an `if` must have the same type!
       
 
     I recommend using camelCase, it is the standard in the Roc ecosystem.
+    "###
+    );
+
+    test_report!(
+        destructure_assignment_introduces_no_variables_nested,
+        indoc!(
+            r#"
+            Pair _ _ = Pair 0 1
+
+            _ = Pair 0 1
+
+            {} = {}
+
+            Foo = Foo
+
+            0
+            "#
+        ),
+        @r###"
+    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+
+    This destructure assignment doesn't introduce any new variables:
+
+    4│      Pair _ _ = Pair 0 1
+            ^^^^
+
+    If you don't need to use the value on the right-hand-side of this
+    assignment, consider removing the assignment. Since Roc is purely
+    functional, assignments that don't introduce variables cannot affect a
+    program's behavior!
+
+    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+
+    This destructure assignment doesn't introduce any new variables:
+
+    6│      _ = Pair 0 1
+            ^
+
+    If you don't need to use the value on the right-hand-side of this
+    assignment, consider removing the assignment. Since Roc is purely
+    functional, assignments that don't introduce variables cannot affect a
+    program's behavior!
+
+    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+
+    This destructure assignment doesn't introduce any new variables:
+
+    8│      {} = {}
+            ^^
+
+    If you don't need to use the value on the right-hand-side of this
+    assignment, consider removing the assignment. Since Roc is purely
+    functional, assignments that don't introduce variables cannot affect a
+    program's behavior!
+
+    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+
+    This destructure assignment doesn't introduce any new variables:
+
+    10│      Foo = Foo
+             ^^^
+
+    If you don't need to use the value on the right-hand-side of this
+    assignment, consider removing the assignment. Since Roc is purely
+    functional, assignments that don't introduce variables cannot affect a
+    program's behavior!
     "###
     );
 }

@@ -914,6 +914,15 @@ pub fn can_problem<'b>(
             title = "NAME NOT BOUND IN ALL PATTERNS".to_string();
             severity = Severity::RuntimeError;
         }
+        Problem::NoIdentifiersIntroduced(region) => {
+            doc = alloc.stack([
+                alloc.reflow("This destructure assignment doesn't introduce any new variables:"),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("If you don't need to use the value on the right-hand-side of this assignment, consider removing the assignment. Since Roc is purely functional, assignments that don't introduce variables cannot affect a program's behavior!"),
+            ]);
+            title = "UNNECESSARY DEFINITION".to_string();
+            severity = Severity::Warning;
+        }
     };
 
     Report {

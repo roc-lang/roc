@@ -168,6 +168,7 @@ pub enum Problem {
         unbound_symbol: Symbol,
         region: Region,
     },
+    NoIdentifiersIntroduced(Region),
 }
 
 #[derive(Clone, Debug, PartialEq)]

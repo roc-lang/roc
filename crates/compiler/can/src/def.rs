@@ -905,7 +905,17 @@ fn canonicalize_value_defs<'a>(
     let mut symbol_to_index: Vec<(IdentId, u32)> = Vec::with_capacity(pending_value_defs.len());
 
     for (def_index, pending_def) in pending_value_defs.iter().enumerate() {
-        for (s, r) in BindingsFromPattern::new(pending_def.loc_pattern()) {
+        let mut new_bindings = BindingsFromPattern::new(pending_def.loc_pattern())
+            .into_iter()
+            .peekable();
+
+        if new_bindings.peek().is_none() {
+            env.problem(Problem::NoIdentifiersIntroduced(
+                pending_def.loc_pattern().region,
+            ));
+        }
+
+        for (s, r) in new_bindings {
             // store the top-level defs, used to ensure that closures won't capture them
             if let PatternType::TopLevelDef = pattern_type {
                 env.top_level_symbols.insert(s);
