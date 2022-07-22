@@ -795,14 +795,14 @@ findFirst = \list, pred ->
 ## Returns the last element of the list satisfying a predicate function.
 ## If no satisfying element is found, an `Err NotFound` is returned.
 findLast : List elem, (elem -> Bool) -> Result elem [NotFound]*
-findLast = \array, pred ->
+findLast = \list, pred ->
     callback = \_, elem ->
         if pred elem then
             Break elem
         else
             Continue {}
 
-    when iterateBackwards array {} callback is
+    when List.iterateBackwards list {} callback is
         Continue {} -> Err NotFound
         Break found -> Ok found
 
@@ -825,12 +825,12 @@ findFirstIndex = \list, matcher ->
 ## satisfying a predicate function can be found.
 ## If no satisfying element is found, an `Err NotFound` is returned.
 findLastIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]*
-findLastIndex = \list, matcher ->
-    foundIndex = iterateBackwards list (List.len list - 1) \index, elem ->
-        if matcher elem then
-            Break index
+findLastIndex = \list, matches ->
+   foundIndex = List.iterateBackwards list (List.len list) \prevIndex, elem ->
+        if matches elem then
+            Break (prevIndex - 1)
         else
-            Continue (index - 1)
+            Continue (prevIndex - 1)
 
     when foundIndex is
         Break index -> Ok index
@@ -981,11 +981,8 @@ iterHelp : List elem, s, (s, elem -> [Continue s, Break b]), Nat, Nat -> [Contin
 iterHelp = \list, state, f, index, length ->
     if index < length then
         when f state (List.getUnsafe list index) is
-            Continue nextState ->
-                iterHelp list nextState f (index + 1) length
-
-            Break b ->
-                Break b
+            Continue nextState -> iterHelp list nextState f (index + 1) length
+            Break b -> Break b
     else
         Continue state
 
@@ -996,17 +993,14 @@ iterateBackwards = \list, init, func ->
     iterBackwardsHelp list init func (List.len list)
 
 ## internal helper
-iterBackwardsHelp : List elem, s, (s, elem -> [Continue s, Break b]), Nat, Nat -> [Continue s, Break b]
+iterBackwardsHelp : List elem, s, (s, elem -> [Continue s, Break b]), Nat -> [Continue s, Break b]
 iterBackwardsHelp = \list, state, f, prevIndex ->
     if prevIndex > 0 then
         index = prevIndex - 1
 
         when f state (List.getUnsafe list index) is
-            Continue nextState ->
-                iterHelp list nextState f index
-
-            Break b ->
-                Break b
+            Continue nextState -> iterBackwardsHelp list nextState f index
+            Break b -> Break b
     else
         Continue state
 
