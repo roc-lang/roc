@@ -20,7 +20,7 @@ use roc_debug_flags::{
 };
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::{internal_error, todo_abilities};
-use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
+use roc_exhaustive::{Ctor, CtorName, RenderAs, TagId};
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -6036,16 +6036,9 @@ fn to_opt_branches<'a>(
 )> {
     debug_assert!(!branches.is_empty());
 
-    let mut loc_branches = std::vec::Vec::new();
     let mut opt_branches = std::vec::Vec::new();
 
     for when_branch in branches {
-        let exhaustive_guard = if when_branch.guard.is_some() {
-            Guard::HasGuard
-        } else {
-            Guard::NoGuard
-        };
-
         if when_branch.redundant.is_redundant(env.subs) {
             // Don't codegen this branch since it's redundant.
             continue;
@@ -6054,11 +6047,6 @@ fn to_opt_branches<'a>(
         for loc_pattern in when_branch.patterns {
             match from_can_pattern(env, procs, layout_cache, &loc_pattern.pattern.value) {
                 Ok((mono_pattern, assignments)) => {
-                    loc_branches.push((
-                        Loc::at(loc_pattern.pattern.region, mono_pattern.clone()),
-                        exhaustive_guard,
-                    ));
-
                     let mut loc_expr = when_branch.value.clone();
                     let region = loc_pattern.pattern.region;
                     for (symbol, variable, expr) in assignments.into_iter().rev() {
@@ -6081,11 +6069,6 @@ fn to_opt_branches<'a>(
                     opt_branches.push((mono_pattern, when_branch.guard.clone(), loc_expr.value));
                 }
                 Err(runtime_error) => {
-                    loc_branches.push((
-                        Loc::at(loc_pattern.pattern.region, Pattern::Underscore),
-                        exhaustive_guard,
-                    ));
-
                     // TODO remove clone?
                     opt_branches.push((
                         Pattern::Underscore,
