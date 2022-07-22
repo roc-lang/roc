@@ -2388,6 +2388,13 @@ fn update<'a>(
             }
 
             if is_host_exposed && state.goal_phase == Phase::SolveTypes {
+                debug_assert_eq!(
+                    work,
+                    Default::default(),
+                    "There should have been no work left."
+                );
+                debug_assert!(state.dependencies.all_statuses_done());
+
                 state.timings.insert(module_id, module_timing);
 
                 let documentation = {
