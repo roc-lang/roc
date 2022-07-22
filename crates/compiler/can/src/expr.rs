@@ -1410,7 +1410,7 @@ fn canonicalize_when_branch<'a>(
         }
     }
 
-    if some_symbols_not_bound_in_all_patterns && pattern_bound_symbols_body_needs.len() > 0 {
+    if some_symbols_not_bound_in_all_patterns && !pattern_bound_symbols_body_needs.is_empty() {
         // There might be branches that don't bind all the symbols needed by the body; mark those
         // branches degenerate.
         for pattern in patterns.iter_mut() {
