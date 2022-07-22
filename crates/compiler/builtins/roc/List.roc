@@ -923,12 +923,13 @@ split = \elements, userSplitIndex ->
 ##
 ##     List.splitFirst [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo], after: [Bar, Baz] }
 splitFirst : List elem, elem -> Result { before : List elem, after : List elem } [NotFound]*
-splitFirst = \elements, delimiter ->
-    when List.findFirstIndex elements (\elem -> elem == delimiter) is
+splitFirst = \list, delimiter ->
+    when List.findFirstIndex list (\elem -> elem == delimiter) is
         Ok index ->
-            before = List.sublist elements { start: 0, len: index }
+            before = List.sublist list { start: 0, len: index }
+            after = List.sublist list { start: index + 1, len: List.len list - index - 1}
 
-            Ok { before, len: List.len elements - index }
+            Ok { before, after }
 
         Err NotFound -> Err NotFound
 
@@ -937,12 +938,13 @@ splitFirst = \elements, delimiter ->
 ##
 ##     List.splitLast [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo, Bar], after: [Baz] }
 splitLast : List elem, elem -> Result { before : List elem, after : List elem } [NotFound]*
-splitLast = \elements, delimiter ->
-    when List.findLastIndex elements (\elem -> elem == delimiter) is
+splitLast = \list, delimiter ->
+    when List.findLastIndex list (\elem -> elem == delimiter) is
         Ok index ->
-            before = List.sublist elements { start: 0, len: index }
+            before = List.sublist list { start: 0, len: index }
+            after = List.sublist list { start: index + 1, len: List.len list - index - 1 }
 
-            Ok { before, len: List.len elements - index }
+            Ok { before, after }
 
         Err NotFound -> Err NotFound
 

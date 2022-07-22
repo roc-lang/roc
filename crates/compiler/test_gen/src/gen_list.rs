@@ -362,6 +362,72 @@ fn list_split() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_split_first() {
+    assert_evals_to!(
+        r#"
+               List.splitFirst [2, 3, 0, 4, 0, 6, 0, 8, 9] 0
+               |> Result.map .before
+        "#,
+        RocResult::ok(RocList::<i64>::from_slice(&[2, 3])),
+        RocResult<RocList<i64>, ()>
+    );
+    assert_evals_to!(
+        r#"
+               List.splitFirst [2, 3, 0, 4, 0, 6, 0, 8, 9] 0
+               |> Result.map .after
+        "#,
+        RocResult::ok(RocList::<i64>::from_slice(&[4, 0, 6, 0, 8, 9])),
+        RocResult<RocList<i64>, ()>
+    );
+
+    assert_evals_to!(
+        "List.splitFirst [1, 2, 3] 0",
+        RocResult::err(()),
+        RocResult<(RocList<i64>, RocList<i64>), ()>
+    );
+
+    assert_evals_to!(
+        "List.splitFirst [] 1",
+        RocResult::err(()),
+        RocResult<(RocList<i64>, RocList<i64>), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_split_last() {
+    assert_evals_to!(
+        r#"
+               List.splitLast [2, 3, 0, 4, 0, 6, 0, 8, 9] 0
+               |> Result.map .before
+        "#,
+        RocResult::ok(RocList::<i64>::from_slice(&[2, 3, 0, 4, 0, 6])),
+        RocResult<RocList<i64>, ()>
+    );
+    assert_evals_to!(
+        r#"
+               List.splitLast [2, 3, 0, 4, 0, 6, 0, 8, 9] 0
+               |> Result.map .after
+        "#,
+        RocResult::ok(RocList::<i64>::from_slice(&[8, 9])),
+        RocResult<RocList<i64>, ()>
+    );
+
+    assert_evals_to!(
+        "List.splitLast [1, 2, 3] 0",
+        RocResult::err(()),
+        RocResult<(RocList<i64>, RocList<i64>), ()>
+    );
+
+    assert_evals_to!(
+        "List.splitLast [] 1",
+        RocResult::err(()),
+        RocResult<(RocList<i64>, RocList<i64>), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_drop() {
     assert_evals_to!(
         "List.drop [1,2,3] 2",
