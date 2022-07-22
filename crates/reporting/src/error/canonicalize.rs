@@ -192,15 +192,6 @@ pub fn can_problem<'b>(
             title = SYNTAX_PROBLEM.to_string();
             severity = Severity::RuntimeError;
         }
-        Problem::UnsupportedPattern(BadPattern::UnderscoreInDef, region) => {
-            doc = alloc.stack([
-                alloc.reflow("Underscore patterns are not allowed in definitions"),
-                alloc.region(lines.convert_region(region)),
-            ]);
-
-            title = SYNTAX_PROBLEM.to_string();
-            severity = Severity::RuntimeError;
-        }
         Problem::UnsupportedPattern(BadPattern::Unsupported(pattern_type), region) => {
             use roc_parse::pattern::PatternType::*;
 

@@ -7438,6 +7438,20 @@ mod solve_expr {
                 "#
             ),
             @r#"x : { a : [A { b : [B]* }*]* }*"#
-        )
+        );
+    }
+
+    #[test]
+    fn infer_type_with_underscore_destructure_assignment() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Pair x _ = Pair 0 1
+
+                x
+                "#
+            ),
+            "Num *",
+        );
     }
 }

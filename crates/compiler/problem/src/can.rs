@@ -16,7 +16,6 @@ pub struct CycleEntry {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum BadPattern {
-    UnderscoreInDef,
     Unsupported(PatternType),
 }
 
