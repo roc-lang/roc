@@ -3034,6 +3034,162 @@ fn list_find_index_empty_typed_list() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_ends_with_empty() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.endsWith [] []
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.endsWith ["a"] []
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.endsWith [] ["a"]
+            "#
+        ),
+        false,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_ends_with_nonempty() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.endsWith ["a", "bc", "def"] ["def"]
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.endsWith ["a", "bc", "def"] ["bc", "def"]
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.endsWith ["a", "bc", "def"] ["a"]
+            "#
+        ),
+        false,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.endsWith ["a", "bc", "def"] [""]
+            "#
+        ),
+        false,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_starts_with_empty() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.startsWith [] []
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.startsWith ["a"] []
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.startsWith [] ["a"]
+            "#
+        ),
+        false,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_starts_with_nonempty() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.startsWith ["a", "bc", "def"] ["a"]
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.startsWith ["a", "bc", "def"] ["a", "bc"]
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.startsWith ["a", "bc", "def"] ["def"]
+            "#
+        ),
+        false,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.startsWith ["a", "bc", "def"] [""]
+            "#
+        ),
+        false,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn monomorphized_lists() {
     assert_evals_to!(
         indoc!(
