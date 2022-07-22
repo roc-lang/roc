@@ -6030,30 +6030,6 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        underscore_let,
-        indoc!(
-            r#"
-            _ = 3
-
-            4
-            "#
-        ),
-        @r###"
-    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
-
-    This destructure assignment doesn't introduce any new variables:
-
-    4│      _ = 3
-            ^
-
-    If you don't need to use the value on the right-hand-side of this
-    assignment, consider removing the assignment. Since Roc is purely
-    functional, assignments that don't introduce variables cannot affect a
-    program's behavior!
-    "###
-    );
-
-    test_report!(
         expect_expr_type_error,
         indoc!(
             r#"
