@@ -2,9 +2,10 @@ use crate::llvm::build::Env;
 use bumpalo::collections::Vec;
 use inkwell::context::Context;
 use inkwell::types::{BasicType, BasicTypeEnum, FloatType, IntType, StructType};
+use inkwell::values::StructValue;
 use inkwell::AddressSpace;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_mono::layout::{Builtin, Layout, UnionLayout};
+use roc_mono::layout::{round_up_to_alignment, Builtin, Layout, UnionLayout};
 use roc_target::TargetInfo;
 
 fn basic_type_from_record<'a, 'ctx, 'env>(
@@ -247,6 +248,199 @@ fn block_of_memory_help(context: &Context, union_size: u32) -> BasicTypeEnum<'_>
         context
             .struct_type(&[i64_array_type, i8_array_type], false)
             .into()
+    }
+}
+
+fn alignment_type(context: &Context, alignment: u32) -> BasicTypeEnum {
+    match alignment {
+        0 => context.struct_type(&[], false).into(),
+        1 => context.i8_type().into(),
+        2 => context.i16_type().into(),
+        4 => context.i32_type().into(),
+        8 => context.i64_type().into(),
+        16 => context.i128_type().into(),
+        _ => unimplemented!("weird alignment: {alignment}"),
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TagType {
+    I8,
+    I16,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RocUnion<'ctx> {
+    struct_type: StructType<'ctx>,
+    data_align: u32,
+    data_width: u32,
+    tag_type: Option<TagType>,
+}
+
+impl<'ctx> RocUnion<'ctx> {
+    pub const TAG_ID_INDEX: u32 = 2;
+    pub const TAG_DATA_INDEX: u32 = 1;
+
+    fn new(
+        context: &'ctx Context,
+        _target_info: TargetInfo,
+        data_align: u32,
+        data_width: u32,
+        tag_type: Option<TagType>,
+    ) -> Self {
+        let bytes = round_up_to_alignment(data_width, data_align);
+        let byte_array_type = context.i8_type().array_type(bytes).as_basic_type_enum();
+
+        let alignment_array_type = alignment_type(context, data_align)
+            .array_type(0)
+            .as_basic_type_enum();
+
+        let struct_type = if let Some(tag_type) = tag_type {
+            let tag_width = match tag_type {
+                TagType::I8 => 1,
+                TagType::I16 => 2,
+            };
+
+            let tag_padding = round_up_to_alignment(tag_width, data_align) - tag_width;
+            let tag_padding_type = context
+                .i8_type()
+                .array_type(tag_padding)
+                .as_basic_type_enum();
+
+            context.struct_type(
+                &[
+                    alignment_array_type,
+                    byte_array_type,
+                    match tag_type {
+                        TagType::I8 => context.i8_type().into(),
+                        TagType::I16 => context.i16_type().into(),
+                    },
+                    tag_padding_type,
+                ],
+                false,
+            )
+        } else {
+            context.struct_type(&[alignment_array_type, byte_array_type], false)
+        };
+
+        Self {
+            struct_type,
+            data_align,
+            data_width,
+            tag_type,
+        }
+    }
+
+    pub fn struct_type(&self) -> StructType<'ctx> {
+        self.struct_type
+    }
+
+    pub fn tagged_from_slices(
+        context: &'ctx Context,
+        layouts: &[&[Layout<'_>]],
+        target_info: TargetInfo,
+    ) -> Self {
+        let tag_type = match layouts.len() {
+            0..=255 => TagType::I8,
+            _ => TagType::I16,
+        };
+
+        let (data_width, data_align) =
+            Layout::stack_size_and_alignment_slices(layouts, target_info);
+
+        Self::new(context, target_info, data_align, data_width, Some(tag_type))
+    }
+
+    pub fn untagged_from_slices(
+        context: &'ctx Context,
+        layouts: &[&[Layout<'_>]],
+        target_info: TargetInfo,
+    ) -> Self {
+        let (data_width, data_align) =
+            Layout::stack_size_and_alignment_slices(layouts, target_info);
+
+        Self::new(context, target_info, data_align, data_width, None)
+    }
+
+    pub fn tag_alignment(&self) -> u32 {
+        let tag_id_alignment = match self.tag_type {
+            None => 0,
+            Some(TagType::I8) => 1,
+            Some(TagType::I16) => 2,
+        };
+
+        self.data_align.max(tag_id_alignment)
+    }
+
+    pub fn tag_width(&self) -> u32 {
+        let tag_id_width = match self.tag_type {
+            None => 0,
+            Some(TagType::I8) => 1,
+            Some(TagType::I16) => 2,
+        };
+
+        let mut width = self.data_width;
+
+        // add padding between data and the tag id
+        width = round_up_to_alignment(width, tag_id_width);
+
+        // add tag id
+        width += tag_id_width;
+
+        // add padding after the tag id
+        width = round_up_to_alignment(width, self.tag_alignment());
+
+        width
+    }
+
+    pub fn as_struct_value<'a, 'env>(
+        &self,
+        env: &Env<'a, 'ctx, 'env>,
+        data: StructValue<'ctx>,
+        tag_id: Option<usize>,
+    ) -> StructValue<'ctx> {
+        debug_assert_eq!(tag_id.is_some(), self.tag_type.is_some());
+
+        let mut struct_value = self.struct_type().const_zero();
+
+        let tag_alloca = env
+            .builder
+            .build_alloca(struct_value.get_type(), "tag_alloca");
+        env.builder.build_store(tag_alloca, struct_value);
+
+        let cast_pointer = env.builder.build_pointer_cast(
+            tag_alloca,
+            data.get_type().ptr_type(AddressSpace::Generic),
+            "to_data_ptr",
+        );
+
+        env.builder.build_store(cast_pointer, data);
+
+        struct_value = env
+            .builder
+            .build_load(tag_alloca, "load_tag")
+            .into_struct_value();
+
+        // set the tag id
+        //
+        // NOTE: setting the tag id initially happened before writing the data into it.
+        // That turned out to expose UB. More info at https://github.com/rtfeldman/roc/issues/3554
+        if let Some(tag_id) = tag_id {
+            let tag_id_type = match self.tag_type.unwrap() {
+                TagType::I8 => env.context.i8_type(),
+                TagType::I16 => env.context.i16_type(),
+            };
+
+            let tag_id = tag_id_type.const_int(tag_id as u64, false);
+
+            struct_value = env
+                .builder
+                .build_insert_value(struct_value, tag_id, Self::TAG_ID_INDEX, "insert_tag_id")
+                .unwrap()
+                .into_struct_value();
+        }
+
+        struct_value
     }
 }
 

@@ -1556,6 +1556,29 @@ impl<'a> Layout<'a> {
         }
     }
 
+    pub fn stack_size_and_alignment_slices(
+        slices: &[&[Self]],
+        target_info: TargetInfo,
+    ) -> (u32, u32) {
+        let mut data_align = 1;
+        let mut data_width = 0;
+
+        for tag in slices {
+            let mut total = 0;
+            for layout in tag.iter() {
+                let (stack_size, alignment) = layout.stack_size_and_alignment(target_info);
+                total += stack_size;
+                data_align = data_align.max(alignment);
+            }
+
+            data_width = data_width.max(total);
+        }
+
+        data_width = round_up_to_alignment(data_width, data_align);
+
+        (data_width, data_align)
+    }
+
     pub fn is_refcounted(&self) -> bool {
         use self::Builtin::*;
         use Layout::*;
