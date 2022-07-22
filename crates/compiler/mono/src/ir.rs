@@ -2533,7 +2533,7 @@ fn pattern_to_when<'a>(
     body: Loc<roc_can::expr::Expr>,
 ) -> (Symbol, Loc<roc_can::expr::Expr>) {
     use roc_can::expr::Expr::*;
-    use roc_can::expr::WhenBranch;
+    use roc_can::expr::{WhenBranch, WhenBranchPattern};
     use roc_can::pattern::Pattern::*;
 
     match &pattern.value {
@@ -2580,7 +2580,10 @@ fn pattern_to_when<'a>(
                 region: Region::zero(),
                 loc_cond: Box::new(Loc::at_zero(Var(symbol))),
                 branches: vec![WhenBranch {
-                    patterns: vec![pattern],
+                    patterns: vec![WhenBranchPattern {
+                        pattern,
+                        degenerate: false,
+                    }],
                     value: body,
                     guard: None,
                     // If this type-checked, it's non-redundant
@@ -6049,15 +6052,15 @@ fn to_opt_branches<'a>(
         }
 
         for loc_pattern in when_branch.patterns {
-            match from_can_pattern(env, procs, layout_cache, &loc_pattern.value) {
+            match from_can_pattern(env, procs, layout_cache, &loc_pattern.pattern.value) {
                 Ok((mono_pattern, assignments)) => {
                     loc_branches.push((
-                        Loc::at(loc_pattern.region, mono_pattern.clone()),
+                        Loc::at(loc_pattern.pattern.region, mono_pattern.clone()),
                         exhaustive_guard,
                     ));
 
                     let mut loc_expr = when_branch.value.clone();
-                    let region = loc_pattern.region;
+                    let region = loc_pattern.pattern.region;
                     for (symbol, variable, expr) in assignments.into_iter().rev() {
                         let def = roc_can::def::Def {
                             annotation: None,
@@ -6079,7 +6082,7 @@ fn to_opt_branches<'a>(
                 }
                 Err(runtime_error) => {
                     loc_branches.push((
-                        Loc::at(loc_pattern.region, Pattern::Underscore),
+                        Loc::at(loc_pattern.pattern.region, Pattern::Underscore),
                         exhaustive_guard,
                     ));
 

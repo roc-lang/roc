@@ -1,6 +1,6 @@
 use crate::annotation::IntroducedVariables;
 use crate::def::Def;
-use crate::expr::{AnnotatedMark, ClosureData, Declarations, Expr, Recursive};
+use crate::expr::{AnnotatedMark, ClosureData, Declarations, Expr, Recursive, WhenBranchPattern};
 use crate::pattern::Pattern;
 use crate::scope::Scope;
 use roc_collections::{SendMap, VecSet};
@@ -475,11 +475,15 @@ fn build_effect_after(
             type_arguments,
             lambda_set_variables,
         };
+        let pattern = WhenBranchPattern {
+            pattern: Loc::at_zero(pattern),
+            degenerate: false,
+        };
 
         let branches = vec![crate::expr::WhenBranch {
             guard: None,
             value: Loc::at_zero(force_inner_thunk_call),
-            patterns: vec![Loc::at_zero(pattern)],
+            patterns: vec![pattern],
             redundant: RedundantMark::new(var_store),
         }];
 
@@ -1256,9 +1260,13 @@ fn build_effect_loop_inner_body(
         let step_tag_name = TagName("Step".into());
 
         let step_pattern = applied_tag_pattern(step_tag_name, &[new_state_symbol], var_store);
+        let step_pattern = WhenBranchPattern {
+            pattern: Loc::at_zero(step_pattern),
+            degenerate: false,
+        };
 
         crate::expr::WhenBranch {
-            patterns: vec![Loc::at_zero(step_pattern)],
+            patterns: vec![step_pattern],
             value: Loc::at_zero(force_thunk2),
             guard: None,
             redundant: RedundantMark::new(var_store),
@@ -1268,9 +1276,13 @@ fn build_effect_loop_inner_body(
     let done_branch = {
         let done_tag_name = TagName("Done".into());
         let done_pattern = applied_tag_pattern(done_tag_name, &[done_symbol], var_store);
+        let done_pattern = WhenBranchPattern {
+            pattern: Loc::at_zero(done_pattern),
+            degenerate: false,
+        };
 
         crate::expr::WhenBranch {
-            patterns: vec![Loc::at_zero(done_pattern)],
+            patterns: vec![done_pattern],
             value: Loc::at_zero(Expr::Var(done_symbol)),
             guard: None,
             redundant: RedundantMark::new(var_store),

@@ -482,8 +482,17 @@ impl Recursive {
 }
 
 #[derive(Clone, Debug)]
+pub struct WhenBranchPattern {
+    pub pattern: Loc<Pattern>,
+    /// Degenerate branch patterns are those that don't fully bind symbols that the branch body
+    /// needs. For example, in `A x | B y -> x`, the `B y` pattern is degenerate.
+    /// Degenerate patterns emit a runtime error if reached in a program.
+    pub degenerate: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct WhenBranch {
-    pub patterns: Vec<Loc<Pattern>>,
+    pub patterns: Vec<WhenBranchPattern>,
     pub value: Loc<Expr>,
     pub guard: Option<Loc<Expr>>,
     /// Whether this branch is redundant in the `when` it appears in
@@ -497,11 +506,13 @@ impl WhenBranch {
                 .patterns
                 .first()
                 .expect("when branch has no pattern?")
+                .pattern
                 .region,
             &self
                 .patterns
                 .last()
                 .expect("when branch has no pattern?")
+                .pattern
                 .region,
         )
     }
@@ -512,7 +523,7 @@ impl WhenBranch {
         Region::across_all(
             self.patterns
                 .iter()
-                .map(|p| &p.region)
+                .map(|p| &p.pattern.region)
                 .chain([self.value.region].iter()),
         )
     }
@@ -1350,14 +1361,20 @@ fn canonicalize_when_branch<'a>(
         );
 
         multi_pattern_variables.add_pattern(&can_pattern);
-        patterns.push(can_pattern);
+        patterns.push(WhenBranchPattern {
+            pattern: can_pattern,
+            degenerate: false,
+        });
     }
 
+    let mut some_symbols_not_bound_in_all_patterns = false;
     for (unbound_symbol, region) in multi_pattern_variables.get_unbound() {
         env.problem(Problem::NotBoundInAllPatterns {
             unbound_symbol,
             region,
-        })
+        });
+
+        some_symbols_not_bound_in_all_patterns = true;
     }
 
     let (value, mut branch_output) = canonicalize_expr(
@@ -1384,9 +1401,30 @@ fn canonicalize_when_branch<'a>(
 
     // Now that we've collected all the references for this branch, check to see if
     // any of the new idents it defined were unused. If any were, report it.
-    for (symbol, region) in BindingsFromPattern::new_many(patterns.iter()) {
-        if !output.references.has_value_lookup(symbol) {
+    let mut pattern_bound_symbols_body_needs = VecSet::default();
+    for (symbol, region) in BindingsFromPattern::new_many(patterns.iter().map(|pat| &pat.pattern)) {
+        if output.references.has_value_lookup(symbol) {
+            pattern_bound_symbols_body_needs.insert(symbol);
+        } else {
             env.problem(Problem::UnusedDef(symbol, region));
+        }
+    }
+
+    if some_symbols_not_bound_in_all_patterns && pattern_bound_symbols_body_needs.len() > 0 {
+        // There might be branches that don't bind all the symbols needed by the body; mark those
+        // branches degenerate.
+        for pattern in patterns.iter_mut() {
+            let bound_by_pattern: VecSet<_> = BindingsFromPattern::new(&pattern.pattern)
+                .map(|(sym, _)| sym)
+                .collect();
+
+            let binds_all_needed = pattern_bound_symbols_body_needs
+                .iter()
+                .all(|sym| bound_by_pattern.contains(sym));
+
+            if !binds_all_needed {
+                pattern.degenerate = true;
+            }
         }
     }
 

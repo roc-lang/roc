@@ -1822,14 +1822,15 @@ fn constrain_when_branch_help(
     };
 
     for (i, loc_pattern) in when_branch.patterns.iter().enumerate() {
-        let pattern_expected = pattern_expected(HumanIndex::zero_based(i), loc_pattern.region);
+        let pattern_expected =
+            pattern_expected(HumanIndex::zero_based(i), loc_pattern.pattern.region);
 
         let mut partial_state = PatternState::default();
         constrain_pattern(
             constraints,
             env,
-            &loc_pattern.value,
-            loc_pattern.region,
+            &loc_pattern.pattern.value,
+            loc_pattern.pattern.region,
             pattern_expected,
             &mut partial_state,
         );
