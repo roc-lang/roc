@@ -781,14 +781,14 @@ joinMap = \list, mapper ->
 ## Returns the first element of the list satisfying a predicate function.
 ## If no satisfying element is found, an `Err NotFound` is returned.
 findFirst : List elem, (elem -> Bool) -> Result elem [NotFound]*
-findFirst = \array, pred ->
+findFirst = \list, pred ->
     callback = \_, elem ->
         if pred elem then
             Break elem
         else
             Continue {}
 
-    when List.iterate array {} callback is
+    when List.iterate list {} callback is
         Continue {} -> Err NotFound
         Break found -> Ok found
 
