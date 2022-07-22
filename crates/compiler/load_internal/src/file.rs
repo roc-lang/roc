@@ -2481,15 +2481,17 @@ fn update<'a>(
                         let report = can_problem(&alloc, &line_info, module_path.clone(), problem);
 
                         report.render_color_terminal(&mut buf, &alloc, &palette);
+
+                        buf.push_str("\n\n");
                     }
 
                     for problem in type_probs {
                         if let Some(report) =
                             type_problem(&alloc, &line_info, module_path.clone(), problem)
                         {
-                            let mut buf = String::new();
-
                             report.render_color_terminal(&mut buf, &alloc, &palette);
+
+                            buf.push_str("\n\n");
                         }
                     }
                 }
