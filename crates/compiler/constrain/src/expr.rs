@@ -1824,14 +1824,49 @@ fn constrain_when_branch_help(
     for (i, loc_pattern) in when_branch.patterns.iter().enumerate() {
         let pattern_expected = pattern_expected(HumanIndex::zero_based(i), loc_pattern.region);
 
+        let mut partial_state = PatternState::default();
         constrain_pattern(
             constraints,
             env,
             &loc_pattern.value,
             loc_pattern.region,
             pattern_expected,
-            &mut state,
+            &mut partial_state,
         );
+
+        state.vars.extend(partial_state.vars);
+        state.constraints.extend(partial_state.constraints);
+        state
+            .delayed_is_open_constraints
+            .extend(partial_state.delayed_is_open_constraints);
+
+        if i == 0 {
+            state.headers.extend(partial_state.headers);
+        } else {
+            // Make sure the bound variables in the patterns on the same branch agree in their types.
+            for (sym, typ1) in state.headers.iter() {
+                if let Some(typ2) = partial_state.headers.get(sym) {
+                    state.constraints.push(constraints.equal_types(
+                        typ1.value.clone(),
+                        Expected::NoExpectation(typ2.value.clone()),
+                        Category::When,
+                        typ2.region,
+                    ));
+                }
+
+                // If the pattern doesn't bind all symbols introduced in the branch we'll have
+                // reported a canonicalization error, but still might reach here; that's okay.
+            }
+
+            // Add any variables this pattern binds that the other patterns don't bind.
+            // This will already have been reported as an error, but we still might be able to
+            // solve their types.
+            for (sym, ty) in partial_state.headers {
+                if !state.headers.contains_key(&sym) {
+                    state.headers.insert(sym, ty);
+                }
+            }
+        }
     }
 
     let (pattern_constraints, body_constraints) = if let Some(loc_guard) = &when_branch.guard {

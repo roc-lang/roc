@@ -2,9 +2,9 @@ interface Path
     exposes [
         Path,
         fromStr,
-        toStr
+        toStr,
     ]
-    imports []
+    imports [InternalPath.{ InternalPath }, Task.{ Task }]
 
 Path := Str
 

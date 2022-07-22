@@ -1884,3 +1884,14 @@ fn encode_derived_tag_two_payloads_string() {
         "#
     )
 }
+
+#[mono_test]
+fn issue_3560_nested_tag_constructor_is_newtype() {
+    indoc!(
+        r#"
+        when Wrapper (Payload "err") is
+            Wrapper (Payload str) -> str
+            Wrapper (AlternatePayload str) -> str
+        "#
+    )
+}

@@ -165,6 +165,10 @@ pub enum Problem {
         ability: Symbol,
         not_implemented: Vec<Symbol>,
     },
+    NotBoundInAllPatterns {
+        unbound_symbol: Symbol,
+        region: Region,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]

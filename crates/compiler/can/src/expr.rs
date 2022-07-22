@@ -7,7 +7,7 @@ use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, float_expr_from_result,
     int_expr_from_result, num_expr_from_result, FloatBound, IntBound, NumBound,
 };
-use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern};
+use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern, PermitShadows};
 use crate::procedure::References;
 use crate::scope::Scope;
 use crate::traverse::{walk_expr, Visitor};
@@ -1187,6 +1187,7 @@ fn canonicalize_closure_body<'a>(
             FunctionArg,
             &loc_pattern.value,
             loc_pattern.region,
+            PermitShadows(false),
         );
 
         can_args.push((
@@ -1269,6 +1270,59 @@ fn canonicalize_closure_body<'a>(
     (closure_data, output)
 }
 
+enum MultiPatternVariables {
+    OnePattern,
+    MultiPattern {
+        bound_occurrences: VecMap<Symbol, (Region, u8)>,
+    },
+}
+
+impl MultiPatternVariables {
+    #[inline(always)]
+    fn new(num_patterns: usize) -> Self {
+        if num_patterns > 1 {
+            Self::MultiPattern {
+                bound_occurrences: VecMap::with_capacity(2),
+            }
+        } else {
+            Self::OnePattern
+        }
+    }
+
+    #[inline(always)]
+    fn add_pattern(&mut self, pattern: &Loc<Pattern>) {
+        match self {
+            MultiPatternVariables::OnePattern => {}
+            MultiPatternVariables::MultiPattern { bound_occurrences } => {
+                for (sym, region) in BindingsFromPattern::new(pattern) {
+                    if !bound_occurrences.contains_key(&sym) {
+                        bound_occurrences.insert(sym, (region, 0));
+                    }
+                    bound_occurrences.get_mut(&sym).unwrap().1 += 1;
+                }
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn get_unbound(self) -> impl Iterator<Item = (Symbol, Region)> {
+        let bound_occurrences = match self {
+            MultiPatternVariables::OnePattern => Default::default(),
+            MultiPatternVariables::MultiPattern { bound_occurrences } => bound_occurrences,
+        };
+
+        bound_occurrences
+            .into_iter()
+            .filter_map(|(sym, (region, occurs))| {
+                if occurs == 1 {
+                    Some((sym, region))
+                } else {
+                    None
+                }
+            })
+    }
+}
+
 #[inline(always)]
 fn canonicalize_when_branch<'a>(
     env: &mut Env<'a>,
@@ -1279,9 +1333,11 @@ fn canonicalize_when_branch<'a>(
     output: &mut Output,
 ) -> (WhenBranch, References) {
     let mut patterns = Vec::with_capacity(branch.patterns.len());
+    let mut multi_pattern_variables = MultiPatternVariables::new(branch.patterns.len());
 
-    // TODO report symbols not bound in all patterns
-    for loc_pattern in branch.patterns.iter() {
+    for (i, loc_pattern) in branch.patterns.iter().enumerate() {
+        let permit_shadows = PermitShadows(i > 0); // patterns can shadow symbols defined in the first pattern.
+
         let can_pattern = canonicalize_pattern(
             env,
             var_store,
@@ -1290,9 +1346,18 @@ fn canonicalize_when_branch<'a>(
             WhenBranch,
             &loc_pattern.value,
             loc_pattern.region,
+            permit_shadows,
         );
 
+        multi_pattern_variables.add_pattern(&can_pattern);
         patterns.push(can_pattern);
+    }
+
+    for (unbound_symbol, region) in multi_pattern_variables.get_unbound() {
+        env.problem(Problem::NotBoundInAllPatterns {
+            unbound_symbol,
+            region,
+        })
     }
 
     let (value, mut branch_output) = canonicalize_expr(

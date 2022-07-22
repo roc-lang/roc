@@ -3641,3 +3641,37 @@ fn recursive_call_capturing_function() {
         i64
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn shared_pattern_variable_in_when_branches() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            f = \t ->
+                when t is
+                    A x | B x -> x
+
+            {a: f (A 15u8), b: (B 31u8)}
+            "#
+        ),
+        (15u8, 31u8),
+        (u8, u8)
+    );
+}
+
+#[test]
+#[ignore = "TODO currently fails in alias analysis because `B y` does not introduce `x`"]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn symbol_not_bound_in_all_patterns_runs_when_bound_pattern_reached() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when A 15u8 is
+                A x | B y -> x
+            "#
+        ),
+        15u8,
+        u8
+    );
+}

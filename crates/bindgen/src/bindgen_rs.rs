@@ -1,8 +1,6 @@
 use crate::types::{RocNum, RocTagUnion, RocType, TypeId, Types};
 use indexmap::IndexMap;
-use roc_mono::layout::UnionLayout;
 use roc_target::{Architecture, TargetInfo};
-use std::convert::TryInto;
 use std::fmt::{Display, Write};
 
 pub static TEMPLATE: &[u8] = include_bytes!("../templates/template.rs");
@@ -151,7 +149,7 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
         }
         RocType::TagUnion(tag_union) => {
             match tag_union {
-                RocTagUnion::Enumeration { tags, name } => {
+                RocTagUnion::Enumeration { tags, name, size } => {
                     if tags.len() == 1 {
                         // An enumeration with one tag is a zero-sized unit type, so
                         // represent it as a zero-sized struct (e.g. "struct Foo()").
@@ -166,6 +164,7 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                             target_info,
                             types.get_type(id),
                             tags.iter(),
+                            *size,
                             types,
                             impls,
                         )
@@ -174,27 +173,20 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                 RocTagUnion::NonRecursive {
                     tags,
                     name,
-                    discriminant_type,
+                    discriminant_size,
+                    discriminant_offset,
                 } => {
                     // Empty tag unions can never come up at runtime,
                     // and so don't need declared types.
                     if !tags.is_empty() {
-                        // The discriminant is placed immediately after the last byte of
-                        // the longest variant. That means if we take the total size
-                        // and subtract the size of the discriminant, we have its offset.
-                        //
-                        // Importantly, we should use the size *without* alignment rounding;
-                        // otherwise, that might not be where the discriminant actually is!
-                        let discriminant_offset =
-                            types.size_ignoring_alignment(id) - discriminant_type.size();
-
                         add_tag_union(
                             Recursiveness::NonRecursive,
                             name,
                             target_info,
                             id,
                             tags,
-                            discriminant_offset,
+                            *discriminant_size,
+                            *discriminant_offset,
                             types,
                             impls,
                         );
@@ -203,27 +195,20 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                 RocTagUnion::Recursive {
                     tags,
                     name,
-                    discriminant_type,
+                    discriminant_size,
+                    discriminant_offset,
                 } => {
                     // Empty tag unions can never come up at runtime,
                     // and so don't need declared types.
                     if !tags.is_empty() {
-                        // The discriminant is placed immediately after the last byte of
-                        // the longest variant. That means if we take the total size
-                        // and subtract the size of the discriminant, we have its offset.
-                        //
-                        // Importantly, we should use the size *without* alignment rounding;
-                        // otherwise, that might not be where the discriminant actually is!
-                        let discriminant_offset =
-                            types.size_ignoring_alignment(id) - discriminant_type.size();
-
                         add_tag_union(
                             Recursiveness::Recursive,
                             name,
                             target_info,
                             id,
                             tags,
-                            discriminant_offset,
+                            *discriminant_size,
+                            *discriminant_offset,
                             types,
                             impls,
                         );
@@ -279,6 +264,7 @@ fn add_discriminant(
     name: &str,
     target_info: TargetInfo,
     tag_names: Vec<String>,
+    size: u32,
     types: &Types,
     impls: &mut Impls,
 ) -> String {
@@ -293,6 +279,7 @@ fn add_discriminant(
     let discriminant_type = RocType::TagUnion(RocTagUnion::Enumeration {
         name: discriminant_name.clone(),
         tags: tag_names.clone(),
+        size,
     });
 
     add_enumeration(
@@ -300,6 +287,7 @@ fn add_discriminant(
         target_info,
         &discriminant_type,
         tag_names.into_iter(),
+        size,
         types,
         impls,
     );
@@ -320,6 +308,7 @@ fn add_tag_union(
     target_info: TargetInfo,
     type_id: TypeId,
     tags: &[(String, Option<TypeId>)],
+    discriminant_size: u32,
     discriminant_offset: u32,
     types: &Types,
     impls: &mut Impls,
@@ -329,7 +318,14 @@ fn add_tag_union(
     debug_assert_ne!(tags.len(), 0);
 
     let tag_names = tags.iter().map(|(name, _)| name).cloned().collect();
-    let discriminant_name = add_discriminant(name, target_info, tag_names, types, impls);
+    let discriminant_name = add_discriminant(
+        name,
+        target_info,
+        tag_names,
+        discriminant_size,
+        types,
+        impls,
+    );
     let typ = types.get_type(type_id);
     let size_rounded_to_alignment = types.size_rounded_to_alignment(type_id);
     let (actual_self, actual_self_mut, actual_other, union_name) = match recursiveness {
@@ -1189,19 +1185,15 @@ fn add_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str> + Display>(
     target_info: TargetInfo,
     typ: &RocType,
     tags: I,
+    tag_bytes: u32,
     types: &Types,
     impls: &mut Impls,
 ) {
-    let tag_bytes: usize = UnionLayout::discriminant_size(tags.len())
-        .stack_size()
-        .try_into()
-        .unwrap();
-
     let derive = derive_str(typ, types, false);
-    let repr_bytes = tag_bytes * 8;
+    let repr_bits = tag_bytes * 8;
 
     // e.g. "#[repr(u8)]\npub enum Foo {\n"
-    let mut buf = format!("{derive}\n#[repr(u{repr_bytes})]\npub enum {name} {{\n");
+    let mut buf = format!("{derive}\n#[repr(u{repr_bits})]\npub enum {name} {{\n");
 
     // Debug impls should never vary by target_info.
     let mut debug_buf = format!(
@@ -1356,7 +1348,7 @@ fn add_nullable_unwrapped(
 
     tag_names.sort();
 
-    let discriminant_name = add_discriminant(name, target_info, tag_names, types, impls);
+    let discriminant_name = add_discriminant(name, target_info, tag_names, 1, types, impls);
     let payload_type = types.get_type(non_null_payload);
     let payload_type_name = type_name(non_null_payload, types);
     let cannot_derive_copy = cannot_derive_copy(payload_type, types);
