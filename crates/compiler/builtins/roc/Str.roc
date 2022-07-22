@@ -137,6 +137,10 @@ Utf8Problem : { byteIndex : Nat, problem : Utf8ByteProblem }
 ##
 ## >>> Str.isEmpty ""
 isEmpty : Str -> Bool
+
+## Combine two strings.
+##
+##     Str.concat "Hello, " "World!" # "Hello, World!"
 concat : Str, Str -> Str
 
 ## Combine a list of strings into a single string, with a separator
