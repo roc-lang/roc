@@ -16,20 +16,24 @@ use roc_std::{RocResult, RocStr};
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn with_default() {
+fn with_default_ok() {
     assert_evals_to!(
         indoc!(
             r#"
             result : Result I64 {}
-            result = Ok 2
+            result = Ok 12345
 
             Result.withDefault result 0
             "#
         ),
-        2,
+        12345,
         i64
     );
+}
 
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn with_default_err() {
     assert_evals_to!(
         indoc!(
             r#"

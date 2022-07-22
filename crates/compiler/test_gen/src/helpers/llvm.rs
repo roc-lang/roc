@@ -261,7 +261,12 @@ fn create_llvm_module<'a>(
 
     // Verify the module
     if let Err(errors) = env.module.verify() {
-        panic!("Errors defining module:\n\n{}", errors.to_string());
+        let path = "/tmp/test.ll";
+        env.module.print_to_file(path).unwrap();
+        panic!(
+            "Errors defining module:\n\n{}\n\nI have written the full module to `{path}`",
+            errors.to_string()
+        );
     }
 
     // Uncomment this to see the module's optimized LLVM instruction output:
@@ -354,6 +359,22 @@ fn wasm32_target_tripple() -> Triple {
 }
 
 #[allow(dead_code)]
+fn write_final_wasm() -> bool {
+    #[allow(unused_imports)]
+    use roc_debug_flags::{dbg_do, ROC_WRITE_FINAL_WASM};
+
+    dbg_do!(ROC_WRITE_FINAL_WASM, {
+        return true;
+    });
+
+    false
+}
+
+lazy_static::lazy_static! {
+    static ref TEMP_DIR: tempfile::TempDir = tempfile::tempdir().unwrap();
+}
+
+#[allow(dead_code)]
 fn compile_to_wasm_bytes<'a>(
     arena: &'a bumpalo::Bump,
     config: HelperConfig,
@@ -365,22 +386,29 @@ fn compile_to_wasm_bytes<'a>(
     let (_main_fn_name, _delayed_errors, llvm_module) =
         create_llvm_module(arena, src, config, context, &target);
 
-    let temp_dir = tempfile::tempdir().unwrap();
-    let wasm_file = llvm_module_to_wasm_file(&temp_dir, llvm_module);
-    std::fs::read(wasm_file).unwrap()
+    let content_hash = crate::helpers::src_hash(src);
+    let wasm_file = llvm_module_to_wasm_file(&TEMP_DIR, content_hash, llvm_module);
+    let compiled_bytes = std::fs::read(wasm_file).unwrap();
+
+    if write_final_wasm() {
+        crate::helpers::save_wasm_file(&compiled_bytes, content_hash)
+    };
+
+    compiled_bytes
 }
 
 #[allow(dead_code)]
 fn llvm_module_to_wasm_file(
     temp_dir: &tempfile::TempDir,
+    content_hash: u64,
     llvm_module: &inkwell::module::Module,
 ) -> PathBuf {
     use inkwell::targets::{InitializationConfig, Target, TargetTriple};
 
     let dir_path = temp_dir.path();
 
-    let test_a_path = dir_path.join("test.a");
-    let test_wasm_path = dir_path.join("libmain.wasm");
+    let test_a_path = dir_path.join(format!("test_{content_hash}.a"));
+    let test_wasm_path = dir_path.join(format!("libmain_{content_hash}.wasm"));
 
     Target::initialize_webassembly(&InitializationConfig::default());
 
@@ -407,16 +435,13 @@ fn llvm_module_to_wasm_file(
         .write_to_file(llvm_module, file_type, &test_a_path)
         .unwrap();
 
-    let mut wasm_test_platform = std::env::current_dir().unwrap();
-    wasm_test_platform.push("build/wasm_test_platform.wasm");
-
     use std::process::Command;
 
-    Command::new(&crate::helpers::zig_executable())
+    let output = Command::new(&crate::helpers::zig_executable())
         .current_dir(dir_path)
         .args(&[
             "wasm-ld",
-            wasm_test_platform.to_str().unwrap(),
+            concat!(env!("OUT_DIR"), "/wasm_test_platform.wasm"),
             test_a_path.to_str().unwrap(),
             "-o",
             test_wasm_path.to_str().unwrap(),
@@ -424,8 +449,12 @@ fn llvm_module_to_wasm_file(
             "--allow-undefined",
             "--no-entry",
         ])
-        .status()
+        .output()
         .unwrap();
+
+    assert!(output.status.success(), "{:#?}", output);
+    assert!(output.stdout.is_empty(), "{:#?}", output);
+    assert!(output.stderr.is_empty(), "{:#?}", output);
 
     test_wasm_path
 }
@@ -487,7 +516,7 @@ macro_rules! assert_llvm_evals_to {
         use bumpalo::Bump;
         use inkwell::context::Context;
         use roc_gen_llvm::llvm::build::LlvmBackendMode;
-        use roc_gen_llvm::run_jit_function;
+        use roc_gen_llvm::try_run_jit_function;
 
         let arena = Bump::new();
         let context = Context::create();
@@ -508,7 +537,18 @@ macro_rules! assert_llvm_evals_to {
             let given = $transform(success);
             assert_eq!(&given, &expected, "LLVM test failed");
         };
-        run_jit_function!(lib, main_fn_name, $ty, transform, errors)
+
+        let result = try_run_jit_function!(lib, main_fn_name, $ty, transform, errors);
+
+        match result {
+            Ok(raw) => {
+                // only if there are no exceptions thrown, check for errors
+                assert!(errors.is_empty(), "Encountered errors:\n{}", errors);
+
+                transform(raw)
+            }
+            Err(msg) => panic!("Roc failed with message: \"{}\"", msg),
+        }
     };
 
     ($src:expr, $expected:expr, $ty:ty) => {

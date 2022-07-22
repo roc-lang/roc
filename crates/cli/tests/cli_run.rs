@@ -392,54 +392,54 @@ mod cli_run {
             expected_ending:"Hello, World!\n",
             use_valgrind: true,
         },
-        platformSwitching:"platform-switching" => Example {
-            filename: "main.roc",
-            executable_filename: "rocLovesPlatforms",
-            stdin: &[],
-            input_file: None,
-            expected_ending:"Which platform am I running on now?\n",
-            use_valgrind: true,
-        },
-        platformSwitchingC:"platform-switching/c-platform" => Example {
-            filename: "rocLovesC.roc",
-            executable_filename: "rocLovesC",
-            stdin: &[],
-            input_file: None,
-            expected_ending:"Roc <3 C!\n",
-            use_valgrind: true,
-        },
-        platformSwitchingRust:"platform-switching/rust-platform" => Example {
-            filename: "rocLovesRust.roc",
-            executable_filename: "rocLovesRust",
-            stdin: &[],
-            input_file: None,
-            expected_ending:"Roc <3 Rust!\n",
-            use_valgrind: true,
-        },
-        platformSwitchingSwift:"platform-switching/swift-platform" => Example {
-            filename: "rocLovesSwift.roc",
-            executable_filename: "rocLovesSwift",
-            stdin: &[],
-            input_file: None,
-            expected_ending:"Roc <3 Swift!\n",
-            use_valgrind: true,
-        },
-        platformSwitchingWebAssembly:"platform-switching/web-assembly-platform" => Example {
-            filename: "rocLovesWebAssembly.roc",
-            executable_filename: "rocLovesWebAssembly",
-            stdin: &[],
-            input_file: None,
-            expected_ending:"Roc <3 Web Assembly!\n",
-            use_valgrind: true,
-        },
-        platformSwitchingZig:"platform-switching/zig-platform" => Example {
-            filename: "rocLovesZig.roc",
-            executable_filename: "rocLovesZig",
-            stdin: &[],
-            input_file: None,
-            expected_ending:"Roc <3 Zig!\n",
-            use_valgrind: true,
-        },
+        //        platformSwitching:"platform-switching" => Example {
+        //            filename: "main.roc",
+        //            executable_filename: "rocLovesPlatforms",
+        //            stdin: &[],
+        //            input_file: None,
+        //            expected_ending:"Which platform am I running on now?\n",
+        //            use_valgrind: true,
+        //        },
+        //        platformSwitchingC:"platform-switching/c-platform" => Example {
+        //            filename: "rocLovesC.roc",
+        //            executable_filename: "rocLovesC",
+        //            stdin: &[],
+        //            input_file: None,
+        //            expected_ending:"Roc <3 C!\n",
+        //            use_valgrind: true,
+        //        },
+        //        platformSwitchingRust:"platform-switching/rust-platform" => Example {
+        //            filename: "rocLovesRust.roc",
+        //            executable_filename: "rocLovesRust",
+        //            stdin: &[],
+        //            input_file: None,
+        //            expected_ending:"Roc <3 Rust!\n",
+        //            use_valgrind: true,
+        //        },
+        //        platformSwitchingSwift:"platform-switching/swift-platform" => Example {
+        //            filename: "rocLovesSwift.roc",
+        //            executable_filename: "rocLovesSwift",
+        //            stdin: &[],
+        //            input_file: None,
+        //            expected_ending:"Roc <3 Swift!\n",
+        //            use_valgrind: true,
+        //        },
+        //        platformSwitchingWebAssembly:"platform-switching/web-assembly-platform" => Example {
+        //            filename: "rocLovesWebAssembly.roc",
+        //            executable_filename: "rocLovesWebAssembly",
+        //            stdin: &[],
+        //            input_file: None,
+        //            expected_ending:"Roc <3 Web Assembly!\n",
+        //            use_valgrind: true,
+        //        },
+        //        platformSwitchingZig:"platform-switching/zig-platform" => Example {
+        //            filename: "rocLovesZig.roc",
+        //            executable_filename: "rocLovesZig",
+        //            stdin: &[],
+        //            input_file: None,
+        //            expected_ending:"Roc <3 Zig!\n",
+        //            use_valgrind: true,
+        //        },
         fib:"algorithms" => Example {
             filename: "fibonacci.roc",
             executable_filename: "fibonacci",
@@ -812,20 +812,12 @@ mod cli_run {
             if entry.file_type().unwrap().is_dir() {
                 let example_dir_name = entry.file_name().into_string().unwrap();
 
+                // TODO re-enable platform-switching
                 // TODO: Improve this with a more-dynamic approach. (Read all subdirectories?)
                 // Some platform-switching examples live in nested directories
                 if example_dir_name == "platform-switching" {
-                    for sub_dir in [
-                        "c-platform",
-                        "rust-platform",
-                        "swift-platform",
-                        "web-assembly-platform",
-                        "zig-platform",
-                    ] {
-                        all_examples.remove(format!("{}/{}", example_dir_name, sub_dir).as_str()).unwrap_or_else(|| {
-                            panic!("The example directory {}/{}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!", examples_dir, example_dir_name, sub_dir);
-                        });
-                    }
+                    // TODO re-enable platform-switching tests
+                    continue;
                 }
 
                 // We test benchmarks separately
