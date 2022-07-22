@@ -53,6 +53,8 @@ interface List
         split,
         splitFirst,
         splitLast,
+        startsWith,
+        endsWith,
         all,
         dropIf,
         sortAsc,
