@@ -3716,6 +3716,7 @@ dependencies = [
  "roc_error_macros",
  "roc_module",
  "roc_mono",
+ "roc_region",
  "roc_std",
  "roc_target",
  "target-lexicon",
