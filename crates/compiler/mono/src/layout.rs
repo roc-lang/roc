@@ -630,20 +630,21 @@ impl<'a> UnionLayout<'a> {
     }
 
     pub fn tag_id_offset(&self, target_info: TargetInfo) -> Option<u32> {
-        use UnionLayout::*;
-
-        if let NonNullableUnwrapped(_) | NullableUnwrapped { .. } = self {
-            return None;
+        match self {
+            UnionLayout::NonRecursive(tags)
+            | UnionLayout::Recursive(tags)
+            | UnionLayout::NullableWrapped {
+                other_tags: tags, ..
+            } => Some(Self::tag_id_offset_help(tags, target_info)),
+            UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => None,
         }
+    }
 
-        let data_width = self.data_size_and_alignment_help_match(None, target_info).0;
+    fn tag_id_offset_help(layouts: &[&[Layout]], target_info: TargetInfo) -> u32 {
+        let (data_width, data_align) =
+            Layout::stack_size_and_alignment_slices(layouts, target_info);
 
-        // current, broken logic
-        if data_width > 8 {
-            Some(round_up_to_alignment(data_width, 8))
-        } else {
-            Some(data_width)
-        }
+        round_up_to_alignment(data_width, data_align)
     }
 
     /// Very important to use this when doing a memcpy!

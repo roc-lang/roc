@@ -57,36 +57,40 @@ pub fn basic_type_from_union_layout<'a, 'ctx, 'env>(
 ) -> BasicTypeEnum<'ctx> {
     use UnionLayout::*;
 
-    let tag_id_type = basic_type_from_layout(env, &union_layout.tag_id_layout());
-
     match union_layout {
         NonRecursive(tags) => {
-            let data = block_of_memory_slices(env.context, tags, env.target_info);
-
-            env.context.struct_type(&[data, tag_id_type], false).into()
+            //
+            RocUnion::tagged_from_slices(env.context, tags, env.target_info)
+                .struct_type()
+                .into()
         }
         Recursive(tags)
         | NullableWrapped {
             other_tags: tags, ..
         } => {
-            let data = block_of_memory_slices(env.context, tags, env.target_info);
-
             if union_layout.stores_tag_id_as_data(env.target_info) {
-                env.context
-                    .struct_type(&[data, tag_id_type], false)
+                RocUnion::tagged_from_slices(env.context, tags, env.target_info)
+                    .struct_type()
                     .ptr_type(AddressSpace::Generic)
                     .into()
             } else {
-                data.ptr_type(AddressSpace::Generic).into()
+                RocUnion::untagged_from_slices(env.context, tags, env.target_info)
+                    .struct_type()
+                    .ptr_type(AddressSpace::Generic)
+                    .into()
             }
         }
         NullableUnwrapped { other_fields, .. } => {
-            let block = block_of_memory_slices(env.context, &[other_fields], env.target_info);
-            block.ptr_type(AddressSpace::Generic).into()
+            RocUnion::untagged_from_slices(env.context, &[other_fields], env.target_info)
+                .struct_type()
+                .ptr_type(AddressSpace::Generic)
+                .into()
         }
         NonNullableUnwrapped(fields) => {
-            let block = block_of_memory_slices(env.context, &[fields], env.target_info);
-            block.ptr_type(AddressSpace::Generic).into()
+            RocUnion::untagged_from_slices(env.context, &[fields], env.target_info)
+                .struct_type()
+                .ptr_type(AddressSpace::Generic)
+                .into()
         }
     }
 }
@@ -278,11 +282,8 @@ pub(crate) struct RocUnion<'ctx> {
 }
 
 impl<'ctx> RocUnion<'ctx> {
-    // pub const TAG_ID_INDEX: u32 = 2;
-    // pub const TAG_DATA_INDEX: u32 = 1;
-
-    pub const TAG_ID_INDEX: u32 = 1;
-    pub const TAG_DATA_INDEX: u32 = 0;
+    pub const TAG_ID_INDEX: u32 = 2;
+    pub const TAG_DATA_INDEX: u32 = 1;
 
     fn new(
         context: &'ctx Context,

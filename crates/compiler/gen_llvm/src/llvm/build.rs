@@ -1429,16 +1429,34 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     let field_layouts = tag_layouts[*tag_id as usize];
 
-                    let tag_id_type =
-                        basic_type_from_layout(env, &union_layout.tag_id_layout()).into_int_type();
+                    let struct_layout = Layout::struct_no_name_order(field_layouts);
+                    let struct_type = basic_type_from_layout(env, &struct_layout);
 
-                    lookup_at_index_ptr2(
+                    let opaque_data_ptr = env
+                        .builder
+                        .build_struct_gep(
+                            argument.into_pointer_value(),
+                            RocUnion::TAG_DATA_INDEX,
+                            "get_opaque_data_ptr",
+                        )
+                        .unwrap();
+
+                    let data_ptr = env.builder.build_pointer_cast(
+                        opaque_data_ptr,
+                        struct_type.ptr_type(AddressSpace::Generic),
+                        "to_data_pointer",
+                    );
+
+                    let element_ptr = env
+                        .builder
+                        .build_struct_gep(data_ptr, *index as _, "get_opaque_data_ptr")
+                        .unwrap();
+
+                    load_roc_value(
                         env,
-                        union_layout,
-                        tag_id_type,
-                        field_layouts,
-                        *index as usize,
-                        argument.into_pointer_value(),
+                        field_layouts[*index as usize],
+                        element_ptr,
+                        "load_element",
                     )
                 }
                 UnionLayout::Recursive(tag_layouts) => {
@@ -1446,19 +1464,9 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     let field_layouts = tag_layouts[*tag_id as usize];
 
-                    let tag_id_type =
-                        basic_type_from_layout(env, &union_layout.tag_id_layout()).into_int_type();
-
                     let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
 
-                    lookup_at_index_ptr2(
-                        env,
-                        union_layout,
-                        tag_id_type,
-                        field_layouts,
-                        *index as usize,
-                        ptr,
-                    )
+                    lookup_at_index_ptr2(env, union_layout, field_layouts, *index as usize, ptr)
                 }
                 UnionLayout::NonNullableUnwrapped(field_layouts) => {
                     let struct_layout = Layout::struct_no_name_order(field_layouts);
@@ -1489,18 +1497,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     let field_layouts = other_tags[tag_index as usize];
 
-                    let tag_id_type =
-                        basic_type_from_layout(env, &union_layout.tag_id_layout()).into_int_type();
-
                     let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
-                    lookup_at_index_ptr2(
-                        env,
-                        union_layout,
-                        tag_id_type,
-                        field_layouts,
-                        *index as usize,
-                        ptr,
-                    )
+                    lookup_at_index_ptr2(env, union_layout, field_layouts, *index as usize, ptr)
                 }
                 UnionLayout::NullableUnwrapped {
                     nullable_id,
@@ -1713,93 +1711,27 @@ fn build_tag<'a, 'ctx, 'env>(
     reuse_allocation: Option<PointerValue<'ctx>>,
     parent: FunctionValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    let tag_id_layout = union_layout.tag_id_layout();
     let union_size = union_layout.number_of_tags();
 
     match union_layout {
         UnionLayout::NonRecursive(tags) => {
             debug_assert!(union_size > 1);
 
-            let internal_type = block_of_memory_slices(env.context, tags, env.target_info);
+            let data = build_struct(env, scope, arguments);
 
-            let tag_id_type = basic_type_from_layout(env, &tag_id_layout).into_int_type();
-            let wrapper_type = env
-                .context
-                .struct_type(&[internal_type, tag_id_type.into()], false);
-            let result_alloca = entry_block_alloca_zerofill(env, wrapper_type.into(), "opaque_tag");
+            let roc_union = RocUnion::tagged_from_slices(env.context, tags, env.target_info);
+            let value = roc_union.as_struct_value(env, data, Some(tag_id as _));
 
-            // Determine types
-            let num_fields = arguments.len() + 1;
-            let mut field_types = Vec::with_capacity_in(num_fields, env.arena);
-            let mut field_vals = Vec::with_capacity_in(num_fields, env.arena);
-
-            let tag_field_layouts = &tags[tag_id as usize];
-
-            for (field_symbol, tag_field_layout) in arguments.iter().zip(tag_field_layouts.iter()) {
-                let (val, _val_layout) = load_symbol_and_layout(scope, field_symbol);
-
-                // Zero-sized fields have no runtime representation.
-                // The layout of the struct expects them to be dropped!
-                if !tag_field_layout.is_dropped_because_empty() {
-                    let field_type = basic_type_from_layout(env, tag_field_layout);
-
-                    field_types.push(field_type);
-
-                    if let Layout::RecursivePointer = tag_field_layout {
-                        panic!(
-                            r"non-recursive tag unions cannot directly contain a recursive pointer"
-                        );
-                    } else {
-                        // this check fails for recursive tag unions, but can be helpful while debugging
-                        // debug_assert_eq!(tag_field_layout, val_layout);
-
-                        field_vals.push(val);
-                    }
-                }
-            }
-            // store the tag id
-            let tag_id_ptr = env
-                .builder
-                .build_struct_gep(result_alloca, RocUnion::TAG_ID_INDEX, "tag_id_ptr")
-                .unwrap();
-
-            let tag_id_intval = tag_id_type.const_int(tag_id as u64, false);
-            env.builder.build_store(tag_id_ptr, tag_id_intval);
-
-            // Create the struct_type
-            let struct_type = env
-                .context
-                .struct_type(field_types.into_bump_slice(), false);
-
-            let struct_opaque_ptr = env
-                .builder
-                .build_struct_gep(result_alloca, RocUnion::TAG_DATA_INDEX, "opaque_data_ptr")
-                .unwrap();
-            let struct_ptr = env.builder.build_pointer_cast(
-                struct_opaque_ptr,
-                struct_type.ptr_type(AddressSpace::Generic),
-                "to_specific",
+            let alloca = create_entry_block_alloca(
+                env,
+                parent,
+                value.get_type().into(),
+                "non_recursive_tag_alloca",
             );
 
-            // Insert field exprs into struct_val
-            //let struct_val =
-            //struct_from_fields(env, struct_type, field_vals.into_iter().enumerate());
+            env.builder.build_store(alloca, value);
 
-            // Insert field exprs into struct_val
-            for (index, field_val) in field_vals.iter().copied().enumerate() {
-                let index: u32 = index as u32;
-
-                let ptr = env
-                    .builder
-                    .build_struct_gep(struct_ptr, index, "get_tag_field_ptr")
-                    .unwrap();
-
-                let field_layout = tag_field_layouts[index as usize];
-                store_roc_value(env, field_layout, ptr, field_val);
-            }
-
-            // env.builder.build_load(result_alloca, "load_result")
-            result_alloca.into()
+            alloca.into()
         }
         UnionLayout::Recursive(tags) => {
             debug_assert!(union_size > 1);
@@ -1878,11 +1810,11 @@ fn build_tag<'a, 'ctx, 'env>(
             nullable_id,
             other_fields,
         } => {
-            let tag_struct_type =
-                block_of_memory_slices(env.context, &[other_fields], env.target_info);
+            let roc_union =
+                RocUnion::untagged_from_slices(env.context, &[other_fields], env.target_info);
 
             if tag_id == *nullable_id as _ {
-                let output_type = tag_struct_type.ptr_type(AddressSpace::Generic);
+                let output_type = roc_union.struct_type().ptr_type(AddressSpace::Generic);
 
                 return output_type.const_null().into();
             }
@@ -1893,23 +1825,15 @@ fn build_tag<'a, 'ctx, 'env>(
 
             debug_assert!(union_size == 2);
 
-            // Determine types
-            let (field_types, field_values) = build_tag_fields(env, scope, other_fields, arguments);
-
             // Create the struct_type
             let data_ptr =
                 allocate_tag(env, parent, reuse_allocation, union_layout, &[other_fields]);
 
-            let struct_type = env
-                .context
-                .struct_type(field_types.into_bump_slice(), false);
+            let data = build_struct(env, scope, arguments);
 
-            struct_pointer_from_fields(
-                env,
-                struct_type,
-                data_ptr,
-                field_values.into_iter().enumerate(),
-            );
+            let value = roc_union.as_struct_value(env, data, None);
+
+            env.builder.build_store(data_ptr, value);
 
             data_ptr.into()
         }
@@ -2156,7 +2080,6 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
 fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     union_layout: &UnionLayout<'a>,
-    tag_id_type: IntType<'ctx>,
     field_layouts: &[Layout<'_>],
     index: usize,
     value: PointerValue<'ctx>,
@@ -2166,22 +2089,14 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
     let struct_layout = Layout::struct_no_name_order(field_layouts);
     let struct_type = basic_type_from_layout(env, &struct_layout);
 
-    let wrapper_type = env
-        .context
-        .struct_type(&[struct_type, tag_id_type.into()], false);
-
-    let ptr = env
+    let data_ptr = env
         .builder
         .build_bitcast(
             value,
-            wrapper_type.ptr_type(AddressSpace::Generic),
+            struct_type.ptr_type(AddressSpace::Generic),
             "cast_lookup_at_index_ptr",
         )
         .into_pointer_value();
-
-    let data_ptr = builder
-        .build_struct_gep(ptr, RocUnion::TAG_DATA_INDEX, "at_index_struct_gep_tag")
-        .unwrap();
 
     let elem_ptr = builder
         .build_struct_gep(data_ptr, index as u32, "at_index_struct_gep_data")
@@ -2226,35 +2141,18 @@ fn reserve_with_refcount_union_as_block_of_memory<'a, 'ctx, 'env>(
 ) -> PointerValue<'ctx> {
     let ptr_bytes = env.target_info;
 
-    let block_type = block_of_memory_slices(env.context, fields, env.target_info);
-
-    let basic_type = if union_layout.stores_tag_id_as_data(ptr_bytes) {
-        let tag_id_type = basic_type_from_layout(env, &union_layout.tag_id_layout());
-
-        env.context
-            .struct_type(&[block_type, tag_id_type], false)
-            .into()
+    let roc_union = if union_layout.stores_tag_id_as_data(ptr_bytes) {
+        RocUnion::tagged_from_slices(env.context, fields, env.target_info)
     } else {
-        block_type
+        RocUnion::untagged_from_slices(env.context, fields, env.target_info)
     };
 
-    let mut stack_size = fields
-        .iter()
-        .map(|tag| tag.iter().map(|l| l.stack_size(env.target_info)).sum())
-        .max()
-        .unwrap_or_default();
-
-    if union_layout.stores_tag_id_as_data(ptr_bytes) {
-        stack_size += union_layout.tag_id_layout().stack_size(env.target_info);
-    }
-
-    let alignment_bytes = fields
-        .iter()
-        .flat_map(|tag| tag.iter().map(|l| l.alignment_bytes(env.target_info)))
-        .max()
-        .unwrap_or(0);
-
-    reserve_with_refcount_help(env, basic_type, stack_size, alignment_bytes)
+    reserve_with_refcount_help(
+        env,
+        roc_union.struct_type(),
+        roc_union.tag_width(),
+        roc_union.tag_alignment(),
+    )
 }
 
 fn reserve_with_refcount_help<'a, 'ctx, 'env>(
@@ -2657,10 +2555,9 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             //
                             // Hence, we explicitly memcpy source to destination, and rely on
                             // LLVM optimizing away any inefficiencies.
-                            let size = env.ptr_int().const_int(
-                                layout.stack_size_without_alignment(env.target_info) as u64,
-                                false,
-                            );
+                            let target_info = env.target_info;
+                            let width = layout.stack_size(target_info);
+                            let size = env.ptr_int().const_int(width as _, false);
 
                             env.builder
                                 .build_memcpy(
