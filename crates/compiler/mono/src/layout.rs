@@ -630,7 +630,13 @@ impl<'a> UnionLayout<'a> {
     }
 
     pub fn tag_id_offset(&self, target_info: TargetInfo) -> Option<u32> {
-        let data_width = self.data_size_without_tag_id(target_info)?;
+        use UnionLayout::*;
+
+        if let NonNullableUnwrapped(_) | NullableUnwrapped { .. } = self {
+            return None;
+        }
+
+        let data_width = self.data_size_and_alignment_help_match(None, target_info).0;
 
         // current, broken logic
         if data_width > 8 {
