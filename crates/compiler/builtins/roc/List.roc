@@ -901,7 +901,6 @@ endsWith = \list, suffix ->
 
     suffix == List.sublist list { start, len: List.len suffix }
 
-
 ## Splits the list into two lists, around the given index.
 ##
 ## The returned lists are labeled `before` and `others`. The `before` list will
@@ -931,7 +930,6 @@ splitFirst = \elements, delimiter ->
             Ok { before, len: List.len elements - index }
 
         Err NotFound -> Err NotFound
-
 
 ## Returns the elements before the last occurrence of a delimiter, as well as the
 ## remaining elements after that occurrence. If the delimiter is not found, returns `Err`.
