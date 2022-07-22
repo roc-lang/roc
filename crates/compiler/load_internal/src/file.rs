@@ -2429,36 +2429,40 @@ fn update<'a>(
             {
                 state.timings.insert(module_id, module_timing);
 
+                state.declarations_by_id.insert(module_id, decls);
+                state.constrained_ident_ids.insert(module_id, ident_ids);
+
+                let interns = {
+                    // There may still be outstanding references to module_ids, so clone them.
+                    let module_ids = Arc::clone(&state.arc_modules)
+                        .lock()
+                        .clone()
+                        .into_module_ids();
+
+                    let mut all_ident_ids = state.constrained_ident_ids;
+
+                    // Associate the ident IDs from the derived synth module
+                    let (_, derived_synth_ident_ids) = Arc::try_unwrap(state.derived_module)
+                        .unwrap_or_else(|_| {
+                            internal_error!("Outstanding references to the derived module")
+                        })
+                        .into_inner()
+                        .unwrap()
+                        .decompose();
+                    ModuleId::DERIVED_SYNTH.register_debug_idents(&derived_synth_ident_ids);
+                    all_ident_ids.insert(ModuleId::DERIVED_SYNTH, derived_synth_ident_ids);
+
+                    Interns {
+                        module_ids,
+                        all_ident_ids,
+                    }
+                };
+
                 // Report canonicalization and type problems
                 let palette = DEFAULT_PALETTE;
                 let can_problems = &mut state.module_cache.can_problems;
                 let type_problems = &mut state.module_cache.type_problems;
                 let mut buf = String::new();
-
-                let module_ids = Arc::try_unwrap(state.arc_modules)
-                    .unwrap_or_else(|_| {
-                        panic!("There were still outstanding Arc references to module_ids")
-                    })
-                    .into_inner()
-                    .into_module_ids();
-
-                let mut all_ident_ids = state.constrained_ident_ids;
-
-                // Associate the ident IDs from the derived synth module
-                let (_, derived_synth_ident_ids) = Arc::try_unwrap(state.derived_module)
-                    .unwrap_or_else(|_| {
-                        internal_error!("Outstanding references to the derived module")
-                    })
-                    .into_inner()
-                    .unwrap()
-                    .decompose();
-                ModuleId::DERIVED_SYNTH.register_debug_idents(&derived_synth_ident_ids);
-                all_ident_ids.insert(ModuleId::DERIVED_SYNTH, derived_synth_ident_ids);
-
-                let interns = Interns {
-                    module_ids,
-                    all_ident_ids,
-                };
 
                 for (home, (module_path, src)) in state.module_cache.sources.iter() {
                     let can_probs = can_problems.remove(home).unwrap_or_default();
