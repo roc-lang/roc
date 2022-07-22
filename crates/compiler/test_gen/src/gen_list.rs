@@ -2890,12 +2890,21 @@ fn list_find_empty_typed_list() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore = "Fails because monomorphization can't be done if we don't have a concrete element type!"]
 fn list_find_empty_layout() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.findFirst [] (\_ -> True)
+            List.findFirst [] \_ -> True
+            "#
+        ),
+        0,
+        i64
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.findLast [] \_ -> True
             "#
         ),
         0,
