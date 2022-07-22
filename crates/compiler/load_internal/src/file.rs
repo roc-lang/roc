@@ -1248,7 +1248,9 @@ impl<'a> LoadStart<'a> {
                 Err(LoadingProblem::ParsingFailed(problem)) => {
                     let module_ids = Arc::try_unwrap(arc_modules)
                         .unwrap_or_else(|_| {
-                            panic!("There were still outstanding Arc references to module_ids")
+                            internal_error!(
+                                "There were still outstanding Arc references to module_ids"
+                            )
                         })
                         .into_inner()
                         .into_module_ids();
@@ -1621,7 +1623,7 @@ fn state_thread_step<'a>(
                         Err(LoadingProblem::ParsingFailed(problem)) => {
                             let module_ids = Arc::try_unwrap(arc_modules)
                                 .unwrap_or_else(|_| {
-                                    panic!(
+                                    internal_error!(
                                         r"There were still outstanding Arc references to module_ids"
                                     )
                                 })
@@ -2826,7 +2828,9 @@ fn finish_specialization(
         );
     }
     let module_ids = Arc::try_unwrap(state.arc_modules)
-        .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
+        .unwrap_or_else(|_| {
+            internal_error!("There were still outstanding Arc references to module_ids")
+        })
         .into_inner()
         .into_module_ids();
 
@@ -2955,7 +2959,9 @@ fn finish(
     abilities_store: AbilitiesStore,
 ) -> LoadedModule {
     let module_ids = Arc::try_unwrap(state.arc_modules)
-        .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
+        .unwrap_or_else(|_| {
+            internal_error!("There were still outstanding Arc references to module_ids")
+        })
         .into_inner()
         .into_module_ids();
 
