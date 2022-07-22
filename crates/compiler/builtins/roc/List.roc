@@ -843,6 +843,34 @@ intersperse = \list, sep ->
 
     List.dropLast newList
 
+## Returns `True` if the first list starts with the second list.
+##
+## If the second list is empty, this always returns `True`; every list
+## is considered to "start with" an empty list.
+##
+## If the first list is empty, this only returns `True` if the second list is empty.
+startsWith : List elem, List elem -> Bool
+startsWith = \list, prefix ->
+    # TODO once we have seamless slices, verify that this wouldn't
+    # have better performance with a function like List.compareSublists
+    prefix == List.sublist list { start: 0, len: List.len prefix }
+
+## Returns `True` if the first list ends with the second list.
+##
+## If the second list is empty, this always returns `True`; every list
+## is considered to "end with" an empty list.
+##
+## If the first list is empty, this only returns `True` if the second list is empty.
+endsWith : List elem, List elem -> Bool
+endsWith = \list, suffix ->
+    # TODO once we have seamless slices, verify that this wouldn't
+    # have better performance with a function like List.compareSublists
+    len = List.len suffix
+    start = List.len list - len
+
+    suffix == List.sublist list { start, len }
+
+
 ## Splits the list into two lists, around the given index.
 ##
 ## The returned lists are labeled `before` and `others`. The `before` list will
