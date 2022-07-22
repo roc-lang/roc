@@ -3690,6 +3690,28 @@ fn symbol_not_bound_in_all_patterns_runs_when_bound_pattern_reached() {
             "#
         ),
         15u8,
-        u8
+        u8,
+        |x| x,
+        true // allow errors
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[should_panic(
+    expected = r#"Roc failed with message: "Hit a branch pattern that does not bind all symbols its body needs"#
+)]
+fn runtime_error_when_degenerate_pattern_reached() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when B 15u8 is
+                A x | B y -> x + 5u8
+            "#
+        ),
+        15u8,
+        u8,
+        |x| x,
+        true // allow errors
     );
 }

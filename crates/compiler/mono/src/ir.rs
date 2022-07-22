@@ -5187,7 +5187,7 @@ pub fn with_hole<'a>(
             }
         }
         TypedHole(_) => Stmt::RuntimeError("Hit a blank"),
-        RuntimeError(e) => Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e))),
+        RuntimeError(e) => Stmt::RuntimeError(env.arena.alloc(e.runtime_message())),
     }
 }
 
@@ -6047,23 +6047,34 @@ fn to_opt_branches<'a>(
         for loc_pattern in when_branch.patterns {
             match from_can_pattern(env, procs, layout_cache, &loc_pattern.pattern.value) {
                 Ok((mono_pattern, assignments)) => {
-                    let mut loc_expr = when_branch.value.clone();
-                    let region = loc_pattern.pattern.region;
-                    for (symbol, variable, expr) in assignments.into_iter().rev() {
-                        let def = roc_can::def::Def {
-                            annotation: None,
-                            expr_var: variable,
-                            loc_expr: Loc::at(region, expr),
-                            loc_pattern: Loc::at(
-                                region,
-                                roc_can::pattern::Pattern::Identifier(symbol),
-                            ),
-                            pattern_vars: std::iter::once((symbol, variable)).collect(),
-                        };
-                        let new_expr =
-                            roc_can::expr::Expr::LetNonRec(Box::new(def), Box::new(loc_expr));
-                        loc_expr = Loc::at(region, new_expr);
-                    }
+                    let loc_expr = if !loc_pattern.degenerate {
+                        let mut loc_expr = when_branch.value.clone();
+
+                        let region = loc_pattern.pattern.region;
+                        for (symbol, variable, expr) in assignments.into_iter().rev() {
+                            let def = roc_can::def::Def {
+                                annotation: None,
+                                expr_var: variable,
+                                loc_expr: Loc::at(region, expr),
+                                loc_pattern: Loc::at(
+                                    region,
+                                    roc_can::pattern::Pattern::Identifier(symbol),
+                                ),
+                                pattern_vars: std::iter::once((symbol, variable)).collect(),
+                            };
+                            let new_expr =
+                                roc_can::expr::Expr::LetNonRec(Box::new(def), Box::new(loc_expr));
+                            loc_expr = Loc::at(region, new_expr);
+                        }
+
+                        loc_expr
+                    } else {
+                        // This pattern is degenerate; when it's reached we must emit a runtime
+                        // error.
+                        Loc::at_zero(roc_can::expr::Expr::RuntimeError(
+                            RuntimeError::DegenerateBranch(loc_pattern.pattern.region),
+                        ))
+                    };
 
                     // TODO remove clone?
                     opt_branches.push((mono_pattern, when_branch.guard.clone(), loc_expr.value));

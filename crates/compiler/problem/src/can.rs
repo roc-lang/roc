@@ -329,6 +329,24 @@ pub enum RuntimeError {
     EmptySingleQuote(Region),
     /// where 'aa'
     MultipleCharsInSingleQuote(Region),
+
+    DegenerateBranch(Region),
+}
+
+impl RuntimeError {
+    pub fn runtime_message(self) -> String {
+        use RuntimeError::*;
+
+        match self {
+            DegenerateBranch(region) => {
+                format!(
+                    "Hit a branch pattern that does not bind all symbols its body needs, at {:?}",
+                    region
+                )
+            }
+            err => format!("{:?}", err),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
