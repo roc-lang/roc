@@ -917,8 +917,8 @@ split = \elements, userSplitIndex ->
 
     { before, others }
 
-## Returns the list before the first occurrence of a delimiter, as well as the
-## rest of the list after that occurrence. If the delimiter is not found, returns `Err`.
+## Returns the elements before the first occurrence of a delimiter, as well as the
+## remaining elements after that occurrence. If the delimiter is not found, returns `Err`.
 ##
 ##     List.splitFirst [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo], after: [Bar, Baz] }
 splitFirst : List elem, elem -> Result { before : List elem, after : List elem } [NotFound]*
@@ -935,8 +935,8 @@ splitFirst = \elements, delimiter ->
         Err NotFound -> Err NotFound
 
 
-## Returns the list before the last occurrence of a delimiter, as well as the
-## rest of the list after that occurrence. If the delimiter is not found, returns `Err`.
+## Returns the elements before the last occurrence of a delimiter, as well as the
+## remaining elements after that occurrence. If the delimiter is not found, returns `Err`.
 ##
 ##     List.splitLast [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo, Bar], after: [Baz] }
 splitLast : List elem, elem -> Result { before : List elem, after : List elem } [NotFound]*
