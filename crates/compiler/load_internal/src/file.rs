@@ -40,7 +40,7 @@ use roc_parse::ident::UppercaseIdent;
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SyntaxError};
 use roc_region::all::{LineInfo, Loc, Region};
-use roc_reporting::report::{RenderTarget, Report};
+use roc_reporting::report::RenderTarget;
 use roc_solve::module::{Solved, SolvedModule};
 use roc_solve::solve;
 use roc_target::TargetInfo;
@@ -141,22 +141,6 @@ struct ModuleCache<'a> {
     type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
 
     sources: MutMap<ModuleId, (PathBuf, &'a str)>,
-}
-
-impl<'a> ModuleCache<'a> {
-    pub fn total_problems(&self) -> usize {
-        let mut total = 0;
-
-        for problems in self.can_problems.values() {
-            total += problems.len();
-        }
-
-        for problems in self.type_problems.values() {
-            total += problems.len();
-        }
-
-        total
-    }
 }
 
 impl Default for ModuleCache<'_> {
@@ -956,30 +940,6 @@ impl<'a> State<'a> {
             render,
             make_specializations_pass: MakeSpecializationsPass::Pass(1),
             world_abilities: Default::default(),
-        }
-    }
-
-    fn interns(&self) -> Interns {
-        let module_ids = Arc::try_unwrap(self.arc_modules)
-            .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
-            .into_inner()
-            .into_module_ids();
-
-        // Associate the ident IDs from the derived synth module
-        let (_, derived_synth_ident_ids) = Arc::try_unwrap(self.derived_module)
-            .unwrap_or_else(|_| internal_error!("Outstanding references to the derived module"))
-            .into_inner()
-            .unwrap()
-            .decompose();
-
-        ModuleId::DERIVED_SYNTH.register_debug_idents(&derived_synth_ident_ids);
-
-        self.constrained_ident_ids
-            .insert(ModuleId::DERIVED_SYNTH, derived_synth_ident_ids);
-
-        Interns {
-            module_ids,
-            all_ident_ids: self.constrained_ident_ids,
         }
     }
 }
@@ -2357,14 +2317,13 @@ fn update<'a>(
             log!("solved types for {:?}", module_id);
             module_timing.end_time = SystemTime::now();
 
-            let module_cache = &mut state.module_cache;
-
-            module_cache
+            state
+                .module_cache
                 .type_problems
                 .insert(module_id, solved_module.problems);
 
             if !loc_expects.is_empty() {
-                let (path, _) = module_cache.sources.get(&module_id).unwrap();
+                let (path, _) = state.module_cache.sources.get(&module_id).unwrap();
 
                 let expectations = Expectations {
                     expectations: loc_expects,
@@ -2408,63 +2367,47 @@ fn update<'a>(
                     .extend(solved_module.aliases.keys().copied());
             }
 
-            let total_problems = module_cache.total_problems();
-            let should_halt = halt_for_errors && total_problems > 0;
+            let has_errors = !state.module_cache.can_problems.is_empty()
+                || !state.module_cache.type_problems.is_empty();
+            let should_halt = halt_for_errors && has_errors;
 
             if is_host_exposed && (state.goal_phase == Phase::SolveTypes || should_halt) {
-                state.timings.insert(module_id, module_timing);
-
-                let documentation = {
-                    let mut empty = MutMap::default();
-                    std::mem::swap(&mut empty, &mut module_cache.documentation);
-
-                    empty
-                };
-
-                if should_halt {
-                    let report = Report::problems(
-                        total_problems,
-                        module_cache.sources,
-                        state.interns(),
-                        &mut state.module_cache.can_problems,
-                        &mut state.module_cache.type_problems,
-                    );
-
-                    // pub fn type_problem<'b>(
-                    // alloc: &'b RocDocAllocator<'b>,
-                    // lines: &LineInfo,
-                    // filename: PathBuf,
-                    // problem: solve::TypeError,
-                    // ) -> Option<Report<'b>> {
-
-                    return Err(LoadingProblem::FormattedReport("o noes".to_string()));
-                } else {
+                if !should_halt {
                     // There may be ongoing work if we halted early (e.g. specializations),
                     // but otherwise there should not be!
                     debug_assert!(work.is_empty());
                     debug_assert!(state.dependencies.all_statuses_done());
-
-                    msg_tx
-                        .send(Msg::FinishedAllTypeChecking {
-                            solved_subs,
-                            exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
-                            exposed_aliases_by_symbol: solved_module.aliases,
-                            exposed_types_storage: solved_module.exposed_types,
-                            resolved_specializations: solved_module.solved_specializations,
-                            dep_idents,
-                            documentation,
-                            abilities_store,
-                        })
-                        .map_err(|_| LoadingProblem::MsgChannelDied)?;
-
-                    // bookkeeping
-                    state.declarations_by_id.insert(module_id, decls);
-                    state.constrained_ident_ids.insert(module_id, ident_ids);
-
-                    // As far as type-checking goes, once we've solved
-                    // the originally requested module, we're all done!
-                    return Ok(state);
                 }
+
+                state.timings.insert(module_id, module_timing);
+
+                let documentation = {
+                    let mut empty = MutMap::default();
+                    std::mem::swap(&mut empty, &mut state.module_cache.documentation);
+
+                    empty
+                };
+
+                msg_tx
+                    .send(Msg::FinishedAllTypeChecking {
+                        solved_subs,
+                        exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
+                        exposed_aliases_by_symbol: solved_module.aliases,
+                        exposed_types_storage: solved_module.exposed_types,
+                        resolved_specializations: solved_module.solved_specializations,
+                        dep_idents,
+                        documentation,
+                        abilities_store,
+                    })
+                    .map_err(|_| LoadingProblem::MsgChannelDied)?;
+
+                // bookkeeping
+                state.declarations_by_id.insert(module_id, decls);
+                state.constrained_ident_ids.insert(module_id, ident_ids);
+
+                // As far as type-checking goes, once we've solved
+                // the originally requested module, we're all done!
+                return Ok(state);
             } else {
                 state.exposed_types.insert(
                     module_id,
@@ -2937,6 +2880,27 @@ fn finish(
     documentation: MutMap<ModuleId, ModuleDocumentation>,
     abilities_store: AbilitiesStore,
 ) -> LoadedModule {
+    let module_ids = Arc::try_unwrap(state.arc_modules)
+        .unwrap_or_else(|_| panic!("There were still outstanding Arc references to module_ids"))
+        .into_inner()
+        .into_module_ids();
+
+    // Associate the ident IDs from the derived synth module
+    let (_, derived_synth_ident_ids) = Arc::try_unwrap(state.derived_module)
+        .unwrap_or_else(|_| internal_error!("Outstanding references to the derived module"))
+        .into_inner()
+        .unwrap()
+        .decompose();
+    ModuleId::DERIVED_SYNTH.register_debug_idents(&derived_synth_ident_ids);
+    state
+        .constrained_ident_ids
+        .insert(ModuleId::DERIVED_SYNTH, derived_synth_ident_ids);
+
+    let interns = Interns {
+        module_ids,
+        all_ident_ids: state.constrained_ident_ids,
+    };
+
     let sources = state
         .module_cache
         .sources
@@ -2948,8 +2912,7 @@ fn finish(
 
     LoadedModule {
         module_id: state.root_id,
-        interns: state.interns(),
-
+        interns,
         solved,
         can_problems: state.module_cache.can_problems,
         type_problems: state.module_cache.type_problems,
