@@ -45,7 +45,9 @@ interface List
         takeFirst,
         takeLast,
         findFirst,
+        findLast,
         findFirstIndex,
+        findLastIndex,
         sublist,
         intersperse,
         split,
@@ -783,11 +785,22 @@ findFirst = \array, pred ->
             Continue {}
 
     when List.iterate array {} callback is
-        Continue {} ->
-            Err NotFound
+        Continue {} -> Err NotFound
+        Break found -> Ok found
 
-        Break found ->
-            Ok found
+## Returns the last element of the list satisfying a predicate function.
+## If no satisfying element is found, an `Err NotFound` is returned.
+findLast : List elem, (elem -> Bool) -> Result elem [NotFound]*
+findLast = \array, pred ->
+    callback = \_, elem ->
+        if pred elem then
+            Break elem
+        else
+            Continue {}
+
+    when List.iterateBackwards array {} callback is
+        Continue {} -> Err NotFound
+        Break found -> Ok found
 
 ## Returns the index at which the first element in the list
 ## satisfying a predicate function can be found.
@@ -799,6 +812,21 @@ findFirstIndex = \list, matcher ->
             Break index
         else
             Continue (index + 1)
+
+    when foundIndex is
+        Break index -> Ok index
+        Continue _ -> Err NotFound
+
+## Returns the last index at which the first element in the list
+## satisfying a predicate function can be found.
+## If no satisfying element is found, an `Err NotFound` is returned.
+findLastIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]*
+findLastIndex = \list, matcher ->
+    foundIndex = List.iterateBackwards list (List.len list - 1) \index, elem ->
+        if matcher elem then
+            Break index
+        else
+            Continue (index - 1)
 
     when foundIndex is
         Break index -> Ok index
@@ -925,6 +953,27 @@ iterHelp = \list, state, f, index, length ->
         when f state (List.getUnsafe list index) is
             Continue nextState ->
                 iterHelp list nextState f (index + 1) length
+
+            Break b ->
+                Break b
+    else
+        Continue state
+
+## Primitive for iterating over a List from back to front, being able to decide at every
+## element whether to continue
+iterateBackwards : List elem, s, (s, elem -> [Continue s, Break b]) -> [Continue s, Break b]
+iterateBackwards = \list, init, func ->
+    iterBackwardsHelp list init func (List.len list)
+
+## internal helper
+iterBackwardsHelp : List elem, s, (s, elem -> [Continue s, Break b]), Nat, Nat -> [Continue s, Break b]
+iterBackwardsHelp = \list, state, f, prevIndex ->
+    if prevIndex > 0 then
+        index = prevIndex - 1
+
+        when f state (List.getUnsafe list index) is
+            Continue nextState ->
+                iterHelp list nextState f index
 
             Break b ->
                 Break b
