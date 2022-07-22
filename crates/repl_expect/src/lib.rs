@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+
 use roc_module::symbol::Interns;
 use roc_mono::{
     ir::ProcLayout,
@@ -23,9 +25,13 @@ pub fn get_values<'a>(
     variables: &[Variable],
 ) -> Result<Vec<Expr<'a>>, ToAstProblem> {
     let mut result = Vec::with_capacity(variables.len());
-    let memory = ExpectMemory { start };
 
     for variable in variables {
+        let memory = ExpectMemory {
+            start,
+            extra_offset: Default::default(),
+        };
+
         let expr = {
             let variable = *variable;
 
@@ -33,6 +39,8 @@ pub fn get_values<'a>(
                 memory: arena.alloc(memory),
                 start_offset,
             };
+
+            let app = arena.alloc(app);
 
             let content = subs.get_content_without_compacting(variable);
 
@@ -45,19 +53,24 @@ pub fn get_values<'a>(
                 captures_niche: CapturesNiche::no_niche(),
             };
 
-            start_offset += layout.stack_size(target_info) as usize;
-
-            jit_to_ast(
+            let element = jit_to_ast(
                 arena,
-                arena.alloc(app),
+                app,
                 "expect_repl_main_fn",
                 proc_layout,
                 content,
                 subs,
                 interns,
                 target_info,
-            )
-        }?;
+            )?;
+
+            start_offset += layout.stack_size(target_info) as usize;
+            let mut extra_offset = app.memory.extra_offset.borrow_mut();
+            start_offset += *extra_offset;
+            *extra_offset = 0;
+
+            element
+        };
 
         result.push(expr);
     }
@@ -65,9 +78,10 @@ pub fn get_values<'a>(
     Ok(result)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct ExpectMemory {
     start: *const u8,
+    extra_offset: RefCell<usize>,
 }
 
 macro_rules! deref_number {
@@ -113,6 +127,9 @@ impl ReplAppMemory for ExpectMemory {
         } else {
             let offset = self.deref_usize(addr);
             let length = self.deref_usize(addr + std::mem::size_of::<usize>());
+            let capacity = self.deref_usize(addr + std::mem::size_of::<usize>());
+
+            *self.extra_offset.borrow_mut() += capacity;
 
             unsafe {
                 let ptr = self.start.add(offset);
