@@ -63,6 +63,7 @@ pub fn compile_to_mono<'a>(
         target_info,
         roc_reporting::report::RenderTarget::ColorTerminal,
         Threading::Single,
+        false, // don't block on compile-time errors; run anyway!
     );
 
     let mut loaded = match loaded {

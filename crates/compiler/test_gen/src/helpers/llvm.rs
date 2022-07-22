@@ -75,6 +75,7 @@ fn create_llvm_module<'a>(
         target_info,
         RenderTarget::ColorTerminal,
         Threading::Single,
+        true, // block on type errors; don't run!
     );
 
     let mut loaded = match loaded {

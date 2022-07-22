@@ -23,6 +23,7 @@ fn load<'a>(
     target_info: TargetInfo,
     render: RenderTarget,
     threading: Threading,
+    halt_for_errors: bool,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let cached_subs = read_cached_subs();
 
@@ -35,6 +36,7 @@ fn load<'a>(
         cached_subs,
         render,
         threading,
+        halt_for_errors,
     )
 }
 
@@ -46,6 +48,7 @@ pub fn load_single_threaded<'a>(
     goal_phase: Phase,
     target_info: TargetInfo,
     render: RenderTarget,
+    halt_for_errors: bool,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let cached_subs = read_cached_subs();
 
@@ -57,6 +60,7 @@ pub fn load_single_threaded<'a>(
         target_info,
         cached_subs,
         render,
+        halt_for_errors,
     )
 }
 
@@ -70,6 +74,7 @@ pub fn load_and_monomorphize_from_str<'a>(
     target_info: TargetInfo,
     render: RenderTarget,
     threading: Threading,
+    halt_for_errors: bool,
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     use LoadResult::*;
 
@@ -83,6 +88,7 @@ pub fn load_and_monomorphize_from_str<'a>(
         target_info,
         render,
         threading,
+        halt_for_errors,
     )? {
         Monomorphized(module) => Ok(module),
         TypeChecked(_) => unreachable!(""),
@@ -96,6 +102,7 @@ pub fn load_and_monomorphize(
     target_info: TargetInfo,
     render: RenderTarget,
     threading: Threading,
+    halt_for_errors: bool,
 ) -> Result<MonomorphizedModule<'_>, LoadingProblem<'_>> {
     use LoadResult::*;
 
@@ -109,6 +116,7 @@ pub fn load_and_monomorphize(
         target_info,
         render,
         threading,
+        halt_for_errors,
     )? {
         Monomorphized(module) => Ok(module),
         TypeChecked(_) => unreachable!(""),
@@ -135,6 +143,7 @@ pub fn load_and_typecheck(
         target_info,
         render,
         threading,
+        true, // halt for type errors; don't run!
     )? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),
@@ -164,6 +173,7 @@ pub fn load_and_typecheck_str<'a>(
         Phase::SolveTypes,
         target_info,
         render,
+        true, // halt for type errors; don't run!
     )? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),

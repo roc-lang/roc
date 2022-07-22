@@ -48,6 +48,7 @@ pub fn build_file<'a>(
     precompiled: bool,
     target_valgrind: bool,
     threading: Threading,
+    halt_for_errors: bool,
 ) -> Result<BuiltFile, LoadingProblem<'a>> {
     let compilation_start = SystemTime::now();
     let target_info = TargetInfo::from(target);
@@ -63,6 +64,7 @@ pub fn build_file<'a>(
         // TODO: expose this from CLI?
         RenderTarget::ColorTerminal,
         threading,
+        halt_for_errors,
     )?;
 
     use target_lexicon::Architecture;

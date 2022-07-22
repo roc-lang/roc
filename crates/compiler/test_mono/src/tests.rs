@@ -100,6 +100,7 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         TARGET_INFO,
         roc_reporting::report::RenderTarget::Generic,
         Threading::Single,
+        true, // block on compile errors; don't run!
     );
 
     let mut loaded = match loaded {

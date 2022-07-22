@@ -1153,6 +1153,7 @@ pub fn load_and_typecheck_str<'a>(
         cached_subs,
         render,
         threading,
+        true, // halt on type errors, because that's all we're doing here
     )? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),
@@ -1367,6 +1368,7 @@ pub fn load<'a>(
     cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
     render: RenderTarget,
     threading: Threading,
+    halt_for_errors: bool,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     enum Threads {
         Single,
@@ -1401,6 +1403,7 @@ pub fn load<'a>(
             target_info,
             cached_subs,
             render,
+            halt_for_errors,
         ),
         Threads::Many(threads) => load_multi_threaded(
             arena,
@@ -1411,6 +1414,7 @@ pub fn load<'a>(
             cached_subs,
             render,
             threads,
+            halt_for_errors,
         ),
     }
 }
@@ -1425,6 +1429,7 @@ pub fn load_single_threaded<'a>(
     target_info: TargetInfo,
     cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
     render: RenderTarget,
+    halt_for_errors: bool,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,
@@ -1467,7 +1472,15 @@ pub fn load_single_threaded<'a>(
 
     // now we just manually interleave stepping the state "thread" and the worker "thread"
     loop {
-        match state_thread_step(arena, state, worker_listeners, &injector, &msg_tx, &msg_rx) {
+        match state_thread_step(
+            arena,
+            state,
+            worker_listeners,
+            &injector,
+            &msg_tx,
+            &msg_rx,
+            halt_for_errors,
+        ) {
             Ok(ControlFlow::Break(done)) => return Ok(done),
             Ok(ControlFlow::Continue(new_state)) => {
                 state = new_state;
@@ -1504,6 +1517,7 @@ fn state_thread_step<'a>(
     injector: &Injector<BuildTask<'a>>,
     msg_tx: &crossbeam::channel::Sender<Msg<'a>>,
     msg_rx: &crossbeam::channel::Receiver<Msg<'a>>,
+    halt_for_errors: bool,
 ) -> Result<ControlFlow<LoadResult<'a>, State<'a>>, LoadingProblem<'a>> {
     match msg_rx.try_recv() {
         Ok(msg) => {
@@ -1581,6 +1595,7 @@ fn state_thread_step<'a>(
                         injector,
                         worker_listeners,
                         arena,
+                        halt_for_errors,
                     );
 
                     match res_state {
@@ -1627,6 +1642,7 @@ fn load_multi_threaded<'a>(
     cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
     render: RenderTarget,
     available_threads: usize,
+    halt_for_errors: bool,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,
@@ -1759,8 +1775,15 @@ fn load_multi_threaded<'a>(
             // The root module will have already queued up messages to process,
             // and processing those messages will in turn queue up more messages.
             loop {
-                match state_thread_step(arena, state, worker_listeners, &injector, &msg_tx, &msg_rx)
-                {
+                match state_thread_step(
+                    arena,
+                    state,
+                    worker_listeners,
+                    &injector,
+                    &msg_tx,
+                    &msg_rx,
+                    halt_for_errors,
+                ) {
                     Ok(ControlFlow::Break(load_result)) => {
                         shut_down_worker_threads!();
 
@@ -1973,6 +1996,7 @@ fn update<'a>(
     injector: &Injector<BuildTask<'a>>,
     worker_listeners: &'a [Sender<WorkerMsg>],
     arena: &'a Bump,
+    halt_for_errors: bool,
 ) -> Result<State<'a>, LoadingProblem<'a>> {
     use self::Msg::*;
 
@@ -2343,7 +2367,12 @@ fn update<'a>(
                     .extend(solved_module.aliases.keys().copied());
             }
 
-            if is_host_exposed && state.goal_phase == Phase::SolveTypes {
+            if is_host_exposed
+                && (state.goal_phase == Phase::SolveTypes
+                    || (halt_for_errors
+                        && (!state.module_cache.can_problems.is_empty()
+                            || !state.module_cache.type_problems.is_empty())))
+            {
                 debug_assert!(work.is_empty());
                 debug_assert!(state.dependencies.solved_all());
 

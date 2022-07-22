@@ -51,6 +51,7 @@ fn load_and_typecheck(
         Default::default(), // these tests will re-compile the builtins
         RenderTarget::Generic,
         Threading::Single,
+        true, // block on compile errors; don't run!
     )? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),

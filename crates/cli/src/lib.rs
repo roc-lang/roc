@@ -380,6 +380,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         // TODO: expose this from CLI?
         roc_reporting::report::RenderTarget::ColorTerminal,
         threading,
+        false, // don't block on compile-time errors; run anyway!
     )
     .unwrap();
 
@@ -571,6 +572,7 @@ pub fn build(
         }
     });
 
+    let halt_for_errors = matches!(config, BuildConfig::BuildAndRunIfNoErrors);
     let target_valgrind = matches.is_present(FLAG_VALGRIND);
     let res_binary_path = build_file(
         &arena,
@@ -584,6 +586,7 @@ pub fn build(
         precompiled,
         target_valgrind,
         threading,
+        halt_for_errors,
     );
 
     match res_binary_path {
