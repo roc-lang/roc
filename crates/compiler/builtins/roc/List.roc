@@ -897,10 +897,9 @@ endsWith : List elem, List elem -> Bool
 endsWith = \list, suffix ->
     # TODO once we have seamless slices, verify that this wouldn't
     # have better performance with a function like List.compareSublists
-    len = List.len suffix
     start = List.len list - len
 
-    suffix == List.sublist list { start, len }
+    suffix == List.sublist list { start, len: List.len suffix }
 
 
 ## Splits the list into two lists, around the given index.
@@ -925,14 +924,11 @@ split = \elements, userSplitIndex ->
 ##     List.splitFirst [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo], after: [Bar, Baz] }
 splitFirst : List elem, elem -> Result { before : List elem, after : List elem } [NotFound]*
 splitFirst = \elements, delimiter ->
-    length = List.len elements
-
     when List.findFirstIndex elements (\elem -> elem == delimiter) is
         Ok index ->
             before = List.sublist elements { start: 0, len: index }
-            len = List.len elements - index
 
-            Ok { before, len }
+            Ok { before, len: List.len elements - index }
 
         Err NotFound -> Err NotFound
 
@@ -943,14 +939,11 @@ splitFirst = \elements, delimiter ->
 ##     List.splitLast [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo, Bar], after: [Baz] }
 splitLast : List elem, elem -> Result { before : List elem, after : List elem } [NotFound]*
 splitLast = \elements, delimiter ->
-    length = List.len elements
-
     when List.findLastIndex elements (\elem -> elem == delimiter) is
         Ok index ->
             before = List.sublist elements { start: 0, len: index }
-            len = List.len elements - index
 
-            Ok { before, len }
+            Ok { before, len: List.len elements - index }
 
         Err NotFound -> Err NotFound
 
