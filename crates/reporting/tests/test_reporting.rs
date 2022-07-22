@@ -9901,4 +9901,25 @@ All branches in an `if` must have the same type!
     I would have to crash if I saw one of those! Add branches for them!
     "###
     );
+
+    test_report!(
+        call_with_underscore_identifier,
+        indoc!(
+            r#"
+            f = \x, y, z -> x + y + z
+
+            f 1 _ 1
+            "#
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    Underscores are not allowed in identifier names:
+
+    6│      f 1 _ 1
+      
+
+    I recommend using camelCase, it is the standard in the Roc ecosystem.
+    "###
+    );
 }
