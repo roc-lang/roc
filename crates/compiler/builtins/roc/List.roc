@@ -770,7 +770,7 @@ maxHelp = \list, initial ->
 ## You may know a similar function named `concatMap` in other languages.
 joinMap : List a, (a -> List b) -> List b
 joinMap = \list, mapper ->
-    List.walk list [] (\state, elem -> List.concat state (mapper elem))
+    List.walk list [] \state, elem -> List.concat state (mapper elem)
 
 ## Returns the first element of the list satisfying a predicate function.
 ## If no satisfying element is found, an `Err NotFound` is returned.
