@@ -897,9 +897,10 @@ endsWith : List elem, List elem -> Bool
 endsWith = \list, suffix ->
     # TODO once we have seamless slices, verify that this wouldn't
     # have better performance with a function like List.compareSublists
-    start = List.len list - len
+    length = List.len suffix
+    start = Num.subSaturated (List.len list) length
 
-    suffix == List.sublist list { start, len: List.len suffix }
+    suffix == List.sublist list { start, len: length }
 
 ## Splits the list into two lists, around the given index.
 ##
