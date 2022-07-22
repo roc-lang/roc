@@ -1519,7 +1519,7 @@ fn parse_expr_end<'a>(
 ) -> ParseResult<'a, Expr<'a>, EExpr<'a>> {
     let parser = skip_first!(
         crate::blankspace::check_indent(min_indent, EExpr::IndentEnd),
-        move |a, s| parse_loc_term(min_indent, options, a, s)
+        move |a, s| parse_loc_term_or_underscore(min_indent, options, a, s)
     );
 
     match parser.parse(arena, state.clone()) {

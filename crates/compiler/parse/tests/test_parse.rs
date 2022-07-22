@@ -266,6 +266,7 @@ mod test_parse {
         pass/unary_not_with_parens.expr,
         pass/unary_not.expr,
         pass/underscore_backpassing.expr,
+        pass/underscore_in_assignment_pattern.expr,
         pass/var_else.expr,
         pass/var_if.expr,
         pass/var_is.expr,
