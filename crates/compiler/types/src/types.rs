@@ -2674,14 +2674,28 @@ pub fn gather_fields(
     })
 }
 
+#[derive(Debug)]
+pub enum GatherTagsError {
+    NotATagUnion(Variable),
+}
+
+/// Gathers tag payloads of a type, assuming it is a tag.
+///
+/// If the given type is unbound or an error, no payloads are returned.
+///
+/// If the given type cannot be seen as a tag, unbound type, or error, this
+/// function returns an error.
 pub fn gather_tags_unsorted_iter(
     subs: &Subs,
     other_fields: UnionTags,
     mut var: Variable,
-) -> (
-    impl Iterator<Item = (&TagName, VariableSubsSlice)> + '_,
-    Variable,
-) {
+) -> Result<
+    (
+        impl Iterator<Item = (&TagName, VariableSubsSlice)> + '_,
+        Variable,
+    ),
+    GatherTagsError,
+> {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
 
@@ -2697,34 +2711,32 @@ pub fn gather_tags_unsorted_iter(
 
             Structure(FunctionOrTagUnion(_tag_name_index, _, _sub_ext)) => {
                 todo!("this variant does not use SOA yet, and therefore this case is unreachable right now")
-                //                let sub_fields: UnionTags = (*tag_name_index).into();
-                //                stack.push(sub_fields);
+                // let sub_fields: UnionTags = (*tag_name_index).into();
+                // stack.push(sub_fields);
                 //
-                //                var = *sub_ext;
+                // var = *sub_ext;
             }
 
             Structure(RecursiveTagUnion(_, _sub_fields, _sub_ext)) => {
                 todo!("this variant does not use SOA yet, and therefore this case is unreachable right now")
-                //                stack.push(*sub_fields);
+                // stack.push(*sub_fields);
                 //
-                //                var = *sub_ext;
+                // var = *sub_ext;
             }
 
             Alias(_, _, actual_var, _) => {
-                // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
                 var = *actual_var;
             }
 
             Structure(EmptyTagUnion) => break,
             FlexVar(_) => break,
 
-            // TODO investigate this likely can happen when there is a type error
+            // TODO investigate, this likely can happen when there is a type error
             RigidVar(_) => break,
 
-            other => unreachable!(
-                "something weird ended up in a tag union type: {:?} at {:?}",
-                other, var
-            ),
+            Error => break,
+
+            _ => return Err(GatherTagsError::NotATagUnion(var)),
         }
     }
 
@@ -2738,15 +2750,15 @@ pub fn gather_tags_unsorted_iter(
             (tag_name, subs_slice)
         });
 
-    (it, var)
+    Ok((it, var))
 }
 
 pub fn gather_tags_slices(
     subs: &Subs,
     other_fields: UnionTags,
     var: Variable,
-) -> (Vec<(TagName, VariableSubsSlice)>, Variable) {
-    let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, var);
+) -> Result<(Vec<(TagName, VariableSubsSlice)>, Variable), GatherTagsError> {
+    let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, var)?;
 
     let mut result: Vec<_> = it
         .map(|(ref_label, field): (_, VariableSubsSlice)| (ref_label.clone(), field))
@@ -2754,11 +2766,15 @@ pub fn gather_tags_slices(
 
     result.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-    (result, ext)
+    Ok((result, ext))
 }
 
-pub fn gather_tags(subs: &Subs, other_fields: UnionTags, var: Variable) -> TagUnionStructure {
-    let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, var);
+pub fn gather_tags(
+    subs: &Subs,
+    other_fields: UnionTags,
+    var: Variable,
+) -> Result<TagUnionStructure, GatherTagsError> {
+    let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, var)?;
 
     let mut result: Vec<_> = it
         .map(|(ref_label, field): (_, VariableSubsSlice)| {
@@ -2768,10 +2784,10 @@ pub fn gather_tags(subs: &Subs, other_fields: UnionTags, var: Variable) -> TagUn
 
     result.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-    TagUnionStructure {
+    Ok(TagUnionStructure {
         fields: result,
         ext,
-    }
+    })
 }
 
 fn instantiate_lambda_sets_as_unspecialized(
