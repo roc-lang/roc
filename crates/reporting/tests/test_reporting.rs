@@ -10022,4 +10022,70 @@ All branches in an `if` must have the same type!
     program's behavior!
     "###
     );
+
+    test_report!(
+        destructure_assignment_introduces_no_variables_nested_toplevel,
+        indoc!(
+            r#"
+            app "test" provides [] to "./platform"
+
+            Pair _ _ = Pair 0 1
+
+            _ = Pair 0 1
+
+            {} = {}
+
+            Foo = Foo
+            "#
+        ),
+        @r###"
+    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+
+    This destructure assignment doesn't introduce any new variables:
+
+    3│  Pair _ _ = Pair 0 1
+        ^^^^^^^^
+
+    If you don't need to use the value on the right-hand-side of this
+    assignment, consider removing the assignment. Since Roc is purely
+    functional, assignments that don't introduce variables cannot affect a
+    program's behavior!
+
+    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+
+    This destructure assignment doesn't introduce any new variables:
+
+    5│  _ = Pair 0 1
+        ^
+
+    If you don't need to use the value on the right-hand-side of this
+    assignment, consider removing the assignment. Since Roc is purely
+    functional, assignments that don't introduce variables cannot affect a
+    program's behavior!
+
+    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+
+    This destructure assignment doesn't introduce any new variables:
+
+    7│  {} = {}
+        ^^
+
+    If you don't need to use the value on the right-hand-side of this
+    assignment, consider removing the assignment. Since Roc is purely
+    functional, assignments that don't introduce variables cannot affect a
+    program's behavior!
+
+    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+
+    This destructure assignment doesn't introduce any new variables:
+
+    9│  Foo = Foo
+        ^^^
+
+    If you don't need to use the value on the right-hand-side of this
+    assignment, consider removing the assignment. Since Roc is purely
+    functional, assignments that don't introduce variables cannot affect a
+    program's behavior!
+    "###
+    );
 }
