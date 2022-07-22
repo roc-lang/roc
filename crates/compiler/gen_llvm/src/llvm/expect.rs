@@ -144,27 +144,27 @@ fn build_clone<'a, 'ctx, 'env>(
             build_clone_builtin(env, ptr, offset, value, builtin, when_recursive)
         }
 
-        /*
-        Layout::Struct { field_layouts, .. } => build_struct_eq(
-            env,
-            layout_ids,
-            field_layouts,
-            when_recursive,
-            lhs_val.into_struct_value(),
-            rhs_val.into_struct_value(),
-        ),
+        Layout::Struct {
+            field_layouts: _, ..
+        } => {
+            if layout.safe_to_memcpy() {
+                build_copy(env, ptr, offset, value)
+            } else {
+                todo!()
+            }
+        }
 
         Layout::LambdaSet(_) => unreachable!("cannot compare closures"),
 
-        Layout::Union(union_layout) => build_tag_eq(
-            env,
-            layout_ids,
-            when_recursive,
-            union_layout,
-            lhs_val,
-            rhs_val,
-        ),
+        Layout::Union(_union_layout) => {
+            if layout.safe_to_memcpy() {
+                build_copy(env, ptr, offset, value)
+            } else {
+                todo!()
+            }
+        }
 
+        /*
         Layout::Boxed(inner_layout) => build_box_eq(
             env,
             layout_ids,
