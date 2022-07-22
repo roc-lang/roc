@@ -11,8 +11,7 @@ use crate::llvm::build_list::{
 use crate::llvm::build_str::{dec_to_str, str_from_float, str_from_int};
 use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
-    self, argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout,
-    block_of_memory_slices, zig_str_type,
+    self, argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout, zig_str_type,
 };
 use crate::llvm::refcounting::{
     build_reset, decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
