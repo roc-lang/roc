@@ -413,7 +413,8 @@ impl<'a> ExprState<'a> {
             let fail = EExpr::BadOperator(opchar, loc_op.region.start());
 
             Err(fail)
-        } else if !(self.expr.value.is_tag() || self.expr.value.is_opaque())
+        } else if !self.expr.value.is_tag()
+            && !self.expr.value.is_opaque()
             && !self.arguments.is_empty()
         {
             let region = Region::across_all(self.arguments.iter().map(|v| &v.region));
