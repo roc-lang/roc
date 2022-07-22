@@ -40,7 +40,9 @@ use roc_parse::ident::UppercaseIdent;
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SyntaxError};
 use roc_region::all::{LineInfo, Loc, Region};
-use roc_reporting::report::RenderTarget;
+use roc_reporting::report::{
+    can_problem, type_problem, RenderTarget, RocDocAllocator, DEFAULT_PALETTE,
+};
 use roc_solve::module::{Solved, SolvedModule};
 use roc_solve::solve;
 use roc_target::TargetInfo;
@@ -2418,7 +2420,66 @@ fn update<'a>(
             {
                 state.timings.insert(module_id, module_timing);
 
-                let buf = "TODO formatted report for errors".to_string();
+                // Report canonicalization and type problems
+                let palette = DEFAULT_PALETTE;
+                let can_problems = &mut state.module_cache.can_problems;
+                let type_problems = &mut state.module_cache.type_problems;
+                let mut buf = String::new();
+
+                let module_ids = Arc::try_unwrap(state.arc_modules)
+                    .unwrap_or_else(|_| {
+                        panic!("There were still outstanding Arc references to module_ids")
+                    })
+                    .into_inner()
+                    .into_module_ids();
+
+                let mut all_ident_ids = state.constrained_ident_ids;
+
+                // Associate the ident IDs from the derived synth module
+                let (_, derived_synth_ident_ids) = Arc::try_unwrap(state.derived_module)
+                    .unwrap_or_else(|_| {
+                        internal_error!("Outstanding references to the derived module")
+                    })
+                    .into_inner()
+                    .unwrap()
+                    .decompose();
+                ModuleId::DERIVED_SYNTH.register_debug_idents(&derived_synth_ident_ids);
+                all_ident_ids.insert(ModuleId::DERIVED_SYNTH, derived_synth_ident_ids);
+
+                let interns = Interns {
+                    module_ids,
+                    all_ident_ids,
+                };
+
+                for (home, (module_path, src)) in state.module_cache.sources.iter() {
+                    let can_probs = can_problems.remove(home).unwrap_or_default();
+                    let type_probs = type_problems.remove(home).unwrap_or_default();
+                    let error_count = can_probs.len() + type_probs.len();
+
+                    if error_count == 0 {
+                        continue;
+                    }
+
+                    let line_info = LineInfo::new(src);
+                    let src_lines: Vec<&str> = src.split('\n').collect();
+                    let alloc = RocDocAllocator::new(&src_lines, *home, &interns);
+
+                    for problem in can_probs.into_iter() {
+                        let report = can_problem(&alloc, &line_info, module_path.clone(), problem);
+
+                        report.render_color_terminal(&mut buf, &alloc, &palette);
+                    }
+
+                    for problem in type_probs {
+                        if let Some(report) =
+                            type_problem(&alloc, &line_info, module_path.clone(), problem)
+                        {
+                            let mut buf = String::new();
+
+                            report.render_color_terminal(&mut buf, &alloc, &palette);
+                        }
+                    }
+                }
 
                 return Err(LoadingProblem::FormattedReport(buf));
             } else {
@@ -5320,7 +5381,7 @@ fn run_task<'a>(
 }
 
 fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
-    use roc_reporting::report::{Report, RocDocAllocator, Severity, DEFAULT_PALETTE};
+    use roc_reporting::report::{Report, Severity};
     use ven_pretty::DocAllocator;
 
     let src_lines: Vec<&str> = Vec::new();
@@ -5402,7 +5463,7 @@ fn to_parse_problem_report<'a>(
     all_ident_ids: IdentIdsByModule,
     render: RenderTarget,
 ) -> String {
-    use roc_reporting::report::{parse_problem, RocDocAllocator, DEFAULT_PALETTE};
+    use roc_reporting::report::parse_problem;
 
     // TODO this is not in fact safe
     let src = unsafe { from_utf8_unchecked(problem.problem.bytes) };
@@ -5441,7 +5502,7 @@ fn to_parse_problem_report<'a>(
 }
 
 fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> String {
-    use roc_reporting::report::{Report, RocDocAllocator, Severity, DEFAULT_PALETTE};
+    use roc_reporting::report::{Report, Severity};
     use ven_pretty::DocAllocator;
     use PlatformPath::*;
 
