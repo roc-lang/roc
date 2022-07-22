@@ -4677,10 +4677,9 @@ fn make_specializations<'a>(
     mono_env.home.register_debug_idents(mono_env.ident_ids);
 
     let make_specializations_end = Instant::now();
-    module_timing.make_specializations.push(
-        make_specializations_end
-            .duration_since(make_specializations_start),
-    );
+    module_timing
+        .make_specializations
+        .push(make_specializations_end.duration_since(make_specializations_start));
 
     Msg::MadeSpecializations {
         module_id: home,
@@ -5028,8 +5027,8 @@ fn build_pending_specializations<'a>(
     procs_base.module_thunks = module_thunks.into_bump_slice();
 
     let find_specializations_end = Instant::now();
-    module_timing.find_specializations = find_specializations_end
-        .duration_since(find_specializations_start);
+    module_timing.find_specializations =
+        find_specializations_end.duration_since(find_specializations_start);
 
     Msg::FoundSpecializations {
         module_id: home,
@@ -5132,8 +5131,8 @@ fn load_derived_partial_procs<'a>(
 
     let load_derived_procs_end = Instant::now();
 
-    module_timing.find_specializations = load_derived_procs_end
-        .duration_since(load_derived_procs_start);
+    module_timing.find_specializations =
+        load_derived_procs_end.duration_since(load_derived_procs_start);
 }
 
 fn run_task<'a>(
