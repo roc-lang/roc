@@ -1805,3 +1805,59 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
         i64
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_3560_nested_tag_constructor_is_newtype() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            f : _ -> u8
+            f = \t ->
+                when t is
+                    Wrapper (Payload it) -> it
+                    Wrapper (AlternatePayload it) -> it
+
+            {a: f (Wrapper (Payload 15u8)), b: f(Wrapper (AlternatePayload 31u8))}
+            "#
+        ),
+        (15, 31),
+        (u8, u8)
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_3560_nested_tag_constructor_is_record_newtype() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            f : _ -> u8
+            f = \t ->
+                when t is
+                    {wrapper: (Payload it)} -> it
+                    {wrapper: (AlternatePayload it)} -> it
+
+            {a: f {wrapper: (Payload 15u8)}, b: f {wrapper: (AlternatePayload 31u8)}}
+            "#
+        ),
+        (15, 31),
+        (u8, u8)
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_3560_newtype_tag_constructor_has_nested_constructor_with_no_payload() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Wrapper (Payload "err") is
+                Wrapper (Payload str) -> str
+                Wrapper NoPayload -> "nothing"
+            "#
+        ),
+        RocStr::from("err"),
+        RocStr
+    )
+}
