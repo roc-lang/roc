@@ -61,9 +61,9 @@ use crate::work::Dependencies;
 pub use crate::work::Phase;
 
 #[cfg(target_family = "wasm")]
-use crate::wasm_system_time::{Duration, SystemTime};
+use crate::wasm_instant::{Duration, Instant};
 #[cfg(not(target_family = "wasm"))]
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant};
 
 /// Default name for the binary generated for an app, if an invalid one was specified.
 const DEFAULT_APP_OUTPUT_PATH: &str = "app";
@@ -462,7 +462,7 @@ fn start_phase<'a>(
                             Subs::default(),
                             ProcsBase::default(),
                             LayoutCache::new(state.target_info),
-                            ModuleTiming::new(SystemTime::now()),
+                            ModuleTiming::new(Instant::now()),
                         )
                     } else if state.make_specializations_pass.current_pass() == 1 {
                         let found_specializations = state
@@ -958,12 +958,12 @@ pub struct ModuleTiming {
     // TODO pub monomorphize: Duration,
     /// Total duration will always be more than the sum of the other fields, due
     /// to things like state lookups in between phases, waiting on other threads, etc.
-    start_time: SystemTime,
-    end_time: SystemTime,
+    start_time: Instant,
+    end_time: Instant,
 }
 
 impl ModuleTiming {
-    pub fn new(start_time: SystemTime) -> Self {
+    pub fn new(start_time: Instant) -> Self {
         ModuleTiming {
             read_roc_file: Duration::default(),
             parse_header: Duration::default(),
@@ -979,7 +979,7 @@ impl ModuleTiming {
     }
 
     pub fn total(&self) -> Duration {
-        self.end_time.duration_since(self.start_time).unwrap()
+        self.end_time.duration_since(self.start_time)
     }
 
     /// Subtract all the other fields from total_start_to_finish
@@ -997,10 +997,10 @@ impl ModuleTiming {
             end_time,
         } = self;
 
-        let calculate = |t: Result<Duration, _>| -> Option<Duration> {
+        let calculate = |d: Option<Duration>| -> Option<Duration> {
             make_specializations
                 .iter()
-                .fold(t.ok(), |t, pass_time| t?.checked_sub(*pass_time))?
+                .fold(d, |d, pass_time| d?.checked_sub(*pass_time))?
                 .checked_sub(*find_specializations)?
                 .checked_sub(*solve)?
                 .checked_sub(*constrain)?
@@ -1010,7 +1010,7 @@ impl ModuleTiming {
                 .checked_sub(*read_roc_file)
         };
 
-        calculate(end_time.duration_since(*start_time)).unwrap_or_default()
+        calculate(Some(end_time.duration_since(*start_time))).unwrap_or_default()
     }
 }
 
@@ -1186,7 +1186,7 @@ impl<'a> LoadStart<'a> {
 
         // Load the root module synchronously; we can't proceed until we have its id.
         let (root_id, root_msg) = {
-            let root_start_time = SystemTime::now();
+            let root_start_time = Instant::now();
 
             let res_loaded = load_filename(
                 arena,
@@ -1273,7 +1273,7 @@ impl<'a> LoadStart<'a> {
 
         // Load the root module synchronously; we can't proceed until we have its id.
         let (root_id, root_msg) = {
-            let root_start_time = SystemTime::now();
+            let root_start_time = Instant::now();
 
             load_from_str(
                 arena,
@@ -2291,7 +2291,7 @@ fn update<'a>(
             loc_expects,
         } => {
             log!("solved types for {:?}", module_id);
-            module_timing.end_time = SystemTime::now();
+            module_timing.end_time = Instant::now();
 
             state
                 .module_cache
@@ -2907,18 +2907,18 @@ fn load_platform_module<'a>(
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
 ) -> Result<Msg<'a>, LoadingProblem<'a>> {
-    let module_start_time = SystemTime::now();
-    let file_io_start = SystemTime::now();
+    let module_start_time = Instant::now();
+    let file_io_start = Instant::now();
     let file = fs::read(&filename);
-    let file_io_duration = file_io_start.elapsed().unwrap();
+    let file_io_duration = file_io_start.elapsed();
 
     match file {
         Ok(bytes_vec) => {
-            let parse_start = SystemTime::now();
+            let parse_start = Instant::now();
             let bytes = arena.alloc(bytes_vec);
             let parse_state = roc_parse::state::State::new(bytes);
             let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
-            let parse_header_duration = parse_start.elapsed().unwrap();
+            let parse_header_duration = parse_start.elapsed();
 
             // Insert the first entries for this module's timings
             let mut pkg_module_timing = ModuleTiming::new(module_start_time);
@@ -3047,10 +3047,10 @@ fn load_module<'a>(
     arc_shorthands: Arc<Mutex<MutMap<&'a str, PackageName<'a>>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
-    let module_start_time = SystemTime::now();
+    let module_start_time = Instant::now();
 
-    let parse_start = SystemTime::now();
-    let parse_header_duration = parse_start.elapsed().unwrap();
+    let parse_start = Instant::now();
+    let parse_header_duration = parse_start.elapsed();
 
     // Insert the first entries for this module's timings
     let mut module_timing = ModuleTiming::new(module_start_time);
@@ -3188,12 +3188,12 @@ fn parse_header<'a>(
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
     src_bytes: &'a [u8],
-    start_time: SystemTime,
+    start_time: Instant,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
-    let parse_start = SystemTime::now();
+    let parse_start = Instant::now();
     let parse_state = roc_parse::state::State::new(src_bytes);
     let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
-    let parse_header_duration = parse_start.elapsed().unwrap();
+    let parse_header_duration = parse_start.elapsed();
 
     // Insert the first entries for this module's timings
     let mut module_timing = ModuleTiming::new(start_time);
@@ -3375,11 +3375,11 @@ fn load_filename<'a>(
     opt_shorthand: Option<&'a str>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
-    module_start_time: SystemTime,
+    module_start_time: Instant,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
-    let file_io_start = SystemTime::now();
+    let file_io_start = Instant::now();
     let file = fs::read(&filename);
-    let file_io_duration = file_io_start.elapsed().unwrap();
+    let file_io_duration = file_io_start.elapsed();
 
     match file {
         Ok(bytes) => parse_header(
@@ -3409,10 +3409,10 @@ fn load_from_str<'a>(
     src: &'a str,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
-    module_start_time: SystemTime,
+    module_start_time: Instant,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
-    let file_io_start = SystemTime::now();
-    let file_io_duration = file_io_start.elapsed().unwrap();
+    let file_io_start = Instant::now();
+    let file_io_duration = file_io_start.elapsed();
 
     parse_header(
         arena,
@@ -4218,7 +4218,7 @@ fn run_solve<'a>(
     cached_subs: CachedSubs,
     derived_module: SharedDerivedModule,
 ) -> Msg<'a> {
-    let solve_start = SystemTime::now();
+    let solve_start = Instant::now();
 
     let module_id = module.module_id;
 
@@ -4284,8 +4284,8 @@ fn run_solve<'a>(
     };
 
     // Record the final timings
-    let solve_end = SystemTime::now();
-    module_timing.solve = solve_end.duration_since(solve_start).unwrap();
+    let solve_end = Instant::now();
+    module_timing.solve = solve_end.duration_since(solve_start);
 
     // Send the subs to the main thread for processing,
     Msg::SolvedTypes {
@@ -4363,7 +4363,7 @@ fn canonicalize_and_constrain<'a>(
     parsed: ParsedModule<'a>,
     skip_constraint_gen: bool,
 ) -> CanAndCon {
-    let canonicalize_start = SystemTime::now();
+    let canonicalize_start = Instant::now();
 
     let ParsedModule {
         module_id,
@@ -4412,9 +4412,9 @@ fn canonicalize_and_constrain<'a>(
         _after
     );
 
-    let canonicalize_end = SystemTime::now();
+    let canonicalize_end = Instant::now();
 
-    module_timing.canonicalize = canonicalize_end.duration_since(canonicalize_start).unwrap();
+    module_timing.canonicalize = canonicalize_end.duration_since(canonicalize_start);
 
     // Generate documentation information
     // TODO: store timing information?
@@ -4522,7 +4522,7 @@ fn canonicalize_and_constrain<'a>(
 
 fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let mut module_timing = header.module_timing;
-    let parse_start = SystemTime::now();
+    let parse_start = Instant::now();
     let source = header.parse_state.original_bytes();
     let parse_state = header.parse_state;
     let parsed_defs = match module_defs().parse(arena, parse_state) {
@@ -4536,9 +4536,9 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
 
     // Record the parse end time once, to avoid checking the time a second time
     // immediately afterward (for the beginning of canonicalization).
-    let parse_end = SystemTime::now();
+    let parse_end = Instant::now();
 
-    module_timing.parse_body = parse_end.duration_since(parse_start).unwrap();
+    module_timing.parse_body = parse_end.duration_since(parse_start);
 
     let imported_modules = header.imported_modules;
 
@@ -4632,7 +4632,7 @@ fn make_specializations<'a>(
     exposed_by_module: &ExposedByModule,
     derived_module: SharedDerivedModule,
 ) -> Msg<'a> {
-    let make_specializations_start = SystemTime::now();
+    let make_specializations_start = Instant::now();
     let mut update_mode_ids = UpdateModeIds::new();
     // do the thing
     let mut mono_env = roc_mono::ir::Env {
@@ -4676,11 +4676,10 @@ fn make_specializations<'a>(
     // Turn `Bytes.Decode.IdentId(238)` into `Bytes.Decode.238`, we rely on this in mono tests
     mono_env.home.register_debug_idents(mono_env.ident_ids);
 
-    let make_specializations_end = SystemTime::now();
+    let make_specializations_end = Instant::now();
     module_timing.make_specializations.push(
         make_specializations_end
-            .duration_since(make_specializations_start)
-            .unwrap(),
+            .duration_since(make_specializations_start),
     );
 
     Msg::MadeSpecializations {
@@ -4712,7 +4711,7 @@ fn build_pending_specializations<'a>(
     abilities_store: AbilitiesStore,
     derived_module: SharedDerivedModule,
 ) -> Msg<'a> {
-    let find_specializations_start = SystemTime::now();
+    let find_specializations_start = Instant::now();
 
     let mut module_thunks = bumpalo::collections::Vec::new_in(arena);
     let mut toplevel_expects = VecMap::default();
@@ -5028,10 +5027,9 @@ fn build_pending_specializations<'a>(
 
     procs_base.module_thunks = module_thunks.into_bump_slice();
 
-    let find_specializations_end = SystemTime::now();
+    let find_specializations_end = Instant::now();
     module_timing.find_specializations = find_specializations_end
-        .duration_since(find_specializations_start)
-        .unwrap();
+        .duration_since(find_specializations_start);
 
     Msg::FoundSpecializations {
         module_id: home,
@@ -5064,7 +5062,7 @@ fn load_derived_partial_procs<'a>(
 ) {
     debug_assert_eq!(home, ModuleId::DERIVED_GEN);
 
-    let load_derived_procs_start = SystemTime::now();
+    let load_derived_procs_start = Instant::now();
 
     let mut new_module_thunks = bumpalo::collections::Vec::new_in(arena);
 
@@ -5132,11 +5130,10 @@ fn load_derived_partial_procs<'a>(
         procs_base.module_thunks = new_module_thunks.into_bump_slice();
     }
 
-    let load_derived_procs_end = SystemTime::now();
+    let load_derived_procs_end = Instant::now();
 
     module_timing.find_specializations = load_derived_procs_end
-        .duration_since(load_derived_procs_start)
-        .unwrap();
+        .duration_since(load_derived_procs_start);
 }
 
 fn run_task<'a>(

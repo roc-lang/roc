@@ -6,4 +6,4 @@ pub mod file;
 mod work;
 
 #[cfg(target_family = "wasm")]
-mod wasm_system_time;
+mod wasm_instant;
