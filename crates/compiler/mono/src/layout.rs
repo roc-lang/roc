@@ -561,13 +561,32 @@ impl<'a> UnionLayout<'a> {
 
     /// Size of the data in memory, whether it's stack or heap (for non-null tag ids)
     pub fn data_size_and_alignment(&self, target_info: TargetInfo) -> (u32, u32) {
-        let id_data_layout = if self.stores_tag_id_as_data(target_info) {
-            Some(self.tag_id_layout())
-        } else {
-            None
-        };
+        let (data_width, data_align) = self.data_size_and_alignment_help_match(target_info);
 
-        self.data_size_and_alignment_help_match(id_data_layout, target_info)
+        if self.stores_tag_id_as_data(target_info) {
+            match self.tag_id_builtin() {
+                Builtin::Int(IntWidth::I8 | IntWidth::U8) | Builtin::Bool => {
+                    // here we can just add the tag id at the end, irrespective of alignment
+                    (
+                        round_up_to_alignment(data_width + 1, data_align),
+                        data_align.max(1),
+                    )
+                }
+                Builtin::Int(IntWidth::I16 | IntWidth::U16) => {
+                    // first, round up the data so the tag id is well-aligned;
+                    // then add the tag id width, and make sure the whole extends
+                    // to the next alignment multiple
+                    let tag_align = data_align.max(2);
+                    let tag_width =
+                        round_up_to_alignment(round_up_to_alignment(data_width, 2) + 2, tag_align);
+
+                    (tag_width, tag_align)
+                }
+                other => panic!("weird alignment builtin {:?}", other),
+            }
+        } else {
+            (data_width, data_align)
+        }
     }
 
     /// Size of the data before the tag_id, if it exists.
@@ -577,56 +596,23 @@ impl<'a> UnionLayout<'a> {
             return None;
         };
 
-        Some(self.data_size_and_alignment_help_match(None, target_info).0)
+        Some(self.data_size_and_alignment_help_match(target_info).0)
     }
 
-    fn data_size_and_alignment_help_match(
-        &self,
-        id_data_layout: Option<Layout>,
-        target_info: TargetInfo,
-    ) -> (u32, u32) {
+    fn data_size_and_alignment_help_match(&self, target_info: TargetInfo) -> (u32, u32) {
         match self {
-            Self::NonRecursive(tags) => {
-                Self::data_size_and_alignment_help(tags, id_data_layout, target_info)
-            }
-            Self::Recursive(tags) => {
-                Self::data_size_and_alignment_help(tags, id_data_layout, target_info)
-            }
+            Self::NonRecursive(tags) => Layout::stack_size_and_alignment_slices(tags, target_info),
+            Self::Recursive(tags) => Layout::stack_size_and_alignment_slices(tags, target_info),
             Self::NonNullableUnwrapped(fields) => {
-                Self::data_size_and_alignment_help(&[fields], id_data_layout, target_info)
+                Layout::stack_size_and_alignment_slices(&[fields], target_info)
             }
             Self::NullableWrapped { other_tags, .. } => {
-                Self::data_size_and_alignment_help(other_tags, id_data_layout, target_info)
+                Layout::stack_size_and_alignment_slices(other_tags, target_info)
             }
             Self::NullableUnwrapped { other_fields, .. } => {
-                Self::data_size_and_alignment_help(&[other_fields], id_data_layout, target_info)
+                Layout::stack_size_and_alignment_slices(&[other_fields], target_info)
             }
         }
-    }
-
-    fn data_size_and_alignment_help(
-        variant_field_layouts: &[&[Layout]],
-        id_data_layout: Option<Layout>,
-        target_info: TargetInfo,
-    ) -> (u32, u32) {
-        let mut size = 0;
-        let mut alignment_bytes = 0;
-
-        for field_layouts in variant_field_layouts {
-            let mut data = Layout::struct_no_name_order(field_layouts);
-
-            let fields_and_id;
-            if let Some(id_layout) = id_data_layout {
-                fields_and_id = [data, id_layout];
-                data = Layout::struct_no_name_order(&fields_and_id);
-            }
-
-            let (variant_size, variant_alignment) = data.stack_size_and_alignment(target_info);
-            alignment_bytes = alignment_bytes.max(variant_alignment);
-            size = size.max(variant_size);
-        }
-
-        (size, alignment_bytes)
     }
 
     pub fn tag_id_offset(&self, target_info: TargetInfo) -> Option<u32> {
@@ -650,20 +636,9 @@ impl<'a> UnionLayout<'a> {
     /// Very important to use this when doing a memcpy!
     fn stack_size_without_alignment(&self, target_info: TargetInfo) -> u32 {
         match self {
-            UnionLayout::NonRecursive(tags) => {
-                let id_layout = self.tag_id_layout();
-
-                let mut size = 0;
-
-                for field_layouts in tags.iter() {
-                    let fields = Layout::struct_no_name_order(field_layouts);
-                    let fields_and_id = [fields, id_layout];
-
-                    let data = Layout::struct_no_name_order(&fields_and_id);
-                    size = size.max(data.stack_size_without_alignment(target_info));
-                }
-
-                size
+            UnionLayout::NonRecursive(_) => {
+                let (width, align) = self.data_size_and_alignment(target_info);
+                round_up_to_alignment(width, align)
             }
             UnionLayout::Recursive(_)
             | UnionLayout::NonNullableUnwrapped(_)
