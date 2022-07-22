@@ -736,7 +736,7 @@ pub fn constrain_expr(
             let mut pattern_headers = SendMap::default();
             let mut pattern_cons = Vec::with_capacity(branches.len() + 2);
             let mut delayed_is_open_constraints = Vec::with_capacity(2);
-            let mut branch_cons = Vec::with_capacity(branches.len());
+            let mut body_cons = Vec::with_capacity(branches.len());
 
             for (index, when_branch) in branches.iter().enumerate() {
                 let expected_pattern = |sub_pattern, sub_region| {
@@ -750,13 +750,13 @@ pub fn constrain_expr(
                     )
                 };
 
-                let (
-                    new_pattern_vars,
-                    new_pattern_headers,
-                    pattern_con,
-                    partial_delayed_is_open_constraints,
-                    branch_con,
-                ) = constrain_when_branch_help(
+                let ConstrainedBranch {
+                    vars: new_pattern_vars,
+                    headers: new_pattern_headers,
+                    pattern_constraints,
+                    is_open_constrains,
+                    body_constraints,
+                } = constrain_when_branch_help(
                     constraints,
                     env,
                     region,
@@ -785,10 +785,10 @@ pub fn constrain_expr(
                 }
 
                 pattern_headers.extend(new_pattern_headers);
-                pattern_cons.push(pattern_con);
-                delayed_is_open_constraints.extend(partial_delayed_is_open_constraints);
+                pattern_cons.push(pattern_constraints);
+                delayed_is_open_constraints.extend(is_open_constrains);
 
-                branch_cons.push(branch_con);
+                body_cons.push(body_constraints);
             }
 
             // Deviation: elm adds another layer of And nesting
@@ -838,7 +838,7 @@ pub fn constrain_expr(
             // Solve all the pattern constraints together, introducing variables in the pattern as
             // need be before solving the bodies.
             let pattern_constraints = constraints.and_constraint(pattern_cons);
-            let body_constraints = constraints.and_constraint(branch_cons);
+            let body_constraints = constraints.and_constraint(body_cons);
             let when_body_con = constraints.let_constraint(
                 [],
                 pattern_vars,
@@ -1802,6 +1802,14 @@ fn constrain_value_def(
     }
 }
 
+struct ConstrainedBranch {
+    vars: Vec<Variable>,
+    headers: VecMap<Symbol, Loc<Type>>,
+    pattern_constraints: Constraint,
+    is_open_constrains: Vec<Constraint>,
+    body_constraints: Constraint,
+}
+
 /// Constrain a when branch, returning (variables in pattern, symbols introduced in pattern, pattern constraint, body constraint).
 /// We want to constraint all pattern constraints in a "when" before body constraints.
 #[inline(always)]
@@ -1812,13 +1820,7 @@ fn constrain_when_branch_help(
     when_branch: &WhenBranch,
     pattern_expected: impl Fn(HumanIndex, Region) -> PExpected<Type>,
     expr_expected: Expected<Type>,
-) -> (
-    Vec<Variable>,
-    VecMap<Symbol, Loc<Type>>,
-    Constraint,
-    Vec<Constraint>,
-    Constraint,
-) {
+) -> ConstrainedBranch {
     let ret_constraint = constrain_expr(
         constraints,
         env,
@@ -1912,13 +1914,13 @@ fn constrain_when_branch_help(
             )
         };
 
-    (
-        state.vars,
-        state.headers,
+    ConstrainedBranch {
+        vars: state.vars,
+        headers: state.headers,
         pattern_constraints,
-        delayed_is_open_constraints,
+        is_open_constrains: delayed_is_open_constraints,
         body_constraints,
-    )
+    }
 }
 
 fn constrain_field(
