@@ -802,7 +802,7 @@ findLast = \array, pred ->
         else
             Continue {}
 
-    when List.iterateBackwards array {} callback is
+    when iterateBackwards array {} callback is
         Continue {} -> Err NotFound
         Break found -> Ok found
 
@@ -826,7 +826,7 @@ findFirstIndex = \list, matcher ->
 ## If no satisfying element is found, an `Err NotFound` is returned.
 findLastIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]*
 findLastIndex = \list, matcher ->
-    foundIndex = List.iterateBackwards list (List.len list - 1) \index, elem ->
+    foundIndex = iterateBackwards list (List.len list - 1) \index, elem ->
         if matcher elem then
             Break index
         else
