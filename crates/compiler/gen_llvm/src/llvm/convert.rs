@@ -278,8 +278,11 @@ pub(crate) struct RocUnion<'ctx> {
 }
 
 impl<'ctx> RocUnion<'ctx> {
-    pub const TAG_ID_INDEX: u32 = 2;
-    pub const TAG_DATA_INDEX: u32 = 1;
+    // pub const TAG_ID_INDEX: u32 = 2;
+    // pub const TAG_DATA_INDEX: u32 = 1;
+
+    pub const TAG_ID_INDEX: u32 = 1;
+    pub const TAG_DATA_INDEX: u32 = 0;
 
     fn new(
         context: &'ctx Context,

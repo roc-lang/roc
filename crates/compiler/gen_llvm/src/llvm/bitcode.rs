@@ -2,9 +2,9 @@
 use crate::debug_info_init;
 use crate::llvm::build::{
     complex_bitcast_check_size, load_roc_value, struct_from_fields, to_cc_return, CCReturn, Env,
-    C_CALL_CONV, FAST_CALL_CONV, TAG_DATA_INDEX,
+    C_CALL_CONV, FAST_CALL_CONV,
 };
-use crate::llvm::convert::basic_type_from_layout;
+use crate::llvm::convert::{basic_type_from_layout, RocUnion};
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_n_refcount_layout, increment_refcount_layout,
 };
@@ -314,7 +314,7 @@ fn build_has_tag_id_help<'a, 'ctx, 'env>(
             let tag_data_ptr = {
                 let ptr = env
                     .builder
-                    .build_struct_gep(tag_value, TAG_DATA_INDEX, "get_data_ptr")
+                    .build_struct_gep(tag_value, RocUnion::TAG_DATA_INDEX, "get_data_ptr")
                     .unwrap();
 
                 env.builder.build_bitcast(ptr, i8_ptr_type, "to_opaque")
