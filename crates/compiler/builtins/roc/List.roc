@@ -44,8 +44,8 @@ interface List
         any,
         takeFirst,
         takeLast,
-        find,
-        findIndex,
+        findFirst,
+        findFirstIndex,
         sublist,
         intersperse,
         split,
@@ -774,8 +774,8 @@ joinMap = \list, mapper ->
 
 ## Returns the first element of the list satisfying a predicate function.
 ## If no satisfying element is found, an `Err NotFound` is returned.
-find : List elem, (elem -> Bool) -> Result elem [NotFound]*
-find = \array, pred ->
+findFirst : List elem, (elem -> Bool) -> Result elem [NotFound]*
+findFirst = \array, pred ->
     callback = \_, elem ->
         if pred elem then
             Break elem
@@ -792,8 +792,8 @@ find = \array, pred ->
 ## Returns the index at which the first element in the list
 ## satisfying a predicate function can be found.
 ## If no satisfying element is found, an `Err NotFound` is returned.
-findIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]*
-findIndex = \list, matcher ->
+findFirstIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]*
+findFirstIndex = \list, matcher ->
     foundIndex = List.iterate list 0 \index, elem ->
         if matcher elem then
             Break index
