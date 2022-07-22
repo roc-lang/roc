@@ -1290,13 +1290,12 @@ define_builtins! {
         66 LIST_GET_UNSAFE: "getUnsafe"
         67 LIST_REPLACE_UNSAFE: "replaceUnsafe"
         68 LIST_WITH_CAPACITY: "withCapacity"
-        69 LIST_ITERATE: "iterate"
-        70 LIST_UNREACHABLE: "unreachable"
-        71 LIST_RESERVE: "reserve"
-        72 LIST_APPEND_UNSAFE: "appendUnsafe"
-        73 LIST_SUBLIST_LOWLEVEL: "sublistLowlevel"
-        74 LIST_CAPACITY: "capacity"
-        75 LIST_MAP_TRY: "mapTry"
+        69 LIST_UNREACHABLE: "unreachable"
+        70 LIST_RESERVE: "reserve"
+        71 LIST_APPEND_UNSAFE: "appendUnsafe"
+        72 LIST_SUBLIST_LOWLEVEL: "sublistLowlevel"
+        73 LIST_CAPACITY: "capacity"
+        74 LIST_MAP_TRY: "mapTry"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" // the Result.Result type alias
