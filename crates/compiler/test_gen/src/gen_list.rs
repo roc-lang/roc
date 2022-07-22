@@ -2846,12 +2846,24 @@ fn list_find() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findFirst ["a", "bc", "def"] (\s -> Str.countGraphemes s > 1) is
+            when List.findFirst ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 1) is
                 Ok v -> v
                 Err _ -> "not found"
             "#
         ),
         RocStr::from("bc"),
+        RocStr
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when List.findLast ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 1) is
+                Ok v -> v
+                Err _ -> "not found"
+            "#
+        ),
+        RocStr::from("def"),
         RocStr
     );
 }
@@ -2862,7 +2874,19 @@ fn list_find_not_found() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findFirst ["a", "bc", "def"] (\s -> Str.countGraphemes s > 5) is
+            when List.findFirst ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 5) is
+                Ok v -> v
+                Err _ -> "not found"
+            "#
+        ),
+        RocStr::from("not found"),
+        RocStr
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when List.findLast ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 5) is
                 Ok v -> v
                 Err _ -> "not found"
             "#
@@ -2879,6 +2903,18 @@ fn list_find_empty_typed_list() {
         indoc!(
             r#"
             when List.findFirst [] (\s -> Str.countGraphemes s > 5) is
+                Ok v -> v
+                Err _ -> "not found"
+            "#
+        ),
+        RocStr::from("not found"),
+        RocStr
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when List.findLast [] (\s -> Str.countGraphemes s > 5) is
                 Ok v -> v
                 Err _ -> "not found"
             "#
@@ -2918,7 +2954,7 @@ fn list_find_index() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findFirstIndex ["a", "bc", "def"] (\s -> Str.countGraphemes s > 1) is
+            when List.findFirstIndex ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 1) is
                 Ok v -> v
                 Err _ -> 999
             "#
@@ -2930,7 +2966,7 @@ fn list_find_index() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findLastIndex ["a", "bc", "def"] (\s -> Str.countGraphemes s > 1) is
+            when List.findLastIndex ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 1) is
                 Ok v -> v
                 Err _ -> 999
             "#
@@ -2946,7 +2982,7 @@ fn list_find_index_not_found() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findFirstIndex ["a", "bc", "def"] (\s -> Str.countGraphemes s > 5) is
+            when List.findFirstIndex ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 5) is
                 Ok v -> v
                 Err _ -> 999
             "#
