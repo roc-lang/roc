@@ -2383,18 +2383,7 @@ fn update<'a>(
                     .extend(solved_module.aliases.keys().copied());
             }
 
-            let has_errors = !state.module_cache.can_problems.is_empty()
-                || !state.module_cache.type_problems.is_empty();
-            let should_halt = halt_for_errors && has_errors;
-
-            if is_host_exposed && (state.goal_phase == Phase::SolveTypes || should_halt) {
-                if !should_halt {
-                    // There may be ongoing work if we halted early (e.g. specializations),
-                    // but otherwise there should not be!
-                    debug_assert!(work.is_empty());
-                    debug_assert!(state.dependencies.all_statuses_done());
-                }
-
+            if is_host_exposed && state.goal_phase == Phase::SolveTypes {
                 state.timings.insert(module_id, module_timing);
 
                 let documentation = {
@@ -2424,6 +2413,14 @@ fn update<'a>(
                 // As far as type-checking goes, once we've solved
                 // the originally requested module, we're all done!
                 return Ok(state);
+            } else if is_host_exposed
+                && (halt_for_errors && state.module_cache.total_problems() > 0)
+            {
+                state.timings.insert(module_id, module_timing);
+
+                let buf = "TODO formatted report for errors".to_string();
+
+                return Err(LoadingProblem::FormattedReport(buf));
             } else {
                 state.exposed_types.insert(
                     module_id,
