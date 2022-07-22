@@ -830,7 +830,7 @@ mod cli_run {
 
                 // We test benchmarks separately
                 // TODO re-enable platform-switching
-                if example_dir_name != "benchmarks" && example_dir_name != "platform-switching" {
+                if example_dir_name != "benchmarks" || example_dir_name != "platform-switching" {
                     all_examples.remove(example_dir_name.as_str()).unwrap_or_else(|| {
                     panic!("The example directory {}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!", examples_dir, example_dir_name);
                 });
