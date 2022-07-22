@@ -812,9 +812,11 @@ mod cli_run {
             if entry.file_type().unwrap().is_dir() {
                 let example_dir_name = entry.file_name().into_string().unwrap();
 
+                // TODO re-enable platform-switching
                 // TODO: Improve this with a more-dynamic approach. (Read all subdirectories?)
                 // Some platform-switching examples live in nested directories
-                if example_dir_name == "platform-switching" {
+                // example_dir_name == "platform-switching" {
+                if false {
                     for sub_dir in [
                         "c-platform",
                         "rust-platform",
@@ -829,8 +831,7 @@ mod cli_run {
                 }
 
                 // We test benchmarks separately
-                // TODO re-enable platform-switching
-                if example_dir_name != "benchmarks" || example_dir_name != "platform-switching" {
+                if example_dir_name != "benchmarks" {
                     all_examples.remove(example_dir_name.as_str()).unwrap_or_else(|| {
                     panic!("The example directory {}/{} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!", examples_dir, example_dir_name);
                 });
