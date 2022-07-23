@@ -1,0 +1,16 @@
+procedure Test.0 ():
+    let Test.12 : Str = "err";
+    let Test.11 : [C Str, C Str] = TagId(1) Test.12;
+    let Test.8 : U8 = 1i64;
+    let Test.9 : U8 = GetTagId Test.11;
+    let Test.10 : Int1 = lowlevel Eq Test.8 Test.9;
+    if Test.10 then
+        let Test.3 : Str = UnionAtIndex (Id 1) (Index 0) Test.11;
+        inc Test.3;
+        dec Test.11;
+        ret Test.3;
+    else
+        let Test.4 : Str = UnionAtIndex (Id 0) (Index 0) Test.11;
+        inc Test.4;
+        dec Test.11;
+        ret Test.4;

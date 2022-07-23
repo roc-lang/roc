@@ -1038,28 +1038,8 @@ fn different_proc_types_specialized_to_same_layout() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
-#[should_panic(
-    // TODO: something upstream is escaping the '
-    // NOTE: Are we sure it's upstream? It's not escaped in gen-wasm version below!
-    expected = r#"Roc failed with message: "Can\'t create record with improper layout""#
-)]
-fn call_with_bad_record_runtime_error() {
-    expect_runtime_error_panic!(indoc!(
-        r#"
-            app "test" provides [main] to "./platform"
-
-            main =
-                get : {a: Bool} -> Bool
-                get = \{a} -> a
-                get {b: ""}
-            "#
-    ))
-}
-
-#[test]
-#[cfg(any(feature = "gen-wasm"))]
-#[should_panic(expected = r#"Roc failed with message: "Can't create record with improper layout"#)]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[should_panic(expected = r#"Roc failed with message: "Can't create record with improper layout""#)]
 fn call_with_bad_record_runtime_error() {
     expect_runtime_error_panic!(indoc!(
         r#"

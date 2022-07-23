@@ -2807,7 +2807,8 @@ fn type_to_variable<'a>(
                     subs,
                     UnionTags::default(),
                     temp_ext_var,
-                );
+                )
+                .expect("extension var could not be seen as a tag union");
 
                 for _ in it {
                     unreachable!("we assert that the ext var is empty; otherwise we'd already know it was a tag union!");
@@ -3351,7 +3352,8 @@ fn type_to_union_tags<'a>(
                 subs,
                 UnionTags::default(),
                 temp_ext_var,
-            );
+            )
+            .expect("extension var could not be seen as tag union");
 
             tag_vars.extend(it.map(|(n, v)| (n.clone(), v)));
 

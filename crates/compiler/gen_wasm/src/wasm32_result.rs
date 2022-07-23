@@ -260,3 +260,19 @@ where
         )
     }
 }
+
+impl<T, U, V, W> Wasm32Result for (T, U, V, W)
+where
+    T: Wasm32Result + Wasm32Sized,
+    U: Wasm32Result + Wasm32Sized,
+    V: Wasm32Result + Wasm32Sized,
+    W: Wasm32Result + Wasm32Sized,
+{
+    fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
+        build_wrapper_body_stack_memory(
+            code_builder,
+            main_function_index,
+            T::ACTUAL_WIDTH + U::ACTUAL_WIDTH + V::ACTUAL_WIDTH + W::ACTUAL_WIDTH,
+        )
+    }
+}

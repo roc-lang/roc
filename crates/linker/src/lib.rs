@@ -1931,12 +1931,14 @@ pub fn surgery(
 ) {
     let total_start = Instant::now();
     let loading_metadata_start = total_start;
-    let input = fs::File::open(metadata_filename).unwrap_or_else(|e| internal_error!("{}", e));
-    let input = BufReader::new(input);
-    let md: metadata::Metadata = match deserialize_from(input) {
-        Ok(data) => data,
-        Err(err) => {
-            internal_error!("Failed to deserialize metadata: {}", err);
+    let md: metadata::Metadata = {
+        let input = fs::File::open(metadata_filename).unwrap_or_else(|e| internal_error!("{}", e));
+        let input = BufReader::new(input);
+        match deserialize_from(input) {
+            Ok(data) => data,
+            Err(err) => {
+                internal_error!("Failed to deserialize metadata: {}", err);
+            }
         }
     };
     let loading_metadata_duration = loading_metadata_start.elapsed();
