@@ -238,16 +238,12 @@ fn tag_id_from_data<'a, M: ReplAppMemory>(
         .unwrap();
     let tag_id_addr = data_addr + offset as usize;
 
-    match union_layout.tag_id_builtin() {
-        Builtin::Bool => mem.deref_bool(tag_id_addr) as i64,
-        Builtin::Int(IntWidth::U8) => mem.deref_u8(tag_id_addr) as i64,
-        Builtin::Int(IntWidth::U16) => mem.deref_u16(tag_id_addr) as i64,
-        Builtin::Int(IntWidth::U64) => {
-            // used by non-recursive unions at the
-            // moment, remove if that is no longer the case
-            mem.deref_i64(tag_id_addr)
-        }
-        _ => unreachable!("invalid tag id layout"),
+    use roc_mono::layout::Discriminant::*;
+    match union_layout.discriminant() {
+        U0 => 0,
+        U1 => mem.deref_bool(tag_id_addr) as i64,
+        U8 => mem.deref_u8(tag_id_addr) as i64,
+        U16 => mem.deref_u16(tag_id_addr) as i64,
     }
 }
 

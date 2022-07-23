@@ -9,8 +9,8 @@ use roc_builtins::bitcode::{
 use roc_collections::VecMap;
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::layout::{
-    cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Layout, LayoutCache,
-    UnionLayout,
+    cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant, Layout,
+    LayoutCache, UnionLayout,
 };
 use roc_target::TargetInfo;
 use roc_types::{
@@ -1024,7 +1024,8 @@ fn add_tag_union<'a>(
                 // A non-recursive tag union
                 // e.g. `Result ok err : [Ok ok, Err err]`
                 NonRecursive(_) => {
-                    let discriminant_size = UnionLayout::discriminant_size(tags.len()).stack_size();
+                    let discriminant_size =
+                        Discriminant::from_number_of_tags(tags.len()).stack_size();
                     let discriminant_offset = union_layout.tag_id_offset(env.target).unwrap();
 
                     RocType::TagUnion(RocTagUnion::NonRecursive {
@@ -1037,7 +1038,8 @@ fn add_tag_union<'a>(
                 // A recursive tag union (general case)
                 // e.g. `Expr : [Sym Str, Add Expr Expr]`
                 Recursive(_) => {
-                    let discriminant_size = UnionLayout::discriminant_size(tags.len()).stack_size();
+                    let discriminant_size =
+                        Discriminant::from_number_of_tags(tags.len()).stack_size();
                     let discriminant_offset = union_layout.tag_id_offset(env.target).unwrap();
 
                     RocType::TagUnion(RocTagUnion::Recursive {

@@ -444,38 +444,28 @@ impl<'a> UnionLayout<'a> {
         }
     }
 
-    pub fn discriminant_size(num_tags: usize) -> IntWidth {
-        if num_tags <= u8::MAX as usize {
-            IntWidth::U8
-        } else if num_tags <= u16::MAX as usize {
-            IntWidth::U16
-        } else {
-            panic!("tag union is too big")
-        }
-    }
-
-    pub fn tag_id_builtin(&self) -> Builtin<'a> {
+    pub fn discriminant(&self) -> Discriminant {
         match self {
-            UnionLayout::NonRecursive(tags) => {
-                let union_size = tags.len();
-                Builtin::Int(Self::discriminant_size(union_size))
-            }
-            UnionLayout::Recursive(tags) => {
-                let union_size = tags.len();
-
-                Builtin::Int(Self::discriminant_size(union_size))
-            }
+            UnionLayout::NonRecursive(tags) => Discriminant::from_number_of_tags(tags.len()),
+            UnionLayout::Recursive(tags) => Discriminant::from_number_of_tags(tags.len()),
 
             UnionLayout::NullableWrapped { other_tags, .. } => {
-                Builtin::Int(Self::discriminant_size(other_tags.len() + 1))
+                Discriminant::from_number_of_tags(other_tags.len() + 1)
             }
-            UnionLayout::NonNullableUnwrapped(_) => Builtin::Bool,
-            UnionLayout::NullableUnwrapped { .. } => Builtin::Bool,
+            UnionLayout::NonNullableUnwrapped(_) => Discriminant::from_number_of_tags(2),
+            UnionLayout::NullableUnwrapped { .. } => Discriminant::from_number_of_tags(1),
         }
     }
 
     pub fn tag_id_layout(&self) -> Layout<'a> {
-        Layout::Builtin(self.tag_id_builtin())
+        // TODO is it beneficial to return a more specific layout?
+        // e.g. Layout::bool() and Layout::VOID
+        match self.discriminant() {
+            Discriminant::U0 => Layout::u8(),
+            Discriminant::U1 => Layout::u8(),
+            Discriminant::U8 => Layout::u8(),
+            Discriminant::U16 => Layout::u16(),
+        }
     }
 
     fn stores_tag_id_in_pointer_bits(tags: &[&[Layout<'a>]], target_info: TargetInfo) -> bool {
@@ -564,15 +554,14 @@ impl<'a> UnionLayout<'a> {
         let (data_width, data_align) = self.data_size_and_alignment_help_match(target_info);
 
         if self.stores_tag_id_as_data(target_info) {
-            match self.tag_id_builtin() {
-                Builtin::Int(IntWidth::I8 | IntWidth::U8) | Builtin::Bool => {
-                    // here we can just add the tag id at the end, irrespective of alignment
-                    (
-                        round_up_to_alignment(data_width + 1, data_align),
-                        data_align.max(1),
-                    )
-                }
-                Builtin::Int(IntWidth::I16 | IntWidth::U16) => {
+            use Discriminant::*;
+            match self.discriminant() {
+                U0 => (round_up_to_alignment(data_width, data_align), data_align),
+                U1 | U8 => (
+                    round_up_to_alignment(data_width + 1, data_align),
+                    data_align,
+                ),
+                U16 => {
                     // first, round up the data so the tag id is well-aligned;
                     // then add the tag id width, and make sure the whole extends
                     // to the next alignment multiple
@@ -582,7 +571,6 @@ impl<'a> UnionLayout<'a> {
 
                     (tag_width, tag_align)
                 }
-                other => panic!("weird alignment builtin {:?}", other),
             }
         } else {
             (data_width, data_align)
@@ -645,6 +633,39 @@ impl<'a> UnionLayout<'a> {
             | UnionLayout::NullableWrapped { .. }
             | UnionLayout::NullableUnwrapped { .. } => target_info.ptr_width() as u32,
         }
+    }
+}
+
+pub enum Discriminant {
+    U0,
+    U1,
+    U8,
+    U16,
+}
+
+impl Discriminant {
+    pub const fn from_number_of_tags(tags: usize) -> Self {
+        match tags {
+            0 => Discriminant::U0,
+            1 => Discriminant::U0,
+            2 => Discriminant::U1,
+            3..=255 => Discriminant::U8,
+            256..=65_535 => Discriminant::U16,
+            _ => panic!("discriminant too large"),
+        }
+    }
+
+    pub const fn stack_size(&self) -> u32 {
+        match self {
+            Discriminant::U0 => 0,
+            Discriminant::U1 => 1,
+            Discriminant::U8 => 1,
+            Discriminant::U16 => 2,
+        }
+    }
+
+    pub const fn alignment_bytes(&self) -> u32 {
+        self.stack_size()
     }
 }
 
@@ -1184,10 +1205,16 @@ impl<'a, 'b> Env<'a, 'b> {
 }
 
 pub const fn round_up_to_alignment(width: u32, alignment: u32) -> u32 {
-    if alignment != 0 && width % alignment > 0 {
-        width + alignment - (width % alignment)
-    } else {
-        width
+    match alignment {
+        0 => width,
+        1 => width,
+        _ => {
+            if width % alignment > 0 {
+                width + alignment - (width % alignment)
+            } else {
+                width
+            }
+        }
     }
 }
 
@@ -1490,15 +1517,15 @@ impl<'a> Layout<'a> {
                             })
                             .max();
 
-                        let tag_id_builtin = variant.tag_id_builtin();
+                        let discriminant = variant.discriminant();
                         match max_alignment {
                             Some(align) => round_up_to_alignment(
-                                align.max(tag_id_builtin.alignment_bytes(target_info)),
-                                tag_id_builtin.alignment_bytes(target_info),
+                                align.max(discriminant.alignment_bytes()),
+                                discriminant.alignment_bytes(),
                             ),
                             None => {
                                 // none of the tags had any payload, but the tag id still contains information
-                                tag_id_builtin.alignment_bytes(target_info)
+                                discriminant.alignment_bytes()
                             }
                         }
                     }
@@ -3276,6 +3303,23 @@ impl<'a> LayoutIds<'a> {
     }
 }
 
+/// Compare two fields when sorting them for code gen.
+/// This is called by both code gen and bindgen, so that
+/// their field orderings agree.
+#[inline(always)]
+pub fn cmp_fields<L: Ord>(
+    label1: &L,
+    layout1: &Layout<'_>,
+    label2: &L,
+    layout2: &Layout<'_>,
+    target_info: TargetInfo,
+) -> Ordering {
+    let size1 = layout1.alignment_bytes(target_info);
+    let size2 = layout2.alignment_bytes(target_info);
+
+    size2.cmp(&size1).then(label1.cmp(label2))
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -3309,21 +3353,10 @@ mod test {
         let target_info = TargetInfo::default_x86_64();
         assert_eq!(layout.stack_size_without_alignment(target_info), 8);
     }
-}
 
-/// Compare two fields when sorting them for code gen.
-/// This is called by both code gen and bindgen, so that
-/// their field orderings agree.
-#[inline(always)]
-pub fn cmp_fields<L: Ord>(
-    label1: &L,
-    layout1: &Layout<'_>,
-    label2: &L,
-    layout2: &Layout<'_>,
-    target_info: TargetInfo,
-) -> Ordering {
-    let size1 = layout1.alignment_bytes(target_info);
-    let size2 = layout2.alignment_bytes(target_info);
-
-    size2.cmp(&size1).then(label1.cmp(label2))
+    #[test]
+    fn void_stack_size() {
+        let target_info = TargetInfo::default_x86_64();
+        assert_eq!(Layout::VOID.stack_size(target_info), 0);
+    }
 }

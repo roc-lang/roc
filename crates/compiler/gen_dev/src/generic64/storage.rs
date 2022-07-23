@@ -594,16 +594,16 @@ impl<
                 let (data_size, data_alignment) =
                     union_layout.data_size_and_alignment(self.target_info);
                 let id_offset = data_size - data_alignment;
-                let id_builtin = union_layout.tag_id_builtin();
+                let discriminant = union_layout.discriminant();
 
-                let size = id_builtin.stack_size(self.target_info);
+                let size = discriminant.stack_size();
                 self.allocation_map.insert(*sym, owned_data);
                 self.symbol_storage_map.insert(
                     *sym,
                     Stack(ReferencedPrimitive {
                         base_offset: union_offset + id_offset as i32,
                         size,
-                        sign_extend: matches!(id_builtin, sign_extended_int_builtins!()),
+                        sign_extend: false, // tag ids are always unsigned
                     }),
                 );
             }

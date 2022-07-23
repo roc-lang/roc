@@ -1595,7 +1595,7 @@ impl<'a> WasmBackend<'a> {
         if stores_tag_id_as_data {
             let id_offset = data_offset + union_layout.tag_id_offset(TARGET_INFO).unwrap();
 
-            let id_align = union_layout.tag_id_builtin().alignment_bytes(TARGET_INFO);
+            let id_align = union_layout.discriminant().alignment_bytes();
             let id_align = Align::from(id_align);
 
             self.code_builder.get_local(local_id);
@@ -1678,20 +1678,16 @@ impl<'a> WasmBackend<'a> {
         if union_layout.stores_tag_id_as_data(TARGET_INFO) {
             let id_offset = union_layout.tag_id_offset(TARGET_INFO).unwrap();
 
-            let id_align = union_layout.tag_id_builtin().alignment_bytes(TARGET_INFO);
+            let id_align = union_layout.discriminant().alignment_bytes();
             let id_align = Align::from(id_align);
 
             self.storage
                 .load_symbols(&mut self.code_builder, &[structure]);
 
-            match union_layout.tag_id_builtin() {
-                Builtin::Bool | Builtin::Int(IntWidth::U8) => {
-                    self.code_builder.i32_load8_u(id_align, id_offset)
-                }
-                Builtin::Int(IntWidth::U16) => self.code_builder.i32_load16_u(id_align, id_offset),
-                Builtin::Int(IntWidth::U32) => self.code_builder.i32_load(id_align, id_offset),
-                Builtin::Int(IntWidth::U64) => self.code_builder.i64_load(id_align, id_offset),
-                x => internal_error!("Unexpected layout for tag union id {:?}", x),
+            use roc_mono::layout::Discriminant::*;
+            match union_layout.discriminant() {
+                U0 | U1 | U8 => self.code_builder.i32_load8_u(id_align, id_offset),
+                U16 => self.code_builder.i32_load16_u(id_align, id_offset),
             }
         } else if union_layout.stores_tag_id_in_pointer(TARGET_INFO) {
             self.storage
