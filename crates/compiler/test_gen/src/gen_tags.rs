@@ -1861,3 +1861,27 @@ fn issue_3560_newtype_tag_constructor_has_nested_constructor_with_no_payload() {
         RocStr
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[should_panic(expected = r#"Roc failed with message: "Erroneous: Expr::Closure""#)]
+fn error_type_in_tag_union_payload() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            f : ([] -> Bool) -> Bool
+            f = \fun ->
+              if True then
+                fun 42
+              else
+                False
+
+            f (\x -> x)
+            "#
+        ),
+        0,
+        u8,
+        |x| x,
+        true // ignore type errors
+    )
+}

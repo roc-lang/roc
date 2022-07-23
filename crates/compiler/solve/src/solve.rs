@@ -1653,25 +1653,35 @@ fn open_tag_union(subs: &mut Subs, var: Variable) {
         use {Content::*, FlatType::*};
 
         let desc = subs.get(var);
-        if let Structure(TagUnion(tags, ext)) = desc.content {
-            if let Structure(EmptyTagUnion) = subs.get_content_without_compacting(ext) {
-                let new_ext = subs.fresh_unnamed_flex_var();
-                subs.set_rank(new_ext, desc.rank);
-                let new_union = Structure(TagUnion(tags, new_ext));
-                subs.set_content(var, new_union);
+        match desc.content {
+            Structure(TagUnion(tags, ext)) => {
+                if let Structure(EmptyTagUnion) = subs.get_content_without_compacting(ext) {
+                    let new_ext = subs.fresh_unnamed_flex_var();
+                    subs.set_rank(new_ext, desc.rank);
+                    let new_union = Structure(TagUnion(tags, new_ext));
+                    subs.set_content(var, new_union);
+                }
+
+                // Also open up all nested tag unions.
+                let all_vars = tags.variables().into_iter();
+                stack.extend(all_vars.flat_map(|slice| subs[slice]).map(|var| subs[var]));
             }
 
-            // Also open up all nested tag unions.
-            let all_vars = tags.variables().into_iter();
-            stack.extend(all_vars.flat_map(|slice| subs[slice]).map(|var| subs[var]));
+            Structure(Record(fields, _)) => {
+                // Open up all nested tag unions.
+                stack.extend(subs.get_subs_slice(fields.variables()));
+            }
+
+            _ => {
+                // Everything else is not a structural type that can be opened
+                // (i.e. cannot be matched in a pattern-match)
+            }
         }
 
         // Today, an "open" constraint doesn't affect any types
         // other than tag unions. Recursive tag unions are constructed
         // at a later time (during occurs checks after tag unions are
         // resolved), so that's not handled here either.
-        // NB: Handle record types here if we add presence constraints
-        // to their type inference as well.
     }
 }
 
@@ -2807,7 +2817,8 @@ fn type_to_variable<'a>(
                     subs,
                     UnionTags::default(),
                     temp_ext_var,
-                );
+                )
+                .expect("extension var could not be seen as a tag union");
 
                 for _ in it {
                     unreachable!("we assert that the ext var is empty; otherwise we'd already know it was a tag union!");
@@ -3351,7 +3362,8 @@ fn type_to_union_tags<'a>(
                 subs,
                 UnionTags::default(),
                 temp_ext_var,
-            );
+            )
+            .expect("extension var could not be seen as tag union");
 
             tag_vars.extend(it.map(|(n, v)| (n.clone(), v)));
 

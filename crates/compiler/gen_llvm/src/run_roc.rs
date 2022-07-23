@@ -1,4 +1,4 @@
-use std::ffi::CString;
+use std::ffi::CStr;
 use std::mem::MaybeUninit;
 use std::os::raw::c_char;
 
@@ -37,14 +37,9 @@ impl<T: Sized> From<RocCallResult<T>> for Result<T, String> {
         match call_result.tag {
             0 => Ok(unsafe { call_result.value.assume_init() }),
             _ => Err({
-                let raw = unsafe { CString::from_raw(call_result.error_msg) };
+                let raw = unsafe { CStr::from_ptr(call_result.error_msg) };
 
-                let result = format!("{:?}", raw);
-
-                // make sure rust does not try to free the Roc string
-                std::mem::forget(raw);
-
-                result
+                raw.to_str().unwrap().to_owned()
             }),
         }
     }
@@ -80,10 +75,10 @@ macro_rules! try_run_jit_function {
         try_run_jit_function!($lib, $main_fn_name, $ty, $transform, v)
     }};
 
-    ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr, $errors:expr) => {{
-        try_run_jit_function!($lib, $main_fn_name, $ty, $transform, $errors, &[])
+    ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr) => {{
+        try_run_jit_function!($lib, $main_fn_name, $ty, $transform, &[])
     }};
-    ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr, $errors:expr, $expect_failures:expr) => {{
+    ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr, $expect_failures:expr) => {{
         use inkwell::context::Context;
         use roc_builtins::bitcode;
         use roc_gen_llvm::run_roc::RocCallResult;
@@ -115,14 +110,8 @@ macro_rules! run_jit_function {
         run_jit_function!($lib, $main_fn_name, $ty, $transform, $errors, &[])
     }};
     ($lib: expr, $main_fn_name: expr, $ty:ty, $transform:expr, $errors:expr, $expect_failures:expr) => {{
-        let result = $crate::try_run_jit_function!(
-            $lib,
-            $main_fn_name,
-            $ty,
-            $transform,
-            $errors,
-            $expect_failures
-        );
+        let result =
+            $crate::try_run_jit_function!($lib, $main_fn_name, $ty, $transform, $expect_failures);
 
         match result {
             Ok(success) => {

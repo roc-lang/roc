@@ -5,7 +5,7 @@ use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant};
 
 use roc_collections::all::MutMap;
 #[cfg(feature = "target-wasm32")]
@@ -199,7 +199,7 @@ pub fn gen_from_mono_module_llvm(
     use inkwell::module::Linkage;
     use inkwell::targets::{FileType, RelocMode};
 
-    let code_gen_start = SystemTime::now();
+    let code_gen_start = Instant::now();
 
     // Generate the binary
     let target_info = roc_target::TargetInfo::from(target);
@@ -292,8 +292,8 @@ pub fn gen_from_mono_module_llvm(
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
-    let code_gen = code_gen_start.elapsed().unwrap();
-    let emit_o_file_start = SystemTime::now();
+    let code_gen = code_gen_start.elapsed();
+    let emit_o_file_start = Instant::now();
 
     // annotate the LLVM IR output with debug info
     // so errors are reported with the line number of the LLVM source
@@ -389,7 +389,7 @@ pub fn gen_from_mono_module_llvm(
         }
     }
 
-    let emit_o_file = emit_o_file_start.elapsed().unwrap();
+    let emit_o_file = emit_o_file_start.elapsed();
 
     CodeGenTiming {
         code_gen,
@@ -442,7 +442,7 @@ fn gen_from_mono_module_dev_wasm32(
     app_o_file: &Path,
     preprocessed_host_path: &Path,
 ) -> CodeGenTiming {
-    let code_gen_start = SystemTime::now();
+    let code_gen_start = Instant::now();
     let MonomorphizedModule {
         module_id,
         procedures,
@@ -482,8 +482,8 @@ fn gen_from_mono_module_dev_wasm32(
     let final_binary_bytes =
         roc_gen_wasm::build_app_binary(&env, &mut interns, host_module, procedures);
 
-    let code_gen = code_gen_start.elapsed().unwrap();
-    let emit_o_file_start = SystemTime::now();
+    let code_gen = code_gen_start.elapsed();
+    let emit_o_file_start = Instant::now();
 
     // The app_o_file is actually the final binary
     std::fs::write(&app_o_file, &final_binary_bytes).unwrap_or_else(|e| {
@@ -494,7 +494,7 @@ fn gen_from_mono_module_dev_wasm32(
         )
     });
 
-    let emit_o_file = emit_o_file_start.elapsed().unwrap();
+    let emit_o_file = emit_o_file_start.elapsed();
 
     CodeGenTiming {
         code_gen,
@@ -508,7 +508,7 @@ fn gen_from_mono_module_dev_assembly(
     target: &target_lexicon::Triple,
     app_o_file: &Path,
 ) -> CodeGenTiming {
-    let code_gen_start = SystemTime::now();
+    let code_gen_start = Instant::now();
 
     let lazy_literals = true;
     let generate_allocators = false; // provided by the platform
@@ -531,15 +531,15 @@ fn gen_from_mono_module_dev_assembly(
 
     let module_object = roc_gen_dev::build_module(&env, &mut interns, target, procedures);
 
-    let code_gen = code_gen_start.elapsed().unwrap();
-    let emit_o_file_start = SystemTime::now();
+    let code_gen = code_gen_start.elapsed();
+    let emit_o_file_start = Instant::now();
 
     let module_out = module_object
         .write()
         .expect("failed to build output object");
     std::fs::write(&app_o_file, module_out).expect("failed to write object to file");
 
-    let emit_o_file = emit_o_file_start.elapsed().unwrap();
+    let emit_o_file = emit_o_file_start.elapsed();
 
     CodeGenTiming {
         code_gen,

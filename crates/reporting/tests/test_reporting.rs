@@ -7727,7 +7727,7 @@ All branches in an `if` must have the same type!
 
     But all the previous branches match:
 
-        F [A]a
+        F [A]
     "###
     );
 
@@ -9874,5 +9874,31 @@ All branches in an `if` must have the same type!
         If you didn't intend on using `y` then remove it so future readers of
         your code don't wonder why it is there.
         "###
+    );
+
+    test_report!(
+        flip_flop_catch_all_branches_not_exhaustive,
+        indoc!(
+            r#"
+            \x -> when x is
+                    A B _ -> ""
+                    A _ C -> ""
+            "#
+        ),
+        @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    4│>      \x -> when x is
+    5│>              A B _ -> ""
+    6│>              A _ C -> ""
+
+    Other possibilities include:
+
+        A _ _
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
     );
 }
