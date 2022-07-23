@@ -160,8 +160,8 @@ pub extern "C" fn roc_fx_sendRequest(roc_request: &glue::Request) -> glue::Respo
 
     let mut req_builder = client.request(method, url);
     for header in roc_request.headers.iter() {
-        let (key, value) = unsafe { header.as_Header() };
-        req_builder = req_builder.header(key.as_str(), value.as_str());
+        let (name, value) = unsafe { header.as_Header() };
+        req_builder = req_builder.header(name.as_str(), value.as_str());
     }
     if roc_request.body.discriminant() == glue::discriminant_Body::Body {
         let (mime_type_tag, body_byte_list) = unsafe { roc_request.body.as_Body() };
@@ -183,8 +183,15 @@ pub extern "C" fn roc_fx_sendRequest(roc_request: &glue::Request) -> glue::Respo
             let status = response.status();
             let status_str = status.canonical_reason().unwrap_or_else(|| status.as_str());
 
+            let headers_iter = response.headers().iter().map(|(name, value)| {
+                glue::Header::Header(
+                    RocStr::from(name.as_str()),
+                    RocStr::from(value.to_str().unwrap_or_default()),
+                )
+            });
+
             let metadata = Metadata {
-                headers: RocList::empty(), // TODO
+                headers: RocList::from_iter(headers_iter),
                 statusText: RocStr::from(status_str),
                 url: RocStr::from(url),
                 statusCode: status.as_u16(),
