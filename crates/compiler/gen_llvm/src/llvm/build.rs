@@ -696,8 +696,8 @@ pub fn construct_optimization_passes<'a>(
     mpm.add_always_inliner_pass();
 
     // tail-call elimination is always on
-    fpm.add_instruction_combining_pass();
-    fpm.add_tail_call_elimination_pass();
+    //fpm.add_instruction_combining_pass();
+    //fpm.add_tail_call_elimination_pass();
 
     let pmb = PassManagerBuilder::create();
     match opt_level {

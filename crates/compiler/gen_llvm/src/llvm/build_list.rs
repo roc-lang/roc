@@ -373,6 +373,29 @@ pub fn list_capacity<'ctx>(
         .into_int_value()
 }
 
+pub fn destructure<'ctx>(
+    builder: &Builder<'ctx>,
+    wrapper_struct: StructValue<'ctx>,
+) -> (PointerValue<'ctx>, IntValue<'ctx>, IntValue<'ctx>) {
+    let length = builder
+        .build_extract_value(wrapper_struct, Builtin::WRAPPER_LEN, "list_len")
+        .unwrap()
+        .into_int_value();
+
+    let capacity = builder
+        .build_extract_value(wrapper_struct, Builtin::WRAPPER_CAPACITY, "list_cap")
+        .unwrap()
+        .into_int_value();
+
+    // a `*mut u8` pointer
+    let generic_ptr = builder
+        .build_extract_value(wrapper_struct, Builtin::WRAPPER_PTR, "read_list_ptr")
+        .unwrap()
+        .into_pointer_value();
+
+    (generic_ptr, length, capacity)
+}
+
 /// List.sortWith : List a, (a, a -> Ordering) -> List a
 pub fn list_sort_with<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -645,6 +668,8 @@ where
     LoopFn: FnMut(IntValue<'ctx>, BasicValueEnum<'ctx>),
 {
     let builder = env.builder;
+
+    dbg!(ptr);
 
     incrementing_index_loop(env, parent, len, index_name, |index| {
         // The pointer to the element in the list

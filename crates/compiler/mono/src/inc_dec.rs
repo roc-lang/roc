@@ -111,9 +111,11 @@ pub fn occurring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) 
             Expect {
                 condition,
                 remainder,
+                lookups,
                 ..
             } => {
                 result.insert(*condition);
+                result.extend(lookups.iter().copied());
                 stack.push(remainder);
             }
 
@@ -1180,7 +1182,7 @@ impl<'a> Context<'a> {
                 lookups,
                 layouts,
             } => {
-                let (b, b_live_vars) = self.visit_stmt(codegen, remainder);
+                let (b, mut b_live_vars) = self.visit_stmt(codegen, remainder);
 
                 let expect = self.arena.alloc(Stmt::Expect {
                     condition: *condition,
@@ -1189,6 +1191,10 @@ impl<'a> Context<'a> {
                     layouts,
                     remainder: b,
                 });
+
+                let expect = self.add_inc_before_consume_all(lookups, expect, &b_live_vars);
+
+                b_live_vars.extend(lookups.iter().copied());
 
                 (expect, b_live_vars)
             }
@@ -1299,9 +1305,11 @@ pub fn collect_stmt(
         Expect {
             condition,
             remainder,
+            lookups,
             ..
         } => {
             vars.insert(*condition);
+            vars.extend(lookups.iter().copied());
             collect_stmt(remainder, jp_live_vars, vars)
         }
 

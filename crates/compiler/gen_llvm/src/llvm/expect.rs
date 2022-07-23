@@ -1,9 +1,10 @@
 use crate::llvm::bitcode::{call_bitcode_fn, call_str_bitcode_fn};
 use crate::llvm::build::{get_tag_id, tag_pointer_clear_tag_id, Env, FAST_CALL_CONV};
-use crate::llvm::build_list::{list_len, load_list_ptr};
+use crate::llvm::build_list::{self, incrementing_elem_loop, list_len, load_list_ptr};
 use crate::llvm::build_str::str_equal;
 use crate::llvm::convert::basic_type_from_layout;
 use bumpalo::collections::Vec;
+use inkwell::builder::Builder;
 use inkwell::types::BasicType;
 use inkwell::values::{
     BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
@@ -19,6 +20,14 @@ use super::build::{
     dec_binop_with_unchecked, load_roc_value, load_symbol_and_layout, use_roc_value, Scope,
 };
 use super::convert::argument_type_from_union_layout;
+
+fn pointer_at_offset<'ctx>(
+    bd: &Builder<'ctx>,
+    ptr: PointerValue<'ctx>,
+    offset: IntValue<'ctx>,
+) -> PointerValue<'ctx> {
+    unsafe { bd.build_gep(ptr, &[offset], "offset_ptr") }
+}
 
 pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -124,7 +133,7 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Copy)]
 enum WhenRecursive<'a> {
     Unreachable,
     Loop(UnionLayout<'a>),
@@ -132,7 +141,7 @@ enum WhenRecursive<'a> {
 
 fn build_clone<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    _layout_ids: &mut LayoutIds<'a>,
+    layout_ids: &mut LayoutIds<'a>,
     ptr: PointerValue<'ctx>,
     offset: IntValue<'ctx>,
     value: BasicValueEnum<'ctx>,
@@ -141,7 +150,7 @@ fn build_clone<'a, 'ctx, 'env>(
 ) -> IntValue<'ctx> {
     match layout {
         Layout::Builtin(builtin) => {
-            build_clone_builtin(env, ptr, offset, value, builtin, when_recursive)
+            build_clone_builtin(env, layout_ids, ptr, offset, value, builtin, when_recursive)
         }
 
         Layout::Struct {
@@ -235,6 +244,7 @@ fn build_copy<'a, 'ctx, 'env>(
 
 fn build_clone_builtin<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
     ptr: PointerValue<'ctx>,
     offset: IntValue<'ctx>,
     value: BasicValueEnum<'ctx>,
@@ -256,6 +266,74 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
             )
             .into_int_value()
         }
-        Builtin::List(elem) => todo!(),
+        Builtin::List(elem) => {
+            let bd = env.builder;
+
+            let list = value.into_struct_value();
+            let (elements, len, cap) = build_list::destructure(env.builder, list);
+
+            let list_width = env
+                .ptr_int()
+                .const_int(env.target_info.ptr_size() as u64 * 3, false);
+            let elements_offset = bd.build_int_add(offset, list_width, "new_offset");
+
+            let mut offset = offset;
+
+            offset = build_copy(env, ptr, offset, elements_offset.into());
+            offset = build_copy(env, ptr, offset, len.into());
+            offset = build_copy(env, ptr, offset, cap.into());
+
+            let (element_width, _element_align) = elem.stack_size_and_alignment(env.target_info);
+            let element_width = env.ptr_int().const_int(element_width as _, false);
+
+            let elements_width = bd.build_int_mul(element_width, cap, "elements_width");
+
+            if false && elem.safe_to_memcpy() {
+                // NOTE we are not actually sure the dest is properly aligned
+                let dest = pointer_at_offset(bd, ptr, offset);
+                let src = bd.build_pointer_cast(
+                    elements,
+                    env.context.i8_type().ptr_type(AddressSpace::Generic),
+                    "to_bytes_pointer",
+                );
+                bd.build_memcpy(dest, 1, src, 1, elements_width).unwrap();
+
+                bd.build_int_add(offset, elements_width, "new_offset")
+            } else {
+                let elements_start_offset = offset;
+                let mut element_offset = elements_start_offset;
+
+                let body = |_index, element| {
+                    element_offset = build_clone(
+                        env,
+                        layout_ids,
+                        ptr,
+                        element_offset,
+                        element,
+                        *elem,
+                        when_recursive,
+                    );
+                };
+
+                let parent = env
+                    .builder
+                    .get_insert_block()
+                    .and_then(|b| b.get_parent())
+                    .unwrap();
+
+                let element_type = basic_type_from_layout(env, elem);
+                let elements = bd.build_pointer_cast(
+                    elements,
+                    element_type.ptr_type(AddressSpace::Generic),
+                    "elements",
+                );
+
+                dbg!(elements);
+
+                incrementing_elem_loop(env, parent, *elem, elements, len, "index", body);
+
+                element_offset
+            }
+        }
     }
 }

@@ -78,8 +78,9 @@ struct ExpectMemory {
 macro_rules! deref_number {
     ($name: ident, $t: ty) => {
         fn $name(&self, addr: usize) -> $t {
+            // dbg!(std::any::type_name::<$t>(), self.start, addr);
             let ptr = unsafe { self.start.add(addr) } as *const _;
-            unsafe { *ptr }
+            unsafe { std::ptr::read_unaligned(ptr) }
         }
     };
 }
@@ -165,7 +166,10 @@ impl<'a> ReplApp<'a> for ExpectReplApp<'a> {
         F: Fn(&'a Self::Memory, (usize, usize, usize)) -> Expr<'a>,
         Self::Memory: 'a,
     {
-        self.call_function(main_fn_name, transform)
+        let result = self.call_function(main_fn_name, transform);
+        dbg!(self.offset);
+        self.offset += 8;
+        result
     }
 
     fn call_function_returns_roc_str<T, F>(
