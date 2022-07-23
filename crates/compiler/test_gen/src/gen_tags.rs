@@ -11,7 +11,7 @@ use crate::helpers::wasm::assert_evals_to;
 use indoc::indoc;
 
 #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
-use roc_std::{RocList, RocStr};
+use roc_std::{RocList, RocStr, U128};
 
 #[test]
 fn width_and_alignment_u8_u8() {
@@ -1873,10 +1873,9 @@ fn alignment_i128() {
                 x
                 #"
         ),
-        // note: rust aligns the tuple `(i128, bool)` to 8 we align it to 16,
-        // so add 8 extra padding bytes
-        ((42, true), [0; 8], 1, [0; 15]),
-        ((i128, bool), [u8; 8], u8, [u8; 15])
+        // NOTE: roc_std::U128 is always aligned to 16, unlike rust's u128
+        ((U128::from(42), true), 1, [0; 15]),
+        ((U128, bool), u8, [u8; 15])
     );
 }
 
