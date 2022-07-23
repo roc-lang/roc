@@ -22,7 +22,7 @@ use std::mem;
 use std::os::raw::c_char;
 use std::path::Path;
 use std::process::Command;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant};
 use target_lexicon::Triple;
 use tempfile::Builder;
 
@@ -255,7 +255,7 @@ pub fn preprocess(
         println!("Targeting: {}", target);
     }
 
-    let total_start = SystemTime::now();
+    let total_start = Instant::now();
     let exec_parsing_start = total_start;
     let exec_file = fs::File::open(exec_filename).unwrap_or_else(|e| internal_error!("{}", e));
     let exec_mmap = unsafe { Mmap::map(&exec_file).unwrap_or_else(|e| internal_error!("{}", e)) };
@@ -306,10 +306,10 @@ pub fn preprocess(
         );
     }
 
-    let exec_parsing_duration = exec_parsing_start.elapsed().unwrap();
+    let exec_parsing_duration = exec_parsing_start.elapsed();
 
     // Extract PLT related information for app functions.
-    let symbol_and_plt_processing_start = SystemTime::now();
+    let symbol_and_plt_processing_start = Instant::now();
     let plt_section_name = match target.binary_format {
         target_lexicon::BinaryFormat::Elf => ".plt",
         target_lexicon::BinaryFormat::Macho => "__stubs",
@@ -550,9 +550,9 @@ pub fn preprocess(
         println!();
         println!("App Function Address Map: {:+x?}", app_func_addresses);
     }
-    let symbol_and_plt_processing_duration = symbol_and_plt_processing_start.elapsed().unwrap();
+    let symbol_and_plt_processing_duration = symbol_and_plt_processing_start.elapsed();
 
-    let text_disassembly_start = SystemTime::now();
+    let text_disassembly_start = Instant::now();
     let text_sections: Vec<Section> = exec_obj
         .sections()
         .filter(|sec| sec.kind() == SectionKind::Text)
@@ -688,7 +688,7 @@ pub fn preprocess(
             }
         }
     }
-    let text_disassembly_duration = text_disassembly_start.elapsed().unwrap();
+    let text_disassembly_duration = text_disassembly_start.elapsed();
 
     let scanning_dynamic_deps_duration;
     let platform_gen_start;
@@ -699,7 +699,7 @@ pub fn preprocess(
             .unwrap_or(target_lexicon::Endianness::Little)
         {
             target_lexicon::Endianness::Little => {
-                let scanning_dynamic_deps_start = SystemTime::now();
+                let scanning_dynamic_deps_start = Instant::now();
 
                 let ElfDynamicDeps {
                     got_app_syms,
@@ -710,9 +710,9 @@ pub fn preprocess(
                     &exec_obj, &mut md, &app_syms, shared_lib, exec_data, verbose,
                 );
 
-                scanning_dynamic_deps_duration = scanning_dynamic_deps_start.elapsed().unwrap();
+                scanning_dynamic_deps_duration = scanning_dynamic_deps_start.elapsed();
 
-                platform_gen_start = SystemTime::now();
+                platform_gen_start = Instant::now();
 
                 // TODO little endian
                 gen_elf_le(
@@ -739,7 +739,7 @@ pub fn preprocess(
                 .unwrap_or(target_lexicon::Endianness::Little)
             {
                 target_lexicon::Endianness::Little => {
-                    let scanning_dynamic_deps_start = SystemTime::now();
+                    let scanning_dynamic_deps_start = Instant::now();
 
                     // let ElfDynamicDeps {
                     //     got_app_syms,
@@ -750,9 +750,9 @@ pub fn preprocess(
                     //     &exec_obj, &mut md, &app_syms, shared_lib, exec_data, verbose,
                     // );
 
-                    scanning_dynamic_deps_duration = scanning_dynamic_deps_start.elapsed().unwrap();
+                    scanning_dynamic_deps_duration = scanning_dynamic_deps_start.elapsed();
 
-                    platform_gen_start = SystemTime::now();
+                    platform_gen_start = Instant::now();
 
                     // TODO little endian
                     let macho_load_so_offset = match macho_load_so_offset {
@@ -802,14 +802,14 @@ pub fn preprocess(
         }
     };
 
-    let platform_gen_duration = platform_gen_start.elapsed().unwrap();
+    let platform_gen_duration = platform_gen_start.elapsed();
 
     if verbose {
         println!();
         println!("{:+x?}", md);
     }
 
-    let saving_metadata_start = SystemTime::now();
+    let saving_metadata_start = Instant::now();
     // This block ensure that the metadata is fully written and timed before continuing.
     {
         let output =
@@ -819,18 +819,18 @@ pub fn preprocess(
             internal_error!("Failed to serialize metadata: {}", err);
         };
     }
-    let saving_metadata_duration = saving_metadata_start.elapsed().unwrap();
+    let saving_metadata_duration = saving_metadata_start.elapsed();
 
-    let flushing_data_start = SystemTime::now();
+    let flushing_data_start = Instant::now();
     out_mmap
         .flush()
         .unwrap_or_else(|e| internal_error!("{}", e));
     // Also drop files to to ensure data is fully written here.
     drop(out_mmap);
     drop(out_file);
-    let flushing_data_duration = flushing_data_start.elapsed().unwrap();
+    let flushing_data_duration = flushing_data_start.elapsed();
 
-    let total_duration = total_start.elapsed().unwrap();
+    let total_duration = total_start.elapsed();
 
     if verbose || time {
         println!();
@@ -1929,7 +1929,7 @@ pub fn surgery(
     time: bool,
     target: &Triple,
 ) {
-    let total_start = SystemTime::now();
+    let total_start = Instant::now();
     let loading_metadata_start = total_start;
     let md: metadata::Metadata = {
         let input = fs::File::open(metadata_filename).unwrap_or_else(|e| internal_error!("{}", e));
@@ -1941,9 +1941,9 @@ pub fn surgery(
             }
         }
     };
-    let loading_metadata_duration = loading_metadata_start.elapsed().unwrap();
+    let loading_metadata_duration = loading_metadata_start.elapsed();
 
-    let app_parsing_start = SystemTime::now();
+    let app_parsing_start = Instant::now();
     let app_file = fs::File::open(app_filename).unwrap_or_else(|e| internal_error!("{}", e));
     let app_mmap = unsafe { Mmap::map(&app_file).unwrap_or_else(|e| internal_error!("{}", e)) };
     let app_data = &*app_mmap;
@@ -1953,9 +1953,9 @@ pub fn surgery(
             internal_error!("Failed to parse application file: {}", err);
         }
     };
-    let app_parsing_duration = app_parsing_start.elapsed().unwrap();
+    let app_parsing_duration = app_parsing_start.elapsed();
 
-    let load_and_mmap_start = SystemTime::now();
+    let load_and_mmap_start = Instant::now();
     let exec_file = fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -1970,8 +1970,8 @@ pub fn surgery(
     let mut exec_mmap =
         unsafe { MmapMut::map_mut(&exec_file).unwrap_or_else(|e| internal_error!("{}", e)) };
 
-    let load_and_mmap_duration = load_and_mmap_start.elapsed().unwrap();
-    let out_gen_start = SystemTime::now();
+    let load_and_mmap_duration = load_and_mmap_start.elapsed();
+    let out_gen_start = Instant::now();
 
     let mut offset = 0;
     let output = match target.binary_format {
@@ -1995,8 +1995,8 @@ pub fn surgery(
         }
     };
 
-    let out_gen_duration = out_gen_start.elapsed().unwrap();
-    let flushing_data_start = SystemTime::now();
+    let out_gen_duration = out_gen_start.elapsed();
+    let flushing_data_start = Instant::now();
 
     // TODO investigate using the async version of flush - might be faster due to not having to block on that
     exec_mmap
@@ -2009,7 +2009,7 @@ pub fn surgery(
         .set_len(offset as u64 + 1)
         .unwrap_or_else(|e| internal_error!("{}", e));
     drop(exec_file);
-    let flushing_data_duration = flushing_data_start.elapsed().unwrap();
+    let flushing_data_duration = flushing_data_start.elapsed();
 
     // Make sure the final executable has permision to execute.
     #[cfg(target_family = "unix")]
@@ -2023,7 +2023,7 @@ pub fn surgery(
         fs::set_permissions(out_filename, perms).unwrap_or_else(|e| internal_error!("{}", e));
     }
 
-    let total_duration = total_start.elapsed().unwrap();
+    let total_duration = total_start.elapsed();
 
     if verbose || time {
         println!("\nTimings");
