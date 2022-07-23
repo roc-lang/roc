@@ -1104,17 +1104,17 @@ impl<
 
         let elem_size = elem_layout.stack_size(self.storage_manager.target_info()) as u64;
         let allocation_size = elem_size * elems.len() as u64 + allocation_alignment /* add space for refcount */;
-        let u32_layout = Layout::Builtin(Builtin::Int(IntWidth::U32));
-        self.load_literal(
-            &Symbol::DEV_TMP,
-            &u32_layout,
-            &Literal::Int((allocation_alignment as i128).to_ne_bytes()),
-        );
         let u64_layout = Layout::Builtin(Builtin::Int(IntWidth::U64));
         self.load_literal(
-            &Symbol::DEV_TMP2,
+            &Symbol::DEV_TMP,
             &u64_layout,
             &Literal::Int((allocation_size as i128).to_ne_bytes()),
+        );
+        let u32_layout = Layout::Builtin(Builtin::Int(IntWidth::U32));
+        self.load_literal(
+            &Symbol::DEV_TMP2,
+            &u32_layout,
+            &Literal::Int((allocation_alignment as i128).to_ne_bytes()),
         );
 
         self.build_fn_call(
