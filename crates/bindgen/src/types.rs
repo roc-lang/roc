@@ -1024,8 +1024,10 @@ fn add_tag_union<'a>(
                 // A non-recursive tag union
                 // e.g. `Result ok err : [Ok ok, Err err]`
                 NonRecursive(_) => {
-                    let discriminant_size =
-                        Discriminant::from_number_of_tags(tags.len()).stack_size();
+                    // TODO deal with empty tag union
+                    let discriminant_size = Discriminant::from_number_of_tags(tags.len())
+                        .stack_size()
+                        .max(1);
                     let discriminant_offset = union_layout.tag_id_offset(env.target).unwrap();
 
                     RocType::TagUnion(RocTagUnion::NonRecursive {
