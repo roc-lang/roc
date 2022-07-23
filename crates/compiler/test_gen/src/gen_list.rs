@@ -31,19 +31,19 @@ fn empty_list_literal() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_literal_empty_record() {
     assert_evals_to!("[{}]", RocList::from_slice(&[()]), RocList<()>);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn int_singleton_list_literal() {
     assert_evals_to!("[1, 2]", RocList::from_slice(&[1, 2]), RocList<i64>);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn int_list_literal() {
     assert_evals_to!("[12, 9]", RocList::from_slice(&[12, 9]), RocList<i64>);
     assert_evals_to!(
@@ -133,7 +133,7 @@ fn bool_list_literal() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn variously_sized_list_literals() {
     assert_evals_to!("[]", RocList::<i64>::from_slice(&[]), RocList<i64>);
     assert_evals_to!("[1]", RocList::from_slice(&[1]), RocList<i64>);

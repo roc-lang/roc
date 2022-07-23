@@ -627,17 +627,6 @@ impl<
         );
     }
 
-    pub fn create_empty_array(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) {
-        let base_offset = self.claim_stack_area(sym, 24);
-        // TODO: This can be optimized. We just need to add the ability to set a stack value to zero or load an immediate to the stack.
-        self.with_tmp_general_reg(buf, |_storage_manager, buf, reg| {
-            ASM::mov_reg64_imm64(buf, reg, 0);
-            ASM::mov_base32_reg64(buf, base_offset, reg);
-            ASM::mov_base32_reg64(buf, base_offset + 8, reg);
-            ASM::mov_base32_reg64(buf, base_offset + 16, reg);
-        });
-    }
-
     /// Creates a struct on the stack, moving the data in fields into the struct.
     pub fn create_struct(
         &mut self,
