@@ -43,7 +43,7 @@ pub enum ToAstProblem {
 #[allow(clippy::too_many_arguments)]
 pub fn jit_to_ast<'a, A: ReplApp<'a>>(
     arena: &'a Bump,
-    app: &'a A,
+    app: &mut A,
     main_fn_name: &str,
     layout: ProcLayout<'a>,
     content: &'a Content,
@@ -94,6 +94,7 @@ enum NewtypeKind<'a> {
 /// Returns (new type containers, optional alias content, real content).
 fn unroll_newtypes_and_aliases<'a>(
     env: &Env<'a, 'a>,
+
     mut content: &'a Content,
 ) -> (Vec<'a, NewtypeKind<'a>>, Option<&'a Content>, &'a Content) {
     let mut newtype_containers = Vec::with_capacity_in(1, env.arena);
@@ -282,7 +283,7 @@ const OPAQUE_FUNCTION: Expr = Expr::Var {
 
 fn jit_to_ast_help<'a, A: ReplApp<'a>>(
     env: &Env<'a, 'a>,
-    app: &'a A,
+    app: &mut A,
     main_fn_name: &str,
     layout: &Layout<'a>,
     content: &'a Content,

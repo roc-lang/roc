@@ -108,7 +108,7 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
     /// Size of the return value is statically determined from its Rust type
     /// The `transform` callback takes the app's memory and the returned value
     /// _main_fn_name is always the same and we don't use it here
-    fn call_function<Return, F>(&self, _main_fn_name: &str, transform: F) -> Expr<'a>
+    fn call_function<Return, F>(&mut self, _main_fn_name: &str, transform: F) -> Expr<'a>
     where
         F: Fn(&'a Self::Memory, Return) -> Expr<'a>,
         Self::Memory: 'a,
@@ -135,7 +135,7 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
     /// _main_fn_name and _ret_bytes are only used for the CLI REPL. For Wasm they are compiled-in
     /// to the test_wrapper function of the app itself
     fn call_function_dynamic_size<T, F>(
-        &self,
+        &mut self,
         _main_fn_name: &str,
         _ret_bytes: usize,
         transform: F,
@@ -242,13 +242,13 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         .await
         .map_err(|js| format!("{:?}", js))?;
 
-    let app = WasmReplApp { arena };
+    let mut app = WasmReplApp { arena };
 
     // Run the app and transform the result value to an AST `Expr`
     // Restore type constructor names, and other user-facing info that was erased during compilation.
     let res_answer = jit_to_ast(
         arena,
-        &app,
+        &mut app,
         "", // main_fn_name is ignored (only passed to WasmReplApp methods)
         main_fn_layout,
         content,
