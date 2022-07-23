@@ -633,23 +633,6 @@ impl<'a> UnionLayout<'a> {
         round_up_to_alignment(data_width, data_align)
     }
 
-    pub fn tag_id_offset(&self, target_info: TargetInfo) -> Option<u32> {
-        use UnionLayout::*;
-
-        if let NonNullableUnwrapped(_) | NullableUnwrapped { .. } = self {
-            return None;
-        }
-
-        let data_width = self.data_size_and_alignment_help_match(None, target_info).0;
-
-        // current, broken logic
-        if data_width > 8 {
-            Some(round_up_to_alignment(data_width, 8))
-        } else {
-            Some(data_width)
-        }
-    }
-
     /// Very important to use this when doing a memcpy!
     fn stack_size_without_alignment(&self, target_info: TargetInfo) -> u32 {
         match self {
