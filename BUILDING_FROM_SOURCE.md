@@ -41,6 +41,8 @@ Use `cargo run help` to see all subcommands.
 To use the `repl` subcommand, execute `cargo run repl`.
 Use `cargo build` to build the whole project.
 
+Read the instructions [here](devtools/README.md) to make nix work well with your development tools (vscode, vim, rust-analyzer...)
+
 #### Extra tips
 
 If you want to load all dependencies automatically whenever you `cd` into `roc`, check out [direnv](https://direnv.net/).
