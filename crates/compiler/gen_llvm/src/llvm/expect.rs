@@ -1,25 +1,17 @@
-use crate::llvm::bitcode::{call_bitcode_fn, call_str_bitcode_fn};
-use crate::llvm::build::{get_tag_id, tag_pointer_clear_tag_id, Env, FAST_CALL_CONV};
-use crate::llvm::build_list::{self, incrementing_elem_loop, list_len, load_list_ptr};
-use crate::llvm::build_str::str_equal;
+use crate::llvm::bitcode::call_bitcode_fn;
+use crate::llvm::build::Env;
+use crate::llvm::build_list::{self, incrementing_elem_loop};
 use crate::llvm::convert::basic_type_from_layout;
-use bumpalo::collections::Vec;
 use inkwell::builder::Builder;
 use inkwell::types::BasicType;
-use inkwell::values::{
-    BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
-};
-use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
+use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
+use inkwell::AddressSpace;
 use roc_builtins::bitcode;
-use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 use roc_region::all::Region;
 
-use super::build::{
-    dec_binop_with_unchecked, load_roc_value, load_symbol_and_layout, use_roc_value, Scope,
-};
-use super::convert::argument_type_from_union_layout;
+use super::build::{load_symbol_and_layout, Scope};
 
 fn pointer_at_offset<'ctx>(
     bd: &Builder<'ctx>,
@@ -107,16 +99,9 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
         );
 
         env.builder.build_store(cast_ptr, value);
-
-        // let increment = layout.stack_size(env.target_info);
-        let increment = 4;
-        let increment = env.ptr_int().const_int(increment as _, false);
-
-        ptr = unsafe { env.builder.build_gep(ptr, &[increment], "increment_ptr") };
     }
 
     let mut offset = env.ptr_int().const_int(12, false);
-    let mut ptr = original_ptr;
 
     for lookup in lookups.iter() {
         let (value, layout) = load_symbol_and_layout(scope, lookup);
@@ -124,7 +109,7 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
         offset = build_clone(
             env,
             layout_ids,
-            ptr,
+            original_ptr,
             offset,
             value,
             *layout,
@@ -136,6 +121,7 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
 #[derive(Clone, Debug, Copy)]
 enum WhenRecursive<'a> {
     Unreachable,
+    #[allow(dead_code)]
     Loop(UnionLayout<'a>),
 }
 
@@ -270,7 +256,7 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
             let bd = env.builder;
 
             let list = value.into_struct_value();
-            let (elements, len, cap) = build_list::destructure(env.builder, list);
+            let (elements, len, _cap) = build_list::destructure(env.builder, list);
 
             let list_width = env
                 .ptr_int()
@@ -279,16 +265,17 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
 
             let mut offset = offset;
 
+            // we only copy the elements we actually have (and skip extra capacity)
             offset = build_copy(env, ptr, offset, elements_offset.into());
             offset = build_copy(env, ptr, offset, len.into());
-            offset = build_copy(env, ptr, offset, cap.into());
+            offset = build_copy(env, ptr, offset, len.into());
 
             let (element_width, _element_align) = elem.stack_size_and_alignment(env.target_info);
             let element_width = env.ptr_int().const_int(element_width as _, false);
 
-            let elements_width = bd.build_int_mul(element_width, cap, "elements_width");
+            let elements_width = bd.build_int_mul(element_width, len, "elements_width");
 
-            if false && elem.safe_to_memcpy() {
+            if elem.safe_to_memcpy() {
                 // NOTE we are not actually sure the dest is properly aligned
                 let dest = pointer_at_offset(bd, ptr, offset);
                 let src = bd.build_pointer_cast(
@@ -301,25 +288,6 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
                 bd.build_int_add(offset, elements_width, "new_offset")
             } else {
                 let elements_start_offset = offset;
-                let mut element_offset = elements_start_offset;
-
-                let body = |_index, element| {
-                    element_offset = build_clone(
-                        env,
-                        layout_ids,
-                        ptr,
-                        element_offset,
-                        element,
-                        *elem,
-                        when_recursive,
-                    );
-                };
-
-                let parent = env
-                    .builder
-                    .get_insert_block()
-                    .and_then(|b| b.get_parent())
-                    .unwrap();
 
                 let element_type = basic_type_from_layout(env, elem);
                 let elements = bd.build_pointer_cast(
@@ -328,11 +296,35 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
                     "elements",
                 );
 
-                dbg!(elements);
+                let element_offset = bd.build_alloca(env.ptr_int(), "element_offset");
+                bd.build_store(element_offset, elements_start_offset);
+
+                let body = |_index, element| {
+                    let current_offset = bd.build_load(element_offset, "element_offset");
+
+                    let new_offset = build_clone(
+                        env,
+                        layout_ids,
+                        ptr,
+                        current_offset.into_int_value(),
+                        element,
+                        *elem,
+                        when_recursive,
+                    );
+
+                    bd.build_store(element_offset, new_offset);
+                };
+
+                let parent = env
+                    .builder
+                    .get_insert_block()
+                    .and_then(|b| b.get_parent())
+                    .unwrap();
 
                 incrementing_elem_loop(env, parent, *elem, elements, len, "index", body);
 
-                element_offset
+                bd.build_load(element_offset, "element_offset")
+                    .into_int_value()
             }
         }
     }

@@ -669,8 +669,6 @@ where
 {
     let builder = env.builder;
 
-    dbg!(ptr);
-
     incrementing_index_loop(env, parent, len, index_name, |index| {
         // The pointer to the element in the list
         let element_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index], "load_index") };
