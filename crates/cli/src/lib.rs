@@ -424,16 +424,20 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         );
 
         for expect in expects {
+            // clear the state
             libc::memset(shared_ptr.cast(), 0, SHM_SIZE as _);
+            *((shared_ptr as *mut usize).add(1)) = 16;
 
             let result: Result<(), String> = try_run_jit_function!(lib, expect.name, (), |v: ()| v);
 
             let shared_memory_ptr: *const u8 = shared_ptr.cast();
 
-            let buffer = std::slice::from_raw_parts(shared_memory_ptr, SHM_SIZE as _);
+            let buffer =
+                std::slice::from_raw_parts(shared_memory_ptr.add(16), SHM_SIZE as usize - 16);
 
             if let Err(roc_panic_message) = result {
                 failed += 1;
+
                 render_expect_panic(
                     arena,
                     expect,
@@ -444,14 +448,21 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
                 println!();
             } else if buffer.iter().any(|b| *b != 0) {
                 failed += 1;
-                render_expect_failure(
-                    arena,
-                    Some(expect),
-                    &mut expectations,
-                    interns,
-                    shared_memory_ptr,
-                );
-                println!();
+
+                let count = *(shared_ptr as *const usize).add(0);
+                let mut offset = 16;
+
+                for _ in 0..count {
+                    offset += render_expect_failure(
+                        arena,
+                        Some(expect),
+                        &mut expectations,
+                        interns,
+                        shared_memory_ptr.add(offset),
+                    );
+
+                    println!();
+                }
             } else {
                 passed += 1;
             }
@@ -1097,7 +1108,7 @@ fn render_expect_failure<'a>(
     expectations: &mut VecMap<ModuleId, Expectations>,
     interns: &'a Interns,
     start: *const u8,
-) {
+) -> usize {
     use roc_reporting::report::Report;
     use roc_reporting::report::RocDocAllocator;
     use ven_pretty::DocAllocator;
@@ -1112,8 +1123,6 @@ fn render_expect_failure<'a>(
     let module_id: ModuleId = unsafe { std::mem::transmute(module_id_bytes) };
 
     let data = expectations.get_mut(&module_id).unwrap();
-    let current = data.expectations.get(&region).unwrap();
-    let subs = arena.alloc(&mut data.subs);
 
     // TODO cache these line offsets?
     let path = &data.path;
@@ -1123,7 +1132,15 @@ fn render_expect_failure<'a>(
 
     let line_info = roc_region::all::LineInfo::new(&file_string);
     let display_region = match expect {
-        Some(expect) => Region::span_across(&expect.region, &region),
+        Some(expect) => {
+            if !expect.region.contains(&region) {
+                // this is an expect outside of a toplevel expect,
+                // likely in some function we called
+                region
+            } else {
+                Region::across_all([&expect.region, &region])
+            }
+        }
         None => region,
     };
     let line_col_region = line_info.convert_region(display_region);
@@ -1132,6 +1149,15 @@ fn render_expect_failure<'a>(
 
     // 8 bytes for region, 4 for module id
     let start_offset = 12;
+
+    let current = match data.expectations.get(&region) {
+        None => {
+            invalid_regions(alloc, filename, line_info, region);
+            return 0;
+        }
+        Some(current) => current,
+    };
+    let subs = arena.alloc(&mut data.subs);
 
     let (symbols, variables): (Vec<_>, Vec<_>) = current.iter().map(|(a, b)| (*a, *b)).unzip();
 
@@ -1143,7 +1169,7 @@ fn render_expect_failure<'a>(
         })
         .collect();
 
-    let expressions = roc_repl_expect::get_values(
+    let (offset, expressions) = roc_repl_expect::get_values(
         target_info,
         arena,
         subs,
@@ -1209,6 +1235,44 @@ fn render_expect_failure<'a>(
     );
 
     println!("{}", buf);
+
+    offset
+}
+
+fn invalid_regions(
+    alloc: roc_reporting::report::RocDocAllocator,
+    filename: PathBuf,
+    line_info: roc_region::all::LineInfo,
+    region: Region,
+) {
+    use ven_pretty::DocAllocator;
+
+    let line_col_region = line_info.convert_region(region);
+
+    let doc = alloc.stack([
+        alloc.text("Internal expect failure"),
+        alloc.region(line_col_region),
+    ]);
+
+    let report = roc_reporting::report::Report {
+        title: "EXPECT FAILED".into(),
+        doc,
+        filename,
+        severity: roc_reporting::report::Severity::RuntimeError,
+    };
+
+    let mut buf = String::new();
+
+    report.render(
+        roc_reporting::report::RenderTarget::ColorTerminal,
+        &mut buf,
+        &alloc,
+        &roc_reporting::report::DEFAULT_PALETTE,
+    );
+
+    println!("{}", buf);
+
+    panic!();
 }
 
 #[cfg(target_os = "linux")]
