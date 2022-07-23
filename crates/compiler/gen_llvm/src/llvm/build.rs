@@ -3845,8 +3845,9 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
     return_layout: Layout<'a>,
     c_function_name: &str,
 ) -> FunctionValue<'ctx> {
-    let it = arguments.iter().map(|l| basic_type_from_layout(env, l));
+    let it = arguments.iter().map(|l| to_cc_type(env, l));
     let argument_types = Vec::from_iter_in(it, env.arena);
+
     let return_type = basic_type_from_layout(env, &return_layout);
 
     let cc_return = to_cc_return(env, &return_layout);
@@ -3897,15 +3898,58 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
         param_types.len()
     );
 
-    let it = params.iter().zip(param_types).map(|(arg, fastcc_type)| {
-        let arg_type = arg.get_type();
-        if arg_type == *fastcc_type {
-            // the C and Fast calling conventions agree
-            *arg
-        } else {
-            complex_bitcast_check_size(env, *arg, *fastcc_type, "to_fastcc_type_2")
-        }
-    });
+    let it = params
+        .iter()
+        .zip(param_types)
+        .enumerate()
+        .map(|(i, (arg, fastcc_type))| {
+            let arg_type = arg.get_type();
+            if arg_type == *fastcc_type {
+                // the C and Fast calling conventions agree
+                *arg
+            } else {
+                // not pretty, but seems to cover all our current cases
+                if arg_type.is_pointer_type() && !fastcc_type.is_pointer_type() {
+                    // On x86_*, Modify the argument to specify it is passed by value and nonnull
+                    // Aarch*, just passes in the pointer directly.
+                    if matches!(
+                        env.target_info.architecture,
+                        roc_target::Architecture::X86_32 | roc_target::Architecture::X86_64
+                    ) {
+                        let byval = context.create_type_attribute(
+                            Attribute::get_named_enum_kind_id("byval"),
+                            arg_type.into_pointer_type().get_element_type(),
+                        );
+                        let nonnull = context.create_type_attribute(
+                            Attribute::get_named_enum_kind_id("nonnull"),
+                            arg_type.into_pointer_type().get_element_type(),
+                        );
+                        // C return pointer goes at the beginning of params, and we must skip it if it exists.
+                        let param_index = (i
+                            + (if matches!(cc_return, CCReturn::ByPointer) {
+                                1
+                            } else {
+                                0
+                            })) as u32;
+                        c_function.add_attribute(AttributeLoc::Param(param_index), byval);
+                        c_function.add_attribute(AttributeLoc::Param(param_index), nonnull);
+                    }
+                    // bitcast the ptr
+                    let fastcc_ptr = env
+                        .builder
+                        .build_bitcast(
+                            *arg,
+                            fastcc_type.ptr_type(AddressSpace::Generic),
+                            "bitcast_arg",
+                        )
+                        .into_pointer_value();
+
+                    env.builder.build_load(fastcc_ptr, "load_arg")
+                } else {
+                    complex_bitcast_check_size(env, *arg, *fastcc_type, "to_fastcc_type_2")
+                }
+            }
+        });
 
     let arguments = Vec::from_iter_in(it, env.arena);
 
@@ -6433,8 +6477,13 @@ impl<'ctx> FunctionSpec<'ctx> {
             let sret_attribute_id = Attribute::get_named_enum_kind_id("sret");
             debug_assert!(sret_attribute_id > 0);
             let ret_typ = self.typ.get_param_types()[param_index as usize];
-            let sret_attribute =
-                ctx.create_type_attribute(sret_attribute_id, ret_typ.as_any_type_enum());
+            // if ret_typ is a pointer type. We need the base type here.
+            let ret_base_typ = if ret_typ.is_pointer_type() {
+                ret_typ.into_pointer_type().get_element_type()
+            } else {
+                ret_typ.as_any_type_enum()
+            };
+            let sret_attribute = ctx.create_type_attribute(sret_attribute_id, ret_base_typ);
             fn_val.add_attribute(AttributeLoc::Param(0), sret_attribute);
         }
     }
