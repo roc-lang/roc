@@ -342,21 +342,23 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         }
         Layout::Builtin(Builtin::Decimal) => Ok(num_helper!(RocDec)),
         Layout::Builtin(Builtin::Str) => {
-            let size = layout.stack_size(env.target_info) as usize;
-            Ok(
-                app.call_function_dynamic_size(main_fn_name, size, |mem: &A::Memory, addr| {
-                    let string = mem.deref_str(addr);
-                    let arena_str = env.arena.alloc_str(string);
-                    Expr::Str(StrLiteral::PlainLine(arena_str))
-                }),
-            )
+            let body = |mem: &A::Memory, addr| {
+                let string = mem.deref_str(addr);
+                let arena_str = env.arena.alloc_str(string);
+                Expr::Str(StrLiteral::PlainLine(arena_str))
+            };
+
+            Ok(app.call_function_returns_roc_str(env.target_info, main_fn_name, body))
         }
-        Layout::Builtin(Builtin::List(elem_layout)) => Ok(app.call_function(
-            main_fn_name,
-            |mem: &A::Memory, (addr, len): (usize, usize)| {
-                list_to_ast(env, mem, addr, len, elem_layout, raw_content)
-            },
-        )),
+        Layout::Builtin(Builtin::List(elem_layout)) => {
+            //
+            Ok(app.call_function_returns_roc_list(
+                main_fn_name,
+                |mem: &A::Memory, (addr, len, _cap)| {
+                    list_to_ast(env, mem, addr, len, elem_layout, raw_content)
+                },
+            ))
+        }
         Layout::Struct { field_layouts, .. } => {
             let struct_addr_to_ast = |mem: &'a A::Memory, addr: usize| match raw_content {
                 Content::Structure(FlatType::Record(fields, _)) => {
