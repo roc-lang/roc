@@ -219,9 +219,7 @@ pub struct Request {
     pub timeout: TimeoutConfig,
     pub body: Body,
     pub headers: roc_std::RocList<Header>,
-    pub progressTracking: ProgressTracking,
     pub url: roc_std::RocStr,
-    pub allowCookiesFromOtherDomains: bool,
     pub method: Method,
 }
 
@@ -445,40 +443,6 @@ impl core::fmt::Debug for Method {
     target_arch = "x86",
     target_arch = "x86_64"
 ))]
-#[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
-#[repr(u8)]
-pub enum discriminant_ProgressTracking {
-    NoProgressTracking = 0,
-    ProgressTrackingId = 1,
-}
-
-impl core::fmt::Debug for discriminant_ProgressTracking {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::NoProgressTracking => {
-                f.write_str("discriminant_ProgressTracking::NoProgressTracking")
-            }
-            Self::ProgressTrackingId => {
-                f.write_str("discriminant_ProgressTracking::ProgressTrackingId")
-            }
-        }
-    }
-}
-
-#[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
-#[repr(C)]
-pub union ProgressTracking {
-    ProgressTrackingId: core::mem::ManuallyDrop<roc_std::RocStr>,
-    _sizer: [u8; 16],
-}
-
-#[cfg(any(
-    target_arch = "arm",
-    target_arch = "aarch64",
-    target_arch = "wasm32",
-    target_arch = "x86",
-    target_arch = "x86_64"
-))]
 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 struct Header_Header {
@@ -601,18 +565,9 @@ pub union Response {
 pub struct Request {
     pub body: Body,
     pub headers: roc_std::RocList<Header>,
-    pub progressTracking: ProgressTracking,
     pub timeout: TimeoutConfig,
     pub url: roc_std::RocStr,
-    pub allowCookiesFromOtherDomains: bool,
     pub method: Method,
-}
-
-#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-#[repr(C)]
-pub union ProgressTracking {
-    ProgressTrackingId: core::mem::ManuallyDrop<roc_std::RocStr>,
-    _sizer: [u8; 32],
 }
 
 #[cfg(target_arch = "x86")]
@@ -629,7 +584,7 @@ impl Error {
         unsafe {
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
-            core::mem::transmute::<u8, discriminant_Error>(*bytes.as_ptr().add(12))
+            core::mem::transmute::<u8, discriminant_Error>(*bytes.as_ptr().add(16))
         }
     }
 
@@ -639,7 +594,7 @@ impl Error {
         let discriminant_ptr: *mut discriminant_Error = (self as *mut Error).cast();
 
         unsafe {
-            *(discriminant_ptr.add(12)) = discriminant;
+            *(discriminant_ptr.add(16)) = discriminant;
         }
     }
 
@@ -808,7 +763,7 @@ impl Error {
     pub const NetworkError: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<Error>()];
 
-        bytes[12] = discriminant_Error::NetworkError as u8;
+        bytes[16] = discriminant_Error::NetworkError as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<Error>()], Error>(bytes)
     };
@@ -844,7 +799,7 @@ impl Error {
     pub const Timeout: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<Error>()];
 
-        bytes[12] = discriminant_Error::Timeout as u8;
+        bytes[16] = discriminant_Error::Timeout as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<Error>()], Error>(bytes)
     };
@@ -1116,23 +1071,35 @@ impl core::fmt::Debug for Error {
 }
 
 impl Header {
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
     pub fn discriminant(&self) -> discriminant_Header {
         unsafe {
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
-            core::mem::transmute::<u8, discriminant_Header>(*bytes.as_ptr().add(23))
+            core::mem::transmute::<u8, discriminant_Header>(*bytes.as_ptr().add(0))
         }
     }
 
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
     /// Internal helper
     fn set_discriminant(&mut self, discriminant: discriminant_Header) {
         let discriminant_ptr: *mut discriminant_Header = (self as *mut Header).cast();
 
         unsafe {
-            *(discriminant_ptr.add(23)) = discriminant;
+            *(discriminant_ptr.add(0)) = discriminant;
         }
     }
 
@@ -1188,26 +1155,6 @@ impl Header {
         let payload = &self.Header;
 
         (&payload.f0, &payload.f1)
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_Header {
-        unsafe {
-            let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
-
-            core::mem::transmute::<u8, discriminant_Header>(*bytes.as_ptr().add(47))
-        }
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_Header) {
-        let discriminant_ptr: *mut discriminant_Header = (self as *mut Header).cast();
-
-        unsafe {
-            *(discriminant_ptr.add(47)) = discriminant;
-        }
     }
 }
 
@@ -1361,23 +1308,35 @@ impl core::fmt::Debug for Header {
 }
 
 impl U4 {
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
     pub fn discriminant(&self) -> discriminant_U4 {
         unsafe {
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
-            core::mem::transmute::<u8, discriminant_U4>(*bytes.as_ptr().add(11))
+            core::mem::transmute::<u8, discriminant_U4>(*bytes.as_ptr().add(0))
         }
     }
 
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
     /// Internal helper
     fn set_discriminant(&mut self, discriminant: discriminant_U4) {
         let discriminant_ptr: *mut discriminant_U4 = (self as *mut U4).cast();
 
         unsafe {
-            *(discriminant_ptr.add(11)) = discriminant;
+            *(discriminant_ptr.add(0)) = discriminant;
         }
     }
 
@@ -1433,26 +1392,6 @@ impl U4 {
         let payload = &self.MimeType;
 
         &payload
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_U4 {
-        unsafe {
-            let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
-
-            core::mem::transmute::<u8, discriminant_U4>(*bytes.as_ptr().add(23))
-        }
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_U4) {
-        let discriminant_ptr: *mut discriminant_U4 = (self as *mut U4).cast();
-
-        unsafe {
-            *(discriminant_ptr.add(23)) = discriminant;
-        }
     }
 }
 
@@ -1903,23 +1842,35 @@ impl core::fmt::Debug for Body {
 }
 
 impl U2 {
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
     pub fn discriminant(&self) -> discriminant_U2 {
         unsafe {
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
-            core::mem::transmute::<u8, discriminant_U2>(*bytes.as_ptr().add(11))
+            core::mem::transmute::<u8, discriminant_U2>(*bytes.as_ptr().add(0))
         }
     }
 
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
     /// Internal helper
     fn set_discriminant(&mut self, discriminant: discriminant_U2) {
         let discriminant_ptr: *mut discriminant_U2 = (self as *mut U2).cast();
 
         unsafe {
-            *(discriminant_ptr.add(11)) = discriminant;
+            *(discriminant_ptr.add(0)) = discriminant;
         }
     }
 
@@ -1975,26 +1926,6 @@ impl U2 {
         let payload = &self.MimeType;
 
         &payload
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_U2 {
-        unsafe {
-            let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
-
-            core::mem::transmute::<u8, discriminant_U2>(*bytes.as_ptr().add(23))
-        }
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_U2) {
-        let discriminant_ptr: *mut discriminant_U2 = (self as *mut U2).cast();
-
-        unsafe {
-            *(discriminant_ptr.add(23)) = discriminant;
-        }
     }
 }
 
@@ -2152,7 +2083,7 @@ impl Response {
         unsafe {
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
-            core::mem::transmute::<u8, discriminant_Response>(*bytes.as_ptr().add(52))
+            core::mem::transmute::<u8, discriminant_Response>(*bytes.as_ptr().add(56))
         }
     }
 
@@ -2162,7 +2093,7 @@ impl Response {
         let discriminant_ptr: *mut discriminant_Response = (self as *mut Response).cast();
 
         unsafe {
-            *(discriminant_ptr.add(52)) = discriminant;
+            *(discriminant_ptr.add(56)) = discriminant;
         }
     }
 
@@ -2333,7 +2264,7 @@ impl Response {
     pub const NetworkError: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<Response>()];
 
-        bytes[52] = discriminant_Response::NetworkError as u8;
+        bytes[56] = discriminant_Response::NetworkError as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<Response>()], Response>(bytes)
     };
@@ -2369,7 +2300,7 @@ impl Response {
     pub const Timeout: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<Response>()];
 
-        bytes[52] = discriminant_Response::Timeout as u8;
+        bytes[56] = discriminant_Response::Timeout as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<Response>()], Response>(bytes)
     };
@@ -2648,23 +2579,35 @@ impl core::fmt::Debug for Response {
 }
 
 impl U7 {
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
     pub fn discriminant(&self) -> discriminant_U7 {
         unsafe {
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
-            core::mem::transmute::<u8, discriminant_U7>(*bytes.as_ptr().add(11))
+            core::mem::transmute::<u8, discriminant_U7>(*bytes.as_ptr().add(0))
         }
     }
 
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
     /// Internal helper
     fn set_discriminant(&mut self, discriminant: discriminant_U7) {
         let discriminant_ptr: *mut discriminant_U7 = (self as *mut U7).cast();
 
         unsafe {
-            *(discriminant_ptr.add(11)) = discriminant;
+            *(discriminant_ptr.add(0)) = discriminant;
         }
     }
 
@@ -2720,26 +2663,6 @@ impl U7 {
         let payload = &self.MimeType;
 
         &payload
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_U7 {
-        unsafe {
-            let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
-
-            core::mem::transmute::<u8, discriminant_U7>(*bytes.as_ptr().add(23))
-        }
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_U7) {
-        let discriminant_ptr: *mut discriminant_U7 = (self as *mut U7).cast();
-
-        unsafe {
-            *(discriminant_ptr.add(23)) = discriminant;
-        }
     }
 }
 
@@ -2891,23 +2814,35 @@ impl core::fmt::Debug for U7 {
 }
 
 impl U6 {
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
     pub fn discriminant(&self) -> discriminant_U6 {
         unsafe {
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
-            core::mem::transmute::<u8, discriminant_U6>(*bytes.as_ptr().add(11))
+            core::mem::transmute::<u8, discriminant_U6>(*bytes.as_ptr().add(0))
         }
     }
 
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
     /// Internal helper
     fn set_discriminant(&mut self, discriminant: discriminant_U6) {
         let discriminant_ptr: *mut discriminant_U6 = (self as *mut U6).cast();
 
         unsafe {
-            *(discriminant_ptr.add(11)) = discriminant;
+            *(discriminant_ptr.add(0)) = discriminant;
         }
     }
 
@@ -2963,26 +2898,6 @@ impl U6 {
         let payload = &self.MimeType;
 
         &payload
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_U6 {
-        unsafe {
-            let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
-
-            core::mem::transmute::<u8, discriminant_U6>(*bytes.as_ptr().add(23))
-        }
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_U6) {
-        let discriminant_ptr: *mut discriminant_U6 = (self as *mut U6).cast();
-
-        unsafe {
-            *(discriminant_ptr.add(23)) = discriminant;
-        }
     }
 }
 
@@ -3134,23 +3049,35 @@ impl core::fmt::Debug for U6 {
 }
 
 impl U5 {
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
     pub fn discriminant(&self) -> discriminant_U5 {
         unsafe {
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
-            core::mem::transmute::<u8, discriminant_U5>(*bytes.as_ptr().add(11))
+            core::mem::transmute::<u8, discriminant_U5>(*bytes.as_ptr().add(0))
         }
     }
 
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
     /// Internal helper
     fn set_discriminant(&mut self, discriminant: discriminant_U5) {
         let discriminant_ptr: *mut discriminant_U5 = (self as *mut U5).cast();
 
         unsafe {
-            *(discriminant_ptr.add(11)) = discriminant;
+            *(discriminant_ptr.add(0)) = discriminant;
         }
     }
 
@@ -3206,26 +3133,6 @@ impl U5 {
         let payload = &self.MimeType;
 
         &payload
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_U5 {
-        unsafe {
-            let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
-
-            core::mem::transmute::<u8, discriminant_U5>(*bytes.as_ptr().add(23))
-        }
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_U5) {
-        let discriminant_ptr: *mut discriminant_U5 = (self as *mut U5).cast();
-
-        unsafe {
-            *(discriminant_ptr.add(23)) = discriminant;
-        }
     }
 }
 
@@ -3377,23 +3284,35 @@ impl core::fmt::Debug for U5 {
 }
 
 impl U3 {
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
     pub fn discriminant(&self) -> discriminant_U3 {
         unsafe {
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
-            core::mem::transmute::<u8, discriminant_U3>(*bytes.as_ptr().add(11))
+            core::mem::transmute::<u8, discriminant_U3>(*bytes.as_ptr().add(0))
         }
     }
 
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
     /// Internal helper
     fn set_discriminant(&mut self, discriminant: discriminant_U3) {
         let discriminant_ptr: *mut discriminant_U3 = (self as *mut U3).cast();
 
         unsafe {
-            *(discriminant_ptr.add(11)) = discriminant;
+            *(discriminant_ptr.add(0)) = discriminant;
         }
     }
 
@@ -3449,26 +3368,6 @@ impl U3 {
         let payload = &self.MimeType;
 
         &payload
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_U3 {
-        unsafe {
-            let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
-
-            core::mem::transmute::<u8, discriminant_U3>(*bytes.as_ptr().add(23))
-        }
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_U3) {
-        let discriminant_ptr: *mut discriminant_U3 = (self as *mut U3).cast();
-
-        unsafe {
-            *(discriminant_ptr.add(23)) = discriminant;
-        }
     }
 }
 
@@ -3619,349 +3518,36 @@ impl core::fmt::Debug for U3 {
     }
 }
 
-impl ProgressTracking {
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
-    /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_ProgressTracking {
-        unsafe {
-            let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
-
-            core::mem::transmute::<u8, discriminant_ProgressTracking>(*bytes.as_ptr().add(12))
-        }
-    }
-
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
-    /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_ProgressTracking) {
-        let discriminant_ptr: *mut discriminant_ProgressTracking =
-            (self as *mut ProgressTracking).cast();
-
-        unsafe {
-            *(discriminant_ptr.add(12)) = discriminant;
-        }
-    }
-
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
-    /// A tag named NoProgressTracking, which has no payload.
-    pub const NoProgressTracking: Self = unsafe {
-        let mut bytes = [0; core::mem::size_of::<ProgressTracking>()];
-
-        bytes[12] = discriminant_ProgressTracking::NoProgressTracking as u8;
-
-        core::mem::transmute::<[u8; core::mem::size_of::<ProgressTracking>()], ProgressTracking>(
-            bytes,
-        )
-    };
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `into_` methods return a payload, but since the NoProgressTracking tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_NoProgressTracking(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the NoProgressTracking tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub unsafe fn as_NoProgressTracking(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Construct a tag named `ProgressTrackingId`, with the appropriate payload
-    pub fn ProgressTrackingId(arg: roc_std::RocStr) -> Self {
-        let mut answer = Self {
-            ProgressTrackingId: core::mem::ManuallyDrop::new(arg),
-        };
-
-        answer.set_discriminant(discriminant_ProgressTracking::ProgressTrackingId);
-
-        answer
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Unsafely assume the given `ProgressTracking` has a `.discriminant()` of `ProgressTrackingId` and convert it to `ProgressTrackingId`'s payload.
-    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-    /// Panics in debug builds if the `.discriminant()` doesn't return `ProgressTrackingId`.
-    pub unsafe fn into_ProgressTrackingId(mut self) -> roc_std::RocStr {
-        debug_assert_eq!(
-            self.discriminant(),
-            discriminant_ProgressTracking::ProgressTrackingId
-        );
-
-        let payload = core::mem::ManuallyDrop::take(&mut self.ProgressTrackingId);
-
-        payload
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Unsafely assume the given `ProgressTracking` has a `.discriminant()` of `ProgressTrackingId` and return its payload.
-    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-    /// Panics in debug builds if the `.discriminant()` doesn't return `ProgressTrackingId`.
-    pub unsafe fn as_ProgressTrackingId(&self) -> &roc_std::RocStr {
-        debug_assert_eq!(
-            self.discriminant(),
-            discriminant_ProgressTracking::ProgressTrackingId
-        );
-
-        let payload = &self.ProgressTrackingId;
-
-        &payload
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_ProgressTracking {
-        unsafe {
-            let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
-
-            core::mem::transmute::<u8, discriminant_ProgressTracking>(*bytes.as_ptr().add(24))
-        }
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_ProgressTracking) {
-        let discriminant_ptr: *mut discriminant_ProgressTracking =
-            (self as *mut ProgressTracking).cast();
-
-        unsafe {
-            *(discriminant_ptr.add(24)) = discriminant;
-        }
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// A tag named NoProgressTracking, which has no payload.
-    pub const NoProgressTracking: Self = unsafe {
-        let mut bytes = [0; core::mem::size_of::<ProgressTracking>()];
-
-        bytes[24] = discriminant_ProgressTracking::NoProgressTracking as u8;
-
-        core::mem::transmute::<[u8; core::mem::size_of::<ProgressTracking>()], ProgressTracking>(
-            bytes,
-        )
-    };
-}
-
-impl Drop for ProgressTracking {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn drop(&mut self) {
-        // Drop the payloads
-        match self.discriminant() {
-            discriminant_ProgressTracking::NoProgressTracking => {}
-            discriminant_ProgressTracking::ProgressTrackingId => unsafe {
-                core::mem::ManuallyDrop::drop(&mut self.ProgressTrackingId)
-            },
-        }
-    }
-}
-
-impl Eq for ProgressTracking {}
-
-impl PartialEq for ProgressTracking {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn eq(&self, other: &Self) -> bool {
-        if self.discriminant() != other.discriminant() {
-            return false;
-        }
-
-        unsafe {
-            match self.discriminant() {
-                discriminant_ProgressTracking::NoProgressTracking => true,
-                discriminant_ProgressTracking::ProgressTrackingId => {
-                    self.ProgressTrackingId == other.ProgressTrackingId
-                }
-            }
-        }
-    }
-}
-
-impl PartialOrd for ProgressTracking {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        match self.discriminant().partial_cmp(&other.discriminant()) {
-            Some(core::cmp::Ordering::Equal) => {}
-            not_eq => return not_eq,
-        }
-
-        unsafe {
-            match self.discriminant() {
-                discriminant_ProgressTracking::NoProgressTracking => {
-                    Some(core::cmp::Ordering::Equal)
-                }
-                discriminant_ProgressTracking::ProgressTrackingId => self
-                    .ProgressTrackingId
-                    .partial_cmp(&other.ProgressTrackingId),
-            }
-        }
-    }
-}
-
-impl Ord for ProgressTracking {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        match self.discriminant().cmp(&other.discriminant()) {
-            core::cmp::Ordering::Equal => {}
-            not_eq => return not_eq,
-        }
-
-        unsafe {
-            match self.discriminant() {
-                discriminant_ProgressTracking::NoProgressTracking => core::cmp::Ordering::Equal,
-                discriminant_ProgressTracking::ProgressTrackingId => {
-                    self.ProgressTrackingId.cmp(&other.ProgressTrackingId)
-                }
-            }
-        }
-    }
-}
-
-impl Clone for ProgressTracking {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn clone(&self) -> Self {
-        let mut answer = unsafe {
-            match self.discriminant() {
-                discriminant_ProgressTracking::NoProgressTracking => {
-                    core::mem::transmute::<core::mem::MaybeUninit<ProgressTracking>, ProgressTracking>(
-                        core::mem::MaybeUninit::uninit(),
-                    )
-                }
-                discriminant_ProgressTracking::ProgressTrackingId => Self {
-                    ProgressTrackingId: self.ProgressTrackingId.clone(),
-                },
-            }
-        };
-
-        answer.set_discriminant(self.discriminant());
-
-        answer
-    }
-}
-
-impl core::hash::Hash for ProgressTracking {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
-        match self.discriminant() {
-            discriminant_ProgressTracking::NoProgressTracking => {
-                discriminant_ProgressTracking::NoProgressTracking.hash(state)
-            }
-            discriminant_ProgressTracking::ProgressTrackingId => unsafe {
-                discriminant_ProgressTracking::ProgressTrackingId.hash(state);
-                self.ProgressTrackingId.hash(state);
-            },
-        }
-    }
-}
-
-impl core::fmt::Debug for ProgressTracking {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("ProgressTracking::")?;
-
-        unsafe {
-            match self.discriminant() {
-                discriminant_ProgressTracking::NoProgressTracking => {
-                    f.write_str("NoProgressTracking")
-                }
-                discriminant_ProgressTracking::ProgressTrackingId => f
-                    .debug_tuple("ProgressTrackingId")
-                    .field(&*self.ProgressTrackingId)
-                    .finish(),
-            }
-        }
-    }
-}
-
 impl U1 {
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
     pub fn discriminant(&self) -> discriminant_U1 {
         unsafe {
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
-            core::mem::transmute::<u8, discriminant_U1>(*bytes.as_ptr().add(11))
+            core::mem::transmute::<u8, discriminant_U1>(*bytes.as_ptr().add(0))
         }
     }
 
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
     /// Internal helper
     fn set_discriminant(&mut self, discriminant: discriminant_U1) {
         let discriminant_ptr: *mut discriminant_U1 = (self as *mut U1).cast();
 
         unsafe {
-            *(discriminant_ptr.add(11)) = discriminant;
+            *(discriminant_ptr.add(0)) = discriminant;
         }
     }
 
@@ -4017,26 +3603,6 @@ impl U1 {
         let payload = &self.MimeType;
 
         &payload
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> discriminant_U1 {
-        unsafe {
-            let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
-
-            core::mem::transmute::<u8, discriminant_U1>(*bytes.as_ptr().add(23))
-        }
-    }
-
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-    /// Internal helper
-    fn set_discriminant(&mut self, discriminant: discriminant_U1) {
-        let discriminant_ptr: *mut discriminant_U1 = (self as *mut U1).cast();
-
-        unsafe {
-            *(discriminant_ptr.add(23)) = discriminant;
-        }
     }
 }
 

@@ -4,7 +4,6 @@ interface Http
         Method,
         Header,
         TimeoutConfig,
-        ProgressTracking,
         Body,
         Response,
         Metadata,
@@ -24,7 +23,6 @@ Request : InternalHttp.Request
 Method : InternalHttp.Method
 Header : InternalHttp.Header
 TimeoutConfig : InternalHttp.TimeoutConfig
-ProgressTracking : InternalHttp.ProgressTracking
 Body : InternalHttp.Body
 Response : InternalHttp.Response
 Metadata : InternalHttp.Metadata
@@ -37,8 +35,6 @@ defaultRequest = {
     url: "",
     body: Http.emptyBody,
     timeout: NoTimeout,
-    progressTracking: NoProgressTracking,
-    allowCookiesFromOtherDomains: False,
 }
 
 ## An HTTP header for configuring requests. See a bunch of common headers

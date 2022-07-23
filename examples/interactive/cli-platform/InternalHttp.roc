@@ -1,5 +1,5 @@
 interface InternalHttp
-    exposes [Request, Method, Header, TimeoutConfig, ProgressTracking, Part, Body, Response, Metadata, Error]
+    exposes [Request, Method, Header, TimeoutConfig, Part, Body, Response, Metadata, Error]
     imports []
 
 Request : {
@@ -8,8 +8,6 @@ Request : {
     url : Str,
     body : Body,
     timeout : TimeoutConfig,
-    progressTracking : ProgressTracking,
-    allowCookiesFromOtherDomains : Bool,
 }
 
 Method : [Options, Get, Post, Put, Delete, Head, Trace, Connect, Patch]
@@ -18,8 +16,6 @@ Header : [Header Str Str]
 
 # Name is distinguished from the Timeout tag used in Response and Error
 TimeoutConfig : [TimeoutMilliseconds U64, NoTimeout]
-
-ProgressTracking : [ProgressTrackingId Str, NoProgressTracking]
 
 Part : [Part Str (List U8)]
 
