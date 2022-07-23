@@ -816,6 +816,7 @@ mod cli_run {
                 let example_dir_name = entry.file_name().into_string().unwrap();
 
                 // TODO: Improve this with a more-dynamic approach. (Read all subdirectories?)
+                // Some platform-switching examples live in nested directories
                 if example_dir_name == "platform-switching" {
                     for sub_dir in [
                         // We exclude the C platforming switching example
