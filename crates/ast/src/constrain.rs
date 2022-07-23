@@ -2705,7 +2705,7 @@ pub mod test_constrain {
                        A _ -> Z
                  "#
             ),
-            "[A [M, N]*] -> [X, Y, Z]*",
+            "[A [M, N]] -> [X, Y, Z]*",
         )
     }
 
