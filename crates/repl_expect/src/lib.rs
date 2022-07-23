@@ -26,7 +26,10 @@ pub fn get_values<'a>(
 ) -> Result<Vec<Expr<'a>>, ToAstProblem> {
     let mut result = Vec::with_capacity(variables.len());
 
-    let memory = ExpectMemory { start };
+    let memory = ExpectMemory {
+        start,
+        bytes_read: RefCell::new(0),
+    };
 
     let app = ExpectReplApp {
         memory: arena.alloc(memory),
@@ -70,9 +73,9 @@ pub fn get_values<'a>(
     Ok(result)
 }
 
-#[derive(Clone)]
 struct ExpectMemory {
     start: *const u8,
+    bytes_read: RefCell<usize>,
 }
 
 macro_rules! deref_number {
@@ -80,6 +83,7 @@ macro_rules! deref_number {
         fn $name(&self, addr: usize) -> $t {
             // dbg!(std::any::type_name::<$t>(), self.start, addr);
             let ptr = unsafe { self.start.add(addr) } as *const _;
+            *self.bytes_read.borrow_mut() += std::mem::size_of::<$t>();
             unsafe { std::ptr::read_unaligned(ptr) }
         }
     };
@@ -158,7 +162,13 @@ impl<'a> ReplApp<'a> for ExpectReplApp<'a> {
 
         self.offset += std::mem::size_of::<Return>();
 
-        transform(self.memory, result)
+        *self.memory.bytes_read.borrow_mut() = 0;
+
+        let transformed = transform(self.memory, result);
+
+        self.offset += *self.memory.bytes_read.borrow();
+
+        transformed
     }
 
     fn call_function_returns_roc_list<F>(&mut self, main_fn_name: &str, transform: F) -> Expr<'a>
@@ -166,10 +176,7 @@ impl<'a> ReplApp<'a> for ExpectReplApp<'a> {
         F: Fn(&'a Self::Memory, (usize, usize, usize)) -> Expr<'a>,
         Self::Memory: 'a,
     {
-        let result = self.call_function(main_fn_name, transform);
-        dbg!(self.offset);
-        self.offset += 8;
-        result
+        self.call_function(main_fn_name, transform)
     }
 
     fn call_function_returns_roc_str<T, F>(

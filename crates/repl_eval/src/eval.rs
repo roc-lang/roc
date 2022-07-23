@@ -356,7 +356,6 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
             Ok(app.call_function_returns_roc_list(
                 main_fn_name,
                 |mem: &A::Memory, (addr, len, _cap)| {
-                    dbg!(addr, len);
                     list_to_ast(env, mem, addr, len, elem_layout, raw_content)
                 },
             ))
@@ -549,9 +548,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
         (_, Layout::Builtin(Builtin::List(elem_layout))) => {
             let elem_addr = mem.deref_usize(addr);
             let len = mem.deref_usize(addr + env.target_info.ptr_width() as usize);
-            let cap = mem.deref_usize(addr + 2 * env.target_info.ptr_width() as usize);
-
-            dbg!(elem_addr, len, cap);
+            let _cap = mem.deref_usize(addr + 2 * env.target_info.ptr_width() as usize);
 
             list_to_ast(env, mem, elem_addr, len, elem_layout, raw_content)
         }
