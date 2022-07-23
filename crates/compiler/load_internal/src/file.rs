@@ -2454,7 +2454,7 @@ fn update<'a>(
                 // As far as type-checking goes, once we've solved
                 // the originally requested module, we're all done!
                 return Ok(state);
-            } else if module_id == state.root_id
+            } else if is_host_exposed
                 && (halt_for_errors && state.module_cache.total_problems() > 0)
             {
                 state.timings.insert(module_id, module_timing);
