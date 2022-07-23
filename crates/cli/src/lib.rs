@@ -12,7 +12,7 @@ use roc_load::{Expectations, LoadingProblem, Threading};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_region::all::Region;
-use roc_repl_cli::expect_mono_module_to_dylib;
+use roc_repl_cli::{expect_mono_module_to_dylib, ToplevelExpect};
 use roc_target::TargetInfo;
 use std::env;
 use std::ffi::{CString, OsStr};
@@ -185,7 +185,8 @@ pub fn build_app<'a>() -> Command<'a> {
                 Arg::new(ROC_FILE)
                     .help("The .roc file for the root module")
                     .allow_invalid_utf8(true)
-                    .required(true),
+                    .required(false)
+                    .default_value(DEFAULT_ROC_FILENAME)
             )
             .arg(args_for_app.clone())
         )
@@ -403,7 +404,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let arena = &bumpalo::Bump::new();
     let interns = arena.alloc(interns);
 
-    use roc_gen_llvm::run_jit_function;
+    use roc_gen_llvm::try_run_jit_function;
 
     let mut failed = 0;
     let mut passed = 0;
@@ -425,15 +426,31 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         for expect in expects {
             libc::memset(shared_ptr.cast(), 0, SHM_SIZE as _);
 
-            run_jit_function!(lib, expect, (), |v: ()| v);
+            let result: Result<(), String> = try_run_jit_function!(lib, expect.name, (), |v: ()| v);
 
             let shared_memory_ptr: *const u8 = shared_ptr.cast();
 
             let buffer = std::slice::from_raw_parts(shared_memory_ptr, SHM_SIZE as _);
 
-            if buffer.iter().any(|b| *b != 0) {
+            if let Err(roc_panic_message) = result {
                 failed += 1;
-                render_expect_failure(arena, &mut expectations, interns, shared_memory_ptr);
+                render_expect_panic(
+                    arena,
+                    expect,
+                    &roc_panic_message,
+                    &mut expectations,
+                    interns,
+                );
+                println!();
+            } else if buffer.iter().any(|b| *b != 0) {
+                failed += 1;
+                render_expect_failure(
+                    arena,
+                    Some(expect),
+                    &mut expectations,
+                    interns,
+                    shared_memory_ptr,
+                );
                 println!();
             } else {
                 passed += 1;
@@ -698,8 +715,8 @@ pub fn build(
                         std::mem::forget(bytes);
                         x
                     } else {
-                        println!(
-                            "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.\n\nYou can run the program anyway with: \x1B[32mroc run {}\x1B[39m",
+                        let mut output = format!(
+                            "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.\n\nYou can run the program anyway with \x1B[32mroc run",
                             if problems.errors == 0 {
                                 32 // green
                             } else {
@@ -723,8 +740,15 @@ pub fn build(
                                 "warnings"
                             },
                             total_time.as_millis(),
-                            filename.to_string_lossy()
                         );
+                        // If you're running "main.roc" then you can just do `roc run`
+                        // to re-run the program.
+                        if filename != DEFAULT_ROC_FILENAME {
+                            output.push(' ');
+                            output.push_str(&filename.to_string_lossy());
+                        }
+
+                        println!("{}\x1B[39m", output);
 
                         Ok(problems.exit_code())
                     }
@@ -1000,7 +1024,13 @@ unsafe fn roc_run_native_debug(
 
                         let shared_memory_ptr: *const u8 = shared_ptr.cast();
 
-                        render_expect_failure(arena, &mut expectations, interns, shared_memory_ptr);
+                        render_expect_failure(
+                            arena,
+                            None,
+                            &mut expectations,
+                            interns,
+                            shared_memory_ptr,
+                        );
                     }
                     _ => println!("received signal {}", sig),
                 }
@@ -1010,8 +1040,60 @@ unsafe fn roc_run_native_debug(
     }
 }
 
+fn render_expect_panic<'a>(
+    _arena: &'a Bump,
+    expect: ToplevelExpect,
+    message: &str,
+    expectations: &mut VecMap<ModuleId, Expectations>,
+    interns: &'a Interns,
+) {
+    use roc_reporting::report::Report;
+    use roc_reporting::report::RocDocAllocator;
+    use ven_pretty::DocAllocator;
+
+    let module_id = expect.symbol.module_id();
+    let data = expectations.get_mut(&module_id).unwrap();
+
+    // TODO cache these line offsets?
+    let path = &data.path;
+    let filename = data.path.to_owned();
+    let file_string = std::fs::read_to_string(path).unwrap();
+    let src_lines: Vec<_> = file_string.lines().collect();
+
+    let line_info = roc_region::all::LineInfo::new(&file_string);
+    let line_col_region = line_info.convert_region(expect.region);
+
+    let alloc = RocDocAllocator::new(&src_lines, module_id, interns);
+
+    let doc = alloc.stack([
+        alloc.text("This expectation crashed while running:"),
+        alloc.region(line_col_region),
+        alloc.text("The crash reported this message:"),
+        alloc.text(message),
+    ]);
+
+    let report = Report {
+        title: "EXPECT FAILED".into(),
+        doc,
+        filename,
+        severity: roc_reporting::report::Severity::RuntimeError,
+    };
+
+    let mut buf = String::new();
+
+    report.render(
+        roc_reporting::report::RenderTarget::ColorTerminal,
+        &mut buf,
+        &alloc,
+        &roc_reporting::report::DEFAULT_PALETTE,
+    );
+
+    println!("{}", buf);
+}
+
 fn render_expect_failure<'a>(
     arena: &'a Bump,
+    expect: Option<ToplevelExpect>,
     expectations: &mut VecMap<ModuleId, Expectations>,
     interns: &'a Interns,
     start: *const u8,
@@ -1040,7 +1122,11 @@ fn render_expect_failure<'a>(
     let src_lines: Vec<_> = file_string.lines().collect();
 
     let line_info = roc_region::all::LineInfo::new(&file_string);
-    let line_col_region = line_info.convert_region(region);
+    let display_region = match expect {
+        Some(expect) => Region::span_across(&expect.region, &region),
+        None => region,
+    };
+    let line_col_region = line_info.convert_region(display_region);
 
     let alloc = RocDocAllocator::new(&src_lines, module_id, interns);
 

@@ -32,12 +32,12 @@ extern fn roc__mainForHost_size() i64;
 const ConstModel = [*]const u8;
 const MutModel = [*]u8;
 
-extern fn roc__mainForHost_1_Init_caller([*]u8, [*]u8, MutModel) void;
-extern fn roc__mainForHost_1_Init_size() i64;
-extern fn roc__mainForHost_1_Init_result_size() i64;
+extern fn roc__mainForHost_1__Init_caller([*]u8, [*]u8, MutModel) void;
+extern fn roc__mainForHost_1__Init_size() i64;
+extern fn roc__mainForHost_1__Init_result_size() i64;
 
 fn allocate_model(allocator: *Allocator) MutModel {
-    const size = roc__mainForHost_1_Init_result_size();
+    const size = roc__mainForHost_1__Init_result_size();
     const raw_output = allocator.allocAdvanced(u8, @alignOf(u64), @intCast(usize, size), .at_least) catch unreachable;
     var output = @ptrCast([*]u8, raw_output);
 
@@ -48,33 +48,33 @@ fn init(allocator: *Allocator) ConstModel {
     const closure: [*]u8 = undefined;
     const output = allocate_model(allocator);
 
-    roc__mainForHost_1_Init_caller(closure, closure, output);
+    roc__mainForHost_1__Init_caller(closure, closure, output);
 
     return output;
 }
 
-extern fn roc__mainForHost_1_Update_caller(ConstModel, *const RocStr, [*]u8, MutModel) void;
-extern fn roc__mainForHost_1_Update_size() i64;
-extern fn roc__mainForHost_1_Update_result_size() i64;
+extern fn roc__mainForHost_1__Update_caller(ConstModel, *const RocStr, [*]u8, MutModel) void;
+extern fn roc__mainForHost_1__Update_size() i64;
+extern fn roc__mainForHost_1__Update_result_size() i64;
 
 fn update(allocator: *Allocator, model: ConstModel, msg: RocStr) ConstModel {
     const closure: [*]u8 = undefined;
     const output = allocate_model(allocator);
 
-    roc__mainForHost_1_Update_caller(model, &msg, closure, output);
+    roc__mainForHost_1__Update_caller(model, &msg, closure, output);
 
     return output;
 }
 
-extern fn roc__mainForHost_1_View_caller(ConstModel, [*]u8, *RocStr) void;
-extern fn roc__mainForHost_1_View_size() i64;
-extern fn roc__mainForHost_1_View_result_size() i64;
+extern fn roc__mainForHost_1__View_caller(ConstModel, [*]u8, *RocStr) void;
+extern fn roc__mainForHost_1__View_size() i64;
+extern fn roc__mainForHost_1__View_result_size() i64;
 
 fn view(input: ConstModel) RocStr {
     const closure: [*]u8 = undefined;
     var output: RocStr = undefined;
 
-    roc__mainForHost_1_View_caller(input, closure, &output);
+    roc__mainForHost_1__View_caller(input, closure, &output);
 
     return output;
 }

@@ -672,7 +672,7 @@ pub struct MonomorphizedModule<'a> {
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-    pub toplevel_expects: Vec<Symbol>,
+    pub toplevel_expects: VecMap<Symbol, Region>,
     pub entry_point: EntryPoint<'a>,
     pub exposed_to_host: ExposedToHost,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
@@ -767,7 +767,7 @@ enum Msg<'a> {
         solved_subs: Solved<Subs>,
         module_timing: ModuleTiming,
         abilities_store: AbilitiesStore,
-        toplevel_expects: std::vec::Vec<Symbol>,
+        toplevel_expects: VecMap<Symbol, Region>,
     },
     MadeSpecializations {
         module_id: ModuleId,
@@ -855,7 +855,7 @@ struct State<'a> {
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies<'a>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-    pub toplevel_expects: Vec<Symbol>,
+    pub toplevel_expects: VecMap<Symbol, Region>,
     pub exposed_to_host: ExposedToHost,
 
     /// This is the "final" list of IdentIds, after canonicalization and constraint gen
@@ -924,7 +924,7 @@ impl<'a> State<'a> {
             module_cache: ModuleCache::default(),
             dependencies,
             procedures: MutMap::default(),
-            toplevel_expects: Vec::new(),
+            toplevel_expects: VecMap::default(),
             exposed_to_host: ExposedToHost::default(),
             exposed_types,
             arc_modules,
@@ -4715,7 +4715,7 @@ fn build_pending_specializations<'a>(
     let find_specializations_start = SystemTime::now();
 
     let mut module_thunks = bumpalo::collections::Vec::new_in(arena);
-    let mut toplevel_expects = std::vec::Vec::new();
+    let mut toplevel_expects = VecMap::default();
 
     let mut procs_base = ProcsBase {
         partial_procs: BumpMap::default(),
@@ -5014,7 +5014,13 @@ fn build_pending_specializations<'a>(
                     is_self_recursive: false,
                 };
 
-                toplevel_expects.push(symbol);
+                // extend the region of the expect expression with the region of the preceding
+                // comment, so it is shown in failure/panic messages
+                let name_region = declarations.symbols[index].region;
+                let expr_region = declarations.expressions[index].region;
+                let region = Region::span_across(&name_region, &expr_region);
+
+                toplevel_expects.insert(symbol, region);
                 procs_base.partial_procs.insert(symbol, proc);
             }
         }
@@ -5420,11 +5426,10 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
             }
             RootIsInterface => {
                 let doc = alloc.stack([
-                    alloc.reflow(r"The input file is an interface module, but only app modules can be run."),
-                    alloc.concat([
-                        alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
-                        alloc.reflow(r"but won't output any executable."),
-                    ])
+                    alloc.reflow(
+                        r"The input file is an `interface` module, but only `app` modules can be run.",
+                    ),
+                    alloc.reflow(r"Tip: You can use `roc check` or `roc test` to verify an interface module like this one."),
                 ]);
 
                 Report {
@@ -5436,11 +5441,10 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
             }
             RootIsHosted => {
                 let doc = alloc.stack([
-                    alloc.reflow(r"The input file is a hosted module, but only app modules can be run."),
-                    alloc.concat([
-                        alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
-                        alloc.reflow(r"but won't output any executable."),
-                    ])
+                    alloc.reflow(
+                        r"The input file is a `hosted` module, but only `app` modules can be run.",
+                    ),
+                    alloc.reflow(r"Tip: You can use `roc check` or `roc test` to verify a hosted module like this one."),
                 ]);
 
                 Report {
@@ -5452,11 +5456,10 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
             }
             RootIsPlatformModule => {
                 let doc = alloc.stack([
-                    alloc.reflow(r"The input file is a package config file, but only app modules can be run."),
-                    alloc.concat([
-                        alloc.reflow(r"I will still parse and typecheck the input file and its dependencies, "),
-                        alloc.reflow(r"but won't output any executable."),
-                    ])
+                    alloc.reflow(
+                        r"The input file is a `platform` module, but only `app` modules can be run.",
+                    ),
+                    alloc.reflow(r"Tip: You can use `roc check` or `roc test` to verify a platform module like this one."),
                 ]);
 
                 Report {

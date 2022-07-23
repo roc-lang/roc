@@ -629,6 +629,23 @@ impl<'a> UnionLayout<'a> {
         (size, alignment_bytes)
     }
 
+    pub fn tag_id_offset(&self, target_info: TargetInfo) -> Option<u32> {
+        use UnionLayout::*;
+
+        if let NonNullableUnwrapped(_) | NullableUnwrapped { .. } = self {
+            return None;
+        }
+
+        let data_width = self.data_size_and_alignment_help_match(None, target_info).0;
+
+        // current, broken logic
+        if data_width > 8 {
+            Some(round_up_to_alignment(data_width, 8))
+        } else {
+            Some(data_width)
+        }
+    }
+
     /// Very important to use this when doing a memcpy!
     fn stack_size_without_alignment(&self, target_info: TargetInfo) -> u32 {
         match self {
@@ -800,13 +817,13 @@ impl<'a> LambdaSet<'a> {
     }
 
     pub fn is_represented(&self) -> Option<Layout<'a>> {
-        if let Layout::Struct {
-            field_layouts: &[], ..
-        } = self.representation
-        {
-            None
-        } else {
-            Some(*self.representation)
+        match self.representation {
+            Layout::Struct {
+                field_layouts: &[], ..
+            }
+            | Layout::Builtin(Builtin::Bool)
+            | Layout::Builtin(Builtin::Int(..)) => None,
+            repr => Some(*repr),
         }
     }
 
@@ -3039,7 +3056,9 @@ pub fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
     // the ext_var is empty
     let mut ext_fields = std::vec::Vec::new();
     match roc_types::pretty_print::chase_ext_tag_union(subs, ext_var, &mut ext_fields) {
-        Ok(()) | Err((_, Content::FlexVar(_) | Content::RigidVar(_))) => ext_fields.is_empty(),
+        Ok(()) | Err((_, Content::FlexVar(_) | Content::RigidVar(_) | Content::Error)) => {
+            ext_fields.is_empty()
+        }
         Err(content) => panic!("invalid content in ext_var: {:?}", content),
     }
 }

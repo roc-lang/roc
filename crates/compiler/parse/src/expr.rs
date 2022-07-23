@@ -584,6 +584,7 @@ fn parse_defs_end<'a>(
         let initial = state.clone();
 
         let mut spaces_before_current = &[] as &[_];
+        let spaces_before_current_start = state.pos();
 
         let state = match space0_e(min_indent, EExpr::IndentStart).parse(arena, state) {
             Err((MadeProgress, _, s)) => {
@@ -625,7 +626,27 @@ fn parse_defs_end<'a>(
                         let end = loc_def_expr.region.end();
                         let region = Region::new(start, end);
 
-                        let value_def = ValueDef::Expect(arena.alloc(loc_def_expr));
+                        // drop newlines before the preceding comment
+                        let spaces_before_start = spaces_before_current_start.offset as usize;
+                        let spaces_before_end = start.offset as usize;
+                        let mut spaces_before_current_start = spaces_before_current_start;
+
+                        for byte in &state.original_bytes()[spaces_before_start..spaces_before_end]
+                        {
+                            match byte {
+                                b' ' | b'\n' => {
+                                    spaces_before_current_start.offset += 1;
+                                }
+                                _ => break,
+                            }
+                        }
+
+                        let preceding_comment = Region::new(spaces_before_current_start, start);
+
+                        let value_def = ValueDef::Expect {
+                            condition: arena.alloc(loc_def_expr),
+                            preceding_comment,
+                        };
                         defs.push_value_def(value_def, region, spaces_before_current, &[]);
 
                         global_state = state;
@@ -2440,7 +2461,7 @@ fn list_literal_help<'a>(min_indent: u32) -> impl Parser<'a, Expr<'a>, EList<'a>
     }
 }
 
-fn record_field_help<'a>(
+pub fn record_value_field<'a>(
     min_indent: u32,
 ) -> impl Parser<'a, AssignedField<'a, Expr<'a>>, ERecord<'a>> {
     use AssignedField::*;
@@ -2543,7 +2564,7 @@ fn record_help<'a>(
                         trailing_sep_by0(
                             word1(b',', ERecord::End),
                             space0_before_optional_after(
-                                loc!(record_field_help(min_indent)),
+                                loc!(record_value_field(min_indent)),
                                 min_indent,
                                 ERecord::IndentEnd,
                                 ERecord::IndentEnd

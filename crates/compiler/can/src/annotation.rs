@@ -1,6 +1,6 @@
 use crate::env::Env;
 use crate::procedure::References;
-use crate::scope::Scope;
+use crate::scope::{PendingAbilitiesInScope, Scope};
 use roc_collections::{ImMap, MutSet, SendMap, VecMap, VecSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
@@ -189,7 +189,7 @@ impl IntroducedVariables {
         self.inferred.push(var);
     }
 
-    fn insert_lambda_set(&mut self, var: Variable) {
+    pub fn insert_lambda_set(&mut self, var: Variable) {
         self.debug_assert_not_already_present(var);
         self.lambda_sets.push(var);
     }
@@ -267,7 +267,7 @@ pub fn canonicalize_annotation(
     annotation: &TypeAnnotation,
     region: Region,
     var_store: &mut VarStore,
-    pending_abilities_in_scope: &[Symbol],
+    pending_abilities_in_scope: &PendingAbilitiesInScope,
 ) -> Annotation {
     let mut introduced_variables = IntroducedVariables::default();
     let mut references = VecSet::default();
@@ -621,11 +621,11 @@ fn can_annotation_help(
             let symbol = match scope.introduce(name.value.into(), region) {
                 Ok(symbol) => symbol,
 
-                Err((original_region, shadow, _new_symbol)) => {
-                    let problem = Problem::Shadowed(original_region, shadow.clone());
+                Err((shadowed_symbol, shadow, _new_symbol)) => {
+                    let problem = Problem::Shadowed(shadowed_symbol.region, shadow.clone());
 
                     env.problem(roc_problem::can::Problem::Shadowing {
-                        original_region,
+                        original_region: shadowed_symbol.region,
                         shadow,
                         kind: ShadowKind::Variable,
                     });
@@ -908,7 +908,7 @@ fn canonicalize_has_clause(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     clause: &Loc<roc_parse::ast::HasClause<'_>>,
-    pending_abilities_in_scope: &[Symbol],
+    pending_abilities_in_scope: &PendingAbilitiesInScope,
     references: &mut VecSet<Symbol>,
 ) -> Result<(), Type> {
     let Loc {
@@ -929,7 +929,7 @@ fn canonicalize_has_clause(
             let symbol = make_apply_symbol(env, ability.region, scope, module_name, ident)?;
 
             // Ability defined locally, whose members we are constructing right now...
-            if !pending_abilities_in_scope.contains(&symbol)
+            if !pending_abilities_in_scope.contains_key(&symbol)
                 // or an ability that was imported from elsewhere
                 && !scope.abilities_store.is_ability(symbol)
             {

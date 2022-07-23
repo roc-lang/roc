@@ -841,16 +841,20 @@ fn promote_to_wasm_test_wrapper<'a, 'ctx, 'env>(
         &Layout::UNIT,
     );
 
+    let (roc_return, output_type) = match roc_main_fn.get_type().get_return_type() {
+        Some(return_type) => {
+            let output_type = return_type.ptr_type(AddressSpace::Generic);
+            (RocReturn::Return, output_type.into())
+        }
+        None => {
+            assert_eq!(roc_main_fn.get_type().get_param_types().len(), 1);
+            let output_type = roc_main_fn.get_type().get_param_types()[0];
+            (RocReturn::ByPointer, output_type)
+        }
+    };
+
     let main_fn = {
-        let c_function_spec = {
-            match roc_main_fn.get_type().get_return_type() {
-                Some(return_type) => {
-                    let output_type = return_type.ptr_type(AddressSpace::Generic);
-                    FunctionSpec::cconv(env, CCReturn::Return, Some(output_type.into()), &[])
-                }
-                None => todo!(),
-            }
-        };
+        let c_function_spec = FunctionSpec::cconv(env, CCReturn::Return, Some(output_type), &[]);
 
         let c_function = add_func(
             env.context,
@@ -870,42 +874,43 @@ fn promote_to_wasm_test_wrapper<'a, 'ctx, 'env>(
         let entry = context.append_basic_block(c_function, "entry");
         builder.position_at_end(entry);
 
-        // call the main roc function
-        let roc_main_fn_result = call_roc_function(env, roc_main_fn, &top_level.result, &[]);
-
         // reserve space for the result on the heap
         // pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
         let (size, alignment) = top_level.result.stack_size_and_alignment(env.target_info);
         let roc_alloc = env.module.get_function("roc_alloc").unwrap();
 
-        let call = builder.build_call(
-            roc_alloc,
-            &[
-                env.ptr_int().const_int(size as _, false).into(),
-                env.context
-                    .i32_type()
-                    .const_int(alignment as _, false)
-                    .into(),
-            ],
-            "result_ptr",
-        );
+        let roc_main_fn_result = call_roc_function(env, roc_main_fn, &top_level.result, &[]);
 
-        call.set_call_convention(C_CALL_CONV);
-        let void_ptr = call.try_as_basic_value().left().unwrap();
+        match roc_return {
+            RocReturn::Return => {
+                let call = builder.build_call(
+                    roc_alloc,
+                    &[
+                        env.ptr_int().const_int(size as _, false).into(),
+                        env.context
+                            .i32_type()
+                            .const_int(alignment as _, false)
+                            .into(),
+                    ],
+                    "result_ptr",
+                );
 
-        let ptr = builder.build_pointer_cast(
-            void_ptr.into_pointer_value(),
-            c_function
-                .get_type()
-                .get_return_type()
-                .unwrap()
-                .into_pointer_type(),
-            "cast_ptr",
-        );
+                call.set_call_convention(C_CALL_CONV);
+                let void_ptr = call.try_as_basic_value().left().unwrap();
 
-        builder.build_store(ptr, roc_main_fn_result);
-
-        builder.build_return(Some(&ptr));
+                let ptr = builder.build_pointer_cast(
+                    void_ptr.into_pointer_value(),
+                    output_type.into_pointer_type(),
+                    "cast_ptr",
+                );
+                builder.build_store(ptr, roc_main_fn_result);
+                builder.build_return(Some(&ptr));
+            }
+            RocReturn::ByPointer => {
+                assert!(roc_main_fn_result.is_pointer_value());
+                builder.build_return(Some(&roc_main_fn_result));
+            }
+        }
 
         c_function
     };
@@ -984,7 +989,7 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
             if str_literal.len() < env.small_str_bytes() as usize {
                 match env.small_str_bytes() {
                     24 => small_str_ptr_width_8(env, parent, str_literal).into(),
-                    12 => small_str_ptr_width_4(env, parent, str_literal).into(),
+                    12 => small_str_ptr_width_4(env, str_literal).into(),
                     _ => unreachable!("incorrect small_str_bytes"),
                 }
             } else {
@@ -1051,9 +1056,8 @@ fn small_str_ptr_width_8<'a, 'ctx, 'env>(
 
 fn small_str_ptr_width_4<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
     str_literal: &str,
-) -> PointerValue<'ctx> {
+) -> StructValue<'ctx> {
     debug_assert_eq!(env.target_info.ptr_width() as u8, 4);
 
     let mut array = [0u8; 12];
@@ -1074,7 +1078,11 @@ fn small_str_ptr_width_4<'a, 'ctx, 'env>(
     let ptr_type = env.context.i8_type().ptr_type(address_space);
     let ptr = env.builder.build_int_to_ptr(ptr, ptr_type, "to_u8_ptr");
 
-    const_str_alloca_ptr(env, parent, ptr, len, cap)
+    struct_from_fields(
+        env,
+        zig_str_type(env),
+        [(0, ptr.into()), (1, len.into()), (2, cap.into())].into_iter(),
+    )
 }
 
 pub fn build_exp_call<'a, 'ctx, 'env>(
@@ -2412,7 +2420,7 @@ fn list_literal<'a, 'ctx, 'env>(
                     .build_in_bounds_gep(global, &[zero, offset], "first_element_pointer")
             };
 
-            super::build_list::store_list(env, ptr, list_length_intval)
+            super::build_list::store_list(env, ptr, list_length_intval).into()
         } else {
             // some of our elements are non-constant, so we must allocate space on the heap
             let ptr = allocate_list(env, element_layout, list_length_intval);
@@ -2436,7 +2444,7 @@ fn list_literal<'a, 'ctx, 'env>(
                 builder.build_store(elem_ptr, val);
             }
 
-            super::build_list::store_list(env, ptr, list_length_intval)
+            super::build_list::store_list(env, ptr, list_length_intval).into()
         }
     } else {
         let ptr = allocate_list(env, element_layout, list_length_intval);
@@ -2455,7 +2463,7 @@ fn list_literal<'a, 'ctx, 'env>(
             store_roc_value(env, *element_layout, elem_ptr, val);
         }
 
-        super::build_list::store_list(env, ptr, list_length_intval)
+        super::build_list::store_list(env, ptr, list_length_intval).into()
     }
 }
 
@@ -4837,8 +4845,9 @@ fn build_closure_caller<'a, 'ctx, 'env>(
 
     // e.g. `roc__main_1_Fx_caller`
     let function_name = format!(
-        "roc__{}_{}_caller",
+        "roc__{}_{}_{}_caller",
         def_name,
+        alias_symbol.module_string(&env.interns),
         alias_symbol.as_str(&env.interns)
     );
 
@@ -4952,15 +4961,17 @@ fn build_host_exposed_alias_size_help<'a, 'ctx, 'env>(
     let size_function_spec = FunctionSpec::cconv(env, CCReturn::Return, Some(i64), &[]);
     let size_function_name: String = if let Some(label) = opt_label {
         format!(
-            "roc__{}_{}_{}_size",
+            "roc__{}_{}_{}_{}_size",
             def_name,
+            alias_symbol.module_string(&env.interns),
             alias_symbol.as_str(&env.interns),
             label
         )
     } else {
         format!(
-            "roc__{}_{}_size",
+            "roc__{}_{}_{}_size",
             def_name,
+            alias_symbol.module_string(&env.interns),
             alias_symbol.as_str(&env.interns)
         )
     };

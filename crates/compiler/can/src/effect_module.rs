@@ -411,41 +411,39 @@ fn build_effect_map(
     (map_symbol, def)
 }
 
+fn force_thunk(expr: Expr, var_store: &mut VarStore) -> Expr {
+    let boxed = (
+        var_store.fresh(),
+        Loc::at_zero(expr),
+        var_store.fresh(),
+        var_store.fresh(),
+    );
+
+    let arguments = vec![(var_store.fresh(), Loc::at_zero(Expr::EmptyRecord))];
+    Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
+}
+
 fn build_effect_after(
     scope: &mut Scope,
-    effect_symbol: Symbol,
+    effect_opaque_symbol: Symbol,
     var_store: &mut VarStore,
 ) -> (Symbol, Def) {
-    // Effect.after = \@Effect effect, toEffect -> toEffect (effect {})
+    //    Effect.after = \@Effect effect, toEffect ->
+    //        @Effect \{} ->
+    //            when toEffect (effect {}) is
+    //            @Effect thunk -> thunk {}
 
-    let thunk_symbol = {
-        scope
-            .introduce("effect_after_thunk".into(), Region::zero())
-            .unwrap()
-    };
+    let thunk_symbol = new_symbol!(scope, "effect_after_thunk");
 
-    let to_effect_symbol = {
-        scope
-            .introduce("effect_after_toEffect".into(), Region::zero())
-            .unwrap()
-    };
+    let effect_symbol = new_symbol!(scope, "effect_after_effect");
+    let to_effect_symbol = new_symbol!(scope, "effect_after_toEffect");
+    let after_symbol = new_symbol!(scope, "after");
+    let outer_closure_symbol = new_symbol!(scope, "effect_after_inner");
 
-    let after_symbol = { scope.introduce("after".into(), Region::zero()).unwrap() };
+    // `effect {}`
+    let force_effect_call = force_thunk(Expr::Var(effect_symbol), var_store);
 
-    // `thunk {}`
-    let force_thunk_call = {
-        let boxed = (
-            var_store.fresh(),
-            Loc::at_zero(Expr::Var(thunk_symbol)),
-            var_store.fresh(),
-            var_store.fresh(),
-        );
-
-        let arguments = vec![(var_store.fresh(), Loc::at_zero(Expr::EmptyRecord))];
-        Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
-    };
-
-    // `toEffect (thunk {})`
+    // `toEffect (effect {})`
     let to_effect_call = {
         let boxed = (
             var_store.fresh(),
@@ -454,9 +452,58 @@ fn build_effect_after(
             var_store.fresh(),
         );
 
-        let arguments = vec![(var_store.fresh(), Loc::at_zero(force_thunk_call))];
+        let arguments = vec![(var_store.fresh(), Loc::at_zero(force_effect_call))];
         Expr::Call(Box::new(boxed), arguments, CalledVia::Space)
     };
+
+    // let @Effect thunk = toEffect (effect {}) in thunk {}
+    let let_effect_thunk = {
+        // `thunk {}`
+        let force_inner_thunk_call = force_thunk(Expr::Var(thunk_symbol), var_store);
+
+        let (specialized_def_type, type_arguments, lambda_set_variables) =
+            build_fresh_opaque_variables(var_store);
+
+        let pattern = Pattern::UnwrappedOpaque {
+            whole_var: var_store.fresh(),
+            opaque: effect_opaque_symbol,
+            argument: Box::new((
+                var_store.fresh(),
+                Loc::at_zero(Pattern::Identifier(thunk_symbol)),
+            )),
+            specialized_def_type,
+            type_arguments,
+            lambda_set_variables,
+        };
+
+        let branches = vec![crate::expr::WhenBranch {
+            guard: None,
+            value: Loc::at_zero(force_inner_thunk_call),
+            patterns: vec![Loc::at_zero(pattern)],
+            redundant: RedundantMark::new(var_store),
+        }];
+
+        Expr::When {
+            cond_var: var_store.fresh(),
+            branches_cond_var: var_store.fresh(),
+            expr_var: var_store.fresh(),
+            region: Region::zero(),
+            loc_cond: Box::new(Loc::at_zero(to_effect_call)),
+            branches,
+            exhaustive: ExhaustiveMark::new(var_store),
+        }
+    };
+
+    // @Effect \{} -> when toEffect (effect {}) is @Effect thunk -> thunk {}
+    let outer_effect = wrap_in_effect_thunk(
+        let_effect_thunk,
+        effect_opaque_symbol,
+        outer_closure_symbol,
+        vec![effect_symbol, to_effect_symbol],
+        var_store,
+    );
+
+    scope.register_debug_idents();
 
     let (specialized_def_type, type_arguments, lambda_set_variables) =
         build_fresh_opaque_variables(var_store);
@@ -466,11 +513,11 @@ fn build_effect_after(
             var_store.fresh(),
             AnnotatedMark::new(var_store),
             Loc::at_zero(Pattern::UnwrappedOpaque {
-                opaque: effect_symbol,
+                opaque: effect_opaque_symbol,
                 whole_var: var_store.fresh(),
                 argument: Box::new((
                     var_store.fresh(),
-                    Loc::at_zero(Pattern::Identifier(thunk_symbol)),
+                    Loc::at_zero(Pattern::Identifier(effect_symbol)),
                 )),
                 specialized_def_type,
                 type_arguments,
@@ -493,7 +540,7 @@ fn build_effect_after(
         captured_symbols: Vec::new(),
         recursive: Recursive::NotRecursive,
         arguments,
-        loc_body: Box::new(Loc::at_zero(to_effect_call)),
+        loc_body: Box::new(Loc::at_zero(outer_effect)),
     });
 
     let mut introduced_variables = IntroducedVariables::default();
@@ -506,15 +553,24 @@ fn build_effect_after(
         introduced_variables.insert_named("b".into(), Loc::at_zero(var_b));
 
         let effect_a = build_effect_opaque(
-            effect_symbol,
+            effect_opaque_symbol,
             var_a,
             Type::Variable(var_a),
             var_store,
             &mut introduced_variables,
         );
 
-        let effect_b = build_effect_opaque(
-            effect_symbol,
+        let effect_b1 = build_effect_opaque(
+            effect_opaque_symbol,
+            var_b,
+            Type::Variable(var_b),
+            var_store,
+            &mut introduced_variables,
+        );
+
+        // we need a second b2 to give it a unique lambda set variable
+        let effect_b2 = build_effect_opaque(
+            effect_opaque_symbol,
             var_b,
             Type::Variable(var_b),
             var_store,
@@ -522,19 +578,19 @@ fn build_effect_after(
         );
 
         let closure_var = var_store.fresh();
-        introduced_variables.insert_wildcard(Loc::at_zero(closure_var));
+        introduced_variables.insert_lambda_set(closure_var);
         let a_to_effect_b = Type::Function(
             vec![Type::Variable(var_a)],
             Box::new(Type::Variable(closure_var)),
-            Box::new(effect_b.clone()),
+            Box::new(effect_b1),
         );
 
         let closure_var = var_store.fresh();
-        introduced_variables.insert_wildcard(Loc::at_zero(closure_var));
+        introduced_variables.insert_lambda_set(closure_var);
         Type::Function(
             vec![effect_a, a_to_effect_b],
             Box::new(Type::Variable(closure_var)),
-            Box::new(effect_b),
+            Box::new(effect_b2),
         )
     };
 
@@ -1424,7 +1480,8 @@ fn build_effect_opaque(
     introduced_variables: &mut IntroducedVariables,
 ) -> Type {
     let closure_var = var_store.fresh();
-    introduced_variables.insert_wildcard(Loc::at_zero(closure_var));
+    // introduced_variables.insert_wildcard(Loc::at_zero(closure_var));
+    introduced_variables.insert_lambda_set(closure_var);
 
     let actual = Type::Function(
         vec![Type::EmptyRec],

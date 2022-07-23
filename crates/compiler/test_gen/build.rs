@@ -141,5 +141,9 @@ fn feature_is_enabled(feature_name: &str) -> bool {
 fn run_zig(args: &[&str]) {
     let zig = zig_executable();
     println!("{} {}", zig, args.join(" "));
-    Command::new(&zig).args(args).output().unwrap();
+    let output = Command::new(&zig).args(args).output().unwrap();
+
+    assert!(output.status.success(), "{:#?}", output);
+    assert!(output.stdout.is_empty(), "{:#?}", output);
+    assert!(output.stderr.is_empty(), "{:#?}", output);
 }

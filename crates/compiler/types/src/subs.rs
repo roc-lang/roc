@@ -2702,7 +2702,8 @@ impl UnionTags {
         subs: &'a Subs,
         ext: Variable,
     ) -> impl Iterator<Item = (&TagName, &[Variable])> + 'a {
-        let (it, _) = crate::types::gather_tags_unsorted_iter(subs, *self, ext);
+        let (it, _) =
+            crate::types::gather_tags_unsorted_iter(subs, *self, ext).expect("not a tag union");
 
         let f = move |(label, slice): (_, SubsSlice<Variable>)| (label, subs.get_subs_slice(slice));
 
@@ -2715,7 +2716,8 @@ impl UnionTags {
         subs: &'a Subs,
         ext: Variable,
     ) -> (UnsortedUnionLabels<'a, TagName>, Variable) {
-        let (it, ext) = crate::types::gather_tags_unsorted_iter(subs, *self, ext);
+        let (it, ext) =
+            crate::types::gather_tags_unsorted_iter(subs, *self, ext).expect("not a tag union");
         let f = move |(label, slice): (_, SubsSlice<Variable>)| (label, subs.get_subs_slice(slice));
         let it = it.map(f);
 
@@ -2741,7 +2743,8 @@ impl UnionTags {
                 ext,
             )
         } else {
-            let union_structure = crate::types::gather_tags(subs, *self, ext);
+            let union_structure =
+                crate::types::gather_tags(subs, *self, ext).expect("not a tag union");
 
             (
                 Box::new(union_structure.fields.into_iter()),
@@ -2767,7 +2770,8 @@ impl UnionTags {
                 ext,
             )
         } else {
-            let (fields, ext) = crate::types::gather_tags_slices(subs, *self, ext);
+            let (fields, ext) =
+                crate::types::gather_tags_slices(subs, *self, ext).expect("not a tag union");
 
             (Box::new(fields.into_iter()), ext)
         }

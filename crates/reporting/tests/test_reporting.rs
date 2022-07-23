@@ -1310,7 +1310,7 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 1st argument to `f` is not what I expect:
+    This 1st argument to `f` has an unexpected type:
 
     9│      f bar
               ^^^
@@ -1319,7 +1319,7 @@ mod test_reporting {
 
         { bar : Int a }
 
-    But `f` needs the 1st argument to be:
+    But `f` needs its 1st argument to be:
 
         { foo : Int * }
 
@@ -1344,7 +1344,7 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 1st argument to `f` is not what I expect:
+    This 1st argument to `f` has an unexpected type:
 
     7│      f Blue
               ^^^^
@@ -1353,7 +1353,7 @@ mod test_reporting {
 
         [Blue]a
 
-    But `f` needs the 1st argument to be:
+    But `f` needs its 1st argument to be:
 
         [Green, Red]
 
@@ -1378,7 +1378,7 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 1st argument to `f` is not what I expect:
+    This 1st argument to `f` has an unexpected type:
 
     7│      f (Blue 3.14)
                ^^^^^^^^^
@@ -1387,7 +1387,7 @@ mod test_reporting {
 
         [Blue (Frac a)]b
 
-    But `f` needs the 1st argument to be:
+    But `f` needs its 1st argument to be:
 
         [Green Str, Red (Int *)]
 
@@ -1418,7 +1418,7 @@ mod test_reporting {
     5│      x = if True then 3.14 else 4
                              ^^^^
 
-    The 1st branch is a frac of type:
+    The 1st branch is a fraction of type:
 
         Frac a
 
@@ -1485,7 +1485,7 @@ mod test_reporting {
     5│      x = \_ -> 3.14
                       ^^^^
 
-    The body is a frac of type:
+    The body is a fraction of type:
 
         Frac a
 
@@ -2322,16 +2322,16 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `add` is not what I expect:
+    This 2nd argument to `add` has an unexpected type:
 
     4│      0x4 + "foo"
                   ^^^^^
 
-    This argument is a string of type:
+    The argument is a string of type:
 
         Str
 
-    But `add` needs the 2nd argument to be:
+    But `add` needs its 2nd argument to be:
 
         Int a
     "###
@@ -2347,16 +2347,16 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `add` is not what I expect:
+    This 2nd argument to `add` has an unexpected type:
 
     4│      0x4 + 3.14
                   ^^^^
 
-    This argument is a frac of type:
+    The argument is a fraction of type:
 
         Frac a
 
-    But `add` needs the 2nd argument to be:
+    But `add` needs its 2nd argument to be:
 
         Int a
 
@@ -2375,7 +2375,7 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `add` is not what I expect:
+    This 2nd argument to `add` has an unexpected type:
 
     4│      42 + True
                  ^^^^
@@ -2384,7 +2384,7 @@ mod test_reporting {
 
         [True]a
 
-    But `add` needs the 2nd argument to be:
+    But `add` needs its 2nd argument to be:
 
         Num a
     "###
@@ -2761,16 +2761,16 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 1st argument to `f` is not what I expect:
+    This 1st argument to `f` has an unexpected type:
 
     9│      f { y: 3.14 }
               ^^^^^^^^^^^
 
-    This argument is a record of type:
+    The argument is a record of type:
 
         { y : Frac a }
 
-    But `f` needs the 1st argument to be:
+    But `f` needs its 1st argument to be:
 
         { x : Int a }
 
@@ -3058,7 +3058,7 @@ mod test_reporting {
         @r###"
     ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    This pattern in the definition of `MyAlias` is not what I expect:
+    This definition of `MyAlias` has an unexpected pattern:
 
     4│      MyAlias 1 : Num.I64
                     ^
@@ -3090,7 +3090,7 @@ mod test_reporting {
         @r###"
     ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    This pattern in the definition of `Age` is not what I expect:
+    This definition of `Age` has an unexpected pattern:
 
     4│      Age 1 := Num.I64
                 ^
@@ -3377,7 +3377,7 @@ mod test_reporting {
 
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `add` is not what I expect:
+    This 2nd argument to `add` has an unexpected type:
 
     14│      x + y + h + l + minlit + maxlit
                                       ^^^^^^
@@ -3386,7 +3386,7 @@ mod test_reporting {
 
         U128
 
-    But `add` needs the 2nd argument to be:
+    But `add` needs its 2nd argument to be:
 
         I128 or Dec
     "###
@@ -3664,7 +3664,7 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `add` is not what I expect:
+    This 2nd argument to `add` has an unexpected type:
 
     4│      \{ x, y ? True } -> x + y
                                     ^
@@ -3673,7 +3673,7 @@ mod test_reporting {
 
         [True]a
 
-    But `add` needs the 2nd argument to be:
+    But `add` needs its 2nd argument to be:
 
         Num a
     "###
@@ -3849,7 +3849,7 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 1st argument to this function is not what I expect:
+    This 1st argument to this function has an unexpected type:
 
     5│      f = \r -> .y r
                          ^
@@ -3858,7 +3858,7 @@ mod test_reporting {
 
         { x : I64, y ? I64 }
 
-    But this function needs the 1st argument to be:
+    But this function needs its 1st argument to be:
 
         { x : I64, y : I64 }
 
@@ -5996,17 +5996,17 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `map` is not what I expect:
+    This 2nd argument to `map` has an unexpected type:
 
     4│>      x <- List.map ["a", "b"]
     5│>
     6│>      x + 1
 
-    This argument is an anonymous function of type:
+    The argument is an anonymous function of type:
 
         Num a -> Num a
 
-    But `map` needs the 2nd argument to be:
+    But `map` needs its 2nd argument to be:
 
         Str -> Num a
     "###
@@ -6070,7 +6070,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `mul` is not what I expect:
+    This 2nd argument to `mul` has an unexpected type:
 
     5│      mult = \a, b -> a * b
                                 ^
@@ -6079,7 +6079,7 @@ All branches in an `if` must have the same type!
 
         F64
 
-    But `mul` needs the 2nd argument to be:
+    But `mul` needs its 2nd argument to be:
 
         Num *
 
@@ -6114,7 +6114,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `mul` is not what I expect:
+    This 2nd argument to `mul` has an unexpected type:
 
     5│      mult = \a, b -> a * b
                                 ^
@@ -6123,7 +6123,7 @@ All branches in an `if` must have the same type!
 
         F64
 
-    But `mul` needs the 2nd argument to be:
+    But `mul` needs its 2nd argument to be:
 
         Num a
 
@@ -6439,7 +6439,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 1st argument to `isEmpty` is not what I expect:
+    This 1st argument to `isEmpty` has an unexpected type:
 
     9│      isEmpty (Name "boo")
                      ^^^^^^^^^^
@@ -6448,7 +6448,7 @@ All branches in an `if` must have the same type!
 
         [Name Str]a
 
-    But `isEmpty` needs the 1st argument to be:
+    But `isEmpty` needs its 1st argument to be:
 
         [Email Str]
 
@@ -6475,16 +6475,16 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 1st argument to `c` is not what I expect:
+    This 1st argument to `c` has an unexpected type:
 
     8│      f = \c -> c 6
                         ^
 
-    This argument is a number of type:
+    The argument is a number of type:
 
         Num a
 
-    But `c` needs the 1st argument to be:
+    But `c` needs its 1st argument to be:
 
         a
 
@@ -6712,7 +6712,7 @@ All branches in an `if` must have the same type!
                     let bad_type = if $suffix == "u8" { "I8" } else { "U8" };
                     let carets = "^".repeat(number.len() + $suffix.len());
                     let kind = match $suffix {
-                        "dec"|"f32"|"f64" => "a frac",
+                        "dec"|"f32"|"f64" => "a fraction",
                         _ => "an integer",
                     };
 
@@ -6720,16 +6720,16 @@ All branches in an `if` must have the same type!
                         r#"
                         ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-                        The 1st argument to `use` is not what I expect:
+                        This 1st argument to `use` has an unexpected type:
 
                         5│      use {}{}
                                     {}
 
-                        This argument is {} of type:
+                        The argument is {} of type:
 
                             {}
 
-                        But `use` needs the 1st argument to be:
+                        But `use` needs its 1st argument to be:
 
                             {}
                         "#
@@ -7208,16 +7208,16 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `get` is not what I expect:
+    This 2nd argument to `get` has an unexpected type:
 
     4│      List.get [1,2,3] -1
                              ^^
 
-    This argument is a number of type:
+    The argument is a number of type:
 
         I8, I16, F32, I32, F64, I64, I128, or Dec
 
-    But `get` needs the 2nd argument to be:
+    But `get` needs its 2nd argument to be:
 
         Nat
     "###
@@ -7234,7 +7234,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `get` is not what I expect:
+    This 2nd argument to `get` has an unexpected type:
 
     5│      List.get [1,2,3] a
                              ^
@@ -7243,7 +7243,7 @@ All branches in an `if` must have the same type!
 
         F64, I64, I128, or Dec
 
-    But `get` needs the 2nd argument to be:
+    But `get` needs its 2nd argument to be:
 
         Nat
     "###
@@ -7261,7 +7261,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `get` is not what I expect:
+    This 2nd argument to `get` has an unexpected type:
 
     6│      List.get [1,2,3] b
                              ^
@@ -7270,7 +7270,7 @@ All branches in an `if` must have the same type!
 
         F64, I64, I128, or Dec
 
-    But `get` needs the 2nd argument to be:
+    But `get` needs its 2nd argument to be:
 
         Nat
     "###
@@ -7818,16 +7818,16 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 1st argument to `y` is not what I expect:
+    This 1st argument to `y` has an unexpected type:
 
     9│          n = y 1u8
                       ^^^
 
-    This argument is an integer of type:
+    The argument is an integer of type:
 
         U8
 
-    But `y` needs the 1st argument to be:
+    But `y` needs its 1st argument to be:
 
         a
 
@@ -8368,35 +8368,6 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        ability_specialization_with_non_implementing_type,
-        indoc!(
-            r#"
-            app "test" provides [hash] to "./platform"
-
-            Hash has hash : a -> Num.U64 | a has Hash
-
-            hash = \{} -> 0u64
-            "#
-        ),
-        @r#"
-        ── ILLEGAL SPECIALIZATION ──────────────────────────────── /code/proj/Main.roc ─
-
-        This specialization of `hash` is for a non-opaque type:
-
-        5│  hash = \{} -> 0u64
-            ^^^^
-
-        It is specialized for
-
-            {}a
-
-        but structural types can never specialize abilities!
-
-        Note: `hash` is a member of `#UserApp.Hash`
-        "#
-    );
-
-    test_report!(
         ability_specialization_does_not_match_type,
         indoc!(
             r#"
@@ -8404,7 +8375,7 @@ All branches in an `if` must have the same type!
 
             Hash has hash : a -> U64 | a has Hash
 
-            Id := U32
+            Id := U32 has [Hash {hash}]
 
             hash = \@Id n -> n
             "#
@@ -8437,26 +8408,37 @@ All branches in an `if` must have the same type!
                 eq : a, a -> Bool | a has Eq
                 le : a, a -> Bool | a has Eq
 
-            Id := U64
+            Id := U64 has [Eq {eq}]
 
             eq = \@Id m, @Id n -> m == n
             "#
         ),
-        @r#"
-        ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-        The type `Id` does not fully implement the ability `Eq`. The following
-        specializations are missing:
+    This type does not fully implement the `Eq` ability:
 
-        A specialization for `le`, which is defined here:
+    7│  Id := U64 has [Eq {eq}]
+                       ^^^^^^^
 
-        5│      le : a, a -> Bool | a has Eq
-                ^^
-        "#
+    The following necessary members are missing implementations:
+
+        le
+
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    The type `Id` does not fully implement the ability `Eq`. The following
+    specializations are missing:
+
+    A specialization for `le`, which is defined here:
+
+    5│      le : a, a -> Bool | a has Eq
+            ^^
+    "###
     );
 
     test_report!(
-        ability_specialization_overly_generalized,
+        ability_specialization_is_unused,
         indoc!(
             r#"
             app "test" provides [hash] to "./platform"
@@ -8467,29 +8449,78 @@ All branches in an `if` must have the same type!
             hash = \_ -> 0u64
             "#
         ),
-        @r#"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
 
-        This specialization of `hash` is overly general:
+    `hash` is not used anywhere in your code.
 
-        6│  hash = \_ -> 0u64
-            ^^^^
+    6│  hash = \_ -> 0u64
+        ^^^^
 
-        This value is a declared specialization of type:
+    If you didn't intend on using `hash` then remove it so future readers of
+    your code don't wonder why it is there.
+    "###
+    );
 
-            a -> U64
+    test_report!(
+        ability_specialization_is_duplicated,
+        indoc!(
+            r#"
+            app "test" provides [hash, One, Two] to "./platform"
 
-        But the type annotation on `hash` says it must match:
+            Hash has
+                hash : a -> U64 | a has Hash
 
-            a -> U64 | a has Hash
+            One := {} has [Hash {hash}]
+            Two := {} has [Hash {hash}]
 
-        Note: The specialized type is too general, and does not provide a
-        concrete type where a type variable is bound to an ability.
+            hash = \_ -> 0u64
+            "#
+        ),
+        // TODO: the error message here could be seriously improved!
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        Specializations can only be made for concrete types. If you have a
-        generic implementation for this value, perhaps you don't need an
-        ability?
-        "#
+    This specialization of `hash` is overly general:
+
+    9│  hash = \_ -> 0u64
+        ^^^^
+
+    This value is a declared specialization of type:
+
+        a -> U64
+
+    But the type annotation on `hash` says it must match:
+
+        a -> U64 | a has Hash
+
+    Note: The specialized type is too general, and does not provide a
+    concrete type where a type variable is bound to an ability.
+
+    Specializations can only be made for concrete types. If you have a
+    generic implementation for this value, perhaps you don't need an
+    ability?
+    "###
+    );
+
+    test_report!(
+        #[ignore = "TODO does not error yet"]
+        ability_specialization_is_duplicated_with_type_mismatch,
+        indoc!(
+            r#"
+            app "test" provides [hash, One, Two] to "./platform"
+
+            Hash has
+                hash : a -> U64 | a has Hash
+
+            One := {} has [Hash {hash}]
+            Two := {} has [Hash {hash}]
+
+            hash = \@One _ -> 0u64
+            "#
+        ),
+        @r###"
+    "###
     );
 
     test_report!(
@@ -8501,7 +8532,7 @@ All branches in an `if` must have the same type!
             Eq has
                 eq : a, a -> Bool | a has Eq
 
-            You := {}
+            You := {} has [Eq {eq}]
             AndI := {}
 
             eq = \@You {}, @AndI {} -> False
@@ -8539,7 +8570,7 @@ All branches in an `if` must have the same type!
             Hash has
                 hash : a -> U64 | a has Hash
 
-            Id := U64
+            Id := U64 has [Hash {hash}]
 
             hash : Id -> U32
             hash = \@Id n -> n
@@ -8588,7 +8619,7 @@ All branches in an `if` must have the same type!
             Hash has
                 hash : a -> U64 | a has Hash
 
-            Id := U64
+            Id := U64 has [Hash {hash}]
 
             hash = \@Id n -> n
 
@@ -8666,7 +8697,7 @@ All branches in an `if` must have the same type!
             Hash has
                 hash : a -> U64 | a has Hash
 
-            Id := U64
+            Id := U64 has [Hash {hash}]
             hash = \@Id n -> n
 
             hashable : a | a has Hash
@@ -8710,11 +8741,11 @@ All branches in an `if` must have the same type!
             mulHashes : Hash, Hash -> U64
             mulHashes = \x, y -> hash x * hash y
 
-            Id := U64
-            hash = \@Id n -> n
+            Id := U64 has [Hash {hash: hashId}]
+            hashId = \@Id n -> n
 
-            Three := {}
-            hash = \@Three _ -> 3
+            Three := {} has [Hash {hash: hashThree}]
+            hashThree = \@Three _ -> 3
 
             result = mulHashes (@Id 100) (@Three {})
             "#
@@ -8879,7 +8910,7 @@ All branches in an `if` must have the same type!
             Default has default : {} -> a | a has Default
 
             main =
-                A := {}
+                A := {} has [Default {default}]
                 default = \{} -> @A {}
                 default {}
             "#
@@ -8909,22 +8940,22 @@ All branches in an `if` must have the same type!
                 Job lst -> lst == ""
             "#
         ),
-        @r#"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        The 2nd argument to `isEq` is not what I expect:
+    This 2nd argument to `isEq` has an unexpected type:
 
-        9│          Job lst -> lst == ""
-                                      ^^
+    9│          Job lst -> lst == ""
+                                  ^^
 
-        This argument is a string of type:
+    The argument is a string of type:
 
-            Str
+        Str
 
-        But `isEq` needs the 2nd argument to be:
+    But `isEq` needs its 2nd argument to be:
 
-            List [Job ∞] as ∞
-        "#
+        List [Job ∞] as ∞
+    "###
     );
 
     test_report!(
@@ -8948,7 +8979,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 1st argument to `remove` is not what I expect:
+    This 1st argument to `remove` has an unexpected type:
 
     10│              new = { model & set : Set.remove goal model.set }
                                                       ^^^^
@@ -9134,6 +9165,286 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
+        opaque_ability_impl_not_found_shorthand_syntax,
+        indoc!(
+            r#"
+            app "test" provides [A] to "./platform"
+
+            Eq has eq : a, a -> U64 | a has Eq
+
+            A := U8 has [Eq {eq}]
+            "#
+        ),
+        @r###"
+    ── IMPLEMENTATION NOT FOUND ────────────────────────────── /code/proj/Main.roc ─
+
+    An implementation of `eq` could not be found in this scope:
+
+    5│  A := U8 has [Eq {eq}]
+                         ^^
+
+    Tip: consider adding a value of name `eq` in this scope, or using
+    another variable that implements this ability member, like
+    { eq: myeq }
+
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    This type does not fully implement the `Eq` ability:
+
+    5│  A := U8 has [Eq {eq}]
+                     ^^^^^^^
+
+    The following necessary members are missing implementations:
+
+        eq
+    "###
+    );
+
+    test_report!(
+        opaque_ability_impl_not_found,
+        indoc!(
+            r#"
+            app "test" provides [A, myEq] to "./platform"
+
+            Eq has eq : a, a -> Bool | a has Eq
+
+            A := U8 has [ Eq {eq: aEq} ]
+
+            myEq = \m, n -> m == n
+            "#
+        ),
+        @r###"
+    ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
+
+    Nothing is named `aEq` in this scope.
+
+    5│  A := U8 has [ Eq {eq: aEq} ]
+                              ^^^
+
+    Did you mean one of these?
+
+        Eq
+        myEq
+        eq
+        U8
+
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    This type does not fully implement the `Eq` ability:
+
+    5│  A := U8 has [ Eq {eq: aEq} ]
+                      ^^^^^^^^^^^^
+
+    The following necessary members are missing implementations:
+
+        eq
+    "###
+    );
+
+    test_report!(
+        opaque_ability_impl_optional,
+        indoc!(
+            r#"
+            app "test" provides [A, myEq] to "./platform"
+
+            Eq has eq : a, a -> Bool | a has Eq
+
+            A := U8 has [ Eq {eq ? aEq} ]
+
+            myEq = \m, n -> m == n
+            "#
+        ),
+        @r###"
+    ── OPTIONAL ABILITY IMPLEMENTATION ─────────────────────── /code/proj/Main.roc ─
+
+    Ability implementations cannot be optional:
+
+    5│  A := U8 has [ Eq {eq ? aEq} ]
+                          ^^^^^^^^
+
+    Custom implementations must be supplied fully.
+
+
+
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    This type does not fully implement the `Eq` ability:
+
+    5│  A := U8 has [ Eq {eq ? aEq} ]
+                      ^^^^^^^^^^^^^
+
+    The following necessary members are missing implementations:
+
+        eq
+    "###
+    );
+
+    test_report!(
+        opaque_builtin_ability_impl_optional,
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode.{ Encoding }]
+                provides [A, myEncoder] to "./platform"
+
+            A := U8 has [ Encoding {toEncoder ? myEncoder} ]
+
+            myEncoder = 1
+            "#
+        ),
+        @r###"
+    ── OPTIONAL ABILITY IMPLEMENTATION ─────────────────────── /code/proj/Main.roc ─
+
+    Ability implementations cannot be optional:
+
+    5│  A := U8 has [ Encoding {toEncoder ? myEncoder} ]
+                                ^^^^^^^^^^^^^^^^^^^^^
+
+    Custom implementations must be supplied fully.
+
+    Hint: if you want this implementation to be derived, don't include a
+    record of implementations. For example,    has [Encoding] will attempt
+    to derive `Encoding`
+
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    This type does not fully implement the `Encoding` ability:
+
+    5│  A := U8 has [ Encoding {toEncoder ? myEncoder} ]
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    The following necessary members are missing implementations:
+
+        toEncoder
+    "###
+    );
+
+    test_report!(
+        opaque_ability_impl_qualified,
+        indoc!(
+            r#"
+            app "test" provides [A] to "./platform"
+
+            Eq has eq : a, a -> Bool | a has Eq
+
+            A := U8 has [ Eq {eq : Bool.eq} ]
+            "#
+        ),
+        @r###"
+    ── QUALIFIED ABILITY IMPLEMENTATION ────────────────────── /code/proj/Main.roc ─
+
+    This ability implementation is qualified:
+
+    5│  A := U8 has [ Eq {eq : Bool.eq} ]
+                               ^^^^^^^
+
+    Custom implementations must be defined in the local scope, and
+    unqualified.
+
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    This type does not fully implement the `Eq` ability:
+
+    5│  A := U8 has [ Eq {eq : Bool.eq} ]
+                      ^^^^^^^^^^^^^^^^^
+
+    The following necessary members are missing implementations:
+
+        eq
+    "###
+    );
+
+    test_report!(
+        opaque_ability_impl_not_identifier,
+        indoc!(
+            r#"
+            app "test" provides [A] to "./platform"
+
+            Eq has eq : a, a -> Bool | a has Eq
+
+            A := U8 has [ Eq {eq : \m, n -> m == n} ]
+            "#
+        ),
+        @r###"
+    ── ABILITY IMPLEMENTATION NOT IDENTIFIER ───────────────── /code/proj/Main.roc ─
+
+    This ability implementation is not an identifier:
+
+    5│  A := U8 has [ Eq {eq : \m, n -> m == n} ]
+                               ^^^^^^^^^^^^^^^
+
+    Custom ability implementations defined in this position can only be
+    unqualified identifiers, not arbitrary expressions.
+
+    Tip: consider defining this expression as a variable.
+
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+
+    This type does not fully implement the `Eq` ability:
+
+    5│  A := U8 has [ Eq {eq : \m, n -> m == n} ]
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    The following necessary members are missing implementations:
+
+        eq
+    "###
+    );
+
+    test_report!(
+        opaque_ability_impl_duplicate,
+        indoc!(
+            r#"
+            app "test" provides [A] to "./platform"
+
+            Eq has eq : a, a -> Bool | a has Eq
+
+            A := U8 has [ Eq {eq: eqA, eq: eqA} ]
+
+            eqA = \@A m, @A n -> m == n
+            "#
+        ),
+        @r###"
+    ── DUPLICATE IMPLEMENTATION ────────────────────────────── /code/proj/Main.roc ─
+
+    This ability member implementation is duplicate:
+
+    5│  A := U8 has [ Eq {eq: eqA, eq: eqA} ]
+                                   ^^^^^^^
+
+    The first implementation was defined here:
+
+    5│  A := U8 has [ Eq {eq: eqA, eq: eqA} ]
+                          ^^^^^^^
+
+    Only one custom implementation can be defined for an ability member.
+    "###
+    );
+
+    test_report!(
+        implements_type_not_ability,
+        indoc!(
+            r#"
+            app "test" provides [A, Foo] to "./platform"
+
+            Foo := {}
+
+            A := U8 has [ Foo {} ]
+            "#
+        ),
+        @r###"
+    ── NOT AN ABILITY ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This identifier is not an ability in scope:
+
+    5│  A := U8 has [ Foo {} ]
+                      ^^^
+
+    Only abilities can be implemented.
+    "###
+    );
+
+    test_report!(
         derive_non_builtin_ability,
         indoc!(
             r#"
@@ -9263,40 +9574,6 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        has_encoding_dominated_by_custom,
-        indoc!(
-            r#"
-            app "test" imports [Encode.{ Encoding, toEncoder, custom }] provides [A] to "./platform"
-
-            A := {} has [Encode.Encoding]
-
-            toEncoder = \@A {} -> custom \l, _ -> l
-            "#
-        ),
-        @r#"
-        ── CONFLICTING DERIVE AND IMPLEMENTATION ───────────────── /code/proj/Main.roc ─
-
-        `A` both derives and custom-implements `Encode.Encoding`. We found the
-        derive here:
-
-        3│  A := {} has [Encode.Encoding]
-                         ^^^^^^^^^^^^^^^
-
-        and one custom implementation of `Encode.Encoding` here:
-
-        5│  toEncoder = \@A {} -> custom \l, _ -> l
-            ^^^^^^^^^
-
-        Derived and custom implementations can conflict, so one of them needs
-        to be removed!
-
-        Note: We'll try to compile your program using the custom
-        implementation first, and fall-back on the derived implementation if
-        needed. Make sure to disambiguate which one you want!
-        "#
-    );
-
-    test_report!(
         issue_1755,
         indoc!(
             r#"
@@ -9400,7 +9677,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 1st argument to `foo` is not what I expect:
+    This 1st argument to `foo` has an unexpected type:
 
     10│      foo x
                  ^
@@ -9409,7 +9686,7 @@ All branches in an `if` must have the same type!
 
         F U8 Str
 
-    But `foo` needs the 1st argument to be:
+    But `foo` needs its 1st argument to be:
 
         F Str Str
     "###
@@ -9445,16 +9722,16 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `isEq` is not what I expect:
+    This 2nd argument to `isEq` has an unexpected type:
 
     4│      0x80000000000000000000000000000000 == -0x80000000000000000000000000000000
                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    This argument is an integer of type:
+    The argument is an integer of type:
 
         I128
 
-    But `isEq` needs the 2nd argument to be:
+    But `isEq` needs its 2nd argument to be:
 
         U128
     "###
@@ -9470,16 +9747,16 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `isEq` is not what I expect:
+    This 2nd argument to `isEq` has an unexpected type:
 
     4│      170141183460469231731687303715884105728 == -170141183460469231731687303715884105728
                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    This argument is a number of type:
+    The argument is a number of type:
 
         I128 or Dec
 
-    But `isEq` needs the 2nd argument to be:
+    But `isEq` needs its 2nd argument to be:
 
         U128
     "###
@@ -9541,7 +9818,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    The 2nd argument to `map` is not what I expect:
+    This 2nd argument to `map` has an unexpected type:
 
     5│      List.map [1u16, 2u16, 3u16] @A
                                         ^^
@@ -9550,9 +9827,52 @@ All branches in an `if` must have the same type!
 
         U8 -> A
 
-    But `map` needs the 2nd argument to be:
+    But `map` needs its 2nd argument to be:
 
         U16 -> A
     "###
+    );
+
+    test_report!(
+        symbols_not_bound_in_all_patterns,
+        indoc!(
+            r#"
+            when A "" is
+                A x | B y -> x
+            "#
+        ),
+        @r###"
+        ── NAME NOT BOUND IN ALL PATTERNS ──────────────────────── /code/proj/Main.roc ─
+
+        `x` is not bound in all patterns of this `when` branch
+
+        5│          A x | B y -> x
+                      ^
+
+        Identifiers introduced in a `when` branch must be bound in all patterns
+        of the branch. Otherwise, the program would crash when it tries to use
+        an identifier that wasn't bound!
+
+        ── NAME NOT BOUND IN ALL PATTERNS ──────────────────────── /code/proj/Main.roc ─
+
+        `y` is not bound in all patterns of this `when` branch
+
+        5│          A x | B y -> x
+                            ^
+
+        Identifiers introduced in a `when` branch must be bound in all patterns
+        of the branch. Otherwise, the program would crash when it tries to use
+        an identifier that wasn't bound!
+
+        ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+
+        `y` is not used anywhere in your code.
+
+        5│          A x | B y -> x
+                            ^
+
+        If you didn't intend on using `y` then remove it so future readers of
+        your code don't wonder why it is there.
+        "###
     );
 }

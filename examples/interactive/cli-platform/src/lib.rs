@@ -1,12 +1,16 @@
 #![allow(non_snake_case)]
 
+mod glue;
+
 use core::alloc::Layout;
 use core::ffi::c_void;
-use core::mem::{ManuallyDrop, MaybeUninit};
+use core::mem::MaybeUninit;
+use glue::Metadata;
 use libc;
-use roc_std::RocStr;
+use roc_std::{RocList, RocStr};
 use std::ffi::CStr;
 use std::os::raw::c_char;
+use ureq::Error;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
@@ -15,14 +19,14 @@ extern "C" {
     #[link_name = "roc__mainForHost_size"]
     fn roc_main_size() -> i64;
 
-    #[link_name = "roc__mainForHost_1_Fx_caller"]
+    #[link_name = "roc__mainForHost_1__Fx_caller"]
     fn call_Fx(flags: *const u8, closure_data: *const u8, output: *mut u8);
 
     #[allow(dead_code)]
-    #[link_name = "roc__mainForHost_1_Fx_size"]
+    #[link_name = "roc__mainForHost_1__Fx_size"]
     fn size_Fx() -> i64;
 
-    #[link_name = "roc__mainForHost_1_Fx_result_size"]
+    #[link_name = "roc__mainForHost_1__Fx_result_size"]
     fn size_Fx_result() -> i64;
 }
 
@@ -122,4 +126,71 @@ pub extern "C" fn roc_fx_getLine() -> RocStr {
 pub extern "C" fn roc_fx_putLine(line: &RocStr) {
     let string = line.as_str();
     println!("{}", string);
+}
+
+const BODY_MAX_BYTES: usize = 10 * 1024 * 1024;
+
+#[no_mangle]
+pub extern "C" fn roc_fx_sendRequest(roc_request: &glue::Request) -> glue::Response {
+    use std::io::Read;
+
+    let url = roc_request.url.as_str();
+    match ureq::get(url).call() {
+        Ok(response) => {
+            let statusCode = response.status();
+
+            let len: usize = response
+                .header("Content-Length")
+                .and_then(|val| val.parse::<usize>().ok())
+                .map(|val| val.max(BODY_MAX_BYTES))
+                .unwrap_or(BODY_MAX_BYTES);
+
+            let mut bytes: Vec<u8> = Vec::with_capacity(len);
+            match response
+                .into_reader()
+                .take(len as u64)
+                .read_to_end(&mut bytes)
+            {
+                Ok(_read_bytes) => {}
+                Err(_) => {
+                    // Not totally accurate, but let's deal with this later when we do async
+                    return glue::Response::NetworkError;
+                }
+            }
+
+            // Note: we could skip a full memcpy if we had `RocList::from_iter`.
+            let body = RocList::from_slice(&bytes);
+
+            let metadata = Metadata {
+                headers: RocList::empty(),   // TODO
+                statusText: RocStr::empty(), // TODO
+                url: RocStr::empty(),        // TODO
+                statusCode,
+            };
+
+            glue::Response::GoodStatus(metadata, body)
+        }
+        Err(Error::Status(statusCode, response)) => {
+            let mut buffer: Vec<u8> = vec![];
+            let mut reader = response.into_reader();
+            reader.read(&mut buffer).expect("can't read response");
+            let body = RocList::from_slice(&buffer);
+
+            let metadata = Metadata {
+                headers: RocList::empty(),   // TODO
+                statusText: RocStr::empty(), // TODO
+                url: RocStr::empty(),        // TODO
+                statusCode,
+            };
+
+            glue::Response::BadStatus(metadata, body)
+        }
+        Err(transportError) => {
+            use ureq::ErrorKind::*;
+            match transportError.kind() {
+                InvalidUrl | UnknownScheme => glue::Response::BadUrl(RocStr::from(url)),
+                _ => glue::Response::NetworkError,
+            }
+        }
+    }
 }

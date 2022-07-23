@@ -1,4 +1,4 @@
-use roc_collections::VecMap;
+use roc_collections::{VecMap, VecSet};
 use roc_module::ident::Ident;
 use roc_module::symbol::{IdentId, IdentIds, ModuleId, Symbol};
 use roc_problem::can::RuntimeError;
@@ -8,6 +8,9 @@ use roc_types::types::{Alias, AliasKind, AliasVar, Type};
 use crate::abilities::PendingAbilitiesStore;
 
 use bitvec::vec::BitVec;
+
+// ability -> member names
+pub(crate) type PendingAbilitiesInScope = VecMap<Symbol, VecSet<Symbol>>;
 
 #[derive(Clone, Debug)]
 pub struct Scope {
@@ -26,6 +29,13 @@ pub struct Scope {
 
     /// Identifiers that are imported (and introduced in the header)
     imports: Vec<(Ident, Symbol, Region)>,
+
+    /// Shadows of an ability member, for example a local specialization of `eq` for the ability
+    /// member `Eq has eq : a, a -> Bool | a has Eq` gets a shadow symbol it can use for its
+    /// implementation.
+    ///
+    /// Only one shadow of an ability member is permitted per scope.
+    shadows: VecMap<Symbol, Loc<Symbol>>,
 
     /// Identifiers that are in scope, and defined in the current module
     pub locals: ScopedIdentIds,
@@ -48,12 +58,17 @@ impl Scope {
             locals: ScopedIdentIds::from_ident_ids(home, initial_ident_ids),
             aliases: VecMap::default(),
             abilities_store: starting_abilities_store,
+            shadows: VecMap::default(),
             imports,
         }
     }
 
     pub fn lookup(&self, ident: &Ident, region: Region) -> Result<Symbol, RuntimeError> {
         self.lookup_str(ident.as_str(), region)
+    }
+
+    pub fn lookup_ability_member_shadow(&self, member: Symbol) -> Option<Symbol> {
+        self.shadows.get(&member).map(|loc_shadow| loc_shadow.value)
     }
 
     pub fn add_docs_imports(&mut self) {
@@ -238,7 +253,7 @@ impl Scope {
         &mut self,
         ident: Ident,
         region: Region,
-    ) -> Result<Symbol, (Region, Loc<Ident>, Symbol)> {
+    ) -> Result<Symbol, (Loc<Symbol>, Loc<Ident>, Symbol)> {
         self.introduce_str(ident.as_str(), region)
     }
 
@@ -246,17 +261,17 @@ impl Scope {
         &mut self,
         ident: &str,
         region: Region,
-    ) -> Result<Symbol, (Region, Loc<Ident>, Symbol)> {
+    ) -> Result<Symbol, (Loc<Symbol>, Loc<Ident>, Symbol)> {
         match self.introduce_help(ident, region) {
             Ok(symbol) => Ok(symbol),
-            Err((_, original_region)) => {
+            Err((shadowed_symbol, original_region)) => {
                 let shadow = Loc {
                     value: Ident::from(ident),
                     region,
                 };
                 let symbol = self.locals.scopeless_symbol(ident, region);
 
-                Err((original_region, shadow, symbol))
+                Err((Loc::at(original_region, shadowed_symbol), shadow, symbol))
             }
         }
     }
@@ -288,6 +303,7 @@ impl Scope {
     #[allow(clippy::type_complexity)]
     pub fn introduce_or_shadow_ability_member(
         &mut self,
+        pending_abilities_in_scope: &PendingAbilitiesInScope,
         ident: Ident,
         region: Region,
     ) -> Result<(Symbol, Option<Symbol>), (Region, Loc<Ident>, Symbol)> {
@@ -297,11 +313,27 @@ impl Scope {
             Err((original_symbol, original_region)) => {
                 let shadow_symbol = self.scopeless_symbol(ident, region);
 
-                if self.abilities_store.is_ability_member_name(original_symbol) {
-                    self.abilities_store
-                        .register_specializing_symbol(shadow_symbol, original_symbol);
+                if self.abilities_store.is_ability_member_name(original_symbol)
+                    || pending_abilities_in_scope
+                        .iter()
+                        .any(|(_, members)| members.iter().any(|m| *m == original_symbol))
+                {
+                    match self.shadows.get(&original_symbol) {
+                        Some(loc_original_shadow) => {
+                            // Duplicate shadow of an ability members; that's illegal.
+                            let shadow = Loc {
+                                value: ident.clone(),
+                                region,
+                            };
+                            Err((loc_original_shadow.region, shadow, shadow_symbol))
+                        }
+                        None => {
+                            self.shadows
+                                .insert(original_symbol, Loc::at(region, shadow_symbol));
 
-                    Ok((shadow_symbol, Some(original_symbol)))
+                            Ok((shadow_symbol, Some(original_symbol)))
+                        }
+                    }
                 } else {
                     // This is an illegal shadow.
                     let shadow = Loc {
@@ -606,13 +638,13 @@ mod test {
         assert!(scope.lookup(&ident, Region::zero()).is_err());
 
         let first = scope.introduce(ident.clone(), region1).unwrap();
-        let (original_region, _ident, shadow_symbol) =
+        let (original, _ident, shadow_symbol) =
             scope.introduce(ident.clone(), region2).unwrap_err();
 
         scope.register_debug_idents();
 
         assert_ne!(first, shadow_symbol);
-        assert_eq!(original_region, region1);
+        assert_eq!(original.region, region1);
 
         let lookup = scope.lookup(&ident, Region::zero()).unwrap();
 
@@ -773,13 +805,13 @@ mod test {
 
         scope.import(ident.clone(), symbol, region1).unwrap();
 
-        let (original_region, _ident, shadow_symbol) =
+        let (original, _ident, shadow_symbol) =
             scope.introduce(ident.clone(), region2).unwrap_err();
 
         scope.register_debug_idents();
 
         assert_ne!(symbol, shadow_symbol);
-        assert_eq!(original_region, region1);
+        assert_eq!(original.region, region1);
 
         let lookup = scope.lookup(&ident, Region::zero()).unwrap();
 

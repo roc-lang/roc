@@ -1317,7 +1317,7 @@ fn specialize_ability_call() {
         Hash has
             hash : a -> U64 | a has Hash
 
-        Id := U64
+        Id := U64 has [Hash {hash}]
 
         hash : Id -> U64
         hash = \@Id n -> n
@@ -1359,14 +1359,12 @@ fn encode() {
           u8 : U8 -> Encoder fmt | fmt has Format
 
 
-        Linear := {}
+        Linear := {} has [Format {u8}]
 
-        # impl Format for Linear
         u8 = \n -> @Encoder (\lst, @Linear {} -> List.append lst n)
 
-        MyU8 := U8
+        MyU8 := U8 has [Encoding {toEncoder}]
 
-        # impl Encoding for MyU8
         toEncoder = \@MyU8 n -> u8 n
 
         myU8Bytes =
@@ -1883,6 +1881,17 @@ fn encode_derived_tag_two_payloads_string() {
             when result is
                 Ok s -> s
                 _ -> "<bad>"
+        "#
+    )
+}
+
+#[mono_test]
+fn issue_3560_nested_tag_constructor_is_newtype() {
+    indoc!(
+        r#"
+        when Wrapper (Payload "err") is
+            Wrapper (Payload str) -> str
+            Wrapper (AlternatePayload str) -> str
         "#
     )
 }
