@@ -3902,24 +3902,30 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
             } else {
                 // not pretty, but seems to cover all our current cases
                 if arg_type.is_pointer_type() && !fastcc_type.is_pointer_type() {
-                    // Modify the argument to specify it is passed by value and nonnull
-                    let byval = context.create_type_attribute(
-                        Attribute::get_named_enum_kind_id("byval"),
-                        arg_type.into_pointer_type().get_element_type(),
-                    );
-                    let nonnull = context.create_type_attribute(
-                        Attribute::get_named_enum_kind_id("nonnull"),
-                        arg_type.into_pointer_type().get_element_type(),
-                    );
-                    // C return pointer goes at the beginning of params, and we must skip it if it exists.
-                    let param_index = (i
-                        + (if matches!(cc_return, CCReturn::ByPointer) {
-                            1
-                        } else {
-                            0
-                        })) as u32;
-                    c_function.add_attribute(AttributeLoc::Param(param_index), byval);
-                    c_function.add_attribute(AttributeLoc::Param(param_index), nonnull);
+                    // On x86_*, Modify the argument to specify it is passed by value and nonnull
+                    // Aarch*, just passes in the pointer directly.
+                    if matches!(
+                        env.target_info.architecture,
+                        roc_target::Architecture::X86_32 | roc_target::Architecture::X86_64
+                    ) {
+                        let byval = context.create_type_attribute(
+                            Attribute::get_named_enum_kind_id("byval"),
+                            arg_type.into_pointer_type().get_element_type(),
+                        );
+                        let nonnull = context.create_type_attribute(
+                            Attribute::get_named_enum_kind_id("nonnull"),
+                            arg_type.into_pointer_type().get_element_type(),
+                        );
+                        // C return pointer goes at the beginning of params, and we must skip it if it exists.
+                        let param_index = (i
+                            + (if matches!(cc_return, CCReturn::ByPointer) {
+                                1
+                            } else {
+                                0
+                            })) as u32;
+                        c_function.add_attribute(AttributeLoc::Param(param_index), byval);
+                        c_function.add_attribute(AttributeLoc::Param(param_index), nonnull);
+                    }
                     // bitcast the ptr
                     let fastcc_ptr = env
                         .builder
