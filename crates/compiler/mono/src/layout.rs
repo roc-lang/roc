@@ -3305,7 +3305,7 @@ mod test {
         let layout = Layout::Union(union_layout);
 
         let target_info = TargetInfo::default_x86_64();
-        assert_eq!(layout.stack_size_without_alignment(target_info), 5);
+        assert_eq!(layout.stack_size_without_alignment(target_info), 8);
     }
 }
 
