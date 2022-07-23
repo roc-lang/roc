@@ -86,7 +86,7 @@ stringBody = \mimeType, str ->
 handleStringResponse : Response -> Result Str Error
 handleStringResponse = \response ->
     when response is
-        BadUrl url -> Err (BadUrl url)
+        BadRequest err -> Err (BadRequest err)
         Timeout -> Err Timeout
         NetworkError -> Err NetworkError
         BadStatus metadata _ -> Err (BadStatus metadata.statusCode)
@@ -101,7 +101,7 @@ handleStringResponse = \response ->
 errorToString : Error -> Str
 errorToString = \err ->
     when err is
-        BadUrl url -> "\(url) is not a valid URL"
+        BadRequest e -> "Invalid Request: \(e)"
         Timeout -> "Request timed out"
         NetworkError -> "Network error"
         BadStatus code -> Str.concat "Request failed with status " (Num.toStr code)

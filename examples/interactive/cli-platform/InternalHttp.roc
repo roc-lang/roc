@@ -29,7 +29,7 @@ Body : [
 ]
 
 Response : [
-    BadUrl Str,
+    BadRequest Str,
     Timeout,
     NetworkError,
     BadStatus Metadata (List U8),
@@ -44,7 +44,7 @@ Metadata : {
 }
 
 Error : [
-    BadUrl Str,
+    BadRequest Str,
     Timeout,
     NetworkError,
     BadStatus U16,

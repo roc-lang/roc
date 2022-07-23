@@ -137,37 +137,73 @@ pub extern "C" fn roc_fx_sendRequest(roc_request: &glue::Request) -> glue::Respo
         builder = builder.timeout(Duration::from_millis(*ms));
     }
 
-    let url = roc_request.url.as_str();
-    match reqwest::blocking::get(url) {
-        Ok(response) => {
-            let bytes = response.bytes().unwrap_or_default();
-            let body: RocList<u8> = RocList::from_iter(bytes.into_iter());
+    let client = match builder.build() {
+        Ok(c) => c,
+        Err(_) => {
+            return glue::Response::NetworkError; // TLS backend cannot be initialized
+        }
+    };
 
+    let method = match roc_request.method {
+        glue::Method::Connect => reqwest::Method::CONNECT,
+        glue::Method::Delete => reqwest::Method::DELETE,
+        glue::Method::Get => reqwest::Method::GET,
+        glue::Method::Head => reqwest::Method::HEAD,
+        glue::Method::Options => reqwest::Method::OPTIONS,
+        glue::Method::Patch => reqwest::Method::PATCH,
+        glue::Method::Post => reqwest::Method::POST,
+        glue::Method::Put => reqwest::Method::PUT,
+        glue::Method::Trace => reqwest::Method::TRACE,
+    };
+
+    let url = roc_request.url.as_str();
+
+    let mut req_builder = client.request(method, url);
+    for header in roc_request.headers.iter() {
+        let (key, value) = unsafe { header.as_Header() };
+        req_builder = req_builder.header(key.as_str(), value.as_str());
+    }
+    if roc_request.body.discriminant() == glue::discriminant_Body::Body {
+        let (mime_type_tag, body_byte_list) = unsafe { roc_request.body.as_Body() };
+        let mime_type_str: &RocStr = unsafe { mime_type_tag.as_MimeType() };
+
+        req_builder = req_builder.header("Content-Type", mime_type_str.as_str());
+        req_builder = req_builder.body(body_byte_list.as_slice().to_vec());
+    }
+
+    let request = match req_builder.build() {
+        Ok(req) => req,
+        Err(err) => {
+            return glue::Response::BadRequest(RocStr::from(err.to_string().as_str()));
+        }
+    };
+
+    match client.execute(request) {
+        Ok(response) => {
             let status = response.status();
             let status_str = status.canonical_reason().unwrap_or_else(|| status.as_str());
+
             let metadata = Metadata {
                 headers: RocList::empty(), // TODO
                 statusText: RocStr::from(status_str),
                 url: RocStr::from(url),
                 statusCode: status.as_u16(),
             };
-            glue::Response::GoodStatus(metadata, body)
+
+            let bytes = response.bytes().unwrap_or_default();
+            let body: RocList<u8> = RocList::from_iter(bytes.into_iter());
+
+            if status.is_success() {
+                glue::Response::GoodStatus(metadata, body)
+            } else {
+                glue::Response::BadStatus(metadata, body)
+            }
         }
         Err(err) => {
             if err.is_timeout() {
                 glue::Response::Timeout
-            } else if let Some(status) = err.status() {
-                let body = RocList::empty(); // TODO
-                let status_str = status.canonical_reason().unwrap_or_else(|| status.as_str());
-                let metadata = Metadata {
-                    headers: RocList::empty(), // TODO
-                    statusText: RocStr::from(status_str),
-                    url: RocStr::from(url),
-                    statusCode: status.as_u16(),
-                };
-                glue::Response::BadStatus(metadata, body)
             } else if err.is_request() {
-                glue::Response::BadUrl(RocStr::from(url))
+                glue::Response::BadRequest(RocStr::from(err.to_string().as_str()))
             } else {
                 glue::Response::NetworkError
             }

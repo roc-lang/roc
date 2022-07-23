@@ -18,8 +18,8 @@
 #[repr(u8)]
 pub enum discriminant_Error {
     BadBody = 0,
-    BadStatus = 1,
-    BadUrl = 2,
+    BadRequest = 1,
+    BadStatus = 2,
     NetworkError = 3,
     Timeout = 4,
 }
@@ -28,8 +28,8 @@ impl core::fmt::Debug for discriminant_Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::BadBody => f.write_str("discriminant_Error::BadBody"),
+            Self::BadRequest => f.write_str("discriminant_Error::BadRequest"),
             Self::BadStatus => f.write_str("discriminant_Error::BadStatus"),
-            Self::BadUrl => f.write_str("discriminant_Error::BadUrl"),
             Self::NetworkError => f.write_str("discriminant_Error::NetworkError"),
             Self::Timeout => f.write_str("discriminant_Error::Timeout"),
         }
@@ -40,8 +40,8 @@ impl core::fmt::Debug for discriminant_Error {
 #[repr(C)]
 pub union Error {
     BadBody: core::mem::ManuallyDrop<roc_std::RocStr>,
+    BadRequest: core::mem::ManuallyDrop<roc_std::RocStr>,
     BadStatus: u16,
-    BadUrl: core::mem::ManuallyDrop<roc_std::RocStr>,
     _sizer: [u8; 16],
 }
 
@@ -184,8 +184,8 @@ pub union U2 {
 #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(u8)]
 pub enum discriminant_Response {
-    BadStatus = 0,
-    BadUrl = 1,
+    BadRequest = 0,
+    BadStatus = 1,
     GoodStatus = 2,
     NetworkError = 3,
     Timeout = 4,
@@ -194,8 +194,8 @@ pub enum discriminant_Response {
 impl core::fmt::Debug for discriminant_Response {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::BadRequest => f.write_str("discriminant_Response::BadRequest"),
             Self::BadStatus => f.write_str("discriminant_Response::BadStatus"),
-            Self::BadUrl => f.write_str("discriminant_Response::BadUrl"),
             Self::GoodStatus => f.write_str("discriminant_Response::GoodStatus"),
             Self::NetworkError => f.write_str("discriminant_Response::NetworkError"),
             Self::Timeout => f.write_str("discriminant_Response::Timeout"),
@@ -206,8 +206,8 @@ impl core::fmt::Debug for discriminant_Response {
 #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
 #[repr(C)]
 pub union Response {
+    BadRequest: core::mem::ManuallyDrop<roc_std::RocStr>,
     BadStatus: core::mem::ManuallyDrop<Response_BadStatus>,
-    BadUrl: core::mem::ManuallyDrop<roc_std::RocStr>,
     GoodStatus: core::mem::ManuallyDrop<Response_GoodStatus>,
     _sizer: [u8; 56],
 }
@@ -574,8 +574,8 @@ pub union TimeoutConfig {
 #[repr(C)]
 pub union Error {
     BadBody: core::mem::ManuallyDrop<roc_std::RocStr>,
+    BadRequest: core::mem::ManuallyDrop<roc_std::RocStr>,
     BadStatus: u16,
-    BadUrl: core::mem::ManuallyDrop<roc_std::RocStr>,
     _sizer: [u8; 32],
 }
 
@@ -589,8 +589,8 @@ pub union Body {
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[repr(C)]
 pub union Response {
+    BadRequest: core::mem::ManuallyDrop<roc_std::RocStr>,
     BadStatus: core::mem::ManuallyDrop<Response_BadStatus>,
-    BadUrl: core::mem::ManuallyDrop<roc_std::RocStr>,
     GoodStatus: core::mem::ManuallyDrop<Response_GoodStatus>,
     _sizer: [u8; 112],
 }
@@ -704,6 +704,60 @@ impl Error {
         target_arch = "x86",
         target_arch = "x86_64"
     ))]
+    /// Construct a tag named `BadRequest`, with the appropriate payload
+    pub fn BadRequest(arg: roc_std::RocStr) -> Self {
+        let mut answer = Self {
+            BadRequest: core::mem::ManuallyDrop::new(arg),
+        };
+
+        answer.set_discriminant(discriminant_Error::BadRequest);
+
+        answer
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Unsafely assume the given `Error` has a `.discriminant()` of `BadRequest` and convert it to `BadRequest`'s payload.
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `BadRequest`.
+    pub unsafe fn into_BadRequest(mut self) -> roc_std::RocStr {
+        debug_assert_eq!(self.discriminant(), discriminant_Error::BadRequest);
+
+        let payload = core::mem::ManuallyDrop::take(&mut self.BadRequest);
+
+        payload
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Unsafely assume the given `Error` has a `.discriminant()` of `BadRequest` and return its payload.
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `BadRequest`.
+    pub unsafe fn as_BadRequest(&self) -> &roc_std::RocStr {
+        debug_assert_eq!(self.discriminant(), discriminant_Error::BadRequest);
+
+        let payload = &self.BadRequest;
+
+        &payload
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
     /// Construct a tag named `BadStatus`, with the appropriate payload
     pub fn BadStatus(arg: u16) -> Self {
         let mut answer = Self { BadStatus: arg };
@@ -745,60 +799,6 @@ impl Error {
         debug_assert_eq!(self.discriminant(), discriminant_Error::BadStatus);
 
         let payload = &self.BadStatus;
-
-        &payload
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Construct a tag named `BadUrl`, with the appropriate payload
-    pub fn BadUrl(arg: roc_std::RocStr) -> Self {
-        let mut answer = Self {
-            BadUrl: core::mem::ManuallyDrop::new(arg),
-        };
-
-        answer.set_discriminant(discriminant_Error::BadUrl);
-
-        answer
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Unsafely assume the given `Error` has a `.discriminant()` of `BadUrl` and convert it to `BadUrl`'s payload.
-    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-    /// Panics in debug builds if the `.discriminant()` doesn't return `BadUrl`.
-    pub unsafe fn into_BadUrl(mut self) -> roc_std::RocStr {
-        debug_assert_eq!(self.discriminant(), discriminant_Error::BadUrl);
-
-        let payload = core::mem::ManuallyDrop::take(&mut self.BadUrl);
-
-        payload
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Unsafely assume the given `Error` has a `.discriminant()` of `BadUrl` and return its payload.
-    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-    /// Panics in debug builds if the `.discriminant()` doesn't return `BadUrl`.
-    pub unsafe fn as_BadUrl(&self) -> &roc_std::RocStr {
-        debug_assert_eq!(self.discriminant(), discriminant_Error::BadUrl);
-
-        let payload = &self.BadUrl;
 
         &payload
     }
@@ -930,10 +930,10 @@ impl Drop for Error {
             discriminant_Error::BadBody => unsafe {
                 core::mem::ManuallyDrop::drop(&mut self.BadBody)
             },
-            discriminant_Error::BadStatus => {}
-            discriminant_Error::BadUrl => unsafe {
-                core::mem::ManuallyDrop::drop(&mut self.BadUrl)
+            discriminant_Error::BadRequest => unsafe {
+                core::mem::ManuallyDrop::drop(&mut self.BadRequest)
             },
+            discriminant_Error::BadStatus => {}
             discriminant_Error::NetworkError => {}
             discriminant_Error::Timeout => {}
         }
@@ -958,8 +958,8 @@ impl PartialEq for Error {
         unsafe {
             match self.discriminant() {
                 discriminant_Error::BadBody => self.BadBody == other.BadBody,
+                discriminant_Error::BadRequest => self.BadRequest == other.BadRequest,
                 discriminant_Error::BadStatus => self.BadStatus == other.BadStatus,
-                discriminant_Error::BadUrl => self.BadUrl == other.BadUrl,
                 discriminant_Error::NetworkError => true,
                 discriminant_Error::Timeout => true,
             }
@@ -984,8 +984,8 @@ impl PartialOrd for Error {
         unsafe {
             match self.discriminant() {
                 discriminant_Error::BadBody => self.BadBody.partial_cmp(&other.BadBody),
+                discriminant_Error::BadRequest => self.BadRequest.partial_cmp(&other.BadRequest),
                 discriminant_Error::BadStatus => self.BadStatus.partial_cmp(&other.BadStatus),
-                discriminant_Error::BadUrl => self.BadUrl.partial_cmp(&other.BadUrl),
                 discriminant_Error::NetworkError => Some(core::cmp::Ordering::Equal),
                 discriminant_Error::Timeout => Some(core::cmp::Ordering::Equal),
             }
@@ -1010,8 +1010,8 @@ impl Ord for Error {
         unsafe {
             match self.discriminant() {
                 discriminant_Error::BadBody => self.BadBody.cmp(&other.BadBody),
+                discriminant_Error::BadRequest => self.BadRequest.cmp(&other.BadRequest),
                 discriminant_Error::BadStatus => self.BadStatus.cmp(&other.BadStatus),
-                discriminant_Error::BadUrl => self.BadUrl.cmp(&other.BadUrl),
                 discriminant_Error::NetworkError => core::cmp::Ordering::Equal,
                 discriminant_Error::Timeout => core::cmp::Ordering::Equal,
             }
@@ -1033,11 +1033,11 @@ impl Clone for Error {
                 discriminant_Error::BadBody => Self {
                     BadBody: self.BadBody.clone(),
                 },
+                discriminant_Error::BadRequest => Self {
+                    BadRequest: self.BadRequest.clone(),
+                },
                 discriminant_Error::BadStatus => Self {
                     BadStatus: self.BadStatus.clone(),
-                },
-                discriminant_Error::BadUrl => Self {
-                    BadUrl: self.BadUrl.clone(),
                 },
                 discriminant_Error::NetworkError => {
                     core::mem::transmute::<core::mem::MaybeUninit<Error>, Error>(
@@ -1071,13 +1071,13 @@ impl core::hash::Hash for Error {
                 discriminant_Error::BadBody.hash(state);
                 self.BadBody.hash(state);
             },
+            discriminant_Error::BadRequest => unsafe {
+                discriminant_Error::BadRequest.hash(state);
+                self.BadRequest.hash(state);
+            },
             discriminant_Error::BadStatus => unsafe {
                 discriminant_Error::BadStatus.hash(state);
                 self.BadStatus.hash(state);
-            },
-            discriminant_Error::BadUrl => unsafe {
-                discriminant_Error::BadUrl.hash(state);
-                self.BadUrl.hash(state);
             },
             discriminant_Error::NetworkError => discriminant_Error::NetworkError.hash(state),
             discriminant_Error::Timeout => discriminant_Error::Timeout.hash(state),
@@ -1101,10 +1101,13 @@ impl core::fmt::Debug for Error {
                 discriminant_Error::BadBody => {
                     f.debug_tuple("BadBody").field(&*self.BadBody).finish()
                 }
+                discriminant_Error::BadRequest => f
+                    .debug_tuple("BadRequest")
+                    .field(&*self.BadRequest)
+                    .finish(),
                 discriminant_Error::BadStatus => {
                     f.debug_tuple("BadStatus").field(&self.BadStatus).finish()
                 }
-                discriminant_Error::BadUrl => f.debug_tuple("BadUrl").field(&*self.BadUrl).finish(),
                 discriminant_Error::NetworkError => f.write_str("NetworkError"),
                 discriminant_Error::Timeout => f.write_str("Timeout"),
             }
@@ -2170,6 +2173,60 @@ impl Response {
         target_arch = "x86",
         target_arch = "x86_64"
     ))]
+    /// Construct a tag named `BadRequest`, with the appropriate payload
+    pub fn BadRequest(arg: roc_std::RocStr) -> Self {
+        let mut answer = Self {
+            BadRequest: core::mem::ManuallyDrop::new(arg),
+        };
+
+        answer.set_discriminant(discriminant_Response::BadRequest);
+
+        answer
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Unsafely assume the given `Response` has a `.discriminant()` of `BadRequest` and convert it to `BadRequest`'s payload.
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `BadRequest`.
+    pub unsafe fn into_BadRequest(mut self) -> roc_std::RocStr {
+        debug_assert_eq!(self.discriminant(), discriminant_Response::BadRequest);
+
+        let payload = core::mem::ManuallyDrop::take(&mut self.BadRequest);
+
+        payload
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Unsafely assume the given `Response` has a `.discriminant()` of `BadRequest` and return its payload.
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `BadRequest`.
+    pub unsafe fn as_BadRequest(&self) -> &roc_std::RocStr {
+        debug_assert_eq!(self.discriminant(), discriminant_Response::BadRequest);
+
+        let payload = &self.BadRequest;
+
+        &payload
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
     /// Construct a tag named `BadStatus`, with the appropriate payload
     pub fn BadStatus(arg0: Metadata, arg1: roc_std::RocList<u8>) -> Self {
         let mut answer = Self {
@@ -2215,60 +2272,6 @@ impl Response {
         let payload = &self.BadStatus;
 
         (&payload.f0, &payload.f1)
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Construct a tag named `BadUrl`, with the appropriate payload
-    pub fn BadUrl(arg: roc_std::RocStr) -> Self {
-        let mut answer = Self {
-            BadUrl: core::mem::ManuallyDrop::new(arg),
-        };
-
-        answer.set_discriminant(discriminant_Response::BadUrl);
-
-        answer
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Unsafely assume the given `Response` has a `.discriminant()` of `BadUrl` and convert it to `BadUrl`'s payload.
-    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-    /// Panics in debug builds if the `.discriminant()` doesn't return `BadUrl`.
-    pub unsafe fn into_BadUrl(mut self) -> roc_std::RocStr {
-        debug_assert_eq!(self.discriminant(), discriminant_Response::BadUrl);
-
-        let payload = core::mem::ManuallyDrop::take(&mut self.BadUrl);
-
-        payload
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Unsafely assume the given `Response` has a `.discriminant()` of `BadUrl` and return its payload.
-    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-    /// Panics in debug builds if the `.discriminant()` doesn't return `BadUrl`.
-    pub unsafe fn as_BadUrl(&self) -> &roc_std::RocStr {
-        debug_assert_eq!(self.discriminant(), discriminant_Response::BadUrl);
-
-        let payload = &self.BadUrl;
-
-        &payload
     }
 
     #[cfg(any(
@@ -2449,11 +2452,11 @@ impl Drop for Response {
     fn drop(&mut self) {
         // Drop the payloads
         match self.discriminant() {
+            discriminant_Response::BadRequest => unsafe {
+                core::mem::ManuallyDrop::drop(&mut self.BadRequest)
+            },
             discriminant_Response::BadStatus => unsafe {
                 core::mem::ManuallyDrop::drop(&mut self.BadStatus)
-            },
-            discriminant_Response::BadUrl => unsafe {
-                core::mem::ManuallyDrop::drop(&mut self.BadUrl)
             },
             discriminant_Response::GoodStatus => unsafe {
                 core::mem::ManuallyDrop::drop(&mut self.GoodStatus)
@@ -2481,8 +2484,8 @@ impl PartialEq for Response {
 
         unsafe {
             match self.discriminant() {
+                discriminant_Response::BadRequest => self.BadRequest == other.BadRequest,
                 discriminant_Response::BadStatus => self.BadStatus == other.BadStatus,
-                discriminant_Response::BadUrl => self.BadUrl == other.BadUrl,
                 discriminant_Response::GoodStatus => self.GoodStatus == other.GoodStatus,
                 discriminant_Response::NetworkError => true,
                 discriminant_Response::Timeout => true,
@@ -2507,8 +2510,8 @@ impl PartialOrd for Response {
 
         unsafe {
             match self.discriminant() {
+                discriminant_Response::BadRequest => self.BadRequest.partial_cmp(&other.BadRequest),
                 discriminant_Response::BadStatus => self.BadStatus.partial_cmp(&other.BadStatus),
-                discriminant_Response::BadUrl => self.BadUrl.partial_cmp(&other.BadUrl),
                 discriminant_Response::GoodStatus => self.GoodStatus.partial_cmp(&other.GoodStatus),
                 discriminant_Response::NetworkError => Some(core::cmp::Ordering::Equal),
                 discriminant_Response::Timeout => Some(core::cmp::Ordering::Equal),
@@ -2533,8 +2536,8 @@ impl Ord for Response {
 
         unsafe {
             match self.discriminant() {
+                discriminant_Response::BadRequest => self.BadRequest.cmp(&other.BadRequest),
                 discriminant_Response::BadStatus => self.BadStatus.cmp(&other.BadStatus),
-                discriminant_Response::BadUrl => self.BadUrl.cmp(&other.BadUrl),
                 discriminant_Response::GoodStatus => self.GoodStatus.cmp(&other.GoodStatus),
                 discriminant_Response::NetworkError => core::cmp::Ordering::Equal,
                 discriminant_Response::Timeout => core::cmp::Ordering::Equal,
@@ -2554,11 +2557,11 @@ impl Clone for Response {
     fn clone(&self) -> Self {
         let mut answer = unsafe {
             match self.discriminant() {
+                discriminant_Response::BadRequest => Self {
+                    BadRequest: self.BadRequest.clone(),
+                },
                 discriminant_Response::BadStatus => Self {
                     BadStatus: self.BadStatus.clone(),
-                },
-                discriminant_Response::BadUrl => Self {
-                    BadUrl: self.BadUrl.clone(),
                 },
                 discriminant_Response::GoodStatus => Self {
                     GoodStatus: self.GoodStatus.clone(),
@@ -2592,13 +2595,13 @@ impl core::hash::Hash for Response {
     ))]
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         match self.discriminant() {
+            discriminant_Response::BadRequest => unsafe {
+                discriminant_Response::BadRequest.hash(state);
+                self.BadRequest.hash(state);
+            },
             discriminant_Response::BadStatus => unsafe {
                 discriminant_Response::BadStatus.hash(state);
                 self.BadStatus.hash(state);
-            },
-            discriminant_Response::BadUrl => unsafe {
-                discriminant_Response::BadUrl.hash(state);
-                self.BadUrl.hash(state);
             },
             discriminant_Response::GoodStatus => unsafe {
                 discriminant_Response::GoodStatus.hash(state);
@@ -2623,14 +2626,15 @@ impl core::fmt::Debug for Response {
 
         unsafe {
             match self.discriminant() {
+                discriminant_Response::BadRequest => f
+                    .debug_tuple("BadRequest")
+                    .field(&*self.BadRequest)
+                    .finish(),
                 discriminant_Response::BadStatus => f
                     .debug_tuple("BadStatus")
                     .field(&(&*self.BadStatus).f0)
                     .field(&(&*self.BadStatus).f1)
                     .finish(),
-                discriminant_Response::BadUrl => {
-                    f.debug_tuple("BadUrl").field(&*self.BadUrl).finish()
-                }
                 discriminant_Response::GoodStatus => f
                     .debug_tuple("GoodStatus")
                     .field(&(&*self.GoodStatus).f0)
