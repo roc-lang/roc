@@ -2540,7 +2540,10 @@ pub fn surgery_elf(
     // in development builds for caching the results of top-level constants
     let rodata_sections: Vec<Section> = app_obj
         .sections()
-        .filter(|sec| sec.name().unwrap_or_default().starts_with(".rodata"))
+        .filter(|sec| {
+            sec.name().unwrap_or_default().starts_with(".rodata")
+                || sec.name().unwrap_or_default().starts_with(".data.rel.ro")
+        })
         .collect();
 
     // bss section is like rodata section, but it has zero file size and non-zero virtual size.
@@ -2683,6 +2686,7 @@ pub fn surgery_elf(
                             RelocationKind::Relative | RelocationKind::PltRelative => {
                                 target_offset - virt_base as i64 + rel.1.addend()
                             }
+                            RelocationKind::Absolute => target_offset + rel.1.addend(),
                             x => {
                                 internal_error!("Relocation Kind not yet support: {:?}", x);
                             }
