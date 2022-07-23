@@ -1,4 +1,5 @@
 use roc_build::link::LinkType;
+use roc_build::program::Problems;
 use roc_cli::build::check_file;
 use roc_cli::{
     build_app, format, test, BuildConfig, FormatMode, Target, CMD_BUILD, CMD_CHECK, CMD_DOCS,
@@ -8,9 +9,11 @@ use roc_cli::{
 use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
 use roc_load::{LoadingProblem, Threading};
+use roc_reporting::report::{Report, DEFAULT_PALETTE};
 use std::fs::{self, FileType};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use target_lexicon::Triple;
 
 #[macro_use]
@@ -102,40 +105,33 @@ fn main() -> io::Result<()> {
 
             match check_file(&arena, roc_file_path, emit_timings, threading) {
                 Ok((problems, total_time)) => {
-                    println!(
-                        "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.",
-                        if problems.errors == 0 {
-                            32 // green
-                        } else {
-                            33 // yellow
-                        },
-                        problems.errors,
-                        if problems.errors == 1 {
-                            "error"
-                        } else {
-                            "errors"
-                        },
-                        if problems.warnings == 0 {
-                            32 // green
-                        } else {
-                            33 // yellow
-                        },
-                        problems.warnings,
-                        if problems.warnings == 1 {
-                            "warning"
-                        } else {
-                            "warnings"
-                        },
-                        total_time.as_millis(),
-                    );
+                    print_check_summary(problems, total_time);
 
                     Ok(problems.exit_code())
                 }
+                Err(LoadingProblem::FormattedReport {
+                    text,
+                    warnings,
+                    errors,
+                    total_time,
+                }) => {
+                    print!("{}", text);
 
-                Err(LoadingProblem::FormattedReport { text, .. }) => {
-                    eprintln!("{}", text);
+                    // If we printed any problems, print a horizontal rule at the end,
+                    // and then clear any ANSI escape codes (e.g. colors) we've used.
+                    //
+                    // The horizontal rule is nice when running the program right after
+                    // compiling it, as it lets you clearly see where the compiler
+                    // errors/warnings end and the program output begins.
+                    if warnings + errors > 0 {
+                        println!("{}\u{001B}[0m\n", Report::horizontal_rule(&DEFAULT_PALETTE));
+                    }
 
-                    Ok(1)
+                    let problems = Problems { warnings, errors };
+
+                    print_check_summary(problems, total_time);
+
+                    Ok(problems.exit_code())
                 }
                 Err(other) => {
                     panic!("build_file failed with error:\n{:?}", other);
@@ -279,6 +275,35 @@ fn read_all_roc_files(
     }
 
     Ok(())
+}
+
+fn print_check_summary(problems: Problems, total_time: Duration) {
+    println!(
+        "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.",
+        if problems.errors == 0 {
+            32 // green
+        } else {
+            33 // yellow
+        },
+        problems.errors,
+        if problems.errors == 1 {
+            "error"
+        } else {
+            "errors"
+        },
+        if problems.warnings == 0 {
+            32 // green
+        } else {
+            33 // yellow
+        },
+        problems.warnings,
+        if problems.warnings == 1 {
+            "warning"
+        } else {
+            "warnings"
+        },
+        total_time.as_millis(),
+    );
 }
 
 fn roc_files_recursive<P: AsRef<Path>>(
