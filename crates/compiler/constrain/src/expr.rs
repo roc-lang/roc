@@ -735,7 +735,8 @@ pub fn constrain_expr(
             let mut pattern_vars = Vec::with_capacity(branches.len());
             let mut pattern_headers = SendMap::default();
             let mut pattern_cons = Vec::with_capacity(branches.len() + 2);
-            let mut branch_cons = Vec::with_capacity(branches.len());
+            let mut delayed_is_open_constraints = Vec::with_capacity(2);
+            let mut body_cons = Vec::with_capacity(branches.len());
 
             for (index, when_branch) in branches.iter().enumerate() {
                 let expected_pattern = |sub_pattern, sub_region| {
@@ -749,19 +750,24 @@ pub fn constrain_expr(
                     )
                 };
 
-                let (new_pattern_vars, new_pattern_headers, pattern_con, branch_con) =
-                    constrain_when_branch_help(
-                        constraints,
-                        env,
-                        region,
-                        when_branch,
-                        expected_pattern,
-                        branch_expr_reason(
-                            &expected,
-                            HumanIndex::zero_based(index),
-                            when_branch.value.region,
-                        ),
-                    );
+                let ConstrainedBranch {
+                    vars: new_pattern_vars,
+                    headers: new_pattern_headers,
+                    pattern_constraints,
+                    is_open_constrains,
+                    body_constraints,
+                } = constrain_when_branch_help(
+                    constraints,
+                    env,
+                    region,
+                    when_branch,
+                    expected_pattern,
+                    branch_expr_reason(
+                        &expected,
+                        HumanIndex::zero_based(index),
+                        when_branch.value.region,
+                    ),
+                );
 
                 pattern_vars.extend(new_pattern_vars);
 
@@ -779,9 +785,10 @@ pub fn constrain_expr(
                 }
 
                 pattern_headers.extend(new_pattern_headers);
-                pattern_cons.push(pattern_con);
+                pattern_cons.push(pattern_constraints);
+                delayed_is_open_constraints.extend(is_open_constrains);
 
-                branch_cons.push(branch_con);
+                body_cons.push(body_constraints);
             }
 
             // Deviation: elm adds another layer of And nesting
@@ -792,6 +799,11 @@ pub fn constrain_expr(
             //
             // The return type of each branch must equal the return type of
             // the entire when-expression.
+
+            // Layer on the "is-open" constraints at the very end, after we know what the branch
+            // types are supposed to look like without open-ness.
+            let is_open_constr = constraints.and_constraint(delayed_is_open_constraints);
+            pattern_cons.push(is_open_constr);
 
             // After solving the condition variable with what's expected from the branch patterns,
             // check it against the condition expression.
@@ -826,7 +838,7 @@ pub fn constrain_expr(
             // Solve all the pattern constraints together, introducing variables in the pattern as
             // need be before solving the bodies.
             let pattern_constraints = constraints.and_constraint(pattern_cons);
-            let body_constraints = constraints.and_constraint(branch_cons);
+            let body_constraints = constraints.and_constraint(body_cons);
             let when_body_con = constraints.let_constraint(
                 [],
                 pattern_vars,
@@ -1790,6 +1802,14 @@ fn constrain_value_def(
     }
 }
 
+struct ConstrainedBranch {
+    vars: Vec<Variable>,
+    headers: VecMap<Symbol, Loc<Type>>,
+    pattern_constraints: Constraint,
+    is_open_constrains: Vec<Constraint>,
+    body_constraints: Constraint,
+}
+
 /// Constrain a when branch, returning (variables in pattern, symbols introduced in pattern, pattern constraint, body constraint).
 /// We want to constraint all pattern constraints in a "when" before body constraints.
 #[inline(always)]
@@ -1800,12 +1820,7 @@ fn constrain_when_branch_help(
     when_branch: &WhenBranch,
     pattern_expected: impl Fn(HumanIndex, Region) -> PExpected<Type>,
     expr_expected: Expected<Type>,
-) -> (
-    Vec<Variable>,
-    VecMap<Symbol, Loc<Type>>,
-    Constraint,
-    Constraint,
-) {
+) -> ConstrainedBranch {
     let ret_constraint = constrain_expr(
         constraints,
         env,
@@ -1869,41 +1884,43 @@ fn constrain_when_branch_help(
         }
     }
 
-    let (pattern_constraints, body_constraints) = if let Some(loc_guard) = &when_branch.guard {
-        let guard_constraint = constrain_expr(
-            constraints,
-            env,
-            region,
-            &loc_guard.value,
-            Expected::ForReason(
-                Reason::WhenGuard,
-                Type::Variable(Variable::BOOL),
-                loc_guard.region,
-            ),
-        );
+    let (pattern_constraints, delayed_is_open_constraints, body_constraints) =
+        if let Some(loc_guard) = &when_branch.guard {
+            let guard_constraint = constrain_expr(
+                constraints,
+                env,
+                region,
+                &loc_guard.value,
+                Expected::ForReason(
+                    Reason::WhenGuard,
+                    Type::Variable(Variable::BOOL),
+                    loc_guard.region,
+                ),
+            );
 
-        // must introduce the headers from the pattern before constraining the guard
-        state
-            .constraints
-            .append(&mut state.delayed_is_open_constraints);
-        let state_constraints = constraints.and_constraint(state.constraints);
-        let inner = constraints.let_constraint([], [], [], guard_constraint, ret_constraint);
+            // must introduce the headers from the pattern before constraining the guard
+            let delayed_is_open_constraints = state.delayed_is_open_constraints;
+            let state_constraints = constraints.and_constraint(state.constraints);
+            let inner = constraints.let_constraint([], [], [], guard_constraint, ret_constraint);
 
-        (state_constraints, inner)
-    } else {
-        state
-            .constraints
-            .append(&mut state.delayed_is_open_constraints);
-        let state_constraints = constraints.and_constraint(state.constraints);
-        (state_constraints, ret_constraint)
-    };
+            (state_constraints, delayed_is_open_constraints, inner)
+        } else {
+            let delayed_is_open_constraints = state.delayed_is_open_constraints;
+            let state_constraints = constraints.and_constraint(state.constraints);
+            (
+                state_constraints,
+                delayed_is_open_constraints,
+                ret_constraint,
+            )
+        };
 
-    (
-        state.vars,
-        state.headers,
+    ConstrainedBranch {
+        vars: state.vars,
+        headers: state.headers,
         pattern_constraints,
+        is_open_constrains: delayed_is_open_constraints,
         body_constraints,
-    )
+    }
 }
 
 fn constrain_field(

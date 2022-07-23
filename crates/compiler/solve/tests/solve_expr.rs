@@ -245,7 +245,13 @@ mod solve_expr {
         assert_eq!(actual, expected.to_string());
     }
 
-    fn infer_queries_help(src: &str, expected: impl FnOnce(&str), print_only_under_alias: bool) {
+    #[derive(Default)]
+    struct InferOptions {
+        print_only_under_alias: bool,
+        allow_errors: bool,
+    }
+
+    fn infer_queries_help(src: &str, expected: impl FnOnce(&str), options: InferOptions) {
         let (
             LoadedModule {
                 module_id: home,
@@ -269,12 +275,14 @@ mod solve_expr {
         let (can_problems, type_problems) =
             format_problems(&src, home, &interns, can_problems, type_problems);
 
-        assert!(
-            can_problems.is_empty(),
-            "Canonicalization problems: {}",
-            can_problems
-        );
-        assert!(type_problems.is_empty(), "Type problems: {}", type_problems);
+        if !options.allow_errors {
+            assert!(
+                can_problems.is_empty(),
+                "Canonicalization problems: {}",
+                can_problems
+            );
+            assert!(type_problems.is_empty(), "Type problems: {}", type_problems);
+        }
 
         let queries = parse_queries(&src);
         assert!(!queries.is_empty(), "No queries provided!");
@@ -295,7 +303,7 @@ mod solve_expr {
                 &interns,
                 DebugPrint {
                     print_lambda_sets: true,
-                    print_only_under_alias,
+                    print_only_under_alias: options.print_only_under_alias,
                 },
             );
             subs.rollback_to(snapshot);
@@ -325,11 +333,10 @@ mod solve_expr {
     }
 
     macro_rules! infer_queries {
-        ($program:expr, @$queries:literal $(,)?) => {
-            infer_queries_help($program, |golden| insta::assert_snapshot!(golden, @$queries), false)
-        };
-        ($program:expr, @$queries:literal, print_only_under_alias=true $(,)?) => {
-            infer_queries_help($program, |golden| insta::assert_snapshot!(golden, @$queries), true)
+        ($program:expr, @$queries:literal $($option:ident: $value:expr)*) => {
+            infer_queries_help($program, |golden| insta::assert_snapshot!(golden, @$queries), InferOptions {
+                $($option: $value,)* ..InferOptions::default()
+            })
         };
     }
 
@@ -6662,7 +6669,7 @@ mod solve_expr {
             A#id(4) : A -[[id(4)]]-> A
             idChoice : a -[[] + a:id(2):1]-> a | a has Id
             idChoice : A -[[id(4)]]-> A
-            "#,
+            "#
         )
     }
 
@@ -6696,8 +6703,8 @@ mod solve_expr {
             A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
             Id#id(3) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
             alias : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
-            "#,
-            print_only_under_alias = true,
+            "#
+            print_only_under_alias: true
         )
     }
 
@@ -6726,8 +6733,8 @@ mod solve_expr {
             @r#"
             A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
             it : {} -[[8(8)]]-> {}
-            "#,
-            print_only_under_alias = true,
+            "#
+            print_only_under_alias: true
         )
     }
 
@@ -6757,8 +6764,8 @@ mod solve_expr {
             @r#"
             A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
             A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
-            "#,
-            print_only_under_alias = true,
+            "#
+            print_only_under_alias: true
         )
     }
 
@@ -6895,8 +6902,8 @@ mod solve_expr {
             Named name outerList : [Named Str (List a)] as a
             name : Str
             outerList : List ([Named Str (List a)] as a)
-            "#,
-            print_only_under_alias = true
+            "#
+            print_only_under_alias: true
         )
     }
 
@@ -7012,8 +7019,8 @@ mod solve_expr {
                 #^^^{-1}
                 "#
             ),
-            @r#"fun : {} -[[thunk(9) (({} -[[15(15)]]-> { s1 : Str })) ({ s1 : Str } -[[g(4)]]-> ({} -[[13(13) Str]]-> Str)), thunk(9) (({} -[[14(14)]]-> Str)) (Str -[[f(3)]]-> ({} -[[11(11)]]-> Str))]]-> Str"#,
-            print_only_under_alias = true,
+            @r#"fun : {} -[[thunk(9) (({} -[[15(15)]]-> { s1 : Str })) ({ s1 : Str } -[[g(4)]]-> ({} -[[13(13) Str]]-> Str)), thunk(9) (({} -[[14(14)]]-> Str)) (Str -[[f(3)]]-> ({} -[[11(11)]]-> Str))]]-> Str"#
+            print_only_under_alias: true
         );
     }
 
@@ -7356,5 +7363,81 @@ mod solve_expr {
             ),
             "List (A U8)",
         );
+    }
+
+    #[test]
+    fn shared_pattern_variable_in_when_patterns() {
+        infer_queries!(
+            indoc!(
+                r#"
+                when A "" is
+                #    ^^^^
+                    A x | B x -> x
+                    # ^     ^    ^
+                "#
+            ),
+            @r###"
+            A "" : [A Str, B Str]
+            x : Str
+            x : Str
+            x : Str
+            "###
+        );
+    }
+
+    #[test]
+    fn shared_pattern_variable_in_multiple_branch_when_patterns() {
+        infer_queries!(
+            indoc!(
+                r#"
+                when A "" is
+                #    ^^^^
+                    A x | B x -> x
+                    # ^     ^    ^
+                    C x | D x -> x
+                    # ^     ^    ^
+                "#
+            ),
+            @r###"
+            A "" : [A Str, B Str, C Str, D Str]
+            x : Str
+            x : Str
+            x : Str
+            x : Str
+            x : Str
+            x : Str
+            "###
+        );
+    }
+
+    #[test]
+    fn catchall_branch_for_pattern_not_last() {
+        infer_queries!(
+            indoc!(
+                r#"
+                \x -> when x is
+                #^
+                        A B _ -> ""
+                        A _ C -> ""
+                "#
+            ),
+            @r#"x : [A [B]* [C]*]"#
+            allow_errors: true
+        );
+    }
+
+    #[test]
+    fn catchall_branch_walk_into_nested_types() {
+        infer_queries!(
+            indoc!(
+                r#"
+                \x -> when x is
+                #^
+                        { a: A { b: B } } -> ""
+                        _ -> ""
+                "#
+            ),
+            @r#"x : { a : [A { b : [B]* }*]* }*"#
+        )
     }
 }
