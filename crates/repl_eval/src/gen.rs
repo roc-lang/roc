@@ -68,8 +68,8 @@ pub fn compile_to_mono<'a>(
 
     let mut loaded = match loaded {
         Ok(v) => v,
-        Err(LoadingProblem::FormattedReport(report)) => {
-            return Err(vec![report]);
+        Err(LoadingProblem::FormattedReport { text, .. }) => {
+            return Err(vec![text]);
         }
         Err(e) => {
             panic!("error while loading module: {:?}", e)

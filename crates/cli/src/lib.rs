@@ -674,7 +674,42 @@ pub fn build(
 
                     let mut bytes = std::fs::read(&binary_path).unwrap();
 
-                    let x = roc_run(
+                    let result = roc_run(
+                        arena,
+                        opt_level,
+                        triple,
+                        args,
+                        &mut bytes,
+                        expectations,
+                        interns,
+                    );
+
+                    std::mem::forget(bytes);
+
+                    result
+                }
+                BuildAndRunIfNoErrors => {
+                    // If there were errors, we should have gotten a Result::Err earlier.
+                    debug_assert_eq!(problems.errors, 0);
+
+                    if problems.warnings > 0 {
+                        eprintln!(
+                            "\x1B[32m0\x1B[39m errors and \x1B[33m{}\x1B[39m {} found in {} ms.\n\nRunning program…\n\n\x1B[36m{}\x1B[39m",
+                            problems.warnings,
+                            if problems.warnings == 1 {
+                                "warning"
+                            } else {
+                                "warnings"
+                            },
+                            total_time.as_millis(),
+                            "─".repeat(80)
+                        );
+                    }
+
+                    let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
+                    let mut bytes = std::fs::read(&binary_path).unwrap();
+
+                    let result = roc_run(
                         arena,
                         opt_level,
                         triple,
@@ -684,82 +719,52 @@ pub fn build(
                         interns,
                     );
                     std::mem::forget(bytes);
-                    x
-                }
-                BuildAndRunIfNoErrors => {
-                    if problems.errors == 0 {
-                        if problems.warnings > 0 {
-                            println!(
-                                "\x1B[32m0\x1B[39m errors and \x1B[33m{}\x1B[39m {} found in {} ms.\n\nRunning program…\n\n\x1B[36m{}\x1B[39m",
-                                problems.warnings,
-                                if problems.warnings == 1 {
-                                    "warning"
-                                } else {
-                                    "warnings"
-                                },
-                                total_time.as_millis(),
-                                "─".repeat(80)
-                            );
-                        }
 
-                        let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
-
-                        let mut bytes = std::fs::read(&binary_path).unwrap();
-
-                        let x = roc_run(
-                            arena,
-                            opt_level,
-                            triple,
-                            args,
-                            &mut bytes,
-                            expectations,
-                            interns,
-                        );
-                        std::mem::forget(bytes);
-                        x
-                    } else {
-                        let mut output = format!(
-                            "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.\n\nYou can run the program anyway with \x1B[32mroc run",
-                            if problems.errors == 0 {
-                                32 // green
-                            } else {
-                                33 // yellow
-                            },
-                            problems.errors,
-                            if problems.errors == 1 {
-                                "error"
-                            } else {
-                                "errors"
-                            },
-                            if problems.warnings == 0 {
-                                32 // green
-                            } else {
-                                33 // yellow
-                            },
-                            problems.warnings,
-                            if problems.warnings == 1 {
-                                "warning"
-                            } else {
-                                "warnings"
-                            },
-                            total_time.as_millis(),
-                        );
-                        // If you're running "main.roc" then you can just do `roc run`
-                        // to re-run the program.
-                        if filename != DEFAULT_ROC_FILENAME {
-                            output.push(' ');
-                            output.push_str(&filename.to_string_lossy());
-                        }
-
-                        println!("{}\x1B[39m", output);
-
-                        Ok(problems.exit_code())
-                    }
+                    result
                 }
             }
         }
-        Err(LoadingProblem::FormattedReport(report)) => {
-            print!("{}", report);
+        Err(LoadingProblem::FormattedReport {
+            text,
+            warnings,
+            errors,
+            total_time,
+        }) => {
+            let mut summary = format!(
+                "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.\n\nYou can run the program anyway with \x1B[32mroc run",
+                if errors == 0 {
+                    32 // green
+                } else {
+                    33 // yellow
+                },
+                errors,
+                if errors == 1 {
+                    "error"
+                } else {
+                    "errors"
+                },
+                if warnings == 0 {
+                    32 // green
+                } else {
+                    33 // yellow
+                },
+                warnings,
+                if warnings == 1 {
+                    "warning"
+                } else {
+                    "warnings"
+                },
+                total_time.as_millis(),
+            );
+
+            // If you're running "main.roc" then you can just do `roc run`
+            // to re-run the program, no need to `roc run main.roc`
+            if filename != DEFAULT_ROC_FILENAME {
+                summary.push(' ');
+                summary.push_str(&filename.to_string_lossy());
+            }
+
+            println!("{text}{summary}\x1B[39m");
 
             Ok(1)
         }

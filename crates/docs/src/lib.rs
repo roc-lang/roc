@@ -441,8 +441,8 @@ pub fn load_modules_for_files(filenames: Vec<PathBuf>) -> Vec<LoadedModule> {
             Threading::AllAvailable,
         ) {
             Ok(loaded) => modules.push(loaded),
-            Err(LoadingProblem::FormattedReport(report)) => {
-                eprintln!("{}", report);
+            Err(LoadingProblem::FormattedReport { text, .. }) => {
+                eprintln!("{}", text);
                 std::process::exit(1);
             }
             Err(e) => panic!("{:?}", e),

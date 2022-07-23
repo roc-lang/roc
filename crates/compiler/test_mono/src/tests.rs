@@ -105,8 +105,8 @@ fn compiles_to_ir(test_name: &str, src: &str) {
 
     let mut loaded = match loaded {
         Ok(x) => x,
-        Err(roc_load::LoadingProblem::FormattedReport(report)) => {
-            println!("{}", report);
+        Err(roc_load::LoadingProblem::FormattedReport { text, .. }) => {
+            println!("{}", text);
             panic!();
         }
         Err(e) => panic!("{:?}", e),

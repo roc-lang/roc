@@ -132,8 +132,8 @@ fn main() -> io::Result<()> {
                     Ok(problems.exit_code())
                 }
 
-                Err(LoadingProblem::FormattedReport(report)) => {
-                    print!("{}", report);
+                Err(LoadingProblem::FormattedReport { text, .. }) => {
+                    eprintln!("{}", text);
 
                     Ok(1)
                 }

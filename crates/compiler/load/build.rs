@@ -49,8 +49,8 @@ fn write_subs_for_module(module_id: ModuleId, filename: &str) {
 
     let module = match res_module {
         Ok(v) => v,
-        Err(LoadingProblem::FormattedReport(report)) => {
-            panic!("{}", report);
+        Err(LoadingProblem::FormattedReport { text, .. }) => {
+            todo!("{}", text);
         }
         Err(other) => {
             panic!("build_file failed with error:\n{:?}", other);

@@ -80,8 +80,8 @@ fn create_llvm_module<'a>(
 
     let mut loaded = match loaded {
         Ok(x) => x,
-        Err(roc_load::LoadingProblem::FormattedReport(report)) => {
-            println!("{}", report);
+        Err(roc_load::LoadingProblem::FormattedReport { text, .. }) => {
+            println!("{}", text);
             panic!();
         }
         Err(e) => panic!("{:?}", e),

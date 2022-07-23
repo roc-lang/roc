@@ -57,6 +57,7 @@ use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::str::from_utf8_unchecked;
 use std::sync::Arc;
+use std::time::Instant;
 use std::{env, fs};
 
 use crate::work::Dependencies;
@@ -861,6 +862,7 @@ impl MakeSpecializationsPass {
 
 #[derive(Debug)]
 struct State<'a> {
+    pub start_time: Instant,
     pub root_id: ModuleId,
     pub root_subs: Option<Subs>,
     pub platform_data: Option<PlatformData>,
@@ -932,6 +934,7 @@ impl<'a> State<'a> {
         let dependencies = Dependencies::new(goal_phase);
 
         Self {
+            start_time: Instant::now(),
             root_id,
             root_subs: None,
             target_info,
@@ -1114,7 +1117,12 @@ pub enum LoadingProblem<'a> {
     TriedToImportAppModule,
 
     /// a formatted report
-    FormattedReport(String),
+    FormattedReport {
+        text: String,
+        errors: usize,
+        warnings: usize,
+        total_time: Duration,
+    },
 }
 
 pub enum Phases {
@@ -1263,11 +1271,20 @@ impl<'a> LoadStart<'a> {
                         root_exposed_ident_ids,
                         render,
                     );
-                    return Err(LoadingProblem::FormattedReport(buf));
+                    return Err(LoadingProblem::FormattedReport {
+                        text: buf,
+                        errors: 1,
+                        warnings: 0,
+                        total_time: root_start_time.elapsed().unwrap(),
+                    });
                 }
                 Err(LoadingProblem::FileProblem { filename, error }) => {
-                    let buf = to_file_problem_report(&filename, error);
-                    return Err(LoadingProblem::FormattedReport(buf));
+                    return Err(LoadingProblem::FormattedReport {
+                        text: to_file_problem_report(&filename, error),
+                        errors: 1,
+                        warnings: 0,
+                        total_time: root_start_time.elapsed().unwrap(),
+                    });
                 }
                 Err(e) => return Err(e),
             }
@@ -1585,20 +1602,27 @@ fn state_thread_step<'a>(
 
                     Ok(ControlFlow::Break(LoadResult::Monomorphized(monomorphized)))
                 }
-                Msg::FailedToReadFile { filename, error } => {
-                    let buf = to_file_problem_report(&filename, error);
-                    Err(LoadingProblem::FormattedReport(buf))
-                }
+                Msg::FailedToReadFile { filename, error } => Err(LoadingProblem::FormattedReport {
+                    text: to_file_problem_report(&filename, error),
+                    errors: 1,
+                    warnings: 0,
+                    total_time: state.start_time.elapsed(),
+                }),
 
                 Msg::FailedToParse(problem) => {
                     let module_ids = (*state.arc_modules).lock().clone().into_module_ids();
-                    let buf = to_parse_problem_report(
+                    let text = to_parse_problem_report(
                         problem,
                         module_ids,
                         state.constrained_ident_ids,
                         state.render,
                     );
-                    Err(LoadingProblem::FormattedReport(buf))
+                    Err(LoadingProblem::FormattedReport {
+                        text,
+                        errors: 1,
+                        warnings: 0,
+                        total_time: state.start_time.elapsed(),
+                    })
                 }
                 msg => {
                     // This is where most of the main thread's work gets done.
@@ -1607,6 +1631,7 @@ fn state_thread_step<'a>(
                     let arc_modules = state.arc_modules.clone();
 
                     let render = state.render;
+                    let start_time = state.start_time;
 
                     let res_state = update(
                         state,
@@ -1632,13 +1657,18 @@ fn state_thread_step<'a>(
 
                             // if parsing failed, this module did not add anything to IdentIds
                             let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
-                            let buf = to_parse_problem_report(
+                            let text = to_parse_problem_report(
                                 problem,
                                 module_ids,
                                 root_exposed_ident_ids,
                                 render,
                             );
-                            Err(LoadingProblem::FormattedReport(buf))
+                            Err(LoadingProblem::FormattedReport {
+                                text,
+                                errors: 1,
+                                warnings: 0,
+                                total_time: start_time.elapsed(),
+                            })
                         }
                         Err(e) => Err(e),
                     }
@@ -2462,14 +2492,17 @@ fn update<'a>(
                 let palette = DEFAULT_PALETTE;
                 let can_problems = &mut state.module_cache.can_problems;
                 let type_problems = &mut state.module_cache.type_problems;
+                let mut total_errors = 0;
+                let mut total_warnings = 0;
                 let mut buf = String::new();
 
                 for (home, (module_path, src)) in state.module_cache.sources.iter() {
+                    use roc_reporting::report::Severity::*;
+
                     let can_probs = can_problems.remove(home).unwrap_or_default();
                     let type_probs = type_problems.remove(home).unwrap_or_default();
-                    let error_count = can_probs.len() + type_probs.len();
 
-                    if error_count == 0 {
+                    if can_probs.len() + type_probs.len() == 0 {
                         continue;
                     }
 
@@ -2480,6 +2513,15 @@ fn update<'a>(
                     for problem in can_probs.into_iter() {
                         let report = can_problem(&alloc, &line_info, module_path.clone(), problem);
 
+                        match report.severity {
+                            RuntimeError => {
+                                total_errors += 1;
+                            }
+                            Warning => {
+                                total_warnings += 1;
+                            }
+                        }
+
                         report.render_color_terminal(&mut buf, &alloc, &palette);
 
                         buf.push_str("\n\n");
@@ -2489,6 +2531,15 @@ fn update<'a>(
                         if let Some(report) =
                             type_problem(&alloc, &line_info, module_path.clone(), problem)
                         {
+                            match report.severity {
+                                RuntimeError => {
+                                    total_errors += 1;
+                                }
+                                Warning => {
+                                    total_warnings += 1;
+                                }
+                            }
+
                             report.render_color_terminal(&mut buf, &alloc, &palette);
 
                             buf.push_str("\n\n");
@@ -2496,7 +2547,12 @@ fn update<'a>(
                     }
                 }
 
-                return Err(LoadingProblem::FormattedReport(buf));
+                return Err(LoadingProblem::FormattedReport {
+                    text: buf,
+                    errors: total_errors,
+                    warnings: total_warnings,
+                    total_time: state.start_time.elapsed(),
+                });
             } else {
                 state.exposed_types.insert(
                     module_id,
@@ -2897,8 +2953,12 @@ fn finish_specialization(
             }
             Valid(To::NewPackage(p_or_p)) => p_or_p,
             other => {
-                let buf = to_missing_platform_report(state.root_id, other);
-                return Err(LoadingProblem::FormattedReport(buf));
+                return Err(LoadingProblem::FormattedReport {
+                    text: to_missing_platform_report(state.root_id, other),
+                    errors: 1,
+                    warnings: 0,
+                    total_time: state.start_time.elapsed(),
+                });
             }
         };
 

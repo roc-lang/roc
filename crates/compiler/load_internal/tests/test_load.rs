@@ -94,7 +94,7 @@ fn multiple_modules(subdir: &str, files: Vec<(&str, &str)>) -> Result<LoadedModu
 
     match multiple_modules_help(subdir, arena, files) {
         Err(io_error) => panic!("IO trouble: {:?}", io_error),
-        Ok(Err(LoadingProblem::FormattedReport(buf))) => Err(buf),
+        Ok(Err(LoadingProblem::FormattedReport { text, .. })) => Err(text),
         Ok(Err(loading_problem)) => Err(format!("{:?}", loading_problem)),
         Ok(Ok(mut loaded_module)) => {
             let home = loaded_module.module_id;
@@ -180,9 +180,9 @@ fn load_fixture(
     let loaded = load_and_typecheck(&arena, filename, subs_by_module, TARGET_INFO);
     let mut loaded_module = match loaded {
         Ok(x) => x,
-        Err(roc_load_internal::file::LoadingProblem::FormattedReport(report)) => {
-            println!("{}", report);
-            panic!("{}", report);
+        Err(roc_load_internal::file::LoadingProblem::FormattedReport { text, .. }) => {
+            println!("{}", text);
+            panic!("{}", text);
         }
         Err(e) => panic!("{:?}", e),
     };

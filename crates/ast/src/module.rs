@@ -18,10 +18,10 @@ pub fn load_module(src_file: &Path, threading: Threading) -> LoadedModule {
 
     match loaded {
         Ok(x) => x,
-        Err(roc_load::LoadingProblem::FormattedReport(report)) => {
+        Err(roc_load::LoadingProblem::FormattedReport { text, .. }) => {
             panic!(
                 "Failed to load module from src_file: {:?}. Report: {}",
-                src_file, report
+                src_file, text
             );
         }
         Err(e) => panic!(
