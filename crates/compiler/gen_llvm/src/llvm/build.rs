@@ -805,14 +805,14 @@ fn promote_to_wasm_test_wrapper<'a, 'ctx, 'env>(
 ) -> (&'static str, FunctionValue<'ctx>) {
     // generates roughly
     //
-    // fn $Test.wasm_test_wrapper() -> *T {
+    // fn test_wrapper() -> *T {
     //     result = roc_main();
     //     ptr = roc_malloc(size_of::<T>)
     //     *ptr = result
     //     ret ptr;
     // }
 
-    let main_fn_name = "$Test.wasm_test_wrapper";
+    let main_fn_name = "test_wrapper";
 
     let it = top_level.arguments.iter().copied();
     let bytes = roc_alias_analysis::func_name_bytes_help(

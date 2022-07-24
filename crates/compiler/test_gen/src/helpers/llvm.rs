@@ -20,7 +20,7 @@ use crate::helpers::from_wasm32_memory::FromWasm32Memory;
 use roc_gen_wasm::wasm32_result::Wasm32Result;
 
 #[cfg(feature = "gen-llvm-wasm")]
-const TEST_WRAPPER_NAME: &str = "$Test.wasm_test_wrapper";
+const TEST_WRAPPER_NAME: &str = "test_wrapper";
 
 #[allow(dead_code)]
 pub const OPT_LEVEL: OptLevel = if cfg!(debug_assertions) {
