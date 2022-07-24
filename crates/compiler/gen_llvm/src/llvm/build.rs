@@ -1,7 +1,7 @@
 use crate::llvm::bitcode::{
     call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_list_bitcode_fn,
-    call_list_bitcode_fn_new, call_str_bitcode_fn_new, call_str_bitcode_fn_old,
-    call_void_bitcode_fn, BitcodeReturns,
+    call_list_bitcode_fn_new, call_str_bitcode_fn, call_str_bitcode_fn_old, call_void_bitcode_fn,
+    BitcodeReturns,
 };
 use crate::llvm::build_list::{
     self, allocate_list, empty_polymorphic_list, list_append_unsafe, list_capacity, list_concat,
@@ -5823,7 +5823,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                 Layout::Builtin(Builtin::Int(int_width)) => {
                     let int = num.into_int_value();
 
-                    call_str_bitcode_fn_new(
+                    call_str_bitcode_fn(
                         env,
                         &[],
                         &[int.into()],
@@ -5839,7 +5839,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                         _ => unreachable!(),
                     };
 
-                    call_str_bitcode_fn_new(
+                    call_str_bitcode_fn(
                         env,
                         &[],
                         &[float],
@@ -7263,7 +7263,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                         let zig_function_type = zig_function.get_type();
 
                         match zig_function_type.get_return_type() {
-                            Some(_) => call_str_bitcode_fn_new(
+                            Some(_) => call_str_bitcode_fn(
                                 env,
                                 &[],
                                 &[arg.into()],

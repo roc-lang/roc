@@ -1060,7 +1060,7 @@ pub(crate) fn pass_list_or_string_to_zig_32bit<'a, 'ctx, 'env>(
     (ptr_len, cap)
 }
 
-pub(crate) fn call_str_bitcode_fn_new<'a, 'ctx, 'env>(
+pub(crate) fn call_str_bitcode_fn<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     strings: &[BasicValueEnum<'ctx>],
     other_arguments: &[BasicValueEnum<'ctx>],
