@@ -452,9 +452,12 @@ fn llvm_module_to_wasm_file(
         .output()
         .unwrap();
 
+    if !output.stderr.is_empty() {
+        panic!("{}", String::from_utf8_lossy(&output.stderr));
+    }
+
     assert!(output.status.success(), "{:#?}", output);
     assert!(output.stdout.is_empty(), "{:#?}", output);
-    assert!(output.stderr.is_empty(), "{:#?}", output);
 
     test_wasm_path
 }
@@ -586,6 +589,7 @@ macro_rules! assert_evals_to {
             $ignore_problems
         );
 
+        #[cfg(not(feature = "gen-llvm-wasm"))]
         $crate::helpers::llvm::assert_llvm_evals_to!(
             $src,
             $expected,
@@ -596,6 +600,7 @@ macro_rules! assert_evals_to {
     }};
 }
 
+#[allow(unused_macros)]
 macro_rules! expect_runtime_error_panic {
     ($src:expr) => {{
         #[cfg(feature = "gen-llvm-wasm")]
@@ -607,6 +612,7 @@ macro_rules! expect_runtime_error_panic {
             true // ignore problems
         );
 
+        #[cfg(not(feature = "gen-llvm-wasm"))]
         $crate::helpers::llvm::assert_llvm_evals_to!(
             $src,
             false, // fake value/type for eval
