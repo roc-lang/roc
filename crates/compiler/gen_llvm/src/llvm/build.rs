@@ -874,43 +874,18 @@ fn promote_to_wasm_test_wrapper<'a, 'ctx, 'env>(
         let entry = context.append_basic_block(c_function, "entry");
         builder.position_at_end(entry);
 
-        // reserve space for the result on the heap
-        // pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
-        let (size, alignment) = top_level.result.stack_size_and_alignment(env.target_info);
-        let roc_alloc = env.module.get_function("roc_alloc").unwrap();
-
         let roc_main_fn_result = call_roc_function(env, roc_main_fn, &top_level.result, &[]);
 
-        match roc_return {
-            RocReturn::Return => {
-                let call = builder.build_call(
-                    roc_alloc,
-                    &[
-                        env.ptr_int().const_int(size as _, false).into(),
-                        env.context
-                            .i32_type()
-                            .const_int(alignment as _, false)
-                            .into(),
-                    ],
-                    "result_ptr",
-                );
+        // For consistency, we always return with a heap-allocated value
+        let (size, alignment) = top_level.result.stack_size_and_alignment(env.target_info);
+        let number_of_bytes = env.ptr_int().const_int(size as _, false);
+        let void_ptr = env.call_alloc(number_of_bytes, alignment);
 
-                call.set_call_convention(C_CALL_CONV);
-                let void_ptr = call.try_as_basic_value().left().unwrap();
+        let ptr = builder.build_pointer_cast(void_ptr, output_type.into_pointer_type(), "cast_ptr");
 
-                let ptr = builder.build_pointer_cast(
-                    void_ptr.into_pointer_value(),
-                    output_type.into_pointer_type(),
-                    "cast_ptr",
-                );
-                builder.build_store(ptr, roc_main_fn_result);
-                builder.build_return(Some(&ptr));
-            }
-            RocReturn::ByPointer => {
-                assert!(roc_main_fn_result.is_pointer_value());
-                builder.build_return(Some(&roc_main_fn_result));
-            }
-        }
+        store_roc_value(env, top_level.result, ptr, roc_main_fn_result);
+
+        builder.build_return(Some(&ptr));
 
         c_function
     };
