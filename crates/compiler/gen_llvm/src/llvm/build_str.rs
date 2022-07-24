@@ -7,7 +7,7 @@ use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
 use roc_target::PtrWidth;
 
-use super::bitcode::{call_bitcode_fn, call_str_bitcode_fn, BitcodeReturns};
+use super::bitcode::{call_str_bitcode_fn, BitcodeReturns};
 use super::build::{create_entry_block_alloca, load_symbol};
 
 pub static CHAR_LAYOUT: Layout = Layout::u8();

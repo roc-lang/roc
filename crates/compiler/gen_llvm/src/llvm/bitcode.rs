@@ -64,42 +64,6 @@ pub fn call_list_bitcode_fn<'a, 'ctx, 'env>(
     env.builder.build_load(result, "load_list")
 }
 
-pub(crate) fn call_str_bitcode_fn_old<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    args: &[BasicValueEnum<'ctx>],
-    fn_name: &str,
-) -> BasicValueEnum<'ctx> {
-    use bumpalo::collections::Vec;
-
-    let parent = env
-        .builder
-        .get_insert_block()
-        .and_then(|b| b.get_parent())
-        .unwrap();
-
-    let str_type = super::convert::zig_str_type(env);
-
-    match env.target_info.ptr_width() {
-        roc_target::PtrWidth::Bytes4 => {
-            // 3 machine words actually fit into 2 registers
-            call_bitcode_fn(env, args, fn_name)
-        }
-        roc_target::PtrWidth::Bytes8 => {
-            let result =
-                create_entry_block_alloca(env, parent, str_type.into(), "return_str_alloca");
-            let mut arguments: Vec<BasicValueEnum> =
-                Vec::with_capacity_in(args.len() + 1, env.arena);
-
-            arguments.push(result.into());
-            arguments.extend(args);
-
-            call_void_bitcode_fn(env, &arguments, fn_name);
-
-            result.into()
-        }
-    }
-}
-
 pub fn call_void_bitcode_fn<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     args: &[BasicValueEnum<'ctx>],
