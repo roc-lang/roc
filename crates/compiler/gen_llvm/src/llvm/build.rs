@@ -1,7 +1,7 @@
 use crate::llvm::bitcode::{
     call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_list_bitcode_fn,
-    call_list_bitcode_fn_new, call_str_bitcode_fn, call_str_bitcode_fn_new, call_void_bitcode_fn,
-    BitcodeReturns,
+    call_list_bitcode_fn_new, call_str_bitcode_fn_new, call_str_bitcode_fn_old,
+    call_void_bitcode_fn, BitcodeReturns,
 };
 use crate::llvm::build_list::{
     self, allocate_list, empty_polymorphic_list, list_append_unsafe, list_capacity, list_concat,
@@ -5389,7 +5389,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let string1 = load_symbol(scope, &args[0]);
             let string2 = load_symbol(scope, &args[1]);
 
-            call_str_bitcode_fn(env, &[string1, string2], bitcode::STR_CONCAT)
+            call_str_bitcode_fn_old(env, &[string1, string2], bitcode::STR_CONCAT)
         }
         StrJoinWith => {
             // Str.joinWith : List Str, Str -> Str
@@ -5398,7 +5398,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let list = list_symbol_to_c_abi(env, scope, args[0]);
             let string = load_symbol(scope, &args[1]);
 
-            call_str_bitcode_fn(env, &[list.into(), string], bitcode::STR_JOIN_WITH)
+            call_str_bitcode_fn_old(env, &[list.into(), string], bitcode::STR_JOIN_WITH)
         }
         StrToScalars => {
             // Str.toScalars : Str -> List U32
@@ -5532,7 +5532,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let string = load_symbol(scope, &args[0]);
             let count = load_symbol(scope, &args[1]);
-            call_str_bitcode_fn(env, &[string, count], bitcode::STR_REPEAT)
+            call_str_bitcode_fn_old(env, &[string, count], bitcode::STR_REPEAT)
         }
         StrSplit => {
             // Str.split : Str, Str -> List Str
@@ -5601,7 +5601,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             let string = load_symbol(scope, &args[0]);
             let start = load_symbol(scope, &args[1]);
             let length = load_symbol(scope, &args[2]);
-            call_str_bitcode_fn(env, &[string, start, length], bitcode::STR_SUBSTRING_UNSAFE)
+            call_str_bitcode_fn_old(env, &[string, start, length], bitcode::STR_SUBSTRING_UNSAFE)
         }
         StrReserve => {
             // Str.reserve : Str, Nat -> Str
@@ -5609,7 +5609,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let string = load_symbol(scope, &args[0]);
             let capacity = load_symbol(scope, &args[1]);
-            call_str_bitcode_fn(env, &[string, capacity], bitcode::STR_RESERVE)
+            call_str_bitcode_fn_old(env, &[string, capacity], bitcode::STR_RESERVE)
         }
         StrAppendScalar => {
             // Str.appendScalar : Str, U32 -> Str
@@ -5617,28 +5617,28 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let string = load_symbol(scope, &args[0]);
             let capacity = load_symbol(scope, &args[1]);
-            call_str_bitcode_fn(env, &[string, capacity], bitcode::STR_APPEND_SCALAR)
+            call_str_bitcode_fn_old(env, &[string, capacity], bitcode::STR_APPEND_SCALAR)
         }
         StrTrim => {
             // Str.trim : Str -> Str
             debug_assert_eq!(args.len(), 1);
 
             let string = load_symbol(scope, &args[0]);
-            call_str_bitcode_fn(env, &[string], bitcode::STR_TRIM)
+            call_str_bitcode_fn_old(env, &[string], bitcode::STR_TRIM)
         }
         StrTrimLeft => {
             // Str.trim : Str -> Str
             debug_assert_eq!(args.len(), 1);
 
             let string = load_symbol(scope, &args[0]);
-            call_str_bitcode_fn(env, &[string], bitcode::STR_TRIM_LEFT)
+            call_str_bitcode_fn_old(env, &[string], bitcode::STR_TRIM_LEFT)
         }
         StrTrimRight => {
             // Str.trim : Str -> Str
             debug_assert_eq!(args.len(), 1);
 
             let string = load_symbol(scope, &args[0]);
-            call_str_bitcode_fn(env, &[string], bitcode::STR_TRIM_RIGHT)
+            call_str_bitcode_fn_old(env, &[string], bitcode::STR_TRIM_RIGHT)
         }
         ListLen => {
             // List.len : List * -> Nat

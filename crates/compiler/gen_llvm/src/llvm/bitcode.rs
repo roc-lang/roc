@@ -64,7 +64,7 @@ pub fn call_list_bitcode_fn<'a, 'ctx, 'env>(
     env.builder.build_load(result, "load_list")
 }
 
-pub fn call_str_bitcode_fn<'a, 'ctx, 'env>(
+pub(crate) fn call_str_bitcode_fn_old<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     args: &[BasicValueEnum<'ctx>],
     fn_name: &str,
