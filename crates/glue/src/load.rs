@@ -1,7 +1,7 @@
 use crate::rust_glue;
 use crate::types::{Env, Types};
 use bumpalo::Bump;
-use roc_load::{LoadedModule, Threading};
+use roc_load::{LoadedModule, LoadingProblem, Threading};
 use roc_reporting::report::RenderTarget;
 use roc_target::{Architecture, TargetInfo};
 use std::fs::File;
@@ -87,7 +87,16 @@ pub fn load_types(
         RenderTarget::Generic,
         threading,
     )
-    .expect("Problem loading platform module");
+    .unwrap_or_else(|problem| match problem {
+        LoadingProblem::FormattedReport(report) => {
+            eprintln!("{}", report);
+
+            process::exit(1);
+        }
+        problem => {
+            todo!("{:?}", problem);
+        }
+    });
 
     let decls = declarations_by_id.remove(&home).unwrap();
     let subs = solved.inner_mut();
