@@ -1493,14 +1493,13 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    # technically, an empty record can be destructured
-                    {} = {}
-                    thunk = \{} -> 42
+                # technically, an empty record can be destructured
+                thunk = \{} -> 42
 
-                    xEmpty = if thunk {} == 42 then { x: {} } else { x: {} }
+                xEmpty = if thunk {} == 42 then { x: {} } else { x: {} }
 
-                    when xEmpty is
-                        { x: {} } -> {}
+                when xEmpty is
+                    { x: {} } -> {}
                 "#
             ),
             "{}",
