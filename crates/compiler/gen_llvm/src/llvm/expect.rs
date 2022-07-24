@@ -21,6 +21,68 @@ fn pointer_at_offset<'ctx>(
     unsafe { bd.build_gep(ptr, &[offset], "offset_ptr") }
 }
 
+/// Writes the module and region into the buffer
+fn write_header<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    ptr: PointerValue<'ctx>,
+    mut offset: IntValue<'ctx>,
+    condition: Symbol,
+    region: Region,
+) -> IntValue<'ctx> {
+    let region_start = env
+        .context
+        .i32_type()
+        .const_int(region.start().offset as _, false);
+
+    let region_end = env
+        .context
+        .i32_type()
+        .const_int(region.end().offset as _, false);
+
+    let module_id: u32 = unsafe { std::mem::transmute(condition.module_id()) };
+    let module_id = env.context.i32_type().const_int(module_id as _, false);
+
+    offset = build_copy(env, ptr, offset, region_start.into());
+    offset = build_copy(env, ptr, offset, region_end.into());
+    offset = build_copy(env, ptr, offset, module_id.into());
+
+    offset
+}
+
+/// Read the first two 32-bit values from the shared memory,
+/// representing the total number of expect frames and the next free position
+fn read_state<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    ptr: PointerValue<'ctx>,
+) -> (IntValue<'ctx>, IntValue<'ctx>) {
+    let ptr_type = env.ptr_int().ptr_type(AddressSpace::Generic);
+    let ptr = env.builder.build_pointer_cast(ptr, ptr_type, "");
+
+    let one = env.ptr_int().const_int(1, false);
+    let offset_ptr = pointer_at_offset(env.builder, ptr, one);
+
+    let count = env.builder.build_load(ptr, "load_count");
+    let offset = env.builder.build_load(offset_ptr, "load_offset");
+
+    (count.into_int_value(), offset.into_int_value())
+}
+
+fn write_state<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    ptr: PointerValue<'ctx>,
+    count: IntValue<'ctx>,
+    offset: IntValue<'ctx>,
+) {
+    let ptr_type = env.ptr_int().ptr_type(AddressSpace::Generic);
+    let ptr = env.builder.build_pointer_cast(ptr, ptr_type, "");
+
+    let one = env.ptr_int().const_int(1, false);
+    let offset_ptr = pointer_at_offset(env.builder, ptr, one);
+
+    env.builder.build_store(ptr, count);
+    env.builder.build_store(offset_ptr, offset);
+}
+
 pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
@@ -44,64 +106,9 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
         .unwrap()
         .into_pointer_value();
 
-    let mut ptr = original_ptr;
+    let (count, mut offset) = read_state(env, original_ptr);
 
-    {
-        let value = env
-            .context
-            .i32_type()
-            .const_int(region.start().offset as _, false);
-
-        let cast_ptr = env.builder.build_pointer_cast(
-            ptr,
-            value.get_type().ptr_type(AddressSpace::Generic),
-            "to_store_pointer",
-        );
-
-        env.builder.build_store(cast_ptr, value);
-
-        // let increment = layout.stack_size(env.target_info);
-        let increment = 4;
-        let increment = env.ptr_int().const_int(increment as _, false);
-
-        ptr = unsafe { env.builder.build_gep(ptr, &[increment], "increment_ptr") };
-    }
-
-    {
-        let value = env
-            .context
-            .i32_type()
-            .const_int(region.end().offset as _, false);
-
-        let cast_ptr = env.builder.build_pointer_cast(
-            ptr,
-            value.get_type().ptr_type(AddressSpace::Generic),
-            "to_store_pointer",
-        );
-
-        env.builder.build_store(cast_ptr, value);
-
-        // let increment = layout.stack_size(env.target_info);
-        let increment = 4;
-        let increment = env.ptr_int().const_int(increment as _, false);
-
-        ptr = unsafe { env.builder.build_gep(ptr, &[increment], "increment_ptr") };
-    }
-
-    {
-        let region_bytes: u32 = unsafe { std::mem::transmute(condition.module_id()) };
-        let value = env.context.i32_type().const_int(region_bytes as _, false);
-
-        let cast_ptr = env.builder.build_pointer_cast(
-            ptr,
-            value.get_type().ptr_type(AddressSpace::Generic),
-            "to_store_pointer",
-        );
-
-        env.builder.build_store(cast_ptr, value);
-    }
-
-    let mut offset = env.ptr_int().const_int(12, false);
+    offset = write_header(env, original_ptr, offset, condition, region);
 
     for lookup in lookups.iter() {
         let (value, layout) = load_symbol_and_layout(scope, lookup);
@@ -116,6 +123,10 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
             WhenRecursive::Unreachable,
         );
     }
+
+    let one = env.ptr_int().const_int(1, false);
+    let new_count = env.builder.build_int_add(count, one, "inc");
+    write_state(env, original_ptr, new_count, offset)
 }
 
 #[derive(Clone, Debug, Copy)]

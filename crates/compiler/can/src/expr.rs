@@ -2692,12 +2692,15 @@ struct ExpectCollector {
 }
 
 impl crate::traverse::Visitor for ExpectCollector {
-    fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
+    fn visit_expr(&mut self, expr: &Expr, _region: Region, var: Variable) {
         if let Expr::Expect {
-            lookups_in_cond, ..
+            lookups_in_cond,
+            loc_condition,
+            ..
         } = expr
         {
-            self.expects.insert(region, lookups_in_cond.to_vec());
+            self.expects
+                .insert(loc_condition.region, lookups_in_cond.to_vec());
         }
 
         walk_expr(self, expr, var)

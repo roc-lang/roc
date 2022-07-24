@@ -23,7 +23,7 @@ pub fn get_values<'a>(
     start: *const u8,
     start_offset: usize,
     variables: &[Variable],
-) -> Result<Vec<Expr<'a>>, ToAstProblem> {
+) -> Result<(usize, Vec<Expr<'a>>), ToAstProblem> {
     let mut result = Vec::with_capacity(variables.len());
 
     let memory = ExpectMemory {
@@ -70,7 +70,7 @@ pub fn get_values<'a>(
         result.push(expr);
     }
 
-    Ok(result)
+    Ok((app.offset, result))
 }
 
 struct ExpectMemory {
