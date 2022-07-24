@@ -30,26 +30,6 @@ fn width_and_alignment_u8_u8() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn applied_tag_nothing_ir() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Maybe a : [Just a, Nothing]
-
-                x : Maybe I64
-                x = Nothing
-
-                x
-                "#
-        ),
-        1,
-        (i64, u8),
-        |(_, tag)| tag
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn applied_tag_nothing() {
     assert_evals_to!(
         indoc!(
