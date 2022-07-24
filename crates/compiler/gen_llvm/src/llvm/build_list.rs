@@ -1,5 +1,5 @@
 #![allow(clippy::too_many_arguments)]
-use crate::llvm::bitcode::{build_dec_wrapper, call_list_bitcode_fn_old};
+use crate::llvm::bitcode::build_dec_wrapper;
 use crate::llvm::build::{
     allocate_with_refcount_help, cast_basic_basic, Env, RocFunctionCall, Scope,
 };
