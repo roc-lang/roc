@@ -2380,7 +2380,7 @@ fn min_f32() {
 #[cfg(all(any(feature = "gen-llvm"), not(feature = "gen-llvm-wasm")))]
 fn to_nat_truncate_wraps() {
     let input = "Num.toNat 10_000_000_000_000_000_000_000i128";
-    assert_evals_to!(&input, 1864712049423024128, u64)
+    assert_evals_to!(input, 1864712049423024128, u64)
 }
 
 macro_rules! num_conversion_tests {
