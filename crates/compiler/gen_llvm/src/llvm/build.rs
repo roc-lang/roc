@@ -1,7 +1,7 @@
 use crate::llvm::bitcode::{
     call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_list_bitcode_fn,
     call_list_bitcode_fn_new, call_str_bitcode_fn, call_str_bitcode_fn_old, call_void_bitcode_fn,
-    BitcodeReturns,
+    pass_list_or_string_to_zig_32bit, BitcodeReturns,
 };
 use crate::llvm::build_list::{
     self, allocate_list, empty_polymorphic_list, list_append_unsafe, list_capacity, list_concat,
@@ -5389,16 +5389,44 @@ fn run_low_level<'a, 'ctx, 'env>(
             let string1 = load_symbol(scope, &args[0]);
             let string2 = load_symbol(scope, &args[1]);
 
-            call_str_bitcode_fn_old(env, &[string1, string2], bitcode::STR_CONCAT)
+            call_str_bitcode_fn(
+                env,
+                &[string1, string2],
+                &[],
+                BitcodeReturns::Str,
+                bitcode::STR_CONCAT,
+            )
         }
         StrJoinWith => {
             // Str.joinWith : List Str, Str -> Str
             debug_assert_eq!(args.len(), 2);
 
-            let list = list_symbol_to_c_abi(env, scope, args[0]);
+            let list = load_symbol(scope, &args[0]);
             let string = load_symbol(scope, &args[1]);
 
-            call_str_bitcode_fn_old(env, &[list.into(), string], bitcode::STR_JOIN_WITH)
+            match env.target_info.ptr_width() {
+                PtrWidth::Bytes4 => {
+                    // list and string are both stored as structs on the stack on 32-bit targets
+                    call_str_bitcode_fn(
+                        env,
+                        &[list, string],
+                        &[],
+                        BitcodeReturns::Str,
+                        bitcode::STR_JOIN_WITH,
+                    )
+                }
+                PtrWidth::Bytes8 => {
+                    // on 64-bit targets, strings are stored as pointers, but that is not what zig expects
+
+                    call_list_bitcode_fn_new(
+                        env,
+                        &[list.into_struct_value()],
+                        &[string],
+                        BitcodeReturns::Str,
+                        bitcode::STR_JOIN_WITH,
+                    )
+                }
+            }
         }
         StrToScalars => {
             // Str.toScalars : Str -> List U32
@@ -5406,7 +5434,13 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let string = load_symbol(scope, &args[0]);
 
-            call_list_bitcode_fn(env, &[string], bitcode::STR_TO_SCALARS)
+            call_str_bitcode_fn(
+                env,
+                &[string],
+                &[],
+                BitcodeReturns::List,
+                bitcode::STR_TO_SCALARS,
+            )
         }
         StrStartsWith => {
             // Str.startsWith : Str, Str -> Bool
@@ -5415,7 +5449,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             let string = load_symbol(scope, &args[0]);
             let prefix = load_symbol(scope, &args[1]);
 
-            call_bitcode_fn(env, &[string, prefix], bitcode::STR_STARTS_WITH)
+            call_str_bitcode_fn(
+                env,
+                &[string, prefix],
+                &[],
+                BitcodeReturns::Basic,
+                bitcode::STR_STARTS_WITH,
+            )
         }
         StrStartsWithScalar => {
             // Str.startsWithScalar : Str, U32 -> Bool
@@ -5424,7 +5464,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             let string = load_symbol(scope, &args[0]);
             let prefix = load_symbol(scope, &args[1]);
 
-            call_bitcode_fn(env, &[string, prefix], bitcode::STR_STARTS_WITH_SCALAR)
+            call_str_bitcode_fn(
+                env,
+                &[string],
+                &[prefix],
+                BitcodeReturns::Basic,
+                bitcode::STR_STARTS_WITH_SCALAR,
+            )
         }
         StrEndsWith => {
             // Str.startsWith : Str, Str -> Bool
@@ -5433,7 +5479,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             let string = load_symbol(scope, &args[0]);
             let prefix = load_symbol(scope, &args[1]);
 
-            call_bitcode_fn(env, &[string, prefix], bitcode::STR_ENDS_WITH)
+            call_str_bitcode_fn(
+                env,
+                &[string, prefix],
+                &[],
+                BitcodeReturns::Basic,
+                bitcode::STR_ENDS_WITH,
+            )
         }
         StrToNum => {
             // Str.toNum : Str -> Result (Num *) {}
@@ -5478,7 +5530,13 @@ fn run_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!(),
             };
 
-            str_from_int(env, int, int_width)
+            call_str_bitcode_fn(
+                env,
+                &[],
+                &[int.into()],
+                BitcodeReturns::Str,
+                &bitcode::STR_FROM_INT[int_width],
+            )
         }
         StrFromFloat => {
             // Str.fromFloat : Float * -> Str
@@ -5491,7 +5549,13 @@ fn run_low_level<'a, 'ctx, 'env>(
                 _ => unreachable!(),
             };
 
-            str_from_float(env, float, float_width)
+            call_str_bitcode_fn(
+                env,
+                &[],
+                &[float],
+                BitcodeReturns::Str,
+                &bitcode::STR_FROM_FLOAT[float_width],
+            )
         }
         StrFromUtf8Range => {
             debug_assert_eq!(args.len(), 3);
@@ -5505,17 +5569,40 @@ fn run_low_level<'a, 'ctx, 'env>(
                 .builder
                 .build_alloca(result_type, "alloca_utf8_validate_bytes_result");
 
-            call_void_bitcode_fn(
-                env,
-                &[
-                    result_ptr.into(),
-                    list_symbol_to_c_abi(env, scope, list).into(),
-                    start,
-                    count,
-                    pass_update_mode(env, update_mode),
-                ],
-                bitcode::STR_FROM_UTF8_RANGE,
-            );
+            match env.target_info.ptr_width() {
+                PtrWidth::Bytes4 => {
+                    let list = load_symbol(scope, &list).into_struct_value();
+                    let (a, b) = pass_list_or_string_to_zig_32bit(env, list);
+
+                    call_void_bitcode_fn(
+                        env,
+                        &[
+                            result_ptr.into(),
+                            a.into(),
+                            b.into(),
+                            start,
+                            count,
+                            pass_update_mode(env, update_mode),
+                        ],
+                        bitcode::STR_FROM_UTF8_RANGE,
+                    );
+                }
+                PtrWidth::Bytes8 => {
+                    //
+
+                    call_void_bitcode_fn(
+                        env,
+                        &[
+                            result_ptr.into(),
+                            list_symbol_to_c_abi(env, scope, list).into(),
+                            start,
+                            count,
+                            pass_update_mode(env, update_mode),
+                        ],
+                        bitcode::STR_FROM_UTF8_RANGE,
+                    );
+                }
+            }
 
             crate::llvm::build_str::decode_from_utf8_result(env, result_ptr).into()
         }
@@ -5524,7 +5611,14 @@ fn run_low_level<'a, 'ctx, 'env>(
             debug_assert_eq!(args.len(), 1);
 
             let string = load_symbol(scope, &args[0]);
-            call_list_bitcode_fn(env, &[string], bitcode::STR_TO_UTF8)
+
+            call_str_bitcode_fn(
+                env,
+                &[string],
+                &[],
+                BitcodeReturns::List,
+                bitcode::STR_TO_UTF8,
+            )
         }
         StrRepeat => {
             // Str.repeat : Str, Nat -> Str
@@ -5532,7 +5626,14 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let string = load_symbol(scope, &args[0]);
             let count = load_symbol(scope, &args[1]);
-            call_str_bitcode_fn_old(env, &[string, count], bitcode::STR_REPEAT)
+
+            call_str_bitcode_fn(
+                env,
+                &[string],
+                &[count],
+                BitcodeReturns::Str,
+                bitcode::STR_REPEAT,
+            )
         }
         StrSplit => {
             // Str.split : Str, Str -> List Str
@@ -5541,7 +5642,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             let string = load_symbol(scope, &args[0]);
             let delimiter = load_symbol(scope, &args[1]);
 
-            call_list_bitcode_fn(env, &[string, delimiter], bitcode::STR_STR_SPLIT)
+            call_str_bitcode_fn(
+                env,
+                &[string, delimiter],
+                &[],
+                BitcodeReturns::List,
+                bitcode::STR_STR_SPLIT,
+            )
         }
         StrIsEmpty => {
             // Str.isEmpty : Str -> Str
@@ -5549,8 +5656,14 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             // the builtin will always return an u64
             let string = load_symbol(scope, &args[0]);
-            let length =
-                call_bitcode_fn(env, &[string], bitcode::STR_NUMBER_OF_BYTES).into_int_value();
+            let length = call_str_bitcode_fn(
+                env,
+                &[string],
+                &[],
+                BitcodeReturns::Basic,
+                bitcode::STR_NUMBER_OF_BYTES,
+            )
+            .into_int_value();
 
             // cast to the appropriate usize of the current build
             let byte_count =
@@ -5570,7 +5683,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             debug_assert_eq!(args.len(), 1);
 
             let string = load_symbol(scope, &args[0]);
-            call_bitcode_fn(env, &[string], bitcode::STR_COUNT_GRAPEHEME_CLUSTERS)
+            call_str_bitcode_fn(
+                env,
+                &[string],
+                &[],
+                BitcodeReturns::Basic,
+                bitcode::STR_COUNT_GRAPEHEME_CLUSTERS,
+            )
         }
         StrGetScalarUnsafe => {
             // Str.getScalarUnsafe : Str, Nat -> { bytesParsed : Nat, scalar : U32 }
@@ -5578,14 +5697,36 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let string = load_symbol(scope, &args[0]);
             let index = load_symbol(scope, &args[1]);
-            call_bitcode_fn(env, &[string, index], bitcode::STR_GET_SCALAR_UNSAFE)
+
+            let result = call_str_bitcode_fn(
+                env,
+                &[string],
+                &[index],
+                BitcodeReturns::Basic,
+                bitcode::STR_GET_SCALAR_UNSAFE,
+            );
+
+            // on 32-bit platforms, zig bitpacks the struct
+            match env.target_info.ptr_width() {
+                PtrWidth::Bytes8 => result,
+                PtrWidth::Bytes4 => {
+                    let to = basic_type_from_layout(env, layout);
+                    complex_bitcast_check_size(env, result, to, "to_roc_record")
+                }
+            }
         }
         StrCountUtf8Bytes => {
             // Str.countUtf8Bytes : Str -> Nat
             debug_assert_eq!(args.len(), 1);
 
             let string = load_symbol(scope, &args[0]);
-            call_bitcode_fn(env, &[string], bitcode::STR_COUNT_UTF8_BYTES)
+            call_str_bitcode_fn(
+                env,
+                &[string],
+                &[],
+                BitcodeReturns::Basic,
+                bitcode::STR_COUNT_UTF8_BYTES,
+            )
         }
         StrGetCapacity => {
             // Str.capacity : Str -> Nat
@@ -5601,7 +5742,13 @@ fn run_low_level<'a, 'ctx, 'env>(
             let string = load_symbol(scope, &args[0]);
             let start = load_symbol(scope, &args[1]);
             let length = load_symbol(scope, &args[2]);
-            call_str_bitcode_fn_old(env, &[string, start, length], bitcode::STR_SUBSTRING_UNSAFE)
+            call_str_bitcode_fn(
+                env,
+                &[string],
+                &[start, length],
+                BitcodeReturns::Str,
+                bitcode::STR_SUBSTRING_UNSAFE,
+            )
         }
         StrReserve => {
             // Str.reserve : Str, Nat -> Str
@@ -5609,7 +5756,13 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let string = load_symbol(scope, &args[0]);
             let capacity = load_symbol(scope, &args[1]);
-            call_str_bitcode_fn_old(env, &[string, capacity], bitcode::STR_RESERVE)
+            call_str_bitcode_fn(
+                env,
+                &[string],
+                &[capacity],
+                BitcodeReturns::Str,
+                bitcode::STR_RESERVE,
+            )
         }
         StrAppendScalar => {
             // Str.appendScalar : Str, U32 -> Str
@@ -5617,28 +5770,46 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let string = load_symbol(scope, &args[0]);
             let capacity = load_symbol(scope, &args[1]);
-            call_str_bitcode_fn_old(env, &[string, capacity], bitcode::STR_APPEND_SCALAR)
+            call_str_bitcode_fn(
+                env,
+                &[string],
+                &[capacity],
+                BitcodeReturns::Str,
+                bitcode::STR_APPEND_SCALAR,
+            )
         }
         StrTrim => {
             // Str.trim : Str -> Str
             debug_assert_eq!(args.len(), 1);
 
             let string = load_symbol(scope, &args[0]);
-            call_str_bitcode_fn_old(env, &[string], bitcode::STR_TRIM)
+            call_str_bitcode_fn(env, &[string], &[], BitcodeReturns::Str, bitcode::STR_TRIM)
         }
         StrTrimLeft => {
             // Str.trim : Str -> Str
             debug_assert_eq!(args.len(), 1);
 
             let string = load_symbol(scope, &args[0]);
-            call_str_bitcode_fn_old(env, &[string], bitcode::STR_TRIM_LEFT)
+            call_str_bitcode_fn(
+                env,
+                &[string],
+                &[],
+                BitcodeReturns::Str,
+                bitcode::STR_TRIM_LEFT,
+            )
         }
         StrTrimRight => {
             // Str.trim : Str -> Str
             debug_assert_eq!(args.len(), 1);
 
             let string = load_symbol(scope, &args[0]);
-            call_str_bitcode_fn_old(env, &[string], bitcode::STR_TRIM_RIGHT)
+            call_str_bitcode_fn(
+                env,
+                &[string],
+                &[],
+                BitcodeReturns::Str,
+                bitcode::STR_TRIM_RIGHT,
+            )
         }
         ListLen => {
             // List.len : List * -> Nat
