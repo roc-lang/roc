@@ -5823,10 +5823,29 @@ fn run_low_level<'a, 'ctx, 'env>(
                 Layout::Builtin(Builtin::Int(int_width)) => {
                     let int = num.into_int_value();
 
-                    str_from_int(env, int, *int_width)
+                    call_str_bitcode_fn_new(
+                        env,
+                        &[],
+                        &[int.into()],
+                        BitcodeReturns::Str,
+                        &bitcode::STR_FROM_INT[*int_width],
+                    )
                 }
-                Layout::Builtin(Builtin::Float(float_width)) => {
-                    str_from_float(env, num, *float_width)
+                Layout::Builtin(Builtin::Float(_float_width)) => {
+                    let (float, float_layout) = load_symbol_and_layout(scope, &args[0]);
+
+                    let float_width = match float_layout {
+                        Layout::Builtin(Builtin::Float(float_width)) => *float_width,
+                        _ => unreachable!(),
+                    };
+
+                    call_str_bitcode_fn_new(
+                        env,
+                        &[],
+                        &[float],
+                        BitcodeReturns::Str,
+                        &bitcode::STR_FROM_FLOAT[float_width],
+                    )
                 }
                 Layout::Builtin(Builtin::Decimal) => dec_to_str(env, num),
                 _ => unreachable!(),
