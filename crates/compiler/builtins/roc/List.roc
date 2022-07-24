@@ -826,7 +826,7 @@ findFirstIndex = \list, matcher ->
 ## If no satisfying element is found, an `Err NotFound` is returned.
 findLastIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]*
 findLastIndex = \list, matches ->
-   foundIndex = List.iterateBackwards list (List.len list) \prevIndex, elem ->
+    foundIndex = List.iterateBackwards list (List.len list) \prevIndex, elem ->
         if matches elem then
             Break (prevIndex - 1)
         else
@@ -927,7 +927,7 @@ splitFirst = \list, delimiter ->
     when List.findFirstIndex list (\elem -> elem == delimiter) is
         Ok index ->
             before = List.sublist list { start: 0, len: index }
-            after = List.sublist list { start: index + 1, len: List.len list - index - 1}
+            after = List.sublist list { start: index + 1, len: List.len list - index - 1 }
 
             Ok { before, after }
 
