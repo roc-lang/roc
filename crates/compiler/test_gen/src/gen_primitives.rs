@@ -3661,7 +3661,7 @@ fn shared_pattern_variable_in_when_branches() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm"))]
 fn symbol_not_bound_in_all_patterns_runs_when_no_bound_symbol_used() {
     assert_evals_to!(
         indoc!(
