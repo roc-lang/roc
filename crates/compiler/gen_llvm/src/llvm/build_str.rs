@@ -1,4 +1,3 @@
-use crate::llvm::bitcode::call_str_bitcode_fn_old;
 use crate::llvm::build::{Env, Scope};
 use inkwell::builder::Builder;
 use inkwell::values::{BasicValueEnum, IntValue, PointerValue, StructValue};
@@ -65,7 +64,13 @@ pub fn str_from_int<'a, 'ctx, 'env>(
     value: IntValue<'ctx>,
     int_width: IntWidth,
 ) -> BasicValueEnum<'ctx> {
-    call_str_bitcode_fn_old(env, &[value.into()], &bitcode::STR_FROM_INT[int_width])
+    call_str_bitcode_fn(
+        env,
+        &[],
+        &[value.into()],
+        BitcodeReturns::Str,
+        &bitcode::STR_FROM_INT[int_width],
+    )
 }
 
 pub fn decode_from_utf8_result<'a, 'ctx, 'env>(
@@ -110,7 +115,13 @@ pub fn str_from_float<'a, 'ctx, 'env>(
     float: BasicValueEnum<'ctx>,
     float_width: FloatWidth,
 ) -> BasicValueEnum<'ctx> {
-    call_str_bitcode_fn_old(env, &[float], &bitcode::STR_FROM_FLOAT[float_width])
+    call_str_bitcode_fn(
+        env,
+        &[],
+        &[float],
+        BitcodeReturns::Str,
+        &bitcode::STR_FROM_FLOAT[float_width],
+    )
 }
 
 /// Dec.toStr : Dec -> Str
@@ -145,5 +156,11 @@ pub(crate) fn str_equal<'a, 'ctx, 'env>(
     value1: BasicValueEnum<'ctx>,
     value2: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    call_bitcode_fn(env, &[value1, value2], bitcode::STR_EQUAL)
+    call_str_bitcode_fn(
+        env,
+        &[value1, value2],
+        &[],
+        BitcodeReturns::Basic,
+        bitcode::STR_EQUAL,
+    )
 }
