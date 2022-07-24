@@ -15,10 +15,20 @@ use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds};
 
+use super::bitcode::{call_list_bitcode_fn, BitcodeReturns};
 use super::build::{
     create_entry_block_alloca, load_roc_value, load_symbol, store_roc_value, struct_from_fields,
 };
 use super::convert::zig_list_type;
+
+fn call_list_bitcode_fn_1<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    list: StructValue<'ctx>,
+    other_arguments: &[BasicValueEnum<'ctx>],
+    fn_name: &str,
+) -> BasicValueEnum<'ctx> {
+    call_list_bitcode_fn(env, &[list], other_arguments, BitcodeReturns::List, fn_name)
+}
 
 pub fn list_symbol_to_c_abi<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -111,13 +121,15 @@ pub fn list_with_capacity<'a, 'ctx, 'env>(
     capacity: IntValue<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    call_list_bitcode_fn_old(
+    call_list_bitcode_fn(
         env,
+        &[],
         &[
             capacity.into(),
             env.alignment_intvalue(element_layout),
             layout_width(env, element_layout),
         ],
+        BitcodeReturns::List,
         bitcode::LIST_WITH_CAPACITY,
     )
 }
@@ -157,10 +169,10 @@ pub fn list_reserve<'a, 'ctx, 'env>(
     element_layout: &Layout<'a>,
     update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
-    call_list_bitcode_fn_old(
+    call_list_bitcode_fn_1(
         env,
+        list.into_struct_value(),
         &[
-            list_to_c_abi(env, list).into(),
             env.alignment_intvalue(element_layout),
             spare,
             layout_width(env, element_layout),
@@ -177,10 +189,10 @@ pub fn list_append_unsafe<'a, 'ctx, 'env>(
     element: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    call_list_bitcode_fn_old(
+    call_list_bitcode_fn_1(
         env,
+        original_wrapper,
         &[
-            list_to_c_abi(env, original_wrapper.into()).into(),
             pass_element_as_opaque(env, element, *element_layout),
             layout_width(env, element_layout),
         ],
@@ -195,10 +207,10 @@ pub fn list_prepend<'a, 'ctx, 'env>(
     element: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    call_list_bitcode_fn_old(
+    call_list_bitcode_fn_1(
         env,
+        original_wrapper,
         &[
-            list_to_c_abi(env, original_wrapper.into()).into(),
             env.alignment_intvalue(element_layout),
             pass_element_as_opaque(env, element, *element_layout),
             layout_width(env, element_layout),
@@ -216,10 +228,10 @@ pub fn list_swap<'a, 'ctx, 'env>(
     element_layout: &Layout<'a>,
     update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
-    call_list_bitcode_fn_old(
+    call_list_bitcode_fn_1(
         env,
+        original_wrapper,
         &[
-            list_to_c_abi(env, original_wrapper.into()).into(),
             env.alignment_intvalue(element_layout),
             layout_width(env, element_layout),
             index_1.into(),
@@ -240,10 +252,10 @@ pub fn list_sublist<'a, 'ctx, 'env>(
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
-    call_list_bitcode_fn_old(
+    call_list_bitcode_fn_1(
         env,
+        original_wrapper,
         &[
-            list_to_c_abi(env, original_wrapper.into()).into(),
             env.alignment_intvalue(element_layout),
             layout_width(env, element_layout),
             start.into(),
@@ -263,10 +275,10 @@ pub fn list_drop_at<'a, 'ctx, 'env>(
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
     let dec_element_fn = build_dec_wrapper(env, layout_ids, element_layout);
-    call_list_bitcode_fn_old(
+    call_list_bitcode_fn_1(
         env,
+        original_wrapper,
         &[
-            list_to_c_abi(env, original_wrapper.into()).into(),
             env.alignment_intvalue(element_layout),
             layout_width(env, element_layout),
             count.into(),
@@ -294,10 +306,10 @@ pub fn list_replace_unsafe<'a, 'ctx, 'env>(
     // Assume the bounds have already been checked earlier
     // (e.g. by List.replace or List.set, which wrap List.#replaceUnsafe)
     let new_list = match update_mode {
-        UpdateMode::InPlace => call_list_bitcode_fn_old(
+        UpdateMode::InPlace => call_list_bitcode_fn_1(
             env,
+            list.into_struct_value(),
             &[
-                list_to_c_abi(env, list).into(),
                 index.into(),
                 pass_element_as_opaque(env, element, *element_layout),
                 layout_width(env, element_layout),
@@ -305,10 +317,10 @@ pub fn list_replace_unsafe<'a, 'ctx, 'env>(
             ],
             bitcode::LIST_REPLACE_IN_PLACE,
         ),
-        UpdateMode::Immutable => call_list_bitcode_fn_old(
+        UpdateMode::Immutable => call_list_bitcode_fn_1(
             env,
+            list.into_struct_value(),
             &[
-                list_to_c_abi(env, list).into(),
                 env.alignment_intvalue(element_layout),
                 index.into(),
                 pass_element_as_opaque(env, element, *element_layout),
@@ -414,10 +426,10 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
     list: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    call_list_bitcode_fn_old(
+    call_list_bitcode_fn_1(
         env,
+        list.into_struct_value(),
         &[
-            list_to_c_abi(env, list).into(),
             compare_wrapper.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -437,10 +449,10 @@ pub fn list_map<'a, 'ctx, 'env>(
     element_layout: &Layout<'a>,
     return_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    call_list_bitcode_fn_old(
+    call_list_bitcode_fn_1(
         env,
+        list.into_struct_value(),
         &[
-            list_to_c_abi(env, list).into(),
             roc_function_call.caller.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -466,11 +478,10 @@ pub fn list_map2<'a, 'ctx, 'env>(
     let dec_a = build_dec_wrapper(env, layout_ids, element1_layout);
     let dec_b = build_dec_wrapper(env, layout_ids, element2_layout);
 
-    call_list_bitcode_fn_old(
+    call_list_bitcode_fn(
         env,
+        &[list1.into_struct_value(), list2.into_struct_value()],
         &[
-            list_to_c_abi(env, list1).into(),
-            list_to_c_abi(env, list2).into(),
             roc_function_call.caller.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -482,6 +493,7 @@ pub fn list_map2<'a, 'ctx, 'env>(
             dec_a.as_global_value().as_pointer_value().into(),
             dec_b.as_global_value().as_pointer_value().into(),
         ],
+        BitcodeReturns::List,
         bitcode::LIST_MAP2,
     )
 }
@@ -502,12 +514,14 @@ pub fn list_map3<'a, 'ctx, 'env>(
     let dec_b = build_dec_wrapper(env, layout_ids, element2_layout);
     let dec_c = build_dec_wrapper(env, layout_ids, element3_layout);
 
-    call_list_bitcode_fn_old(
+    call_list_bitcode_fn(
         env,
         &[
-            list_to_c_abi(env, list1).into(),
-            list_to_c_abi(env, list2).into(),
-            list_to_c_abi(env, list3).into(),
+            list1.into_struct_value(),
+            list2.into_struct_value(),
+            list3.into_struct_value(),
+        ],
+        &[
             roc_function_call.caller.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -521,6 +535,7 @@ pub fn list_map3<'a, 'ctx, 'env>(
             dec_b.as_global_value().as_pointer_value().into(),
             dec_c.as_global_value().as_pointer_value().into(),
         ],
+        BitcodeReturns::List,
         bitcode::LIST_MAP3,
     )
 }
@@ -544,13 +559,15 @@ pub fn list_map4<'a, 'ctx, 'env>(
     let dec_c = build_dec_wrapper(env, layout_ids, element3_layout);
     let dec_d = build_dec_wrapper(env, layout_ids, element4_layout);
 
-    call_list_bitcode_fn_old(
+    call_list_bitcode_fn(
         env,
         &[
-            list_to_c_abi(env, list1).into(),
-            list_to_c_abi(env, list2).into(),
-            list_to_c_abi(env, list3).into(),
-            list_to_c_abi(env, list4).into(),
+            list1.into_struct_value(),
+            list2.into_struct_value(),
+            list3.into_struct_value(),
+            list4.into_struct_value(),
+        ],
+        &[
             roc_function_call.caller.into(),
             pass_as_opaque(env, roc_function_call.data),
             roc_function_call.inc_n_data.into(),
@@ -566,6 +583,7 @@ pub fn list_map4<'a, 'ctx, 'env>(
             dec_c.as_global_value().as_pointer_value().into(),
             dec_d.as_global_value().as_pointer_value().into(),
         ],
+        BitcodeReturns::List,
         bitcode::LIST_MAP4,
     )
 }
@@ -573,18 +591,18 @@ pub fn list_map4<'a, 'ctx, 'env>(
 /// List.concat : List elem, List elem -> List elem
 pub fn list_concat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    first_list: BasicValueEnum<'ctx>,
-    second_list: BasicValueEnum<'ctx>,
+    list1: BasicValueEnum<'ctx>,
+    list2: BasicValueEnum<'ctx>,
     element_layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    call_list_bitcode_fn_old(
+    call_list_bitcode_fn(
         env,
+        &[list1.into_struct_value(), list2.into_struct_value()],
         &[
-            list_to_c_abi(env, first_list).into(),
-            list_to_c_abi(env, second_list).into(),
             env.alignment_intvalue(element_layout),
             layout_width(env, element_layout),
         ],
+        BitcodeReturns::List,
         bitcode::LIST_CONCAT,
     )
 }
