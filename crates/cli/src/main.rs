@@ -65,7 +65,16 @@ fn main() -> io::Result<()> {
             }
         }
         Some((CMD_GLUE, matches)) => {
-            todo!("GLUE!");
+            let input_path: &Path = matches.get_one(ROC_FILE).unwrap();
+            let output_path: &Path = matches.get_one(GLUE_FILE).unwrap();
+
+            if Some("rs") == output_path.extension().and_then(OsStr::to_str) {
+                glue::load(input_path, output_path)
+            } else {
+                eprintln!("Currently, `roc glue` only supports generating Rust glue files (with the .rs extension). In the future, the plan is to decouple `roc glue` from any particular output format, by having it accept a second .roc file which gets executed as a plugin to generate glue code for any desired language. However, this has not yet been implemented, and for now only .rs is supported.");
+
+                Ok(1)
+            }
         }
         Some((CMD_BUILD, matches)) => {
             let target: Target = *matches.get_one(FLAG_TARGET).unwrap();

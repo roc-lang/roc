@@ -1,12 +1,67 @@
+use crate::rust_glue;
 use crate::types::{Env, Types};
 use bumpalo::Bump;
 use roc_load::{LoadedModule, Threading};
 use roc_reporting::report::RenderTarget;
 use roc_target::{Architecture, TargetInfo};
-use std::io;
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::{self, ErrorKind, Write};
+use std::path::{Path, PathBuf};
+use std::process;
 use strum::IntoEnumIterator;
 use target_lexicon::Triple;
+
+pub fn generate(input_path: &Path, output_path: &Path) -> io::Result<i32> {
+    match load_types(input_path.to_path_buf(), Threading::AllAvailable) {
+        Ok(types_and_targets) => {
+            let mut file = File::create(output_path.clone()).unwrap_or_else(|err| {
+                eprintln!(
+                    "Unable to create output file {} - {:?}",
+                    output_path.display(),
+                    err
+                );
+
+                process::exit(1);
+            });
+
+            let mut buf = std::str::from_utf8(rust_glue::HEADER).unwrap().to_string();
+            let body = rust_glue::emit(&types_and_targets);
+
+            buf.push_str(&body);
+
+            file.write_all(buf.as_bytes()).unwrap_or_else(|err| {
+                eprintln!(
+                    "Unable to write bindings to output file {} - {:?}",
+                    output_path.display(),
+                    err
+                );
+
+                process::exit(1);
+            });
+
+            println!(
+                "🎉 Generated type declarations in:\n\n\t{}",
+                output_path.display()
+            );
+
+            Ok(0)
+        }
+        Err(err) => match err.kind() {
+            ErrorKind::NotFound => {
+                eprintln!("Platform module file not found: {}", input_path.display());
+                process::exit(1);
+            }
+            error => {
+                eprintln!(
+                    "Error loading platform module file {} - {:?}",
+                    input_path.display(),
+                    error
+                );
+                process::exit(1);
+            }
+        },
+    }
+}
 
 pub fn load_types(
     full_file_path: PathBuf,
