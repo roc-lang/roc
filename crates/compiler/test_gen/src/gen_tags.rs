@@ -943,8 +943,8 @@ fn alignment_in_multi_tag_construction_two() {
 
                 #"
         ),
-        ((32i64, true), 1, [0; 7]),
-        ((i64, bool), u8, [u8; 7])
+        ((32i64, true), 1),
+        ((i64, bool), u8)
     );
 }
 
@@ -960,8 +960,8 @@ fn alignment_in_multi_tag_construction_three() {
                 x
                 #"
         ),
-        ((32i64, true, 2u8), 1, [0; 7]),
-        ((i64, bool, u8), u8, [u8; 7])
+        ((32i64, true, 2u8), 1),
+        ((i64, bool, u8), u8)
     );
 }
 
@@ -1835,8 +1835,8 @@ fn alignment_i128() {
                 #"
         ),
         // NOTE: roc_std::U128 is always aligned to 16, unlike rust's u128
-        ((U128::from(42), true), 1, [0; 15]),
-        ((U128, bool), u8, [u8; 15])
+        ((U128::from(42), true), 1),
+        ((U128, bool), u8)
     );
 }
 
