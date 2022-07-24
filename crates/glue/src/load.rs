@@ -14,7 +14,7 @@ use target_lexicon::Triple;
 pub fn generate(input_path: &Path, output_path: &Path) -> io::Result<i32> {
     match load_types(input_path.to_path_buf(), Threading::AllAvailable) {
         Ok(types_and_targets) => {
-            let mut file = File::create(output_path.clone()).unwrap_or_else(|err| {
+            let mut file = File::create(output_path).unwrap_or_else(|err| {
                 eprintln!(
                     "Unable to create output file {} - {:?}",
                     output_path.display(),
