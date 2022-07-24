@@ -88,25 +88,6 @@ fn applied_tag_just() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn applied_tag_just_ir() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Maybe a : [Just a, Nothing]
-
-                y : Maybe I64
-                y = Just 0x4
-
-                y
-                "#
-        ),
-        (0x4, 0),
-        (i64, u8)
-    );
-}
-
-#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn applied_tag_just_enum() {
     assert_evals_to!(
@@ -522,12 +503,12 @@ fn if_guard_vanilla() {
         indoc!(
             r#"
                 when "fooz" is
-                    s if s == "foo" -> 0
-                    s -> List.len (Str.toUtf8 s)
+                    s if s == "foo" -> []
+                    s -> Str.toUtf8 s
                 "#
         ),
-        4,
-        i64
+        RocList::from_slice(b"fooz"),
+        RocList<u8>
     );
 }
 
