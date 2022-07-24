@@ -67,18 +67,23 @@ impl Wasm32Sized for usize {
 
 impl<T: Wasm32Sized, U: Wasm32Sized> Wasm32Sized for (T, U) {
     const SIZE_OF_WASM: usize = T::SIZE_OF_WASM + U::SIZE_OF_WASM;
-    const ALIGN_OF_WASM: usize = max(&[T::SIZE_OF_WASM, U::SIZE_OF_WASM]);
+    const ALIGN_OF_WASM: usize = max(&[T::ALIGN_OF_WASM, U::ALIGN_OF_WASM]);
 }
 
 impl<T: Wasm32Sized, U: Wasm32Sized, V: Wasm32Sized> Wasm32Sized for (T, U, V) {
     const SIZE_OF_WASM: usize = T::SIZE_OF_WASM + U::SIZE_OF_WASM + V::SIZE_OF_WASM;
-    const ALIGN_OF_WASM: usize = max(&[T::SIZE_OF_WASM, U::SIZE_OF_WASM, V::SIZE_OF_WASM]);
+    const ALIGN_OF_WASM: usize = max(&[T::ALIGN_OF_WASM, U::ALIGN_OF_WASM, V::ALIGN_OF_WASM]);
 }
 
 impl<T: Wasm32Sized, U: Wasm32Sized, V: Wasm32Sized, W: Wasm32Sized> Wasm32Sized for (T, U, V, W) {
     const SIZE_OF_WASM: usize =
         T::SIZE_OF_WASM + U::SIZE_OF_WASM + V::SIZE_OF_WASM + W::SIZE_OF_WASM;
-    const ALIGN_OF_WASM: usize = max(&[T::SIZE_OF_WASM, U::SIZE_OF_WASM, V::SIZE_OF_WASM]);
+    const ALIGN_OF_WASM: usize = max(&[
+        T::ALIGN_OF_WASM,
+        U::ALIGN_OF_WASM,
+        V::ALIGN_OF_WASM,
+        W::ALIGN_OF_WASM,
+    ]);
 }
 
 const fn max(alignments: &[usize]) -> usize {
