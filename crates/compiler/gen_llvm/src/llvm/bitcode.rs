@@ -4,7 +4,7 @@ use crate::llvm::build::{
     complex_bitcast_check_size, load_roc_value, struct_from_fields, to_cc_return, CCReturn, Env,
     C_CALL_CONV, FAST_CALL_CONV,
 };
-use crate::llvm::convert::{basic_type_from_layout, RocUnion};
+use crate::llvm::convert::basic_type_from_layout;
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_n_refcount_layout, increment_refcount_layout,
 };
@@ -17,7 +17,7 @@ use inkwell::values::{
 use inkwell::AddressSpace;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, UnionLayout};
+use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds};
 
 use super::build::create_entry_block_alloca;
 
@@ -170,123 +170,7 @@ const ARGUMENT_SYMBOLS: [Symbol; 8] = [
     Symbol::ARG_8,
 ];
 
-pub fn build_has_tag_id<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    function: FunctionValue<'ctx>,
-    union_layout: UnionLayout<'a>,
-) -> FunctionValue<'ctx> {
-    let fn_name: &str = &format!("{}_has_tag_id", function.get_name().to_string_lossy());
-
-    // currently the code assumes we're dealing with a non-recursive layout
-    debug_assert!(matches!(union_layout, UnionLayout::NonRecursive(_)));
-
-    match env.module.get_function(fn_name) {
-        Some(function_value) => function_value,
-        None => build_has_tag_id_help(env, union_layout, fn_name),
-    }
-}
-
-fn build_has_tag_id_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    union_layout: UnionLayout<'a>,
-    fn_name: &str,
-) -> FunctionValue<'ctx> {
-    let i8_ptr_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
-    let argument_types: &[BasicTypeEnum] = &[env.context.i16_type().into(), i8_ptr_type.into()];
-
-    let block = env.builder.get_insert_block().expect("to be in a function");
-    let di_location = env.builder.get_current_debug_location().unwrap();
-
-    let output_type = crate::llvm::convert::zig_has_tag_id_type(env);
-
-    let function_value = crate::llvm::refcounting::build_header_help(
-        env,
-        fn_name,
-        output_type.into(),
-        argument_types,
-    );
-
-    // called from zig, must use C calling convention
-    function_value.set_call_conventions(C_CALL_CONV);
-
-    let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
-    debug_assert!(kind_id > 0);
-    let attr = env.context.create_enum_attribute(kind_id, 1);
-    function_value.add_attribute(AttributeLoc::Function, attr);
-
-    let entry = env.context.append_basic_block(function_value, "entry");
-    env.builder.position_at_end(entry);
-
-    debug_info_init!(env, function_value);
-
-    let it = function_value.get_param_iter();
-
-    let arguments =
-        bumpalo::collections::Vec::from_iter_in(it.take(argument_types.len()), env.arena);
-
-    for (argument, name) in arguments.iter().zip(ARGUMENT_SYMBOLS.iter()) {
-        argument.set_name(name.as_str(&env.interns));
-    }
-
-    match arguments.as_slice() {
-        [tag_id, tag_value_ptr] => {
-            let tag_type = basic_type_from_layout(env, &Layout::Union(union_layout));
-
-            let tag_value = env.builder.build_pointer_cast(
-                tag_value_ptr.into_pointer_value(),
-                tag_type.ptr_type(AddressSpace::Generic),
-                "load_opaque_get_tag_id",
-            );
-
-            let actual_tag_id = {
-                let tag_id_i64 = crate::llvm::build::get_tag_id(
-                    env,
-                    function_value,
-                    &union_layout,
-                    tag_value.into(),
-                );
-
-                env.builder.build_int_cast_sign_flag(
-                    tag_id_i64,
-                    env.context.i16_type(),
-                    true,
-                    "to_i16",
-                )
-            };
-
-            let answer = env.builder.build_int_compare(
-                inkwell::IntPredicate::EQ,
-                tag_id.into_int_value(),
-                actual_tag_id,
-                "compare",
-            );
-
-            let tag_data_ptr = {
-                let ptr = env
-                    .builder
-                    .build_struct_gep(tag_value, RocUnion::TAG_DATA_INDEX, "get_data_ptr")
-                    .unwrap();
-
-                env.builder.build_bitcast(ptr, i8_ptr_type, "to_opaque")
-            };
-
-            let field_vals = [(0, answer.into()), (1, tag_data_ptr)];
-
-            let output = struct_from_fields(env, output_type, field_vals.iter().copied());
-
-            env.builder.build_return(Some(&output));
-
-            env.builder.position_at_end(block);
-            env.builder
-                .set_current_debug_location(env.context, di_location);
-
-            function_value
-        }
-        _ => unreachable!(),
-    }
-}
-
-pub fn build_transform_caller<'a, 'ctx, 'env>(
+pub(crate) fn build_transform_caller<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     function: FunctionValue<'ctx>,
     closure_data_layout: LambdaSet<'a>,
