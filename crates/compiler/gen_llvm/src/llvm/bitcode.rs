@@ -39,7 +39,7 @@ pub fn call_bitcode_fn<'a, 'ctx, 'env>(
         })
 }
 
-pub fn call_list_bitcode_fn<'a, 'ctx, 'env>(
+pub fn call_list_bitcode_fn_old<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     args: &[BasicValueEnum<'ctx>],
     fn_name: &str,
