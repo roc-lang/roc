@@ -1477,7 +1477,7 @@ fn rbtree_insert() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(all(any(feature = "gen-llvm"), not(feature = "gen-llvm-wasm")))]
 fn rbtree_balance_3() {
     assert_evals_to!(
         indoc!(
