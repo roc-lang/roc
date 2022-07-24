@@ -1769,3 +1769,35 @@ fn str_walk_scalars() {
         RocList<char>
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm-wasm"))]
+fn llvm_wasm_str_layout() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            "hello"
+                |> Str.reserve 42
+            "#
+        ),
+        [0, 5, 42],
+        [u32; 3],
+        |[_ptr, len, cap]: [u32; 3]| [0, len, cap]
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm-wasm"))]
+fn llvm_wasm_str_layout_small() {
+    // exposed an error in using bitcast instead of zextend
+    assert_evals_to!(
+        indoc!(
+            r#"
+            "𒀀𒀁"
+                |> Str.trim
+            "#
+        ),
+        [-2139057424, -2122280208, -2013265920],
+        [i32; 3]
+    );
+}
