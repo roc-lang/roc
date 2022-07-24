@@ -1065,7 +1065,7 @@ pub(crate) fn call_str_bitcode_fn<'a, 'ctx, 'env>(
     }
 }
 
-pub(crate) fn call_list_bitcode_fn_new<'a, 'ctx, 'env>(
+pub(crate) fn call_list_bitcode_fn<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     lists: &[StructValue<'ctx>],
     other_arguments: &[BasicValueEnum<'ctx>],

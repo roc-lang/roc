@@ -1,5 +1,5 @@
 use crate::llvm::bitcode::{
-    call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_list_bitcode_fn_new,
+    call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_list_bitcode_fn,
     call_str_bitcode_fn, call_void_bitcode_fn, pass_list_or_string_to_zig_32bit, BitcodeReturns,
 };
 use crate::llvm::build_list::{
@@ -5417,7 +5417,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                 PtrWidth::Bytes8 => {
                     // on 64-bit targets, strings are stored as pointers, but that is not what zig expects
 
-                    call_list_bitcode_fn_new(
+                    call_list_bitcode_fn(
                         env,
                         &[list.into_struct_value()],
                         &[string],
@@ -6117,7 +6117,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             debug_assert_eq!(args.len(), 2);
             let list = load_symbol(scope, &args[0]).into_struct_value();
             let position = load_symbol(scope, &args[1]);
-            call_list_bitcode_fn_new(
+            call_list_bitcode_fn(
                 env,
                 &[list],
                 &[position],
@@ -6129,7 +6129,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             debug_assert_eq!(args.len(), 2);
             let list = load_symbol(scope, &args[0]).into_struct_value();
             let position = load_symbol(scope, &args[1]);
-            call_list_bitcode_fn_new(
+            call_list_bitcode_fn(
                 env,
                 &[list],
                 &[position],
