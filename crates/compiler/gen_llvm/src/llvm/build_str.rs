@@ -8,7 +8,7 @@ use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout};
 use roc_target::PtrWidth;
 
-use super::bitcode::call_bitcode_fn;
+use super::bitcode::{call_bitcode_fn, call_str_bitcode_fn_new, BitcodeReturns};
 use super::build::{create_entry_block_alloca, load_symbol};
 
 pub static CHAR_LAYOUT: Layout = Layout::u8();
@@ -130,9 +130,11 @@ pub fn dec_to_str<'a, 'ctx, 'env>(
     let right_bits = env.builder.build_int_cast(dec, int_64_type, "");
     let left_bits = env.builder.build_int_cast(dec_right_shift, int_64_type, "");
 
-    call_str_bitcode_fn(
+    call_str_bitcode_fn_new(
         env,
+        &[],
         &[right_bits.into(), left_bits.into()],
+        BitcodeReturns::Str,
         bitcode::DEC_TO_STR,
     )
 }
