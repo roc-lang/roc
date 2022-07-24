@@ -5506,7 +5506,55 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let string = load_symbol(scope, &args[0]);
 
-            let result = call_bitcode_fn_fixing_for_convention(env, &[string], layout, intrinsic);
+            let result = match env.target_info.ptr_width() {
+                PtrWidth::Bytes4 => {
+                    let zig_function = env.module.get_function(intrinsic).unwrap();
+                    let zig_function_type = zig_function.get_type();
+
+                    match zig_function_type.get_return_type() {
+                        Some(_) => call_str_bitcode_fn(
+                            env,
+                            &[string],
+                            &[],
+                            BitcodeReturns::Basic,
+                            intrinsic,
+                        ),
+                        None => {
+                            let return_type = zig_function_type.get_param_types()[0]
+                                .into_pointer_type()
+                                .get_element_type()
+                                .into_struct_type()
+                                .into();
+
+                            let zig_return_alloca =
+                                create_entry_block_alloca(env, parent, return_type, "str_to_num");
+
+                            let (a, b) =
+                                pass_list_or_string_to_zig_32bit(env, string.into_struct_value());
+
+                            call_void_bitcode_fn(
+                                env,
+                                &[zig_return_alloca.into(), a.into(), b.into()],
+                                intrinsic,
+                            );
+
+                            let roc_return_type =
+                                basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
+
+                            let roc_return_alloca = env.builder.build_pointer_cast(
+                                zig_return_alloca,
+                                roc_return_type,
+                                "cast_to_roc",
+                            );
+
+                            load_roc_value(env, *layout, roc_return_alloca, "str_to_num_result")
+                        }
+                    }
+                }
+                PtrWidth::Bytes8 => {
+                    call_bitcode_fn_fixing_for_convention(env, &[string], layout, intrinsic)
+                }
+            };
 
             // zig passes the result as a packed integer sometimes, instead of a struct. So we cast
             let expected_type = basic_type_from_layout(env, layout);
