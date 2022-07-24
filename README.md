@@ -4,7 +4,7 @@ Roc is a language for making delightful software.
 
 The [tutorial](TUTORIAL.md) is the best place to learn about how to use the language - it assumes no prior knowledge of Roc or similar languages. (If you already know [Elm](https://elm-lang.org/), then [Roc for Elm Programmers](https://github.com/rtfeldman/roc/blob/trunk/roc-for-elm-programmers.md) may be of interest.)
 
-There's also a folder of [examples](https://github.com/rtfeldman/roc/tree/trunk/examples) - the [CLI example](https://github.com/rtfeldman/roc/tree/trunk/examples/cli) in particular is a reasonable starting point to build on.
+There's also a folder of [examples](https://github.com/rtfeldman/roc/tree/trunk/examples) - the [CLI form example](https://github.com/rtfeldman/roc/tree/trunk/examples/interactive/form.roc) in particular is a reasonable starting point to build on.
 
 If you have a specific question, the [FAQ](FAQ.md) might have an answer, although [Roc Zulip chat](https://roc.zulipchat.com) is overall the best place to ask questions and get help! It's also where we discuss [ideas](https://roc.zulipchat.com/#narrow/stream/304641-ideas) for the language. If you want to get involved in contributing to the language, Zulip is also a great place to ask about good first projects.
 
@@ -83,7 +83,7 @@ The core Roc language and standard library include no I/O operations, which give
 
 ## Project Goals
 
-Roc is in relatively early stages of development. It's currently possible to build both platforms and applications (see the [examples](https://github.com/rtfeldman/roc/tree/trunk/examples) folder for some examples that aren't particularly organized at the moment), although [documentation](https://github.com/rtfeldman/roc/tree/trunk/compiler/builtins/roc) is in even earlier stages than the compiler itself.
+Roc is in relatively early stages of development. It's currently possible to build both platforms and applications (see the [examples](https://github.com/rtfeldman/roc/tree/trunk/examples) folder for some examples that aren't particularly organized at the moment), although [documentation](https://github.com/rtfeldman/roc/tree/trunk/crates/compiler/builtins/roc) is in even earlier stages than the compiler itself.
 
 Besides the above language design, a separate goal is for Roc to ship with an ambitiously boundary-pushing graphical editor. Not like "an IDE," but rather something that makes people say "I have never seen anything remotely like this outside of Bret Victor demos."
 
