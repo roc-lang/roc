@@ -1006,7 +1006,27 @@ fn lowlevel_spec(
 
             let old_value = builder.add_bag_get(block, bag)?;
             let new_list = with_new_heap_cell(builder, block, bag)?;
-            builder.add_make_tuple(block, &[new_list, old_value])
+
+            // depending on the types, the list or value will come first in the struct
+            let fields = match layout {
+                Layout::Struct { field_layouts, .. } => field_layouts,
+                _ => unreachable!(),
+            };
+
+            match fields {
+                [Layout::Builtin(Builtin::List(_)), Layout::Builtin(Builtin::List(_))] => {
+                    // field name is the tie breaker, list is first in
+                    // { list : List a, value : a }
+                    builder.add_make_tuple(block, &[new_list, old_value])
+                }
+                [Layout::Builtin(Builtin::List(_)), _] => {
+                    builder.add_make_tuple(block, &[new_list, old_value])
+                }
+                [_, Layout::Builtin(Builtin::List(_))] => {
+                    builder.add_make_tuple(block, &[old_value, new_list])
+                }
+                _ => unreachable!(),
+            }
         }
         ListSwap => {
             let list = env.symbols[&arguments[0]];

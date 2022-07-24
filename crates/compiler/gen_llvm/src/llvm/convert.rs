@@ -340,25 +340,23 @@ impl<'ctx> RocUnion<'ctx> {
     ) -> StructValue<'ctx> {
         debug_assert_eq!(tag_id.is_some(), self.tag_type.is_some());
 
-        let mut struct_value = self.struct_type().const_zero();
+        let tag_alloca = env.builder.build_alloca(self.struct_type(), "tag_alloca");
 
-        let tag_alloca = env
+        let data_buffer = env
             .builder
-            .build_alloca(struct_value.get_type(), "tag_alloca");
-        env.builder.build_store(tag_alloca, struct_value);
+            .build_struct_gep(tag_alloca, Self::TAG_DATA_INDEX, "data_buffer")
+            .unwrap();
 
         let cast_pointer = env.builder.build_pointer_cast(
-            tag_alloca,
+            data_buffer,
             data.get_type().ptr_type(AddressSpace::Generic),
             "to_data_ptr",
         );
 
+        // NOTE: the data may be smaller than the buffer, so there might be uninitialized
+        // bytes in the buffer. We should never touch those, but e.g. valgrind might not
+        // realize that. If that comes up, the solution is to just fill it with zeros
         env.builder.build_store(cast_pointer, data);
-
-        struct_value = env
-            .builder
-            .build_load(tag_alloca, "load_tag")
-            .into_struct_value();
 
         // set the tag id
         //
@@ -370,16 +368,19 @@ impl<'ctx> RocUnion<'ctx> {
                 TagType::I16 => env.context.i16_type(),
             };
 
+            let tag_id_ptr = env
+                .builder
+                .build_struct_gep(tag_alloca, Self::TAG_ID_INDEX, "tag_id_ptr")
+                .unwrap();
+
             let tag_id = tag_id_type.const_int(tag_id as u64, false);
 
-            struct_value = env
-                .builder
-                .build_insert_value(struct_value, tag_id, Self::TAG_ID_INDEX, "insert_tag_id")
-                .unwrap()
-                .into_struct_value();
+            env.builder.build_store(tag_id_ptr, tag_id);
         }
 
-        struct_value
+        env.builder
+            .build_load(tag_alloca, "load_tag")
+            .into_struct_value()
     }
 }
 

@@ -30,26 +30,6 @@ fn width_and_alignment_u8_u8() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn applied_tag_nothing_ir() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Maybe a : [Just a, Nothing]
-
-                x : Maybe I64
-                x = Nothing
-
-                x
-                "#
-        ),
-        1,
-        (i64, u8),
-        |(_, tag)| tag
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn applied_tag_nothing() {
     assert_evals_to!(
         indoc!(
@@ -71,25 +51,6 @@ fn applied_tag_nothing() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn applied_tag_just() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Maybe a : [Just a, Nothing]
-
-                y : Maybe I64
-                y = Just 0x4
-
-                y
-                "#
-        ),
-        (0x4, 0),
-        (i64, u8)
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn applied_tag_just_ir() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -522,12 +483,12 @@ fn if_guard_vanilla() {
         indoc!(
             r#"
                 when "fooz" is
-                    s if s == "foo" -> 0
-                    s -> List.len (Str.toUtf8 s)
+                    s if s == "foo" -> []
+                    s -> Str.toUtf8 s
                 "#
         ),
-        4,
-        i64
+        RocList::from_slice(b"fooz"),
+        RocList<u8>
     );
 }
 
@@ -982,8 +943,8 @@ fn alignment_in_multi_tag_construction_two() {
 
                 #"
         ),
-        ((32i64, true), 1, [0; 7]),
-        ((i64, bool), u8, [u8; 7])
+        ((32i64, true), 1),
+        ((i64, bool), u8)
     );
 }
 
@@ -999,8 +960,8 @@ fn alignment_in_multi_tag_construction_three() {
                 x
                 #"
         ),
-        ((32i64, true, 2u8), 1, [0; 7]),
-        ((i64, bool, u8), u8, [u8; 7])
+        ((32i64, true, 2u8), 1),
+        ((i64, bool, u8), u8)
     );
 }
 
@@ -1863,7 +1824,7 @@ fn issue_3560_newtype_tag_constructor_has_nested_constructor_with_no_payload() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn alignment_i128() {
     assert_evals_to!(
         indoc!(
@@ -1874,8 +1835,8 @@ fn alignment_i128() {
                 #"
         ),
         // NOTE: roc_std::U128 is always aligned to 16, unlike rust's u128
-        ((U128::from(42), true), 1, [0; 15]),
-        ((U128, bool), u8, [u8; 15])
+        ((U128::from(42), true), 1),
+        ((U128, bool), u8)
     );
 }
 

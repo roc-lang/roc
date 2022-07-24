@@ -20,7 +20,7 @@ use crate::helpers::from_wasm32_memory::FromWasm32Memory;
 use roc_gen_wasm::wasm32_result::Wasm32Result;
 
 #[cfg(feature = "gen-llvm-wasm")]
-const TEST_WRAPPER_NAME: &str = "$Test.wasm_test_wrapper";
+const TEST_WRAPPER_NAME: &str = "test_wrapper";
 
 #[allow(dead_code)]
 pub const OPT_LEVEL: OptLevel = if cfg!(debug_assertions) {
@@ -452,9 +452,12 @@ fn llvm_module_to_wasm_file(
         .output()
         .unwrap();
 
+    if !output.stderr.is_empty() {
+        panic!("{}", String::from_utf8_lossy(&output.stderr));
+    }
+
     assert!(output.status.success(), "{:#?}", output);
     assert!(output.stdout.is_empty(), "{:#?}", output);
-    assert!(output.stderr.is_empty(), "{:#?}", output);
 
     test_wasm_path
 }
@@ -586,6 +589,7 @@ macro_rules! assert_evals_to {
             $ignore_problems
         );
 
+        #[cfg(not(feature = "gen-llvm-wasm"))]
         $crate::helpers::llvm::assert_llvm_evals_to!(
             $src,
             $expected,
@@ -596,6 +600,7 @@ macro_rules! assert_evals_to {
     }};
 }
 
+#[allow(unused_macros)]
 macro_rules! expect_runtime_error_panic {
     ($src:expr) => {{
         #[cfg(feature = "gen-llvm-wasm")]
@@ -607,6 +612,7 @@ macro_rules! expect_runtime_error_panic {
             true // ignore problems
         );
 
+        #[cfg(not(feature = "gen-llvm-wasm"))]
         $crate::helpers::llvm::assert_llvm_evals_to!(
             $src,
             false, // fake value/type for eval
@@ -622,33 +628,10 @@ pub fn identity<T>(value: T) -> T {
     value
 }
 
-#[allow(unused_macros)]
-macro_rules! assert_non_opt_evals_to {
-    ($src:expr, $expected:expr, $ty:ty) => {{
-        $crate::helpers::llvm::assert_llvm_evals_to!(
-            $src,
-            $expected,
-            $ty,
-            $crate::helpers::llvm::identity
-        );
-    }};
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        // Same as above, except with an additional transformation argument.
-        {
-            $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform);
-        }
-    };
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {{
-        $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform);
-    }};
-}
-
 #[allow(unused_imports)]
 pub(crate) use assert_evals_to;
 #[allow(unused_imports)]
 pub(crate) use assert_llvm_evals_to;
-#[allow(unused_imports)]
-pub(crate) use assert_non_opt_evals_to;
 #[allow(unused_imports)]
 pub(crate) use assert_wasm_evals_to;
 #[allow(unused_imports)]

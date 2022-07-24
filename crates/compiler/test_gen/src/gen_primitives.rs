@@ -1,23 +1,11 @@
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
-#[cfg(feature = "gen-llvm")]
-use crate::helpers::llvm::assert_non_opt_evals_to;
 
 #[cfg(feature = "gen-dev")]
 use crate::helpers::dev::assert_evals_to;
-// #[cfg(feature = "gen-dev")]
-// use crate::helpers::dev::assert_evals_to as assert_llvm_evals_to;
-// #[cfg(feature = "gen-dev")]
-// use crate::helpers::dev::assert_evals_to as assert_non_opt_evals_to;
 
 #[cfg(feature = "gen-wasm")]
 use crate::helpers::wasm::assert_evals_to;
-#[cfg(feature = "gen-wasm")]
-use crate::helpers::wasm::assert_evals_to as assert_non_opt_evals_to;
-// #[cfg(feature = "gen-wasm")]
-// use crate::helpers::wasm::assert_evals_to as assert_llvm_evals_to;
-// #[cfg(feature = "gen-wasm")]
-// use crate::helpers::wasm::assert_evals_to as assert_non_opt_evals_to;
 
 use indoc::indoc;
 #[allow(unused_imports)]
@@ -528,7 +516,7 @@ fn factorial() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn peano1() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
                 Peano : [S Peano, Z]
@@ -549,7 +537,7 @@ fn peano1() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn peano2() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
                 Peano : [S Peano, Z]
@@ -611,7 +599,7 @@ fn top_level_destructure() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_len_0() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -639,7 +627,7 @@ fn linked_list_len_0() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_len_twice_0() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -667,7 +655,7 @@ fn linked_list_len_twice_0() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_len_1() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -695,7 +683,7 @@ fn linked_list_len_1() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_len_twice_1() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -723,7 +711,7 @@ fn linked_list_len_twice_1() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_len_3() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -752,7 +740,7 @@ fn linked_list_len_3() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_sum_num_a() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -781,7 +769,7 @@ fn linked_list_sum_num_a() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_sum_int() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -809,7 +797,7 @@ fn linked_list_sum_int() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_map() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -900,7 +888,7 @@ fn when_nested_maybe() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn when_peano() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
                 Peano : [S Peano, Z]
@@ -918,7 +906,7 @@ fn when_peano() {
         i64
     );
 
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
                 Peano : [S Peano, Z]
@@ -936,7 +924,7 @@ fn when_peano() {
         i64
     );
 
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
                 Peano : [S Peano, Z]
@@ -1063,8 +1051,10 @@ fn nested_closure() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn closure_in_list() {
+    use roc_std::RocList;
+
     assert_evals_to!(
         indoc!(
             r#"
@@ -1080,11 +1070,11 @@ fn closure_in_list() {
             main =
                 items = foo {}
 
-                List.len items
+                items
             "#
         ),
-        1,
-        i64
+        RocList::from_slice(&[41]),
+        RocList<i64>
     );
 }
 
@@ -1123,7 +1113,7 @@ fn specialize_closure() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn io_poc_effect() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1182,7 +1172,7 @@ fn io_poc_desugared() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn return_wrapped_function_pointer() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1205,7 +1195,7 @@ fn return_wrapped_function_pointer() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn return_wrapped_function_pointer_b() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1227,7 +1217,7 @@ fn return_wrapped_function_pointer_b() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn return_wrapped_closure() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1253,7 +1243,7 @@ fn return_wrapped_closure() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_is_singleton() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1288,7 +1278,7 @@ fn linked_list_is_singleton() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_is_empty_1() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1323,7 +1313,7 @@ fn linked_list_is_empty_1() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_is_empty_2() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1356,7 +1346,7 @@ fn linked_list_is_empty_2() {
 #[cfg(any(feature = "gen-llvm"))]
 fn linked_list_singleton() {
     // verifies only that valid llvm is produced
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1376,7 +1366,7 @@ fn linked_list_singleton() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn recursive_function_with_rigid() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1403,7 +1393,7 @@ fn recursive_function_with_rigid() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn rbtree_insert() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1489,9 +1479,9 @@ fn rbtree_insert() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(all(any(feature = "gen-llvm"), not(feature = "gen-llvm-wasm")))]
 fn rbtree_balance_3() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1518,7 +1508,7 @@ fn rbtree_balance_3() {
 #[ignore]
 fn rbtree_layout_issue() {
     // there is a flex var in here somewhere that blows up layout creation
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1565,7 +1555,7 @@ fn rbtree_balance_mono_problem() {
     // problem. As a result, the first argument is dropped and we run into issues down the line
     //
     // concretely, the `rRight` symbol will not be defined
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1612,7 +1602,7 @@ fn rbtree_balance_mono_problem() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn rbtree_balance_full() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1665,7 +1655,7 @@ fn rbtree_balance_full() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn nested_pattern_match_two_ways() {
     // exposed an issue in the ordering of pattern match checks when ran with `--release` mode
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1691,7 +1681,7 @@ fn nested_pattern_match_two_ways() {
         i64
     );
 
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1720,7 +1710,7 @@ fn nested_pattern_match_two_ways() {
 fn linked_list_guarded_double_pattern_match() {
     // the important part here is that the first case (with the nested Cons) does not match
     // TODO this also has undefined behavior
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1750,7 +1740,7 @@ fn linked_list_guarded_double_pattern_match() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_double_pattern_match() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1776,7 +1766,7 @@ fn linked_list_double_pattern_match() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn binary_tree_double_pattern_match() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1804,7 +1794,7 @@ fn binary_tree_double_pattern_match() {
 fn unified_empty_closure_bool() {
     // none of the Closure tags will have a payload
     // this was not handled correctly in the past
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1829,7 +1819,7 @@ fn unified_empty_closure_bool() {
 fn unified_empty_closure_byte() {
     // none of the Closure tags will have a payload
     // this was not handled correctly in the past
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1853,7 +1843,7 @@ fn unified_empty_closure_byte() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn task_always_twice() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1898,7 +1888,7 @@ fn task_always_twice() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn wildcard_rigid() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1928,7 +1918,7 @@ fn wildcard_rigid() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn alias_of_alias_with_type_arguments() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -1958,7 +1948,7 @@ fn alias_of_alias_with_type_arguments() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[ignore]
 fn todo_bad_error_message() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -2061,7 +2051,7 @@ fn unsupported_pattern_str_interp() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[ignore]
 fn fingertree_basic() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -2124,7 +2114,7 @@ fn case_or_pattern() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[ignore]
 fn rosetree_basic() {
-    assert_non_opt_evals_to!(
+    assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"

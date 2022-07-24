@@ -1,6 +1,6 @@
 use roc_error_macros::internal_error;
 use roc_gen_wasm::{round_up_to_alignment, wasm32_sized::Wasm32Sized};
-use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr};
+use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr, I128, U128};
 use std::convert::TryInto;
 
 pub trait FromWasm32Memory: Wasm32Sized {
@@ -40,8 +40,9 @@ macro_rules! from_wasm_memory_primitive {
 }
 
 from_wasm_memory_primitive!(
-    u8, i8, u16, i16, u32, i32, char, u64, i64, u128, i128, f32, f64, bool, RocDec, RocOrder,
+    u8, i8, u16, i16, u32, i32, char, u64, i64, u128, i128, f32, f64, bool,
 );
+from_wasm_memory_primitive!(RocDec, RocOrder, I128, U128,);
 
 impl FromWasm32Memory for () {
     fn decode(_: &[u8], _: u32) -> Self {}

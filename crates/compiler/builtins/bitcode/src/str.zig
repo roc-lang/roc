@@ -221,8 +221,7 @@ pub const RocStr = extern struct {
     }
 
     fn asArray(self: RocStr) [@sizeOf(RocStr)]u8 {
-        const as_int = @ptrToInt(&self);
-        const as_ptr = @intToPtr([*]u8, as_int);
+        const as_ptr = @ptrCast([*]const u8, &self);
         const slice = as_ptr[0..@sizeOf(RocStr)];
 
         return slice.*;
