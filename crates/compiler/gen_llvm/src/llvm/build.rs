@@ -841,15 +841,15 @@ fn promote_to_wasm_test_wrapper<'a, 'ctx, 'env>(
         &Layout::UNIT,
     );
 
-    let (roc_return, output_type) = match roc_main_fn.get_type().get_return_type() {
+    let output_type = match roc_main_fn.get_type().get_return_type() {
         Some(return_type) => {
             let output_type = return_type.ptr_type(AddressSpace::Generic);
-            (RocReturn::Return, output_type.into())
+            output_type.into()
         }
         None => {
             assert_eq!(roc_main_fn.get_type().get_param_types().len(), 1);
             let output_type = roc_main_fn.get_type().get_param_types()[0];
-            (RocReturn::ByPointer, output_type)
+            output_type
         }
     };
 
