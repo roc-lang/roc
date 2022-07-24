@@ -1,17 +1,9 @@
 [package]
-name = "roc-bindgen"
+name = "roc_glue"
 version = "0.1.0"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
-repository = "https://github.com/rtfeldman/roc"
 edition = "2021"
-description = "A CLI for roc-bindgen"
-
-[[bin]]
-name = "roc-bindgen"
-path = "src/main.rs"
-test = false
-bench = false
 
 [dependencies]
 roc_std = { path = "../roc_std" }
