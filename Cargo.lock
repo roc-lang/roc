@@ -3315,37 +3315,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "roc-bindgen"
-version = "0.1.0"
-dependencies = [
- "bumpalo",
- "clap 3.2.11",
- "cli_utils",
- "ctor",
- "dircpy",
- "fnv",
- "indexmap",
- "indoc",
- "pretty_assertions",
- "roc_builtins",
- "roc_can",
- "roc_collections",
- "roc_error_macros",
- "roc_load",
- "roc_module",
- "roc_mono",
- "roc_reporting",
- "roc_std",
- "roc_target",
- "roc_test_utils",
- "roc_types",
- "strum",
- "strum_macros",
- "target-lexicon",
- "tempfile",
-]
-
-[[package]]
 name = "roc_alias_analysis"
 version = "0.1.0"
 dependencies = [
@@ -3735,6 +3704,37 @@ dependencies = [
  "roc_mono",
  "roc_std",
  "roc_target",
+]
+
+[[package]]
+name = "roc_glue"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "clap 3.2.11",
+ "cli_utils",
+ "ctor",
+ "dircpy",
+ "fnv",
+ "indexmap",
+ "indoc",
+ "pretty_assertions",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_error_macros",
+ "roc_load",
+ "roc_module",
+ "roc_mono",
+ "roc_reporting",
+ "roc_std",
+ "roc_target",
+ "roc_test_utils",
+ "roc_types",
+ "strum",
+ "strum_macros",
+ "target-lexicon",
+ "tempfile",
 ]
 
 [[package]]
