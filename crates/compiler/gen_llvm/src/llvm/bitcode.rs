@@ -2,9 +2,9 @@
 use crate::debug_info_init;
 use crate::llvm::build::{
     complex_bitcast_check_size, load_roc_value, struct_from_fields, to_cc_return, CCReturn, Env,
-    C_CALL_CONV, FAST_CALL_CONV, TAG_DATA_INDEX,
+    C_CALL_CONV, FAST_CALL_CONV,
 };
-use crate::llvm::convert::basic_type_from_layout;
+use crate::llvm::convert::{basic_type_from_layout, RocUnion};
 use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_n_refcount_layout, increment_refcount_layout,
 };
@@ -181,7 +181,15 @@ pub fn call_bitcode_fn_fixing_for_convention<'a, 'ctx, 'env>(
                 .try_into()
                 .expect("Zig bitcode return type is not a basic type!");
 
+            // when we write an i128 into this (happens in NumToInt), zig expects this pointer to
+            // be 16-byte aligned. Not doing so is UB and will immediately fail on CI
             let cc_return_value_ptr = env.builder.build_alloca(cc_return_type, "return_value");
+            cc_return_value_ptr
+                .as_instruction()
+                .unwrap()
+                .set_alignment(16)
+                .unwrap();
+
             let fixed_args: Vec<BasicValueEnum<'ctx>> = [cc_return_value_ptr.into()]
                 .iter()
                 .chain(args)
@@ -314,7 +322,7 @@ fn build_has_tag_id_help<'a, 'ctx, 'env>(
             let tag_data_ptr = {
                 let ptr = env
                     .builder
-                    .build_struct_gep(tag_value, TAG_DATA_INDEX, "get_data_ptr")
+                    .build_struct_gep(tag_value, RocUnion::TAG_DATA_INDEX, "get_data_ptr")
                     .unwrap();
 
                 env.builder.build_bitcast(ptr, i8_ptr_type, "to_opaque")

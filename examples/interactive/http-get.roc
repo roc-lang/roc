@@ -15,8 +15,6 @@ main =
         url,
         body: Http.emptyBody,
         timeout: NoTimeout,
-        progressTracking: NoProgressTracking,
-        allowCookiesFromOtherDomains: False,
     }
 
     output <- Http.send request

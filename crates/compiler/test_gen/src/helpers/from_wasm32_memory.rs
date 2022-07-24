@@ -1,4 +1,5 @@
-use roc_gen_wasm::wasm32_sized::Wasm32Sized;
+use roc_error_macros::internal_error;
+use roc_gen_wasm::{round_up_to_alignment, wasm32_sized::Wasm32Sized};
 use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr};
 use std::convert::TryInto;
 
@@ -99,7 +100,9 @@ where
     E: FromWasm32Memory + Wasm32Sized,
 {
     fn decode(memory: &[u8], offset: u32) -> Self {
-        let tag_offset = Ord::max(T::ACTUAL_WIDTH, E::ACTUAL_WIDTH);
+        let data_align = Ord::max(T::ALIGN_OF_WASM, E::ALIGN_OF_WASM);
+        let data_width = Ord::max(T::ACTUAL_WIDTH, E::ACTUAL_WIDTH);
+        let tag_offset = round_up_to_alignment!(data_width, data_align);
         let tag = <u8 as FromWasm32Memory>::decode(memory, offset + tag_offset as u32);
         if tag == 1 {
             let value = <T as FromWasm32Memory>::decode(memory, offset);

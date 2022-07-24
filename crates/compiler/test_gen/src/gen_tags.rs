@@ -11,7 +11,7 @@ use crate::helpers::wasm::assert_evals_to;
 use indoc::indoc;
 
 #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
-use roc_std::{RocList, RocStr};
+use roc_std::{RocList, RocStr, U128};
 
 #[test]
 fn width_and_alignment_u8_u8() {
@@ -982,8 +982,8 @@ fn alignment_in_multi_tag_construction_two() {
 
                 #"
         ),
-        ((32i64, true), 1),
-        ((i64, bool), u8)
+        ((32i64, true), 1, [0; 7]),
+        ((i64, bool), u8, [u8; 7])
     );
 }
 
@@ -999,8 +999,8 @@ fn alignment_in_multi_tag_construction_three() {
                 x
                 #"
         ),
-        ((32i64, true, 2u8), 1),
-        ((i64, bool, u8), u8)
+        ((32i64, true, 2u8), 1, [0; 7]),
+        ((i64, bool, u8), u8, [u8; 7])
     );
 }
 
@@ -1860,6 +1860,23 @@ fn issue_3560_newtype_tag_constructor_has_nested_constructor_with_no_payload() {
         RocStr::from("err"),
         RocStr
     )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn alignment_i128() {
+    assert_evals_to!(
+        indoc!(
+            r"#
+                x : [One I128 Bool, Empty]
+                x = One 42 (1 == 1)
+                x
+                #"
+        ),
+        // NOTE: roc_std::U128 is always aligned to 16, unlike rust's u128
+        ((U128::from(42), true), 1, [0; 15]),
+        ((U128, bool), u8, [u8; 15])
+    );
 }
 
 #[test]

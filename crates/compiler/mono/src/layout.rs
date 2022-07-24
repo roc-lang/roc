@@ -444,38 +444,28 @@ impl<'a> UnionLayout<'a> {
         }
     }
 
-    pub fn discriminant_size(num_tags: usize) -> IntWidth {
-        if num_tags <= u8::MAX as usize {
-            IntWidth::U8
-        } else if num_tags <= u16::MAX as usize {
-            IntWidth::U16
-        } else {
-            panic!("tag union is too big")
-        }
-    }
-
-    pub fn tag_id_builtin(&self) -> Builtin<'a> {
+    pub fn discriminant(&self) -> Discriminant {
         match self {
-            UnionLayout::NonRecursive(tags) => {
-                let union_size = tags.len();
-                Builtin::Int(Self::discriminant_size(union_size))
-            }
-            UnionLayout::Recursive(tags) => {
-                let union_size = tags.len();
-
-                Builtin::Int(Self::discriminant_size(union_size))
-            }
+            UnionLayout::NonRecursive(tags) => Discriminant::from_number_of_tags(tags.len()),
+            UnionLayout::Recursive(tags) => Discriminant::from_number_of_tags(tags.len()),
 
             UnionLayout::NullableWrapped { other_tags, .. } => {
-                Builtin::Int(Self::discriminant_size(other_tags.len() + 1))
+                Discriminant::from_number_of_tags(other_tags.len() + 1)
             }
-            UnionLayout::NonNullableUnwrapped(_) => Builtin::Bool,
-            UnionLayout::NullableUnwrapped { .. } => Builtin::Bool,
+            UnionLayout::NonNullableUnwrapped(_) => Discriminant::from_number_of_tags(2),
+            UnionLayout::NullableUnwrapped { .. } => Discriminant::from_number_of_tags(1),
         }
     }
 
     pub fn tag_id_layout(&self) -> Layout<'a> {
-        Layout::Builtin(self.tag_id_builtin())
+        // TODO is it beneficial to return a more specific layout?
+        // e.g. Layout::bool() and Layout::VOID
+        match self.discriminant() {
+            Discriminant::U0 => Layout::u8(),
+            Discriminant::U1 => Layout::u8(),
+            Discriminant::U8 => Layout::u8(),
+            Discriminant::U16 => Layout::u16(),
+        }
     }
 
     fn stores_tag_id_in_pointer_bits(tags: &[&[Layout<'a>]], target_info: TargetInfo) -> bool {
@@ -561,13 +551,30 @@ impl<'a> UnionLayout<'a> {
 
     /// Size of the data in memory, whether it's stack or heap (for non-null tag ids)
     pub fn data_size_and_alignment(&self, target_info: TargetInfo) -> (u32, u32) {
-        let id_data_layout = if self.stores_tag_id_as_data(target_info) {
-            Some(self.tag_id_layout())
-        } else {
-            None
-        };
+        let (data_width, data_align) = self.data_size_and_alignment_help_match(target_info);
 
-        self.data_size_and_alignment_help_match(id_data_layout, target_info)
+        if self.stores_tag_id_as_data(target_info) {
+            use Discriminant::*;
+            match self.discriminant() {
+                U0 => (round_up_to_alignment(data_width, data_align), data_align),
+                U1 | U8 => (
+                    round_up_to_alignment(data_width + 1, data_align),
+                    data_align,
+                ),
+                U16 => {
+                    // first, round up the data so the tag id is well-aligned;
+                    // then add the tag id width, and make sure the whole extends
+                    // to the next alignment multiple
+                    let tag_align = data_align.max(2);
+                    let tag_width =
+                        round_up_to_alignment(round_up_to_alignment(data_width, 2) + 2, tag_align);
+
+                    (tag_width, tag_align)
+                }
+            }
+        } else {
+            (data_width, data_align)
+        }
     }
 
     /// Size of the data before the tag_id, if it exists.
@@ -577,98 +584,88 @@ impl<'a> UnionLayout<'a> {
             return None;
         };
 
-        Some(self.data_size_and_alignment_help_match(None, target_info).0)
+        Some(self.data_size_and_alignment_help_match(target_info).0)
     }
 
-    fn data_size_and_alignment_help_match(
-        &self,
-        id_data_layout: Option<Layout>,
-        target_info: TargetInfo,
-    ) -> (u32, u32) {
+    fn data_size_and_alignment_help_match(&self, target_info: TargetInfo) -> (u32, u32) {
         match self {
-            Self::NonRecursive(tags) => {
-                Self::data_size_and_alignment_help(tags, id_data_layout, target_info)
-            }
-            Self::Recursive(tags) => {
-                Self::data_size_and_alignment_help(tags, id_data_layout, target_info)
-            }
+            Self::NonRecursive(tags) => Layout::stack_size_and_alignment_slices(tags, target_info),
+            Self::Recursive(tags) => Layout::stack_size_and_alignment_slices(tags, target_info),
             Self::NonNullableUnwrapped(fields) => {
-                Self::data_size_and_alignment_help(&[fields], id_data_layout, target_info)
+                Layout::stack_size_and_alignment_slices(&[fields], target_info)
             }
             Self::NullableWrapped { other_tags, .. } => {
-                Self::data_size_and_alignment_help(other_tags, id_data_layout, target_info)
+                Layout::stack_size_and_alignment_slices(other_tags, target_info)
             }
             Self::NullableUnwrapped { other_fields, .. } => {
-                Self::data_size_and_alignment_help(&[other_fields], id_data_layout, target_info)
+                Layout::stack_size_and_alignment_slices(&[other_fields], target_info)
             }
         }
-    }
-
-    fn data_size_and_alignment_help(
-        variant_field_layouts: &[&[Layout]],
-        id_data_layout: Option<Layout>,
-        target_info: TargetInfo,
-    ) -> (u32, u32) {
-        let mut size = 0;
-        let mut alignment_bytes = 0;
-
-        for field_layouts in variant_field_layouts {
-            let mut data = Layout::struct_no_name_order(field_layouts);
-
-            let fields_and_id;
-            if let Some(id_layout) = id_data_layout {
-                fields_and_id = [data, id_layout];
-                data = Layout::struct_no_name_order(&fields_and_id);
-            }
-
-            let (variant_size, variant_alignment) = data.stack_size_and_alignment(target_info);
-            alignment_bytes = alignment_bytes.max(variant_alignment);
-            size = size.max(variant_size);
-        }
-
-        (size, alignment_bytes)
     }
 
     pub fn tag_id_offset(&self, target_info: TargetInfo) -> Option<u32> {
-        use UnionLayout::*;
-
-        if let NonNullableUnwrapped(_) | NullableUnwrapped { .. } = self {
-            return None;
+        match self {
+            UnionLayout::NonRecursive(tags)
+            | UnionLayout::Recursive(tags)
+            | UnionLayout::NullableWrapped {
+                other_tags: tags, ..
+            } => Some(Self::tag_id_offset_help(tags, target_info)),
+            UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => None,
         }
+    }
 
-        let data_width = self.data_size_and_alignment_help_match(None, target_info).0;
+    fn tag_id_offset_help(layouts: &[&[Layout]], target_info: TargetInfo) -> u32 {
+        let (data_width, data_align) =
+            Layout::stack_size_and_alignment_slices(layouts, target_info);
 
-        // current, broken logic
-        if data_width > 8 {
-            Some(round_up_to_alignment(data_width, 8))
-        } else {
-            Some(data_width)
-        }
+        round_up_to_alignment(data_width, data_align)
     }
 
     /// Very important to use this when doing a memcpy!
     fn stack_size_without_alignment(&self, target_info: TargetInfo) -> u32 {
         match self {
-            UnionLayout::NonRecursive(tags) => {
-                let id_layout = self.tag_id_layout();
-
-                let mut size = 0;
-
-                for field_layouts in tags.iter() {
-                    let fields = Layout::struct_no_name_order(field_layouts);
-                    let fields_and_id = [fields, id_layout];
-
-                    let data = Layout::struct_no_name_order(&fields_and_id);
-                    size = size.max(data.stack_size_without_alignment(target_info));
-                }
-
-                size
+            UnionLayout::NonRecursive(_) => {
+                let (width, align) = self.data_size_and_alignment(target_info);
+                round_up_to_alignment(width, align)
             }
             UnionLayout::Recursive(_)
             | UnionLayout::NonNullableUnwrapped(_)
             | UnionLayout::NullableWrapped { .. }
             | UnionLayout::NullableUnwrapped { .. } => target_info.ptr_width() as u32,
         }
+    }
+}
+
+pub enum Discriminant {
+    U0,
+    U1,
+    U8,
+    U16,
+}
+
+impl Discriminant {
+    pub const fn from_number_of_tags(tags: usize) -> Self {
+        match tags {
+            0 => Discriminant::U0,
+            1 => Discriminant::U0,
+            2 => Discriminant::U1,
+            3..=255 => Discriminant::U8,
+            256..=65_535 => Discriminant::U16,
+            _ => panic!("discriminant too large"),
+        }
+    }
+
+    pub const fn stack_size(&self) -> u32 {
+        match self {
+            Discriminant::U0 => 0,
+            Discriminant::U1 => 1,
+            Discriminant::U8 => 1,
+            Discriminant::U16 => 2,
+        }
+    }
+
+    pub const fn alignment_bytes(&self) -> u32 {
+        self.stack_size()
     }
 }
 
@@ -1208,10 +1205,16 @@ impl<'a, 'b> Env<'a, 'b> {
 }
 
 pub const fn round_up_to_alignment(width: u32, alignment: u32) -> u32 {
-    if alignment != 0 && width % alignment > 0 {
-        width + alignment - (width % alignment)
-    } else {
-        width
+    match alignment {
+        0 => width,
+        1 => width,
+        _ => {
+            if width % alignment > 0 {
+                width + alignment - (width % alignment)
+            } else {
+                width
+            }
+        }
     }
 }
 
@@ -1514,15 +1517,15 @@ impl<'a> Layout<'a> {
                             })
                             .max();
 
-                        let tag_id_builtin = variant.tag_id_builtin();
+                        let discriminant = variant.discriminant();
                         match max_alignment {
                             Some(align) => round_up_to_alignment(
-                                align.max(tag_id_builtin.alignment_bytes(target_info)),
-                                tag_id_builtin.alignment_bytes(target_info),
+                                align.max(discriminant.alignment_bytes()),
+                                discriminant.alignment_bytes(),
                             ),
                             None => {
                                 // none of the tags had any payload, but the tag id still contains information
-                                tag_id_builtin.alignment_bytes(target_info)
+                                discriminant.alignment_bytes()
                             }
                         }
                     }
@@ -1554,6 +1557,29 @@ impl<'a> Layout<'a> {
             Layout::RecursivePointer => unreachable!("should be looked up to get an actual layout"),
             Layout::Boxed(inner) => inner.allocation_alignment_bytes(target_info),
         }
+    }
+
+    pub fn stack_size_and_alignment_slices(
+        slices: &[&[Self]],
+        target_info: TargetInfo,
+    ) -> (u32, u32) {
+        let mut data_align = 1;
+        let mut data_width = 0;
+
+        for tag in slices {
+            let mut total = 0;
+            for layout in tag.iter() {
+                let (stack_size, alignment) = layout.stack_size_and_alignment(target_info);
+                total += stack_size;
+                data_align = data_align.max(alignment);
+            }
+
+            data_width = data_width.max(total);
+        }
+
+        data_width = round_up_to_alignment(data_width, data_align);
+
+        (data_width, data_align)
     }
 
     pub fn is_refcounted(&self) -> bool {
@@ -3277,6 +3303,23 @@ impl<'a> LayoutIds<'a> {
     }
 }
 
+/// Compare two fields when sorting them for code gen.
+/// This is called by both code gen and bindgen, so that
+/// their field orderings agree.
+#[inline(always)]
+pub fn cmp_fields<L: Ord>(
+    label1: &L,
+    layout1: &Layout<'_>,
+    label2: &L,
+    layout2: &Layout<'_>,
+    target_info: TargetInfo,
+) -> Ordering {
+    let size1 = layout1.alignment_bytes(target_info);
+    let size2 = layout2.alignment_bytes(target_info);
+
+    size2.cmp(&size1).then(label1.cmp(label2))
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -3308,23 +3351,12 @@ mod test {
         let layout = Layout::Union(union_layout);
 
         let target_info = TargetInfo::default_x86_64();
-        assert_eq!(layout.stack_size_without_alignment(target_info), 5);
+        assert_eq!(layout.stack_size_without_alignment(target_info), 8);
     }
-}
 
-/// Compare two fields when sorting them for code gen.
-/// This is called by both code gen and bindgen, so that
-/// their field orderings agree.
-#[inline(always)]
-pub fn cmp_fields<L: Ord>(
-    label1: &L,
-    layout1: &Layout<'_>,
-    label2: &L,
-    layout2: &Layout<'_>,
-    target_info: TargetInfo,
-) -> Ordering {
-    let size1 = layout1.alignment_bytes(target_info);
-    let size2 = layout2.alignment_bytes(target_info);
-
-    size2.cmp(&size1).then(label1.cmp(label2))
+    #[test]
+    fn void_stack_size() {
+        let target_info = TargetInfo::default_x86_64();
+        assert_eq!(Layout::VOID.stack_size(target_info), 0);
+    }
 }
