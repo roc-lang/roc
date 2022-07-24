@@ -1,6 +1,6 @@
 use crate::llvm::bitcode::{
     call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_list_bitcode_fn,
-    call_str_bitcode_fn, call_void_bitcode_fn,
+    call_list_bitcode_fn_new, call_str_bitcode_fn, call_void_bitcode_fn, BitcodeReturns,
 };
 use crate::llvm::build_list::{
     self, allocate_list, empty_polymorphic_list, list_append_unsafe, list_capacity, list_concat,
@@ -5876,21 +5876,25 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         NumBytesToU16 => {
             debug_assert_eq!(args.len(), 2);
-            let list = load_symbol(scope, &args[0]);
+            let list = load_symbol(scope, &args[0]).into_struct_value();
             let position = load_symbol(scope, &args[1]);
-            call_bitcode_fn(
+            call_list_bitcode_fn_new(
                 env,
-                &[list_to_c_abi(env, list).into(), position],
+                &[list],
+                &[position],
+                BitcodeReturns::Basic,
                 bitcode::NUM_BYTES_TO_U16,
             )
         }
         NumBytesToU32 => {
             debug_assert_eq!(args.len(), 2);
-            let list = load_symbol(scope, &args[0]);
+            let list = load_symbol(scope, &args[0]).into_struct_value();
             let position = load_symbol(scope, &args[1]);
-            call_bitcode_fn(
+            call_list_bitcode_fn_new(
                 env,
-                &[list_to_c_abi(env, list).into(), position],
+                &[list],
+                &[position],
+                BitcodeReturns::Basic,
                 bitcode::NUM_BYTES_TO_U32,
             )
         }
