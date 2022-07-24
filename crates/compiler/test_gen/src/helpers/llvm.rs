@@ -622,33 +622,10 @@ pub fn identity<T>(value: T) -> T {
     value
 }
 
-#[allow(unused_macros)]
-macro_rules! assert_non_opt_evals_to {
-    ($src:expr, $expected:expr, $ty:ty) => {{
-        $crate::helpers::llvm::assert_llvm_evals_to!(
-            $src,
-            $expected,
-            $ty,
-            $crate::helpers::llvm::identity
-        );
-    }};
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
-        // Same as above, except with an additional transformation argument.
-        {
-            $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform);
-        }
-    };
-    ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {{
-        $crate::helpers::llvm::assert_llvm_evals_to!($src, $expected, $ty, $transform);
-    }};
-}
-
 #[allow(unused_imports)]
 pub(crate) use assert_evals_to;
 #[allow(unused_imports)]
 pub(crate) use assert_llvm_evals_to;
-#[allow(unused_imports)]
-pub(crate) use assert_non_opt_evals_to;
 #[allow(unused_imports)]
 pub(crate) use assert_wasm_evals_to;
 #[allow(unused_imports)]
