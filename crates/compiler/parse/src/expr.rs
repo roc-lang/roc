@@ -189,7 +189,7 @@ fn record_field_access<'a>() -> impl Parser<'a, &'a str, EExpr<'a>> {
 
 /// In some contexts we want to parse the `_` as an expression, so it can then be turned into a
 /// pattern later
-fn parse_loc_term_or_underscore<'a>(
+fn parse_loc_term_or_underscore_or_if<'a>(
     min_indent: u32,
     options: ExprParseOptions,
     arena: &'a Bump,
@@ -198,6 +198,31 @@ fn parse_loc_term_or_underscore<'a>(
     one_of!(
         loc_expr_in_parens_etc_help(min_indent),
         loc!(specialize(EExpr::If, if_expr_help(min_indent, options))),
+        loc!(specialize(EExpr::Str, string_literal_help())),
+        loc!(specialize(EExpr::SingleQuote, single_quote_literal_help())),
+        loc!(specialize(EExpr::Number, positive_number_literal_help())),
+        loc!(specialize(EExpr::Lambda, closure_help(min_indent, options))),
+        loc!(underscore_expression()),
+        loc!(record_literal_help(min_indent)),
+        loc!(specialize(EExpr::List, list_literal_help(min_indent))),
+        loc!(map_with_arena!(
+            assign_or_destructure_identifier(),
+            ident_to_expr
+        )),
+    )
+    .parse(arena, state)
+}
+
+/// In some contexts we want to parse the `_` as an expression, so it can then be turned into a
+/// pattern later
+fn parse_loc_term_or_underscore<'a>(
+    min_indent: u32,
+    options: ExprParseOptions,
+    arena: &'a Bump,
+    state: State<'a>,
+) -> ParseResult<'a, Loc<Expr<'a>>, EExpr<'a>> {
+    one_of!(
+        loc_expr_in_parens_etc_help(min_indent),
         loc!(specialize(EExpr::Str, string_literal_help())),
         loc!(specialize(EExpr::SingleQuote, single_quote_literal_help())),
         loc!(specialize(EExpr::Number, positive_number_literal_help())),
@@ -279,7 +304,7 @@ fn loc_possibly_negative_or_negated_term<'a>(
                 Expr::UnaryOp(arena.alloc(loc_expr), Loc::at(loc_op.region, UnaryOp::Not))
             }
         )),
-        |arena, state| { parse_loc_term_or_underscore(min_indent, options, arena, state) }
+        |arena, state| { parse_loc_term_or_underscore_or_if(min_indent, options, arena, state) }
     ]
 }
 
