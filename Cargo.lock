@@ -3714,7 +3714,6 @@ dependencies = [
  "bumpalo",
  "clap 3.2.11",
  "cli_utils",
- "ctor",
  "dircpy",
  "fnv",
  "indexmap",
