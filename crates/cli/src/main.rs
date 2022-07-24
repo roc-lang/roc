@@ -65,7 +65,7 @@ fn main() -> io::Result<()> {
             }
         }
         Some((CMD_BUILD, matches)) => {
-            let target: Target = matches.value_of_t(FLAG_TARGET).unwrap_or_default();
+            let target: Target = *matches.get_one(FLAG_TARGET).unwrap();
 
             let link_type = match (
                 matches.is_present(FLAG_LIB),
