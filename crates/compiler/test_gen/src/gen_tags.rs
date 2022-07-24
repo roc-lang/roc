@@ -1844,7 +1844,7 @@ fn issue_3560_newtype_tag_constructor_has_nested_constructor_with_no_payload() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn alignment_i128() {
     assert_evals_to!(
         indoc!(
