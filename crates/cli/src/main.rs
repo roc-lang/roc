@@ -7,6 +7,7 @@ use roc_cli::{
 };
 use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
+use roc_glue;
 use roc_load::{LoadingProblem, Threading};
 use std::fs::{self, FileType};
 use std::io;
@@ -65,11 +66,11 @@ fn main() -> io::Result<()> {
             }
         }
         Some((CMD_GLUE, matches)) => {
-            let input_path: &Path = matches.get_one(ROC_FILE).unwrap();
-            let output_path: &Path = matches.get_one(GLUE_FILE).unwrap();
+            let input_path = Path::new(matches.value_of_os(ROC_FILE).unwrap());
+            let output_path = Path::new(matches.value_of_os(GLUE_FILE).unwrap());
 
             if Some("rs") == output_path.extension().and_then(OsStr::to_str) {
-                glue::load(input_path, output_path)
+                roc_glue::generate(input_path, output_path)
             } else {
                 eprintln!("Currently, `roc glue` only supports generating Rust glue files (with the .rs extension). In the future, the plan is to decouple `roc glue` from any particular output format, by having it accept a second .roc file which gets executed as a plugin to generate glue code for any desired language. However, this has not yet been implemented, and for now only .rs is supported.");
 
