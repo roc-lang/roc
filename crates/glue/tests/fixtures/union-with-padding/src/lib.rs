@@ -1,6 +1,6 @@
-mod bindings;
+mod test_glue;
 
-use bindings::NonRecursive;
+use test_glue::NonRecursive;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]

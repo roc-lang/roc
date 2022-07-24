@@ -106,7 +106,7 @@ pub fn load_types(
 
     if !can_problems.is_empty() || !type_problems.is_empty() {
         todo!(
-            "Gracefully report compilation problems during bindgen: {:?}, {:?}",
+            "Gracefully report compilation problems during glue generation: {:?}, {:?}",
             can_problems,
             type_problems
         );

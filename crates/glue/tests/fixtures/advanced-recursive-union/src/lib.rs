@@ -1,7 +1,7 @@
-mod bindings;
+mod test_glue;
 
-use bindings::Rbt;
 use indoc::indoc;
+use test_glue::Rbt;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]

@@ -1,8 +1,8 @@
-mod bindings;
+mod test_glue;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(_: *mut bindings::NonRecursive);
+    fn roc_main(_: *mut test_glue::NonRecursive);
 }
 
 #[no_mangle]
@@ -11,7 +11,7 @@ pub extern "C" fn rust_main() -> i32 {
     use std::collections::hash_set::HashSet;
 
     let tag_union = unsafe {
-        let mut ret: core::mem::MaybeUninit<bindings::NonRecursive> =
+        let mut ret: core::mem::MaybeUninit<test_glue::NonRecursive> =
             core::mem::MaybeUninit::uninit();
 
         roc_main(ret.as_mut_ptr());
@@ -30,10 +30,10 @@ pub extern "C" fn rust_main() -> i32 {
     println!(
         "tag_union was: {:?}\n`Foo \"small str\"` is: {:?}\n`Bar 123` is: {:?}\n`Baz` is: {:?}\n`Blah 456` is: {:?}",
         tag_union,
-        bindings::NonRecursive::Foo("small str".into()),
-        bindings::NonRecursive::Bar(123),
-        bindings::NonRecursive::Baz,
-        bindings::NonRecursive::Blah(456),
+        test_glue::NonRecursive::Foo("small str".into()),
+        test_glue::NonRecursive::Bar(123),
+        test_glue::NonRecursive::Baz,
+        test_glue::NonRecursive::Blah(456),
     ); // Debug
 
     let mut set = HashSet::new();

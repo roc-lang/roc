@@ -10,41 +10,11 @@ extern crate roc_collections;
 mod helpers;
 
 #[cfg(test)]
-mod bindgen_cli_run {
-    use crate::helpers::{fixtures_dir, root_dir};
-    use cli_utils::helpers::{run_bindgen, run_roc, Out};
+mod glue_cli_run {
+    use crate::helpers::fixtures_dir;
+    use cli_utils::helpers::{run_glue, run_roc, Out};
     use std::fs;
     use std::path::Path;
-    use std::process::Command;
-
-    // All of these tests rely on `target/` for the `cli` crate being up-to-date,
-    // so do a `cargo build` on it first!
-    #[ctor::ctor]
-    fn init() {
-        let args = if cfg!(debug_assertions) {
-            vec!["build"]
-        } else {
-            vec!["build", "--release"]
-        };
-
-        println!(
-            "Running `cargo {}` on the `cli` crate before running the tests. This may take a bit!",
-            args.join(" ")
-        );
-
-        let output = Command::new("cargo")
-            .args(args)
-            .current_dir(root_dir().join("crates").join("cli"))
-            .output()
-            .unwrap_or_else(|err| {
-                panic!(
-                    "Failed to `cargo build` roc CLI for bindgen CLI tests - error was: {:?}",
-                    err
-                )
-            });
-
-        assert!(output.status.success());
-    }
 
     /// This macro does two things.
     ///
@@ -68,7 +38,7 @@ mod bindgen_cli_run {
                 fn $test_name() {
                     let dir = fixtures_dir($fixture_dir);
 
-                    generate_bindings_for(&dir, std::iter::empty());
+                    generate_glue_for(&dir, std::iter::empty());
                     let out = run_app(&dir.join("app.roc"), std::iter::empty());
 
                     assert!(out.status.success());
@@ -137,8 +107,6 @@ mod bindgen_cli_run {
     fn check_for_tests(all_fixtures: &mut roc_collections::VecSet<String>) {
         use roc_collections::VecSet;
 
-        // todo!("Remove a bunch of duplication - don't have a ton of files in there.");
-
         let fixtures = fixtures_dir("");
         let entries = std::fs::read_dir(fixtures.as_path()).unwrap_or_else(|err| {
             panic!(
@@ -156,7 +124,7 @@ mod bindgen_cli_run {
 
                 if !all_fixtures.remove(&fixture_dir_name) {
                     panic!(
-                        "The bindgen fixture directory {} does not have any corresponding tests in cli_run. Please add one, so if it ever stops working, we'll know about it right away!",
+                        "The glue fixture directory {} does not have any corresponding tests in test_glue_cli. Please add one, so if it ever stops working, we'll know about it right away!",
                         entry.path().to_string_lossy()
                     );
                 }
@@ -166,12 +134,12 @@ mod bindgen_cli_run {
         assert_eq!(all_fixtures, &mut VecSet::default());
     }
 
-    fn generate_bindings_for<'a, I: IntoIterator<Item = &'a str>>(
+    fn generate_glue_for<'a, I: IntoIterator<Item = &'a str>>(
         platform_dir: &'a Path,
         args: I,
     ) -> Out {
         let platform_module_path = platform_dir.join("platform.roc");
-        let bindings_file = platform_dir.join("src").join("bindings.rs");
+        let glue_file = platform_dir.join("src").join("test_glue.rs");
         let fixture_templates_dir = platform_dir
             .parent()
             .unwrap()
@@ -179,44 +147,49 @@ mod bindgen_cli_run {
             .unwrap()
             .join("fixture-templates");
 
+        dbg!(&platform_module_path);
+        dbg!(&glue_file);
+
         // Copy the rust template from the templates directory into the fixture dir.
         dircpy::CopyBuilder::new(fixture_templates_dir.join("rust"), platform_dir)
             .overwrite(true) // overwrite any files that were already present
             .run()
             .unwrap();
 
-        // Delete the bindings file to make sure we're actually regenerating it!
-        if bindings_file.exists() {
-            fs::remove_file(&bindings_file)
-                .expect("Unable to remove bindings.rs in order to regenerate it in the test");
+        // Delete the glue file to make sure we're actually regenerating it!
+        if glue_file.exists() {
+            fs::remove_file(&glue_file)
+                .expect("Unable to remove test_glue.rs in order to regenerate it in the test");
         }
 
-        // Generate a fresh bindings.rs for this platform
-        let bindgen_out = run_bindgen(
+        // Generate a fresh test_glue.rs for this platform
+        let glue_out = run_glue(
             // converting these all to String avoids lifetime issues
-            args.into_iter().map(|arg| arg.to_string()).chain([
-                platform_module_path.to_str().unwrap().to_string(),
-                bindings_file.to_str().unwrap().to_string(),
-            ]),
+            std::iter::once("glue".to_string()).chain(
+                args.into_iter().map(|arg| arg.to_string()).chain([
+                    platform_module_path.to_str().unwrap().to_string(),
+                    glue_file.to_str().unwrap().to_string(),
+                ]),
+            ),
         );
 
         // If there is any stderr, it should be reporting the runtime and that's it!
-        if !(bindgen_out.stderr.is_empty()
-            || bindgen_out.stderr.starts_with("runtime: ") && bindgen_out.stderr.ends_with("ms\n"))
+        if !(glue_out.stderr.is_empty()
+            || glue_out.stderr.starts_with("runtime: ") && glue_out.stderr.ends_with("ms\n"))
         {
             panic!(
-                "`roc-bindgen` command had unexpected stderr: {}",
-                bindgen_out.stderr
+                "`roc glue` command had unexpected stderr: {}",
+                glue_out.stderr
             );
         }
 
-        assert!(bindgen_out.status.success(), "bad status {:?}", bindgen_out);
+        assert!(glue_out.status.success(), "bad status {:?}", glue_out);
 
-        bindgen_out
+        glue_out
     }
 
     fn run_app<'a, I: IntoIterator<Item = &'a str>>(app_file: &'a Path, args: I) -> Out {
-        // Generate bindings.rs for this platform
+        // Generate test_glue.rs for this platform
         let compile_out = run_roc(
             // converting these all to String avoids lifetime issues
             args.into_iter()

@@ -1,5 +1,5 @@
-use roc_bindgen::bindgen_rs;
-use roc_bindgen::load::load_types;
+use roc_glue::load::load_types;
+use roc_glue::rust_glue;
 use roc_load::Threading;
 use std::env;
 use std::fs::File;
@@ -40,7 +40,7 @@ pub fn generate_bindings(decl_src: &str) -> String {
         result.expect("had problems loading")
     };
 
-    bindgen_rs::emit(&pairs)
+    rust_glue::emit(&pairs)
 }
 
 #[allow(dead_code)]
@@ -49,7 +49,7 @@ pub fn fixtures_dir(dir_name: &str) -> PathBuf {
 
     // Descend into cli/tests/fixtures/{dir_name}
     path.push("crates");
-    path.push("bindgen");
+    path.push("glue");
     path.push("tests");
     path.push("fixtures");
     path.push(dir_name);

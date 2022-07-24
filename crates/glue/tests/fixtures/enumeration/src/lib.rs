@@ -1,8 +1,8 @@
-mod bindings;
+mod test_glue;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(_: *mut bindings::MyEnum);
+    fn roc_main(_: *mut test_glue::MyEnum);
 }
 
 #[no_mangle]
@@ -11,7 +11,7 @@ pub extern "C" fn rust_main() -> i32 {
     use std::collections::hash_set::HashSet;
 
     let tag_union = unsafe {
-        let mut ret: core::mem::MaybeUninit<bindings::MyEnum> = core::mem::MaybeUninit::uninit();
+        let mut ret: core::mem::MaybeUninit<test_glue::MyEnum> = core::mem::MaybeUninit::uninit();
 
         roc_main(ret.as_mut_ptr());
 
@@ -39,8 +39,8 @@ pub extern "C" fn rust_main() -> i32 {
     println!(
         "tag_union was: {:?}, Bar is: {:?}, Baz is: {:?}",
         tag_union,
-        bindings::MyEnum::Bar,
-        bindings::MyEnum::Baz,
+        test_glue::MyEnum::Bar,
+        test_glue::MyEnum::Baz,
     ); // Debug
 
     // Exit code

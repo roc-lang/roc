@@ -254,7 +254,7 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
             // so no extra work needs to happen.
         }
         RocType::Function { .. } => {
-            // TODO actually bindgen functions!
+            // TODO actually generate glue functions!
         }
     }
 }
@@ -312,8 +312,8 @@ fn add_tag_union(
     types: &Types,
     impls: &mut Impls,
 ) {
-    // We should never be attempting to bindgen empty tag unions; RocType should not
-    // have let this happen.
+    // We should never be attempting to generate glue for empty tag unions;
+    // RocType should not have let this happen.
     debug_assert_ne!(tags.len(), 0);
 
     let tag_names = tags.iter().map(|(name, _)| name).cloned().collect();
@@ -471,7 +471,7 @@ pub struct {name} {{
                     );
                 } else {
                     todo!(
-                        "Support {} tags in a recursive tag union on target_info {:?}. (This is too many tags for pointer tagging to work, so we need to bindgen something different.)",
+                        "Support {} tags in a recursive tag union on target_info {:?}. (This is too many tags for pointer tagging to work, so we need to generate different glue.)",
                         tags.len(),
                         target_info
                     );

@@ -1111,11 +1111,11 @@ fn add_tag_union<'a>(
         | Layout::Boxed(_)
         | Layout::LambdaSet(_)
         | Layout::RecursivePointer => {
-            // These must be single-tag unions. Bindgen ordinary nonrecursive
+            // These must be single-tag unions. Generate ordinary nonrecursive
             // tag unions for them, and let Rust do the unwrapping.
             //
             // This should be a very rare use case, and it's not worth overcomplicating
-            // the rest of bindgen to make it do something different.
+            // the rest of glue to make it do something different.
             RocType::TagUnion(RocTagUnion::NonRecursive {
                 name: name.clone(),
                 tags,
