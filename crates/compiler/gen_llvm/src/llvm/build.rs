@@ -6026,10 +6026,15 @@ fn run_low_level<'a, 'ctx, 'env>(
             // List.isUnique : List a -> Bool
             debug_assert_eq!(args.len(), 1);
 
-            let list = load_symbol(scope, &args[0]);
-            let list = list_to_c_abi(env, list).into();
+            let list = load_symbol(scope, &args[0]).into_struct_value();
 
-            call_bitcode_fn(env, &[list], bitcode::LIST_IS_UNIQUE)
+            call_list_bitcode_fn(
+                env,
+                &[list],
+                &[],
+                BitcodeReturns::Basic,
+                bitcode::LIST_IS_UNIQUE,
+            )
         }
         NumToStr => {
             // Num.toStr : Num a -> Str
