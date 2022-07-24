@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+
 use roc_module::symbol::Interns;
 use roc_mono::{
     ir::ProcLayout,
@@ -19,20 +21,26 @@ pub fn get_values<'a>(
     subs: &'a Subs,
     interns: &'a Interns,
     start: *const u8,
-    mut start_offset: usize,
+    start_offset: usize,
     variables: &[Variable],
 ) -> Result<Vec<Expr<'a>>, ToAstProblem> {
     let mut result = Vec::with_capacity(variables.len());
-    let memory = ExpectMemory { start };
+
+    let memory = ExpectMemory {
+        start,
+        bytes_read: RefCell::new(0),
+    };
+
+    let app = ExpectReplApp {
+        memory: arena.alloc(memory),
+        offset: start_offset,
+    };
+
+    let app = arena.alloc(app);
 
     for variable in variables {
         let expr = {
             let variable = *variable;
-
-            let app = ExpectReplApp {
-                memory: arena.alloc(memory),
-                start_offset,
-            };
 
             let content = subs.get_content_without_compacting(variable);
 
@@ -45,19 +53,19 @@ pub fn get_values<'a>(
                 captures_niche: CapturesNiche::no_niche(),
             };
 
-            start_offset += layout.stack_size(target_info) as usize;
-
-            jit_to_ast(
+            let element = jit_to_ast(
                 arena,
-                arena.alloc(app),
+                app,
                 "expect_repl_main_fn",
                 proc_layout,
                 content,
                 subs,
                 interns,
                 target_info,
-            )
-        }?;
+            )?;
+
+            element
+        };
 
         result.push(expr);
     }
@@ -65,16 +73,18 @@ pub fn get_values<'a>(
     Ok(result)
 }
 
-#[derive(Clone, Copy)]
 struct ExpectMemory {
     start: *const u8,
+    bytes_read: RefCell<usize>,
 }
 
 macro_rules! deref_number {
     ($name: ident, $t: ty) => {
         fn $name(&self, addr: usize) -> $t {
+            // dbg!(std::any::type_name::<$t>(), self.start, addr);
             let ptr = unsafe { self.start.add(addr) } as *const _;
-            unsafe { *ptr }
+            *self.bytes_read.borrow_mut() += std::mem::size_of::<$t>();
+            unsafe { std::ptr::read_unaligned(ptr) }
         }
     };
 }
@@ -114,6 +124,9 @@ impl ReplAppMemory for ExpectMemory {
             let offset = self.deref_usize(addr);
             let length = self.deref_usize(addr + std::mem::size_of::<usize>());
 
+            // we don't store extra capacity
+            // let capacity = self.deref_usize(addr + 2 * std::mem::size_of::<usize>());
+
             unsafe {
                 let ptr = self.start.add(offset);
                 let slice = std::slice::from_raw_parts(ptr, length);
@@ -126,7 +139,7 @@ impl ReplAppMemory for ExpectMemory {
 
 struct ExpectReplApp<'a> {
     memory: &'a ExpectMemory,
-    start_offset: usize,
+    offset: usize,
 }
 
 impl<'a> ReplApp<'a> for ExpectReplApp<'a> {
@@ -136,18 +149,65 @@ impl<'a> ReplApp<'a> for ExpectReplApp<'a> {
     /// Size of the return value is statically determined from its Rust type
     /// The `transform` callback takes the app's memory and the returned value
     /// _main_fn_name is always the same and we don't use it here
-    fn call_function<Return, F>(&self, _main_fn_name: &str, transform: F) -> Expr<'a>
+    fn call_function<Return, F>(&mut self, _main_fn_name: &str, transform: F) -> Expr<'a>
     where
         F: Fn(&'a Self::Memory, Return) -> Expr<'a>,
         Self::Memory: 'a,
     {
         let result: Return = unsafe {
-            let ptr = self.memory.start.add(self.start_offset);
+            let ptr = self.memory.start.add(self.offset);
             let ptr: *const Return = std::mem::transmute(ptr);
             ptr.read()
         };
 
-        transform(self.memory, result)
+        self.offset += std::mem::size_of::<Return>();
+
+        *self.memory.bytes_read.borrow_mut() = 0;
+
+        let transformed = transform(self.memory, result);
+
+        self.offset += *self.memory.bytes_read.borrow();
+
+        transformed
+    }
+
+    fn call_function_returns_roc_list<F>(&mut self, main_fn_name: &str, transform: F) -> Expr<'a>
+    where
+        F: Fn(&'a Self::Memory, (usize, usize, usize)) -> Expr<'a>,
+        Self::Memory: 'a,
+    {
+        self.call_function(main_fn_name, transform)
+    }
+
+    fn call_function_returns_roc_str<T, F>(
+        &mut self,
+        _target_info: TargetInfo,
+        main_fn_name: &str,
+        transform: F,
+    ) -> T
+    where
+        F: Fn(&'a Self::Memory, usize) -> T,
+        Self::Memory: 'a,
+    {
+        let string_length = RefCell::new(0);
+
+        let result = self.call_function_dynamic_size(main_fn_name, 24, |memory, addr| {
+            let last_byte_addr = addr + (3 * std::mem::size_of::<usize>()) - 1;
+            let last_byte = memory.deref_i8(last_byte_addr);
+
+            let is_small = last_byte < 0;
+
+            if !is_small {
+                let length = memory.deref_usize(addr + std::mem::size_of::<usize>());
+                *string_length.borrow_mut() = length;
+            }
+
+            transform(memory, addr)
+        });
+
+        self.offset += *string_length.borrow();
+
+        result
     }
 
     /// Run user code that returns a struct or union, whose size is provided as an argument
@@ -155,15 +215,17 @@ impl<'a> ReplApp<'a> for ExpectReplApp<'a> {
     /// _main_fn_name and _ret_bytes are only used for the CLI REPL. For Wasm they are compiled-in
     /// to the test_wrapper function of the app itself
     fn call_function_dynamic_size<T, F>(
-        &self,
+        &mut self,
         _main_fn_name: &str,
-        _ret_bytes: usize,
+        ret_bytes: usize,
         transform: F,
     ) -> T
     where
         F: Fn(&'a Self::Memory, usize) -> T,
         Self::Memory: 'a,
     {
-        transform(self.memory, self.start_offset)
+        let result = transform(self.memory, self.offset);
+        self.offset += ret_bytes;
+        result
     }
 }

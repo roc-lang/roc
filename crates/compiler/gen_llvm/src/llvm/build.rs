@@ -13,6 +13,7 @@ use crate::llvm::compare::{generic_eq, generic_neq};
 use crate::llvm::convert::{
     self, argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout, zig_str_type,
 };
+use crate::llvm::expect::clone_to_shared_memory;
 use crate::llvm::refcounting::{
     build_reset, decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
 };
@@ -2817,105 +2818,14 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
                 match env.target_info.ptr_width() {
                     roc_target::PtrWidth::Bytes8 => {
-                        let func = env
-                            .module
-                            .get_function(bitcode::UTILS_EXPECT_FAILED_START)
-                            .unwrap();
-
-                        let call_result = bd.build_call(func, &[], "call_expect_start_failed");
-
-                        let mut ptr = call_result
-                            .try_as_basic_value()
-                            .left()
-                            .unwrap()
-                            .into_pointer_value();
-
-                        {
-                            let value = env
-                                .context
-                                .i32_type()
-                                .const_int(region.start().offset as _, false);
-
-                            let cast_ptr = env.builder.build_pointer_cast(
-                                ptr,
-                                value.get_type().ptr_type(AddressSpace::Generic),
-                                "to_store_pointer",
-                            );
-
-                            env.builder.build_store(cast_ptr, value);
-
-                            // let increment = layout.stack_size(env.target_info);
-                            let increment = 4;
-                            let increment = env.ptr_int().const_int(increment as _, false);
-
-                            ptr = unsafe {
-                                env.builder.build_gep(ptr, &[increment], "increment_ptr")
-                            };
-                        }
-
-                        {
-                            let value = env
-                                .context
-                                .i32_type()
-                                .const_int(region.end().offset as _, false);
-
-                            let cast_ptr = env.builder.build_pointer_cast(
-                                ptr,
-                                value.get_type().ptr_type(AddressSpace::Generic),
-                                "to_store_pointer",
-                            );
-
-                            env.builder.build_store(cast_ptr, value);
-
-                            // let increment = layout.stack_size(env.target_info);
-                            let increment = 4;
-                            let increment = env.ptr_int().const_int(increment as _, false);
-
-                            ptr = unsafe {
-                                env.builder.build_gep(ptr, &[increment], "increment_ptr")
-                            };
-                        }
-
-                        {
-                            let region_bytes: u32 =
-                                unsafe { std::mem::transmute(cond_symbol.module_id()) };
-                            let value = env.context.i32_type().const_int(region_bytes as _, false);
-
-                            let cast_ptr = env.builder.build_pointer_cast(
-                                ptr,
-                                value.get_type().ptr_type(AddressSpace::Generic),
-                                "to_store_pointer",
-                            );
-
-                            env.builder.build_store(cast_ptr, value);
-
-                            // let increment = layout.stack_size(env.target_info);
-                            let increment = 4;
-                            let increment = env.ptr_int().const_int(increment as _, false);
-
-                            ptr = unsafe {
-                                env.builder.build_gep(ptr, &[increment], "increment_ptr")
-                            };
-                        }
-
-                        for lookup in lookups.iter() {
-                            let (value, layout) = load_symbol_and_layout(scope, lookup);
-
-                            let cast_ptr = env.builder.build_pointer_cast(
-                                ptr,
-                                value.get_type().ptr_type(AddressSpace::Generic),
-                                "to_store_pointer",
-                            );
-
-                            store_roc_value(env, *layout, cast_ptr, value);
-
-                            let increment = layout.stack_size(env.target_info);
-                            let increment = env.ptr_int().const_int(increment as _, false);
-
-                            ptr = unsafe {
-                                env.builder.build_gep(ptr, &[increment], "increment_ptr")
-                            };
-                        }
+                        clone_to_shared_memory(
+                            env,
+                            scope,
+                            layout_ids,
+                            *cond_symbol,
+                            *region,
+                            lookups,
+                        );
 
                         // NOTE: signals to the parent process that an expect failed
                         if env.mode.runs_expects_in_separate_process() {
