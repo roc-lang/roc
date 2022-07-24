@@ -4809,14 +4809,10 @@ mod test_reporting {
         @r###"
     ── MISSING EXPRESSION ───────────────────── tmp/pattern_binds_keyword/Test.roc ─
 
-    I am partway through parsing a definition, but I got stuck here:
+    I am partway through parsing a `when` expression, but I got stuck here:
 
-    1│  app "test" provides [main] to "./platform"
-    2│
-    3│  main =
-    4│      when Just 4 is
     5│          Just when ->
-                     ^
+                           ^
 
     I was expecting to see an expression like 42 or "hello".
     "###
