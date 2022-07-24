@@ -6,8 +6,7 @@ use crate::llvm::build::{
 use crate::llvm::convert::basic_type_from_layout;
 use crate::llvm::refcounting::increment_refcount_layout;
 use inkwell::builder::Builder;
-use inkwell::context::Context;
-use inkwell::types::{BasicType, BasicTypeEnum, PointerType};
+use inkwell::types::{BasicType, PointerType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
 use morphic_lib::UpdateMode;
@@ -30,7 +29,7 @@ fn call_list_bitcode_fn_1<'a, 'ctx, 'env>(
     call_list_bitcode_fn(env, &[list], other_arguments, BitcodeReturns::List, fn_name)
 }
 
-pub fn list_symbol_to_c_abi<'a, 'ctx, 'env>(
+pub(crate) fn list_symbol_to_c_abi<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
     symbol: Symbol,
@@ -50,25 +49,7 @@ pub fn list_symbol_to_c_abi<'a, 'ctx, 'env>(
     list_alloca
 }
 
-pub fn list_to_c_abi<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    list: BasicValueEnum<'ctx>,
-) -> PointerValue<'ctx> {
-    let parent = env
-        .builder
-        .get_insert_block()
-        .and_then(|b| b.get_parent())
-        .unwrap();
-
-    let list_type = super::convert::zig_list_type(env);
-    let list_alloca = create_entry_block_alloca(env, parent, list_type.into(), "list_alloca");
-
-    env.builder.build_store(list_alloca, list);
-
-    list_alloca
-}
-
-pub fn pass_update_mode<'a, 'ctx, 'env>(
+pub(crate) fn pass_update_mode<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     update_mode: UpdateMode,
 ) -> BasicValueEnum<'ctx> {
@@ -96,7 +77,7 @@ fn pass_element_as_opaque<'a, 'ctx, 'env>(
     )
 }
 
-pub fn layout_width<'a, 'ctx, 'env>(
+pub(crate) fn layout_width<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout: &Layout<'a>,
 ) -> BasicValueEnum<'ctx> {
@@ -105,7 +86,7 @@ pub fn layout_width<'a, 'ctx, 'env>(
         .into()
 }
 
-pub fn pass_as_opaque<'a, 'ctx, 'env>(
+pub(crate) fn pass_as_opaque<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     ptr: PointerValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
@@ -116,7 +97,7 @@ pub fn pass_as_opaque<'a, 'ctx, 'env>(
     )
 }
 
-pub fn list_with_capacity<'a, 'ctx, 'env>(
+pub(crate) fn list_with_capacity<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     capacity: IntValue<'ctx>,
     element_layout: &Layout<'a>,
@@ -134,7 +115,7 @@ pub fn list_with_capacity<'a, 'ctx, 'env>(
     )
 }
 
-pub fn list_get_unsafe<'a, 'ctx, 'env>(
+pub(crate) fn list_get_unsafe<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     parent: FunctionValue<'ctx>,
@@ -162,7 +143,7 @@ pub fn list_get_unsafe<'a, 'ctx, 'env>(
 }
 
 /// List.reserve : List elem, Nat -> List elem
-pub fn list_reserve<'a, 'ctx, 'env>(
+pub(crate) fn list_reserve<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     list: BasicValueEnum<'ctx>,
     spare: BasicValueEnum<'ctx>,
@@ -183,7 +164,7 @@ pub fn list_reserve<'a, 'ctx, 'env>(
 }
 
 /// List.appendUnsafe : List elem, elem -> List elem
-pub fn list_append_unsafe<'a, 'ctx, 'env>(
+pub(crate) fn list_append_unsafe<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     original_wrapper: StructValue<'ctx>,
     element: BasicValueEnum<'ctx>,
@@ -201,7 +182,7 @@ pub fn list_append_unsafe<'a, 'ctx, 'env>(
 }
 
 /// List.prepend : List elem, elem -> List elem
-pub fn list_prepend<'a, 'ctx, 'env>(
+pub(crate) fn list_prepend<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     original_wrapper: StructValue<'ctx>,
     element: BasicValueEnum<'ctx>,
@@ -220,7 +201,7 @@ pub fn list_prepend<'a, 'ctx, 'env>(
 }
 
 /// List.swap : List elem, Nat, Nat -> List elem
-pub fn list_swap<'a, 'ctx, 'env>(
+pub(crate) fn list_swap<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     original_wrapper: StructValue<'ctx>,
     index_1: IntValue<'ctx>,
@@ -243,7 +224,7 @@ pub fn list_swap<'a, 'ctx, 'env>(
 }
 
 /// List.sublist : List elem, { start : Nat, len : Nat } -> List elem
-pub fn list_sublist<'a, 'ctx, 'env>(
+pub(crate) fn list_sublist<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     original_wrapper: StructValue<'ctx>,
@@ -267,7 +248,7 @@ pub fn list_sublist<'a, 'ctx, 'env>(
 }
 
 /// List.dropAt : List elem, Nat -> List elem
-pub fn list_drop_at<'a, 'ctx, 'env>(
+pub(crate) fn list_drop_at<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     original_wrapper: StructValue<'ctx>,
@@ -289,7 +270,7 @@ pub fn list_drop_at<'a, 'ctx, 'env>(
 }
 
 /// List.replace_unsafe : List elem, Nat, elem -> { list: List elem, value: elem }
-pub fn list_replace_unsafe<'a, 'ctx, 'env>(
+pub(crate) fn list_replace_unsafe<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     _layout_ids: &mut LayoutIds<'a>,
     list: BasicValueEnum<'ctx>,
@@ -374,7 +355,7 @@ fn bounds_check_comparison<'ctx>(
 }
 
 /// List.len : List * -> Nat
-pub fn list_len<'ctx>(
+pub(crate) fn list_len<'ctx>(
     builder: &Builder<'ctx>,
     wrapper_struct: StructValue<'ctx>,
 ) -> IntValue<'ctx> {
@@ -385,7 +366,7 @@ pub fn list_len<'ctx>(
 }
 
 /// List.capacity : List * -> Nat
-pub fn list_capacity<'ctx>(
+pub(crate) fn list_capacity<'ctx>(
     builder: &Builder<'ctx>,
     wrapper_struct: StructValue<'ctx>,
 ) -> IntValue<'ctx> {
@@ -395,7 +376,7 @@ pub fn list_capacity<'ctx>(
         .into_int_value()
 }
 
-pub fn destructure<'ctx>(
+pub(crate) fn destructure<'ctx>(
     builder: &Builder<'ctx>,
     wrapper_struct: StructValue<'ctx>,
 ) -> (PointerValue<'ctx>, IntValue<'ctx>, IntValue<'ctx>) {
@@ -419,7 +400,7 @@ pub fn destructure<'ctx>(
 }
 
 /// List.sortWith : List a, (a, a -> Ordering) -> List a
-pub fn list_sort_with<'a, 'ctx, 'env>(
+pub(crate) fn list_sort_with<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     roc_function_call: RocFunctionCall<'ctx>,
     compare_wrapper: PointerValue<'ctx>,
@@ -442,7 +423,7 @@ pub fn list_sort_with<'a, 'ctx, 'env>(
 }
 
 /// List.map : List before, (before -> after) -> List after
-pub fn list_map<'a, 'ctx, 'env>(
+pub(crate) fn list_map<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     roc_function_call: RocFunctionCall<'ctx>,
     list: BasicValueEnum<'ctx>,
@@ -465,7 +446,7 @@ pub fn list_map<'a, 'ctx, 'env>(
     )
 }
 
-pub fn list_map2<'a, 'ctx, 'env>(
+pub(crate) fn list_map2<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     roc_function_call: RocFunctionCall<'ctx>,
@@ -498,7 +479,7 @@ pub fn list_map2<'a, 'ctx, 'env>(
     )
 }
 
-pub fn list_map3<'a, 'ctx, 'env>(
+pub(crate) fn list_map3<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     roc_function_call: RocFunctionCall<'ctx>,
@@ -540,7 +521,7 @@ pub fn list_map3<'a, 'ctx, 'env>(
     )
 }
 
-pub fn list_map4<'a, 'ctx, 'env>(
+pub(crate) fn list_map4<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     roc_function_call: RocFunctionCall<'ctx>,
@@ -589,7 +570,7 @@ pub fn list_map4<'a, 'ctx, 'env>(
 }
 
 /// List.concat : List elem, List elem -> List elem
-pub fn list_concat<'a, 'ctx, 'env>(
+pub(crate) fn list_concat<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     list1: BasicValueEnum<'ctx>,
     list2: BasicValueEnum<'ctx>,
@@ -607,83 +588,7 @@ pub fn list_concat<'a, 'ctx, 'env>(
     )
 }
 
-pub fn decrementing_elem_loop<'ctx, LoopFn>(
-    builder: &Builder<'ctx>,
-    ctx: &'ctx Context,
-    parent: FunctionValue<'ctx>,
-    ptr: PointerValue<'ctx>,
-    len: IntValue<'ctx>,
-    index_name: &str,
-    mut loop_fn: LoopFn,
-) -> PointerValue<'ctx>
-where
-    LoopFn: FnMut(IntValue<'ctx>, BasicValueEnum<'ctx>),
-{
-    decrementing_index_loop(builder, ctx, parent, len, index_name, |index| {
-        // The pointer to the element in the list
-        let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index], "load_index") };
-
-        let elem = builder.build_load(elem_ptr, "get_elem");
-
-        loop_fn(index, elem);
-    })
-}
-
-// a for-loop from the back to the front
-fn decrementing_index_loop<'ctx, LoopFn>(
-    builder: &Builder<'ctx>,
-    ctx: &'ctx Context,
-    parent: FunctionValue<'ctx>,
-    end: IntValue<'ctx>,
-    index_name: &str,
-    mut loop_fn: LoopFn,
-) -> PointerValue<'ctx>
-where
-    LoopFn: FnMut(IntValue<'ctx>),
-{
-    // constant 1i64
-    let one = ctx.i64_type().const_int(1, false);
-
-    // allocate a stack slot for the current index
-    let index_alloca = builder.build_alloca(ctx.i64_type(), index_name);
-
-    // we assume `end` is the length of the list
-    // the final index is therefore `end - 1`
-    let end_index = builder.build_int_sub(end, one, "end_index");
-    builder.build_store(index_alloca, end_index);
-
-    let loop_bb = ctx.append_basic_block(parent, "loop");
-    builder.build_unconditional_branch(loop_bb);
-    builder.position_at_end(loop_bb);
-
-    let current_index = builder
-        .build_load(index_alloca, index_name)
-        .into_int_value();
-
-    let next_index = builder.build_int_sub(current_index, one, "nextindex");
-
-    builder.build_store(index_alloca, next_index);
-
-    // The body of the loop
-    loop_fn(current_index);
-
-    // #index >= 0
-    let condition = builder.build_int_compare(
-        IntPredicate::SGE,
-        next_index,
-        ctx.i64_type().const_zero(),
-        "bounds_check",
-    );
-
-    let after_loop_bb = ctx.append_basic_block(parent, "after_outer_loop_1");
-
-    builder.build_conditional_branch(condition, loop_bb, after_loop_bb);
-    builder.position_at_end(after_loop_bb);
-
-    index_alloca
-}
-
-pub fn incrementing_elem_loop<'a, 'ctx, 'env, LoopFn>(
+pub(crate) fn incrementing_elem_loop<'a, 'ctx, 'env, LoopFn>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     element_layout: Layout<'a>,
@@ -714,7 +619,7 @@ where
 
 // This helper simulates a basic for loop, where
 // and index increments up from 0 to some end value
-pub fn incrementing_index_loop<'a, 'ctx, 'env, LoopFn>(
+pub(crate) fn incrementing_index_loop<'a, 'ctx, 'env, LoopFn>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     end: IntValue<'ctx>,
@@ -761,53 +666,9 @@ where
     index_alloca
 }
 
-pub fn build_basic_phi2<'a, 'ctx, 'env, PassFn, FailFn>(
+pub(crate) fn empty_polymorphic_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
-    comparison: IntValue<'ctx>,
-    mut build_pass: PassFn,
-    mut build_fail: FailFn,
-    ret_type: BasicTypeEnum<'ctx>,
-) -> BasicValueEnum<'ctx>
-where
-    PassFn: FnMut() -> BasicValueEnum<'ctx>,
-    FailFn: FnMut() -> BasicValueEnum<'ctx>,
-{
-    let builder = env.builder;
-    let context = env.context;
-
-    // build blocks
-    let then_block = context.append_basic_block(parent, "then");
-    let else_block = context.append_basic_block(parent, "else");
-    let cont_block = context.append_basic_block(parent, "branchcont");
-
-    builder.build_conditional_branch(comparison, then_block, else_block);
-
-    // build then block
-    builder.position_at_end(then_block);
-    let then_val = build_pass();
-    builder.build_unconditional_branch(cont_block);
-
-    let then_block = builder.get_insert_block().unwrap();
-
-    // build else block
-    builder.position_at_end(else_block);
-    let else_val = build_fail();
-    builder.build_unconditional_branch(cont_block);
-
-    let else_block = builder.get_insert_block().unwrap();
-
-    // emit merge block
-    builder.position_at_end(cont_block);
-
-    let phi = builder.build_phi(ret_type, "branch");
-
-    phi.add_incoming(&[(&then_val, then_block), (&else_val, else_block)]);
-
-    phi.as_basic_value()
-}
-
-pub fn empty_polymorphic_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
+) -> BasicValueEnum<'ctx> {
     let struct_type = zig_list_type(env);
 
     // The pointer should be null (aka zero) and the length should be zero,
@@ -815,7 +676,7 @@ pub fn empty_polymorphic_list<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> Basi
     BasicValueEnum::StructValue(struct_type.const_zero())
 }
 
-pub fn load_list<'ctx>(
+pub(crate) fn load_list<'ctx>(
     builder: &Builder<'ctx>,
     wrapper_struct: StructValue<'ctx>,
     ptr_type: PointerType<'ctx>,
@@ -830,7 +691,7 @@ pub fn load_list<'ctx>(
     (length, ptr)
 }
 
-pub fn load_list_ptr<'ctx>(
+pub(crate) fn load_list_ptr<'ctx>(
     builder: &Builder<'ctx>,
     wrapper_struct: StructValue<'ctx>,
     ptr_type: PointerType<'ctx>,
@@ -845,7 +706,7 @@ pub fn load_list_ptr<'ctx>(
     cast_basic_basic(builder, generic_ptr.into(), ptr_type.into()).into_pointer_value()
 }
 
-pub fn allocate_list<'a, 'ctx, 'env>(
+pub(crate) fn allocate_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     elem_layout: &Layout<'a>,
     number_of_elements: IntValue<'ctx>,
@@ -863,7 +724,7 @@ pub fn allocate_list<'a, 'ctx, 'env>(
     allocate_with_refcount_help(env, basic_type, alignment_bytes, number_of_data_bytes)
 }
 
-pub fn store_list<'a, 'ctx, 'env>(
+pub(crate) fn store_list<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     pointer_to_first_element: PointerValue<'ctx>,
     len: IntValue<'ctx>,
@@ -883,7 +744,7 @@ pub fn store_list<'a, 'ctx, 'env>(
     )
 }
 
-pub fn decref<'a, 'ctx, 'env>(
+pub(crate) fn decref<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     wrapper_struct: StructValue<'ctx>,
     alignment: u32,
