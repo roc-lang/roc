@@ -1,4 +1,4 @@
-use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr};
+use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr, I128, U128};
 
 pub trait Wasm32Sized: Sized {
     const SIZE_OF_WASM: usize;
@@ -22,9 +22,8 @@ macro_rules! wasm32_sized_primitive {
     }
 }
 
-wasm32_sized_primitive!(
-    u8, i8, u16, i16, u32, i32, char, u64, i64, u128, i128, f32, f64, bool, RocDec, RocOrder,
-);
+wasm32_sized_primitive!(u8, i8, u16, i16, u32, i32, char, u64, i64, u128, i128, f32, f64, bool,);
+wasm32_sized_primitive!(RocDec, RocOrder, I128, U128,);
 
 impl Wasm32Sized for () {
     const SIZE_OF_WASM: usize = 0;
