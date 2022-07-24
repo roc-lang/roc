@@ -44,6 +44,7 @@ target-all = [
 roc_collections = { path = "../compiler/collections" }
 roc_can = { path = "../compiler/can" }
 roc_docs = { path = "../docs" }
+roc_glue = { path = "../glue" }
 roc_parse = { path = "../compiler/parse" }
 roc_region = { path = "../compiler/region" }
 roc_module = { path = "../compiler/module" }

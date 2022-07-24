@@ -3304,7 +3304,7 @@ impl<'a> LayoutIds<'a> {
 }
 
 /// Compare two fields when sorting them for code gen.
-/// This is called by both code gen and bindgen, so that
+/// This is called by both code gen and glue, so that
 /// their field orderings agree.
 #[inline(always)]
 pub fn cmp_fields<L: Ord>(

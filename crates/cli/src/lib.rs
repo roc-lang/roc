@@ -43,6 +43,7 @@ pub const CMD_CHECK: &str = "check";
 pub const CMD_VERSION: &str = "version";
 pub const CMD_FORMAT: &str = "format";
 pub const CMD_TEST: &str = "test";
+pub const CMD_GLUE: &str = "glue";
 
 pub const FLAG_DEBUG: &str = "debug";
 pub const FLAG_DEV: &str = "dev";
@@ -59,6 +60,7 @@ pub const FLAG_VALGRIND: &str = "valgrind";
 pub const FLAG_CHECK: &str = "check";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const ROC_DIR: &str = "ROC_DIR";
+pub const GLUE_FILE: &str = "GLUE_FILE";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
@@ -171,7 +173,7 @@ pub fn build_app<'a>() -> Command<'a> {
             )
         )
         .subcommand(Command::new(CMD_TEST)
-            .about("Run all top-level `expect`s in a root module and any modules it imports.")
+            .about("Run all top-level `expect`s in a main module and any modules it imports.")
             .arg(flag_optimize.clone())
             .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
@@ -183,7 +185,7 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(flag_valgrind.clone())
             .arg(
                 Arg::new(ROC_FILE)
-                    .help("The .roc file for the root module")
+                    .help("The .roc file for the main module")
                     .allow_invalid_utf8(true)
                     .required(false)
                     .default_value(DEFAULT_ROC_FILENAME)
@@ -245,6 +247,21 @@ pub fn build_app<'a>() -> Command<'a> {
                     .help("The directory or files to build documentation for")
                     .allow_invalid_utf8(true)
                 )
+        )
+        .subcommand(Command::new(CMD_GLUE)
+            .about("Generate glue code between a platform's Roc API and its host language.")
+            .arg(
+                Arg::new(ROC_FILE)
+                    .help("The .roc file for the platform module")
+                    .allow_invalid_utf8(true)
+                    .required(true)
+            )
+            .arg(
+                Arg::new(GLUE_FILE)
+                    .help("The filename for the generated glue code. Currently, this must be a .rs file because only Rust glue generation is supported so far.")
+                    .allow_invalid_utf8(true)
+                    .required(true)
+            )
         )
         .trailing_var_arg(true)
         .arg(flag_optimize)

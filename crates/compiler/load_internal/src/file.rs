@@ -3766,7 +3766,7 @@ fn send_header_two<'a>(
 
         {
             // If we don't have an app module id (e.g. because we're doing
-            // `roc check myplatform.roc` or because we're doing bindgen),
+            // `roc check myplatform.roc` or because we're generating glue code),
             // insert the `requires` symbols into the platform module's IdentIds.
             //
             // Otherwise, get them from the app module's IdentIds, because it

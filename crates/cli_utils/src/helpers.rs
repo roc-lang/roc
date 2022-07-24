@@ -65,20 +65,16 @@ where
     run_with_stdin(&roc_binary_path, args, stdin_vals)
 }
 
-pub fn run_bindgen<I, S>(args: I) -> Out
+pub fn run_glue<I, S>(args: I) -> Out
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    run_with_stdin(&path_to_bindgen_binary(), args, &[])
+    run_with_stdin(&path_to_roc_binary(), args, &[])
 }
 
 pub fn path_to_roc_binary() -> PathBuf {
     path_to_binary("roc")
-}
-
-pub fn path_to_bindgen_binary() -> PathBuf {
-    path_to_binary("roc-bindgen")
 }
 
 pub fn path_to_binary(binary_name: &str) -> PathBuf {
