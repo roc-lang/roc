@@ -171,7 +171,7 @@ pub fn build_app<'a>() -> Command<'a> {
             )
         )
         .subcommand(Command::new(CMD_TEST)
-            .about("Run all top-level `expect`s in a root module and any modules it imports.")
+            .about("Run all top-level `expect`s in a main module and any modules it imports.")
             .arg(flag_optimize.clone())
             .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
@@ -183,7 +183,7 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(flag_valgrind.clone())
             .arg(
                 Arg::new(ROC_FILE)
-                    .help("The .roc file for the root module")
+                    .help("The .roc file for the main module")
                     .allow_invalid_utf8(true)
                     .required(false)
                     .default_value(DEFAULT_ROC_FILENAME)
