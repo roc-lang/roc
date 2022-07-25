@@ -13,7 +13,7 @@ use roc_module::symbol::ModuleId;
 use roc_solve::solve::{compact_lambda_sets_of_vars, Phase, Pools};
 use roc_types::subs::{get_member_lambda_sets_at_region, Content, FlatType, LambdaSet};
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, Variable};
-use roc_unify::unify::{unify as unify_unify, Mode, Unified};
+use roc_unify::unify::{unify as unify_unify, Env, Mode, Unified};
 
 pub use roc_solve::ability::resolve_ability_specialization;
 pub use roc_solve::ability::Resolved;
@@ -260,7 +260,7 @@ pub fn unify(
         ModuleId::DERIVED_SYNTH,
         "derived module can only unify its subs in its own context!"
     );
-    let unified = unify_unify(subs, left, right, Mode::EQ);
+    let unified = unify_unify(&mut Env::new(subs), left, right, Mode::EQ);
 
     match unified {
         Unified::Success {

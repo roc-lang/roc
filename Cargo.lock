@@ -4124,10 +4124,12 @@ name = "roc_unify"
 version = "0.1.0"
 dependencies = [
  "bitflags",
+ "roc_can",
  "roc_collections",
  "roc_debug_flags",
  "roc_error_macros",
  "roc_module",
+ "roc_solve_problem",
  "roc_types",
 ]
 

@@ -7,7 +7,7 @@ use roc_region::all::{Loc, Region};
 use roc_solve_problem::{TypeError, UnderivableReason, Unfulfilled};
 use roc_types::subs::{instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, Subs, Variable};
 use roc_types::types::{AliasKind, Category, PatternCategory};
-use roc_unify::unify::MustImplementConstraints;
+use roc_unify::unify::{Env, MustImplementConstraints};
 use roc_unify::unify::{MustImplementAbility, Obligated};
 
 use crate::solve::type_to_var;
@@ -573,10 +573,15 @@ pub fn resolve_ability_specialization(
     let signature_var = member_def.signature_var();
 
     instantiate_rigids(subs, signature_var);
-    let (_vars, must_implement_ability, _lambda_sets_to_specialize, _meta) =
-        unify(subs, specialization_var, signature_var, Mode::EQ).expect_success(
-            "If resolving a specialization, the specialization must be known to typecheck.",
-        );
+    let (_vars, must_implement_ability, _lambda_sets_to_specialize, _meta) = unify(
+        &mut Env::new(subs),
+        specialization_var,
+        signature_var,
+        Mode::EQ,
+    )
+    .expect_success(
+        "If resolving a specialization, the specialization must be known to typecheck.",
+    );
 
     subs.rollback_to(snapshot);
 
