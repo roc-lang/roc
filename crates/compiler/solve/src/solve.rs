@@ -1705,7 +1705,8 @@ fn check_ability_specialization(
     // If the symbol specializes an ability member, we need to make sure that the
     // inferred type for the specialization actually aligns with the expected
     // implementation.
-    if let Some((ability_member, root_data)) = abilities_store.root_name_and_def(symbol) {
+    if let Some((impl_key, root_data)) = abilities_store.impl_key_and_def(symbol) {
+        let ability_member = impl_key.ability_member;
         let root_signature_var = root_data.signature_var();
         let parent_ability = root_data.parent_ability;
 
@@ -1726,7 +1727,7 @@ fn check_ability_specialization(
             Mode::EQ,
         );
 
-        match unified {
+        let resolved_mark = match unified {
             Success {
                 vars,
                 must_implement_ability,
@@ -1757,10 +1758,6 @@ fn check_ability_specialization(
                         let specialization =
                             MemberSpecializationInfo::new(symbol, specialization_lambda_sets);
 
-                        abilities_store
-                            .mark_implementation(ability_member, opaque, Ok(specialization))
-                            .expect("marked as a custom implementation, but not recorded as such");
-
                         // Make sure we check that the opaque has specialized all members of the
                         // ability, after we finish solving the module.
                         deferred_obligations
@@ -1773,6 +1770,8 @@ fn check_ability_specialization(
                             },
                             specialization_region,
                         );
+
+                        Ok(specialization)
                     }
                     Some(Obligated::Adhoc(var)) => {
                         // This is a specialization of a structural type - never allowed.
@@ -1790,6 +1789,8 @@ fn check_ability_specialization(
                         };
 
                         problems.push(problem);
+
+                        Err(())
                     }
                     None => {
                         // This can happen when every ability constriant on a type variable went
@@ -1816,6 +1817,8 @@ fn check_ability_specialization(
                         );
 
                         problems.push(problem);
+
+                        Err(())
                     }
                 }
             }
@@ -1838,14 +1841,22 @@ fn check_ability_specialization(
                 );
 
                 problems.push(problem);
+
+                Err(())
             }
             BadType(vars, problem) => {
                 subs.commit_snapshot(snapshot);
                 introduce(subs, rank, pools, &vars);
 
                 problems.push(TypeError::BadType(problem));
+
+                Err(())
             }
-        }
+        };
+
+        abilities_store
+            .mark_implementation(impl_key.ability_member, impl_key.opaque, resolved_mark)
+            .expect("marked as a custom implementation, but not recorded as such");
     }
 }
 

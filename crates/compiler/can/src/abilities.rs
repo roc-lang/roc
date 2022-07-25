@@ -134,7 +134,9 @@ pub enum ResolvedImpl {
 pub struct IAbilitiesStore<Phase: ResolvePhase> {
     /// Maps an ability to the members defining it.
     members_of_ability: MutMap<Symbol, Vec<Symbol>>,
-    /// Map of symbols that specialize an ability member to the root ability symbol name.
+    /// Map of symbols that specialize an ability member to the root ability symbol name,
+    /// and the type the specialization claims to implement the ability for.
+    ///
     /// For example, in the program
     ///
     ///   Hash has hash : a -> U64 | a has Hash
@@ -142,8 +144,8 @@ pub struct IAbilitiesStore<Phase: ResolvePhase> {
     ///   Id := {} implements [Hash {hash: myHash}]
     ///   myHash = \@Id n -> n
     ///
-    /// We keep the mapping myHash->hash
-    specialization_to_root: MutMap<Symbol, Symbol>,
+    /// We keep the mapping myHash->(hash, Id)
+    specialization_to_root: MutMap<Symbol, ImplKey>,
 
     /// Information about all members composing abilities.
     ability_members: MutMap<Symbol, AbilityMemberData<Phase>>,
@@ -226,18 +228,13 @@ impl<Phase: ResolvePhase> IAbilitiesStore<Phase> {
     }
 
     #[inline(always)]
-    fn register_one_declared_impl(
-        &mut self,
-        implementing_type: Symbol,
-        member: Symbol,
-        member_impl: MemberImpl,
-    ) {
+    fn register_one_declared_impl(&mut self, impl_key: ImplKey, member_impl: MemberImpl) {
         if let MemberImpl::Impl(specialization_symbol) = member_impl {
             self.specialization_to_root
-                .insert(specialization_symbol, member);
+                .insert(specialization_symbol, impl_key);
         }
         self.declared_implementations
-            .insert((member, implementing_type), member_impl);
+            .insert((impl_key.ability_member, impl_key.opaque), member_impl);
     }
 
     /// Records the implementations of an ability an opaque type declares to have.
@@ -255,7 +252,11 @@ impl<Phase: ResolvePhase> IAbilitiesStore<Phase> {
         implementations: impl IntoIterator<Item = (Symbol, MemberImpl)>,
     ) {
         for (member, member_impl) in implementations.into_iter() {
-            self.register_one_declared_impl(implementing_type, member, member_impl);
+            let impl_key = ImplKey {
+                opaque: implementing_type,
+                ability_member: member,
+            };
+            self.register_one_declared_impl(impl_key, member_impl);
         }
     }
 
@@ -338,7 +339,11 @@ impl<Phase: ResolvePhase> IAbilitiesStore<Phase> {
                 .iter()
                 .filter(|((member, _), _)| members.contains(member))
                 .for_each(|(&(member, typ), member_impl)| {
-                    new.register_one_declared_impl(typ, member, *member_impl);
+                    let impl_key = ImplKey {
+                        ability_member: member,
+                        opaque: typ,
+                    };
+                    new.register_one_declared_impl(impl_key, *member_impl);
 
                     if let MemberImpl::Impl(spec_symbol) = member_impl {
                         if let Some(specialization_info) = specializations.get(spec_symbol) {
@@ -361,17 +366,20 @@ pub enum MarkError {
 impl IAbilitiesStore<Resolved> {
     /// Finds the symbol name and ability member definition for a symbol specializing the ability
     /// member, if it specializes any.
-    /// For example, suppose `hash : Id -> U64` has symbol #hash1 and specializes
-    /// `hash : a -> U64 | a has Hash` with symbol #hash. Calling this with #hash1 would retrieve
-    /// the ability member data for #hash.
-    pub fn root_name_and_def(
+    /// For example, suppose `hashId : Id -> U64` specializes `hash : a -> U64 | a has Hash`.
+    /// Calling this with `hashId` would retrieve the ability member data for `hash`, and what type
+    /// `hashId` is specializing for.
+    pub fn impl_key_and_def(
         &self,
         specializing_symbol: Symbol,
-    ) -> Option<(Symbol, &AbilityMemberData<Resolved>)> {
-        let root_symbol = self.specialization_to_root.get(&specializing_symbol)?;
-        debug_assert!(self.ability_members.contains_key(root_symbol));
-        let root_data = self.ability_members.get(root_symbol).unwrap();
-        Some((*root_symbol, root_data))
+    ) -> Option<(ImplKey, &AbilityMemberData<Resolved>)> {
+        let impl_key = self.specialization_to_root.get(&specializing_symbol)?;
+        debug_assert!(self.ability_members.contains_key(&impl_key.ability_member));
+        let root_data = self
+            .ability_members
+            .get(&impl_key.ability_member)
+            .expect("impl keys can only exist for known ability members");
+        Some((*impl_key, root_data))
     }
 
     /// Finds the ability member definition for a member name.

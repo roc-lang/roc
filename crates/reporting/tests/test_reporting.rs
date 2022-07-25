@@ -8418,16 +8418,6 @@ All branches in an `if` must have the same type!
     The following necessary members are missing implementations:
 
         le
-
-    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
-
-    The type `Id` does not fully implement the ability `Eq`. The following
-    specializations are missing:
-
-    A specialization for `le`, which is defined here:
-
-    5│      le : a, a -> Bool | a has Eq
-            ^^
     "###
     );
 
