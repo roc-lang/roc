@@ -146,6 +146,22 @@ fn consume_indent<'a>(
     Ok(state)
 }
 
+fn utf8<'a>(
+    state: State<'a>,
+    string_bytes: &'a [u8],
+) -> Result<&'a str, (Progress, EString<'a>, State<'a>)> {
+    std::str::from_utf8(string_bytes).map_err(|_| {
+        // Note Based on where this `utf8` function is used, the fact that we know the whole string
+        // in the parser is valid utf8, and barring bugs in the parser itself
+        // (e.g. where we accidentally split a multibyte utf8 char), this error _should_ actually be unreachable.
+        (
+            MadeProgress,
+            EString::Space(BadInputError::BadUtf8, state.pos()),
+            state,
+        )
+    })
+}
+
 pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
     use StrLiteral::*;
 
@@ -290,6 +306,24 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                 }
                 b'\n' => {
                     if is_multiline {
+                        let without_newline = &state.bytes()[0..(segment_parsed_bytes - 1)];
+                        let with_newline = &state.bytes()[0..segment_parsed_bytes];
+
+                        state.advance_mut(segment_parsed_bytes);
+                        state = consume_indent(state, indent)?;
+                        bytes = state.bytes().iter();
+
+                        if state.bytes().starts_with(b"\"\"\"") {
+                            // ending the string; don't use the last newline
+                            segments
+                                .push(StrSegment::Plaintext(utf8(state.clone(), without_newline)?));
+                        } else {
+                            segments
+                                .push(StrSegment::Plaintext(utf8(state.clone(), with_newline)?));
+                        }
+
+                        segment_parsed_bytes = 0;
+
                         continue;
                     } else {
                         // This is a single-line string, which cannot have newlines!

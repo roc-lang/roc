@@ -80,8 +80,20 @@ Defs(
                 ),
                 @58-92 SpaceBefore(
                     Str(
-                        PlainLine(
-                            "Hello,\n\n    World!\n    ",
+                        Block(
+                            [
+                                [
+                                    Plaintext(
+                                        "Hello,\n",
+                                    ),
+                                    Plaintext(
+                                        "\n",
+                                    ),
+                                    Plaintext(
+                                        "World!",
+                                    ),
+                                ],
+                            ],
                         ),
                     ),
                     [
