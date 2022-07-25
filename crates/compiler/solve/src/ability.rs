@@ -396,7 +396,7 @@ impl ObligationCache<'_> {
                 .abilities_store
                 .get_implementation(roc_can::abilities::ImplKey {
                     opaque,
-                    ability_member: ability,
+                    ability_member: member,
                 })
                 .is_none()
             {
