@@ -467,7 +467,7 @@ impl IAbilitiesStore<Pending> {
 
         let old_declared_impl = self
             .declared_implementations
-            .insert((opaque, ability_member), member_impl);
+            .insert((ability_member, opaque), member_impl);
         debug_assert!(
             old_declared_impl.is_none(),
             "Replacing existing declared impl!"
