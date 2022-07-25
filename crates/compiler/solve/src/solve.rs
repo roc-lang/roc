@@ -1785,8 +1785,10 @@ fn check_ability_specialization(
                             // This def is not specialized for the claimed opaque type, that's an
                             // error.
 
-                            // Commit so that `var` persists in subs.
+                            // Commit so that the bad signature and its error persists in subs.
                             subs.commit_snapshot(snapshot);
+
+                            let (_typ, _problems) = subs.var_to_error_type(symbol_loc_var.value);
 
                             let problem = TypeError::WrongSpecialization {
                                 region: symbol_loc_var.region,
