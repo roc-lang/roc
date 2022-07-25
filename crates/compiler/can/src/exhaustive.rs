@@ -260,16 +260,19 @@ pub fn sketch_when_branches(
                     // NB: ordering the guard pattern first seems to be better at catching
                     // non-exhaustive constructors in the second argument; see the paper to see if
                     // there is a way to improve this in general.
-                    vec![guard_pattern, sketch_pattern(target_var, &loc_pat.value)],
+                    vec![
+                        guard_pattern,
+                        sketch_pattern(target_var, &loc_pat.pattern.value),
+                    ],
                 )]
             } else {
                 // Simple case
-                vec![sketch_pattern(target_var, &loc_pat.value)]
+                vec![sketch_pattern(target_var, &loc_pat.pattern.value)]
             };
 
             let row = SketchedRow {
                 patterns,
-                region: loc_pat.region,
+                region: loc_pat.pattern.region,
                 guard,
                 redundant_mark: *redundant,
             };

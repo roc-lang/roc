@@ -1,6 +1,6 @@
 use crate::{
     def::Def,
-    expr::{AccessorData, ClosureData, Expr, Field, OpaqueWrapFunctionData},
+    expr::{AccessorData, ClosureData, Expr, Field, OpaqueWrapFunctionData, WhenBranchPattern},
     pattern::{DestructType, Pattern, RecordDestruct},
 };
 use roc_module::{
@@ -295,7 +295,16 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
                      }| crate::expr::WhenBranch {
                         patterns: patterns
                             .iter()
-                            .map(|lp| lp.map(|p| deep_copy_pattern_help(env, copied, p)))
+                            .map(
+                                |WhenBranchPattern {
+                                     pattern,
+                                     degenerate,
+                                 }| WhenBranchPattern {
+                                    pattern: pattern
+                                        .map(|p| deep_copy_pattern_help(env, copied, p)),
+                                    degenerate: *degenerate,
+                                },
+                            )
                             .collect(),
                         value: value.map(|e| go_help!(e)),
                         guard: guard.as_ref().map(|le| le.map(|e| go_help!(e))),

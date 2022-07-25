@@ -1899,6 +1899,14 @@ fn pretty_runtime_error<'b>(
 
             title = OPAQUE_OVER_APPLIED;
         }
+        RuntimeError::DegenerateBranch(region) => {
+            doc = alloc.stack([
+                alloc.reflow("This branch pattern does not bind all symbols its body needs:"),
+                alloc.region(lines.convert_region(region)),
+            ]);
+
+            title = "DEGENERATE BRANCH";
+        }
     }
 
     (doc, title)

@@ -221,7 +221,7 @@ fn branch<'a>(c: &Ctx, f: &'a Arena<'a>, b: &'a WhenBranch) -> DocBuilder<'a, Ar
     f.intersperse(
         patterns
             .iter()
-            .map(|lp| pattern(c, PPrec::Free, f, &lp.value)),
+            .map(|lp| pattern(c, PPrec::Free, f, &lp.pattern.value)),
         f.text(" | "),
     )
     .append(match guard {

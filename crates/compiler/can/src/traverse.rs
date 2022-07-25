@@ -323,9 +323,13 @@ pub fn walk_when_branch<V: Visitor>(
         redundant: _,
     } = branch;
 
-    patterns
-        .iter()
-        .for_each(|pat| visitor.visit_pattern(&pat.value, pat.region, pat.value.opt_var()));
+    patterns.iter().for_each(|pat| {
+        visitor.visit_pattern(
+            &pat.pattern.value,
+            pat.pattern.region,
+            pat.pattern.value.opt_var(),
+        )
+    });
     visitor.visit_expr(&value.value, value.region, expr_var);
     if let Some(guard) = guard {
         visitor.visit_expr(&guard.value, guard.region, Variable::BOOL);

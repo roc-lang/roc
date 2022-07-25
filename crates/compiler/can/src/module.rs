@@ -910,7 +910,10 @@ fn fix_values_captured_in_closure_expr(
 
                 // patterns can contain default expressions, so much go over them too!
                 for loc_pat in branch.patterns.iter_mut() {
-                    fix_values_captured_in_closure_pattern(&mut loc_pat.value, no_capture_symbols);
+                    fix_values_captured_in_closure_pattern(
+                        &mut loc_pat.pattern.value,
+                        no_capture_symbols,
+                    );
                 }
 
                 if let Some(guard) = &mut branch.guard {
