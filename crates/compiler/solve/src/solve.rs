@@ -1766,7 +1766,7 @@ fn check_ability_specialization(
                         deferred_obligations.dominate(
                             RequestedDeriveKey {
                                 opaque,
-                                ability_member: parent_ability,
+                                ability: parent_ability,
                             },
                             specialization_region,
                         );
