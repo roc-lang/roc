@@ -279,6 +279,13 @@ impl<Phase: ResolvePhase> IAbilitiesStore<Phase> {
         id
     }
 
+    /// Finds the implementation key for a symbol specializing the ability member, if it specializes any.
+    /// For example, suppose `hashId : Id -> U64` specializes `hash : a -> U64 | a has Hash`.
+    /// Calling this with `hashId` would retrieve (hash, hashId).
+    pub fn impl_key(&self, specializing_symbol: Symbol) -> Option<&ImplKey> {
+        self.specialization_to_root.get(&specializing_symbol)
+    }
+
     /// Creates a store from [`self`] that closes over the abilities/members given by the
     /// imported `symbols`, and their specializations (if any).
     pub fn closure_from_imported(&self, symbols: &VecSet<Symbol>) -> PendingAbilitiesStore {
@@ -373,7 +380,7 @@ impl IAbilitiesStore<Resolved> {
         &self,
         specializing_symbol: Symbol,
     ) -> Option<(ImplKey, &AbilityMemberData<Resolved>)> {
-        let impl_key = self.specialization_to_root.get(&specializing_symbol)?;
+        let impl_key = self.impl_key(specializing_symbol)?;
         debug_assert!(self.ability_members.contains_key(&impl_key.ability_member));
         let root_data = self
             .ability_members

@@ -1,4 +1,5 @@
 use crate::abilities::AbilityMemberData;
+use crate::abilities::ImplKey;
 use crate::abilities::MemberVariables;
 use crate::abilities::PendingMemberType;
 use crate::annotation::canonicalize_annotation;
@@ -671,8 +672,30 @@ fn canonicalize_opaque<'a>(
                             Err(()) => continue,
                         };
 
-                    let member_impl = MemberImpl::Impl(impl_symbol);
+                    // Did the user claim this implementation for a specialization of a different
+                    // type? e.g.
+                    //
+                    //   A has [Hash {hash: myHash}]
+                    //   B has [Hash {hash: myHash}]
+                    //
+                    // If so, that's an error and we drop the impl for this opaque type.
+                    let member_impl = match scope.abilities_store.impl_key(impl_symbol) {
+                        Some(ImplKey {
+                            opaque,
+                            ability_member,
+                        }) => {
+                            env.problem(Problem::OverloadedSpecialization {
+                                overload: loc_impl.region,
+                                original_opaque: *opaque,
+                                ability_member: *ability_member,
+                            });
+                            MemberImpl::Error
+                        }
+                        None => MemberImpl::Impl(impl_symbol),
+                    };
 
+                    // Did the user already claim an implementation for the ability member for this
+                    // type previously? (e.g. Hash {hash: hash1, hash: hash2})
                     let opt_old_impl_symbol =
                         impl_map.insert(member, Loc::at(loc_impl.region, member_impl));
 

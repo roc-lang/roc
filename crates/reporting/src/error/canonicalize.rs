@@ -923,6 +923,26 @@ pub fn can_problem<'b>(
             title = "UNNECESSARY DEFINITION".to_string();
             severity = Severity::Warning;
         }
+        Problem::OverloadedSpecialization {
+            ability_member,
+            overload,
+            original_opaque,
+        } => {
+            doc = alloc.stack([
+                alloc.reflow("This ability member specialization is already claimed to specialize another opaque type:"),
+                alloc.region(lines.convert_region(overload)),
+                alloc.concat([
+                    alloc.reflow("Previously, we found it to specialize "),
+                    alloc.symbol_unqualified(ability_member),
+                    alloc.reflow(" for "),
+                    alloc.symbol_unqualified(original_opaque),
+                    alloc.reflow("."),
+                ]),
+                alloc.reflow("Ability specializations can only provide implementations for one opauqe type, since all opaque types are different!"),
+            ]);
+            title = "OVERLOADED SPECIALIZATION".to_string();
+            severity = Severity::Warning;
+        }
     };
 
     Report {
