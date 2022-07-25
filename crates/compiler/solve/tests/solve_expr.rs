@@ -6792,6 +6792,8 @@ mod solve_expr {
                 Diverge has diverge : a -> a | a has Diverge
 
                 A := {} has [Diverge {diverge}]
+
+                diverge : A -> A
                 diverge = \@A {} -> diverge (@A {})
                 #^^^^^^^{-1}        ^^^^^^^
 
@@ -6805,7 +6807,7 @@ mod solve_expr {
             ),
             @r###"
         A#diverge(4) : A -[[diverge(4)]]-> A
-        Diverge#diverge(2) : A -[[diverge(4)]]-> A
+        A#diverge(4) : A -[[diverge(4)]]-> A
         A#diverge(4) : A -[[diverge(4)]]-> A
         "###
         )
@@ -6824,9 +6826,11 @@ mod solve_expr {
 
                 A := {} has [Bounce {ping, pong}]
 
+                ping : A -> A
                 ping = \@A {} -> pong (@A {})
                 #^^^^{-1}        ^^^^
 
+                pong : A -> A
                 pong = \@A {} -> ping (@A {})
                 #^^^^{-1}        ^^^^
 
@@ -6840,7 +6844,7 @@ mod solve_expr {
             ),
             @r###"
         A#ping(5) : A -[[ping(5)]]-> A
-        Bounce#pong(3) : A -[[pong(6)]]-> A
+        A#pong(6) : A -[[pong(6)]]-> A
         A#pong(6) : A -[[pong(6)]]-> A
         A#ping(5) : A -[[ping(5)]]-> A
         A#ping(5) : A -[[ping(5)]]-> A

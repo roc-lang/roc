@@ -1530,6 +1530,13 @@ fn canonicalize_var_lookup(
                 output.references.insert_value_lookup(symbol);
 
                 if scope.abilities_store.is_ability_member_name(symbol) {
+                    // Is there a shadow implementation with the same name? If so, we might be in
+                    // the def for that shadow. In that case add a value lookup of the shadow impl,
+                    // so that it's marked as possibly-recursive.
+                    if let Some(shadow) = scope.get_member_shadow(symbol) {
+                        output.references.insert_value_lookup(shadow.value);
+                    }
+
                     AbilityMember(
                         symbol,
                         Some(scope.abilities_store.fresh_specialization_id()),
