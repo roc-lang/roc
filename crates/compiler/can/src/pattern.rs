@@ -384,10 +384,7 @@ pub fn canonicalize_pattern<'a>(
             ptype => unsupported_pattern(env, ptype, region),
         },
 
-        Underscore(_) => match pattern_type {
-            WhenBranch | FunctionArg => Pattern::Underscore,
-            TopLevelDef | DefExpr => bad_underscore(env, region),
-        },
+        Underscore(_) => Pattern::Underscore,
 
         &NumLiteral(str) => match pattern_type {
             WhenBranch => match finish_parsing_num(str) {
@@ -646,16 +643,6 @@ fn unsupported_pattern(env: &mut Env, pattern_type: PatternType, region: Region)
     use roc_problem::can::BadPattern;
     env.problem(Problem::UnsupportedPattern(
         BadPattern::Unsupported(pattern_type),
-        region,
-    ));
-
-    Pattern::UnsupportedPattern(region)
-}
-
-fn bad_underscore(env: &mut Env, region: Region) -> Pattern {
-    use roc_problem::can::BadPattern;
-    env.problem(Problem::UnsupportedPattern(
-        BadPattern::UnderscoreInDef,
         region,
     ));
 

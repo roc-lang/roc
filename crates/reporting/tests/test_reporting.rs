@@ -4951,12 +4951,29 @@ mod test_reporting {
             "#
         ),
         @r###"
-    ── NOT END OF FILE ──────────────── tmp/when_over_indented_underscore/Test.roc ─
+    ── UNEXPECTED ARROW ─────────────── tmp/when_over_indented_underscore/Test.roc ─
 
-    I expected to reach the end of the file, but got stuck here:
+    I am parsing a `when` expression right now, but this arrow is confusing
+    me:
 
     6│           _ -> 2
-                 ^
+                   ^^
+
+    It makes sense to see arrows around here, so I suspect it is something
+    earlier.Maybe this pattern is indented a bit farther from the previous
+    patterns?
+
+    Note: Here is an example of a valid `when` expression for reference.
+
+        when List.first plants is
+          Ok n ->
+            n
+
+          Err _ ->
+            200
+
+    Notice the indentation. All patterns are aligned, and each branch is
+    indented a bit more than the corresponding pattern. That is important!
     "###
     );
 
@@ -6009,25 +6026,6 @@ All branches in an `if` must have the same type!
     But `map` needs its 2nd argument to be:
 
         Str -> Num a
-    "###
-    );
-
-    test_report!(
-        underscore_let,
-        indoc!(
-            r#"
-            _ = 3
-
-            4
-            "#
-        ),
-        @r###"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-    Underscore patterns are not allowed in definitions
-
-    4│      _ = 3
-            ^
     "###
     );
 
@@ -9555,22 +9553,34 @@ All branches in an `if` must have the same type!
             main = \n -> n + 2
             "#
         ),
-        @r#"
-        ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
-        
-        The `main` name is first defined here:
-        
-        3│  main = 1
-            ^^^^
-        
-        But then it's defined a second time here:
-        
-        5│  main = \n -> n + 2
-            ^^^^
-        
-        Since these variables have the same name, it's easy to use the wrong
-        one on accident. Give one of them a new name.
-        "#
+        @r###"
+    ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    The `main` name is first defined here:
+
+    3│  main = 1
+        ^^^^
+
+    But then it's defined a second time here:
+
+    5│  main = \n -> n + 2
+        ^^^^
+
+    Since these variables have the same name, it's easy to use the wrong
+    one on accident. Give one of them a new name.
+
+    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+
+    This destructure assignment doesn't introduce any new variables:
+
+    5│  main = \n -> n + 2
+        ^^^^
+
+    If you don't need to use the value on the right-hand-side of this
+    assignment, consider removing the assignment. Since Roc is purely
+    functional, assignments that don't introduce variables cannot affect a
+    program's behavior!
+    "###
     );
 
     test_report!(
@@ -9899,6 +9909,159 @@ All branches in an `if` must have the same type!
         A _ _
 
     I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        call_with_underscore_identifier,
+        indoc!(
+            r#"
+            f = \x, y, z -> x + y + z
+
+            f 1 _ 1
+            "#
+        ),
+        @r###"
+    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    Underscores are not allowed in identifier names:
+
+    6│      f 1 _ 1
+      
+
+    I recommend using camelCase, it is the standard in the Roc ecosystem.
+    "###
+    );
+
+    test_report!(
+        destructure_assignment_introduces_no_variables_nested,
+        indoc!(
+            r#"
+            Pair _ _ = Pair 0 1
+
+            _ = Pair 0 1
+
+            {} = {}
+
+            Foo = Foo
+
+            0
+            "#
+        ),
+        @r###"
+    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+
+    This destructure assignment doesn't introduce any new variables:
+
+    4│      Pair _ _ = Pair 0 1
+            ^^^^
+
+    If you don't need to use the value on the right-hand-side of this
+    assignment, consider removing the assignment. Since Roc is purely
+    functional, assignments that don't introduce variables cannot affect a
+    program's behavior!
+
+    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+
+    This destructure assignment doesn't introduce any new variables:
+
+    6│      _ = Pair 0 1
+            ^
+
+    If you don't need to use the value on the right-hand-side of this
+    assignment, consider removing the assignment. Since Roc is purely
+    functional, assignments that don't introduce variables cannot affect a
+    program's behavior!
+
+    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+
+    This destructure assignment doesn't introduce any new variables:
+
+    8│      {} = {}
+            ^^
+
+    If you don't need to use the value on the right-hand-side of this
+    assignment, consider removing the assignment. Since Roc is purely
+    functional, assignments that don't introduce variables cannot affect a
+    program's behavior!
+
+    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+
+    This destructure assignment doesn't introduce any new variables:
+
+    10│      Foo = Foo
+             ^^^
+
+    If you don't need to use the value on the right-hand-side of this
+    assignment, consider removing the assignment. Since Roc is purely
+    functional, assignments that don't introduce variables cannot affect a
+    program's behavior!
+    "###
+    );
+
+    test_report!(
+        destructure_assignment_introduces_no_variables_nested_toplevel,
+        indoc!(
+            r#"
+            app "test" provides [] to "./platform"
+
+            Pair _ _ = Pair 0 1
+
+            _ = Pair 0 1
+
+            {} = {}
+
+            Foo = Foo
+            "#
+        ),
+        @r###"
+    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+
+    This destructure assignment doesn't introduce any new variables:
+
+    3│  Pair _ _ = Pair 0 1
+        ^^^^^^^^
+
+    If you don't need to use the value on the right-hand-side of this
+    assignment, consider removing the assignment. Since Roc is purely
+    functional, assignments that don't introduce variables cannot affect a
+    program's behavior!
+
+    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+
+    This destructure assignment doesn't introduce any new variables:
+
+    5│  _ = Pair 0 1
+        ^
+
+    If you don't need to use the value on the right-hand-side of this
+    assignment, consider removing the assignment. Since Roc is purely
+    functional, assignments that don't introduce variables cannot affect a
+    program's behavior!
+
+    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+
+    This destructure assignment doesn't introduce any new variables:
+
+    7│  {} = {}
+        ^^
+
+    If you don't need to use the value on the right-hand-side of this
+    assignment, consider removing the assignment. Since Roc is purely
+    functional, assignments that don't introduce variables cannot affect a
+    program's behavior!
+
+    ── UNNECESSARY DEFINITION ──────────────────────────────── /code/proj/Main.roc ─
+
+    This destructure assignment doesn't introduce any new variables:
+
+    9│  Foo = Foo
+        ^^^
+
+    If you don't need to use the value on the right-hand-side of this
+    assignment, consider removing the assignment. Since Roc is purely
+    functional, assignments that don't introduce variables cannot affect a
+    program's behavior!
     "###
     );
 }

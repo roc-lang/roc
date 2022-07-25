@@ -16,7 +16,6 @@ pub struct CycleEntry {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum BadPattern {
-    UnderscoreInDef,
     Unsupported(PatternType),
 }
 
@@ -169,6 +168,7 @@ pub enum Problem {
         unbound_symbol: Symbol,
         region: Region,
     },
+    NoIdentifiersIntroduced(Region),
 }
 
 #[derive(Clone, Debug, PartialEq)]
