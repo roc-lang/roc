@@ -1195,8 +1195,6 @@ fn render_expect_failure<'a>(
 
     let (symbols, variables): (Vec<_>, Vec<_>) = current.iter().map(|(a, b)| (*a, *b)).unzip();
 
-    let mut subs2 = subs.clone();
-
     let (offset, expressions) = roc_repl_expect::get_values(
         target_info,
         arena,
@@ -1212,7 +1210,7 @@ fn render_expect_failure<'a>(
 
     let renderer = Renderer::new(arena, interns, module_id, filename, &source);
     let buf = renderer.render(
-        &mut subs2,
+        subs,
         &symbols,
         &variables,
         &expressions,
