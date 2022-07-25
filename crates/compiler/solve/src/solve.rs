@@ -1,6 +1,6 @@
 use crate::ability::{
     resolve_ability_specialization, type_implementing_specialization, AbilityImplError,
-    DeferredObligations, PendingDerivesTable, Resolved, Unfulfilled,
+    CheckedDerives, ObligationCache, PendingDerivesTable, Resolved, Unfulfilled,
 };
 use crate::module::Solved;
 use bumpalo::Bump;
@@ -674,8 +674,14 @@ fn run_in_place(
     let rank = Rank::toplevel();
     let arena = Bump::new();
 
+    let mut obligation_cache = ObligationCache::default();
+
     let pending_derives = PendingDerivesTable::new(subs, aliases, pending_derives);
-    let mut deferred_obligations = DeferredObligations::new(pending_derives);
+    let CheckedDerives {
+        legal_derives: _,
+        problems: derives_problems,
+    } = obligation_cache.check_derives(subs, abilities_store, pending_derives);
+    problems.extend(derives_problems);
 
     // Because we don't know what ability specializations are available until the entire module is
     // solved, we must wait to solve unspecialized lambda sets then.
@@ -692,7 +698,7 @@ fn run_in_place(
         subs,
         constraint,
         abilities_store,
-        &mut deferred_obligations,
+        &mut obligation_cache,
         &mut deferred_uls_to_resolve,
     );
 
@@ -708,11 +714,12 @@ fn run_in_place(
         &SolvePhase { abilities_store },
         exposed_by_module,
     );
-
-    deferred_obligations.add(new_must_implement, AbilityImplError::DoesNotImplement);
-
-    let (obligation_problems, _derived) = deferred_obligations.check_all(subs, abilities_store);
-    problems.extend(obligation_problems);
+    problems.extend(obligation_cache.check_obligations(
+        subs,
+        abilities_store,
+        new_must_implement,
+        AbilityImplError::DoesNotImplement,
+    ));
 
     state.env
 }
@@ -765,7 +772,7 @@ fn solve(
     subs: &mut Subs,
     constraint: &Constraint,
     abilities_store: &mut AbilitiesStore,
-    deferred_obligations: &mut DeferredObligations,
+    obligation_cache: &mut ObligationCache,
     deferred_uls_to_resolve: &mut UlsOfVar,
 ) -> State {
     let initial = Work::Constraint {
@@ -989,11 +996,15 @@ fn solve(
                         extra_metadata: _,
                     } => {
                         introduce(subs, rank, pools, &vars);
+
                         if !must_implement_ability.is_empty() {
-                            deferred_obligations.add(
+                            let new_problems = obligation_cache.check_obligations(
+                                subs,
+                                abilities_store,
                                 must_implement_ability,
                                 AbilityImplError::BadExpr(*region, category.clone(), actual),
                             );
+                            problems.extend(new_problems);
                         }
                         deferred_uls_to_resolve.union(lambda_sets_to_specialize);
 
@@ -1103,8 +1114,11 @@ fn solve(
                                 extra_metadata: _,
                             } => {
                                 introduce(subs, rank, pools, &vars);
+
                                 if !must_implement_ability.is_empty() {
-                                    deferred_obligations.add(
+                                    let new_problems = obligation_cache.check_obligations(
+                                        subs,
+                                        abilities_store,
                                         must_implement_ability,
                                         AbilityImplError::BadExpr(
                                             *region,
@@ -1112,6 +1126,7 @@ fn solve(
                                             actual,
                                         ),
                                     );
+                                    problems.extend(new_problems);
                                 }
                                 deferred_uls_to_resolve.union(lambda_sets_to_specialize);
 
@@ -1183,11 +1198,15 @@ fn solve(
                         extra_metadata: _,
                     } => {
                         introduce(subs, rank, pools, &vars);
+
                         if !must_implement_ability.is_empty() {
-                            deferred_obligations.add(
+                            let new_problems = obligation_cache.check_obligations(
+                                subs,
+                                abilities_store,
                                 must_implement_ability,
                                 AbilityImplError::BadPattern(*region, category.clone(), actual),
                             );
+                            problems.extend(new_problems);
                         }
                         deferred_uls_to_resolve.union(lambda_sets_to_specialize);
 
@@ -1348,8 +1367,11 @@ fn solve(
                         extra_metadata: _,
                     } => {
                         introduce(subs, rank, pools, &vars);
+
                         if !must_implement_ability.is_empty() {
-                            deferred_obligations.add(
+                            let new_problems = obligation_cache.check_obligations(
+                                subs,
+                                abilities_store,
                                 must_implement_ability,
                                 AbilityImplError::BadPattern(
                                     *region,
@@ -1357,6 +1379,7 @@ fn solve(
                                     actual,
                                 ),
                             );
+                            problems.extend(new_problems);
                         }
                         deferred_uls_to_resolve.union(lambda_sets_to_specialize);
 
@@ -1458,8 +1481,12 @@ fn solve(
 
                         introduce(subs, rank, pools, &vars);
 
-                        deferred_obligations
-                            .add(must_implement_ability, AbilityImplError::DoesNotImplement);
+                        problems.extend(obligation_cache.check_obligations(
+                            subs,
+                            abilities_store,
+                            must_implement_ability,
+                            AbilityImplError::DoesNotImplement,
+                        ));
                         deferred_uls_to_resolve.union(lambda_sets_to_specialize);
 
                         // Case 1: unify error types, but don't check exhaustiveness.

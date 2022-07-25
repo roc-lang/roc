@@ -1,6 +1,6 @@
 use roc_can::abilities::AbilitiesStore;
 use roc_can::expr::PendingDerives;
-use roc_collections::VecMap;
+use roc_collections::{VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
@@ -104,159 +104,10 @@ impl PendingDerivesTable {
     }
 }
 
-#[derive(Debug)]
-pub struct DeferredObligations {
-    /// Obligations, to be filled in during solving of a module.
-    obligations: Vec<(MustImplementConstraints, AbilityImplError)>,
-    /// Derives that module-defined opaques claim to have.
-    pending_derives: PendingDerivesTable,
-}
-
-impl DeferredObligations {
-    pub fn new(pending_derives: PendingDerivesTable) -> Self {
-        Self {
-            obligations: Default::default(),
-            pending_derives,
-        }
-    }
-
-    pub fn add(&mut self, must_implement: MustImplementConstraints, on_error: AbilityImplError) {
-        self.obligations.push((must_implement, on_error));
-    }
-
-    // Rules for checking ability implementations:
-    //  - Ad-hoc derives for structural types are checked on-the-fly
-    //  - Opaque derives are registered as "pending" when we check a module
-    //  - Opaque derives are always checked and registered at the end to make sure opaque
-    //    specializations are found first
-    //  - If an opaque O both derives and specializes an ability A
-    //    - The specialization is recorded in the abilities store (this is done in solve/solve)
-    //    - The derive is checked, but will not be recorded in the abilities store (this is done here)
-    //    - Obligations for O to implement A will defer to whether the specialization is complete
-    pub fn check_all(
-        self,
-        subs: &mut Subs,
-        abilities_store: &AbilitiesStore,
-    ) -> (Vec<TypeError>, Vec<RequestedDeriveKey>) {
-        let mut problems = vec![];
-
-        let Self {
-            obligations,
-            pending_derives,
-        } = self;
-
-        let mut obligation_cache = ObligationCache {
-            abilities_store,
-            pending_derives: &pending_derives,
-
-            impl_cache: VecMap::with_capacity(obligations.len()),
-            derive_cache: VecMap::with_capacity(pending_derives.0.len()),
-        };
-
-        let mut legal_derives = Vec::with_capacity(pending_derives.0.len());
-
-        // First, check all derives.
-        for (&derive_key, &(opaque_real_var, derive_region)) in pending_derives.0.iter() {
-            obligation_cache.check_derive(subs, derive_key, opaque_real_var, derive_region);
-            let result = obligation_cache.derive_cache.get(&derive_key).unwrap();
-            match result {
-                Ok(()) => legal_derives.push(derive_key),
-                Err(problem) => problems.push(TypeError::UnfulfilledAbility(problem.clone())),
-            }
-        }
-
-        // Keep track of which types that have an incomplete ability were reported as part of
-        // another type error (from an expression or pattern). If we reported an error for a type
-        // that doesn't implement an ability in that context, we don't want to repeat the error
-        // message.
-        let mut reported_in_context = vec![];
-        let mut incomplete_not_in_context = vec![];
-
-        for (constraints, on_error) in obligations.into_iter() {
-            let must_implement = constraints.get_unique();
-
-            let mut get_unfulfilled = |must_implement: &[MustImplementAbility]| {
-                must_implement
-                    .iter()
-                    .filter_map(|mia| {
-                        obligation_cache
-                            .check_one(subs, *mia)
-                            .as_ref()
-                            .err()
-                            .cloned()
-                    })
-                    .collect::<Vec<_>>()
-            };
-
-            use AbilityImplError::*;
-            match on_error {
-                DoesNotImplement => {
-                    // These aren't attached to another type error, so if these must_implement
-                    // constraints aren't met, we'll emit a generic "this type doesn't implement an
-                    // ability" error message at the end. We only want to do this if it turns out
-                    // the "must implement" constraint indeed wasn't part of a more specific type
-                    // error.
-                    incomplete_not_in_context.extend(must_implement);
-                }
-                BadExpr(region, category, var) => {
-                    let unfulfilled = get_unfulfilled(&must_implement);
-
-                    if !unfulfilled.is_empty() {
-                        // Demote the bad variable that exposed this problem to an error, both so
-                        // that we have an ErrorType to report and so that codegen knows to deal
-                        // with the error later.
-                        let (error_type, _moar_ghosts_n_stuff) = subs.var_to_error_type(var);
-                        problems.push(TypeError::BadExprMissingAbility(
-                            region,
-                            category,
-                            error_type,
-                            unfulfilled,
-                        ));
-                        reported_in_context.extend(must_implement);
-                    }
-                }
-                BadPattern(region, category, var) => {
-                    let unfulfilled = get_unfulfilled(&must_implement);
-
-                    if !unfulfilled.is_empty() {
-                        // Demote the bad variable that exposed this problem to an error, both so
-                        // that we have an ErrorType to report and so that codegen knows to deal
-                        // with the error later.
-                        let (error_type, _moar_ghosts_n_stuff) = subs.var_to_error_type(var);
-                        problems.push(TypeError::BadPatternMissingAbility(
-                            region,
-                            category,
-                            error_type,
-                            unfulfilled,
-                        ));
-                        reported_in_context.extend(must_implement);
-                    }
-                }
-            }
-        }
-
-        // Go through and attach generic "type does not implement ability" errors, if they were not
-        // part of a larger context.
-        for mia in incomplete_not_in_context.into_iter() {
-            // If the obligation is already cached, we must have already reported it in another
-            // context.
-            if !obligation_cache.has_cached(mia) && !reported_in_context.contains(&mia) {
-                if let Err(unfulfilled) = obligation_cache.check_one(subs, mia) {
-                    problems.push(TypeError::UnfulfilledAbility(unfulfilled.clone()));
-                }
-            }
-        }
-
-        (problems, legal_derives)
-    }
-}
-
 type ObligationResult = Result<(), Unfulfilled>;
 
-struct ObligationCache<'a> {
-    abilities_store: &'a AbilitiesStore,
-    pending_derives: &'a PendingDerivesTable,
-
+#[derive(Default)]
+pub struct ObligationCache {
     impl_cache: VecMap<ImplKey, ObligationResult>,
     derive_cache: VecMap<RequestedDeriveKey, ObligationResult>,
 }
@@ -266,13 +117,144 @@ enum ReadCache {
     Derive,
 }
 
-impl ObligationCache<'_> {
-    fn check_one(&mut self, subs: &mut Subs, mia: MustImplementAbility) -> ObligationResult {
+pub struct CheckedDerives {
+    pub legal_derives: Vec<RequestedDeriveKey>,
+    pub problems: Vec<TypeError>,
+}
+
+impl ObligationCache {
+    #[must_use]
+    pub fn check_derives(
+        &mut self,
+        subs: &mut Subs,
+        abilities_store: &AbilitiesStore,
+        pending_derives: PendingDerivesTable,
+    ) -> CheckedDerives {
+        let mut legal_derives = Vec::with_capacity(pending_derives.0.len());
+        let mut problems = vec![];
+
+        // First, check all derives.
+        for (&derive_key, &(opaque_real_var, derive_region)) in pending_derives.0.iter() {
+            self.check_derive(
+                subs,
+                abilities_store,
+                derive_key,
+                opaque_real_var,
+                derive_region,
+            );
+            let result = self.derive_cache.get(&derive_key).unwrap();
+            match result {
+                Ok(()) => legal_derives.push(derive_key),
+                Err(problem) => problems.push(TypeError::UnfulfilledAbility(problem.clone())),
+            }
+        }
+
+        CheckedDerives {
+            legal_derives,
+            problems,
+        }
+    }
+
+    #[must_use]
+    pub fn check_obligations(
+        &mut self,
+        subs: &mut Subs,
+        abilities_store: &AbilitiesStore,
+        must_implement: MustImplementConstraints,
+        on_error: AbilityImplError,
+    ) -> Vec<TypeError> {
+        let must_implement = must_implement.get_unique();
+
+        let mut get_unfulfilled = |must_implement: &[MustImplementAbility]| {
+            must_implement
+                .iter()
+                .filter_map(|mia| {
+                    self.check_one(subs, abilities_store, *mia)
+                        .as_ref()
+                        .err()
+                        .cloned()
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let mut reported_in_context = VecSet::default();
+        let mut incomplete_not_in_context = VecSet::default();
+        let mut problems = vec![];
+
+        use AbilityImplError::*;
+        match on_error {
+            DoesNotImplement => {
+                // These aren't attached to another type error, so if these must_implement
+                // constraints aren't met, we'll emit a generic "this type doesn't implement an
+                // ability" error message at the end. We only want to do this if it turns out
+                // the "must implement" constraint indeed wasn't part of a more specific type
+                // error.
+                incomplete_not_in_context.extend(must_implement);
+            }
+            BadExpr(region, category, var) => {
+                let unfulfilled = get_unfulfilled(&must_implement);
+
+                if !unfulfilled.is_empty() {
+                    // Demote the bad variable that exposed this problem to an error, both so
+                    // that we have an ErrorType to report and so that codegen knows to deal
+                    // with the error later.
+                    let (error_type, _moar_ghosts_n_stuff) = subs.var_to_error_type(var);
+                    problems.push(TypeError::BadExprMissingAbility(
+                        region,
+                        category,
+                        error_type,
+                        unfulfilled,
+                    ));
+                    reported_in_context.extend(must_implement);
+                }
+            }
+            BadPattern(region, category, var) => {
+                let unfulfilled = get_unfulfilled(&must_implement);
+
+                if !unfulfilled.is_empty() {
+                    // Demote the bad variable that exposed this problem to an error, both so
+                    // that we have an ErrorType to report and so that codegen knows to deal
+                    // with the error later.
+                    let (error_type, _moar_ghosts_n_stuff) = subs.var_to_error_type(var);
+                    problems.push(TypeError::BadPatternMissingAbility(
+                        region,
+                        category,
+                        error_type,
+                        unfulfilled,
+                    ));
+                    reported_in_context.extend(must_implement);
+                }
+            }
+        }
+
+        // Go through and attach generic "type does not implement ability" errors, if they were not
+        // part of a larger context.
+        for mia in incomplete_not_in_context.into_iter() {
+            // If the obligation is already cached, we must have already reported it in another
+            // context.
+            if !self.has_cached(mia) && !reported_in_context.contains(&mia) {
+                if let Err(unfulfilled) = self.check_one(subs, abilities_store, mia) {
+                    problems.push(TypeError::UnfulfilledAbility(unfulfilled.clone()));
+                }
+            }
+        }
+
+        problems
+    }
+
+    fn check_one(
+        &mut self,
+        subs: &mut Subs,
+        abilities_store: &AbilitiesStore,
+        mia: MustImplementAbility,
+    ) -> ObligationResult {
         let MustImplementAbility { typ, ability } = mia;
 
         match typ {
-            Obligated::Adhoc(var) => self.check_adhoc(subs, var, ability),
-            Obligated::Opaque(opaque) => self.check_opaque_and_read(subs, opaque, ability).clone(),
+            Obligated::Adhoc(var) => self.check_adhoc(subs, abilities_store, var, ability),
+            Obligated::Opaque(opaque) => self
+                .check_opaque_and_read(subs, abilities_store, opaque, ability)
+                .clone(),
         }
     }
 
@@ -289,12 +271,18 @@ impl ObligationCache<'_> {
         }
     }
 
-    fn check_adhoc(&mut self, subs: &mut Subs, var: Variable, ability: Symbol) -> ObligationResult {
+    fn check_adhoc(
+        &mut self,
+        subs: &mut Subs,
+        abilities_store: &AbilitiesStore,
+        var: Variable,
+        ability: Symbol,
+    ) -> ObligationResult {
         // Not worth caching ad-hoc checks because variables are unlikely to be the same between
         // independent queries.
 
         let opt_can_derive_builtin = match ability {
-            Symbol::ENCODE_ENCODING => Some(self.can_derive_encoding(subs, var)),
+            Symbol::ENCODE_ENCODING => Some(self.can_derive_encoding(subs, abilities_store, var)),
             _ => None,
         };
 
@@ -325,30 +313,28 @@ impl ObligationCache<'_> {
         }
     }
 
-    fn check_opaque(&mut self, subs: &mut Subs, opaque: Symbol, ability: Symbol) -> ReadCache {
+    fn check_opaque(
+        &mut self,
+        subs: &mut Subs,
+        abilities_store: &AbilitiesStore,
+        opaque: Symbol,
+        ability: Symbol,
+    ) -> ReadCache {
         let impl_key = ImplKey { opaque, ability };
         let derive_key = RequestedDeriveKey { opaque, ability };
 
-        match self.pending_derives.0.get(&derive_key) {
-            Some(&(opaque_real_var, derive_region)) => {
-                self.check_derive(subs, derive_key, opaque_real_var, derive_region);
-                ReadCache::Derive
-            }
-            // Only an impl
-            None => {
-                self.check_impl(impl_key);
-                ReadCache::Impl
-            }
-        }
+        self.check_impl(abilities_store, impl_key);
+        ReadCache::Impl
     }
 
     fn check_opaque_and_read(
         &mut self,
         subs: &mut Subs,
+        abilities_store: &AbilitiesStore,
         opaque: Symbol,
         ability: Symbol,
     ) -> &ObligationResult {
-        match self.check_opaque(subs, opaque, ability) {
+        match self.check_opaque(subs, abilities_store, opaque, ability) {
             ReadCache::Impl => self.impl_cache.get(&ImplKey { opaque, ability }).unwrap(),
             ReadCache::Derive => self
                 .derive_cache
@@ -357,15 +343,13 @@ impl ObligationCache<'_> {
         }
     }
 
-    fn check_impl(&mut self, impl_key: ImplKey) {
+    fn check_impl(&mut self, abilities_store: &AbilitiesStore, impl_key: ImplKey) {
         if self.impl_cache.get(&impl_key).is_some() {
             return;
         }
 
         let ImplKey { opaque, ability } = impl_key;
-        let has_declared_impl = self
-            .abilities_store
-            .has_declared_implementation(opaque, ability);
+        let has_declared_impl = abilities_store.has_declared_implementation(opaque, ability);
 
         let obligation_result = if !has_declared_impl {
             Err(Unfulfilled::OpaqueDoesNotImplement {
@@ -382,6 +366,7 @@ impl ObligationCache<'_> {
     fn check_derive(
         &mut self,
         subs: &mut Subs,
+        abilities_store: &AbilitiesStore,
         derive_key: RequestedDeriveKey,
         opaque_real_var: Variable,
         derive_region: Region,
@@ -410,7 +395,8 @@ impl ObligationCache<'_> {
 
         // Now we check whether the structural type behind the opaque is derivable, since that's
         // what we'll need to generate an implementation for during codegen.
-        let real_var_result = self.check_adhoc(subs, opaque_real_var, derive_key.ability);
+        let real_var_result =
+            self.check_adhoc(subs, abilities_store, opaque_real_var, derive_key.ability);
 
         let root_result = real_var_result.map_err(|err| match err {
             // Promote the failure, which should be related to a structural type not being
@@ -445,7 +431,12 @@ impl ObligationCache<'_> {
     // If we have a lot of these, consider using a visitor.
     // It will be very similar for most types (can't derive functions, can't derive unbound type
     // variables, can only derive opaques if they have an impl, etc).
-    fn can_derive_encoding(&mut self, subs: &mut Subs, var: Variable) -> Result<(), Variable> {
+    fn can_derive_encoding(
+        &mut self,
+        subs: &mut Subs,
+        abilities_store: &AbilitiesStore,
+        var: Variable,
+    ) -> Result<(), Variable> {
         let mut stack = vec![var];
         let mut seen_recursion_vars = vec![];
 
@@ -543,7 +534,12 @@ impl ObligationCache<'_> {
                 Alias(name, _, _, AliasKind::Opaque) => {
                     let opaque = *name;
                     if self
-                        .check_opaque_and_read(subs, opaque, Symbol::ENCODE_ENCODING)
+                        .check_opaque_and_read(
+                            subs,
+                            abilities_store,
+                            opaque,
+                            Symbol::ENCODE_ENCODING,
+                        )
                         .is_err()
                     {
                         return Err(var);
