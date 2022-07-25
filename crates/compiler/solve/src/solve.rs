@@ -110,6 +110,12 @@ pub enum TypeError {
         derive_region: Region,
         impl_region: Region,
     },
+    WrongSpecialization {
+        region: Region,
+        ability_member: Symbol,
+        expected_opaque: Symbol,
+        found_opaque: Symbol,
+    },
 }
 
 use roc_types::types::Alias;
@@ -1739,39 +1745,60 @@ fn check_ability_specialization(
 
                 match specialization_type {
                     Some(Obligated::Opaque(opaque)) => {
-                        // This is a specialization for an opaque - that's allowed.
+                        // This is a specialization for an opaque - but is it the opaque the
+                        // specialization was claimed to be for?
+                        if opaque == impl_key.opaque {
+                            // It was! All is good.
 
-                        subs.commit_snapshot(snapshot);
-                        introduce(subs, rank, pools, &vars);
+                            subs.commit_snapshot(snapshot);
+                            introduce(subs, rank, pools, &vars);
 
-                        let specialization_lambda_sets = specialization_lambda_sets
-                            .into_iter()
-                            .map(|((symbol, region), var)| {
-                                debug_assert_eq!(symbol, ability_member);
-                                (region, var)
-                            })
-                            .collect();
+                            let specialization_lambda_sets = specialization_lambda_sets
+                                .into_iter()
+                                .map(|((symbol, region), var)| {
+                                    debug_assert_eq!(symbol, ability_member);
+                                    (region, var)
+                                })
+                                .collect();
 
-                        deferred_uls_to_resolve.union(other_lambda_sets_to_specialize);
+                            deferred_uls_to_resolve.union(other_lambda_sets_to_specialize);
 
-                        let specialization_region = symbol_loc_var.region;
-                        let specialization =
-                            MemberSpecializationInfo::new(symbol, specialization_lambda_sets);
+                            let specialization_region = symbol_loc_var.region;
+                            let specialization =
+                                MemberSpecializationInfo::new(symbol, specialization_lambda_sets);
 
-                        // Make sure we check that the opaque has specialized all members of the
-                        // ability, after we finish solving the module.
-                        deferred_obligations
-                            .add(must_implement_ability, AbilityImplError::IncompleteAbility);
-                        // This specialization dominates any derives that might be present.
-                        deferred_obligations.dominate(
-                            RequestedDeriveKey {
-                                opaque,
-                                ability: parent_ability,
-                            },
-                            specialization_region,
-                        );
+                            // Make sure we check that the opaque has specialized all members of the
+                            // ability, after we finish solving the module.
+                            deferred_obligations
+                                .add(must_implement_ability, AbilityImplError::IncompleteAbility);
+                            // This specialization dominates any derives that might be present.
+                            deferred_obligations.dominate(
+                                RequestedDeriveKey {
+                                    opaque,
+                                    ability: parent_ability,
+                                },
+                                specialization_region,
+                            );
 
-                        Ok(specialization)
+                            Ok(specialization)
+                        } else {
+                            // This def is not specialized for the claimed opaque type, that's an
+                            // error.
+
+                            // Commit so that `var` persists in subs.
+                            subs.commit_snapshot(snapshot);
+
+                            let problem = TypeError::WrongSpecialization {
+                                region: symbol_loc_var.region,
+                                ability_member: impl_key.ability_member,
+                                expected_opaque: impl_key.opaque,
+                                found_opaque: opaque,
+                            };
+
+                            problems.push(problem);
+
+                            Err(())
+                        }
                     }
                     Some(Obligated::Adhoc(var)) => {
                         // This is a specialization of a structural type - never allowed.
@@ -1795,7 +1822,7 @@ fn check_ability_specialization(
                     None => {
                         // This can happen when every ability constriant on a type variable went
                         // through only another type variable. That means this def is not specialized
-                        // for one concrete type - we won't admit this.
+                        // for one concrete type, and especially not our opaque - we won't admit this currently.
 
                         // Rollback the snapshot so we unlink the root signature with the specialization,
                         // so we can have two separate error types.

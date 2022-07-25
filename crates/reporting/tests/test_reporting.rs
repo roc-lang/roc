@@ -10089,4 +10089,31 @@ All branches in an `if` must have the same type!
     your code don't wonder why it is there.
     "###
     );
+
+    test_report!(
+        specialization_for_wrong_type,
+        indoc!(
+            r#"
+            app "test" provides [hash, Id, Id2] to "./platform"
+
+            Hash has hash : a -> U64 | a has Hash
+
+            Id := {} has [Hash {hash}]
+            Id2 := {}
+
+            hash = \@Id2 _ -> 0
+            "#
+        ),
+        @r###"
+    ── WRONG SPECIALIZATION TYPE ───────────────────────────── /code/proj/Main.roc ─
+
+    This specialization of `hash` is not for the expected type:
+
+    8│  hash = \@Id2 _ -> 0
+        ^^^^
+
+    It was previously claimed to be a specialization for `Id`, but was
+    determined to actually specialize `Id2`!
+    "###
+    );
 }

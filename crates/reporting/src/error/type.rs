@@ -254,6 +254,35 @@ pub fn type_problem<'b>(
                 severity: Severity::Warning,
             })
         }
+        WrongSpecialization {
+            region,
+            ability_member,
+            expected_opaque,
+            found_opaque,
+        } => {
+            let stack = [
+                alloc.concat([
+                    alloc.reflow("This specialization of "),
+                    alloc.symbol_unqualified(ability_member),
+                    alloc.reflow(" is not for the expected type:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat([
+                    alloc.reflow("It was previously claimed to be a specialization for "),
+                    alloc.symbol_unqualified(expected_opaque),
+                    alloc.reflow(", but was determined to actually specialize "),
+                    alloc.symbol_unqualified(found_opaque),
+                    alloc.reflow("!"),
+                ]),
+            ];
+
+            Some(Report {
+                title: "WRONG SPECIALIZATION TYPE".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity: Severity::RuntimeError,
+            })
+        }
     }
 }
 
