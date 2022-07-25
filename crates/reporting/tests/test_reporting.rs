@@ -21,7 +21,7 @@ mod test_reporting {
         DEFAULT_PALETTE,
     };
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
-    use roc_solve::solve;
+    use roc_solve_problem::TypeError;
     use roc_types::subs::Subs;
     use std::path::PathBuf;
 
@@ -107,7 +107,7 @@ mod test_reporting {
     ) -> Result<
         (
             String,
-            Vec<solve::TypeError>,
+            Vec<TypeError>,
             Vec<roc_problem::can::Problem>,
             ModuleId,
             Interns,
@@ -185,7 +185,7 @@ mod test_reporting {
         expr_src: &'a str,
     ) -> Result<
         (
-            Vec<solve::TypeError>,
+            Vec<TypeError>,
             Vec<roc_problem::can::Problem>,
             ModuleId,
             Interns,

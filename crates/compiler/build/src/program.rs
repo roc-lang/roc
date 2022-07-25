@@ -5,6 +5,7 @@ use roc_load::{LoadedModule, MonomorphizedModule};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
+use roc_solve_problem::TypeError;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -60,7 +61,7 @@ fn report_problems_help(
     sources: &MutMap<ModuleId, (PathBuf, Box<str>)>,
     interns: &Interns,
     can_problems: &mut MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
-    type_problems: &mut MutMap<ModuleId, Vec<roc_solve::solve::TypeError>>,
+    type_problems: &mut MutMap<ModuleId, Vec<TypeError>>,
 ) -> Problems {
     use roc_reporting::report::{
         can_problem, type_problem, Report, RocDocAllocator, Severity::*, DEFAULT_PALETTE,

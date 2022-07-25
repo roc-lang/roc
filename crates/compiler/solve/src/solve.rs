@@ -1,6 +1,6 @@
 use crate::ability::{
     resolve_ability_specialization, type_implementing_specialization, AbilityImplError,
-    CheckedDerives, ObligationCache, PendingDerivesTable, Resolved, Unfulfilled,
+    CheckedDerives, ObligationCache, PendingDerivesTable, Resolved,
 };
 use crate::module::Solved;
 use bumpalo::Bump;
@@ -21,6 +21,7 @@ use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_problem::can::CycleEntry;
 use roc_region::all::{Loc, Region};
+use roc_solve_problem::TypeError;
 use roc_types::subs::{
     self, get_member_lambda_sets_at_region, AliasVariables, Content, Descriptor, FlatType,
     GetSubsSlice, LambdaSet, Mark, OptVariable, Rank, RecordFields, Subs, SubsIndex, SubsSlice,
@@ -28,8 +29,8 @@ use roc_types::subs::{
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, ErrorType, MemberImpl,
-    OptAbleType, OptAbleVar, PatternCategory, Reason, TypeExtension, Uls,
+    gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, MemberImpl, OptAbleType,
+    OptAbleVar, Reason, TypeExtension, Uls,
 };
 use roc_unify::unify::{
     unify, unify_introduced_ability_specialization, Mode, MustImplementConstraints, Obligated,
@@ -85,32 +86,6 @@ use roc_unify::unify::{
 // Thus instead the inferred type for `id` is generalized (see the `generalize` function) to `a -> a`.
 // Ranks are used to limit the number of type variables considered for generalization. Only those inside
 // of the let (so those used in inferring the type of `\x -> x`) are considered.
-
-#[derive(Debug, Clone)]
-pub enum TypeError {
-    BadExpr(Region, Category, ErrorType, Expected<ErrorType>),
-    BadPattern(Region, PatternCategory, ErrorType, PExpected<ErrorType>),
-    CircularType(Region, Symbol, ErrorType),
-    CircularDef(Vec<CycleEntry>),
-    BadType(roc_types::types::Problem),
-    UnexposedLookup(Symbol),
-    UnfulfilledAbility(Unfulfilled),
-    BadExprMissingAbility(Region, Category, ErrorType, Vec<Unfulfilled>),
-    BadPatternMissingAbility(Region, PatternCategory, ErrorType, Vec<Unfulfilled>),
-    Exhaustive(roc_exhaustive::Error),
-    StructuralSpecialization {
-        region: Region,
-        typ: ErrorType,
-        ability: Symbol,
-        member: Symbol,
-    },
-    WrongSpecialization {
-        region: Region,
-        ability_member: Symbol,
-        expected_opaque: Symbol,
-        found_opaque: Symbol,
-    },
-}
 
 use roc_types::types::Alias;
 

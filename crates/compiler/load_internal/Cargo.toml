@@ -20,6 +20,7 @@ roc_problem = { path = "../problem" }
 roc_unify = { path = "../unify" }
 roc_parse = { path = "../parse" }
 roc_solve = { path = "../solve" }
+roc_solve_problem = { path = "../solve_problem" }
 roc_late_solve = { path = "../late_solve" }
 roc_mono = { path = "../mono" }
 roc_target = { path = "../roc_target" }

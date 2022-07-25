@@ -16,7 +16,7 @@ roc_types = { path = "../types" }
 roc_builtins = { path = "../builtins" }
 roc_constrain = { path = "../constrain" }
 roc_unify = { path = "../unify" }
-roc_solve = { path = "../solve" }
+roc_solve_problem = { path = "../solve_problem" }
 roc_mono = { path = "../mono" }
 roc_load = { path = "../load" }
 roc_target = { path = "../roc_target" }

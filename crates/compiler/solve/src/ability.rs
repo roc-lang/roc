@@ -4,13 +4,14 @@ use roc_collections::{VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
+use roc_solve_problem::{TypeError, UnderivableReason, Unfulfilled};
 use roc_types::subs::{instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, Subs, Variable};
-use roc_types::types::{AliasKind, Category, ErrorType, PatternCategory};
+use roc_types::types::{AliasKind, Category, PatternCategory};
 use roc_unify::unify::MustImplementConstraints;
 use roc_unify::unify::{MustImplementAbility, Obligated};
 
 use crate::solve::type_to_var;
-use crate::solve::{Aliases, Pools, TypeError};
+use crate::solve::{Aliases, Pools};
 
 #[derive(Debug, Clone)]
 pub enum AbilityImplError {
@@ -20,35 +21,6 @@ pub enum AbilityImplError {
     BadExpr(Region, Category, Variable),
     /// Promote this error to a `TypeError::BadPattern` from elsewhere
     BadPattern(Region, PatternCategory, Variable),
-}
-
-#[derive(PartialEq, Debug, Clone)]
-pub enum UnderivableReason {
-    NotABuiltin,
-    /// The surface type is not derivable
-    SurfaceNotDerivable,
-    /// A nested type is not derivable
-    NestedNotDerivable(ErrorType),
-}
-
-#[derive(PartialEq, Debug, Clone)]
-pub enum Unfulfilled {
-    /// No claimed implementation of an ability for an opaque type.
-    OpaqueDoesNotImplement { typ: Symbol, ability: Symbol },
-    /// Cannot derive implementation of an ability for a structural type.
-    AdhocUnderivable {
-        typ: ErrorType,
-        ability: Symbol,
-        reason: UnderivableReason,
-    },
-    /// Cannot derive implementation of an ability for an opaque type.
-    OpaqueUnderivable {
-        typ: ErrorType,
-        ability: Symbol,
-        opaque: Symbol,
-        derive_region: Region,
-        reason: UnderivableReason,
-    },
 }
 
 /// Indexes a requested deriving of an ability for an opaque type.

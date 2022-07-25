@@ -3375,7 +3375,7 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_reporting",
- "roc_solve",
+ "roc_solve_problem",
  "roc_std",
  "roc_target",
  "roc_types",
@@ -3825,6 +3825,7 @@ dependencies = [
  "roc_region",
  "roc_reporting",
  "roc_solve",
+ "roc_solve_problem",
  "roc_target",
  "roc_test_utils",
  "roc_types",
@@ -4026,6 +4027,7 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_solve",
+ "roc_solve_problem",
  "roc_std",
  "roc_target",
  "roc_test_utils",
@@ -4059,10 +4061,24 @@ dependencies = [
  "roc_region",
  "roc_reporting",
  "roc_solve",
+ "roc_solve_problem",
  "roc_target",
  "roc_types",
  "roc_unify",
  "tempfile",
+]
+
+[[package]]
+name = "roc_solve_problem"
+version = "0.1.0"
+dependencies = [
+ "roc_can",
+ "roc_collections",
+ "roc_exhaustive",
+ "roc_module",
+ "roc_problem",
+ "roc_region",
+ "roc_types",
 ]
 
 [[package]]

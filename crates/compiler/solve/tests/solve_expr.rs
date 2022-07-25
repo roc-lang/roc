@@ -21,7 +21,7 @@ mod solve_expr {
     use roc_problem::can::Problem;
     use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Region};
     use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
-    use roc_solve::solve::TypeError;
+    use roc_solve_problem::TypeError;
     use roc_types::{
         pretty_print::{name_and_print_var, DebugPrint},
         types::MemberImpl,

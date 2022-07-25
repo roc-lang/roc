@@ -16,6 +16,7 @@ use roc_parse::parser::{SourceError, SyntaxError};
 use roc_problem::can::Problem;
 use roc_region::all::Loc;
 use roc_solve::solve::{self, Aliases};
+use roc_solve_problem::TypeError;
 use roc_types::subs::{Content, Subs, VarStore, Variable};
 use roc_types::types::Type;
 use std::hash::Hash;
@@ -29,7 +30,7 @@ pub fn test_home() -> ModuleId {
 #[allow(clippy::too_many_arguments)]
 pub fn infer_expr(
     subs: Subs,
-    problems: &mut Vec<solve::TypeError>,
+    problems: &mut Vec<TypeError>,
     constraints: &Constraints,
     constraint: &Constraint,
     pending_derives: PendingDerives,
