@@ -109,6 +109,22 @@ static_assertions::assert_eq_size!(SpecializationId, Option<SpecializationId>);
 
 pub enum SpecializationLambdaSetError {}
 
+/// A key into a particular implementation of an ability member for an opaque type.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct ImplKey {
+    pub opaque: Symbol,
+    pub ability_member: Symbol,
+}
+
+/// Fully-resolved implementation of an ability member for an opaque type.
+/// This is only fully known after type solving of the owning module.
+#[derive(Clone, Debug)]
+pub enum ResolvedImpl {
+    Impl(MemberSpecializationInfo<Resolved>),
+    Derived,
+    Error,
+}
+
 /// Stores information about what abilities exist in a scope, what it means to implement an
 /// ability, and what types implement them.
 // TODO(abilities): this should probably go on the Scope, I don't put it there for now because we
@@ -434,7 +450,31 @@ impl IAbilitiesStore<Resolved> {
 }
 
 impl IAbilitiesStore<Pending> {
-    pub fn import_specialization(
+    pub fn import_implementation(&mut self, impl_key: ImplKey, resolved_impl: &ResolvedImpl) {
+        let ImplKey {
+            opaque,
+            ability_member,
+        } = impl_key;
+
+        let member_impl = match resolved_impl {
+            ResolvedImpl::Impl(specialization) => {
+                self.import_specialization(specialization);
+                MemberImpl::Impl(specialization.symbol)
+            }
+            ResolvedImpl::Derived => MemberImpl::Derived,
+            ResolvedImpl::Error => MemberImpl::Error,
+        };
+
+        let old_declared_impl = self
+            .declared_implementations
+            .insert((opaque, ability_member), member_impl);
+        debug_assert!(
+            old_declared_impl.is_none(),
+            "Replacing existing declared impl!"
+        );
+    }
+
+    fn import_specialization(
         &mut self,
         specialization: &MemberSpecializationInfo<impl ResolvePhase>,
     ) {

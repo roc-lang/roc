@@ -18,7 +18,7 @@ use roc_can::{
     def::Def,
     expr::Declarations,
     module::{
-        ExposedByModule, ExposedForModule, ExposedModuleTypes, ResolvedSpecializations,
+        ExposedByModule, ExposedForModule, ExposedModuleTypes, ResolvedImplementations,
         RigidVariables,
     },
 };
@@ -137,7 +137,7 @@ fn check_derived_typechecks_and_golden(
         ModuleId::ENCODE,
         ExposedModuleTypes {
             exposed_types_storage_subs: exposed_encode_types,
-            resolved_specializations: ResolvedSpecializations::default(),
+            resolved_implementations: ResolvedImplementations::default(),
         },
     );
     let exposed_for_module =
@@ -233,7 +233,7 @@ where
         mut interns,
         exposed_types_storage: exposed_encode_types,
         abilities_store,
-        resolved_specializations,
+        resolved_implementations,
         ..
     } = roc_load_internal::file::load_and_typecheck_str(
         &arena,
@@ -259,7 +259,7 @@ where
         ModuleId::ENCODE,
         ExposedModuleTypes {
             exposed_types_storage_subs: exposed_encode_types.clone(),
-            resolved_specializations,
+            resolved_implementations,
         },
     );
 
