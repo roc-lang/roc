@@ -13,11 +13,14 @@ use ven_pretty::DocAllocator;
 
 use crate::pretty_print::{pretty_print_def, Ctx};
 use roc_can::{
-    abilities::{AbilitiesStore, ResolvedSpecializations, SpecializationLambdaSets},
+    abilities::{AbilitiesStore, SpecializationLambdaSets},
     constraint::Constraints,
     def::Def,
     expr::Declarations,
-    module::{ExposedByModule, ExposedForModule, ExposedModuleTypes, RigidVariables},
+    module::{
+        ExposedByModule, ExposedForModule, ExposedModuleTypes, ResolvedSpecializations,
+        RigidVariables,
+    },
 };
 use roc_collections::VecSet;
 use roc_constrain::expr::constrain_decls;

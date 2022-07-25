@@ -5,12 +5,13 @@ use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
 use roc_builtins::roc::module_source;
-use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedSpecializations};
+use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::expr::Declarations;
 use roc_can::expr::PendingDerives;
 use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
+    ResolvedSpecializations,
 };
 use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
 use roc_constrain::module::constrain_module;
@@ -45,7 +46,7 @@ use roc_solve::module::{Solved, SolvedModule};
 use roc_solve::solve;
 use roc_target::TargetInfo;
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, VarStore, Variable};
-use roc_types::types::{Alias, AliasKind};
+use roc_types::types::{Alias, AliasKind, MemberImpl};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
 use std::env::current_dir;
@@ -4050,8 +4051,8 @@ pub fn add_imports(
     // One idea is to just always assume external modules fulfill their specialization obligations
     // and save lambda set resolution for mono.
     for (_, module_types) in exposed_for_module.exposed_by_module.iter_all() {
-        for ((member, typ), specialization) in module_types.resolved_specializations.iter() {
-            pending_abilities.import_specialization(*member, *typ, specialization)
+        for resolved_specialization in module_types.resolved_specializations.values() {
+            pending_abilities.import_specialization(resolved_specialization)
         }
     }
 
@@ -4099,6 +4100,30 @@ pub fn add_imports(
     );
 
     (import_variables, abilities_store)
+}
+
+/// Extracts the ability member specializations owned by a solved module.
+fn extract_module_owned_specializations(
+    module_id: ModuleId,
+    abilities_store: &AbilitiesStore,
+) -> ResolvedSpecializations {
+    abilities_store
+        .iter_declared_implementations()
+        .filter(|((member, typ), _)| {
+            // This module solved this specialization if either the member or the type comes from the
+            // module.
+            member.module_id() == module_id || typ.module_id() == module_id
+        })
+        .filter_map(|(_, member_impl)| match member_impl {
+            MemberImpl::Impl(impl_symbol) => {
+                let specialization = abilities_store.specialization_info(*impl_symbol).expect(
+                    "declared implementations should be resolved conclusively after solving",
+                );
+                Some((*impl_symbol, specialization.clone()))
+            }
+            MemberImpl::Derived | MemberImpl::Error => None,
+        })
+        .collect()
 }
 
 #[allow(clippy::complexity)]
@@ -4164,16 +4189,8 @@ fn run_solve_solve(
             derived_module,
         );
 
-        // Figure out what specializations belong to this module
-        let solved_specializations: ResolvedSpecializations = abilities_store
-            .iter_declared_implementations()
-            .filter(|((member, typ), _)| {
-                // This module solved this specialization if either the member or the type comes from the
-                // module.
-                member.module_id() == module_id || typ.module_id() == module_id
-            })
-            .map(|(key, specialization)| (key, specialization.clone()))
-            .collect();
+        let solved_specializations =
+            extract_module_owned_specializations(module_id, &abilities_store);
 
         let is_specialization_symbol =
             |sym| solved_specializations.values().any(|ms| ms.symbol == sym);

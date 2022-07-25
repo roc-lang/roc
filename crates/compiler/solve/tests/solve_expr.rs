@@ -19,7 +19,10 @@ mod solve_expr {
     use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Region};
     use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
     use roc_solve::solve::TypeError;
-    use roc_types::pretty_print::{name_and_print_var, DebugPrint};
+    use roc_types::{
+        pretty_print::{name_and_print_var, DebugPrint},
+        types::MemberImpl,
+    };
     use std::path::PathBuf;
 
     // HELPERS
@@ -361,13 +364,24 @@ mod solve_expr {
         if !type_problems.is_empty() {
             eprintln!("{:?}", type_problems);
             panic!();
-        }iter_declared_impls
+        }
 
-        let known_specializations = abilities_store.iter_specializations();
+        let known_specializations = abilities_store.iter_declared_implementations().filter_map(
+            |((member, typ), member_impl)| match member_impl {
+                MemberImpl::Impl(impl_symbol) => {
+                    let specialization = abilities_store.specialization_info(*impl_symbol).expect(
+                        "declared implementations should be resolved conclusively after solving",
+                    );
+                    Some((member, typ, specialization.clone()))
+                }
+                MemberImpl::Derived | MemberImpl::Error => None,
+            },
+        );
+
         use std::collections::HashSet;
         let pretty_specializations = known_specializations
             .into_iter()
-            .map(|((member, typ), _)| {
+            .map(|(member, typ, _)| {
                 let member_data = abilities_store.member_def(member).unwrap();
                 let member_str = member.as_str(&interns);
                 let ability_str = member_data.parent_ability.as_str(&interns);
