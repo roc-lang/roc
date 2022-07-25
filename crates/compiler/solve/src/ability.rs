@@ -238,8 +238,10 @@ impl DeferredObligations {
         // Go through and attach generic "type does not implement ability" errors, if they were not
         // part of a larger context.
         for mia in incomplete_not_in_context.into_iter() {
-            if let Err(unfulfilled) = obligation_cache.check_one(subs, mia) {
-                if !reported_in_context.contains(&mia) {
+            // If the obligation is already cached, we must have already reported it in another
+            // context.
+            if !obligation_cache.has_cached(mia) && !reported_in_context.contains(&mia) {
+                if let Err(unfulfilled) = obligation_cache.check_one(subs, mia) {
                     problems.push(TypeError::UnfulfilledAbility(unfulfilled.clone()));
                 }
             }
@@ -271,6 +273,19 @@ impl ObligationCache<'_> {
         match typ {
             Obligated::Adhoc(var) => self.check_adhoc(subs, var, ability),
             Obligated::Opaque(opaque) => self.check_opaque_and_read(subs, opaque, ability).clone(),
+        }
+    }
+
+    fn has_cached(&self, mia: MustImplementAbility) -> bool {
+        match mia.typ {
+            Obligated::Opaque(opaque) => self.impl_cache.contains_key(&ImplKey {
+                opaque,
+                ability: mia.ability,
+            }),
+            Obligated::Adhoc(_) => {
+                // ad-hoc obligations are never cached
+                false
+            }
         }
     }
 

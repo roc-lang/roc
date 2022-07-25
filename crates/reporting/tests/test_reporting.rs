@@ -9109,10 +9109,6 @@ All branches in an `if` must have the same type!
 
     Tip: `A` does not implement `Encoding`. Consider adding a custom
     implementation or `has Encode.Encoding` to the definition of `A`.
-
-    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
-
-    The type `A` does not fully implement the ability `Encoding`.
     "###
     );
 
