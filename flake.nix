@@ -112,6 +112,9 @@
           debugir
           rust
           rust-bindgen
+
+          # dependency of the cli-platform (see examples/interactive/cli-platform)
+          openssl
         ]);
       in
       {
@@ -123,7 +126,7 @@
           NIX_GLIBC_PATH = if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";
           LD_LIBRARY_PATH = with pkgs;
             lib.makeLibraryPath
-              ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ] ++ linuxInputs);
+              ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib] ++ linuxInputs);
           NIXPKGS_ALLOW_UNFREE = 1; # to run the editor with NVIDIA's closed source drivers
         };
 
