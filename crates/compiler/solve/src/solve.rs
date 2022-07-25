@@ -1,6 +1,6 @@
 use crate::ability::{
     resolve_ability_specialization, type_implementing_specialization, AbilityImplError,
-    DeferredObligations, PendingDerivesTable, RequestedDeriveKey, Resolved, Unfulfilled,
+    DeferredObligations, PendingDerivesTable, Resolved, Unfulfilled,
 };
 use crate::module::Solved;
 use bumpalo::Bump;
@@ -832,7 +832,6 @@ fn solve(
                         rank,
                         abilities_store,
                         problems,
-                        deferred_obligations,
                         deferred_uls_to_resolve,
                         *symbol,
                         *loc_var,
@@ -940,7 +939,6 @@ fn solve(
                         rank,
                         abilities_store,
                         problems,
-                        deferred_obligations,
                         deferred_uls_to_resolve,
                         *symbol,
                         *loc_var,
@@ -1703,7 +1701,6 @@ fn check_ability_specialization(
     rank: Rank,
     abilities_store: &mut AbilitiesStore,
     problems: &mut Vec<TypeError>,
-    deferred_obligations: &mut DeferredObligations,
     deferred_uls_to_resolve: &mut UlsOfVar,
     symbol: Symbol,
     symbol_loc_var: Loc<Variable>,
@@ -1763,18 +1760,8 @@ fn check_ability_specialization(
 
                             deferred_uls_to_resolve.union(other_lambda_sets_to_specialize);
 
-                            let specialization_region = symbol_loc_var.region;
                             let specialization =
                                 MemberSpecializationInfo::new(symbol, specialization_lambda_sets);
-
-                            // This specialization dominates any derives that might be present.
-                            deferred_obligations.dominate(
-                                RequestedDeriveKey {
-                                    opaque,
-                                    ability: parent_ability,
-                                },
-                                specialization_region,
-                            );
 
                             Ok(specialization)
                         } else {
