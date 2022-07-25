@@ -1767,10 +1767,6 @@ fn check_ability_specialization(
                             let specialization =
                                 MemberSpecializationInfo::new(symbol, specialization_lambda_sets);
 
-                            // Make sure we check that the opaque has specialized all members of the
-                            // ability, after we finish solving the module.
-                            deferred_obligations
-                                .add(must_implement_ability, AbilityImplError::IncompleteAbility);
                             // This specialization dominates any derives that might be present.
                             deferred_obligations.dominate(
                                 RequestedDeriveKey {
