@@ -114,10 +114,6 @@ pub struct DeferredObligations {
     obligations: Vec<(MustImplementConstraints, AbilityImplError)>,
     /// Derives that module-defined opaques claim to have.
     pending_derives: PendingDerivesTable,
-    /// Derives that are claimed, but have also been determined to have
-    /// specializations. Maps to the first member specialization of the same
-    /// ability.
-    dominated_derives: VecMap<RequestedDeriveKey, Region>,
 }
 
 impl DeferredObligations {
@@ -125,19 +121,11 @@ impl DeferredObligations {
         Self {
             obligations: Default::default(),
             pending_derives,
-            dominated_derives: Default::default(),
         }
     }
 
     pub fn add(&mut self, must_implement: MustImplementConstraints, on_error: AbilityImplError) {
         self.obligations.push((must_implement, on_error));
-    }
-
-    pub fn dominate(&mut self, key: RequestedDeriveKey, impl_region: Region) {
-        // Only builtin abilities can be derived, and hence dominated.
-        if self.pending_derives.0.contains_key(&key) && !self.dominated_derives.contains_key(&key) {
-            self.dominated_derives.insert(key, impl_region);
-        }
     }
 
     // Rules for checking ability implementations:
@@ -159,13 +147,11 @@ impl DeferredObligations {
         let Self {
             obligations,
             pending_derives,
-            dominated_derives,
         } = self;
 
         let mut obligation_cache = ObligationCache {
             abilities_store,
             pending_derives: &pending_derives,
-            dominated_derives: &dominated_derives,
 
             impl_cache: VecMap::with_capacity(obligations.len()),
             derive_cache: VecMap::with_capacity(pending_derives.0.len()),
@@ -181,17 +167,6 @@ impl DeferredObligations {
                 Ok(()) => legal_derives.push(derive_key),
                 Err(problem) => problems.push(TypeError::UnfulfilledAbility(problem.clone())),
             }
-        }
-
-        for (derive_key, impl_region) in dominated_derives.iter() {
-            let derive_region = pending_derives.0.get(derive_key).unwrap().1;
-
-            problems.push(TypeError::DominatedDerive {
-                opaque: derive_key.opaque,
-                ability: derive_key.ability,
-                derive_region,
-                impl_region: *impl_region,
-            });
         }
 
         // Keep track of which types that have an incomplete ability were reported as part of
@@ -282,7 +257,6 @@ type ObligationResult = Result<(), Unfulfilled>;
 
 struct ObligationCache<'a> {
     abilities_store: &'a AbilitiesStore,
-    dominated_derives: &'a VecMap<RequestedDeriveKey, Region>,
     pending_derives: &'a PendingDerivesTable,
 
     impl_cache: VecMap<ImplKey, ObligationResult>,
@@ -346,18 +320,8 @@ impl ObligationCache<'_> {
 
         match self.pending_derives.0.get(&derive_key) {
             Some(&(opaque_real_var, derive_region)) => {
-                if self.dominated_derives.contains_key(&derive_key) {
-                    // We have a derive, but also a custom implementation. The custom
-                    // implementation takes priority because we'll use that for codegen.
-                    // We'll report an error for the conflict, and whether the derive is
-                    // legal will be checked out-of-band.
-                    self.check_impl(impl_key);
-                    ReadCache::Impl
-                } else {
-                    // Only a derive
-                    self.check_derive(subs, derive_key, opaque_real_var, derive_region);
-                    ReadCache::Derive
-                }
+                self.check_derive(subs, derive_key, opaque_real_var, derive_region);
+                ReadCache::Derive
             }
             // Only an impl
             None => {
@@ -440,11 +404,6 @@ impl ObligationCache<'_> {
             ability: derive_key.ability,
         };
         let opt_specialization_result = self.impl_cache.insert(impl_key, fake_fulfilled.clone());
-        let is_dominated = self.dominated_derives.contains_key(&derive_key);
-        debug_assert!(
-            opt_specialization_result.is_none() || is_dominated,
-            "This derive also has a specialization but it's not marked as dominated!"
-        );
 
         let old_deriving = self.derive_cache.insert(derive_key, fake_fulfilled.clone());
         debug_assert!(
