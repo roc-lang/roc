@@ -2999,8 +2999,8 @@ fn list_find_empty_layout() {
             List.findFirst [] \_ -> True
             "#
         ),
-        0,
-        i64
+        RocResult::err(()),
+        RocResult<(), ()>
     );
 
     assert_evals_to!(
@@ -3009,8 +3009,8 @@ fn list_find_empty_layout() {
             List.findLast [] \_ -> True
             "#
         ),
-        0,
-        i64
+        RocResult::err(()),
+        RocResult<(), ()>
     );
 }
 
