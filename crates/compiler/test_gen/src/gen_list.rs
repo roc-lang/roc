@@ -362,6 +362,72 @@ fn list_split() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_split_first() {
+    assert_evals_to!(
+        r#"
+               List.splitFirst [2, 3, 0, 4, 0, 6, 0, 8, 9] 0
+               |> Result.map .before
+        "#,
+        RocResult::ok(RocList::<i64>::from_slice(&[2, 3])),
+        RocResult<RocList<i64>, ()>
+    );
+    assert_evals_to!(
+        r#"
+               List.splitFirst [2, 3, 0, 4, 0, 6, 0, 8, 9] 0
+               |> Result.map .after
+        "#,
+        RocResult::ok(RocList::<i64>::from_slice(&[4, 0, 6, 0, 8, 9])),
+        RocResult<RocList<i64>, ()>
+    );
+
+    assert_evals_to!(
+        "List.splitFirst [1, 2, 3] 0",
+        RocResult::err(()),
+        RocResult<(RocList<i64>, RocList<i64>), ()>
+    );
+
+    assert_evals_to!(
+        "List.splitFirst [] 1",
+        RocResult::err(()),
+        RocResult<(RocList<i64>, RocList<i64>), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_split_last() {
+    assert_evals_to!(
+        r#"
+               List.splitLast [2, 3, 0, 4, 0, 6, 0, 8, 9] 0
+               |> Result.map .before
+        "#,
+        RocResult::ok(RocList::<i64>::from_slice(&[2, 3, 0, 4, 0, 6])),
+        RocResult<RocList<i64>, ()>
+    );
+    assert_evals_to!(
+        r#"
+               List.splitLast [2, 3, 0, 4, 0, 6, 0, 8, 9] 0
+               |> Result.map .after
+        "#,
+        RocResult::ok(RocList::<i64>::from_slice(&[8, 9])),
+        RocResult<RocList<i64>, ()>
+    );
+
+    assert_evals_to!(
+        "List.splitLast [1, 2, 3] 0",
+        RocResult::err(()),
+        RocResult<(RocList<i64>, RocList<i64>), ()>
+    );
+
+    assert_evals_to!(
+        "List.splitLast [] 1",
+        RocResult::err(()),
+        RocResult<(RocList<i64>, RocList<i64>), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_drop() {
     assert_evals_to!(
         "List.drop [1,2,3] 2",
@@ -2846,12 +2912,24 @@ fn list_find() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.find ["a", "bc", "def"] (\s -> Str.countGraphemes s > 1) is
+            when List.findFirst ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 1) is
                 Ok v -> v
                 Err _ -> "not found"
             "#
         ),
         RocStr::from("bc"),
+        RocStr
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when List.findLast ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 1) is
+                Ok v -> v
+                Err _ -> "not found"
+            "#
+        ),
+        RocStr::from("def"),
         RocStr
     );
 }
@@ -2862,7 +2940,19 @@ fn list_find_not_found() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.find ["a", "bc", "def"] (\s -> Str.countGraphemes s > 5) is
+            when List.findFirst ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 5) is
+                Ok v -> v
+                Err _ -> "not found"
+            "#
+        ),
+        RocStr::from("not found"),
+        RocStr
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when List.findLast ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 5) is
                 Ok v -> v
                 Err _ -> "not found"
             "#
@@ -2878,7 +2968,19 @@ fn list_find_empty_typed_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.find [] (\s -> Str.countGraphemes s > 5) is
+            when List.findFirst [] (\s -> Str.countGraphemes s > 5) is
+                Ok v -> v
+                Err _ -> "not found"
+            "#
+        ),
+        RocStr::from("not found"),
+        RocStr
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when List.findLast [] (\s -> Str.countGraphemes s > 5) is
                 Ok v -> v
                 Err _ -> "not found"
             "#
@@ -2890,16 +2992,25 @@ fn list_find_empty_typed_list() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore = "Fails because monomorphization can't be done if we don't have a concrete element type!"]
 fn list_find_empty_layout() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.find [] (\_ -> True)
+            List.findFirst [] \_ -> True
             "#
         ),
-        0,
-        i64
+        RocResult::err(()),
+        RocResult<(), ()>
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.findLast [] \_ -> True
+            "#
+        ),
+        RocResult::err(()),
+        RocResult<(), ()>
     );
 }
 
@@ -2909,12 +3020,24 @@ fn list_find_index() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findIndex ["a", "bc", "def"] (\s -> Str.countGraphemes s > 1) is
+            when List.findFirstIndex ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 1) is
                 Ok v -> v
                 Err _ -> 999
             "#
         ),
         1,
+        usize
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when List.findLastIndex ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 1) is
+                Ok v -> v
+                Err _ -> 999
+            "#
+        ),
+        2,
         usize
     );
 }
@@ -2925,7 +3048,19 @@ fn list_find_index_not_found() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findIndex ["a", "bc", "def"] (\s -> Str.countGraphemes s > 5) is
+            when List.findFirstIndex ["a", "bc", "def", "g"] (\s -> Str.countGraphemes s > 5) is
+                Ok v -> v
+                Err _ -> 999
+            "#
+        ),
+        999,
+        usize
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when List.findLastIndex ["a", "bc", "def"] (\s -> Str.countGraphemes s > 5) is
                 Ok v -> v
                 Err _ -> 999
             "#
@@ -2941,13 +3076,181 @@ fn list_find_index_empty_typed_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            when List.findIndex [] (\s -> Str.countGraphemes s > 5) is
+            when List.findFirstIndex [] (\s -> Str.countGraphemes s > 5) is
                 Ok v -> v
                 Err _ -> 999
             "#
         ),
         999,
         usize
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when List.findLastIndex [] (\s -> Str.countGraphemes s > 5) is
+                Ok v -> v
+                Err _ -> 999
+            "#
+        ),
+        999,
+        usize
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_ends_with_empty() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.endsWith [] []
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.endsWith ["a"] []
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.endsWith [] ["a"]
+            "#
+        ),
+        false,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_ends_with_nonempty() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.endsWith ["a", "bc", "def"] ["def"]
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.endsWith ["a", "bc", "def"] ["bc", "def"]
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.endsWith ["a", "bc", "def"] ["a"]
+            "#
+        ),
+        false,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.endsWith ["a", "bc", "def"] [""]
+            "#
+        ),
+        false,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_starts_with_empty() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.startsWith [] []
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.startsWith ["a"] []
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.startsWith [] ["a"]
+            "#
+        ),
+        false,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_starts_with_nonempty() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.startsWith ["a", "bc", "def"] ["a"]
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.startsWith ["a", "bc", "def"] ["a", "bc"]
+            "#
+        ),
+        true,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.startsWith ["a", "bc", "def"] ["def"]
+            "#
+        ),
+        false,
+        bool
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.startsWith ["a", "bc", "def"] [""]
+            "#
+        ),
+        false,
+        bool
     );
 }
 

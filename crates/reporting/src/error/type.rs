@@ -1613,7 +1613,7 @@ fn format_category<'b>(
             alloc.text(" which was of type:"),
         ),
         Character => (
-            alloc.concat([this_is, alloc.text(" a character")]),
+            alloc.concat([this_is, alloc.text(" a Unicode scalar value")]),
             alloc.text(" of type:"),
         ),
         Lambda => (

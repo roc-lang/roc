@@ -81,7 +81,7 @@ withCapacity = \n -> @Dict (List.withCapacity n)
 
 get : Dict k v, k -> Result v [KeyNotFound]*
 get = \@Dict list, needle ->
-    when List.find list (\Pair key _ -> key == needle) is
+    when List.findFirst list (\Pair key _ -> key == needle) is
         Ok (Pair _ v) ->
             Ok v
 
@@ -94,7 +94,7 @@ walk = \@Dict list, initialState, transform ->
 
 insert : Dict k v, k, v -> Dict k v
 insert = \@Dict list, k, v ->
-    when List.findIndex list (\Pair key _ -> key == k) is
+    when List.findFirstIndex list (\Pair key _ -> key == k) is
         Err NotFound ->
             insertFresh (@Dict list) k v
 
@@ -109,7 +109,7 @@ len = \@Dict list ->
 
 remove : Dict k v, k -> Dict k v
 remove = \@Dict list, key ->
-    when List.findIndex list (\Pair k _ -> k == key) is
+    when List.findFirstIndex list (\Pair k _ -> k == key) is
         Err NotFound ->
             @Dict list
 

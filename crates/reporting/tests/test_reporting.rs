@@ -436,8 +436,8 @@ mod test_reporting {
 
         List.isEmpty
         List.set
-        List.iterate
         List.get
+        List.keepIf
     "###
     );
 
