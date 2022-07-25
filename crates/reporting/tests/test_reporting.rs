@@ -10063,4 +10063,30 @@ All branches in an `if` must have the same type!
     program's behavior!
     "###
     );
+
+    test_report!(
+        unused_shadow_specialization,
+        indoc!(
+            r#"
+            app "test" provides [hash, Id] to "./platform"
+
+            Hash has hash : a -> U64 | a has Hash
+
+            Id := {}
+
+            hash = \@Id _ -> 0
+            "#
+        ),
+        @r###"
+    ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+
+    `hash` is not used anywhere in your code.
+
+    7│  hash = \@Id _ -> 0
+        ^^^^
+
+    If you didn't intend on using `hash` then remove it so future readers of
+    your code don't wonder why it is there.
+    "###
+    );
 }
