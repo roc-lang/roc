@@ -715,7 +715,7 @@ fn run_in_place(
         exposed_by_module,
     );
 
-    deferred_obligations.add(new_must_implement, AbilityImplError::IncompleteAbility);
+    deferred_obligations.add(new_must_implement, AbilityImplError::DoesNotImplement);
 
     let (obligation_problems, _derived) = deferred_obligations.check_all(subs, abilities_store);
     problems.extend(obligation_problems);
@@ -1467,7 +1467,7 @@ fn solve(
                         introduce(subs, rank, pools, &vars);
 
                         deferred_obligations
-                            .add(must_implement_ability, AbilityImplError::IncompleteAbility);
+                            .add(must_implement_ability, AbilityImplError::DoesNotImplement);
                         deferred_uls_to_resolve.union(lambda_sets_to_specialize);
 
                         // Case 1: unify error types, but don't check exhaustiveness.

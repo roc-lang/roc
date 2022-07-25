@@ -14,8 +14,8 @@ use crate::solve::{Aliases, Pools, TypeError};
 
 #[derive(Debug, Clone)]
 pub enum AbilityImplError {
-    /// Promote this to an error that the type does not fully implement an ability
-    IncompleteAbility,
+    /// Promote this to a generic error that a type doesn't implement an ability
+    DoesNotImplement,
     /// Promote this error to a `TypeError::BadExpr` from elsewhere
     BadExpr(Region, Category, Variable),
     /// Promote this error to a `TypeError::BadPattern` from elsewhere
@@ -219,7 +219,7 @@ impl DeferredObligations {
 
             use AbilityImplError::*;
             match on_error {
-                IncompleteAbility => {
+                DoesNotImplement => {
                     // These aren't attached to another type error, so if these must_implement
                     // constraints aren't met, we'll emit a generic "this type doesn't implement an
                     // ability" error message at the end. We only want to do this if it turns out
