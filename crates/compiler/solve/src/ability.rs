@@ -1,4 +1,4 @@
-use roc_can::abilities::AbilitiesStore;
+use roc_can::abilities::{AbilitiesStore, ImplKey};
 use roc_can::expr::PendingDerives;
 use roc_collections::VecMap;
 use roc_error_macros::internal_error;
@@ -59,14 +59,7 @@ pub enum Unfulfilled {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct RequestedDeriveKey {
     pub opaque: Symbol,
-    pub ability: Symbol,
-}
-
-/// Indexes a custom implementation of an ability for an opaque type.
-#[derive(Debug, PartialEq, Clone, Copy)]
-struct ImplKey {
-    opaque: Symbol,
-    ability: Symbol,
+    pub ability_member: Symbol,
 }
 
 #[derive(Debug)]
@@ -89,7 +82,10 @@ impl PendingDerivesTable {
                     ability.is_derivable_ability(),
                     "Not a builtin - should have been caught during can"
                 );
-                let derive_key = RequestedDeriveKey { opaque, ability };
+                let derive_key = RequestedDeriveKey {
+                    opaque,
+                    ability_member: ability,
+                };
 
                 // Neither rank nor pools should matter here.
                 let opaque_var =
@@ -188,7 +184,7 @@ impl DeferredObligations {
 
             problems.push(TypeError::DominatedDerive {
                 opaque: derive_key.opaque,
-                ability: derive_key.ability,
+                ability: derive_key.ability_member,
                 derive_region,
                 impl_region: *impl_region,
             });
@@ -340,9 +336,20 @@ impl ObligationCache<'_> {
         }
     }
 
-    fn check_opaque(&mut self, subs: &mut Subs, opaque: Symbol, ability: Symbol) -> ReadCache {
-        let impl_key = ImplKey { opaque, ability };
-        let derive_key = RequestedDeriveKey { opaque, ability };
+    fn check_opaque(
+        &mut self,
+        subs: &mut Subs,
+        opaque: Symbol,
+        ability_member: Symbol,
+    ) -> ReadCache {
+        let impl_key = ImplKey {
+            opaque,
+            ability_member,
+        };
+        let derive_key = RequestedDeriveKey {
+            opaque,
+            ability_member,
+        };
 
         match self.pending_derives.0.get(&derive_key) {
             Some(&(opaque_real_var, derive_region)) => {
@@ -371,13 +378,22 @@ impl ObligationCache<'_> {
         &mut self,
         subs: &mut Subs,
         opaque: Symbol,
-        ability: Symbol,
+        ability_member: Symbol,
     ) -> &ObligationResult {
-        match self.check_opaque(subs, opaque, ability) {
-            ReadCache::Impl => self.impl_cache.get(&ImplKey { opaque, ability }).unwrap(),
+        match self.check_opaque(subs, opaque, ability_member) {
+            ReadCache::Impl => self
+                .impl_cache
+                .get(&ImplKey {
+                    opaque,
+                    ability_member,
+                })
+                .unwrap(),
             ReadCache::Derive => self
                 .derive_cache
-                .get(&RequestedDeriveKey { opaque, ability })
+                .get(&RequestedDeriveKey {
+                    opaque,
+                    ability_member,
+                })
                 .unwrap(),
         }
     }
@@ -387,19 +403,13 @@ impl ObligationCache<'_> {
             return;
         }
 
-        let ImplKey { opaque, ability } = impl_key;
-
-        let members_of_ability = self.abilities_store.members_of_ability(ability).unwrap();
+        let members_of_ability = self
+            .abilities_store
+            .members_of_ability(impl_key.ability_member)
+            .unwrap();
         let mut missing_members = Vec::new();
         for &member in members_of_ability {
-            if self
-                .abilities_store
-                .get_implementation(roc_can::abilities::ImplKey {
-                    opaque,
-                    ability_member: ability,
-                })
-                .is_none()
-            {
+            if self.abilities_store.get_implementation(impl_key).is_none() {
                 let root_data = self.abilities_store.member_def(member).unwrap();
                 missing_members.push(Loc::at(root_data.region, member));
             }
@@ -407,8 +417,8 @@ impl ObligationCache<'_> {
 
         let obligation_result = if !missing_members.is_empty() {
             Err(Unfulfilled::Incomplete {
-                typ: opaque,
-                ability,
+                typ: impl_key.opaque,
+                ability: impl_key.ability_member,
                 missing_members,
             })
         } else {
@@ -437,7 +447,7 @@ impl ObligationCache<'_> {
         // want to keep that result around.
         let impl_key = ImplKey {
             opaque: derive_key.opaque,
-            ability: derive_key.ability,
+            ability_member: derive_key.ability_member,
         };
         let opt_specialization_result = self.impl_cache.insert(impl_key, fake_fulfilled.clone());
         let is_dominated = self.dominated_derives.contains_key(&derive_key);
@@ -454,7 +464,7 @@ impl ObligationCache<'_> {
 
         // Now we check whether the structural type behind the opaque is derivable, since that's
         // what we'll need to generate an implementation for during codegen.
-        let real_var_result = self.check_adhoc(subs, opaque_real_var, derive_key.ability);
+        let real_var_result = self.check_adhoc(subs, opaque_real_var, derive_key.ability_member);
 
         let root_result = real_var_result.map_err(|err| match err {
             // Promote the failure, which should be related to a structural type not being
