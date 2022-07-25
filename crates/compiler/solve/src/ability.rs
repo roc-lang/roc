@@ -114,7 +114,6 @@ pub struct ObligationCache {
 
 enum ReadCache {
     Impl,
-    Derive,
 }
 
 pub struct CheckedDerives {
@@ -253,7 +252,7 @@ impl ObligationCache {
         match typ {
             Obligated::Adhoc(var) => self.check_adhoc(subs, abilities_store, var, ability),
             Obligated::Opaque(opaque) => self
-                .check_opaque_and_read(subs, abilities_store, opaque, ability)
+                .check_opaque_and_read(abilities_store, opaque, ability)
                 .clone(),
         }
     }
@@ -315,13 +314,11 @@ impl ObligationCache {
 
     fn check_opaque(
         &mut self,
-        subs: &mut Subs,
         abilities_store: &AbilitiesStore,
         opaque: Symbol,
         ability: Symbol,
     ) -> ReadCache {
         let impl_key = ImplKey { opaque, ability };
-        let derive_key = RequestedDeriveKey { opaque, ability };
 
         self.check_impl(abilities_store, impl_key);
         ReadCache::Impl
@@ -329,17 +326,12 @@ impl ObligationCache {
 
     fn check_opaque_and_read(
         &mut self,
-        subs: &mut Subs,
         abilities_store: &AbilitiesStore,
         opaque: Symbol,
         ability: Symbol,
     ) -> &ObligationResult {
-        match self.check_opaque(subs, abilities_store, opaque, ability) {
+        match self.check_opaque(abilities_store, opaque, ability) {
             ReadCache::Impl => self.impl_cache.get(&ImplKey { opaque, ability }).unwrap(),
-            ReadCache::Derive => self
-                .derive_cache
-                .get(&RequestedDeriveKey { opaque, ability })
-                .unwrap(),
         }
     }
 
@@ -534,12 +526,7 @@ impl ObligationCache {
                 Alias(name, _, _, AliasKind::Opaque) => {
                     let opaque = *name;
                     if self
-                        .check_opaque_and_read(
-                            subs,
-                            abilities_store,
-                            opaque,
-                            Symbol::ENCODE_ENCODING,
-                        )
+                        .check_opaque_and_read(abilities_store, opaque, Symbol::ENCODE_ENCODING)
                         .is_err()
                     {
                         return Err(var);
