@@ -229,6 +229,7 @@ mod test_parse {
         pass/parse_as_ann.expr,
         pass/pattern_with_space_in_parens.expr, // https://github.com/rtfeldman/roc/issues/929
         pass/plus_if.expr,
+        pass/plus_when.expr,
         pass/pos_inf_float.expr,
         pass/positive_float.expr,
         pass/positive_int.expr,
