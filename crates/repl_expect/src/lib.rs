@@ -81,7 +81,6 @@ struct ExpectMemory {
 macro_rules! deref_number {
     ($name: ident, $t: ty) => {
         fn $name(&self, addr: usize) -> $t {
-            // dbg!(std::any::type_name::<$t>(), self.start, addr);
             let ptr = unsafe { self.start.add(addr) } as *const _;
             *self.bytes_read.borrow_mut() += std::mem::size_of::<$t>();
             unsafe { std::ptr::read_unaligned(ptr) }

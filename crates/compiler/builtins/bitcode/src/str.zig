@@ -2531,7 +2531,7 @@ pub fn strCloneTo(
         const array: [@sizeOf(RocStr)]u8 = @bitCast([@sizeOf(RocStr)]u8, string);
 
         var i: usize = 0;
-        while (i < array.len) : (i += 1) {
+        while (i < WIDTH) : (i += 1) {
             ptr[offset + i] = array[i];
         }
 

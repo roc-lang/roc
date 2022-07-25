@@ -441,16 +441,11 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         );
 
         for expect in expects {
-            // clear the state
-            libc::memset(shared_ptr.cast(), 0, SHM_SIZE as _);
-            *((shared_ptr as *mut usize).add(1)) = 16;
+            let sequence = ExpectSequence::new(shared_ptr.cast());
 
             let result: Result<(), String> = try_run_jit_function!(lib, expect.name, (), |v: ()| v);
 
             let shared_memory_ptr: *const u8 = shared_ptr.cast();
-
-            let buffer =
-                std::slice::from_raw_parts(shared_memory_ptr.add(16), SHM_SIZE as usize - 16);
 
             if let Err(roc_panic_message) = result {
                 failed += 1;
@@ -463,19 +458,19 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
                     interns,
                 );
                 println!();
-            } else if buffer.iter().any(|b| *b != 0) {
+            } else if sequence.count_failures() > 0 {
                 failed += 1;
 
-                let count = *(shared_ptr as *const usize).add(0);
-                let mut offset = 16;
+                let mut offset = ExpectSequence::START_OFFSET;
 
-                for _ in 0..count {
+                for _ in 0..sequence.count_failures() {
                     offset += render_expect_failure(
                         arena,
                         Some(expect),
                         &mut expectations,
                         interns,
-                        shared_memory_ptr.add(offset),
+                        shared_memory_ptr,
+                        offset,
                     );
 
                     println!();
@@ -511,6 +506,32 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         );
 
         Ok((failed > 0) as i32)
+    }
+}
+
+struct ExpectSequence {
+    ptr: *const u8,
+}
+
+impl ExpectSequence {
+    const START_OFFSET: usize = 16;
+
+    const COUNT_INDEX: usize = 0;
+    const OFFSET_INDEX: usize = 1;
+
+    fn new(ptr: *mut u8) -> Self {
+        unsafe {
+            libc::memset(ptr.cast(), 0, SHM_SIZE as _);
+            *((ptr as *mut usize).add(Self::OFFSET_INDEX)) = Self::START_OFFSET;
+        }
+
+        Self {
+            ptr: ptr as *const u8,
+        }
+    }
+
+    fn count_failures(&self) -> usize {
+        unsafe { *(self.ptr as *const usize).add(Self::COUNT_INDEX) }
     }
 }
 
@@ -1058,6 +1079,7 @@ unsafe fn roc_run_native_debug(
                             &mut expectations,
                             interns,
                             shared_memory_ptr,
+                            ExpectSequence::START_OFFSET,
                         );
                     }
                     _ => println!("received signal {}", sig),
@@ -1119,12 +1141,38 @@ fn render_expect_panic<'a>(
     println!("{}", buf);
 }
 
+struct ExpectFrame {
+    region: Region,
+    module_id: ModuleId,
+    start_offset: usize,
+}
+
+impl ExpectFrame {
+    fn at_offset(start: *const u8, offset: usize) -> Self {
+        let region_bytes: [u8; 8] = unsafe { *(start.add(offset).cast()) };
+        let region: Region = unsafe { std::mem::transmute(region_bytes) };
+
+        let module_id_bytes: [u8; 4] = unsafe { *(start.add(offset + 8).cast()) };
+        let module_id: ModuleId = unsafe { std::mem::transmute(module_id_bytes) };
+
+        // skip to frame, 8 bytes for region, 4 for module id
+        let start_offset = offset + 12;
+
+        Self {
+            region,
+            module_id,
+            start_offset,
+        }
+    }
+}
+
 fn render_expect_failure<'a>(
     arena: &'a Bump,
     expect: Option<ToplevelExpect>,
     expectations: &mut VecMap<ModuleId, Expectations>,
     interns: &'a Interns,
     start: *const u8,
+    offset: usize,
 ) -> usize {
     use roc_reporting::report::Report;
     use roc_reporting::report::RocDocAllocator;
@@ -1133,11 +1181,9 @@ fn render_expect_failure<'a>(
     // we always run programs as the host
     let target_info = (&target_lexicon::Triple::host()).into();
 
-    let region_bytes: [u8; 8] = unsafe { *(start.cast()) };
-    let region: Region = unsafe { std::mem::transmute(region_bytes) };
-
-    let module_id_bytes: [u8; 4] = unsafe { *(start.add(8).cast()) };
-    let module_id: ModuleId = unsafe { std::mem::transmute(module_id_bytes) };
+    let frame = ExpectFrame::at_offset(start, offset);
+    let region = frame.region;
+    let module_id = frame.module_id;
 
     let data = expectations.get_mut(&module_id).unwrap();
 
@@ -1164,9 +1210,6 @@ fn render_expect_failure<'a>(
 
     let alloc = RocDocAllocator::new(&src_lines, module_id, interns);
 
-    // 8 bytes for region, 4 for module id
-    let start_offset = 12;
-
     let current = match data.expectations.get(&region) {
         None => {
             invalid_regions(alloc, filename, line_info, region);
@@ -1192,7 +1235,7 @@ fn render_expect_failure<'a>(
         subs,
         interns,
         start,
-        start_offset,
+        frame.start_offset,
         &variables,
     )
     .unwrap();
