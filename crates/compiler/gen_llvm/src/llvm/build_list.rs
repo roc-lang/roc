@@ -634,33 +634,40 @@ where
 
     let entry = env.builder.get_insert_block().unwrap();
 
-    // constant 1i64
+    // constant 1usize
     let one = env.ptr_int().const_int(1, false);
+    let zero = env.ptr_int().const_zero();
 
     // allocate a stack slot for the current index
     let index_alloca = builder.build_alloca(env.ptr_int(), index_name);
-    builder.build_store(index_alloca, env.ptr_int().const_zero());
+    builder.build_store(index_alloca, zero);
 
     let loop_bb = ctx.append_basic_block(parent, "loop");
-    builder.build_unconditional_branch(loop_bb);
-    builder.position_at_end(loop_bb);
+    let after_loop_bb = ctx.append_basic_block(parent, "after_loop");
 
-    let current_index_phi = env.builder.build_phi(env.ptr_int(), "current_index");
-    let current_index = current_index_phi.as_basic_value().into_int_value();
-
-    let next_index = builder.build_int_add(current_index, one, "next_index");
-
-    current_index_phi.add_incoming(&[(&next_index, loop_bb), (&env.ptr_int().const_zero(), entry)]);
-
-    // The body of the loop
-    loop_fn(current_index);
-
-    // #index < end
-    let loop_end_cond = bounds_check_comparison(builder, next_index, end);
-
-    let after_loop_bb = ctx.append_basic_block(parent, "after_outer_loop_2");
-
+    let loop_end_cond = bounds_check_comparison(builder, zero, end);
     builder.build_conditional_branch(loop_end_cond, loop_bb, after_loop_bb);
+
+    {
+        builder.position_at_end(loop_bb);
+
+        let current_index_phi = env.builder.build_phi(env.ptr_int(), "current_index");
+        let current_index = current_index_phi.as_basic_value().into_int_value();
+
+        let next_index = builder.build_int_add(current_index, one, "next_index");
+
+        current_index_phi
+            .add_incoming(&[(&next_index, loop_bb), (&env.ptr_int().const_zero(), entry)]);
+
+        // The body of the loop
+        loop_fn(current_index);
+
+        // #index < end
+        let loop_end_cond = bounds_check_comparison(builder, next_index, end);
+
+        builder.build_conditional_branch(loop_end_cond, loop_bb, after_loop_bb);
+    }
+
     builder.position_at_end(after_loop_bb);
 
     index_alloca
