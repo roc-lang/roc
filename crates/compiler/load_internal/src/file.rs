@@ -2469,18 +2469,10 @@ fn update<'a>(
                         .clone()
                         .into_module_ids();
 
-                    let mut all_ident_ids = state.constrained_ident_ids;
+                    let all_ident_ids = state.constrained_ident_ids;
 
-                    // Associate the ident IDs from the derived synth module
-                    let (_, derived_synth_ident_ids) = Arc::try_unwrap(state.derived_module)
-                        .unwrap_or_else(|_| {
-                            internal_error!("Outstanding references to the derived module")
-                        })
-                        .into_inner()
-                        .unwrap()
-                        .decompose();
-                    ModuleId::DERIVED_SYNTH.register_debug_idents(&derived_synth_ident_ids);
-                    all_ident_ids.insert(ModuleId::DERIVED_SYNTH, derived_synth_ident_ids);
+                    // No need to get ident IDs from the derived module, since derived idents
+                    // should never appear in user code.
 
                     Interns {
                         module_ids,
