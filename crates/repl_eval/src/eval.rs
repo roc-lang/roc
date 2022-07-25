@@ -41,13 +41,13 @@ pub enum ToAstProblem {
 /// we get to a struct or tag, we know what the labels are and can turn them
 /// back into the appropriate user-facing literals.
 #[allow(clippy::too_many_arguments)]
-pub fn jit_to_ast<'a, 'env, A: ReplApp<'a>>(
+pub fn jit_to_ast<'a, A: ReplApp<'a>>(
     arena: &'a Bump,
     app: &mut A,
     main_fn_name: &str,
     layout: ProcLayout<'a>,
-    content: &'a Content,
-    subs: &'env Subs,
+    content: &Content,
+    subs: &Subs,
     interns: &'a Interns,
     target_info: TargetInfo,
 ) -> Result<Expr<'a>, ToAstProblem> {
@@ -280,7 +280,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
     app: &mut A,
     main_fn_name: &str,
     layout: &Layout<'a>,
-    content: &'a Content,
+    content: &Content,
 ) -> Result<Expr<'a>, ToAstProblem> {
     let (newtype_containers, alias_content, raw_content) =
         unroll_newtypes_and_aliases(env, content);

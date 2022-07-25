@@ -18,7 +18,7 @@ use roc_types::subs::{Subs, Variable};
 pub fn get_values<'a>(
     target_info: TargetInfo,
     arena: &'a bumpalo::Bump,
-    subs: &'a Subs,
+    subs: &Subs,
     interns: &'a Interns,
     start: *const u8,
     start_offset: usize,
