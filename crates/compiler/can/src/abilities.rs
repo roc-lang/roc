@@ -282,6 +282,25 @@ impl<Phase: ResolvePhase> IAbilitiesStore<Phase> {
         self.specialization_to_root.get(&specializing_symbol)
     }
 
+    /// Answers the question, "does an opaque type claim to implement a particular ability?"
+    ///
+    /// Whether the given opaque typ faithfully implements or derives all members of the given ability
+    /// without errors is not validated.
+    ///
+    /// When the given ability is not known to the current store, this call will return `false`.
+    pub fn has_declared_implementation(&self, opaque: Symbol, ability: Symbol) -> bool {
+        // Idea: choose an ability member and check whether there is a declared implementation for it.
+        // During canonicalization, we would have added either all members as declared
+        // implementations, or none if the opaque doesn't implement the ability.
+        match self.members_of_ability(ability) {
+            Some(members) => self.declared_implementations.contains_key(&ImplKey {
+                opaque,
+                ability_member: members[0],
+            }),
+            None => false,
+        }
+    }
+
     /// Creates a store from [`self`] that closes over the abilities/members given by the
     /// imported `symbols`, and their specializations (if any).
     pub fn closure_from_imported(&self, symbols: &VecSet<Symbol>) -> PendingAbilitiesStore {

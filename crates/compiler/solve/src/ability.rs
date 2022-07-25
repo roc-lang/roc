@@ -33,12 +33,8 @@ pub enum UnderivableReason {
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum Unfulfilled {
-    /// Incomplete custom implementation for an ability by an opaque type.
-    Incomplete {
-        typ: Symbol,
-        ability: Symbol,
-        missing_members: Vec<Loc<Symbol>>,
-    },
+    /// No claimed implementation of an ability for an opaque type.
+    OpaqueDoesNotImplement { typ: Symbol, ability: Symbol },
     /// Cannot derive implementation of an ability for a structural type.
     AdhocUnderivable {
         typ: ErrorType,
@@ -352,28 +348,14 @@ impl ObligationCache<'_> {
         }
 
         let ImplKey { opaque, ability } = impl_key;
+        let has_declared_impl = self
+            .abilities_store
+            .has_declared_implementation(opaque, ability);
 
-        let members_of_ability = self.abilities_store.members_of_ability(ability).unwrap();
-        let mut missing_members = Vec::new();
-        for &member in members_of_ability {
-            if self
-                .abilities_store
-                .get_implementation(roc_can::abilities::ImplKey {
-                    opaque,
-                    ability_member: member,
-                })
-                .is_none()
-            {
-                let root_data = self.abilities_store.member_def(member).unwrap();
-                missing_members.push(Loc::at(root_data.region, member));
-            }
-        }
-
-        let obligation_result = if !missing_members.is_empty() {
-            Err(Unfulfilled::Incomplete {
+        let obligation_result = if !has_declared_impl {
+            Err(Unfulfilled::OpaqueDoesNotImplement {
                 typ: opaque,
                 ability,
-                missing_members,
             })
         } else {
             Ok(())

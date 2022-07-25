@@ -8629,35 +8629,29 @@ All branches in an `if` must have the same type!
                 }
             "#
         ),
-        @r#"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        This expression has a type that does not implement the abilities it's expected to:
+    This expression has a type that does not implement the abilities it's expected to:
 
-        15│          notYet: hash (A 1),
-                                   ^^^
+    15│          notYet: hash (A 1),
+                               ^^^
 
-        Roc can't generate an implementation of the `#UserApp.Hash` ability for
+    Roc can't generate an implementation of the `#UserApp.Hash` ability for
 
-            [A (Num a)]b
+        [A (Num a)]b
 
-        Only builtin abilities can have generated implementations!
+    Only builtin abilities can have generated implementations!
 
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        This expression has a type that does not implement the abilities it's expected to:
+    This expression has a type that does not implement the abilities it's expected to:
 
-        14│          nope: hash (@User {}),
-                                 ^^^^^^^^
+    14│          nope: hash (@User {}),
+                             ^^^^^^^^
 
-        The type `User` does not fully implement the ability `Hash`. The following
-        specializations are missing:
-
-        A specialization for `hash`, which is defined here:
-
-        4│      hash : a -> U64 | a has Hash
-                ^^^^
-        "#
+    The type `User` does not fully implement the ability `Hash`.
+    "###
     );
 
     test_report!(
@@ -9095,37 +9089,31 @@ All branches in an `if` must have the same type!
         // TODO: this error message is quite unfortunate. We should remove the duplication, and
         // also support regions that point to things in other modules. See also https://github.com/rtfeldman/roc/issues/3056.
         @r###"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        This expression has a type that does not implement the abilities it's expected to:
+    This expression has a type that does not implement the abilities it's expected to:
 
-        4│  main = Encode.toEncoder { x: @A {} }
-                                    ^^^^^^^^^^^^
+    4│  main = Encode.toEncoder { x: @A {} }
+                                ^^^^^^^^^^^^
 
-        Roc can't generate an implementation of the `Encode.Encoding` ability
-        for
+    Roc can't generate an implementation of the `Encode.Encoding` ability
+    for
 
-            { x : A }
+        { x : A }
 
-        In particular, an implementation for
+    In particular, an implementation for
 
-            A
+        A
 
-        cannot be generated.
+    cannot be generated.
 
-        Tip: `A` does not implement `Encoding`. Consider adding a custom
-        implementation or `has Encode.Encoding` to the definition of `A`.
+    Tip: `A` does not implement `Encoding`. Consider adding a custom
+    implementation or `has Encode.Encoding` to the definition of `A`.
 
-        ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
+    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
 
-        The type `A` does not fully implement the ability `Encoding`. The
-        following specializations are missing:
-
-        A specialization for `toEncoder`, which is defined here:
-
-        5│
-                                                                                                                                                                                                                                                                                                                                                                                                                                                    ^^^^^^^^^
-        "###
+    The type `A` does not fully implement the ability `Encoding`.
+    "###
     );
 
     test_report!(
