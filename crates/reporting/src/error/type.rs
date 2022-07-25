@@ -221,39 +221,6 @@ pub fn type_problem<'b>(
                 severity: Severity::RuntimeError,
             })
         }
-        DominatedDerive {
-            opaque,
-            ability,
-            derive_region,
-            impl_region,
-        } => {
-            let stack = [
-                alloc.concat([
-                    alloc.symbol_unqualified(opaque),
-                    alloc.reflow(" both derives and custom-implements "),
-                    alloc.symbol_qualified(ability),
-                    alloc.reflow(". We found the derive here:"),
-                ]),
-                alloc.region(lines.convert_region(derive_region)),
-                alloc.concat([
-                    alloc.reflow("and one custom implementation of "),
-                    alloc.symbol_qualified(ability),
-                    alloc.reflow(" here:"),
-                ]),
-                alloc.region(lines.convert_region(impl_region)),
-                alloc.concat([
-                    alloc.reflow("Derived and custom implementations can conflict, so one of them needs to be removed!"),
-                ]),
-                alloc.note("").append(alloc.reflow("We'll try to compile your program using the custom implementation first, and fall-back on the derived implementation if needed. Make sure to disambiguate which one you want!")),
-            ];
-
-            Some(Report {
-                title: "CONFLICTING DERIVE AND IMPLEMENTATION".to_string(),
-                filename,
-                doc: alloc.stack(stack),
-                severity: Severity::Warning,
-            })
-        }
         WrongSpecialization {
             region,
             ability_member,

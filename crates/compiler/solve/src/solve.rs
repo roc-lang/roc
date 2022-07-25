@@ -104,12 +104,6 @@ pub enum TypeError {
         ability: Symbol,
         member: Symbol,
     },
-    DominatedDerive {
-        opaque: Symbol,
-        ability: Symbol,
-        derive_region: Region,
-        impl_region: Region,
-    },
     WrongSpecialization {
         region: Region,
         ability_member: Symbol,
