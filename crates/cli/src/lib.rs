@@ -1174,60 +1174,28 @@ fn render_expect_failure<'a>(
     start: *const u8,
     offset: usize,
 ) -> usize {
-    use roc_reporting::report::Report;
-    use roc_reporting::report::RocDocAllocator;
-    use ven_pretty::DocAllocator;
-
     // we always run programs as the host
     let target_info = (&target_lexicon::Triple::host()).into();
 
     let frame = ExpectFrame::at_offset(start, offset);
-    let region = frame.region;
     let module_id = frame.module_id;
 
+    let failure_region = frame.region;
+    let expect_region = expect.map(|e| e.region);
+
     let data = expectations.get_mut(&module_id).unwrap();
-
-    // TODO cache these line offsets?
-    let path = &data.path;
     let filename = data.path.to_owned();
-    let file_string = std::fs::read_to_string(path).unwrap();
-    let src_lines: Vec<_> = file_string.lines().collect();
+    let source = std::fs::read_to_string(&data.path).unwrap();
 
-    let line_info = roc_region::all::LineInfo::new(&file_string);
-    let display_region = match expect {
-        Some(expect) => {
-            if !expect.region.contains(&region) {
-                // this is an expect outside of a toplevel expect,
-                // likely in some function we called
-                region
-            } else {
-                Region::across_all([&expect.region, &region])
-            }
-        }
-        None => region,
-    };
-    let line_col_region = line_info.convert_region(display_region);
-
-    let alloc = RocDocAllocator::new(&src_lines, module_id, interns);
-
-    let current = match data.expectations.get(&region) {
-        None => {
-            invalid_regions(alloc, filename, line_info, region);
-            return 0;
-        }
+    let current = match data.expectations.get(&failure_region) {
+        None => panic!("region not in list of expects"),
         Some(current) => current,
     };
     let subs = arena.alloc(&mut data.subs);
 
     let (symbols, variables): (Vec<_>, Vec<_>) = current.iter().map(|(a, b)| (*a, *b)).unzip();
 
-    let error_types: Vec<_> = variables
-        .iter()
-        .map(|variable| {
-            let (error_type, _) = subs.var_to_error_type(*variable);
-            error_type
-        })
-        .collect();
+    let mut subs2 = subs.clone();
 
     let (offset, expressions) = roc_repl_expect::get_values(
         target_info,
@@ -1240,99 +1208,21 @@ fn render_expect_failure<'a>(
     )
     .unwrap();
 
-    use roc_fmt::annotation::Formattable;
-    use roc_reporting::error::r#type::error_type_to_doc;
+    use roc_reporting::error::expect::Renderer;
 
-    let it =
-        symbols
-            .iter()
-            .zip(expressions)
-            .zip(error_types)
-            .map(|((symbol, expr), error_type)| {
-                let mut buf = roc_fmt::Buf::new_in(arena);
-                expr.format(&mut buf, 0);
-
-                alloc.vcat([
-                    alloc
-                        .symbol_unqualified(*symbol)
-                        .append(" : ")
-                        .append(error_type_to_doc(&alloc, error_type)),
-                    alloc
-                        .symbol_unqualified(*symbol)
-                        .append(" = ")
-                        .append(buf.into_bump_str()),
-                ])
-            });
-
-    let doc = if it.len() > 0 {
-        alloc.stack([
-            alloc.text("This expectation failed:"),
-            alloc.region(line_col_region),
-            alloc.text("When it failed, these variables had these values:"),
-            alloc.stack(it),
-        ])
-    } else {
-        alloc.stack([
-            alloc.text("This expectation failed:"),
-            alloc.region(line_col_region),
-        ])
-    };
-
-    let report = Report {
-        title: "EXPECT FAILED".into(),
-        doc,
-        filename,
-        severity: roc_reporting::report::Severity::RuntimeError,
-    };
-
-    let mut buf = String::new();
-
-    report.render(
-        roc_reporting::report::RenderTarget::ColorTerminal,
-        &mut buf,
-        &alloc,
-        &roc_reporting::report::DEFAULT_PALETTE,
+    let renderer = Renderer::new(arena, interns, module_id, filename, &source);
+    let buf = renderer.render(
+        &mut subs2,
+        &symbols,
+        &variables,
+        &expressions,
+        expect_region,
+        failure_region,
     );
 
     println!("{}", buf);
 
     offset
-}
-
-fn invalid_regions(
-    alloc: roc_reporting::report::RocDocAllocator,
-    filename: PathBuf,
-    line_info: roc_region::all::LineInfo,
-    region: Region,
-) {
-    use ven_pretty::DocAllocator;
-
-    let line_col_region = line_info.convert_region(region);
-
-    let doc = alloc.stack([
-        alloc.text("Internal expect failure"),
-        alloc.region(line_col_region),
-    ]);
-
-    let report = roc_reporting::report::Report {
-        title: "EXPECT FAILED".into(),
-        doc,
-        filename,
-        severity: roc_reporting::report::Severity::RuntimeError,
-    };
-
-    let mut buf = String::new();
-
-    report.render(
-        roc_reporting::report::RenderTarget::ColorTerminal,
-        &mut buf,
-        &alloc,
-        &roc_reporting::report::DEFAULT_PALETTE,
-    );
-
-    println!("{}", buf);
-
-    panic!();
 }
 
 #[cfg(target_os = "linux")]
