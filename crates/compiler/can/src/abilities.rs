@@ -70,9 +70,6 @@ impl AbilityMemberData<Resolved> {
     }
 }
 
-/// (member, specialization type) -> specialization
-pub type ImplMap = VecMap<(Symbol, Symbol), MemberImpl>;
-
 /// Solved lambda sets for an ability member specialization. For example, if we have
 ///
 ///   Default has default : {} -[[] + a:default:1]-> a | a has Default
@@ -152,7 +149,7 @@ pub struct IAbilitiesStore<Phase: ResolvePhase> {
 
     /// Maps a tuple (member, type) specifying that `type` has an implementation of an ability
     /// member `member`, to how that implementation is defined.
-    declared_implementations: ImplMap,
+    declared_implementations: MutMap<ImplKey, MemberImpl>,
 
     /// Information about specialized ability member implementations for a type.
     specializations: MutMap<Symbol, MemberSpecializationInfo<Phase>>,
@@ -233,8 +230,7 @@ impl<Phase: ResolvePhase> IAbilitiesStore<Phase> {
             self.specialization_to_root
                 .insert(specialization_symbol, impl_key);
         }
-        self.declared_implementations
-            .insert((impl_key.ability_member, impl_key.opaque), member_impl);
+        self.declared_implementations.insert(impl_key, member_impl);
     }
 
     /// Records the implementations of an ability an opaque type declares to have.
@@ -344,12 +340,8 @@ impl<Phase: ResolvePhase> IAbilitiesStore<Phase> {
             // Add any specializations of the ability's members we know about.
             declared_implementations
                 .iter()
-                .filter(|((member, _), _)| members.contains(member))
-                .for_each(|(&(member, typ), member_impl)| {
-                    let impl_key = ImplKey {
-                        ability_member: member,
-                        opaque: typ,
-                    };
+                .filter(|(impl_key, _)| members.contains(&impl_key.ability_member))
+                .for_each(|(&impl_key, member_impl)| {
                     new.register_one_declared_impl(impl_key, *member_impl);
 
                     if let MemberImpl::Impl(spec_symbol) = member_impl {
@@ -398,26 +390,22 @@ impl IAbilitiesStore<Resolved> {
     /// the give type has an implementation of an ability member.
     pub fn iter_declared_implementations(
         &self,
-    ) -> impl Iterator<Item = ((Symbol, Symbol), &MemberImpl)> + '_ {
+    ) -> impl Iterator<Item = (ImplKey, &MemberImpl)> + '_ {
         self.declared_implementations.iter().map(|(k, v)| (*k, v))
     }
 
     /// Retrieves the declared implementation of `member` for `typ`, if it exists.
-    pub fn get_implementation(&self, member: Symbol, typ: Symbol) -> Option<&MemberImpl> {
-        self.declared_implementations.get(&(member, typ))
+    pub fn get_implementation(&self, impl_key: ImplKey) -> Option<&MemberImpl> {
+        self.declared_implementations.get(&impl_key)
     }
 
     /// Marks a declared implementation as either properly specializing, or as erroring.
     pub fn mark_implementation(
         &mut self,
-        ability_member: Symbol,
-        typ: Symbol,
+        impl_key: ImplKey,
         mark: Result<MemberSpecializationInfo<Resolved>, ()>,
     ) -> Result<(), MarkError> {
-        match self
-            .declared_implementations
-            .get_mut(&(ability_member, typ))
-        {
+        match self.declared_implementations.get_mut(&impl_key) {
             Some(member_impl) => match *member_impl {
                 MemberImpl::Impl(specialization_symbol) => {
                     debug_assert!(!self.specializations.contains_key(&specialization_symbol));
@@ -466,11 +454,6 @@ impl IAbilitiesStore<Resolved> {
 
 impl IAbilitiesStore<Pending> {
     pub fn import_implementation(&mut self, impl_key: ImplKey, resolved_impl: &ResolvedImpl) {
-        let ImplKey {
-            opaque,
-            ability_member,
-        } = impl_key;
-
         let member_impl = match resolved_impl {
             ResolvedImpl::Impl(specialization) => {
                 self.import_specialization(specialization);
@@ -480,9 +463,7 @@ impl IAbilitiesStore<Pending> {
             ResolvedImpl::Error => MemberImpl::Error,
         };
 
-        let old_declared_impl = self
-            .declared_implementations
-            .insert((ability_member, opaque), member_impl);
+        let old_declared_impl = self.declared_implementations.insert(impl_key, member_impl);
         debug_assert!(
             old_declared_impl.is_none(),
             "Replacing existing declared impl!"
@@ -539,8 +520,8 @@ impl IAbilitiesStore<Pending> {
             debug_assert!(old_root.is_none() || old_root.unwrap() == member);
         }
 
-        for ((member, typ), impl_) in declared_implementations.into_iter() {
-            let old_impl = self.declared_implementations.insert((member, typ), impl_);
+        for (impl_key, impl_) in declared_implementations.into_iter() {
+            let old_impl = self.declared_implementations.insert(impl_key, impl_);
             debug_assert!(old_impl.is_none() || old_impl.unwrap() == impl_);
         }
 

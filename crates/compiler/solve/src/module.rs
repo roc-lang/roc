@@ -1,5 +1,5 @@
 use crate::solve::{self, Aliases};
-use roc_can::abilities::{AbilitiesStore, ImplKey, ResolvedImpl};
+use roc_can::abilities::{AbilitiesStore, ResolvedImpl};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::expr::PendingDerives;
 use roc_can::module::{ExposedByModule, ResolvedImplementations, RigidVariables};
@@ -190,16 +190,14 @@ pub fn extract_module_owned_implementations(
 ) -> ResolvedImplementations {
     abilities_store
         .iter_declared_implementations()
-        .filter_map(|((member, typ), member_impl)| {
+        .filter_map(|(impl_key, member_impl)| {
             // This module solved this specialization if either the member or the type comes from the
             // module.
-            if member.module_id() != module_id && typ.module_id() != module_id {
+            if impl_key.ability_member.module_id() != module_id
+                && impl_key.opaque.module_id() != module_id
+            {
                 return None;
             }
-            let impl_key = ImplKey {
-                opaque: typ,
-                ability_member: member,
-            };
 
             let resolved_impl = match member_impl {
                 MemberImpl::Impl(impl_symbol) => {

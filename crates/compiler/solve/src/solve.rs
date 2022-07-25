@@ -1855,7 +1855,7 @@ fn check_ability_specialization(
         };
 
         abilities_store
-            .mark_implementation(impl_key.ability_member, impl_key.opaque, resolved_mark)
+            .mark_implementation(impl_key, resolved_mark)
             .expect("marked as a custom implementation, but not recorded as such");
     }
 }
@@ -2310,8 +2310,12 @@ fn get_specialization_lambda_set_ambient_function<P: Phase>(
             let opaque_home = opaque.module_id();
             let external_specialized_lset =
                 phase.with_module_abilities_store(opaque_home, |abilities_store| {
+            let impl_key = roc_can::abilities::ImplKey {
+                opaque,
+                ability_member,
+            };
                     let opt_specialization =
-                        abilities_store.get_implementation(ability_member, opaque);
+                        abilities_store.get_implementation(impl_key);
                     match (P::IS_LATE, opt_specialization) {
                         (false, None) => {
                             // doesn't specialize, we'll have reported an error for this

@@ -394,7 +394,10 @@ impl ObligationCache<'_> {
         for &member in members_of_ability {
             if self
                 .abilities_store
-                .get_implementation(member, opaque)
+                .get_implementation(roc_can::abilities::ImplKey {
+                    opaque,
+                    ability_member: ability,
+                })
                 .is_none()
             {
                 let root_data = self.abilities_store.member_def(member).unwrap();
@@ -671,7 +674,12 @@ pub fn resolve_ability_specialization(
 
     let resolved = match obligated {
         Obligated::Opaque(symbol) => {
-            match abilities_store.get_implementation(ability_member, symbol)? {
+            let impl_key = roc_can::abilities::ImplKey {
+                opaque: symbol,
+                ability_member,
+            };
+
+            match abilities_store.get_implementation(impl_key)? {
                 roc_types::types::MemberImpl::Impl(spec_symbol) => {
                     Resolved::Specialization(*spec_symbol)
                 }
