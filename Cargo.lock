@@ -4008,6 +4008,7 @@ dependencies = [
  "roc_constrain",
  "roc_derive",
  "roc_exhaustive",
+ "roc_fmt",
  "roc_load",
  "roc_module",
  "roc_parse",
