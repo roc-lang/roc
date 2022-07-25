@@ -6853,6 +6853,44 @@ mod solve_expr {
     }
 
     #[test]
+    #[ignore = "TODO: this currently runs into trouble with ping and pong first being inferred as overly-general before recursive constraining"]
+    fn resolve_mutually_recursive_ability_lambda_sets_inferred() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Bounce has
+                    ping : a -> a | a has Bounce
+                    pong : a -> a | a has Bounce
+
+                A := {} has [Bounce {ping, pong}]
+
+                ping = \@A {} -> pong (@A {})
+                #^^^^{-1}        ^^^^
+
+                pong = \@A {} -> ping (@A {})
+                #^^^^{-1}        ^^^^
+
+                main =
+                    a : A
+                    a = ping (@A {})
+                    #   ^^^^
+
+                    a
+                "#
+            ),
+            @r###"
+        A#ping(5) : A -[[ping(5)]]-> A
+        Bounce#pong(3) : A -[[pong(6)]]-> A
+        A#pong(6) : A -[[pong(6)]]-> A
+        A#ping(5) : A -[[ping(5)]]-> A
+        A#ping(5) : A -[[ping(5)]]-> A
+        "###
+        )
+    }
+
+    #[test]
     fn list_of_lambdas() {
         infer_queries!(
             indoc!(
