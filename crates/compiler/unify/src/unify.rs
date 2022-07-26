@@ -1372,7 +1372,7 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
                             //
                             // But, in expected function, they **should not** be treated as disjoint!
                             // In this case, the specialization lambda is not introducing any new
-                            // information, and is targetting exactly the local lambda `a:lam:1`.
+                            // information, and is targeting exactly the local lambda `a:lam:1`.
                             //
                             // So, to avoid introducing superfluous variables, we unify these disjoint
                             // variables once, and then progress on both sides. We progress on both
