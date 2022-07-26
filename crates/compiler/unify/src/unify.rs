@@ -1352,8 +1352,31 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
                             // If we're in the process of running the ambient lambda set
                             // specialization procedure, disjoint type variables being merged from
                             // the left and right lists are treated specially!
-                            // To avoid introducing superfluous variables, we unify disjoint variables
-                            // once, and then progress on both sides.
+                            //
+                            // In particular, we are unifying a local list of lambda sets, for
+                            // which the specialization is for (on the left), with specialization
+                            // lambda sets, which have just been freshened (on the right).
+                            //
+                            //     [ ..  a:lam:1 ] (local, undergoing specialization)
+                            //     [ .. a':lam:1 ] (specialization lambda sets, just freshened)
+                            //
+                            // Because the specialization lambdas are freshened, they certainly are
+                            // disjoint from the local lambdas - but they may be equivalent in
+                            // principle, from the perspective of a human looking at the
+                            // unification!
+                            //
+                            // Running with the example above, the specialization lambda set has an
+                            // unspecialized lambda `a':lam:1`. Now, this is disjoint from
+                            // `a:lam:1` in the local lambda set, from the purely technical
+                            // perspective that `a' != a`.
+                            //
+                            // But, in expected function, they **should not** be treated as disjoint!
+                            // In this case, the specialization lambda is not introducing any new
+                            // information, and is targetting exactly the local lambda `a:lam:1`.
+                            //
+                            // So, to avoid introducing superfluous variables, we unify these disjoint
+                            // variables once, and then progress on both sides. We progress on both
+                            // sides to avoid unifying more than what we should in our principle.
                             //
                             // It doesn't matter which side we choose to progress on, since after
                             // unification of flex vars roots are equivalent. So, choose the left
