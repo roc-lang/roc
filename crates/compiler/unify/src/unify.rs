@@ -1198,10 +1198,11 @@ fn separate_union_lambdas<M: MetaCollector>(
     )
 }
 
-// Arrange into partitions of (_, member, region).
-// Within each partition, place flex-able vars at the end of the partition.
-// Amongst all flex-able vars, sort by their root key, so that identical vars are next
-// to each other.
+/// ULS-SORT-ORDER:
+///   - Arrange into partitions of (_, member, region), in ascending order of (member, region).
+///   - Within each partition, place flex-able vars at the end of the partition.
+///   - Amongst all flex-able vars, sort by their root key, so that identical vars are next to each other.
+#[inline(always)]
 fn unspecialized_lambda_set_sorter(subs: &Subs, uls1: Uls, uls2: Uls) -> std::cmp::Ordering {
     let Uls(var1, sym1, region1) = uls1;
     let Uls(var2, sym2, region2) = uls2;
@@ -1230,106 +1231,198 @@ fn unspecialized_lambda_set_sorter(subs: &Subs, uls1: Uls, uls2: Uls) -> std::cm
     }
 }
 
+#[inline(always)]
 fn sort_unspecialized_lambda_sets(subs: &Subs, mut uls: Vec<Uls>) -> Vec<Uls> {
     uls.sort_by(|&uls1, &uls2| unspecialized_lambda_set_sorter(subs, uls1, uls2));
     uls
 }
 
+#[inline(always)]
+fn is_sorted_unspecialized_lamba_set_list(subs: &Subs, uls: &[Uls]) -> bool {
+    uls == sort_unspecialized_lambda_sets(subs, uls.to_vec())
+}
+
 fn unify_unspecialized_lambdas<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
-    uls1: SubsSlice<Uls>,
-    uls2: SubsSlice<Uls>,
+    uls_left: SubsSlice<Uls>,
+    uls_right: SubsSlice<Uls>,
 ) -> Result<(SubsSlice<Uls>, Outcome<M>), Outcome<M>> {
-    // For now we merge all variables of unspecialized lambdas in a lambda set that share the same
-    // ability member/region.
-    // See the section "A property that's lost, and how we can hold on to it" of
-    // solve/docs/ambient_lambda_set_specialization.md to see how we can loosen this restriction.
-
     // Note that we don't need to update the bookkeeping of variable -> lambda set to be resolved,
     // because if we had v1 -> lset1, and now lset1 ~ lset2, then afterward either lset1 still
     // resolves to itself or re-points to lset2.
     // In either case the merged unspecialized lambda sets will be there.
-    match (uls1.is_empty(), uls2.is_empty()) {
-        (true, true) => Ok((SubsSlice::default(), Default::default())),
-        (false, true) => Ok((uls1, Default::default())),
-        (true, false) => Ok((uls2, Default::default())),
-        (false, false) => {
-            let all_uls = (env.subs.get_subs_slice(uls1).iter())
-                .chain(env.subs.get_subs_slice(uls2))
-                .map(|&Uls(var, sym, region)| {
-                    // Take the root key to deduplicate
-                    Uls(env.subs.get_root_key_without_compacting(var), sym, region)
-                })
-                .collect::<Vec<_>>();
+    let (uls_left, uls_right) = match (uls_left.is_empty(), uls_right.is_empty()) {
+        (true, true) => return Ok((SubsSlice::default(), Default::default())),
+        (false, true) => return Ok((uls_left, Default::default())),
+        (true, false) => return Ok((uls_right, Default::default())),
+        (false, false) => (
+            env.subs.get_subs_slice(uls_left).to_vec(),
+            env.subs.get_subs_slice(uls_right).to_vec(),
+        ),
+    };
 
-            // Sort the unspecialized lambda sets prior to merging.
-            let mut all_uls = sort_unspecialized_lambda_sets(env.subs, all_uls);
+    // Unfortunately, it is not an invariant that `uls_left` and `uls_right` obey ULS-SORT-ORDER before
+    // merging.
+    //
+    // That's because flex-able variables in unspecialized lambda sets may be unified at any time,
+    // and unification of flex-able variables may change their root keys, which ULS-SORT-ORDER
+    // considers.
+    //
+    // As such, we must sort beforehand. In practice these sets are very, very small (<5 elements).
+    let uls_left = sort_unspecialized_lambda_sets(env.subs, uls_left);
+    let uls_right = sort_unspecialized_lambda_sets(env.subs, uls_right);
 
-            // Now merge the variables of unspecialized lambdas pointing to the same
-            // member/region.
-            let mut whole_outcome = Outcome::default();
-            let mut j = 1;
-            while j < all_uls.len() {
-                let i = j - 1;
-                let Uls(var_i, sym_i, region_i) = all_uls[i];
-                let Uls(var_j, sym_j, region_j) = all_uls[j];
-                if sym_i == sym_j && region_i == region_j {
-                    use Content::*;
+    let (mut uls_left, mut uls_right) = (uls_left.iter().peekable(), uls_right.iter().peekable());
+    let mut merged_uls = Vec::with_capacity(uls_left.len() + uls_right.len());
+    let mut whole_outcome = Outcome::default();
 
-                    match (
-                        env.subs.get_content_without_compacting(var_i),
-                        env.subs.get_content_without_compacting(var_j),
-                    ) {
-                        (
-                            FlexAbleVar(..) | RigidAbleVar(..),
-                            FlexAbleVar(..) | RigidAbleVar(..),
-                        ) => {
-                            // If the types are root-equivalent, de-duplicate them.
-                            // Otherwise, the type variables are disjoint, and we want to keep both
-                            // of them, for purposes of disjoint variable lambda specialization.
+    loop {
+        let (uls_l, uls_r) = match (uls_left.peek(), uls_right.peek()) {
+            (Some(uls_l), Some(uls_r)) => (**uls_l, **uls_r),
+            (Some(_), None) => {
+                merged_uls.push(*uls_left.next().unwrap());
+                continue;
+            }
+            (None, Some(_)) => {
+                merged_uls.push(*uls_right.next().unwrap());
+                continue;
+            }
+            (None, None) => break,
+        };
 
-                            if env.subs.equivalent_without_compacting(var_i, var_j) {
-                                // Keep the one in position `i` and drop the one in `j`, then move
-                                // on.
-                                all_uls.remove(j);
+        let Uls(var_l, sym_l, region_l) = uls_l;
+        let Uls(var_r, sym_r, region_r) = uls_r;
+
+        use std::cmp::Ordering::*;
+        match (sym_l, region_l).cmp(&(sym_r, region_r)) {
+            Less => {
+                // Left needs to catch up to right, add it to the merged lambdas.
+                merged_uls.push(*uls_left.next().unwrap());
+            }
+            Greater => {
+                // Right needs to catch up to left, add it to the merged lambdas.
+                merged_uls.push(*uls_right.next().unwrap());
+            }
+            Equal => {
+                // The interesting case - both point to the same specialization.
+                use Content::*;
+                match (
+                    env.subs.get_content_without_compacting(var_l),
+                    env.subs.get_content_without_compacting(var_r),
+                ) {
+                    (FlexAbleVar(..) | RigidAbleVar(..), FlexAbleVar(..) | RigidAbleVar(..)) => {
+                        // If the types are root-equivalent, de-duplicate them.
+                        //
+                        // Otherwise, the type variables are disjoint, and we want to keep both
+                        // of them, for purposes of disjoint variable lambda specialization.
+                        //
+                        // For more information, see "A Property that’s lost, and how we can hold on to it"
+                        // in solve/docs/ambient_lambda_set_specialization.md.
+
+                        if env.subs.equivalent_without_compacting(var_l, var_r) {
+                            //     ... a1    ...
+                            //     ... b1=a1 ...
+                            // =>  ... a1    ...
+                            //
+                            // Keep the one on the left, drop the one on the right.
+                            //
+                            // Then progress both, because the invariant tells us they must be
+                            // disjoint, and if there were any concrete variables, they would have
+                            // appeared earlier.
+                            let _dropped = uls_right.next().unwrap();
+                            let kept = uls_left.next().unwrap();
+                            merged_uls.push(*kept);
+                        } else {
+                            //     ... a1     ...
+                            //     ... b1     ...
+                            // =>  ... a1, b1 ...
+                            //
+                            // Keep both. But, we have to be careful about how we do this -
+                            // immediately add the one with the lower root, and advance that side;
+                            // keep the other as-is, because the next variable on the advanced side
+                            // might be lower than the current non-advanced variable. For example:
+                            //
+                            //     ... 640 645 ...
+                            //     ... 670 ...
+                            //
+                            // we want to add `640` to the merged list and advance to
+                            //
+                            //     ... 645 ...
+                            //     ... 670 ...
+                            //
+                            // rather than adding both `640` and `670`, and skipping the comparison
+                            // of `645` with `670`.
+                            if env.subs.get_root_key(var_l) < env.subs.get_root_key(var_r) {
+                                let kept = uls_left.next().unwrap();
+                                merged_uls.push(*kept);
                             } else {
-                                // Keep both.
-                                j += 1;
+                                let kept = uls_right.next().unwrap();
+                                merged_uls.push(*kept);
                             }
-                        }
-                        (_, _) => {
-                            // Any other two types - unify them.
-
-                            let outcome = unify_pool(env, pool, var_i, var_j, Mode::EQ);
-                            if !outcome.mismatches.is_empty() {
-                                return Err(outcome);
-                            }
-                            whole_outcome.union(outcome);
-                            // Keep the Uls in position `i` and remove the one in position `j`.
-                            // Then continue to compare `i` and the one behind `j`.
-                            all_uls.remove(j);
                         }
                     }
-                } else {
-                    // Keep both Uls since they correspond to different specialization
-                    // member/regions, and look at the next pair.
-                    j += 1;
+                    (FlexAbleVar(..) | RigidAbleVar(..), _) => {
+                        //     ... a1       ...
+                        //     ... {foo: _} ...
+                        // =>  ... {foo: _} ...
+                        //
+                        // Unify them, then advance the merged flex var.
+
+                        let outcome = unify_pool(env, pool, var_l, var_r, Mode::EQ);
+                        if !outcome.mismatches.is_empty() {
+                            return Err(outcome);
+                        }
+                        whole_outcome.union(outcome);
+
+                        let _dropped = uls_right.next().unwrap();
+                    }
+                    (_, FlexAbleVar(..) | RigidAbleVar(..)) => {
+                        //     ... {foo: _} ...
+                        //     ... a1       ...
+                        // =>  ... {foo: _} ...
+                        //
+                        // Unify them, then advance the merged flex var.
+
+                        let outcome = unify_pool(env, pool, var_l, var_r, Mode::EQ);
+                        if !outcome.mismatches.is_empty() {
+                            return Err(outcome);
+                        }
+                        whole_outcome.union(outcome);
+
+                        let _dropped = uls_left.next().unwrap();
+                    }
+                    (_, _) => {
+                        //     ... {foo: _} ...
+                        //     ... {foo: _} ...
+                        // =>  ... {foo: _} ...
+                        //
+                        // Unify them, then advance one.
+                        // (the choice is arbitrary, so we choose the left)
+
+                        let outcome = unify_pool(env, pool, var_l, var_r, Mode::EQ);
+                        if !outcome.mismatches.is_empty() {
+                            return Err(outcome);
+                        }
+                        whole_outcome.union(outcome);
+
+                        let _dropped = uls_left.next().unwrap();
+                    }
                 }
             }
-
-            debug_assert_eq!(
-                all_uls,
-                sort_unspecialized_lambda_sets(env.subs, all_uls.clone()),
-                "sorting or merging of unspecialized lambda sets not idempotent!"
-            );
-
-            Ok((
-                SubsSlice::extend_new(&mut env.subs.unspecialized_lambda_sets, all_uls),
-                whole_outcome,
-            ))
         }
     }
+
+    debug_assert!(
+        is_sorted_unspecialized_lamba_set_list(env.subs, &merged_uls),
+        "merging of unspecialized lambda sets does not preserve sort! {:?}",
+        merged_uls
+    );
+
+    Ok((
+        SubsSlice::extend_new(&mut env.subs.unspecialized_lambda_sets, merged_uls),
+        whole_outcome,
+    ))
 }
 
 fn unify_lambda_set_help<M: MetaCollector>(
