@@ -100,6 +100,10 @@ bitflags! {
         ///
         /// For example, t1 += [A Str] says we should "add" the tag "A Str" to the type of "t1".
         const PRESENT = 1 << 1;
+        /// Like [`Mode::EQ`], but also instructs the unifier that the ambient lambda set
+        /// specialization algorithm is running. This has implications for the unification of
+        /// unspecialized lambda sets; see [`unify_unspecialized_lambdas`].
+        const LAMBDA_SET_SPECIALIZATION = Mode::EQ.bits | (1 << 2);
     }
 }
 
@@ -112,6 +116,11 @@ impl Mode {
     fn is_present(&self) -> bool {
         debug_assert!(!self.contains(Mode::EQ | Mode::PRESENT));
         self.contains(Mode::PRESENT)
+    }
+
+    fn is_lambda_set_specialization(&self) -> bool {
+        debug_assert!(!self.contains(Mode::EQ | Mode::PRESENT));
+        self.contains(Mode::LAMBDA_SET_SPECIALIZATION)
     }
 
     fn as_eq(self) -> Self {
@@ -1049,6 +1058,7 @@ struct SeparatedUnionLambdas {
 fn separate_union_lambdas<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
+    mode: Mode,
     fields1: UnionLambdas,
     fields2: UnionLambdas,
 ) -> (Outcome<M>, SeparatedUnionLambdas) {
@@ -1157,7 +1167,7 @@ fn separate_union_lambdas<M: MetaCollector>(
                             maybe_mark_union_recursive(env, var1);
                             maybe_mark_union_recursive(env, var2);
 
-                            let outcome = unify_pool(env, pool, var1, var2, Mode::EQ);
+                            let outcome = unify_pool(env, pool, var1, var2, mode);
 
                             if !outcome.mismatches.is_empty() {
                                 env.subs.rollback_to(snapshot);
@@ -1245,6 +1255,7 @@ fn is_sorted_unspecialized_lamba_set_list(subs: &Subs, uls: &[Uls]) -> bool {
 fn unify_unspecialized_lambdas<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
+    mode: Mode,
     uls_left: SubsSlice<Uls>,
     uls_right: SubsSlice<Uls>,
 ) -> Result<(SubsSlice<Uls>, Outcome<M>), Outcome<M>> {
@@ -1333,6 +1344,33 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
                             let _dropped = uls_right.next().unwrap();
                             let kept = uls_left.next().unwrap();
                             merged_uls.push(*kept);
+                        } else if mode.is_lambda_set_specialization() {
+                            //     ... a1    ...
+                            //     ... b1    ...
+                            // =>  ... a1=b1 ...
+                            //
+                            // If we're in the process of running the ambient lambda set
+                            // specialization procedure, disjoint type variables being merged from
+                            // the left and right lists are treated specially!
+                            // To avoid introducing superfluous variables, we unify disjoint variables
+                            // once, and then progress on both sides.
+                            //
+                            // It doesn't matter which side we choose to progress on, since after
+                            // unification of flex vars roots are equivalent. So, choose the left
+                            // side.
+                            //
+                            // See the ambient lambda set specialization document for more details.
+                            let outcome = unify_pool(env, pool, var_l, var_r, mode);
+                            if !outcome.mismatches.is_empty() {
+                                return Err(outcome);
+                            }
+                            whole_outcome.union(outcome);
+
+                            debug_assert!(env.subs.equivalent_without_compacting(var_l, var_r));
+
+                            let _dropped = uls_right.next().unwrap();
+                            let kept = uls_left.next().unwrap();
+                            merged_uls.push(*kept);
                         } else {
                             //     ... a1     ...
                             //     ... b1     ...
@@ -1353,6 +1391,16 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
                             //
                             // rather than adding both `640` and `670`, and skipping the comparison
                             // of `645` with `670`.
+                            //
+                            // An important thing to notice is that we *don't* want to advance
+                            // both sides, because if these two variables are disjoint, then
+                            // advancing one side *might* make the next comparison be between
+                            // equivalent variables, for example in a case like
+                            //
+                            //     ... 640 670 ...
+                            //     ... 670 ...
+                            //
+                            // In the above case, we certainly only want to advance the left side!
                             if env.subs.get_root_key(var_l) < env.subs.get_root_key(var_r) {
                                 let kept = uls_left.next().unwrap();
                                 merged_uls.push(*kept);
@@ -1369,7 +1417,7 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
                         //
                         // Unify them, then advance the merged flex var.
 
-                        let outcome = unify_pool(env, pool, var_l, var_r, Mode::EQ);
+                        let outcome = unify_pool(env, pool, var_l, var_r, mode);
                         if !outcome.mismatches.is_empty() {
                             return Err(outcome);
                         }
@@ -1384,7 +1432,7 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
                         //
                         // Unify them, then advance the merged flex var.
 
-                        let outcome = unify_pool(env, pool, var_l, var_r, Mode::EQ);
+                        let outcome = unify_pool(env, pool, var_l, var_r, mode);
                         if !outcome.mismatches.is_empty() {
                             return Err(outcome);
                         }
@@ -1400,7 +1448,7 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
                         // Unify them, then advance one.
                         // (the choice is arbitrary, so we choose the left)
 
-                        let outcome = unify_pool(env, pool, var_l, var_r, Mode::EQ);
+                        let outcome = unify_pool(env, pool, var_l, var_r, mode);
                         if !outcome.mismatches.is_empty() {
                             return Err(outcome);
                         }
@@ -1467,7 +1515,7 @@ fn unify_lambda_set_help<M: MetaCollector>(
             only_in_right,
             joined,
         },
-    ) = separate_union_lambdas(env, pool, solved1, solved2);
+    ) = separate_union_lambdas(env, pool, ctx.mode, solved1, solved2);
 
     let all_lambdas = joined
         .into_iter()
@@ -1494,7 +1542,7 @@ fn unify_lambda_set_help<M: MetaCollector>(
         (None, None) => OptVariable::NONE,
     };
 
-    let merged_unspecialized = match unify_unspecialized_lambdas(env, pool, uls1, uls2) {
+    let merged_unspecialized = match unify_unspecialized_lambdas(env, pool, ctx.mode, uls1, uls2) {
         Ok((merged, outcome)) => {
             whole_outcome.union(outcome);
             merged
