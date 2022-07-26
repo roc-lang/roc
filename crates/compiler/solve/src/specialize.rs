@@ -263,7 +263,16 @@ pub fn compact_lambda_sets_of_vars<P: Phase>(
         //    `l` such that `l' = [solved_lambdas + t1 + ... + tm + C:f:r]` and `l1 = [[] + C:f1:r1], ..., ln = [[] + C:fn:rn]`.
         //    Replace `l` with `l', l1, ..., ln` in `uls_a`, flattened.
         //    TODO: the flattening step described above
-        let uls_a = uls_a.into_vec();
+        let uls_a = {
+            let mut uls = uls_a.into_vec();
+
+            // De-duplicate lambdas by root key.
+            uls.iter_mut().for_each(|v| *v = subs.get_root_key(*v));
+            uls.sort();
+            uls.dedup();
+            uls
+        };
+
         trace_compact!(1. subs, c_a, &uls_a);
 
         // The flattening step - remove lambda sets that don't reference the concrete var, and for
