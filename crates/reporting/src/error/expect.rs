@@ -121,15 +121,20 @@ impl<'a> Renderer<'a> {
         self.line_info.convert_region(display_region)
     }
 
-    pub fn render_failure(
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_failure<W>(
         &self,
+        writer: &mut W,
         subs: &mut Subs,
         symbols: &[Symbol],
         variables: &[Variable],
         expressions: &[Expr<'_>],
         expect_region: Option<Region>,
         failure_region: Region,
-    ) -> String {
+    ) -> std::io::Result<()>
+    where
+        W: std::io::Write,
+    {
         use crate::report::Report;
 
         let line_col_region = self.to_line_col_region(expect_region, failure_region);
@@ -151,10 +156,18 @@ impl<'a> Renderer<'a> {
             &crate::report::DEFAULT_PALETTE,
         );
 
-        buf
+        write!(writer, "{}", buf)
     }
 
-    pub fn render_panic(&self, message: &str, expect_region: Region) -> String {
+    pub fn render_panic<W>(
+        &self,
+        writer: &mut W,
+        message: &str,
+        expect_region: Region,
+    ) -> std::io::Result<()>
+    where
+        W: std::io::Write,
+    {
         use crate::report::Report;
         use ven_pretty::DocAllocator;
 
@@ -183,6 +196,6 @@ impl<'a> Renderer<'a> {
             &crate::report::DEFAULT_PALETTE,
         );
 
-        buf
+        write!(writer, "{}", buf)
     }
 }

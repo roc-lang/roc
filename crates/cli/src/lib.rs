@@ -13,6 +13,7 @@ use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_region::all::Region;
 use roc_repl_cli::{expect_mono_module_to_dylib, ToplevelExpect};
+use roc_reporting::error::expect::Renderer;
 use roc_target::TargetInfo;
 use std::env;
 use std::ffi::{CString, OsStr};
@@ -421,63 +422,42 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let arena = &bumpalo::Bump::new();
     let interns = arena.alloc(interns);
 
-    use roc_gen_llvm::try_run_jit_function;
+    let mut writer = std::io::stdout();
 
-    let mut failed = 0;
-    let mut passed = 0;
-
-    unsafe {
+    let shared_ptr = unsafe {
         let shared_fd = libc::shm_open(cstring.as_ptr().cast(), libc::O_RDWR, 0o666);
 
         libc::ftruncate(shared_fd, SHM_SIZE);
 
-        let shared_ptr = libc::mmap(
+        libc::mmap(
             std::ptr::null_mut(),
             SHM_SIZE as usize,
             libc::PROT_READ | libc::PROT_WRITE,
             libc::MAP_SHARED,
             shared_fd,
             0,
-        );
+        )
+        .cast()
+    };
 
-        for expect in expects {
-            let sequence = ExpectSequence::new(shared_ptr.cast());
+    let mut failed = 0;
+    let mut passed = 0;
 
-            let result: Result<(), String> = try_run_jit_function!(lib, expect.name, (), |v: ()| v);
+    for expect in expects {
+        let result = run_expect(
+            &mut writer,
+            arena,
+            interns,
+            &lib,
+            &mut expectations,
+            shared_ptr,
+            expect,
+        )
+        .unwrap();
 
-            let shared_memory_ptr: *const u8 = shared_ptr.cast();
-
-            if let Err(roc_panic_message) = result {
-                failed += 1;
-
-                render_expect_panic(
-                    arena,
-                    expect,
-                    &roc_panic_message,
-                    &mut expectations,
-                    interns,
-                );
-                println!();
-            } else if sequence.count_failures() > 0 {
-                failed += 1;
-
-                let mut offset = ExpectSequence::START_OFFSET;
-
-                for _ in 0..sequence.count_failures() {
-                    offset += render_expect_failure(
-                        arena,
-                        Some(expect),
-                        &mut expectations,
-                        interns,
-                        shared_memory_ptr,
-                        offset,
-                    );
-
-                    println!();
-                }
-            } else {
-                passed += 1;
-            }
+        match result {
+            true => passed += 1,
+            false => failed += 1,
         }
     }
 
@@ -506,6 +486,60 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         );
 
         Ok((failed > 0) as i32)
+    }
+}
+
+fn run_expect<W: std::io::Write>(
+    writer: &mut W,
+    arena: &Bump,
+    interns: &Interns,
+    lib: &libloading::Library,
+    expectations: &mut VecMap<ModuleId, Expectations>,
+    shared_ptr: *mut u8,
+    expect: ToplevelExpect<'_>,
+) -> std::io::Result<bool> {
+    use roc_gen_llvm::try_run_jit_function;
+
+    let sequence = ExpectSequence::new(shared_ptr.cast());
+
+    let result: Result<(), String> = try_run_jit_function!(lib, expect.name, (), |v: ()| v);
+
+    let shared_memory_ptr: *const u8 = shared_ptr.cast();
+
+    if result.is_err() || sequence.count_failures() > 0 {
+        let module_id = expect.symbol.module_id();
+        let data = expectations.get_mut(&module_id).unwrap();
+
+        let path = &data.path;
+        let filename = data.path.to_owned();
+        let source = std::fs::read_to_string(path).unwrap();
+
+        let renderer = Renderer::new(arena, interns, module_id, filename, &source);
+
+        if let Err(roc_panic_message) = result {
+            renderer.render_panic(writer, &roc_panic_message, expect.region)?;
+        } else {
+            let mut offset = ExpectSequence::START_OFFSET;
+
+            for _ in 0..sequence.count_failures() {
+                offset += render_expect_failure(
+                    writer,
+                    &renderer,
+                    arena,
+                    Some(expect),
+                    expectations,
+                    interns,
+                    shared_memory_ptr,
+                    offset,
+                )?;
+            }
+        }
+
+        writeln!(writer)?;
+
+        Ok(false)
+    } else {
+        Ok(true)
     }
 }
 
@@ -1073,14 +1107,27 @@ unsafe fn roc_run_native_debug(
 
                         let shared_memory_ptr: *const u8 = shared_ptr.cast();
 
+                        let frame =
+                            ExpectFrame::at_offset(shared_memory_ptr, ExpectSequence::START_OFFSET);
+                        let module_id = frame.module_id;
+
+                        let data = expectations.get_mut(&module_id).unwrap();
+                        let filename = data.path.to_owned();
+                        let source = std::fs::read_to_string(&data.path).unwrap();
+
+                        let renderer = Renderer::new(arena, interns, module_id, filename, &source);
+
                         render_expect_failure(
+                            &mut std::io::stdout(),
+                            &renderer,
                             arena,
                             None,
                             &mut expectations,
                             interns,
                             shared_memory_ptr,
                             ExpectSequence::START_OFFSET,
-                        );
+                        )
+                        .unwrap();
                     }
                     _ => println!("received signal {}", sig),
                 }
@@ -1088,27 +1135,6 @@ unsafe fn roc_run_native_debug(
         }
         _ => unreachable!(),
     }
-}
-
-fn render_expect_panic<'a>(
-    arena: &'a Bump,
-    expect: ToplevelExpect,
-    message: &str,
-    expectations: &mut VecMap<ModuleId, Expectations>,
-    interns: &'a Interns,
-) {
-    let module_id = expect.symbol.module_id();
-    let data = expectations.get_mut(&module_id).unwrap();
-
-    let path = &data.path;
-    let filename = data.path.to_owned();
-    let source = std::fs::read_to_string(path).unwrap();
-
-    use roc_reporting::error::expect::Renderer;
-
-    let renderer = Renderer::new(arena, interns, module_id, filename, &source);
-    let buf = renderer.render_panic(message, expect.region);
-    println!("{}", buf);
 }
 
 struct ExpectFrame {
@@ -1137,13 +1163,15 @@ impl ExpectFrame {
 }
 
 fn render_expect_failure<'a>(
+    writer: &mut impl std::io::Write,
+    renderer: &Renderer,
     arena: &'a Bump,
     expect: Option<ToplevelExpect>,
     expectations: &mut VecMap<ModuleId, Expectations>,
     interns: &'a Interns,
     start: *const u8,
     offset: usize,
-) -> usize {
+) -> std::io::Result<usize> {
     // we always run programs as the host
     let target_info = (&target_lexicon::Triple::host()).into();
 
@@ -1154,8 +1182,6 @@ fn render_expect_failure<'a>(
     let expect_region = expect.map(|e| e.region);
 
     let data = expectations.get_mut(&module_id).unwrap();
-    let filename = data.path.to_owned();
-    let source = std::fs::read_to_string(&data.path).unwrap();
 
     let current = match data.expectations.get(&failure_region) {
         None => panic!("region not in list of expects"),
@@ -1176,21 +1202,17 @@ fn render_expect_failure<'a>(
     )
     .unwrap();
 
-    use roc_reporting::error::expect::Renderer;
-
-    let renderer = Renderer::new(arena, interns, module_id, filename, &source);
-    let buf = renderer.render_failure(
+    renderer.render_failure(
+        writer,
         subs,
         &symbols,
         &variables,
         &expressions,
         expect_region,
         failure_region,
-    );
+    )?;
 
-    println!("{}", buf);
-
-    offset
+    Ok(offset)
 }
 
 #[cfg(target_os = "linux")]
