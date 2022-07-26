@@ -11,6 +11,7 @@ use roc_target::TargetInfo;
 use roc_types::subs::{Subs, Variable};
 
 mod app;
+pub mod run;
 
 use app::{ExpectMemory, ExpectReplApp};
 

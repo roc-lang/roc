@@ -1,11 +1,8 @@
-use bumpalo::collections::Vec as BumpVec;
 use bumpalo::Bump;
 use const_format::concatcp;
 use inkwell::context::Context;
 use libloading::Library;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
-use roc_module::symbol::Symbol;
-use roc_region::all::Region;
 use roc_types::subs::Subs;
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
@@ -193,108 +190,6 @@ impl ReplAppMemory for CliMemory {
         let reference: &RocStr = unsafe { std::mem::transmute(addr) };
         reference.as_str()
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct ToplevelExpect<'a> {
-    pub name: &'a str,
-    pub symbol: Symbol,
-    pub region: Region,
-}
-
-pub fn expect_mono_module_to_dylib<'a>(
-    arena: &'a Bump,
-    target: Triple,
-    loaded: MonomorphizedModule<'a>,
-    opt_level: OptLevel,
-    mode: LlvmBackendMode,
-) -> Result<(libloading::Library, BumpVec<'a, ToplevelExpect<'a>>), libloading::Error> {
-    let target_info = TargetInfo::from(&target);
-
-    let MonomorphizedModule {
-        toplevel_expects,
-        procedures,
-        entry_point,
-        interns,
-        ..
-    } = loaded;
-
-    let context = Context::create();
-    let builder = context.create_builder();
-    let module = arena.alloc(roc_gen_llvm::llvm::build::module_from_builtins(
-        &target, &context, "",
-    ));
-
-    let module = arena.alloc(module);
-    let (module_pass, _function_pass) =
-        roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
-
-    let (dibuilder, compile_unit) = roc_gen_llvm::llvm::build::Env::new_debug_info(module);
-
-    // Compile and add all the Procs before adding main
-    let env = roc_gen_llvm::llvm::build::Env {
-        arena,
-        builder: &builder,
-        dibuilder: &dibuilder,
-        compile_unit: &compile_unit,
-        context: &context,
-        interns,
-        module,
-        target_info,
-        mode,
-        // important! we don't want any procedures to get the C calling convention
-        exposed_to_host: MutSet::default(),
-    };
-
-    // Add roc_alloc, roc_realloc, and roc_dealloc, since the repl has no
-    // platform to provide them.
-    add_default_roc_externs(&env);
-
-    let expect_names = roc_gen_llvm::llvm::build::build_procedures_expose_expects(
-        &env,
-        opt_level,
-        toplevel_expects.unzip_slices().0,
-        procedures,
-        entry_point,
-    );
-
-    let expects = bumpalo::collections::Vec::from_iter_in(
-        toplevel_expects
-            .into_iter()
-            .zip(expect_names.into_iter())
-            .map(|((symbol, region), name)| ToplevelExpect {
-                symbol,
-                region,
-                name,
-            }),
-        env.arena,
-    );
-
-    env.dibuilder.finalize();
-
-    // we don't use the debug info, and it causes weird errors.
-    module.strip_debug_info();
-
-    // Uncomment this to see the module's un-optimized LLVM instruction output:
-    // env.module.print_to_stderr();
-
-    module_pass.run_on(env.module);
-
-    // Uncomment this to see the module's optimized LLVM instruction output:
-    // env.module.print_to_stderr();
-
-    // Verify the module
-    if let Err(errors) = env.module.verify() {
-        env.module.print_to_file("/tmp/test.ll").unwrap();
-        panic!(
-            "Errors defining module:\n{}\n\nUncomment things nearby to see more details. IR written to `/tmp/test.ll`",
-            errors.to_string()
-        );
-    }
-
-    env.module.print_to_file("/tmp/test.ll").unwrap();
-
-    llvm_module_to_dylib(env.module, &target, opt_level).map(|lib| (lib, expects))
 }
 
 pub fn mono_module_to_dylib<'a>(

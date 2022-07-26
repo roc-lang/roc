@@ -6,8 +6,8 @@ use roc_std::RocStr;
 use roc_target::TargetInfo;
 
 pub(crate) struct ExpectMemory {
-    start: *const u8,
-    bytes_read: RefCell<usize>,
+    pub(crate) start: *const u8,
+    pub(crate) bytes_read: RefCell<usize>,
 }
 
 macro_rules! deref_number {
@@ -74,8 +74,8 @@ impl ReplAppMemory for ExpectMemory {
 }
 
 pub(crate) struct ExpectReplApp<'a> {
-    memory: &'a ExpectMemory,
-    offset: usize,
+    pub(crate) memory: &'a ExpectMemory,
+    pub(crate) offset: usize,
 }
 
 impl<'a> ReplApp<'a> for ExpectReplApp<'a> {

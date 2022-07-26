@@ -11,9 +11,7 @@ use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{Expectations, LoadingProblem, Threading};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
-use roc_region::all::Region;
-use roc_repl_cli::{expect_mono_module_to_dylib, ToplevelExpect};
-use roc_reporting::error::expect::Renderer;
+use roc_repl_expect::run::{expect_mono_module_to_dylib, roc_dev_expect};
 use roc_target::TargetInfo;
 use std::env;
 use std::ffi::{CString, OsStr};
@@ -440,26 +438,16 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         .cast()
     };
 
-    let mut failed = 0;
-    let mut passed = 0;
-
-    for expect in expects {
-        let result = run_expect(
-            &mut writer,
-            arena,
-            interns,
-            &lib,
-            &mut expectations,
-            shared_ptr,
-            expect,
-        )
-        .unwrap();
-
-        match result {
-            true => passed += 1,
-            false => failed += 1,
-        }
-    }
+    let (failed, passed) = roc_repl_expect::run::run_expects(
+        &mut writer,
+        arena,
+        interns,
+        &lib,
+        &mut expectations,
+        shared_ptr,
+        expects,
+    )
+    .unwrap();
 
     let total_time = start_time.elapsed();
 
@@ -480,92 +468,14 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
             31 // red
         };
 
+        println!();
+
         println!(
             "\x1B[{failed_color}m{failed}\x1B[39m failed and \x1B[32m{passed}\x1B[39m passed in {} ms.\n",
             total_time.as_millis(),
         );
 
         Ok((failed > 0) as i32)
-    }
-}
-
-fn run_expect<W: std::io::Write>(
-    writer: &mut W,
-    arena: &Bump,
-    interns: &Interns,
-    lib: &libloading::Library,
-    expectations: &mut VecMap<ModuleId, Expectations>,
-    shared_ptr: *mut u8,
-    expect: ToplevelExpect<'_>,
-) -> std::io::Result<bool> {
-    use roc_gen_llvm::try_run_jit_function;
-
-    let sequence = ExpectSequence::new(shared_ptr.cast());
-
-    let result: Result<(), String> = try_run_jit_function!(lib, expect.name, (), |v: ()| v);
-
-    let shared_memory_ptr: *const u8 = shared_ptr.cast();
-
-    if result.is_err() || sequence.count_failures() > 0 {
-        let module_id = expect.symbol.module_id();
-        let data = expectations.get_mut(&module_id).unwrap();
-
-        let path = &data.path;
-        let filename = data.path.to_owned();
-        let source = std::fs::read_to_string(path).unwrap();
-
-        let renderer = Renderer::new(arena, interns, module_id, filename, &source);
-
-        if let Err(roc_panic_message) = result {
-            renderer.render_panic(writer, &roc_panic_message, expect.region)?;
-        } else {
-            let mut offset = ExpectSequence::START_OFFSET;
-
-            for _ in 0..sequence.count_failures() {
-                offset += render_expect_failure(
-                    writer,
-                    &renderer,
-                    arena,
-                    Some(expect),
-                    expectations,
-                    interns,
-                    shared_memory_ptr,
-                    offset,
-                )?;
-            }
-        }
-
-        writeln!(writer)?;
-
-        Ok(false)
-    } else {
-        Ok(true)
-    }
-}
-
-struct ExpectSequence {
-    ptr: *const u8,
-}
-
-impl ExpectSequence {
-    const START_OFFSET: usize = 16;
-
-    const COUNT_INDEX: usize = 0;
-    const OFFSET_INDEX: usize = 1;
-
-    fn new(ptr: *mut u8) -> Self {
-        unsafe {
-            libc::memset(ptr.cast(), 0, SHM_SIZE as _);
-            *((ptr as *mut usize).add(Self::OFFSET_INDEX)) = Self::START_OFFSET;
-        }
-
-        Self {
-            ptr: ptr as *const u8,
-        }
-    }
-
-    fn count_failures(&self) -> usize {
-        unsafe { *(self.ptr as *const usize).add(Self::COUNT_INDEX) }
     }
 }
 
@@ -1105,27 +1015,14 @@ unsafe fn roc_run_native_debug(
                             0,
                         );
 
-                        let shared_memory_ptr: *const u8 = shared_ptr.cast();
+                        let shared_memory_ptr: *mut u8 = shared_ptr.cast();
 
-                        let frame =
-                            ExpectFrame::at_offset(shared_memory_ptr, ExpectSequence::START_OFFSET);
-                        let module_id = frame.module_id;
-
-                        let data = expectations.get_mut(&module_id).unwrap();
-                        let filename = data.path.to_owned();
-                        let source = std::fs::read_to_string(&data.path).unwrap();
-
-                        let renderer = Renderer::new(arena, interns, module_id, filename, &source);
-
-                        render_expect_failure(
+                        roc_dev_expect(
                             &mut std::io::stdout(),
-                            &renderer,
-                            arena,
-                            None,
+                            &arena,
                             &mut expectations,
                             interns,
                             shared_memory_ptr,
-                            ExpectSequence::START_OFFSET,
                         )
                         .unwrap();
                     }
@@ -1135,84 +1032,6 @@ unsafe fn roc_run_native_debug(
         }
         _ => unreachable!(),
     }
-}
-
-struct ExpectFrame {
-    region: Region,
-    module_id: ModuleId,
-    start_offset: usize,
-}
-
-impl ExpectFrame {
-    fn at_offset(start: *const u8, offset: usize) -> Self {
-        let region_bytes: [u8; 8] = unsafe { *(start.add(offset).cast()) };
-        let region: Region = unsafe { std::mem::transmute(region_bytes) };
-
-        let module_id_bytes: [u8; 4] = unsafe { *(start.add(offset + 8).cast()) };
-        let module_id: ModuleId = unsafe { std::mem::transmute(module_id_bytes) };
-
-        // skip to frame, 8 bytes for region, 4 for module id
-        let start_offset = offset + 12;
-
-        Self {
-            region,
-            module_id,
-            start_offset,
-        }
-    }
-}
-
-fn render_expect_failure<'a>(
-    writer: &mut impl std::io::Write,
-    renderer: &Renderer,
-    arena: &'a Bump,
-    expect: Option<ToplevelExpect>,
-    expectations: &mut VecMap<ModuleId, Expectations>,
-    interns: &'a Interns,
-    start: *const u8,
-    offset: usize,
-) -> std::io::Result<usize> {
-    // we always run programs as the host
-    let target_info = (&target_lexicon::Triple::host()).into();
-
-    let frame = ExpectFrame::at_offset(start, offset);
-    let module_id = frame.module_id;
-
-    let failure_region = frame.region;
-    let expect_region = expect.map(|e| e.region);
-
-    let data = expectations.get_mut(&module_id).unwrap();
-
-    let current = match data.expectations.get(&failure_region) {
-        None => panic!("region not in list of expects"),
-        Some(current) => current,
-    };
-    let subs = arena.alloc(&mut data.subs);
-
-    let (symbols, variables): (Vec<_>, Vec<_>) = current.iter().map(|(a, b)| (*a, *b)).unzip();
-
-    let (offset, expressions) = roc_repl_expect::get_values(
-        target_info,
-        arena,
-        subs,
-        interns,
-        start,
-        frame.start_offset,
-        &variables,
-    )
-    .unwrap();
-
-    renderer.render_failure(
-        writer,
-        subs,
-        &symbols,
-        &variables,
-        &expressions,
-        expect_region,
-        failure_region,
-    )?;
-
-    Ok(offset)
 }
 
 #[cfg(target_os = "linux")]

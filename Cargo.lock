@@ -3957,12 +3957,17 @@ name = "roc_repl_expect"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
+ "inkwell 0.1.0",
+ "libloading",
+ "roc_build",
  "roc_builtins",
  "roc_collections",
+ "roc_gen_llvm",
  "roc_load",
  "roc_module",
  "roc_mono",
  "roc_parse",
+ "roc_region",
  "roc_repl_eval",
  "roc_reporting",
  "roc_std",
