@@ -666,22 +666,33 @@ pub enum ETypeAbilityImpl<'a> {
     IndentColon(Position),
     IndentOptional(Position),
     IndentEnd(Position),
+    Updateable(Position),
+    QuestionMark(Position),
+    Bar(Position),
+    Ampersand(Position),
+    Expr(&'a EExpr<'a>, Position),
+    IndentBar(Position),
+    IndentAmpersand(Position),
 }
 
-impl<'a> From<ETypeRecord<'a>> for ETypeAbilityImpl<'a> {
-    fn from(e: ETypeRecord<'a>) -> Self {
+impl<'a> From<ERecord<'a>> for ETypeAbilityImpl<'a> {
+    fn from(e: ERecord<'a>) -> Self {
         match e {
-            ETypeRecord::End(p) => ETypeAbilityImpl::End(p),
-            ETypeRecord::Open(p) => ETypeAbilityImpl::Open(p),
-            ETypeRecord::Field(p) => ETypeAbilityImpl::Field(p),
-            ETypeRecord::Colon(p) => ETypeAbilityImpl::Colon(p),
-            ETypeRecord::Optional(p) => ETypeAbilityImpl::Optional(p),
-            ETypeRecord::Type(t, p) => ETypeAbilityImpl::Type(t, p),
-            ETypeRecord::Space(s, p) => ETypeAbilityImpl::Space(s, p),
-            ETypeRecord::IndentOpen(p) => ETypeAbilityImpl::IndentOpen(p),
-            ETypeRecord::IndentColon(p) => ETypeAbilityImpl::IndentColon(p),
-            ETypeRecord::IndentOptional(p) => ETypeAbilityImpl::IndentOptional(p),
-            ETypeRecord::IndentEnd(p) => ETypeAbilityImpl::IndentEnd(p),
+            ERecord::End(p) => ETypeAbilityImpl::End(p),
+            ERecord::Open(p) => ETypeAbilityImpl::Open(p),
+            ERecord::Field(p) => ETypeAbilityImpl::Field(p),
+            ERecord::Colon(p) => ETypeAbilityImpl::Colon(p),
+            ERecord::Space(s, p) => ETypeAbilityImpl::Space(s, p),
+            ERecord::IndentOpen(p) => ETypeAbilityImpl::IndentOpen(p),
+            ERecord::IndentColon(p) => ETypeAbilityImpl::IndentColon(p),
+            ERecord::IndentEnd(p) => ETypeAbilityImpl::IndentEnd(p),
+            ERecord::Updateable(p) => ETypeAbilityImpl::Updateable(p),
+            ERecord::QuestionMark(p) => ETypeAbilityImpl::QuestionMark(p),
+            ERecord::Bar(p) => ETypeAbilityImpl::Bar(p),
+            ERecord::Ampersand(p) => ETypeAbilityImpl::Ampersand(p),
+            ERecord::Expr(e, p) => ETypeAbilityImpl::Expr(e, p),
+            ERecord::IndentBar(p) => ETypeAbilityImpl::IndentBar(p),
+            ERecord::IndentAmpersand(p) => ETypeAbilityImpl::IndentAmpersand(p),
         }
     }
 }

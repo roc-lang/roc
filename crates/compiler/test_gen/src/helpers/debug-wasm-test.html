@@ -297,6 +297,11 @@
           throw new Error(`Wasm exited with code ${exit_code}`);
         }
 
+        // send_panic_msg_to_rust (i32, i32) => {}
+        function send_panic_msg_to_rust(msg, length) {
+          throw new Error("Wasm hit a panic");
+        }
+
         // Signatures from wasm_test_platform.o
         const sig2 = (i32) => {};
         const sig6 = (i32a, i32b) => 0;
@@ -318,6 +323,9 @@
         const sig22 = () => 0;
 
         return {
+          env: {
+            send_panic_msg_to_rust,
+          },
           wasi_snapshot_preview1: {
             args_get: sig6,
             args_sizes_get: sig6,

@@ -3315,37 +3315,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "roc-bindgen"
-version = "0.1.0"
-dependencies = [
- "bumpalo",
- "clap 3.2.11",
- "cli_utils",
- "ctor",
- "dircpy",
- "fnv",
- "indexmap",
- "indoc",
- "pretty_assertions",
- "roc_builtins",
- "roc_can",
- "roc_collections",
- "roc_error_macros",
- "roc_load",
- "roc_module",
- "roc_mono",
- "roc_reporting",
- "roc_std",
- "roc_target",
- "roc_test_utils",
- "roc_types",
- "strum",
- "strum_macros",
- "target-lexicon",
- "tempfile",
-]
-
-[[package]]
 name = "roc_alias_analysis"
 version = "0.1.0"
 dependencies = [
@@ -3475,6 +3444,7 @@ dependencies = [
  "roc_error_macros",
  "roc_fmt",
  "roc_gen_llvm",
+ "roc_glue",
  "roc_linker",
  "roc_load",
  "roc_module",
@@ -3716,6 +3686,7 @@ dependencies = [
  "roc_error_macros",
  "roc_module",
  "roc_mono",
+ "roc_region",
  "roc_std",
  "roc_target",
  "target-lexicon",
@@ -3734,6 +3705,36 @@ dependencies = [
  "roc_mono",
  "roc_std",
  "roc_target",
+]
+
+[[package]]
+name = "roc_glue"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "clap 3.2.11",
+ "cli_utils",
+ "dircpy",
+ "fnv",
+ "indexmap",
+ "indoc",
+ "pretty_assertions",
+ "roc_builtins",
+ "roc_can",
+ "roc_collections",
+ "roc_error_macros",
+ "roc_load",
+ "roc_module",
+ "roc_mono",
+ "roc_reporting",
+ "roc_std",
+ "roc_target",
+ "roc_test_utils",
+ "roc_types",
+ "strum",
+ "strum_macros",
+ "target-lexicon",
+ "tempfile",
 ]
 
 [[package]]
@@ -3920,6 +3921,7 @@ dependencies = [
  "roc_module",
  "roc_mono",
  "roc_parse",
+ "roc_region",
  "roc_repl_eval",
  "roc_reporting",
  "roc_std",
@@ -4026,6 +4028,7 @@ dependencies = [
  "arrayvec 0.7.2",
  "bumpalo",
  "indoc",
+ "insta",
  "lazy_static",
  "pretty_assertions",
  "regex",
@@ -4784,6 +4787,7 @@ dependencies = [
  "either",
  "indoc",
  "inkwell 0.1.0",
+ "lazy_static",
  "libc",
  "libloading",
  "roc_build",
@@ -4791,6 +4795,8 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_constrain",
+ "roc_debug_flags",
+ "roc_error_macros",
  "roc_gen_dev",
  "roc_gen_llvm",
  "roc_gen_wasm",

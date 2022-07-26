@@ -1,8 +1,11 @@
+use bumpalo::collections::Vec as BumpVec;
 use bumpalo::Bump;
 use const_format::concatcp;
 use inkwell::context::Context;
 use libloading::Library;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
+use roc_module::symbol::Symbol;
+use roc_region::all::Region;
 use roc_types::subs::Subs;
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
@@ -132,7 +135,7 @@ impl<'a> ReplApp<'a> for CliApp {
 
     /// Run user code that returns a type with a `Builtin` layout
     /// Size of the return value is statically determined from its Rust type
-    fn call_function<Return, F>(&self, main_fn_name: &str, transform: F) -> Expr<'a>
+    fn call_function<Return, F>(&mut self, main_fn_name: &str, transform: F) -> Expr<'a>
     where
         F: Fn(&'a Self::Memory, Return) -> Expr<'a>,
         Self::Memory: 'a,
@@ -142,7 +145,7 @@ impl<'a> ReplApp<'a> for CliApp {
 
     /// Run user code that returns a struct or union, whose size is provided as an argument
     fn call_function_dynamic_size<T, F>(
-        &self,
+        &mut self,
         main_fn_name: &str,
         ret_bytes: usize,
         transform: F,
@@ -192,13 +195,20 @@ impl ReplAppMemory for CliMemory {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ToplevelExpect<'a> {
+    pub name: &'a str,
+    pub symbol: Symbol,
+    pub region: Region,
+}
+
 pub fn expect_mono_module_to_dylib<'a>(
     arena: &'a Bump,
     target: Triple,
     loaded: MonomorphizedModule<'a>,
     opt_level: OptLevel,
     mode: LlvmBackendMode,
-) -> Result<(libloading::Library, bumpalo::collections::Vec<'a, &'a str>), libloading::Error> {
+) -> Result<(libloading::Library, BumpVec<'a, ToplevelExpect<'a>>), libloading::Error> {
     let target_info = TargetInfo::from(&target);
 
     let MonomorphizedModule {
@@ -240,12 +250,24 @@ pub fn expect_mono_module_to_dylib<'a>(
     // platform to provide them.
     add_default_roc_externs(&env);
 
-    let expects = roc_gen_llvm::llvm::build::build_procedures_expose_expects(
+    let expect_names = roc_gen_llvm::llvm::build::build_procedures_expose_expects(
         &env,
         opt_level,
-        &toplevel_expects,
+        toplevel_expects.unzip_slices().0,
         procedures,
         entry_point,
+    );
+
+    let expects = bumpalo::collections::Vec::from_iter_in(
+        toplevel_expects
+            .into_iter()
+            .zip(expect_names.into_iter())
+            .map(|((symbol, region), name)| ToplevelExpect {
+                symbol,
+                region,
+                name,
+            }),
+        env.arena,
     );
 
     env.dibuilder.finalize();
@@ -269,6 +291,8 @@ pub fn expect_mono_module_to_dylib<'a>(
             errors.to_string()
         );
     }
+
+    env.module.print_to_file("/tmp/test.ll").unwrap();
 
     llvm_module_to_dylib(env.module, &target, opt_level).map(|lib| (lib, expects))
 }
@@ -402,11 +426,11 @@ fn gen_and_eval_llvm<'a>(
     let (lib, main_fn_name, subs) =
         mono_module_to_dylib(&arena, target, loaded, opt_level).expect("we produce a valid Dylib");
 
-    let app = CliApp { lib };
+    let mut app = CliApp { lib };
 
     let res_answer = jit_to_ast(
         &arena,
-        &app,
+        &mut app,
         main_fn_name,
         main_fn_layout,
         &content,

@@ -3,7 +3,9 @@
 use std::iter::once;
 
 use roc_can::abilities::SpecializationLambdaSets;
-use roc_can::expr::{AnnotatedMark, ClosureData, Expr, Field, Recursive, WhenBranch};
+use roc_can::expr::{
+    AnnotatedMark, ClosureData, Expr, Field, Recursive, WhenBranch, WhenBranchPattern,
+};
 use roc_can::module::ExposedByModule;
 use roc_can::pattern::Pattern;
 use roc_collections::SendMap;
@@ -672,6 +674,10 @@ fn to_encoder_tag_union(
                     .map(|(var, sym)| (*var, Loc::at_zero(Pattern::Identifier(*sym))))
                     .collect(),
             };
+            let branch_pattern = WhenBranchPattern {
+                pattern: Loc::at_zero(pattern),
+                degenerate: false,
+            };
 
             // whole type of the elements in [ Encode.toEncoder v1, Encode.toEncoder v2 ]
             let whole_payload_encoders_var = env.subs.fresh_unnamed_flex_var();
@@ -792,7 +798,7 @@ fn to_encoder_tag_union(
             env.unify(this_encoder_var, whole_tag_encoders_var);
 
             WhenBranch {
-                patterns: vec![Loc::at_zero(pattern)],
+                patterns: vec![branch_pattern],
                 value: Loc::at_zero(encode_tag_call),
                 guard: None,
                 redundant: RedundantMark::known_non_redundant(),

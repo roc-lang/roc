@@ -2,7 +2,7 @@
 
 use roc_module::{ident::Lowercase, symbol::Symbol};
 use roc_region::all::{Loc, Region};
-use roc_types::subs::Variable;
+use roc_types::{subs::Variable, types::MemberImpl};
 
 use crate::{
     abilities::AbilitiesStore,
@@ -323,9 +323,13 @@ pub fn walk_when_branch<V: Visitor>(
         redundant: _,
     } = branch;
 
-    patterns
-        .iter()
-        .for_each(|pat| visitor.visit_pattern(&pat.value, pat.region, pat.value.opt_var()));
+    patterns.iter().for_each(|pat| {
+        visitor.visit_pattern(
+            &pat.pattern.value,
+            pat.pattern.region,
+            pat.pattern.value.opt_var(),
+        )
+    });
     visitor.visit_expr(&value.value, value.region, expr_var);
     if let Some(guard) = guard {
         visitor.visit_expr(&guard.value, guard.region, Variable::BOOL);
@@ -587,8 +591,8 @@ pub fn find_ability_member_and_owning_type_at(
         abilities_store: &AbilitiesStore,
     ) -> Option<Symbol> {
         abilities_store
-            .iter_specializations()
-            .find(|(_, ms)| ms.symbol == symbol)
+            .iter_declared_implementations()
+            .find(|(_, member_impl)| matches!(member_impl, MemberImpl::Impl(sym) if *sym == symbol))
             .map(|(spec, _)| spec.1)
     }
 }

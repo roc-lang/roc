@@ -33,7 +33,7 @@ members = [
     "crates/vendor/inkwell",
     "crates/vendor/pathfinding",
     "crates/vendor/pretty",
-    "crates/bindgen",
+    "crates/glue",
     "crates/editor",
     "crates/ast",
     "crates/cli",

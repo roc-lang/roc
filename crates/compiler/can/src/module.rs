@@ -1,4 +1,4 @@
-use crate::abilities::{PendingAbilitiesStore, ResolvedSpecializations};
+use crate::abilities::{ImplKey, PendingAbilitiesStore, ResolvedImpl};
 use crate::annotation::canonicalize_annotation;
 use crate::def::{canonicalize_defs, Def};
 use crate::effect_module::HostedGeneratedFunctions;
@@ -103,12 +103,20 @@ impl ExposedForModule {
     }
 }
 
+/// During type solving and monomorphization, a module must know how its imported ability
+/// implementations are resolved - are they derived, or have a concrete implementation?
+///
+/// Unfortunately we cannot keep this information opaque, as it's important for properly
+/// restoring specialization lambda sets. As such, we need to export implementation information,
+/// which is the job of this structure.
+pub type ResolvedImplementations = VecMap<ImplKey, ResolvedImpl>;
+
 /// The types of all exposed values/functions of a module. This includes ability member
 /// specializations.
 #[derive(Clone, Debug)]
 pub struct ExposedModuleTypes {
     pub exposed_types_storage_subs: ExposedTypesStorageSubs,
-    pub resolved_specializations: ResolvedSpecializations,
+    pub resolved_implementations: ResolvedImplementations,
 }
 
 #[derive(Debug)]
@@ -434,7 +442,7 @@ pub fn canonicalize_module_defs<'a>(
         .iter()
         .map(|(symbol, loc_ann)| {
             // We've already canonicalized the module, so there are no pending abilities.
-            let pending_abilities_in_scope = &[];
+            let pending_abilities_in_scope = &Default::default();
 
             let ann = canonicalize_annotation(
                 &mut env,
@@ -910,7 +918,10 @@ fn fix_values_captured_in_closure_expr(
 
                 // patterns can contain default expressions, so much go over them too!
                 for loc_pat in branch.patterns.iter_mut() {
-                    fix_values_captured_in_closure_pattern(&mut loc_pat.value, no_capture_symbols);
+                    fix_values_captured_in_closure_pattern(
+                        &mut loc_pat.pattern.value,
+                        no_capture_symbols,
+                    );
                 }
 
                 if let Some(guard) = &mut branch.guard {

@@ -289,7 +289,7 @@ pub fn constrain_pattern(
                 num_precision_var,
                 bound,
                 region,
-                Category::Float,
+                Category::Frac,
             );
 
             // Link the free num var with the float var and our expectation.
@@ -298,7 +298,7 @@ pub fn constrain_pattern(
             state.constraints.push(constraints.equal_types(
                 num_type.clone(), // TODO check me if something breaks!
                 Expected::NoExpectation(float_type),
-                Category::Float,
+                Category::Frac,
                 region,
             ));
 
@@ -498,9 +498,6 @@ pub fn constrain_pattern(
             state.vars.push(*ext_var);
             state.constraints.push(whole_con);
             state.constraints.push(tag_con);
-            state
-                .constraints
-                .append(&mut state.delayed_is_open_constraints);
         }
 
         UnwrappedOpaque {

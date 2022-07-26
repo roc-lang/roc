@@ -119,6 +119,11 @@ flags! {
     /// Prints LLVM function verification output.
     ROC_PRINT_LLVM_FN_VERIFICATION
 
+    // ===WASM Gen===
+
+    /// Writes a `final.wasm` file to /tmp
+    ROC_WRITE_FINAL_WASM
+
     // ===Load===
 
     /// Print load phases as they complete.

@@ -10,7 +10,7 @@ use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_reporting::report::RenderTarget;
 use roc_target::TargetInfo;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant};
 use std::{path::PathBuf, thread::JoinHandle};
 use target_lexicon::Triple;
 use tempfile::Builder;
@@ -49,7 +49,7 @@ pub fn build_file<'a>(
     target_valgrind: bool,
     threading: Threading,
 ) -> Result<BuiltFile, LoadingProblem<'a>> {
-    let compilation_start = SystemTime::now();
+    let compilation_start = Instant::now();
     let target_info = TargetInfo::from(target);
 
     // Step 1: compile the app and generate the .o file
@@ -121,7 +121,13 @@ pub fn build_file<'a>(
         .exposed_to_host
         .closure_types
         .iter()
-        .map(|x| x.as_str(&loaded.interns).to_string())
+        .map(|x| {
+            format!(
+                "{}_{}",
+                x.module_string(&loaded.interns),
+                x.as_str(&loaded.interns)
+            )
+        })
         .collect();
 
     let preprocessed_host_path = if emit_wasm {
@@ -249,7 +255,7 @@ pub fn build_file<'a>(
     );
     report_timing(buf, "Emit .o file", code_gen_timing.emit_o_file);
 
-    let compilation_end = compilation_start.elapsed().unwrap();
+    let compilation_end = compilation_start.elapsed();
 
     let size = std::fs::metadata(&app_o_file)
         .unwrap_or_else(|err| {
@@ -284,7 +290,7 @@ pub fn build_file<'a>(
     }
 
     // Step 2: link the precompiled host and compiled app
-    let link_start = SystemTime::now();
+    let link_start = Instant::now();
     let problems = match (linking_strategy, link_type) {
         (LinkingStrategy::Surgical, _) => {
             roc_linker::link_preprocessed_host(target, &host_input_path, app_o_file, &binary_path);
@@ -333,13 +339,13 @@ pub fn build_file<'a>(
         }
     };
 
-    let linking_time = link_start.elapsed().unwrap();
+    let linking_time = link_start.elapsed();
 
     if emit_timings {
         println!("Finished linking in {} ms\n", linking_time.as_millis());
     }
 
-    let total_time = compilation_start.elapsed().unwrap();
+    let total_time = compilation_start.elapsed();
 
     Ok(BuiltFile {
         binary_path,
@@ -369,7 +375,7 @@ fn spawn_rebuild_thread(
             println!("🔨 Rebuilding host...");
         }
 
-        let rebuild_host_start = SystemTime::now();
+        let rebuild_host_start = Instant::now();
 
         if !precompiled {
             match linking_strategy {
@@ -410,7 +416,7 @@ fn spawn_rebuild_thread(
             // Copy preprocessed host to executable location.
             std::fs::copy(preprocessed_host_path, binary_path.as_path()).unwrap();
         }
-        let rebuild_host_end = rebuild_host_start.elapsed().unwrap();
+        let rebuild_host_end = rebuild_host_start.elapsed();
 
         rebuild_host_end.as_millis()
     })
@@ -423,7 +429,7 @@ pub fn check_file(
     emit_timings: bool,
     threading: Threading,
 ) -> Result<(program::Problems, Duration), LoadingProblem> {
-    let compilation_start = SystemTime::now();
+    let compilation_start = Instant::now();
 
     // only used for generating errors. We don't do code generation, so hardcoding should be fine
     // we need monomorphization for when exhaustiveness checking
@@ -474,7 +480,7 @@ pub fn check_file(
         }
     }
 
-    let compilation_end = compilation_start.elapsed().unwrap();
+    let compilation_end = compilation_start.elapsed();
 
     if emit_timings {
         println!(

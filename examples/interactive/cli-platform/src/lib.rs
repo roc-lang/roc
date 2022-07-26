@@ -10,7 +10,7 @@ use libc;
 use roc_std::{RocList, RocStr};
 use std::ffi::CStr;
 use std::os::raw::c_char;
-use ureq::Error;
+use std::time::Duration;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
@@ -19,14 +19,14 @@ extern "C" {
     #[link_name = "roc__mainForHost_size"]
     fn roc_main_size() -> i64;
 
-    #[link_name = "roc__mainForHost_1_Fx_caller"]
+    #[link_name = "roc__mainForHost_1__Fx_caller"]
     fn call_Fx(flags: *const u8, closure_data: *const u8, output: *mut u8);
 
     #[allow(dead_code)]
-    #[link_name = "roc__mainForHost_1_Fx_size"]
+    #[link_name = "roc__mainForHost_1__Fx_size"]
     fn size_Fx() -> i64;
 
-    #[link_name = "roc__mainForHost_1_Fx_result_size"]
+    #[link_name = "roc__mainForHost_1__Fx_result_size"]
     fn size_Fx_result() -> i64;
 }
 
@@ -128,68 +128,91 @@ pub extern "C" fn roc_fx_putLine(line: &RocStr) {
     println!("{}", string);
 }
 
-const BODY_MAX_BYTES: usize = 10 * 1024 * 1024;
-
 #[no_mangle]
 pub extern "C" fn roc_fx_sendRequest(roc_request: &glue::Request) -> glue::Response {
-    use std::io::Read;
+    let mut builder = reqwest::blocking::ClientBuilder::new();
+
+    if roc_request.timeout.discriminant() == glue::discriminant_TimeoutConfig::TimeoutMilliseconds {
+        let ms: &u64 = unsafe { roc_request.timeout.as_TimeoutMilliseconds() };
+        builder = builder.timeout(Duration::from_millis(*ms));
+    }
+
+    let client = match builder.build() {
+        Ok(c) => c,
+        Err(_) => {
+            return glue::Response::NetworkError; // TLS backend cannot be initialized
+        }
+    };
+
+    let method = match roc_request.method {
+        glue::Method::Connect => reqwest::Method::CONNECT,
+        glue::Method::Delete => reqwest::Method::DELETE,
+        glue::Method::Get => reqwest::Method::GET,
+        glue::Method::Head => reqwest::Method::HEAD,
+        glue::Method::Options => reqwest::Method::OPTIONS,
+        glue::Method::Patch => reqwest::Method::PATCH,
+        glue::Method::Post => reqwest::Method::POST,
+        glue::Method::Put => reqwest::Method::PUT,
+        glue::Method::Trace => reqwest::Method::TRACE,
+    };
 
     let url = roc_request.url.as_str();
-    match ureq::get(url).call() {
+
+    let mut req_builder = client.request(method, url);
+    for header in roc_request.headers.iter() {
+        let (name, value) = unsafe { header.as_Header() };
+        req_builder = req_builder.header(name.as_str(), value.as_str());
+    }
+    if roc_request.body.discriminant() == glue::discriminant_Body::Body {
+        let (mime_type_tag, body_byte_list) = unsafe { roc_request.body.as_Body() };
+        let mime_type_str: &RocStr = unsafe { mime_type_tag.as_MimeType() };
+
+        req_builder = req_builder.header("Content-Type", mime_type_str.as_str());
+        req_builder = req_builder.body(body_byte_list.as_slice().to_vec());
+    }
+
+    let request = match req_builder.build() {
+        Ok(req) => req,
+        Err(err) => {
+            return glue::Response::BadRequest(RocStr::from(err.to_string().as_str()));
+        }
+    };
+
+    match client.execute(request) {
         Ok(response) => {
-            let statusCode = response.status();
+            let status = response.status();
+            let status_str = status.canonical_reason().unwrap_or_else(|| status.as_str());
 
-            let len: usize = response
-                .header("Content-Length")
-                .and_then(|val| val.parse::<usize>().ok())
-                .map(|val| val.max(BODY_MAX_BYTES))
-                .unwrap_or(BODY_MAX_BYTES);
+            let headers_iter = response.headers().iter().map(|(name, value)| {
+                glue::Header::Header(
+                    RocStr::from(name.as_str()),
+                    RocStr::from(value.to_str().unwrap_or_default()),
+                )
+            });
 
-            let mut bytes: Vec<u8> = Vec::with_capacity(len);
-            match response
-                .into_reader()
-                .take(len as u64)
-                .read_to_end(&mut bytes)
-            {
-                Ok(_read_bytes) => {}
-                Err(_) => {
-                    // Not totally accurate, but let's deal with this later when we do async
-                    return glue::Response::NetworkError;
-                }
+            let metadata = Metadata {
+                headers: RocList::from_iter(headers_iter),
+                statusText: RocStr::from(status_str),
+                url: RocStr::from(url),
+                statusCode: status.as_u16(),
+            };
+
+            let bytes = response.bytes().unwrap_or_default();
+            let body: RocList<u8> = RocList::from_iter(bytes.into_iter());
+
+            if status.is_success() {
+                glue::Response::GoodStatus(metadata, body)
+            } else {
+                glue::Response::BadStatus(metadata, body)
             }
-
-            // Note: we could skip a full memcpy if we had `RocList::from_iter`.
-            let body = RocList::from_slice(&bytes);
-
-            let metadata = Metadata {
-                headers: RocList::empty(),   // TODO
-                statusText: RocStr::empty(), // TODO
-                url: RocStr::empty(),        // TODO
-                statusCode,
-            };
-
-            glue::Response::GoodStatus(metadata, body)
         }
-        Err(Error::Status(statusCode, response)) => {
-            let mut buffer: Vec<u8> = vec![];
-            let mut reader = response.into_reader();
-            reader.read(&mut buffer).expect("can't read response");
-            let body = RocList::from_slice(&buffer);
-
-            let metadata = Metadata {
-                headers: RocList::empty(),   // TODO
-                statusText: RocStr::empty(), // TODO
-                url: RocStr::empty(),        // TODO
-                statusCode,
-            };
-
-            glue::Response::BadStatus(metadata, body)
-        }
-        Err(transportError) => {
-            use ureq::ErrorKind::*;
-            match transportError.kind() {
-                InvalidUrl | UnknownScheme => glue::Response::BadUrl(RocStr::from(url)),
-                _ => glue::Response::NetworkError,
+        Err(err) => {
+            if err.is_timeout() {
+                glue::Response::Timeout
+            } else if err.is_request() {
+                glue::Response::BadRequest(RocStr::from(err.to_string().as_str()))
+            } else {
+                glue::Response::NetworkError
             }
         }
     }

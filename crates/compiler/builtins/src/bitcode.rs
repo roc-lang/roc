@@ -336,6 +336,7 @@ pub const STR_GET_UNSAFE: &str = "roc_builtins.str.get_unsafe";
 pub const STR_RESERVE: &str = "roc_builtins.str.reserve";
 pub const STR_APPEND_SCALAR: &str = "roc_builtins.str.append_scalar";
 pub const STR_GET_SCALAR_UNSAFE: &str = "roc_builtins.str.get_scalar_unsafe";
+pub const STR_CLONE_TO: &str = "roc_builtins.str.clone_to";
 
 pub const LIST_MAP: &str = "roc_builtins.list.map";
 pub const LIST_MAP2: &str = "roc_builtins.list.map2";

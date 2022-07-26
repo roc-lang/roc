@@ -171,10 +171,7 @@ pub fn to_pattern2<'a>(
             malformed_pattern(env, problem, region)
         }
 
-        Underscore(_) => match pattern_type {
-            WhenBranch | FunctionArg => Pattern2::Underscore,
-            TopLevelDef | DefExpr => underscore_in_def(env, region),
-        },
+        Underscore(_) => Pattern2::Underscore,
 
         FloatLiteral(ref string) => match pattern_type {
             WhenBranch => match finish_parsing_float(string) {
@@ -585,16 +582,6 @@ fn unsupported_pattern<'a>(
     use roc_problem::can::BadPattern;
     env.problem(Problem::UnsupportedPattern(
         BadPattern::Unsupported(pattern_type),
-        region,
-    ));
-
-    Pattern2::UnsupportedPattern(region)
-}
-
-fn underscore_in_def<'a>(env: &mut Env<'a>, region: Region) -> Pattern2 {
-    use roc_problem::can::BadPattern;
-    env.problem(Problem::UnsupportedPattern(
-        BadPattern::UnderscoreInDef,
         region,
     ));
 

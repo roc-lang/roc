@@ -7,7 +7,7 @@ use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, float_expr_from_result,
     int_expr_from_result, num_expr_from_result, FloatBound, IntBound, NumBound,
 };
-use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern};
+use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern, PermitShadows};
 use crate::procedure::References;
 use crate::scope::Scope;
 use crate::traverse::{walk_expr, Visitor};
@@ -243,7 +243,7 @@ impl Expr {
         match self {
             Self::Num(..) => Category::Num,
             Self::Int(..) => Category::Int,
-            Self::Float(..) => Category::Float,
+            Self::Float(..) => Category::Frac,
             Self::Str(..) => Category::Str,
             Self::SingleQuote(..) => Category::Character,
             Self::List { .. } => Category::List,
@@ -482,8 +482,17 @@ impl Recursive {
 }
 
 #[derive(Clone, Debug)]
+pub struct WhenBranchPattern {
+    pub pattern: Loc<Pattern>,
+    /// Degenerate branch patterns are those that don't fully bind symbols that the branch body
+    /// needs. For example, in `A x | B y -> x`, the `B y` pattern is degenerate.
+    /// Degenerate patterns emit a runtime error if reached in a program.
+    pub degenerate: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct WhenBranch {
-    pub patterns: Vec<Loc<Pattern>>,
+    pub patterns: Vec<WhenBranchPattern>,
     pub value: Loc<Expr>,
     pub guard: Option<Loc<Expr>>,
     /// Whether this branch is redundant in the `when` it appears in
@@ -497,11 +506,13 @@ impl WhenBranch {
                 .patterns
                 .first()
                 .expect("when branch has no pattern?")
+                .pattern
                 .region,
             &self
                 .patterns
                 .last()
                 .expect("when branch has no pattern?")
+                .pattern
                 .region,
         )
     }
@@ -512,7 +523,7 @@ impl WhenBranch {
         Region::across_all(
             self.patterns
                 .iter()
-                .map(|p| &p.region)
+                .map(|p| &p.pattern.region)
                 .chain([self.value.region].iter()),
         )
     }
@@ -1187,6 +1198,7 @@ fn canonicalize_closure_body<'a>(
             FunctionArg,
             &loc_pattern.value,
             loc_pattern.region,
+            PermitShadows(false),
         );
 
         can_args.push((
@@ -1269,6 +1281,59 @@ fn canonicalize_closure_body<'a>(
     (closure_data, output)
 }
 
+enum MultiPatternVariables {
+    OnePattern,
+    MultiPattern {
+        bound_occurrences: VecMap<Symbol, (Region, u8)>,
+    },
+}
+
+impl MultiPatternVariables {
+    #[inline(always)]
+    fn new(num_patterns: usize) -> Self {
+        if num_patterns > 1 {
+            Self::MultiPattern {
+                bound_occurrences: VecMap::with_capacity(2),
+            }
+        } else {
+            Self::OnePattern
+        }
+    }
+
+    #[inline(always)]
+    fn add_pattern(&mut self, pattern: &Loc<Pattern>) {
+        match self {
+            MultiPatternVariables::OnePattern => {}
+            MultiPatternVariables::MultiPattern { bound_occurrences } => {
+                for (sym, region) in BindingsFromPattern::new(pattern) {
+                    if !bound_occurrences.contains_key(&sym) {
+                        bound_occurrences.insert(sym, (region, 0));
+                    }
+                    bound_occurrences.get_mut(&sym).unwrap().1 += 1;
+                }
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn get_unbound(self) -> impl Iterator<Item = (Symbol, Region)> {
+        let bound_occurrences = match self {
+            MultiPatternVariables::OnePattern => Default::default(),
+            MultiPatternVariables::MultiPattern { bound_occurrences } => bound_occurrences,
+        };
+
+        bound_occurrences
+            .into_iter()
+            .filter_map(|(sym, (region, occurs))| {
+                if occurs == 1 {
+                    Some((sym, region))
+                } else {
+                    None
+                }
+            })
+    }
+}
+
 #[inline(always)]
 fn canonicalize_when_branch<'a>(
     env: &mut Env<'a>,
@@ -1279,9 +1344,11 @@ fn canonicalize_when_branch<'a>(
     output: &mut Output,
 ) -> (WhenBranch, References) {
     let mut patterns = Vec::with_capacity(branch.patterns.len());
+    let mut multi_pattern_variables = MultiPatternVariables::new(branch.patterns.len());
 
-    // TODO report symbols not bound in all patterns
-    for loc_pattern in branch.patterns.iter() {
+    for (i, loc_pattern) in branch.patterns.iter().enumerate() {
+        let permit_shadows = PermitShadows(i > 0); // patterns can shadow symbols defined in the first pattern.
+
         let can_pattern = canonicalize_pattern(
             env,
             var_store,
@@ -1290,9 +1357,24 @@ fn canonicalize_when_branch<'a>(
             WhenBranch,
             &loc_pattern.value,
             loc_pattern.region,
+            permit_shadows,
         );
 
-        patterns.push(can_pattern);
+        multi_pattern_variables.add_pattern(&can_pattern);
+        patterns.push(WhenBranchPattern {
+            pattern: can_pattern,
+            degenerate: false,
+        });
+    }
+
+    let mut some_symbols_not_bound_in_all_patterns = false;
+    for (unbound_symbol, region) in multi_pattern_variables.get_unbound() {
+        env.problem(Problem::NotBoundInAllPatterns {
+            unbound_symbol,
+            region,
+        });
+
+        some_symbols_not_bound_in_all_patterns = true;
     }
 
     let (value, mut branch_output) = canonicalize_expr(
@@ -1319,9 +1401,30 @@ fn canonicalize_when_branch<'a>(
 
     // Now that we've collected all the references for this branch, check to see if
     // any of the new idents it defined were unused. If any were, report it.
-    for (symbol, region) in BindingsFromPattern::new_many(patterns.iter()) {
-        if !output.references.has_value_lookup(symbol) {
+    let mut pattern_bound_symbols_body_needs = VecSet::default();
+    for (symbol, region) in BindingsFromPattern::new_many(patterns.iter().map(|pat| &pat.pattern)) {
+        if output.references.has_value_lookup(symbol) {
+            pattern_bound_symbols_body_needs.insert(symbol);
+        } else {
             env.problem(Problem::UnusedDef(symbol, region));
+        }
+    }
+
+    if some_symbols_not_bound_in_all_patterns && !pattern_bound_symbols_body_needs.is_empty() {
+        // There might be branches that don't bind all the symbols needed by the body; mark those
+        // branches degenerate.
+        for pattern in patterns.iter_mut() {
+            let bound_by_pattern: VecSet<_> = BindingsFromPattern::new(&pattern.pattern)
+                .map(|(sym, _)| sym)
+                .collect();
+
+            let binds_all_needed = pattern_bound_symbols_body_needs
+                .iter()
+                .all(|sym| bound_by_pattern.contains(sym));
+
+            if !binds_all_needed {
+                pattern.degenerate = true;
+            }
         }
     }
 
@@ -1465,6 +1568,13 @@ fn canonicalize_var_lookup(
                 output.references.insert_value_lookup(symbol);
 
                 if scope.abilities_store.is_ability_member_name(symbol) {
+                    // Is there a shadow implementation with the same name? If so, we might be in
+                    // the def for that shadow. In that case add a value lookup of the shadow impl,
+                    // so that it's marked as possibly-recursive.
+                    if let Some(shadow) = scope.get_member_shadow(symbol) {
+                        output.references.insert_value_lookup(shadow.value);
+                    }
+
                     AbilityMember(
                         symbol,
                         Some(scope.abilities_store.fresh_specialization_id()),
@@ -2190,12 +2300,17 @@ impl Declarations {
         index
     }
 
-    pub fn push_expect(&mut self, name: Symbol, loc_expr: Loc<Expr>) -> usize {
+    pub fn push_expect(
+        &mut self,
+        preceding_comment: Region,
+        name: Symbol,
+        loc_expr: Loc<Expr>,
+    ) -> usize {
         let index = self.declarations.len();
 
         self.declarations.push(DeclarationTag::Expectation);
         self.variables.push(Variable::BOOL);
-        self.symbols.push(Loc::at_zero(name));
+        self.symbols.push(Loc::at(preceding_comment, name));
         self.annotations.push(None);
 
         self.expressions.push(loc_expr);
@@ -2622,12 +2737,15 @@ struct ExpectCollector {
 }
 
 impl crate::traverse::Visitor for ExpectCollector {
-    fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
+    fn visit_expr(&mut self, expr: &Expr, _region: Region, var: Variable) {
         if let Expr::Expect {
-            lookups_in_cond, ..
+            lookups_in_cond,
+            loc_condition,
+            ..
         } = expr
         {
-            self.expects.insert(region, lookups_in_cond.to_vec());
+            self.expects
+                .insert(loc_condition.region, lookups_in_cond.to_vec());
         }
 
         walk_expr(self, expr, var)

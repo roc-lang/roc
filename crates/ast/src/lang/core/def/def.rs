@@ -277,7 +277,7 @@ fn to_pending_def<'a>(
         Type(TypeDef::Opaque { .. }) => todo_opaques!(),
         Type(TypeDef::Ability { .. }) => todo_abilities!(),
 
-        Value(AstValueDef::Expect(_)) => todo!(),
+        Value(AstValueDef::Expect { .. }) => todo!(),
 
         SpaceBefore(sub_def, _) | SpaceAfter(sub_def, _) => {
             to_pending_def(env, sub_def, scope, pattern_type)

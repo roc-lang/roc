@@ -20,7 +20,7 @@ use roc_debug_flags::{
 };
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::{internal_error, todo_abilities};
-use roc_exhaustive::{Ctor, CtorName, Guard, RenderAs, TagId};
+use roc_exhaustive::{Ctor, CtorName, RenderAs, TagId};
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
@@ -2533,7 +2533,7 @@ fn pattern_to_when<'a>(
     body: Loc<roc_can::expr::Expr>,
 ) -> (Symbol, Loc<roc_can::expr::Expr>) {
     use roc_can::expr::Expr::*;
-    use roc_can::expr::WhenBranch;
+    use roc_can::expr::{WhenBranch, WhenBranchPattern};
     use roc_can::pattern::Pattern::*;
 
     match &pattern.value {
@@ -2580,7 +2580,10 @@ fn pattern_to_when<'a>(
                 region: Region::zero(),
                 loc_cond: Box::new(Loc::at_zero(Var(symbol))),
                 branches: vec![WhenBranch {
-                    patterns: vec![pattern],
+                    patterns: vec![WhenBranchPattern {
+                        pattern,
+                        degenerate: false,
+                    }],
                     value: body,
                     guard: None,
                     // If this type-checked, it's non-redundant
@@ -5184,7 +5187,7 @@ pub fn with_hole<'a>(
             }
         }
         TypedHole(_) => Stmt::RuntimeError("Hit a blank"),
-        RuntimeError(e) => Stmt::RuntimeError(env.arena.alloc(format!("{:?}", e))),
+        RuntimeError(e) => Stmt::RuntimeError(env.arena.alloc(e.runtime_message())),
     }
 }
 
@@ -6033,56 +6036,50 @@ fn to_opt_branches<'a>(
 )> {
     debug_assert!(!branches.is_empty());
 
-    let mut loc_branches = std::vec::Vec::new();
     let mut opt_branches = std::vec::Vec::new();
 
     for when_branch in branches {
-        let exhaustive_guard = if when_branch.guard.is_some() {
-            Guard::HasGuard
-        } else {
-            Guard::NoGuard
-        };
-
         if when_branch.redundant.is_redundant(env.subs) {
             // Don't codegen this branch since it's redundant.
             continue;
         }
 
         for loc_pattern in when_branch.patterns {
-            match from_can_pattern(env, procs, layout_cache, &loc_pattern.value) {
+            match from_can_pattern(env, procs, layout_cache, &loc_pattern.pattern.value) {
                 Ok((mono_pattern, assignments)) => {
-                    loc_branches.push((
-                        Loc::at(loc_pattern.region, mono_pattern.clone()),
-                        exhaustive_guard,
-                    ));
+                    let loc_expr = if !loc_pattern.degenerate {
+                        let mut loc_expr = when_branch.value.clone();
 
-                    let mut loc_expr = when_branch.value.clone();
-                    let region = loc_pattern.region;
-                    for (symbol, variable, expr) in assignments.into_iter().rev() {
-                        let def = roc_can::def::Def {
-                            annotation: None,
-                            expr_var: variable,
-                            loc_expr: Loc::at(region, expr),
-                            loc_pattern: Loc::at(
-                                region,
-                                roc_can::pattern::Pattern::Identifier(symbol),
-                            ),
-                            pattern_vars: std::iter::once((symbol, variable)).collect(),
-                        };
-                        let new_expr =
-                            roc_can::expr::Expr::LetNonRec(Box::new(def), Box::new(loc_expr));
-                        loc_expr = Loc::at(region, new_expr);
-                    }
+                        let region = loc_pattern.pattern.region;
+                        for (symbol, variable, expr) in assignments.into_iter().rev() {
+                            let def = roc_can::def::Def {
+                                annotation: None,
+                                expr_var: variable,
+                                loc_expr: Loc::at(region, expr),
+                                loc_pattern: Loc::at(
+                                    region,
+                                    roc_can::pattern::Pattern::Identifier(symbol),
+                                ),
+                                pattern_vars: std::iter::once((symbol, variable)).collect(),
+                            };
+                            let new_expr =
+                                roc_can::expr::Expr::LetNonRec(Box::new(def), Box::new(loc_expr));
+                            loc_expr = Loc::at(region, new_expr);
+                        }
+
+                        loc_expr
+                    } else {
+                        // This pattern is degenerate; when it's reached we must emit a runtime
+                        // error.
+                        Loc::at_zero(roc_can::expr::Expr::RuntimeError(
+                            RuntimeError::DegenerateBranch(loc_pattern.pattern.region),
+                        ))
+                    };
 
                     // TODO remove clone?
                     opt_branches.push((mono_pattern, when_branch.guard.clone(), loc_expr.value));
                 }
                 Err(runtime_error) => {
-                    loc_branches.push((
-                        Loc::at(loc_pattern.region, Pattern::Underscore),
-                        exhaustive_guard,
-                    ));
-
                     // TODO remove clone?
                     opt_branches.push((
                         Pattern::Underscore,
@@ -6336,17 +6333,23 @@ fn substitute_in_stmt_help<'a>(
             layouts,
             remainder,
         } => {
-            // TODO should we substitute in the ModifyRc?
-            match substitute_in_stmt_help(arena, remainder, subs) {
-                Some(cont) => Some(arena.alloc(Expect {
-                    condition: *condition,
-                    region: *region,
-                    lookups,
-                    layouts,
-                    remainder: cont,
-                })),
-                None => None,
-            }
+            let new_remainder =
+                substitute_in_stmt_help(arena, remainder, subs).unwrap_or(remainder);
+
+            let new_lookups = Vec::from_iter_in(
+                lookups.iter().map(|s| substitute(subs, *s).unwrap_or(*s)),
+                arena,
+            );
+
+            let expect = Expect {
+                condition: substitute(subs, *condition).unwrap_or(*condition),
+                region: *region,
+                lookups: new_lookups.into_bump_slice(),
+                layouts,
+                remainder: new_remainder,
+            };
+
+            Some(arena.alloc(expect))
         }
 
         Jump(id, args) => {

@@ -838,26 +838,7 @@ fn unify_structure<M: MetaCollector>(
     match other {
         FlexVar(_) => {
             // If the other is flex, Structure wins!
-            let outcome = merge(subs, ctx, Structure(*flat_type));
-
-            // And if we see a flex variable on the right hand side of a presence
-            // constraint, we know we need to open up the structure we're trying to unify with.
-            match (ctx.mode.is_present(), flat_type) {
-                (true, FlatType::TagUnion(tags, _ext)) => {
-                    let new_ext = subs.fresh_unnamed_flex_var();
-                    let mut new_desc = ctx.first_desc;
-                    new_desc.content = Structure(FlatType::TagUnion(*tags, new_ext));
-                    subs.set(ctx.first, new_desc);
-                }
-                (true, FlatType::FunctionOrTagUnion(tn, sym, _ext)) => {
-                    let new_ext = subs.fresh_unnamed_flex_var();
-                    let mut new_desc = ctx.first_desc;
-                    new_desc.content = Structure(FlatType::FunctionOrTagUnion(*tn, *sym, new_ext));
-                    subs.set(ctx.first, new_desc);
-                }
-                _ => {}
-            }
-            outcome
+            merge(subs, ctx, Structure(*flat_type))
         }
         FlexAbleVar(_, ability) => {
             // Structure wins

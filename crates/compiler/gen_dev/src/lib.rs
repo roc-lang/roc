@@ -310,6 +310,22 @@ trait Backend<'a> {
                     x => todo!("the call type, {:?}", x),
                 }
             }
+            Expr::EmptyArray => {
+                self.create_empty_array(sym);
+            }
+            Expr::Array { elem_layout, elems } => {
+                let mut syms = bumpalo::vec![in self.env().arena];
+                for sym in elems.iter().filter_map(|x| match x {
+                    ListLiteralElement::Symbol(sym) => Some(sym),
+                    _ => None,
+                }) {
+                    syms.push(*sym);
+                }
+                // TODO: This could be a huge waste.
+                // We probably want to call this within create_array, one element at a time.
+                self.load_literal_symbols(syms.into_bump_slice());
+                self.create_array(sym, elem_layout, elems);
+            }
             Expr::Struct(fields) => {
                 self.load_literal_symbols(fields);
                 self.create_struct(sym, layout, fields);
@@ -771,6 +787,17 @@ trait Backend<'a> {
 
     /// load_literal sets a symbol to be equal to a literal.
     fn load_literal(&mut self, sym: &Symbol, layout: &Layout<'a>, lit: &Literal<'a>);
+
+    /// create_empty_array creates an empty array with nullptr, zero length, and zero capacity.
+    fn create_empty_array(&mut self, sym: &Symbol);
+
+    /// create_array creates an array filling it with the specified objects.
+    fn create_array(
+        &mut self,
+        sym: &Symbol,
+        elem_layout: &Layout<'a>,
+        elems: &'a [ListLiteralElement<'a>],
+    );
 
     /// create_struct creates a struct with the elements specified loaded into it as data.
     fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]);

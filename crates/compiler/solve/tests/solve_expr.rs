@@ -19,7 +19,10 @@ mod solve_expr {
     use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Region};
     use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
     use roc_solve::solve::TypeError;
-    use roc_types::pretty_print::{name_and_print_var, DebugPrint};
+    use roc_types::{
+        pretty_print::{name_and_print_var, DebugPrint},
+        types::MemberImpl,
+    };
     use std::path::PathBuf;
 
     // HELPERS
@@ -245,7 +248,13 @@ mod solve_expr {
         assert_eq!(actual, expected.to_string());
     }
 
-    fn infer_queries_help(src: &str, expected: &[&'static str], print_only_under_alias: bool) {
+    #[derive(Default)]
+    struct InferOptions {
+        print_only_under_alias: bool,
+        allow_errors: bool,
+    }
+
+    fn infer_queries_help(src: &str, expected: impl FnOnce(&str), options: InferOptions) {
         let (
             LoadedModule {
                 module_id: home,
@@ -269,12 +278,14 @@ mod solve_expr {
         let (can_problems, type_problems) =
             format_problems(&src, home, &interns, can_problems, type_problems);
 
-        assert!(
-            can_problems.is_empty(),
-            "Canonicalization problems: {}",
-            can_problems
-        );
-        assert!(type_problems.is_empty(), "Type problems: {}", type_problems);
+        if !options.allow_errors {
+            assert!(
+                can_problems.is_empty(),
+                "Canonicalization problems: {}",
+                can_problems
+            );
+            assert!(type_problems.is_empty(), "Type problems: {}", type_problems);
+        }
 
         let queries = parse_queries(&src);
         assert!(!queries.is_empty(), "No queries provided!");
@@ -295,7 +306,7 @@ mod solve_expr {
                 &interns,
                 DebugPrint {
                     print_lambda_sets: true,
-                    print_only_under_alias,
+                    print_only_under_alias: options.print_only_under_alias,
                 },
             );
             subs.rollback_to(snapshot);
@@ -319,15 +330,16 @@ mod solve_expr {
             solved_queries.push(elaborated);
         }
 
-        assert_eq!(solved_queries, expected)
+        let pretty_solved_queries = solved_queries.join("\n");
+
+        expected(&pretty_solved_queries);
     }
 
     macro_rules! infer_queries {
-        ($program:expr, $queries:expr $(,)?) => {
-            infer_queries_help($program, $queries, false)
-        };
-        ($program:expr, $queries:expr, print_only_under_alias=true $(,)?) => {
-            infer_queries_help($program, $queries, true)
+        ($program:expr, @$queries:literal $($option:ident: $value:expr)*) => {
+            infer_queries_help($program, |golden| insta::assert_snapshot!(golden, @$queries), InferOptions {
+                $($option: $value,)* ..InferOptions::default()
+            })
         };
     }
 
@@ -354,11 +366,22 @@ mod solve_expr {
             panic!();
         }
 
-        let known_specializations = abilities_store.iter_specializations();
+        let known_specializations = abilities_store.iter_declared_implementations().filter_map(
+            |((member, typ), member_impl)| match member_impl {
+                MemberImpl::Impl(impl_symbol) => {
+                    let specialization = abilities_store.specialization_info(*impl_symbol).expect(
+                        "declared implementations should be resolved conclusively after solving",
+                    );
+                    Some((member, typ, specialization.clone()))
+                }
+                MemberImpl::Derived | MemberImpl::Error => None,
+            },
+        );
+
         use std::collections::HashSet;
         let pretty_specializations = known_specializations
             .into_iter()
-            .map(|((member, typ), _)| {
+            .map(|(member, typ, _)| {
                 let member_data = abilities_store.member_def(member).unwrap();
                 let member_str = member.as_str(&interns);
                 let ability_str = member_data.parent_ability.as_str(&interns);
@@ -1484,14 +1507,13 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    # technically, an empty record can be destructured
-                    {} = {}
-                    thunk = \{} -> 42
+                # technically, an empty record can be destructured
+                thunk = \{} -> 42
 
-                    xEmpty = if thunk {} == 42 then { x: {} } else { x: {} }
+                xEmpty = if thunk {} == 42 then { x: {} } else { x: {} }
 
-                    when xEmpty is
-                        { x: {} } -> {}
+                when xEmpty is
+                    { x: {} } -> {}
                 "#
             ),
             "{}",
@@ -5938,7 +5960,7 @@ mod solve_expr {
 
                 Hash has hash : a -> U64 | a has Hash
 
-                Id := U64
+                Id := U64 has [Hash {hash}]
 
                 hash = \@Id n -> n
                 "#
@@ -5958,7 +5980,7 @@ mod solve_expr {
                     hash : a -> U64 | a has Hash
                     hash32 : a -> U32 | a has Hash
 
-                Id := U64
+                Id := U64 has [Hash {hash, hash32}]
 
                 hash = \@Id n -> n
                 hash32 = \@Id n -> Num.toU32 n
@@ -5983,7 +6005,7 @@ mod solve_expr {
                     eq : a, a -> Bool | a has Ord
                     le : a, a -> Bool | a has Ord
 
-                Id := U64
+                Id := U64 has [Hash {hash, hash32}, Ord {eq, le}]
 
                 hash = \@Id n -> n
                 hash32 = \@Id n -> Num.toU32 n
@@ -6011,7 +6033,7 @@ mod solve_expr {
                 Hash has
                     hash : a -> U64 | a has Hash
 
-                Id := U64
+                Id := U64 has [Hash {hash}]
 
                 hash : Id -> U64
                 hash = \@Id n -> n
@@ -6031,7 +6053,7 @@ mod solve_expr {
                 Hash has
                     hash : a -> U64 | a has Hash
 
-                Id := U64
+                Id := U64 has [Hash {hash}]
 
                 hash : Id -> U64
                 "#
@@ -6050,7 +6072,7 @@ mod solve_expr {
                 Hash has
                     hash : a -> U64 | a has Hash
 
-                Id := U64
+                Id := U64 has [Hash {hash}]
 
                 hash = \@Id n -> n
 
@@ -6144,7 +6166,7 @@ mod solve_expr {
 
                 hashEq = \x, y -> hash x == hash y
 
-                Id := U64
+                Id := U64 has [Hash {hash}]
                 hash = \@Id n -> n
 
                 result = hashEq (@Id 100) (@Id 101)
@@ -6166,11 +6188,11 @@ mod solve_expr {
 
                 mulHashes = \x, y -> hash x * hash y
 
-                Id := U64
-                hash = \@Id n -> n
+                Id := U64 has [Hash { hash: hashId }]
+                hashId = \@Id n -> n
 
-                Three := {}
-                hash = \@Three _ -> 3
+                Three := {} has [Hash { hash: hashThree }]
+                hashThree = \@Three _ -> 3
 
                 result = mulHashes (@Id 100) (@Three {})
                 "#
@@ -6197,12 +6219,12 @@ mod solve_expr {
                 #       ^^^^^
                 "#
             ),
-            &[
-                "ob : Bool",
-                "ob : Bool",
-                "True : [False, True]",
-                "False : [False, True]",
-            ],
+            @r###"
+        ob : Bool
+        ob : Bool
+        True : [False, True]
+        False : [False, True]
+        "###
         )
     }
 
@@ -6329,15 +6351,13 @@ mod solve_expr {
                 toBytes = \val, fmt -> appendWith [] (toEncoder val) fmt
 
 
-                Linear := {}
+                Linear := {} has [Format {u8}]
 
-                # impl Format for Linear
                 u8 = \n -> @Encoder (\lst, @Linear {} -> List.append lst n)
                 #^^{-1}
 
-                MyU8 := U8
+                MyU8 := U8 has [Encoding {toEncoder}]
 
-                # impl Encoding for MyU8
                 toEncoder = \@MyU8 n -> u8 n
                 #^^^^^^^^^{-1}
 
@@ -6345,11 +6365,11 @@ mod solve_expr {
                 #^^^^^^^^^{-1}
                 "#
             ),
-            &[
-                "Linear#u8(22) : U8 -[[u8(22)]]-> Encoder Linear",
-                "MyU8#toEncoder(23) : MyU8 -[[toEncoder(23)]]-> Encoder fmt | fmt has Format",
-                "myU8Bytes : List U8",
-            ],
+            @r###"
+        Linear#u8(10) : U8 -[[u8(10)]]-> Encoder Linear
+        MyU8#toEncoder(11) : MyU8 -[[toEncoder(11)]]-> Encoder fmt | fmt has Format
+        myU8Bytes : List U8
+        "###
         )
     }
 
@@ -6383,18 +6403,16 @@ mod solve_expr {
                                 Err e -> Err e
 
 
-                Linear := {}
+                Linear := {} has [DecoderFormatting {u8}]
 
-                # impl DecoderFormatting for Linear
                 u8 = @Decoder \lst, @Linear {} ->
                 #^^{-1}
                         when List.first lst is
                             Ok n -> { result: Ok n, rest: List.dropFirst lst }
                             Err _ -> { result: Err TooShort, rest: [] }
 
-                MyU8 := U8
+                MyU8 := U8 has [Decoding {decoder}]
 
-                # impl Decoding for MyU8
                 decoder = @Decoder \lst, fmt ->
                 #^^^^^^^{-1}
                     when decodeWith lst u8 fmt is
@@ -6406,11 +6424,11 @@ mod solve_expr {
                 #^^^^{-1}
                 "#
             ),
-            &[
-                "Linear#u8(27) : Decoder U8 Linear",
-                "MyU8#decoder(28) : Decoder MyU8 fmt | fmt has DecoderFormatting",
-                "myU8 : Result MyU8 DecodeError",
-            ],
+            @r#"
+            Linear#u8(11) : Decoder U8 Linear
+            MyU8#decoder(12) : Decoder MyU8 fmt | fmt has DecoderFormatting
+            myU8 : Result MyU8 DecodeError
+            "#
         )
     }
 
@@ -6444,7 +6462,7 @@ mod solve_expr {
 
                 Default has default : {} -> a | a has Default
 
-                A := {}
+                A := {} has [Default {default}]
                 default = \{} -> @A {}
 
                 main =
@@ -6454,7 +6472,7 @@ mod solve_expr {
                     a
                 "#
             ),
-            &["A#default(5) : {} -[[default(5)]]-> A"],
+            @"A#default(4) : {} -[[default(4)]]-> A"
         )
     }
 
@@ -6464,10 +6482,10 @@ mod solve_expr {
             indoc!(
                 r#"
                 app "test"
-                    imports [Encode.{ toEncoder }, Json]
+                    imports [Encode.{ Encoding, toEncoder }, Json]
                     provides [main] to "./platform"
 
-                HelloWorld := {}
+                HelloWorld := {} has [Encoding {toEncoder}]
 
                 toEncoder = \@HelloWorld {} ->
                     Encode.custom \bytes, fmt ->
@@ -6498,9 +6516,9 @@ mod solve_expr {
                      # ^^^^^^^^^
                 "#
             ),
-            &[
-                "Encoding#toEncoder(2) : { a : Str } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting",
-            ],
+            @r#"
+            "Encoding#toEncoder(2) : { a : Str } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting",
+            "#
         )
     }
 
@@ -6521,9 +6539,9 @@ mod solve_expr {
                      # ^^^^^^^^^
                 "#
             ),
-            &[
-                "Encoding#toEncoder(2) : { a : A } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting",
-            ],
+            @r#"
+            "Encoding#toEncoder(2) : { a : A } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting",
+            "#
         )
     }
 
@@ -6536,7 +6554,7 @@ mod solve_expr {
 
                 Id has id : a -> a | a has Id
 
-                A := {}
+                A := {} has [Id {id}]
                 id = \@A {} -> @A {}
                 #^^{-1}
 
@@ -6553,12 +6571,12 @@ mod solve_expr {
                     a
                 "#
             ),
-            &[
-                "A#id(5) : A -[[id(5)]]-> A",
-                "Id#id(4) : a -[[] + a:id(4):1]-> a | a has Id",
-                "alias1 : a -[[] + a:id(4):1]-> a | a has Id",
-                "alias2 : A -[[id(5)]]-> A",
-            ],
+            @r###"
+        A#id(4) : A -[[id(4)]]-> A
+        Id#id(2) : a -[[] + a:id(2):1]-> a | a has Id
+        alias1 : a -[[] + a:id(2):1]-> a | a has Id
+        alias2 : A -[[id(4)]]-> A
+        "###
         )
     }
 
@@ -6572,7 +6590,7 @@ mod solve_expr {
                 Id1 has id1 : a -> a | a has Id1
                 Id2 has id2 : a -> a | a has Id2
 
-                A := {}
+                A := {} has [Id1 {id1}, Id2 {id2}]
                 id1 = \@A {} -> @A {}
                 #^^^{-1}
 
@@ -6587,14 +6605,12 @@ mod solve_expr {
                     a
                 "#
             ),
-            &[
-                "A#id1(8) : A -[[id1(8)]]-> A",
-                //
-                "A#id2(9) : A -[[id2(9)]]-> A",
-                "A#id1(8) : A -[[id1(8)]]-> A",
-                //
-                "A#id2(9) : A -[[id2(9)]]-> A",
-            ],
+            @r###"
+        A#id1(6) : A -[[id1(6)]]-> A
+        A#id2(7) : A -[[id2(7)]]-> A
+        A#id1(6) : A -[[id1(6)]]-> A
+        A#id2(7) : A -[[id2(7)]]-> A
+        "###
         )
     }
 
@@ -6607,7 +6623,7 @@ mod solve_expr {
 
                 Id has id : a -> a | a has Id
 
-                A := {}
+                A := {} has [Id {id}]
                 id = \@A {} -> @A {}
                 #^^{-1}
 
@@ -6627,12 +6643,12 @@ mod solve_expr {
                     #^^^^^^^^{-1}
                 "#
             ),
-            &[
-                "A#id(5) : A -[[id(5)]]-> A",
-                "idNotAbility : a -[[idNotAbility(6)]]-> a",
-                "idChoice : a -[[idNotAbility(6)] + a:id(4):1]-> a | a has Id",
-                "idChoice : A -[[id(5), idNotAbility(6)]]-> A",
-            ],
+            @r###"
+        A#id(4) : A -[[id(4)]]-> A
+        idNotAbility : a -[[idNotAbility(5)]]-> a
+        idChoice : a -[[idNotAbility(5)] + a:id(2):1]-> a | a has Id
+        idChoice : A -[[id(4), idNotAbility(5)]]-> A
+        "###
         )
     }
 
@@ -6645,7 +6661,7 @@ mod solve_expr {
 
                 Id has id : a -> a | a has Id
 
-                A := {}
+                A := {} has [Id {id}]
                 id = \@A {} -> @A {}
                 #^^{-1}
 
@@ -6662,11 +6678,11 @@ mod solve_expr {
                     #^^^^^^^^{-1}
                 "#
             ),
-            &[
-                "A#id(5) : A -[[id(5)]]-> A",
-                "idChoice : a -[[] + a:id(4):1]-> a | a has Id",
-                "idChoice : A -[[id(5)]]-> A",
-            ],
+            @r#"
+            A#id(4) : A -[[id(4)]]-> A
+            idChoice : a -[[] + a:id(2):1]-> a | a has Id
+            idChoice : A -[[id(4)]]-> A
+            "#
         )
     }
 
@@ -6681,7 +6697,7 @@ mod solve_expr {
 
                 Id has id : a -> Thunk a | a has Id
 
-                A := {}
+                A := {} has [Id {id}]
                 id = \@A {} -> \{} -> @A {}
                 #^^{-1}
 
@@ -6696,12 +6712,12 @@ mod solve_expr {
                     a
                 "#
             ),
-            &[
-                "A#id(7) : {} -[[id(7)]]-> ({} -[[8(8)]]-> {})",
-                "Id#id(6) : {} -[[id(7)]]-> ({} -[[8(8)]]-> {})",
-                "alias : {} -[[id(7)]]-> ({} -[[8(8)]]-> {})",
-            ],
-            print_only_under_alias = true,
+            @r#"
+            A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
+            Id#id(3) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
+            alias : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
+            "#
+            print_only_under_alias: true
         )
     }
 
@@ -6716,7 +6732,7 @@ mod solve_expr {
 
                 Id has id : a -> Thunk a | a has Id
 
-                A := {}
+                A := {} has [Id {id}]
                 id = \@A {} -> @Thunk (\{} -> @A {})
                 #^^{-1}
 
@@ -6727,11 +6743,11 @@ mod solve_expr {
                     #^^{-1}
                 "#
             ),
-            &[
-                "A#id(7) : {} -[[id(7)]]-> ({} -[[8(8)]]-> {})",
-                "it : {} -[[8(8)]]-> {}",
-            ],
-            print_only_under_alias = true,
+            @r#"
+            A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
+            it : {} -[[8(8)]]-> {}
+            "#
+            print_only_under_alias: true
         )
     }
 
@@ -6746,7 +6762,7 @@ mod solve_expr {
 
                 Id has id : a -> Thunk a | a has Id
 
-                A := {}
+                A := {} has [Id {id}]
                 id = \@A {} -> \{} -> @A {}
                 #^^{-1}
 
@@ -6758,11 +6774,11 @@ mod solve_expr {
                     a
                 "#
             ),
-            &[
-                "A#id(7) : {} -[[id(7)]]-> ({} -[[8(8)]]-> {})",
-                "A#id(7) : {} -[[id(7)]]-> ({} -[[8(8)]]-> {})",
-            ],
-            print_only_under_alias = true,
+            @r#"
+            A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
+            A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
+            "#
+            print_only_under_alias: true
         )
     }
 
@@ -6775,7 +6791,9 @@ mod solve_expr {
 
                 Diverge has diverge : a -> a | a has Diverge
 
-                A := {}
+                A := {} has [Diverge {diverge}]
+
+                diverge : A -> A
                 diverge = \@A {} -> diverge (@A {})
                 #^^^^^^^{-1}        ^^^^^^^
 
@@ -6787,12 +6805,11 @@ mod solve_expr {
                     a
                 "#
             ),
-            &[
-                "A#diverge(5) : A -[[diverge(5)]]-> A",
-                "Diverge#diverge(4) : A -[[diverge(5)]]-> A",
-                //
-                "A#diverge(5) : A -[[diverge(5)]]-> A",
-            ],
+            @r###"
+        A#diverge(4) : A -[[diverge(4)]]-> A
+        A#diverge(4) : A -[[diverge(4)]]-> A
+        A#diverge(4) : A -[[diverge(4)]]-> A
+        "###
         )
     }
 
@@ -6807,7 +6824,47 @@ mod solve_expr {
                     ping : a -> a | a has Bounce
                     pong : a -> a | a has Bounce
 
-                A := {}
+                A := {} has [Bounce {ping, pong}]
+
+                ping : A -> A
+                ping = \@A {} -> pong (@A {})
+                #^^^^{-1}        ^^^^
+
+                pong : A -> A
+                pong = \@A {} -> ping (@A {})
+                #^^^^{-1}        ^^^^
+
+                main =
+                    a : A
+                    a = ping (@A {})
+                    #   ^^^^
+
+                    a
+                "#
+            ),
+            @r###"
+        A#ping(5) : A -[[ping(5)]]-> A
+        A#pong(6) : A -[[pong(6)]]-> A
+        A#pong(6) : A -[[pong(6)]]-> A
+        A#ping(5) : A -[[ping(5)]]-> A
+        A#ping(5) : A -[[ping(5)]]-> A
+        "###
+        )
+    }
+
+    #[test]
+    #[ignore = "TODO: this currently runs into trouble with ping and pong first being inferred as overly-general before recursive constraining"]
+    fn resolve_mutually_recursive_ability_lambda_sets_inferred() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Bounce has
+                    ping : a -> a | a has Bounce
+                    pong : a -> a | a has Bounce
+
+                A := {} has [Bounce {ping, pong}]
 
                 ping = \@A {} -> pong (@A {})
                 #^^^^{-1}        ^^^^
@@ -6823,15 +6880,13 @@ mod solve_expr {
                     a
                 "#
             ),
-            &[
-                "A#ping(7) : A -[[ping(7)]]-> A",
-                "Bounce#pong(6) : A -[[pong(8)]]-> A",
-                //
-                "A#pong(8) : A -[[pong(8)]]-> A",
-                "A#ping(7) : A -[[ping(7)]]-> A",
-                //
-                "A#ping(7) : A -[[ping(7)]]-> A",
-            ],
+            @r###"
+        A#ping(5) : A -[[ping(5)]]-> A
+        Bounce#pong(3) : A -[[pong(6)]]-> A
+        A#pong(6) : A -[[pong(6)]]-> A
+        A#ping(5) : A -[[ping(5)]]-> A
+        A#ping(5) : A -[[ping(5)]]-> A
+        "###
         )
     }
 
@@ -6844,7 +6899,7 @@ mod solve_expr {
                 #^^^^^^^^^^^^^^^^^^^^^^{-1}
                 "#
             ),
-            &[r#"[\{} -> {}, \{} -> {}] : List ({}* -[[1(1), 2(2)]]-> {})"#],
+            @r#"[\{} -> {}, \{} -> {}] : List ({}* -[[1(1), 2(2)]]-> {})"#
         )
     }
 
@@ -6897,13 +6952,13 @@ mod solve_expr {
                 {name, outerList}
                 "#
             ),
-            &[
-                "foo : [Named Str (List a)] as a",
-                "Named name outerList : [Named Str (List a)] as a",
-                "name : Str",
-                "outerList : List ([Named Str (List a)] as a)",
-            ],
-            print_only_under_alias = true
+            @r#"
+            foo : [Named Str (List a)] as a
+            Named name outerList : [Named Str (List a)] as a
+            name : Str
+            outerList : List ([Named Str (List a)] as a)
+            "#
+            print_only_under_alias: true
         )
     }
 
@@ -6984,11 +7039,11 @@ mod solve_expr {
                 #^^^{-1}
                 "#
             ),
-            &[
-                "capture : Str -[[capture(1)]]-> ({} -[[thunk(5) {}, thunk(5) Str]]-> Str)",
-                "capture : {} -[[capture(1)]]-> ({} -[[thunk(5) {}, thunk(5) Str]]-> Str)",
-                "fun : {} -[[thunk(5) {}, thunk(5) Str]]-> Str",
-            ]
+            @r#"
+            capture : Str -[[capture(1)]]-> ({} -[[thunk(5) {}, thunk(5) Str]]-> Str)
+            capture : {} -[[capture(1)]]-> ({} -[[thunk(5) {}, thunk(5) Str]]-> Str)
+            fun : {} -[[thunk(5) {}, thunk(5) Str]]-> Str
+            "#
         );
     }
 
@@ -7019,11 +7074,8 @@ mod solve_expr {
                 #^^^{-1}
                 "#
             ),
-            &[
-                "fun : {} -[[thunk(9) (({} -[[15(15)]]-> { s1 : Str })) ({ s1 : Str } -[[g(4)]]-> ({} -[[13(13) Str]]-> Str)), \
-                             thunk(9) (({} -[[14(14)]]-> Str)) (Str -[[f(3)]]-> ({} -[[11(11)]]-> Str))]]-> Str",
-            ],
-            print_only_under_alias = true,
+            @r#"fun : {} -[[thunk(9) (({} -[[15(15)]]-> { s1 : Str })) ({ s1 : Str } -[[g(4)]]-> ({} -[[13(13) Str]]-> Str)), thunk(9) (({} -[[14(14)]]-> Str)) (Str -[[f(3)]]-> ({} -[[11(11)]]-> Str))]]-> Str"#
+            print_only_under_alias: true
         );
     }
 
@@ -7050,7 +7102,7 @@ mod solve_expr {
                 #^^^{-1}
                 "#
             ),
-            &["fun : {} -[[thunk(5) [A Str]*, thunk(5) { a : Str }]]-> Str",]
+            @r#"fun : {} -[[thunk(5) [A Str]*, thunk(5) { a : Str }]]-> Str"#
         );
     }
 
@@ -7115,11 +7167,11 @@ mod solve_expr {
                 F has f : a -> (b -> {}) | a has F, b has G
                 G has g : b -> {} | b has G
 
-                Fo := {}
+                Fo := {} has [F {f}]
                 f = \@Fo {} -> g
                 #^{-1}
 
-                Go := {}
+                Go := {} has [G {g}]
                 g = \@Go {} -> {}
                 #^{-1}
 
@@ -7128,12 +7180,12 @@ mod solve_expr {
                 #       ^^^^^^^^^^
                 "#
             ),
-            &[
-                "Fo#f(10) : Fo -[[f(10)]]-> (b -[[] + b:g(8):1]-> {}) | b has G",
-                "Go#g(11) : Go -[[g(11)]]-> {}",
-                "Fo#f(10) : Fo -[[f(10)]]-> (Go -[[g(11)]]-> {})",
-                "f (@Fo {}) : Go -[[g(11)]]-> {}",
-            ],
+            @r###"
+        Fo#f(7) : Fo -[[f(7)]]-> (b -[[] + b:g(4):1]-> {}) | b has G
+        Go#g(8) : Go -[[g(8)]]-> {}
+        Fo#f(7) : Fo -[[f(7)]]-> (Go -[[g(8)]]-> {})
+        f (@Fo {}) : Go -[[g(8)]]-> {}
+        "###
         );
     }
 
@@ -7147,11 +7199,11 @@ mod solve_expr {
                 F has f : a -> ({} -> b) | a has F, b has G
                 G has g : {} -> b | b has G
 
-                Fo := {}
+                Fo := {} has [F {f}]
                 f = \@Fo {} -> g
                 #^{-1}
 
-                Go := {}
+                Go := {} has [G {g}]
                 g = \{} -> @Go {}
                 #^{-1}
 
@@ -7164,12 +7216,12 @@ mod solve_expr {
                     {foo, it}
                 "#
             ),
-            &[
-                "Fo#f(10) : Fo -[[f(10)]]-> ({} -[[] + b:g(8):1]-> b) | b has G",
-                "Go#g(11) : {} -[[g(11)]]-> Go",
-                "Fo#f(10) : Fo -[[f(10)]]-> ({} -[[g(11)]]-> Go)",
-                "f (@Fo {}) : {} -[[g(11)]]-> Go",
-            ],
+            @r###"
+        Fo#f(7) : Fo -[[f(7)]]-> ({} -[[] + b:g(4):1]-> b) | b has G
+        Go#g(8) : {} -[[g(8)]]-> Go
+        Fo#f(7) : Fo -[[f(7)]]-> ({} -[[g(8)]]-> Go)
+        f (@Fo {}) : {} -[[g(8)]]-> Go
+        "###
         );
     }
 
@@ -7183,11 +7235,11 @@ mod solve_expr {
                 F has f : a -> (b -> {}) | a has F, b has G
                 G has g : b -> {} | b has G
 
-                Fo := {}
+                Fo := {} has [F {f}]
                 f = \@Fo {} -> g
                 #^{-1}
 
-                Go := {}
+                Go := {} has [G {g}]
                 g = \@Go {} -> {}
                 #^{-1}
 
@@ -7198,26 +7250,26 @@ mod solve_expr {
                 #   ^
                 "#
             ),
-            &[
-                "Fo#f(10) : Fo -[[f(10)]]-> (b -[[] + b:g(8):1]-> {}) | b has G",
-                "Go#g(11) : Go -[[g(11)]]-> {}",
-                // TODO SERIOUS: Let generalization is broken here, and this is NOT correct!!
-                // Two problems:
-                //   - 1. `{}` always has its rank adjusted to the toplevel, which forces the rest
-                //        of the type to the toplevel, but that is NOT correct here!
-                //   - 2. During solving lambda set compaction cannot happen until an entire module
-                //        is solved, which forces resolved-but-not-yet-compacted lambdas in
-                //        unspecialized lambda sets to pull the rank into a lower, non-generalized
-                //        rank. Special-casing for that is a TERRIBLE HACK that interferes very
-                //        poorly with (1)
-                //
-                // We are BLOCKED on https://github.com/rtfeldman/roc/issues/3207 to make this work
-                // correctly!
-                // See also https://github.com/rtfeldman/roc/pull/3175, a separate, but similar problem.
-                "h : Go -[[g(11)]]-> {}",
-                "Fo#f(10) : Fo -[[f(10)]]-> (Go -[[g(11)]]-> {})",
-                "h : Go -[[g(11)]]-> {}",
-            ],
+            // TODO SERIOUS: Let generalization is broken here, and this is NOT correct!!
+            // Two problems:
+            //   - 1. `{}` always has its rank adjusted to the toplevel, which forces the rest
+            //        of the type to the toplevel, but that is NOT correct here!
+            //   - 2. During solving lambda set compaction cannot happen until an entire module
+            //        is solved, which forces resolved-but-not-yet-compacted lambdas in
+            //        unspecialized lambda sets to pull the rank into a lower, non-generalized
+            //        rank. Special-casing for that is a TERRIBLE HACK that interferes very
+            //        poorly with (1)
+            //
+            // We are BLOCKED on https://github.com/rtfeldman/roc/issues/3207 to make this work
+            // correctly!
+            // See also https://github.com/rtfeldman/roc/pull/3175, a separate, but similar problem.
+            @r###"
+        Fo#f(7) : Fo -[[f(7)]]-> (b -[[] + b:g(4):1]-> {}) | b has G
+        Go#g(8) : Go -[[g(8)]]-> {}
+        h : Go -[[g(8)]]-> {}
+        Fo#f(7) : Fo -[[f(7)]]-> (Go -[[g(8)]]-> {})
+        h : Go -[[g(8)]]-> {}
+        "###
         );
     }
 
@@ -7231,11 +7283,11 @@ mod solve_expr {
                 F has f : a -> (b -> {}) | a has F, b has G
                 G has g : b -> {} | b has G
 
-                Fo := {}
+                Fo := {} has [F {f}]
                 f = \@Fo {} -> g
                 #^{-1}
 
-                Go := {}
+                Go := {} has [G {g}]
                 g = \@Go {} -> {}
                 #^{-1}
 
@@ -7246,13 +7298,13 @@ mod solve_expr {
                     h
                 "#
             ),
-            &[
-                "Fo#f(10) : Fo -[[f(10)]]-> (b -[[] + b:g(8):1]-> {}) | b has G",
-                "Go#g(11) : Go -[[g(11)]]-> {}",
-                "main : b -[[] + b:g(8):1]-> {} | b has G",
-                "h : b -[[] + b:g(8):1]-> {} | b has G",
-                "Fo#f(10) : Fo -[[f(10)]]-> (b -[[] + b:g(8):1]-> {}) | b has G",
-            ],
+            @r###"
+        Fo#f(7) : Fo -[[f(7)]]-> (b -[[] + b:g(4):1]-> {}) | b has G
+        Go#g(8) : Go -[[g(8)]]-> {}
+        main : b -[[] + b:g(4):1]-> {} | b has G
+        h : b -[[] + b:g(4):1]-> {} | b has G
+        Fo#f(7) : Fo -[[f(7)]]-> (b -[[] + b:g(4):1]-> {}) | b has G
+        "###
         );
     }
 
@@ -7266,11 +7318,11 @@ mod solve_expr {
                 F has f : a, b -> ({} -> ({} -> {})) | a has F, b has G
                 G has g : b -> ({} -> {}) | b has G
 
-                Fo := {}
+                Fo := {} has [F {f}]
                 f = \@Fo {}, b -> \{} -> g b
                 #^{-1}
 
-                Go := {}
+                Go := {} has [G {g}]
                 g = \@Go {} -> \{} -> {}
                 #^{-1}
 
@@ -7279,11 +7331,11 @@ mod solve_expr {
                 #    ^
                 "#
             ),
-            &[
-                "Fo#f(10) : Fo, b -[[f(10)]]-> ({} -[[13(13) b]]-> ({} -[[] + b:g(8):2]-> {})) | b has G",
-                "Go#g(11) : Go -[[g(11)]]-> ({} -[[14(14)]]-> {})",
-                "Fo#f(10) : Fo, Go -[[f(10)]]-> ({} -[[13(13) Go]]-> ({} -[[14(14)]]-> {}))",
-            ],
+            @r###"
+        Fo#f(7) : Fo, b -[[f(7)]]-> ({} -[[13(13) b]]-> ({} -[[] + b:g(4):2]-> {})) | b has G
+        Go#g(8) : Go -[[g(8)]]-> ({} -[[14(14)]]-> {})
+        Fo#f(7) : Fo, Go -[[f(7)]]-> ({} -[[13(13) Go]]-> ({} -[[14(14)]]-> {}))
+        "###
         );
     }
 
@@ -7365,6 +7417,96 @@ mod solve_expr {
                 "#
             ),
             "List (A U8)",
+        );
+    }
+
+    #[test]
+    fn shared_pattern_variable_in_when_patterns() {
+        infer_queries!(
+            indoc!(
+                r#"
+                when A "" is
+                #    ^^^^
+                    A x | B x -> x
+                    # ^     ^    ^
+                "#
+            ),
+            @r###"
+            A "" : [A Str, B Str]
+            x : Str
+            x : Str
+            x : Str
+            "###
+        );
+    }
+
+    #[test]
+    fn shared_pattern_variable_in_multiple_branch_when_patterns() {
+        infer_queries!(
+            indoc!(
+                r#"
+                when A "" is
+                #    ^^^^
+                    A x | B x -> x
+                    # ^     ^    ^
+                    C x | D x -> x
+                    # ^     ^    ^
+                "#
+            ),
+            @r###"
+            A "" : [A Str, B Str, C Str, D Str]
+            x : Str
+            x : Str
+            x : Str
+            x : Str
+            x : Str
+            x : Str
+            "###
+        );
+    }
+
+    #[test]
+    fn catchall_branch_for_pattern_not_last() {
+        infer_queries!(
+            indoc!(
+                r#"
+                \x -> when x is
+                #^
+                        A B _ -> ""
+                        A _ C -> ""
+                "#
+            ),
+            @r#"x : [A [B]* [C]*]"#
+            allow_errors: true
+        );
+    }
+
+    #[test]
+    fn catchall_branch_walk_into_nested_types() {
+        infer_queries!(
+            indoc!(
+                r#"
+                \x -> when x is
+                #^
+                        { a: A { b: B } } -> ""
+                        _ -> ""
+                "#
+            ),
+            @r#"x : { a : [A { b : [B]* }*]* }*"#
+        );
+    }
+
+    #[test]
+    fn infer_type_with_underscore_destructure_assignment() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                Pair x _ = Pair 0 1
+
+                x
+                "#
+            ),
+            "Num *",
         );
     }
 }

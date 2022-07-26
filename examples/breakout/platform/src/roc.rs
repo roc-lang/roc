@@ -21,18 +21,18 @@ extern "C" {
 
     // init
 
-    #[link_name = "roc__programForHost_1_Init_caller"]
+    #[link_name = "roc__programForHost_1__Init_caller"]
     fn call_init(size: *const Bounds, closure_data: *const u8, output: *mut Model);
 
-    #[link_name = "roc__programForHost_1_Init_size"]
+    #[link_name = "roc__programForHost_1__Init_size"]
     fn init_size() -> i64;
 
-    #[link_name = "roc__programForHost_1_Init_result_size"]
+    #[link_name = "roc__programForHost_1__Init_result_size"]
     fn init_result_size() -> i64;
 
     // update
 
-    #[link_name = "roc__programForHost_1_Update_caller"]
+    #[link_name = "roc__programForHost_1__Update_caller"]
     fn call_update(
         model: *const Model,
         event: *const RocEvent,
@@ -40,18 +40,18 @@ extern "C" {
         output: *mut Model,
     );
 
-    #[link_name = "roc__programForHost_1_Update_size"]
+    #[link_name = "roc__programForHost_1__Update_size"]
     fn update_size() -> i64;
 
-    #[link_name = "roc__programForHost_1_Update_result_size"]
+    #[link_name = "roc__programForHost_1__Update_result_size"]
     fn update_result_size() -> i64;
 
     // render
 
-    #[link_name = "roc__programForHost_1_Render_caller"]
+    #[link_name = "roc__programForHost_1__Render_caller"]
     fn call_render(model: *const Model, closure_data: *const u8, output: *mut RocList<RocElem>);
 
-    #[link_name = "roc__programForHost_1_Render_size"]
+    #[link_name = "roc__programForHost_1__Render_size"]
     fn roc_render_size() -> i64;
 }
 

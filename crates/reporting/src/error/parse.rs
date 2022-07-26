@@ -358,7 +358,7 @@ fn to_expr_report<'a>(
                     Node::WhenCondition | Node::WhenBranch | Node::WhenIfGuard => (
                         pos,
                         alloc.concat([
-                            alloc.text("an "),
+                            alloc.text("a "),
                             alloc.keyword("when"),
                             alloc.text(" expression"),
                         ]),

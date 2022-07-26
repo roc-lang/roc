@@ -209,6 +209,7 @@ mod test_parse {
         pass/one_minus_two.expr,
         pass/one_plus_two.expr,
         pass/one_spaced_def.expr,
+        pass/opaque_destructure_first_item_in_body.expr,
         pass/opaque_has_abilities.expr,
         pass/opaque_reference_expr_with_arguments.expr,
         pass/opaque_reference_expr.expr,
@@ -229,6 +230,7 @@ mod test_parse {
         pass/parse_as_ann.expr,
         pass/pattern_with_space_in_parens.expr, // https://github.com/rtfeldman/roc/issues/929
         pass/plus_if.expr,
+        pass/plus_when.expr,
         pass/pos_inf_float.expr,
         pass/positive_float.expr,
         pass/positive_int.expr,
@@ -266,6 +268,7 @@ mod test_parse {
         pass/unary_not_with_parens.expr,
         pass/unary_not.expr,
         pass/underscore_backpassing.expr,
+        pass/underscore_in_assignment_pattern.expr,
         pass/var_else.expr,
         pass/var_if.expr,
         pass/var_is.expr,

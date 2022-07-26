@@ -2,7 +2,8 @@
   description = "Roc flake";
 
   inputs = {
-    nixpkgs.url =  "github:nixos/nixpkgs/nixos-22.05";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-22.05";
+
     # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
@@ -124,7 +125,7 @@
           NIX_GLIBC_PATH = if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";
           LD_LIBRARY_PATH = with pkgs;
             lib.makeLibraryPath
-              ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ] ++ linuxInputs);
+              ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib] ++ linuxInputs);
           NIXPKGS_ALLOW_UNFREE = 1; # to run the editor with NVIDIA's closed source drivers
         };
 

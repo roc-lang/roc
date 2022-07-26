@@ -14,7 +14,7 @@ use crate::wasm_module::{
     linking::SymInfo, linking::WasmObjectSymbol, Align, CodeBuilder, Export, ExportType, LocalId,
     Signature, ValueType, WasmModule,
 };
-use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr};
+use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr, I128, U128};
 
 /// Type-driven wrapper generation
 pub trait Wasm32Result {
@@ -186,6 +186,8 @@ wasm_result_primitive!(f64, f64_store, Align::Bytes8);
 
 wasm_result_stack_memory!(u128);
 wasm_result_stack_memory!(i128);
+wasm_result_stack_memory!(U128);
+wasm_result_stack_memory!(I128);
 wasm_result_stack_memory!(RocDec);
 
 impl Wasm32Result for RocStr {
@@ -257,6 +259,22 @@ where
             code_builder,
             main_function_index,
             T::ACTUAL_WIDTH + U::ACTUAL_WIDTH + V::ACTUAL_WIDTH,
+        )
+    }
+}
+
+impl<T, U, V, W> Wasm32Result for (T, U, V, W)
+where
+    T: Wasm32Result + Wasm32Sized,
+    U: Wasm32Result + Wasm32Sized,
+    V: Wasm32Result + Wasm32Sized,
+    W: Wasm32Result + Wasm32Sized,
+{
+    fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
+        build_wrapper_body_stack_memory(
+            code_builder,
+            main_function_index,
+            T::ACTUAL_WIDTH + U::ACTUAL_WIDTH + V::ACTUAL_WIDTH + W::ACTUAL_WIDTH,
         )
     }
 }

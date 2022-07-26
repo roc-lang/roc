@@ -2376,6 +2376,13 @@ fn min_f32() {
     );
 }
 
+#[test]
+#[cfg(all(any(feature = "gen-llvm"), not(feature = "gen-llvm-wasm")))]
+fn to_nat_truncate_wraps() {
+    let input = "Num.toNat 10_000_000_000_000_000_000_000i128";
+    assert_evals_to!(input, 1864712049423024128, u64)
+}
+
 macro_rules! num_conversion_tests {
     ($($fn:expr, $typ:ty, ($($test_name:ident, $input:expr, $output:expr $(, [$($support_gen:literal),*])? )*))*) => {$($(
         #[test]
@@ -2446,7 +2453,6 @@ num_conversion_tests! {
         to_nat_same_width, "15i64", 15, ["gen-wasm"]
         to_nat_extend, "15i8", 15, ["gen-wasm"]
         to_nat_truncate, "115i128", 115
-        to_nat_truncate_wraps, "10_000_000_000_000_000_000_000i128", 1864712049423024128
     )
     "Num.toF32", f32, (
         to_f32_from_i8, "15i8", 15.0

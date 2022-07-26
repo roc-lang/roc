@@ -107,6 +107,7 @@ fn dict_nonempty_remove() {
             empty
                 |> Dict.remove 42
                 |> Dict.len
+                |> Num.toI64
             "#
         ),
         0,
@@ -336,7 +337,7 @@ fn unit_values() {
                     |> Dict.insert 2 {}
                     |> Dict.insert 3 {}
 
-            Dict.len myDict
+            Num.toI64 (Dict.len myDict)
             "#
         ),
         4,
@@ -352,9 +353,9 @@ fn single() {
             r#"
             myDict : Dict.Dict I64 {}
             myDict =
-                Dict.single 0 {}
+                Dict.single 12345 {}
 
-            Dict.len myDict
+            Num.toI64 (Dict.len myDict)
             "#
         ),
         1,
@@ -373,6 +374,7 @@ fn insert_all() {
                 Dict.insertAll (Dict.single 0 {}) (Dict.single 1 {})
 
             Dict.len myDict
+                |> Num.toI64
             "#
         ),
         2,
@@ -423,6 +425,7 @@ fn keep_shared() {
 
             Dict.keepShared dict1 dict2
                 |> Dict.len
+                |> Num.toI64
             "#
         ),
         2,
@@ -485,6 +488,7 @@ fn remove_all() {
 
             Dict.removeAll dict1 dict2
                 |> Dict.len
+                |> Num.toI64
             "#
         ),
         3,

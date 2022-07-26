@@ -400,14 +400,17 @@ mod cli_run {
             expected_ending:"Which platform am I running on now?\n",
             use_valgrind: true,
         },
-        platformSwitchingC:"platform-switching/c-platform" => Example {
-            filename: "rocLovesC.roc",
-            executable_filename: "rocLovesC",
-            stdin: &[],
-            input_file: None,
-            expected_ending:"Roc <3 C!\n",
-            use_valgrind: true,
-        },
+        // We exclude the C platforming switching example
+        // because the main platform switching example runs the c platform.
+        // If we don't a race condition leads to test flakiness.
+        // platformSwitchingC:"platform-switching/c-platform" => Example {
+        //     filename: "rocLovesC.roc",
+        //     executable_filename: "rocLovesC",
+        //     stdin: &[],
+        //     input_file: None,
+        //     expected_ending:"Roc <3 C!\n",
+        //     use_valgrind: true,
+        // },
         platformSwitchingRust:"platform-switching/rust-platform" => Example {
             filename: "rocLovesRust.roc",
             executable_filename: "rocLovesRust",
@@ -816,7 +819,10 @@ mod cli_run {
                 // Some platform-switching examples live in nested directories
                 if example_dir_name == "platform-switching" {
                     for sub_dir in [
-                        "c-platform",
+                        // We exclude the C platforming switching example
+                        // because the main platform switching example runs the c platform.
+                        // If we don't a race condition leads to test flakiness.
+                        // "c-platform",
                         "rust-platform",
                         "swift-platform",
                         "web-assembly-platform",

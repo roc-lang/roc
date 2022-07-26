@@ -1731,6 +1731,7 @@ fn str_split_last() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn str_walk_utf8_with_index() {
+    #[cfg(not(feature = "gen-llvm-wasm"))]
     assert_evals_to!(
         indoc!(
             r#"
@@ -1739,6 +1740,17 @@ fn str_walk_utf8_with_index() {
         ),
         RocList::from_slice(&[(0, b'a'), (1, b'b'), (2, b'c'), (3, b'd')]),
         RocList<(u64, u8)>
+    );
+
+    #[cfg(feature = "gen-llvm-wasm")]
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.walkUtf8WithIndex "abcd" [] (\list, byte, index -> List.append list (Pair index byte))
+            "#
+        ),
+        RocList::from_slice(&[(0, 'a'), (1, 'b'), (2, 'c'), (3, 'd')]),
+        RocList<(u32, char)>
     );
 }
 
@@ -1767,5 +1779,37 @@ fn str_walk_scalars() {
         ),
         RocList::from_slice(&['a', 'b', 'c', 'd']),
         RocList<char>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm-wasm"))]
+fn llvm_wasm_str_layout() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            "hello"
+                |> Str.reserve 42
+            "#
+        ),
+        [0, 5, 42],
+        [u32; 3],
+        |[_ptr, len, cap]: [u32; 3]| [0, len, cap]
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm-wasm"))]
+fn llvm_wasm_str_layout_small() {
+    // exposed an error in using bitcast instead of zextend
+    assert_evals_to!(
+        indoc!(
+            r#"
+            "𒀀𒀁"
+                |> Str.trim
+            "#
+        ),
+        [-2139057424, -2122280208, -2013265920],
+        [i32; 3]
     );
 }

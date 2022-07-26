@@ -221,8 +221,7 @@ pub const RocStr = extern struct {
     }
 
     fn asArray(self: RocStr) [@sizeOf(RocStr)]u8 {
-        const as_int = @ptrToInt(&self);
-        const as_ptr = @intToPtr([*]u8, as_int);
+        const as_ptr = @ptrCast([*]const u8, &self);
         const slice = as_ptr[0..@sizeOf(RocStr)];
 
         return slice.*;
@@ -2520,4 +2519,36 @@ test "getScalarUnsafe" {
 
     try expectEqual(result.scalar, @intCast(u32, expected));
     try expectEqual(result.bytesParsed, 1);
+}
+
+pub fn strCloneTo(
+    ptr: [*]u8,
+    offset: usize,
+    string: RocStr,
+) callconv(.C) usize {
+    const WIDTH: usize = @sizeOf(RocStr);
+    if (string.isSmallStr()) {
+        const array: [@sizeOf(RocStr)]u8 = @bitCast([@sizeOf(RocStr)]u8, string);
+
+        var i: usize = 0;
+        while (i < array.len) : (i += 1) {
+            ptr[offset + i] = array[i];
+        }
+
+        return offset + WIDTH;
+    } else {
+        const slice = string.asSlice();
+
+        var relative = string;
+        relative.str_bytes = @intToPtr(?[*]u8, offset + WIDTH); // i.e. just after the string struct
+
+        // write the string struct
+        const array = relative.asArray();
+        @memcpy(ptr + offset, &array, WIDTH);
+
+        // write the string bytes just after the struct
+        @memcpy(ptr + offset + WIDTH, slice.ptr, slice.len);
+
+        return offset + WIDTH + slice.len;
+    }
 }

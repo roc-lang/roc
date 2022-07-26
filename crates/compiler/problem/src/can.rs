@@ -16,7 +16,6 @@ pub struct CycleEntry {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum BadPattern {
-    UnderscoreInDef,
     Unsupported(PatternType),
 }
 
@@ -130,7 +129,51 @@ pub enum Problem {
     },
     AbilityUsedAsType(Lowercase, Symbol, Region),
     NestedSpecialization(Symbol, Region),
-    IllegalDerive(Region),
+    IllegalDerivedAbility(Region),
+    ImplementationNotFound {
+        member: Symbol,
+        region: Region,
+    },
+    NotAnAbilityMember {
+        ability: Symbol,
+        name: String,
+        region: Region,
+    },
+    OptionalAbilityImpl {
+        ability: Symbol,
+        region: Region,
+    },
+    QualifiedAbilityImpl {
+        region: Region,
+    },
+    AbilityImplNotIdent {
+        region: Region,
+    },
+    DuplicateImpl {
+        original: Region,
+        duplicate: Region,
+    },
+    NotAnAbility(Region),
+    ImplementsNonRequired {
+        region: Region,
+        ability: Symbol,
+        not_required: Vec<Symbol>,
+    },
+    DoesNotImplementAbility {
+        region: Region,
+        ability: Symbol,
+        not_implemented: Vec<Symbol>,
+    },
+    NotBoundInAllPatterns {
+        unbound_symbol: Symbol,
+        region: Region,
+    },
+    NoIdentifiersIntroduced(Region),
+    OverloadedSpecialization {
+        overload: Region,
+        original_opaque: Symbol,
+        ability_member: Symbol,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -291,6 +334,24 @@ pub enum RuntimeError {
     EmptySingleQuote(Region),
     /// where 'aa'
     MultipleCharsInSingleQuote(Region),
+
+    DegenerateBranch(Region),
+}
+
+impl RuntimeError {
+    pub fn runtime_message(self) -> String {
+        use RuntimeError::*;
+
+        match self {
+            DegenerateBranch(region) => {
+                format!(
+                    "Hit a branch pattern that does not bind all symbols its body needs, at {:?}",
+                    region
+                )
+            }
+            err => format!("{:?}", err),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

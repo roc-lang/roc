@@ -43,7 +43,7 @@ pub enum ToAstProblem {
 #[allow(clippy::too_many_arguments)]
 pub fn jit_to_ast<'a, A: ReplApp<'a>>(
     arena: &'a Bump,
-    app: &'a A,
+    app: &mut A,
     main_fn_name: &str,
     layout: ProcLayout<'a>,
     content: &'a Content,
@@ -94,6 +94,7 @@ enum NewtypeKind<'a> {
 /// Returns (new type containers, optional alias content, real content).
 fn unroll_newtypes_and_aliases<'a>(
     env: &Env<'a, 'a>,
+
     mut content: &'a Content,
 ) -> (Vec<'a, NewtypeKind<'a>>, Option<&'a Content>, &'a Content) {
     let mut newtype_containers = Vec::with_capacity_in(1, env.arena);
@@ -238,16 +239,12 @@ fn tag_id_from_data<'a, M: ReplAppMemory>(
         .unwrap();
     let tag_id_addr = data_addr + offset as usize;
 
-    match union_layout.tag_id_builtin() {
-        Builtin::Bool => mem.deref_bool(tag_id_addr) as i64,
-        Builtin::Int(IntWidth::U8) => mem.deref_u8(tag_id_addr) as i64,
-        Builtin::Int(IntWidth::U16) => mem.deref_u16(tag_id_addr) as i64,
-        Builtin::Int(IntWidth::U64) => {
-            // used by non-recursive unions at the
-            // moment, remove if that is no longer the case
-            mem.deref_i64(tag_id_addr)
-        }
-        _ => unreachable!("invalid tag id layout"),
+    use roc_mono::layout::Discriminant::*;
+    match union_layout.discriminant() {
+        U0 => 0,
+        U1 => mem.deref_bool(tag_id_addr) as i64,
+        U8 => mem.deref_u8(tag_id_addr) as i64,
+        U16 => mem.deref_u16(tag_id_addr) as i64,
     }
 }
 
@@ -282,7 +279,7 @@ const OPAQUE_FUNCTION: Expr = Expr::Var {
 
 fn jit_to_ast_help<'a, A: ReplApp<'a>>(
     env: &Env<'a, 'a>,
-    app: &'a A,
+    app: &mut A,
     main_fn_name: &str,
     layout: &Layout<'a>,
     content: &'a Content,
@@ -342,21 +339,23 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         }
         Layout::Builtin(Builtin::Decimal) => Ok(num_helper!(RocDec)),
         Layout::Builtin(Builtin::Str) => {
-            let size = layout.stack_size(env.target_info) as usize;
-            Ok(
-                app.call_function_dynamic_size(main_fn_name, size, |mem: &A::Memory, addr| {
-                    let string = mem.deref_str(addr);
-                    let arena_str = env.arena.alloc_str(string);
-                    Expr::Str(StrLiteral::PlainLine(arena_str))
-                }),
-            )
+            let body = |mem: &A::Memory, addr| {
+                let string = mem.deref_str(addr);
+                let arena_str = env.arena.alloc_str(string);
+                Expr::Str(StrLiteral::PlainLine(arena_str))
+            };
+
+            Ok(app.call_function_returns_roc_str(env.target_info, main_fn_name, body))
         }
-        Layout::Builtin(Builtin::List(elem_layout)) => Ok(app.call_function(
-            main_fn_name,
-            |mem: &A::Memory, (addr, len): (usize, usize)| {
-                list_to_ast(env, mem, addr, len, elem_layout, raw_content)
-            },
-        )),
+        Layout::Builtin(Builtin::List(elem_layout)) => {
+            //
+            Ok(app.call_function_returns_roc_list(
+                main_fn_name,
+                |mem: &A::Memory, (addr, len, _cap)| {
+                    list_to_ast(env, mem, addr, len, elem_layout, raw_content)
+                },
+            ))
+        }
         Layout::Struct { field_layouts, .. } => {
             let struct_addr_to_ast = |mem: &'a A::Memory, addr: usize| match raw_content {
                 Content::Structure(FlatType::Record(fields, _)) => {
@@ -545,6 +544,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
         (_, Layout::Builtin(Builtin::List(elem_layout))) => {
             let elem_addr = mem.deref_usize(addr);
             let len = mem.deref_usize(addr + env.target_info.ptr_width() as usize);
+            let _cap = mem.deref_usize(addr + 2 * env.target_info.ptr_width() as usize);
 
             list_to_ast(env, mem, elem_addr, len, elem_layout, raw_content)
         }

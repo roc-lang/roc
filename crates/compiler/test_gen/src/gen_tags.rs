@@ -11,7 +11,7 @@ use crate::helpers::wasm::assert_evals_to;
 use indoc::indoc;
 
 #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
-use roc_std::{RocList, RocStr};
+use roc_std::{RocList, RocStr, U128};
 
 #[test]
 fn width_and_alignment_u8_u8() {
@@ -26,26 +26,6 @@ fn width_and_alignment_u8_u8() {
     let target_info = roc_target::TargetInfo::default_x86_64();
     assert_eq!(layout.alignment_bytes(target_info), 1);
     assert_eq!(layout.stack_size(target_info), 2);
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn applied_tag_nothing_ir() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Maybe a : [Just a, Nothing]
-
-                x : Maybe I64
-                x = Nothing
-
-                x
-                "#
-        ),
-        1,
-        (i64, u8),
-        |(_, tag)| tag
-    );
 }
 
 #[test]
@@ -71,25 +51,6 @@ fn applied_tag_nothing() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn applied_tag_just() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                Maybe a : [Just a, Nothing]
-
-                y : Maybe I64
-                y = Just 0x4
-
-                y
-                "#
-        ),
-        (0x4, 0),
-        (i64, u8)
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn applied_tag_just_ir() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -522,12 +483,12 @@ fn if_guard_vanilla() {
         indoc!(
             r#"
                 when "fooz" is
-                    s if s == "foo" -> 0
-                    s -> List.len (Str.toUtf8 s)
+                    s if s == "foo" -> []
+                    s -> Str.toUtf8 s
                 "#
         ),
-        4,
-        i64
+        RocList::from_slice(b"fooz"),
+        RocList<u8>
     );
 }
 
@@ -1803,5 +1764,102 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
         ),
         123,
         i64
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_3560_nested_tag_constructor_is_newtype() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            f : _ -> u8
+            f = \t ->
+                when t is
+                    Wrapper (Payload it) -> it
+                    Wrapper (AlternatePayload it) -> it
+
+            {a: f (Wrapper (Payload 15u8)), b: f(Wrapper (AlternatePayload 31u8))}
+            "#
+        ),
+        (15, 31),
+        (u8, u8)
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_3560_nested_tag_constructor_is_record_newtype() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            f : _ -> u8
+            f = \t ->
+                when t is
+                    {wrapper: (Payload it)} -> it
+                    {wrapper: (AlternatePayload it)} -> it
+
+            {a: f {wrapper: (Payload 15u8)}, b: f {wrapper: (AlternatePayload 31u8)}}
+            "#
+        ),
+        (15, 31),
+        (u8, u8)
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_3560_newtype_tag_constructor_has_nested_constructor_with_no_payload() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when Wrapper (Payload "err") is
+                Wrapper (Payload str) -> str
+                Wrapper NoPayload -> "nothing"
+            "#
+        ),
+        RocStr::from("err"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn alignment_i128() {
+    assert_evals_to!(
+        indoc!(
+            r"#
+                x : [One I128 Bool, Empty]
+                x = One 42 (1 == 1)
+                x
+                #"
+        ),
+        // NOTE: roc_std::U128 is always aligned to 16, unlike rust's u128
+        ((U128::from(42), true), 1),
+        ((U128, bool), u8)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[should_panic(expected = r#"Roc failed with message: "Erroneous: Expr::Closure""#)]
+fn error_type_in_tag_union_payload() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            f : ([] -> Bool) -> Bool
+            f = \fun ->
+              if True then
+                fun 42
+              else
+                False
+
+            f (\x -> x)
+            "#
+        ),
+        0,
+        u8,
+        |x| x,
+        true // ignore type errors
     )
 }

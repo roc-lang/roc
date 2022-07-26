@@ -594,16 +594,16 @@ impl<
                 let (data_size, data_alignment) =
                     union_layout.data_size_and_alignment(self.target_info);
                 let id_offset = data_size - data_alignment;
-                let id_builtin = union_layout.tag_id_builtin();
+                let discriminant = union_layout.discriminant();
 
-                let size = id_builtin.stack_size(self.target_info);
+                let size = discriminant.stack_size();
                 self.allocation_map.insert(*sym, owned_data);
                 self.symbol_storage_map.insert(
                     *sym,
                     Stack(ReferencedPrimitive {
                         base_offset: union_offset + id_offset as i32,
                         size,
-                        sign_extend: matches!(id_builtin, sign_extended_int_builtins!()),
+                        sign_extend: false, // tag ids are always unsigned
                     }),
                 );
             }
@@ -734,7 +734,11 @@ impl<
                 ASM::mov_base32_freg64(buf, to_offset, reg);
             }
             _ if layout.stack_size(self.target_info) == 0 => {}
-            _ if layout.safe_to_memcpy() && layout.stack_size(self.target_info) > 8 => {
+            // TODO: Verify this is always true.
+            // The dev backend does not deal with refcounting and does not care about if data is safe to memcpy.
+            // It is just temporarily storing the value due to needing to free registers.
+            // Later, it will be reloaded and stored in refcounted as needed.
+            _ if layout.stack_size(self.target_info) > 8 => {
                 let (from_offset, size) = self.stack_offset_and_size(sym);
                 debug_assert!(from_offset % 8 == 0);
                 debug_assert!(size % 8 == 0);

@@ -33,7 +33,9 @@ roc_can = { path = "../can" }
 roc_parse = { path = "../parse" }
 roc_build = { path = "../build", features = ["target-aarch64", "target-x86_64", "target-wasm32"]  }
 roc_target = { path = "../roc_target" }
+roc_error_macros = { path = "../../error_macros" }
 roc_std = { path = "../../roc_std" }
+roc_debug_flags = {path="../debug_flags"}
 bumpalo = { version = "3.8.0", features = ["collections"] }
 either = "1.6.1"
 libc = "0.2.106"
@@ -44,6 +46,7 @@ tempfile = "3.2.0"
 indoc = "1.0.3"
 criterion = { git = "https://github.com/Anton-4/criterion.rs" }
 wasm3 = "0.3.1"
+lazy_static = "1.4.0"
 
 [features]
 default = ["gen-llvm"]
