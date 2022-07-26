@@ -7255,24 +7255,11 @@ mod solve_expr {
                 #   ^
                 "#
             ),
-            // TODO SERIOUS: Let generalization is broken here, and this is NOT correct!!
-            // Two problems:
-            //   - 1. `{}` always has its rank adjusted to the toplevel, which forces the rest
-            //        of the type to the toplevel, but that is NOT correct here!
-            //   - 2. During solving lambda set compaction cannot happen until an entire module
-            //        is solved, which forces resolved-but-not-yet-compacted lambdas in
-            //        unspecialized lambda sets to pull the rank into a lower, non-generalized
-            //        rank. Special-casing for that is a TERRIBLE HACK that interferes very
-            //        poorly with (1)
-            //
-            // We are BLOCKED on https://github.com/rtfeldman/roc/issues/3207 to make this work
-            // correctly!
-            // See also https://github.com/rtfeldman/roc/pull/3175, a separate, but similar problem.
             @r###"
         Fo#f(7) : Fo -[[f(7)]]-> (b -[[] + b:g(4):1]-> {}) | b has G
         Go#g(8) : Go -[[g(8)]]-> {}
-        h : Go -[[g(8)]]-> {}
-        Fo#f(7) : Fo -[[f(7)]]-> (Go -[[g(8)]]-> {})
+        h : b -[[] + b:g(4):1]-> {} | b has G
+        Fo#f(7) : Fo -[[f(7)]]-> (b -[[] + b:g(4):1]-> {}) | b has G
         h : Go -[[g(8)]]-> {}
         "###
         );

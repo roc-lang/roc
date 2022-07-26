@@ -3141,9 +3141,17 @@ fn adjust_rank_content(
 
                 EmptyRecord => {
                     // from elm-compiler: THEORY: an empty record never needs to get generalized
-                    Rank::toplevel()
+                    //
+                    // But for us, that theory does not hold, because there might be type variables hidden
+                    // inside a lambda set but not on the left or right of an arrow, and records should not
+                    // force de-generalization in such cases.
+                    //
+                    // See https://github.com/rtfeldman/roc/issues/3641 for a longer discussion and
+                    // example.
+                    group_rank
                 }
 
+                // THEORY: an empty tag never needs to get generalized
                 EmptyTagUnion => Rank::toplevel(),
 
                 Record(fields, ext_var) => {
