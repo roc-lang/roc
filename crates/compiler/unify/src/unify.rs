@@ -1198,6 +1198,43 @@ fn separate_union_lambdas<M: MetaCollector>(
     )
 }
 
+// Arrange into partitions of (_, member, region).
+// Within each partition, place flex-able vars at the end of the partition.
+// Amongst all flex-able vars, sort by their root key, so that identical vars are next
+// to each other.
+fn unspecialized_lambda_set_sorter(subs: &Subs, uls1: Uls, uls2: Uls) -> std::cmp::Ordering {
+    let Uls(var1, sym1, region1) = uls1;
+    let Uls(var2, sym2, region2) = uls2;
+
+    use std::cmp::Ordering::*;
+    use Content::*;
+    match (sym1, region1).cmp(&(sym2, region2)) {
+        Equal => {
+            match (
+                subs.get_content_without_compacting(var1),
+                subs.get_content_without_compacting(var2),
+            ) {
+                (FlexAbleVar(..) | RigidAbleVar(..), FlexAbleVar(..) | RigidAbleVar(..)) => subs
+                    .get_root_key_without_compacting(var1)
+                    .cmp(&subs.get_root_key_without_compacting(var2)),
+                (FlexVar(..) | RigidVar(..), _) | (_, FlexVar(..) | RigidVar(..)) => {
+                    internal_error!("unexpected variable type in unspecialized lambda set!")
+                }
+                (FlexAbleVar(..), _) => Greater,
+                (_, FlexAbleVar(..)) => Less,
+                // For everything else, the order is irrelevant
+                (_, _) => Less,
+            }
+        }
+        ord => ord,
+    }
+}
+
+fn sort_unspecialized_lambda_sets(subs: &Subs, mut uls: Vec<Uls>) -> Vec<Uls> {
+    uls.sort_by(|&uls1, &uls2| unspecialized_lambda_set_sorter(subs, uls1, uls2));
+    uls
+}
+
 fn unify_unspecialized_lambdas<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
@@ -1218,15 +1255,16 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
         (false, true) => Ok((uls1, Default::default())),
         (true, false) => Ok((uls2, Default::default())),
         (false, false) => {
-            let mut all_uls = (env.subs.get_subs_slice(uls1).iter())
+            let all_uls = (env.subs.get_subs_slice(uls1).iter())
                 .chain(env.subs.get_subs_slice(uls2))
                 .map(|&Uls(var, sym, region)| {
                     // Take the root key to deduplicate
                     Uls(env.subs.get_root_key_without_compacting(var), sym, region)
                 })
                 .collect::<Vec<_>>();
-            // Arrange into partitions of (_, member, region).
-            all_uls.sort_by_key(|&Uls(_, sym, region)| (sym, region));
+
+            // Sort the unspecialized lambda sets prior to merging.
+            let mut all_uls = sort_unspecialized_lambda_sets(env.subs, all_uls);
 
             // Now merge the variables of unspecialized lambdas pointing to the same
             // member/region.
@@ -1237,18 +1275,54 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
                 let Uls(var_i, sym_i, region_i) = all_uls[i];
                 let Uls(var_j, sym_j, region_j) = all_uls[j];
                 if sym_i == sym_j && region_i == region_j {
-                    let outcome = unify_pool(env, pool, var_i, var_j, Mode::EQ);
-                    if !outcome.mismatches.is_empty() {
-                        return Err(outcome);
+                    use Content::*;
+
+                    match (
+                        env.subs.get_content_without_compacting(var_i),
+                        env.subs.get_content_without_compacting(var_j),
+                    ) {
+                        (
+                            FlexAbleVar(..) | RigidAbleVar(..),
+                            FlexAbleVar(..) | RigidAbleVar(..),
+                        ) => {
+                            // If the types are root-equivalent, de-duplicate them.
+                            // Otherwise, the type variables are disjoint, and we want to keep both
+                            // of them, for purposes of disjoint variable lambda specialization.
+
+                            if env.subs.equivalent_without_compacting(var_i, var_j) {
+                                // Keep the one in position `i` and drop the one in `j`, then move
+                                // on.
+                                all_uls.remove(j);
+                            } else {
+                                // Keep both.
+                                j += 1;
+                            }
+                        }
+                        (_, _) => {
+                            // Any other two types - unify them.
+
+                            let outcome = unify_pool(env, pool, var_i, var_j, Mode::EQ);
+                            if !outcome.mismatches.is_empty() {
+                                return Err(outcome);
+                            }
+                            whole_outcome.union(outcome);
+                            // Keep the Uls in position `i` and remove the one in position `j`.
+                            // Then continue to compare `i` and the one behind `j`.
+                            all_uls.remove(j);
+                        }
                     }
-                    whole_outcome.union(outcome);
-                    // Keep the Uls in position `i` and remove the one in position `j`.
-                    all_uls.remove(j);
                 } else {
-                    // Keep both Uls, look at the next one.
+                    // Keep both Uls since they correspond to different specialization
+                    // member/regions, and look at the next pair.
                     j += 1;
                 }
             }
+
+            debug_assert_eq!(
+                all_uls,
+                sort_unspecialized_lambda_sets(env.subs, all_uls.clone()),
+                "sorting or merging of unspecialized lambda sets not idempotent!"
+            );
 
             Ok((
                 SubsSlice::extend_new(&mut env.subs.unspecialized_lambda_sets, all_uls),

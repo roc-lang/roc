@@ -7319,7 +7319,96 @@ mod solve_expr {
             @r###"
         Fo#f(7) : Fo, b -[[f(7)]]-> ({} -[[13(13) b]]-> ({} -[[] + b:g(4):2]-> {})) | b has G
         Go#g(8) : Go -[[g(8)]]-> ({} -[[14(14)]]-> {})
-        Fo#f(7) : Fo, Go -[[f(7)]]-> ({} -[[13(13) Go]]-> ({} -[[14(14)]]-> {}))
+        Fo#f(7) : Fo, Go -[[f(7)]]-> ({} -[[13(13) Go]]-> ({} -[[14(14)] + b:g(4):2]-> {})) | b has G
+        "###
+        );
+    }
+
+    #[test]
+    fn polymorphic_lambda_set_specialization_varying_over_multiple_variables() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                J has j : j -> (k -> {}) | j has J, k has K
+                K has k : k -> {} | k has K
+
+                C := {} has [J {j: jC}]
+                jC = \@C _ -> k
+                #^^{-1}
+
+                D := {} has [J {j: jD}]
+                jD = \@D _ -> k
+                #^^{-1}
+
+                E := {} has [K {k}]
+                k = \@E _ -> {}
+                #^{-1}
+
+                f = \flag, a, b ->
+                    it =
+                #   ^^
+                        when flag is
+                            A -> j a
+                            #    ^
+                            B -> j b
+                             #   ^
+                    it
+                #   ^^
+
+                main = (f A (@C {}) (@D {})) (@E {})
+                #       ^
+                #       ^^^^^^^^^^^^^^^^^^^
+                #^^^^{-1}
+                "#
+            ),
+            @r###"
+        jC : C -[[jC(8)]]-> (k -[[] + k:k(4):1]-> {}) | k has K
+        jD : D -[[jD(9)]]-> (k -[[] + k:k(4):1]-> {}) | k has K
+        E#k(10) : E -[[k(10)]]-> {}
+        it : k -[[] + j:j(2):2 + j:j(2):2]-> {} | j has J, k has K
+        J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + j:j(2):2 + j:j(2):2]-> {}) | j has J, k has K
+        J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + j:j(2):2 + j:j(2):2]-> {}) | j has J, k has K
+        it : k -[[] + j:j(2):2 + j:j(2):2]-> {} | j has J, k has K
+        f : [A, B], C, D -[[f(11)]]-> (E -[[] + j:j(2):2 + j:j(2):2]-> {}) | j has J
+        f A (@C {}) (@D {}) : E -[[] + j:j(2):2 + j:j(2):2]-> {} | j has J
+        main : {}
+        "###
+        );
+    }
+
+    #[test]
+    fn polymorphic_lambda_set_specialization_branching_over_single_variable() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [f] to "./platform"
+
+                J has j : j -> (k -> {}) | j has J, k has K
+                K has k : k -> {} | k has K
+
+                C := {} has [J {j: jC}]
+                jC = \@C _ -> k
+
+                D := {} has [J {j: jD}]
+                jD = \@D _ -> k
+
+                E := {} has [K {k}]
+                k = \@E _ -> {}
+
+                f = \flag, a, c ->
+                    it =
+                        when flag is
+                            A -> j a
+                            B -> j a
+                    it c
+                #   ^^ ^
+                "#
+            ),
+            @r###"
+        it : k -[[] + j:j(2):2]-> {} | j has J, k has K
+        c : k | k has K
         "###
         );
     }
