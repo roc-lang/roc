@@ -112,9 +112,6 @@
           debugir
           rust
           rust-bindgen
-
-          # dependency of the cli-platform (see examples/interactive/cli-platform)
-          openssl
         ]);
       in
       {
