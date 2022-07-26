@@ -2,7 +2,7 @@
   description = "Roc flake";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-21.11";
+    nixpkgs.url =  "github:nixos/nixpkgs/nixos-22.05";
     # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
@@ -24,7 +24,7 @@
 
   outputs = { self, nixpkgs, rust-overlay, zig, flake-utils, nixgl }:
     let
-      supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-linux" "aarch64-darwin" ];
+      supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" ];
     in
     flake-utils.lib.eachSystem supportedSystems (system:
       let
@@ -120,6 +120,7 @@
           buildInputs = sharedInputs ++ darwinInputs ++ linuxInputs ++  (if system == "x86_64-linux" then [ pkgs.nixgl.nixVulkanIntel ] else []);
 
           LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
+          # nix does not store libs in /usr/lib or /lib
           NIX_GLIBC_PATH = if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";
           LD_LIBRARY_PATH = with pkgs;
             lib.makeLibraryPath
