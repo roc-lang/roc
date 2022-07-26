@@ -8418,16 +8418,6 @@ All branches in an `if` must have the same type!
     The following necessary members are missing implementations:
 
         le
-
-    ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
-
-    The type `Id` does not fully implement the ability `Eq`. The following
-    specializations are missing:
-
-    A specialization for `le`, which is defined here:
-
-    5│      le : a, a -> Bool | a has Eq
-            ^^
     "###
     );
 
@@ -8473,6 +8463,19 @@ All branches in an `if` must have the same type!
         ),
         // TODO: the error message here could be seriously improved!
         @r###"
+    ── OVERLOADED SPECIALIZATION ───────────────────────────── /code/proj/Main.roc ─
+
+    This ability member specialization is already claimed to specialize
+    another opaque type:
+
+    7│  Two := {} has [Hash {hash}]
+                             ^^^^
+
+    Previously, we found it to specialize `hash` for `One`.
+
+    Ability specializations can only provide implementations for one
+    opauqe type, since all opaque types are different!
+
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
     This specialization of `hash` is overly general:

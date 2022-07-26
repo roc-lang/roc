@@ -1,6 +1,6 @@
 procedure Test.2 (Test.4):
-    let Test.13 : Int1 = 1i64;
-    let Test.14 : Int1 = GetTagId Test.4;
+    let Test.13 : U8 = 1i64;
+    let Test.14 : U8 = GetTagId Test.4;
     let Test.15 : Int1 = lowlevel Eq Test.13 Test.14;
     if Test.15 then
         let Test.11 : Int1 = true;

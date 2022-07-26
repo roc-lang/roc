@@ -1,6 +1,6 @@
 use roc_collections::all::MutSet;
 use roc_module::ident::{Ident, Lowercase, ModuleName};
-use roc_module::symbol::BUILTIN_ABILITIES;
+use roc_module::symbol::DERIVABLE_ABILITIES;
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{
     BadPattern, ExtensionTypeKind, FloatErrorKind, IntErrorKind, Problem, RuntimeError, ShadowKind,
@@ -923,6 +923,26 @@ pub fn can_problem<'b>(
             title = "UNNECESSARY DEFINITION".to_string();
             severity = Severity::Warning;
         }
+        Problem::OverloadedSpecialization {
+            ability_member,
+            overload,
+            original_opaque,
+        } => {
+            doc = alloc.stack([
+                alloc.reflow("This ability member specialization is already claimed to specialize another opaque type:"),
+                alloc.region(lines.convert_region(overload)),
+                alloc.concat([
+                    alloc.reflow("Previously, we found it to specialize "),
+                    alloc.symbol_unqualified(ability_member),
+                    alloc.reflow(" for "),
+                    alloc.symbol_unqualified(original_opaque),
+                    alloc.reflow("."),
+                ]),
+                alloc.reflow("Ability specializations can only provide implementations for one opauqe type, since all opaque types are different!"),
+            ]);
+            title = "OVERLOADED SPECIALIZATION".to_string();
+            severity = Severity::Warning;
+        }
     };
 
     Report {
@@ -934,9 +954,8 @@ pub fn can_problem<'b>(
 }
 
 fn list_builtin_abilities<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
-    let doc = alloc.concat([alloc.symbol_qualified(BUILTIN_ABILITIES[0])]);
-    debug_assert!(BUILTIN_ABILITIES.len() == 1);
-    doc
+    debug_assert!(DERIVABLE_ABILITIES.len() == 1);
+    alloc.concat([alloc.symbol_qualified(DERIVABLE_ABILITIES[0].0)])
 }
 
 fn to_invalid_optional_value_report<'b>(

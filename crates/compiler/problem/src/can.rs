@@ -169,6 +169,11 @@ pub enum Problem {
         region: Region,
     },
     NoIdentifiersIntroduced(Region),
+    OverloadedSpecialization {
+        overload: Region,
+        original_opaque: Symbol,
+        ability_member: Symbol,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]

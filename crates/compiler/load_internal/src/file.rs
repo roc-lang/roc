@@ -5,12 +5,13 @@ use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
 use roc_builtins::roc::module_source;
-use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedSpecializations};
+use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedImpl};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::expr::Declarations;
 use roc_can::expr::PendingDerives;
 use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
+    ResolvedImplementations,
 };
 use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
 use roc_constrain::module::constrain_module;
@@ -41,7 +42,7 @@ use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SyntaxError};
 use roc_region::all::{LineInfo, Loc, Region};
 use roc_reporting::report::RenderTarget;
-use roc_solve::module::{Solved, SolvedModule};
+use roc_solve::module::{extract_module_owned_implementations, Solved, SolvedModule};
 use roc_solve::solve;
 use roc_target::TargetInfo;
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, VarStore, Variable};
@@ -562,7 +563,7 @@ pub struct LoadedModule {
     pub exposed_aliases: MutMap<Symbol, Alias>,
     pub exposed_values: Vec<Symbol>,
     pub exposed_types_storage: ExposedTypesStorageSubs,
-    pub resolved_specializations: ResolvedSpecializations,
+    pub resolved_implementations: ResolvedImplementations,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
     pub documentation: MutMap<ModuleId, ModuleDocumentation>,
@@ -754,7 +755,7 @@ enum Msg<'a> {
         exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
         exposed_aliases_by_symbol: MutMap<Symbol, (bool, Alias)>,
         exposed_types_storage: ExposedTypesStorageSubs,
-        resolved_specializations: ResolvedSpecializations,
+        resolved_implementations: ResolvedImplementations,
         dep_idents: IdentIdsByModule,
         documentation: MutMap<ModuleId, ModuleDocumentation>,
         abilities_store: AbilitiesStore,
@@ -1513,7 +1514,7 @@ fn state_thread_step<'a>(
                     exposed_vars_by_symbol,
                     exposed_aliases_by_symbol,
                     exposed_types_storage,
-                    resolved_specializations,
+                    resolved_implementations,
                     dep_idents,
                     documentation,
                     abilities_store,
@@ -1532,7 +1533,7 @@ fn state_thread_step<'a>(
                         exposed_aliases_by_symbol,
                         exposed_vars_by_symbol,
                         exposed_types_storage,
-                        resolved_specializations,
+                        resolved_implementations,
                         dep_idents,
                         documentation,
                         abilities_store,
@@ -2362,7 +2363,7 @@ fn update<'a>(
                         exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
                         exposed_aliases_by_symbol: solved_module.aliases,
                         exposed_types_storage: solved_module.exposed_types,
-                        resolved_specializations: solved_module.solved_specializations,
+                        resolved_implementations: solved_module.solved_implementations,
                         dep_idents,
                         documentation,
                         abilities_store,
@@ -2381,7 +2382,7 @@ fn update<'a>(
                     module_id,
                     ExposedModuleTypes {
                         exposed_types_storage_subs: solved_module.exposed_types,
-                        resolved_specializations: solved_module.solved_specializations,
+                        resolved_implementations: solved_module.solved_implementations,
                     },
                 );
 
@@ -2843,7 +2844,7 @@ fn finish(
     exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     exposed_types_storage: ExposedTypesStorageSubs,
-    resolved_specializations: ResolvedSpecializations,
+    resolved_implementations: ResolvedImplementations,
     dep_idents: IdentIdsByModule,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
     abilities_store: AbilitiesStore,
@@ -2890,7 +2891,7 @@ fn finish(
         exposed_values,
         exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
         exposed_types_storage,
-        resolved_specializations,
+        resolved_implementations,
         sources,
         timings: state.timings,
         documentation,
@@ -3991,7 +3992,7 @@ pub fn add_imports(
             match $exposed_by_module.get(&module_id) {
                 Some(ExposedModuleTypes {
                     exposed_types_storage_subs: exposed_types,
-                    resolved_specializations: _,
+                    resolved_implementations: _,
                 }) => {
                     let variable = match exposed_types.stored_vars_by_symbol.iter().find(|(s, _)| **s == $symbol) {
                         None => {
@@ -4050,8 +4051,8 @@ pub fn add_imports(
     // One idea is to just always assume external modules fulfill their specialization obligations
     // and save lambda set resolution for mono.
     for (_, module_types) in exposed_for_module.exposed_by_module.iter_all() {
-        for ((member, typ), specialization) in module_types.resolved_specializations.iter() {
-            pending_abilities.import_specialization(*member, *typ, specialization)
+        for (impl_key, resolved_impl) in module_types.resolved_implementations.iter() {
+            pending_abilities.import_implementation(*impl_key, resolved_impl);
         }
     }
 
@@ -4081,7 +4082,7 @@ pub fn add_imports(
         |ctx, module, lset_var| match ctx.exposed_by_module.get(&module) {
             Some(ExposedModuleTypes {
                 exposed_types_storage_subs: exposed_types,
-                resolved_specializations: _,
+                resolved_implementations: _,
             }) => {
                 let var = exposed_types
                     .stored_specialization_lambda_set_vars
@@ -4112,7 +4113,7 @@ fn run_solve_solve(
     derived_module: SharedDerivedModule,
 ) -> (
     Solved<Subs>,
-    ResolvedSpecializations,
+    ResolvedImplementations,
     Vec<(Symbol, Variable)>,
     Vec<solve::TypeError>,
     AbilitiesStore,
@@ -4148,7 +4149,7 @@ fn run_solve_solve(
         solve_aliases.insert(*name, alias.clone());
     }
 
-    let (solved_subs, solved_specializations, exposed_vars_by_symbol, problems, abilities_store) = {
+    let (solved_subs, solved_implementations, exposed_vars_by_symbol, problems, abilities_store) = {
         let module_id = module.module_id;
 
         let (solved_subs, solved_env, problems, abilities_store) = roc_solve::module::run_solve(
@@ -4164,19 +4165,17 @@ fn run_solve_solve(
             derived_module,
         );
 
-        // Figure out what specializations belong to this module
-        let solved_specializations: ResolvedSpecializations = abilities_store
-            .iter_specializations()
-            .filter(|((member, typ), _)| {
-                // This module solved this specialization if either the member or the type comes from the
-                // module.
-                member.module_id() == module_id || typ.module_id() == module_id
-            })
-            .map(|(key, specialization)| (key, specialization.clone()))
-            .collect();
+        let solved_implementations =
+            extract_module_owned_implementations(module_id, &abilities_store);
 
-        let is_specialization_symbol =
-            |sym| solved_specializations.values().any(|ms| ms.symbol == sym);
+        let is_specialization_symbol = |sym| {
+            solved_implementations
+                .values()
+                .any(|resolved_impl| match resolved_impl {
+                    ResolvedImpl::Impl(specialization) => specialization.symbol == sym,
+                    ResolvedImpl::Derived | ResolvedImpl::Error => false,
+                })
+        };
 
         // Expose anything that is explicitly exposed by the header, or is a specialization of an
         // ability.
@@ -4187,7 +4186,7 @@ fn run_solve_solve(
 
         (
             solved_subs,
-            solved_specializations,
+            solved_implementations,
             exposed_vars_by_symbol,
             problems,
             abilities_store,
@@ -4196,7 +4195,7 @@ fn run_solve_solve(
 
     (
         solved_subs,
-        solved_specializations,
+        solved_implementations,
         exposed_vars_by_symbol,
         problems,
         abilities_store,
@@ -4229,7 +4228,7 @@ fn run_solve<'a>(
     let loc_expects = std::mem::take(&mut module.loc_expects);
     let module = module;
 
-    let (solved_subs, solved_specializations, exposed_vars_by_symbol, problems, abilities_store) = {
+    let (solved_subs, solved_implementations, exposed_vars_by_symbol, problems, abilities_store) = {
         if module_id.is_builtin() {
             match cached_subs.lock().remove(&module_id) {
                 None => run_solve_solve(
@@ -4271,7 +4270,7 @@ fn run_solve<'a>(
         module_id,
         &mut solved_subs,
         &exposed_vars_by_symbol,
-        &solved_specializations,
+        &solved_implementations,
         &abilities_store,
     );
 
@@ -4279,7 +4278,7 @@ fn run_solve<'a>(
         exposed_vars_by_symbol,
         problems,
         aliases,
-        solved_specializations,
+        solved_implementations,
         exposed_types,
     };
 

@@ -2,7 +2,7 @@
 
 use roc_module::{ident::Lowercase, symbol::Symbol};
 use roc_region::all::{Loc, Region};
-use roc_types::subs::Variable;
+use roc_types::{subs::Variable, types::MemberImpl};
 
 use crate::{
     abilities::AbilitiesStore,
@@ -591,8 +591,8 @@ pub fn find_ability_member_and_owning_type_at(
         abilities_store: &AbilitiesStore,
     ) -> Option<Symbol> {
         abilities_store
-            .iter_specializations()
-            .find(|(_, ms)| ms.symbol == symbol)
+            .iter_declared_implementations()
+            .find(|(_, member_impl)| matches!(member_impl, MemberImpl::Impl(sym) if *sym == symbol))
             .map(|(spec, _)| spec.1)
     }
 }

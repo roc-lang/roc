@@ -348,6 +348,10 @@ impl Scope {
         }
     }
 
+    pub fn get_member_shadow(&self, ability_member: Symbol) -> Option<&Loc<Symbol>> {
+        self.shadows.get(&ability_member)
+    }
+
     /// Create a new symbol, but don't add it to the scope (yet)
     ///
     /// Used for record guards like { x: Just _ } where the `x` is not added to the scope,

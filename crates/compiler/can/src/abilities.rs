@@ -4,7 +4,10 @@ use roc_collections::{all::MutMap, VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::Region;
-use roc_types::{subs::Variable, types::Type};
+use roc_types::{
+    subs::Variable,
+    types::{MemberImpl, Type},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemberVariables {
@@ -68,10 +71,7 @@ impl AbilityMemberData<Resolved> {
 }
 
 /// (member, specialization type) -> specialization
-pub type SpecializationsMap<Phase> = VecMap<(Symbol, Symbol), MemberSpecialization<Phase>>;
-
-pub type PendingSpecializations = SpecializationsMap<Pending>;
-pub type ResolvedSpecializations = SpecializationsMap<Resolved>;
+pub type ImplMap = VecMap<(Symbol, Symbol), MemberImpl>;
 
 /// Solved lambda sets for an ability member specialization. For example, if we have
 ///
@@ -86,15 +86,13 @@ pub type SpecializationLambdaSets = VecMap<u8, Variable>;
 
 /// A particular specialization of an ability member.
 #[derive(Debug, Clone)]
-pub struct MemberSpecialization<Phase: ResolvePhase> {
+pub struct MemberSpecializationInfo<Phase: ResolvePhase> {
     _phase: std::marker::PhantomData<Phase>,
-
     pub symbol: Symbol,
-
     pub specialization_lambda_sets: SpecializationLambdaSets,
 }
 
-impl MemberSpecialization<Resolved> {
+impl MemberSpecializationInfo<Resolved> {
     pub fn new(symbol: Symbol, specialization_lambda_sets: SpecializationLambdaSets) -> Self {
         Self {
             _phase: Default::default(),
@@ -111,6 +109,22 @@ static_assertions::assert_eq_size!(SpecializationId, Option<SpecializationId>);
 
 pub enum SpecializationLambdaSetError {}
 
+/// A key into a particular implementation of an ability member for an opaque type.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct ImplKey {
+    pub opaque: Symbol,
+    pub ability_member: Symbol,
+}
+
+/// Fully-resolved implementation of an ability member for an opaque type.
+/// This is only fully known after type solving of the owning module.
+#[derive(Clone, Debug)]
+pub enum ResolvedImpl {
+    Impl(MemberSpecializationInfo<Resolved>),
+    Derived,
+    Error,
+}
+
 /// Stores information about what abilities exist in a scope, what it means to implement an
 /// ability, and what types implement them.
 // TODO(abilities): this should probably go on the Scope, I don't put it there for now because we
@@ -120,23 +134,28 @@ pub enum SpecializationLambdaSetError {}
 pub struct IAbilitiesStore<Phase: ResolvePhase> {
     /// Maps an ability to the members defining it.
     members_of_ability: MutMap<Symbol, Vec<Symbol>>,
+    /// Map of symbols that specialize an ability member to the root ability symbol name,
+    /// and the type the specialization claims to implement the ability for.
+    ///
+    /// For example, in the program
+    ///
+    ///   Hash has hash : a -> U64 | a has Hash
+    ///
+    ///   Id := {} implements [Hash {hash: myHash}]
+    ///   myHash = \@Id n -> n
+    ///
+    /// We keep the mapping myHash->(hash, Id)
+    specialization_to_root: MutMap<Symbol, ImplKey>,
 
     /// Information about all members composing abilities.
     ability_members: MutMap<Symbol, AbilityMemberData<Phase>>,
 
-    /// Map of symbols that specialize an ability member to the root ability symbol name.
-    /// For example, for the program
-    ///   Hash has hash : a -> U64 | a has Hash
-    ///            ^^^^ gets the symbol "#hash"
-    ///   hash = \@Id n -> n
-    ///   ^^^^ gets the symbol "#hash1"
-    ///
-    /// We keep the mapping #hash1->#hash
-    specialization_to_root: MutMap<Symbol, Symbol>,
+    /// Maps a tuple (member, type) specifying that `type` has an implementation of an ability
+    /// member `member`, to how that implementation is defined.
+    declared_implementations: ImplMap,
 
-    /// Maps a tuple (member, type) specifying that `type` declares an implementation of an ability
-    /// member `member`, to the exact symbol that implements the ability.
-    declared_specializations: SpecializationsMap<Phase>,
+    /// Information about specialized ability member implementations for a type.
+    specializations: MutMap<Symbol, MemberSpecializationInfo<Phase>>,
 
     next_specialization_id: NonZeroU32,
 
@@ -148,14 +167,15 @@ pub struct IAbilitiesStore<Phase: ResolvePhase> {
 impl<Phase: ResolvePhase> Default for IAbilitiesStore<Phase> {
     fn default() -> Self {
         Self {
-             members_of_ability: Default::default(),
-             ability_members: Default::default(),
-             specialization_to_root: Default::default(),
-             declared_specializations: Default::default(),
-             next_specialization_id:
-                 // Safety: 1 != 0
-                 unsafe { NonZeroU32::new_unchecked(1) },
-             resolved_specializations: Default::default(),
+            members_of_ability: Default::default(),
+            specialization_to_root: Default::default(),
+            ability_members: Default::default(),
+            declared_implementations: Default::default(),
+            specializations: Default::default(),
+            next_specialization_id:
+                // Safety: 1 != 0
+                unsafe { NonZeroU32::new_unchecked(1) },
+            resolved_specializations: Default::default(),
          }
     }
 }
@@ -207,20 +227,42 @@ impl<Phase: ResolvePhase> IAbilitiesStore<Phase> {
         &self.ability_members
     }
 
+    #[inline(always)]
+    fn register_one_declared_impl(&mut self, impl_key: ImplKey, member_impl: MemberImpl) {
+        if let MemberImpl::Impl(specialization_symbol) = member_impl {
+            self.specialization_to_root
+                .insert(specialization_symbol, impl_key);
+        }
+        self.declared_implementations
+            .insert((impl_key.ability_member, impl_key.opaque), member_impl);
+    }
+
+    /// Records the implementations of an ability an opaque type declares to have.
+    ///
+    /// Calling this function does not validate that the implementations are correctly specializing
+    /// in their definition, nor does it store type information about the implementations.
+    ///
+    /// It is expected that during type solving, the owner of the abilities store marks the claimed
+    /// implementation as either a proper or erroring implementation using
+    /// [`Self::mark_implementation`].
+    pub fn register_declared_implementations(
+        &mut self,
+        implementing_type: Symbol,
+        // (ability member, implementation)
+        implementations: impl IntoIterator<Item = (Symbol, MemberImpl)>,
+    ) {
+        for (member, member_impl) in implementations.into_iter() {
+            let impl_key = ImplKey {
+                opaque: implementing_type,
+                ability_member: member,
+            };
+            self.register_one_declared_impl(impl_key, member_impl);
+        }
+    }
+
     /// Returns whether a symbol is declared to specialize an ability member.
     pub fn is_specialization_name(&self, symbol: Symbol) -> bool {
         self.specialization_to_root.contains_key(&symbol)
-    }
-
-    /// Records that the symbol `specializing_symbol` claims to specialize `ability_member`; for
-    /// example the symbol of `hash : Id -> U64` specializing `hash : a -> U64 | a has Hash`.
-    pub fn register_specializing_symbol(
-        &mut self,
-        specializing_symbol: Symbol,
-        ability_member: Symbol,
-    ) {
-        self.specialization_to_root
-            .insert(specializing_symbol, ability_member);
     }
 
     pub fn members_of_ability(&self, ability: Symbol) -> Option<&[Symbol]> {
@@ -237,15 +279,23 @@ impl<Phase: ResolvePhase> IAbilitiesStore<Phase> {
         id
     }
 
+    /// Finds the implementation key for a symbol specializing the ability member, if it specializes any.
+    /// For example, suppose `hashId : Id -> U64` specializes `hash : a -> U64 | a has Hash`.
+    /// Calling this with `hashId` would retrieve (hash, hashId).
+    pub fn impl_key(&self, specializing_symbol: Symbol) -> Option<&ImplKey> {
+        self.specialization_to_root.get(&specializing_symbol)
+    }
+
     /// Creates a store from [`self`] that closes over the abilities/members given by the
     /// imported `symbols`, and their specializations (if any).
     pub fn closure_from_imported(&self, symbols: &VecSet<Symbol>) -> PendingAbilitiesStore {
         let Self {
             members_of_ability,
             ability_members,
-            declared_specializations,
+            declared_implementations,
+            specializations,
 
-            // Covered by `declared_specializations`
+            // Covered by `declared_implementations`
             specialization_to_root: _,
 
             // Taking closure for a new module, so specialization IDs can be fresh
@@ -292,12 +342,21 @@ impl<Phase: ResolvePhase> IAbilitiesStore<Phase> {
             new.register_ability(ability, imported_member_data);
 
             // Add any specializations of the ability's members we know about.
-            declared_specializations
+            declared_implementations
                 .iter()
                 .filter(|((member, _), _)| members.contains(member))
-                .for_each(|(&(member, typ), specialization)| {
-                    new.register_specializing_symbol(specialization.symbol, member);
-                    new.import_specialization(member, typ, specialization);
+                .for_each(|(&(member, typ), member_impl)| {
+                    let impl_key = ImplKey {
+                        ability_member: member,
+                        opaque: typ,
+                    };
+                    new.register_one_declared_impl(impl_key, *member_impl);
+
+                    if let MemberImpl::Impl(spec_symbol) = member_impl {
+                        if let Some(specialization_info) = specializations.get(spec_symbol) {
+                            new.import_specialization(specialization_info);
+                        }
+                    }
                 });
         }
 
@@ -305,20 +364,29 @@ impl<Phase: ResolvePhase> IAbilitiesStore<Phase> {
     }
 }
 
+#[derive(Debug)]
+pub enum MarkError {
+    NoDeclaredImpl,
+    ImplIsNotCustom,
+}
+
 impl IAbilitiesStore<Resolved> {
     /// Finds the symbol name and ability member definition for a symbol specializing the ability
     /// member, if it specializes any.
-    /// For example, suppose `hash : Id -> U64` has symbol #hash1 and specializes
-    /// `hash : a -> U64 | a has Hash` with symbol #hash. Calling this with #hash1 would retrieve
-    /// the ability member data for #hash.
-    pub fn root_name_and_def(
+    /// For example, suppose `hashId : Id -> U64` specializes `hash : a -> U64 | a has Hash`.
+    /// Calling this with `hashId` would retrieve the ability member data for `hash`, and what type
+    /// `hashId` is specializing for.
+    pub fn impl_key_and_def(
         &self,
         specializing_symbol: Symbol,
-    ) -> Option<(Symbol, &AbilityMemberData<Resolved>)> {
-        let root_symbol = self.specialization_to_root.get(&specializing_symbol)?;
-        debug_assert!(self.ability_members.contains_key(root_symbol));
-        let root_data = self.ability_members.get(root_symbol).unwrap();
-        Some((*root_symbol, root_data))
+    ) -> Option<(ImplKey, &AbilityMemberData<Resolved>)> {
+        let impl_key = self.impl_key(specializing_symbol)?;
+        debug_assert!(self.ability_members.contains_key(&impl_key.ability_member));
+        let root_data = self
+            .ability_members
+            .get(&impl_key.ability_member)
+            .expect("impl keys can only exist for known ability members");
+        Some((*impl_key, root_data))
     }
 
     /// Finds the ability member definition for a member name.
@@ -326,36 +394,59 @@ impl IAbilitiesStore<Resolved> {
         self.ability_members.get(&member)
     }
 
-    /// Returns an iterator over pairs ((ability member, type), specialization) specifying that
-    /// "ability member" has a "specialization" for type "type".
-    pub fn iter_specializations(
+    /// Returns an iterator over pairs ((ability member, type), implementation) specifying that
+    /// the give type has an implementation of an ability member.
+    pub fn iter_declared_implementations(
         &self,
-    ) -> impl Iterator<Item = ((Symbol, Symbol), &MemberSpecialization<Resolved>)> + '_ {
-        self.declared_specializations.iter().map(|(k, v)| (*k, v))
+    ) -> impl Iterator<Item = ((Symbol, Symbol), &MemberImpl)> + '_ {
+        self.declared_implementations.iter().map(|(k, v)| (*k, v))
     }
 
-    /// Retrieves the specialization of `member` for `typ`, if it exists.
-    pub fn get_specialization(
-        &self,
-        member: Symbol,
-        typ: Symbol,
-    ) -> Option<&MemberSpecialization<Resolved>> {
-        self.declared_specializations.get(&(member, typ))
+    /// Retrieves the declared implementation of `member` for `typ`, if it exists.
+    pub fn get_implementation(&self, member: Symbol, typ: Symbol) -> Option<&MemberImpl> {
+        self.declared_implementations.get(&(member, typ))
     }
 
-    /// Records a specialization of `ability_member` with specialized type `implementing_type`.
-    /// Entries via this function are considered a source of truth. It must be ensured that a
-    /// specialization is validated before being registered here.
-    pub fn register_specialization_for_type(
+    /// Marks a declared implementation as either properly specializing, or as erroring.
+    pub fn mark_implementation(
         &mut self,
         ability_member: Symbol,
-        implementing_type: Symbol,
-        specialization: MemberSpecialization<Resolved>,
-    ) {
-        let old_spec = self
-            .declared_specializations
-            .insert((ability_member, implementing_type), specialization);
-        debug_assert!(old_spec.is_none(), "Replacing existing specialization");
+        typ: Symbol,
+        mark: Result<MemberSpecializationInfo<Resolved>, ()>,
+    ) -> Result<(), MarkError> {
+        match self
+            .declared_implementations
+            .get_mut(&(ability_member, typ))
+        {
+            Some(member_impl) => match *member_impl {
+                MemberImpl::Impl(specialization_symbol) => {
+                    debug_assert!(!self.specializations.contains_key(&specialization_symbol));
+
+                    match mark {
+                        Ok(specialization_info) => {
+                            self.specializations
+                                .insert(specialization_symbol, specialization_info);
+                        }
+                        Err(()) => {
+                            // Mark the member implementation as erroring, so we know to generate a
+                            // runtime error function as appropriate.
+                            *member_impl = MemberImpl::Error;
+                        }
+                    }
+
+                    Ok(())
+                }
+                MemberImpl::Derived | MemberImpl::Error => Err(MarkError::ImplIsNotCustom),
+            },
+            None => Err(MarkError::NoDeclaredImpl),
+        }
+    }
+
+    pub fn specialization_info(
+        &self,
+        specialization_symbol: Symbol,
+    ) -> Option<&MemberSpecializationInfo<Resolved>> {
+        self.specializations.get(&specialization_symbol)
     }
 
     pub fn insert_resolved(&mut self, id: SpecializationId, specialization: Symbol) {
@@ -374,21 +465,43 @@ impl IAbilitiesStore<Resolved> {
 }
 
 impl IAbilitiesStore<Pending> {
-    pub fn import_specialization(
+    pub fn import_implementation(&mut self, impl_key: ImplKey, resolved_impl: &ResolvedImpl) {
+        let ImplKey {
+            opaque,
+            ability_member,
+        } = impl_key;
+
+        let member_impl = match resolved_impl {
+            ResolvedImpl::Impl(specialization) => {
+                self.import_specialization(specialization);
+                MemberImpl::Impl(specialization.symbol)
+            }
+            ResolvedImpl::Derived => MemberImpl::Derived,
+            ResolvedImpl::Error => MemberImpl::Error,
+        };
+
+        let old_declared_impl = self
+            .declared_implementations
+            .insert((ability_member, opaque), member_impl);
+        debug_assert!(
+            old_declared_impl.is_none(),
+            "Replacing existing declared impl!"
+        );
+    }
+
+    fn import_specialization(
         &mut self,
-        ability_member: Symbol,
-        implementing_type: Symbol,
-        specialization: &MemberSpecialization<impl ResolvePhase>,
+        specialization: &MemberSpecializationInfo<impl ResolvePhase>,
     ) {
-        let MemberSpecialization {
+        let MemberSpecializationInfo {
             _phase,
             symbol,
             specialization_lambda_sets,
         } = specialization;
 
-        let old_spec = self.declared_specializations.insert(
-            (ability_member, implementing_type),
-            MemberSpecialization {
+        let old_spec = self.specializations.insert(
+            *symbol,
+            MemberSpecializationInfo {
                 _phase: Default::default(),
                 symbol: *symbol,
                 specialization_lambda_sets: specialization_lambda_sets.clone(),
@@ -402,9 +515,10 @@ impl IAbilitiesStore<Pending> {
             members_of_ability: other_members_of_ability,
             ability_members: mut other_ability_members,
             specialization_to_root,
-            declared_specializations,
+            declared_implementations,
             next_specialization_id,
             resolved_specializations,
+            specializations,
         } = other;
 
         for (ability, members) in other_members_of_ability.into_iter() {
@@ -425,13 +539,18 @@ impl IAbilitiesStore<Pending> {
             debug_assert!(old_root.is_none() || old_root.unwrap() == member);
         }
 
-        for ((member, typ), specialization) in declared_specializations.into_iter() {
+        for ((member, typ), impl_) in declared_implementations.into_iter() {
+            let old_impl = self.declared_implementations.insert((member, typ), impl_);
+            debug_assert!(old_impl.is_none() || old_impl.unwrap() == impl_);
+        }
+
+        for (symbol, specialization_info) in specializations.into_iter() {
             let old_specialization = self
-                .declared_specializations
-                .insert((member, typ), specialization.clone());
+                .specializations
+                .insert(symbol, specialization_info.clone());
             debug_assert!(
                 old_specialization.is_none()
-                    || old_specialization.unwrap().symbol == specialization.symbol
+                    || old_specialization.unwrap().symbol == specialization_info.symbol
             );
         }
 
@@ -456,9 +575,10 @@ impl IAbilitiesStore<Pending> {
             members_of_ability,
             ability_members,
             specialization_to_root,
-            declared_specializations,
+            declared_implementations,
             next_specialization_id,
             resolved_specializations,
+            specializations,
         } = self;
 
         let ability_members = ability_members
@@ -491,24 +611,22 @@ impl IAbilitiesStore<Pending> {
             })
             .collect();
 
-        let declared_specializations = declared_specializations
+        let specializations = specializations
             .into_iter()
             .map(
-                |(
-                    key,
-                    MemberSpecialization {
+                |(symbol, specialization)| {
+                    let MemberSpecializationInfo {
                         _phase,
-                        symbol,
+                        symbol: _,
                         specialization_lambda_sets,
-                    },
-                )| {
+                    } = specialization;
                     let symbol_module = symbol.module_id();
+
                     // NOTE: this totally assumes we're dealing with subs that belong to an
                     // individual module, things would be badly broken otherwise
                     let member_specialization = if symbol_module == my_module {
                         internal_error!("Ability store may only be pending before module solving, \
                             so there shouldn't be any known module specializations at this point, but we found one for {:?}", symbol);
-                        // MemberSpecialization::new(symbol, specialization_lambda_sets)
                     } else {
                         let specialization_lambda_sets = specialization_lambda_sets
                             .into_iter()
@@ -523,10 +641,11 @@ impl IAbilitiesStore<Pending> {
                                 )
                             })
                             .collect();
-                        MemberSpecialization::new(symbol, specialization_lambda_sets)
+
+                        MemberSpecializationInfo::new(symbol, specialization_lambda_sets)
                     };
-                    (key, member_specialization)
-                },
+                    (symbol, member_specialization)
+                }
             )
             .collect();
 
@@ -534,9 +653,10 @@ impl IAbilitiesStore<Pending> {
             members_of_ability,
             ability_members,
             specialization_to_root,
-            declared_specializations,
+            declared_implementations,
             next_specialization_id,
             resolved_specializations,
+            specializations,
         }
     }
 }

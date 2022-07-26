@@ -19,7 +19,10 @@ mod solve_expr {
     use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Region};
     use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
     use roc_solve::solve::TypeError;
-    use roc_types::pretty_print::{name_and_print_var, DebugPrint};
+    use roc_types::{
+        pretty_print::{name_and_print_var, DebugPrint},
+        types::MemberImpl,
+    };
     use std::path::PathBuf;
 
     // HELPERS
@@ -363,11 +366,22 @@ mod solve_expr {
             panic!();
         }
 
-        let known_specializations = abilities_store.iter_specializations();
+        let known_specializations = abilities_store.iter_declared_implementations().filter_map(
+            |((member, typ), member_impl)| match member_impl {
+                MemberImpl::Impl(impl_symbol) => {
+                    let specialization = abilities_store.specialization_info(*impl_symbol).expect(
+                        "declared implementations should be resolved conclusively after solving",
+                    );
+                    Some((member, typ, specialization.clone()))
+                }
+                MemberImpl::Derived | MemberImpl::Error => None,
+            },
+        );
+
         use std::collections::HashSet;
         let pretty_specializations = known_specializations
             .into_iter()
-            .map(|((member, typ), _)| {
+            .map(|(member, typ, _)| {
                 let member_data = abilities_store.member_def(member).unwrap();
                 let member_str = member.as_str(&interns);
                 let ability_str = member_data.parent_ability.as_str(&interns);
@@ -6778,6 +6792,8 @@ mod solve_expr {
                 Diverge has diverge : a -> a | a has Diverge
 
                 A := {} has [Diverge {diverge}]
+
+                diverge : A -> A
                 diverge = \@A {} -> diverge (@A {})
                 #^^^^^^^{-1}        ^^^^^^^
 
@@ -6791,7 +6807,7 @@ mod solve_expr {
             ),
             @r###"
         A#diverge(4) : A -[[diverge(4)]]-> A
-        Diverge#diverge(2) : A -[[diverge(4)]]-> A
+        A#diverge(4) : A -[[diverge(4)]]-> A
         A#diverge(4) : A -[[diverge(4)]]-> A
         "###
         )
@@ -6799,6 +6815,46 @@ mod solve_expr {
 
     #[test]
     fn resolve_mutually_recursive_ability_lambda_sets() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Bounce has
+                    ping : a -> a | a has Bounce
+                    pong : a -> a | a has Bounce
+
+                A := {} has [Bounce {ping, pong}]
+
+                ping : A -> A
+                ping = \@A {} -> pong (@A {})
+                #^^^^{-1}        ^^^^
+
+                pong : A -> A
+                pong = \@A {} -> ping (@A {})
+                #^^^^{-1}        ^^^^
+
+                main =
+                    a : A
+                    a = ping (@A {})
+                    #   ^^^^
+
+                    a
+                "#
+            ),
+            @r###"
+        A#ping(5) : A -[[ping(5)]]-> A
+        A#pong(6) : A -[[pong(6)]]-> A
+        A#pong(6) : A -[[pong(6)]]-> A
+        A#ping(5) : A -[[ping(5)]]-> A
+        A#ping(5) : A -[[ping(5)]]-> A
+        "###
+        )
+    }
+
+    #[test]
+    #[ignore = "TODO: this currently runs into trouble with ping and pong first being inferred as overly-general before recursive constraining"]
+    fn resolve_mutually_recursive_ability_lambda_sets_inferred() {
         infer_queries!(
             indoc!(
                 r#"
