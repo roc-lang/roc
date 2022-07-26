@@ -6858,7 +6858,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore = "TODO: this currently runs into trouble with ping and pong first being inferred as overly-general before recursive constraining"]
     fn resolve_mutually_recursive_ability_lambda_sets_inferred() {
         infer_queries!(
             indoc!(
@@ -6887,7 +6886,7 @@ mod solve_expr {
             ),
             @r###"
         A#ping(5) : A -[[ping(5)]]-> A
-        Bounce#pong(3) : A -[[pong(6)]]-> A
+        A#pong(6) : A -[[pong(6)]]-> A
         A#pong(6) : A -[[pong(6)]]-> A
         A#ping(5) : A -[[ping(5)]]-> A
         A#ping(5) : A -[[ping(5)]]-> A
