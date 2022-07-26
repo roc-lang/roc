@@ -109,7 +109,9 @@ impl ReplAppMemory for ExpectMemory {
     deref_number!(deref_f64, f64);
 
     fn deref_str(&self, addr: usize) -> &str {
-        let last_byte_addr = addr + (3 * std::mem::size_of::<usize>()) - 1;
+        const WIDTH: usize = 3 * std::mem::size_of::<usize>();
+
+        let last_byte_addr = addr + WIDTH - 1;
         let last_byte = self.deref_i8(last_byte_addr);
 
         let is_small = last_byte < 0;
@@ -118,13 +120,16 @@ impl ReplAppMemory for ExpectMemory {
             let ptr = unsafe { self.start.add(addr) };
             let roc_str: &RocStr = unsafe { &*ptr.cast() };
 
+            *self.bytes_read.borrow_mut() += WIDTH - 1;
+
             roc_str.as_str()
         } else {
             let offset = self.deref_usize(addr);
             let length = self.deref_usize(addr + std::mem::size_of::<usize>());
+            let _capacity = self.deref_usize(addr + 2 * std::mem::size_of::<usize>());
 
-            // we don't store extra capacity
-            // let capacity = self.deref_usize(addr + 2 * std::mem::size_of::<usize>());
+            // subtract the last byte, which we've now read twice
+            *self.bytes_read.borrow_mut() -= 1;
 
             unsafe {
                 let ptr = self.start.add(offset);
