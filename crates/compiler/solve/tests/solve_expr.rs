@@ -6831,15 +6831,13 @@ mod solve_expr {
                     ping : a -> a | a has Bounce
                     pong : a -> a | a has Bounce
 
-                A := {} has [Bounce {ping, pong}]
+                A := {} has [Bounce {ping: pingA, pong: pongA}]
 
-                ping : A -> A
-                ping = \@A {} -> pong (@A {})
-                #^^^^{-1}        ^^^^
+                pingA = \@A {} -> pong (@A {})
+                #^^^^^{-1}        ^^^^
 
-                pong : A -> A
-                pong = \@A {} -> ping (@A {})
-                #^^^^{-1}        ^^^^
+                pongA = \@A {} -> ping (@A {})
+                #^^^^^{-1}        ^^^^
 
                 main =
                     a : A
@@ -6850,11 +6848,11 @@ mod solve_expr {
                 "#
             ),
             @r###"
-        A#ping(5) : A -[[ping(5)]]-> A
-        A#pong(6) : A -[[pong(6)]]-> A
-        A#pong(6) : A -[[pong(6)]]-> A
-        A#ping(5) : A -[[ping(5)]]-> A
-        A#ping(5) : A -[[ping(5)]]-> A
+        pingA : A -[[pingA(5)]]-> A
+        A#pong(6) : A -[[pongA(6)]]-> A
+        pongA : A -[[pongA(6)]]-> A
+        A#ping(5) : A -[[pingA(5)]]-> A
+        A#ping(5) : A -[[pingA(5)]]-> A
         "###
         )
     }
