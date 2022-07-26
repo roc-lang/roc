@@ -1858,7 +1858,7 @@ fn check_ability_specialization(
             .expect("marked as a custom implementation, but not recorded as such");
 
         // Get the lambda sets that are ready for specialization because this ability member
-        // specializaiton was resolved, and compact them.
+        // specialization was resolved, and compact them.
         let new_lambda_sets_to_specialize =
             awaiting_specializations.remove_for_specialized(subs, impl_key);
         compact_lambdas_and_check_obligations(
