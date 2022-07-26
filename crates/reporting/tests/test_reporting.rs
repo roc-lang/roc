@@ -5215,6 +5215,23 @@ mod test_reporting {
     "###
     );
 
+    test_report!(
+        multi_insufficient_indent,
+        "    \"\"\"\n  testing\n    \"\"\"", // 4 space indent on the start, 2 space on the `testing` line
+        @r###"
+    ── INSUFFICIENT INDENT IN MULTI-LINE STRING ─ ..._insufficient_indent/Test.roc ─
+
+    This multiline string is not sufficiently indented:
+
+    5│        testing
+              ^
+
+    Lines in a multi-line string must be indented at least as much as the
+    beginning """. This extra indentation is automatically removed from
+    the string during compilation.
+    "###
+    );
+
     // https://github.com/rtfeldman/roc/issues/1714
     test_report!(
     interpolate_concat_is_transparent_1714,

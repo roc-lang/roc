@@ -170,7 +170,11 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
 
         let indent = state.column();
 
+        let start_state;
+
         if state.consume_mut("\"\"\"") {
+            start_state = state.clone();
+
             // we will be parsing a multi-line string
             is_multiline = true;
 
@@ -178,6 +182,8 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                 state = consume_indent(state, indent)?;
             }
         } else if state.consume_mut("\"") {
+            start_state = state.clone();
+
             // we will be parsing a single-line string
             is_multiline = false;
         } else {
@@ -331,7 +337,11 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                         // all remaining chars. This will mask all other errors, but
                         // it should make it easiest to debug; the file will be a giant
                         // error starting from where the open quote appeared.
-                        return Err((MadeProgress, EString::EndlessSingle(state.pos()), state));
+                        return Err((
+                            MadeProgress,
+                            EString::EndlessSingle(start_state.pos()),
+                            start_state,
+                        ));
                     }
                 }
                 b'\\' => {
@@ -434,11 +444,11 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
         Err((
             MadeProgress,
             if is_multiline {
-                EString::EndlessMulti(state.pos())
+                EString::EndlessMulti(start_state.pos())
             } else {
-                EString::EndlessSingle(state.pos())
+                EString::EndlessSingle(start_state.pos())
             },
-            state,
+            start_state,
         ))
     }
 }
