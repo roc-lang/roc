@@ -1108,13 +1108,6 @@ fn gen_rem_checked_div_by_zero_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn gen_is_zero_i64() {
-    assert_evals_to!("Num.isZero 0", true, bool);
-    assert_evals_to!("Num.isZero 1", false, bool);
-}
-
-#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_is_positive_i64() {
     assert_evals_to!("Num.isPositive 0", false, bool);
@@ -1147,7 +1140,7 @@ fn gen_is_negative_f64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_is_zero_f64() {
     assert_evals_to!("Num.isZero 0", true, bool);
     assert_evals_to!("Num.isZero 0_0", true, bool);
