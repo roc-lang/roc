@@ -3,7 +3,11 @@
 use std::collections::VecDeque;
 
 use bumpalo::Bump;
-use roc_can::{abilities::AbilitiesStore, module::ExposedByModule};
+use roc_can::{
+    abilities::{AbilitiesStore, ImplKey},
+    module::ExposedByModule,
+};
+use roc_collections::{VecMap, VecSet};
 use roc_debug_flags::{dbg_do, ROC_TRACE_COMPACTION};
 use roc_derive::SharedDerivedModule;
 use roc_derive_key::{DeriveError, DeriveKey};
@@ -116,6 +120,62 @@ pub struct DerivedEnv<'a> {
     pub derived_module: &'a SharedDerivedModule,
     /// Exposed types needed by the derived module.
     pub exposed_types: &'a ExposedByModule,
+}
+
+#[derive(Default)]
+pub struct AwaitingSpecializations {
+    // What variables' specialized lambda sets in `uls_of_var` will be unlocked for specialization
+    // when an implementation key's specialization is resolved?
+    waiting: VecMap<ImplKey, VecSet<Variable>>,
+    uls_of_var: UlsOfVar,
+}
+
+impl AwaitingSpecializations {
+    pub fn remove_for_specialized(&mut self, subs: &Subs, impl_key: ImplKey) -> UlsOfVar {
+        let spec_variables = self
+            .waiting
+            .remove(&impl_key)
+            .map(|(_, set)| set)
+            .unwrap_or_default();
+
+        let mut result = UlsOfVar::default();
+        for var in spec_variables {
+            let target_lambda_sets = self
+                .uls_of_var
+                .remove_dependent_unspecialized_lambda_sets(subs, var);
+
+            result.extend(var, target_lambda_sets);
+        }
+        result
+    }
+
+    pub fn add(
+        &mut self,
+        impl_key: ImplKey,
+        var: Variable,
+        lambda_sets: impl IntoIterator<Item = Variable>,
+    ) {
+        self.uls_of_var.extend(var, lambda_sets);
+        let waiting = self.waiting.get_or_insert(impl_key, Default::default);
+        waiting.insert(var);
+    }
+
+    pub fn union(&mut self, other: Self) {
+        for (impl_key, waiting_vars) in other.waiting {
+            let waiting = self.waiting.get_or_insert(impl_key, Default::default);
+            waiting.extend(waiting_vars);
+        }
+        self.uls_of_var.union(other.uls_of_var);
+    }
+
+    pub fn waiting_for(&self, impl_key: ImplKey) -> bool {
+        self.waiting.contains_key(&impl_key)
+    }
+}
+
+pub struct CompactionResult {
+    pub obligations: MustImplementConstraints,
+    pub awaiting_specialization: AwaitingSpecializations,
 }
 
 #[cfg(debug_assertions)]
@@ -246,9 +306,9 @@ pub fn compact_lambda_sets_of_vars<P: Phase>(
     pools: &mut Pools,
     uls_of_var: UlsOfVar,
     phase: &P,
-) -> MustImplementConstraints {
-    // let mut seen = VecSet::default();
+) -> CompactionResult {
     let mut must_implement = MustImplementConstraints::default();
+    let mut awaiting_specialization = AwaitingSpecializations::default();
 
     let mut uls_of_var_queue = VecDeque::with_capacity(uls_of_var.len());
     uls_of_var_queue.extend(uls_of_var.drain());
@@ -374,22 +434,36 @@ pub fn compact_lambda_sets_of_vars<P: Phase>(
         //    3. Unify `t_f1 ~ t_f2`.
         trace_compact!(3start.);
         for l in uls_a {
-            // let root_lset = subs.get_root_key_without_compacting(l);
-            // if seen.contains(&root_lset) {
-            //     continue;
-            // }
-
-            let (new_must_implement, new_uls_of_var) =
+            let compaction_result =
                 compact_lambda_set(subs, derived_env, arena, pools, c_a, l, phase);
 
-            must_implement.extend(new_must_implement);
-            uls_of_var_queue.extend(new_uls_of_var.drain());
-
-            // seen.insert(root_lset);
+            match compaction_result {
+                OneCompactionResult::Compacted {
+                    new_obligations,
+                    new_lambda_sets_to_specialize,
+                } => {
+                    must_implement.extend(new_obligations);
+                    uls_of_var_queue.extend(new_lambda_sets_to_specialize.drain());
+                }
+                OneCompactionResult::MustWaitForSpecialization(impl_key) => {
+                    awaiting_specialization.add(impl_key, c_a, [l])
+                }
+            }
         }
     }
 
-    must_implement
+    CompactionResult {
+        obligations: must_implement,
+        awaiting_specialization,
+    }
+}
+
+enum OneCompactionResult {
+    Compacted {
+        new_obligations: MustImplementConstraints,
+        new_lambda_sets_to_specialize: UlsOfVar,
+    },
+    MustWaitForSpecialization(ImplKey),
 }
 
 #[must_use]
@@ -402,7 +476,7 @@ fn compact_lambda_set<P: Phase>(
     resolved_concrete: Variable,
     this_lambda_set: Variable,
     phase: &P,
-) -> (MustImplementConstraints, UlsOfVar) {
+) -> OneCompactionResult {
     // 3. For each `l` in `uls_a` with unique unspecialized lambda `C:f:r`:
     //    1. Let `t_f1` be the directly ambient function of the lambda set containing `C:f:r`. Remove `C:f:r` from `t_f1`'s lambda set.
     //       - For example, `(b' -[[] + Fo:f:2]-> {})` if `C:f:r=Fo:f:2`. Removing `Fo:f:2`, we get `(b' -[[]]-> {})`.
@@ -426,6 +500,20 @@ fn compact_lambda_set<P: Phase>(
 
     debug_assert!(subs.equivalent_without_compacting(c, resolved_concrete));
 
+    // Now decide: do we
+    // - proceed with specialization
+    // - simply drop the specialization lambda set (due to an error)
+    // - or do we need to wait, because we don't know enough information for the specialization yet?
+    let specialization_decision = make_specialization_decision(subs, phase, c, f);
+    let specialization_key_or_drop = match specialization_decision {
+        SpecializeDecision::Specialize(key) => Ok(key),
+        SpecializeDecision::Drop => Err(()),
+        SpecializeDecision::PendingSpecialization(impl_key) => {
+            // Bail, we need to wait for the specialization to be known.
+            return OneCompactionResult::MustWaitForSpecialization(impl_key);
+        }
+    };
+
     // 1b. Remove `C:f:r` from `t_f1`'s lambda set.
     let new_unspecialized: Vec<_> = unspecialized
         .iter()
@@ -447,15 +535,16 @@ fn compact_lambda_set<P: Phase>(
         Content::LambdaSet(t_f1_lambda_set_without_concrete),
     );
 
-    let specialization_decision = make_specialization_decision(subs, c);
-
-    let specialization_key = match specialization_decision {
-        SpecializeDecision::Specialize(key) => key,
-        SpecializeDecision::Drop => {
+    let specialization_key = match specialization_key_or_drop {
+        Ok(specialization_key) => specialization_key,
+        Err(()) => {
             // Do nothing other than to remove the concrete lambda to drop from the lambda set,
             // which we already did in 1b above.
             trace_compact!(3iter_end_skipped. subs, t_f1);
-            return (Default::default(), Default::default());
+            return OneCompactionResult::Compacted {
+                new_obligations: Default::default(),
+                new_lambda_sets_to_specialize: Default::default(),
+            };
         }
     };
 
@@ -475,7 +564,10 @@ fn compact_lambda_set<P: Phase>(
             // Do nothing other than to remove the concrete lambda to drop from the lambda set,
             // which we already did in 1b above.
             trace_compact!(3iter_end_skipped. subs, t_f1);
-            return (Default::default(), Default::default());
+            return OneCompactionResult::Compacted {
+                new_obligations: Default::default(),
+                new_lambda_sets_to_specialize: Default::default(),
+            };
         }
     };
 
@@ -485,14 +577,17 @@ fn compact_lambda_set<P: Phase>(
 
     // 3. Unify `t_f1 ~ t_f2`.
     trace_compact!(3iter_start. subs, this_lambda_set, t_f1, t_f2);
-    let (vars, new_must_implement_ability, new_lambda_sets_to_specialize, _meta) =
+    let (vars, new_obligations, new_lambda_sets_to_specialize, _meta) =
         unify(&mut UEnv::new(subs), t_f1, t_f2, Mode::EQ)
             .expect_success("ambient functions don't unify");
     trace_compact!(3iter_end. subs, t_f1);
 
     introduce(subs, target_rank, pools, &vars);
 
-    (new_must_implement_ability, new_lambda_sets_to_specialize)
+    OneCompactionResult::Compacted {
+        new_obligations,
+        new_lambda_sets_to_specialize,
+    }
 }
 
 #[derive(Debug)]
@@ -505,14 +600,53 @@ enum SpecializationTypeKey {
 enum SpecializeDecision {
     Specialize(SpecializationTypeKey),
     Drop,
+
+    /// Only relevant during module solving of recursive defs - we don't yet know the
+    /// specialization type for a declared ability implementation, so we must hold off on
+    /// specialization.
+    PendingSpecialization(ImplKey),
 }
 
-fn make_specialization_decision(subs: &Subs, var: Variable) -> SpecializeDecision {
+fn make_specialization_decision<P: Phase>(
+    subs: &Subs,
+    phase: &P,
+    var: Variable,
+    ability_member: Symbol,
+) -> SpecializeDecision {
     use Content::*;
     use SpecializationTypeKey::*;
     match subs.get_content_without_compacting(var) {
         Alias(opaque, _, _, AliasKind::Opaque) if opaque.module_id() != ModuleId::NUM => {
-            SpecializeDecision::Specialize(Opaque(*opaque))
+            if P::IS_LATE {
+                SpecializeDecision::Specialize(Opaque(*opaque))
+            } else {
+                // Solving within a module.
+                phase.with_module_abilities_store(opaque.module_id(), |abilities_store| {
+                    let impl_key = ImplKey {
+                        opaque: *opaque,
+                        ability_member,
+                    };
+                    match abilities_store.get_implementation(impl_key) {
+                        None => {
+                            // Doesn't specialize; an error will already be reported for this.
+                            SpecializeDecision::Drop
+                        }
+                        Some(MemberImpl::Error | MemberImpl::Derived) => {
+                            // TODO: probably not right, we may want to choose a derive decision!
+                            SpecializeDecision::Specialize(Opaque(*opaque))
+                        }
+                        Some(MemberImpl::Impl(specialization_symbol)) => {
+                            match abilities_store.specialization_info(*specialization_symbol) {
+                                Some(_) => SpecializeDecision::Specialize(Opaque(*opaque)),
+
+                                // If we expect a specialization impl but don't yet know it, we must hold off
+                                // compacting the lambda set until the specialization is well-known.
+                                None => SpecializeDecision::PendingSpecialization(impl_key),
+                            }
+                        }
+                    }
+                })
+            }
         }
         Structure(_) | Alias(_, _, _, _) => {
             // This is a structural type, find the name of the derived ability function it
@@ -573,19 +707,20 @@ fn get_specialization_lambda_set_ambient_function<P: Phase>(
             };
                     let opt_specialization =
                         abilities_store.get_implementation(impl_key);
-                    match (P::IS_LATE, opt_specialization) {
-                        (false, None) => {
-                            // doesn't specialize, we'll have reported an error for this
-                            Err(())
+                    match opt_specialization {
+                        None => {
+                            if P::IS_LATE {
+                                internal_error!(
+                                    "expected to know a specialization for {:?}#{:?}, but it wasn't found",
+                                    opaque,
+                                    ability_member
+                                );
+                            } else {
+                                // doesn't specialize, we'll have reported an error for this
+                                Err(())
+                            }
                         }
-                        (true, None) => {
-                            internal_error!(
-                            "expected to know a specialization for {:?}#{:?}, but it wasn't found",
-                            opaque,
-                            ability_member,
-                        );
-                        }
-                        (_, Some(member_impl)) => match member_impl {
+                        Some(member_impl) => match member_impl {
                             MemberImpl::Impl(spec_symbol) => {
                                 let specialization =
                                     abilities_store.specialization_info(*spec_symbol).expect("expected custom implementations to always have complete specialization info by this point");

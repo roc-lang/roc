@@ -3,7 +3,9 @@ use crate::ability::{
     CheckedDerives, ObligationCache, PendingDerivesTable, Resolved,
 };
 use crate::module::Solved;
-use crate::specialize::{compact_lambda_sets_of_vars, DerivedEnv, SolvePhase};
+use crate::specialize::{
+    compact_lambda_sets_of_vars, AwaitingSpecializations, CompactionResult, DerivedEnv, SolvePhase,
+};
 use bumpalo::Bump;
 use roc_can::abilities::{AbilitiesStore, MemberSpecializationInfo};
 use roc_can::constraint::Constraint::{self, *};
@@ -20,7 +22,7 @@ use roc_error_macros::internal_error;
 use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_problem::can::CycleEntry;
-use roc_region::all::{Loc, Region};
+use roc_region::all::Loc;
 use roc_solve_problem::TypeError;
 use roc_types::subs::{
     self, AliasVariables, Content, Descriptor, FlatType, GetSubsSlice, LambdaSet, Mark,
@@ -558,6 +560,7 @@ fn run_in_place(
     let arena = Bump::new();
 
     let mut obligation_cache = ObligationCache::default();
+    let mut awaiting_specializations = AwaitingSpecializations::default();
 
     let pending_derives = PendingDerivesTable::new(subs, aliases, pending_derives);
     let CheckedDerives {
@@ -566,9 +569,10 @@ fn run_in_place(
     } = obligation_cache.check_derives(subs, abilities_store, pending_derives);
     problems.extend(derives_problems);
 
-    // Because we don't know what ability specializations are available until the entire module is
-    // solved, we must wait to solve unspecialized lambda sets then.
-    let mut deferred_uls_to_resolve = UlsOfVar::default();
+    let derived_env = DerivedEnv {
+        derived_module: &derived_module,
+        exposed_types: exposed_by_module,
+    };
 
     let state = solve(
         &arena,
@@ -582,30 +586,9 @@ fn run_in_place(
         constraint,
         abilities_store,
         &mut obligation_cache,
-        &mut deferred_uls_to_resolve,
-    );
-
-    // Now that the module has been solved, we can run through and check all
-    // types claimed to implement abilities. This will also tell us what derives
-    // are legal, which we need to register.
-    let derived_env = DerivedEnv {
-        derived_module: &derived_module,
-        exposed_types: exposed_by_module,
-    };
-    let new_must_implement = compact_lambda_sets_of_vars(
-        subs,
+        &mut awaiting_specializations,
         &derived_env,
-        &arena,
-        &mut pools,
-        deferred_uls_to_resolve,
-        &SolvePhase { abilities_store },
     );
-    problems.extend(obligation_cache.check_obligations(
-        subs,
-        abilities_store,
-        new_must_implement,
-        AbilityImplError::DoesNotImplement,
-    ));
 
     state.env
 }
@@ -659,7 +642,8 @@ fn solve(
     constraint: &Constraint,
     abilities_store: &mut AbilitiesStore,
     obligation_cache: &mut ObligationCache,
-    deferred_uls_to_resolve: &mut UlsOfVar,
+    awaiting_specializations: &mut AwaitingSpecializations,
+    derived_env: &DerivedEnv,
 ) -> State {
     let initial = Work::Constraint {
         env: &Env::default(),
@@ -715,11 +699,13 @@ fn solve(
                     check_ability_specialization(
                         arena,
                         subs,
+                        derived_env,
                         pools,
                         rank,
                         abilities_store,
+                        obligation_cache,
+                        awaiting_specializations,
                         problems,
-                        deferred_uls_to_resolve,
                         *symbol,
                         *loc_var,
                     );
@@ -822,11 +808,13 @@ fn solve(
                     check_ability_specialization(
                         arena,
                         subs,
+                        derived_env,
                         pools,
                         rank,
                         abilities_store,
+                        obligation_cache,
+                        awaiting_specializations,
                         problems,
-                        deferred_uls_to_resolve,
                         *symbol,
                         *loc_var,
                     );
@@ -892,7 +880,17 @@ fn solve(
                             );
                             problems.extend(new_problems);
                         }
-                        deferred_uls_to_resolve.union(lambda_sets_to_specialize);
+                        compact_lambdas_and_check_obligations(
+                            arena,
+                            pools,
+                            problems,
+                            subs,
+                            abilities_store,
+                            obligation_cache,
+                            awaiting_specializations,
+                            derived_env,
+                            lambda_sets_to_specialize,
+                        );
 
                         state
                     }
@@ -942,7 +940,21 @@ fn solve(
                     } => {
                         introduce(subs, rank, pools, &vars);
 
-                        deferred_uls_to_resolve.union(lambda_sets_to_specialize);
+                        let CompactionResult {
+                            obligations,
+                            awaiting_specialization,
+                        } = compact_lambda_sets_of_vars(
+                            subs,
+                            &derived_env,
+                            &arena,
+                            pools,
+                            lambda_sets_to_specialize,
+                            &SolvePhase { abilities_store },
+                        );
+                        // implement obligations not reported
+                        _ = obligations;
+                        // but awaited specializations must be recorded
+                        awaiting_specializations.union(awaiting_specialization);
 
                         state
                     }
@@ -1014,7 +1026,17 @@ fn solve(
                                     );
                                     problems.extend(new_problems);
                                 }
-                                deferred_uls_to_resolve.union(lambda_sets_to_specialize);
+                                compact_lambdas_and_check_obligations(
+                                    arena,
+                                    pools,
+                                    problems,
+                                    subs,
+                                    abilities_store,
+                                    obligation_cache,
+                                    awaiting_specializations,
+                                    derived_env,
+                                    lambda_sets_to_specialize,
+                                );
 
                                 state
                             }
@@ -1094,7 +1116,17 @@ fn solve(
                             );
                             problems.extend(new_problems);
                         }
-                        deferred_uls_to_resolve.union(lambda_sets_to_specialize);
+                        compact_lambdas_and_check_obligations(
+                            arena,
+                            pools,
+                            problems,
+                            subs,
+                            abilities_store,
+                            obligation_cache,
+                            awaiting_specializations,
+                            derived_env,
+                            lambda_sets_to_specialize,
+                        );
 
                         state
                     }
@@ -1267,7 +1299,17 @@ fn solve(
                             );
                             problems.extend(new_problems);
                         }
-                        deferred_uls_to_resolve.union(lambda_sets_to_specialize);
+                        compact_lambdas_and_check_obligations(
+                            arena,
+                            pools,
+                            problems,
+                            subs,
+                            abilities_store,
+                            obligation_cache,
+                            awaiting_specializations,
+                            derived_env,
+                            lambda_sets_to_specialize,
+                        );
 
                         state
                     }
@@ -1373,7 +1415,17 @@ fn solve(
                             must_implement_ability,
                             AbilityImplError::DoesNotImplement,
                         ));
-                        deferred_uls_to_resolve.union(lambda_sets_to_specialize);
+                        compact_lambdas_and_check_obligations(
+                            arena,
+                            pools,
+                            problems,
+                            subs,
+                            abilities_store,
+                            obligation_cache,
+                            awaiting_specializations,
+                            derived_env,
+                            lambda_sets_to_specialize,
+                        );
 
                         // Case 1: unify error types, but don't check exhaustiveness.
                         // Case 2: run exhaustiveness to check for redundant branches.
@@ -1543,6 +1595,37 @@ fn solve(
     state
 }
 
+fn compact_lambdas_and_check_obligations(
+    arena: &Bump,
+    pools: &mut Pools,
+    problems: &mut Vec<TypeError>,
+    subs: &mut Subs,
+    abilities_store: &mut AbilitiesStore,
+    obligation_cache: &mut ObligationCache,
+    awaiting_specialization: &mut AwaitingSpecializations,
+    derived_env: &DerivedEnv,
+    lambda_sets_to_specialize: UlsOfVar,
+) {
+    let CompactionResult {
+        obligations,
+        awaiting_specialization: new_awaiting,
+    } = compact_lambda_sets_of_vars(
+        subs,
+        &derived_env,
+        &arena,
+        pools,
+        lambda_sets_to_specialize,
+        &SolvePhase { abilities_store },
+    );
+    problems.extend(obligation_cache.check_obligations(
+        subs,
+        abilities_store,
+        obligations,
+        AbilityImplError::DoesNotImplement,
+    ));
+    awaiting_specialization.union(new_awaiting);
+}
+
 fn open_tag_union(subs: &mut Subs, var: Variable) {
     let mut stack = vec![var];
     while let Some(var) = stack.pop() {
@@ -1589,11 +1672,13 @@ fn open_tag_union(subs: &mut Subs, var: Variable) {
 fn check_ability_specialization(
     arena: &Bump,
     subs: &mut Subs,
+    derived_env: &DerivedEnv,
     pools: &mut Pools,
     rank: Rank,
     abilities_store: &mut AbilitiesStore,
+    obligation_cache: &mut ObligationCache,
+    awaiting_specializations: &mut AwaitingSpecializations,
     problems: &mut Vec<TypeError>,
-    deferred_uls_to_resolve: &mut UlsOfVar,
     symbol: Symbol,
     symbol_loc_var: Loc<Variable>,
 ) {
@@ -1626,7 +1711,7 @@ fn check_ability_specialization(
             Success {
                 vars,
                 must_implement_ability,
-                lambda_sets_to_specialize: other_lambda_sets_to_specialize,
+                lambda_sets_to_specialize,
                 extra_metadata: SpecializationLsetCollector(specialization_lambda_sets),
             } => {
                 let specialization_type =
@@ -1650,7 +1735,17 @@ fn check_ability_specialization(
                                 })
                                 .collect();
 
-                            deferred_uls_to_resolve.union(other_lambda_sets_to_specialize);
+                            compact_lambdas_and_check_obligations(
+                                arena,
+                                pools,
+                                problems,
+                                subs,
+                                abilities_store,
+                                obligation_cache,
+                                awaiting_specializations,
+                                derived_env,
+                                lambda_sets_to_specialize,
+                            );
 
                             let specialization =
                                 MemberSpecializationInfo::new(symbol, specialization_lambda_sets);
@@ -1761,6 +1856,27 @@ fn check_ability_specialization(
         abilities_store
             .mark_implementation(impl_key, resolved_mark)
             .expect("marked as a custom implementation, but not recorded as such");
+
+        // Get the lambda sets that are ready for specialization because this ability member
+        // specializaiton was resolved, and compact them.
+        let new_lambda_sets_to_specialize =
+            awaiting_specializations.remove_for_specialized(subs, impl_key);
+        compact_lambdas_and_check_obligations(
+            arena,
+            pools,
+            problems,
+            subs,
+            abilities_store,
+            obligation_cache,
+            awaiting_specializations,
+            derived_env,
+            new_lambda_sets_to_specialize,
+        );
+        debug_assert!(
+            !awaiting_specializations.waiting_for(impl_key),
+            "still have lambda sets waiting for {:?}, but it was just resolved",
+            impl_key
+        );
     }
 }
 
