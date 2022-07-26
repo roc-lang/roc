@@ -6,10 +6,10 @@ interface Json
     imports [
         List,
         Str,
+        Encode,
         Encode.{
             Encoder,
             EncoderFormatting,
-            custom,
             appendWith,
         },
     ]
@@ -42,33 +42,33 @@ toUtf8 = @Json {}
 numToBytes = \n ->
     n |> Num.toStr |> Str.toUtf8
 
-encodeU8 = \n -> custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeU8 = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
 
-encodeU16 = \n -> custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeU16 = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
 
-encodeU32 = \n -> custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeU32 = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
 
-encodeU64 = \n -> custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeU64 = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
 
-encodeU128 = \n -> custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeU128 = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
 
-encodeI8 = \n -> custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeI8 = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
 
-encodeI16 = \n -> custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeI16 = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
 
-encodeI32 = \n -> custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeI32 = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
 
-encodeI64 = \n -> custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeI64 = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
 
-encodeI128 = \n -> custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeI128 = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
 
-encodeF32 = \n -> custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeF32 = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
 
-encodeF64 = \n -> custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeF64 = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
 
-encodeDec = \n -> custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
+encodeDec = \n -> Encode.custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
 
-encodeBool = \b -> custom \bytes, @Json {} ->
+encodeBool = \b -> Encode.custom \bytes, @Json {} ->
         if
             b
         then
@@ -76,13 +76,13 @@ encodeBool = \b -> custom \bytes, @Json {} ->
         else
             List.concat bytes (Str.toUtf8 "false")
 
-encodeString = \s -> custom \bytes, @Json {} ->
+encodeString = \s -> Encode.custom \bytes, @Json {} ->
         List.append bytes (Num.toU8 '"')
         |> List.concat (Str.toUtf8 s)
         |> List.append (Num.toU8 '"')
 
 encodeList = \lst, encodeElem ->
-    custom \bytes, @Json {} ->
+    Encode.custom \bytes, @Json {} ->
         writeList = \{ buffer, elemsLeft }, elem ->
             bufferWithElem = appendWith buffer (encodeElem elem) (@Json {})
             bufferWithSuffix =
@@ -99,7 +99,7 @@ encodeList = \lst, encodeElem ->
         List.append withList (Num.toU8 ']')
 
 encodeRecord = \fields ->
-    custom \bytes, @Json {} ->
+    Encode.custom \bytes, @Json {} ->
         writeRecord = \{ buffer, fieldsLeft }, { key, value } ->
             bufferWithKeyValue =
                 List.append buffer (Num.toU8 '"')
@@ -122,7 +122,7 @@ encodeRecord = \fields ->
         List.append bytesWithRecord (Num.toU8 '}')
 
 encodeTag = \name, payload ->
-    custom \bytes, @Json {} ->
+    Encode.custom \bytes, @Json {} ->
         # Idea: encode `A v1 v2` as `{"A": [v1, v2]}`
         writePayload = \{ buffer, itemsLeft }, encoder ->
             bufferWithValue = appendWith buffer encoder (@Json {})
