@@ -60,7 +60,6 @@ toUtf8 = @Json {}
 numToBytes = \n ->
     n |> Num.toStr |> Str.toUtf8
 
-# impl EncoderFormatting for Json
 u8 = \n -> custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
 
 u16 = \n -> custom \bytes, @Json {} -> List.concat bytes (numToBytes n)
