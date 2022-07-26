@@ -1476,13 +1476,10 @@ fn solve(
 
                 state
             }
-            // TODO: turning off opportunistic specialization for now because it doesn't mesh well with
-            // the polymorphic lambda resolution algorithm. After
-            // https://github.com/rtfeldman/roc/issues/3207 is resolved, this may be redundant
-            // anyway.
             &Resolve(OpportunisticResolve {
                 specialization_variable,
-                specialization_expectation,
+                // TODO: remove me
+                specialization_expectation: _,
                 member,
                 specialization_id,
             }) => {
@@ -1495,18 +1492,6 @@ fn solve(
                     )
                 {
                     abilities_store.insert_resolved(specialization_id, specialization);
-
-                    // We must now refine the current type state to account for this specialization.
-                    let lookup_constr = arena.alloc(Constraint::Lookup(
-                        specialization,
-                        specialization_expectation,
-                        Region::zero(),
-                    ));
-                    stack.push(Work::Constraint {
-                        env,
-                        rank,
-                        constraint: lookup_constr,
-                    });
                 }
 
                 state
