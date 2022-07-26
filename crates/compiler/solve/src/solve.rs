@@ -3,7 +3,7 @@ use crate::ability::{
     CheckedDerives, ObligationCache, PendingDerivesTable, Resolved,
 };
 use crate::module::Solved;
-use crate::specialize::{compact_lambda_sets_of_vars, SolvePhase};
+use crate::specialize::{compact_lambda_sets_of_vars, DerivedEnv, SolvePhase};
 use bumpalo::Bump;
 use roc_can::abilities::{AbilitiesStore, MemberSpecializationInfo};
 use roc_can::constraint::Constraint::{self, *};
@@ -588,14 +588,17 @@ fn run_in_place(
     // Now that the module has been solved, we can run through and check all
     // types claimed to implement abilities. This will also tell us what derives
     // are legal, which we need to register.
+    let derived_env = DerivedEnv {
+        derived_module: &derived_module,
+        exposed_types: exposed_by_module,
+    };
     let new_must_implement = compact_lambda_sets_of_vars(
         subs,
-        &derived_module,
+        &derived_env,
         &arena,
         &mut pools,
         deferred_uls_to_resolve,
         &SolvePhase { abilities_store },
-        exposed_by_module,
     );
     problems.extend(obligation_cache.check_obligations(
         subs,

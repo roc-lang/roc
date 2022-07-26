@@ -112,6 +112,12 @@ impl Phase for SolvePhase<'_> {
     }
 }
 
+pub struct DerivedEnv<'a> {
+    pub derived_module: &'a SharedDerivedModule,
+    /// Exposed types needed by the derived module.
+    pub exposed_types: &'a ExposedByModule,
+}
+
 #[cfg(debug_assertions)]
 fn trace_compaction_step_1(subs: &Subs, c_a: Variable, uls_a: &[Variable]) {
     let c_a = roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(c_a), subs);
@@ -235,12 +241,11 @@ fn unique_unspecialized_lambda(subs: &Subs, c_a: Variable, uls: &[Uls]) -> Optio
 #[must_use]
 pub fn compact_lambda_sets_of_vars<P: Phase>(
     subs: &mut Subs,
-    derived_module: &SharedDerivedModule,
+    derived_env: &DerivedEnv,
     arena: &Bump,
     pools: &mut Pools,
     uls_of_var: UlsOfVar,
     phase: &P,
-    exposed_by_module: &ExposedByModule,
 ) -> MustImplementConstraints {
     // let mut seen = VecSet::default();
     let mut must_implement = MustImplementConstraints::default();
@@ -365,16 +370,8 @@ pub fn compact_lambda_sets_of_vars<P: Phase>(
             //     continue;
             // }
 
-            let (new_must_implement, new_uls_of_var) = compact_lambda_set(
-                subs,
-                derived_module,
-                arena,
-                pools,
-                c_a,
-                l,
-                phase,
-                exposed_by_module,
-            );
+            let (new_must_implement, new_uls_of_var) =
+                compact_lambda_set(subs, derived_env, arena, pools, c_a, l, phase);
 
             must_implement.extend(new_must_implement);
             uls_of_var_queue.extend(new_uls_of_var.drain());
@@ -390,13 +387,12 @@ pub fn compact_lambda_sets_of_vars<P: Phase>(
 #[allow(clippy::too_many_arguments)]
 fn compact_lambda_set<P: Phase>(
     subs: &mut Subs,
-    derived_module: &SharedDerivedModule,
+    derived_env: &DerivedEnv,
     arena: &Bump,
     pools: &mut Pools,
     resolved_concrete: Variable,
     this_lambda_set: Variable,
     phase: &P,
-    exposed_by_module: &ExposedByModule,
 ) -> (MustImplementConstraints, UlsOfVar) {
     // 3. For each `l` in `uls_a` with unique unspecialized lambda `C:f:r`:
     //    1. Let `t_f1` be the directly ambient function of the lambda set containing `C:f:r`. Remove `C:f:r` from `t_f1`'s lambda set.
@@ -456,12 +452,11 @@ fn compact_lambda_set<P: Phase>(
 
     let specialization_ambient_function_var = get_specialization_lambda_set_ambient_function(
         subs,
-        derived_module,
+        derived_env,
         phase,
         f,
         r,
         specialization_key,
-        exposed_by_module,
         target_rank,
     );
 
@@ -550,12 +545,11 @@ fn make_specialization_decision(subs: &Subs, var: Variable) -> SpecializeDecisio
 #[allow(clippy::too_many_arguments)]
 fn get_specialization_lambda_set_ambient_function<P: Phase>(
     subs: &mut Subs,
-    derived_module: &SharedDerivedModule,
+    derived_env: &DerivedEnv,
     phase: &P,
     ability_member: Symbol,
     lset_region: u8,
     specialization_key: SpecializationTypeKey,
-    exposed_by_module: &ExposedByModule,
     target_rank: Rank,
 ) -> Result<Variable, ()> {
     match specialization_key {
@@ -608,10 +602,10 @@ fn get_specialization_lambda_set_ambient_function<P: Phase>(
         }
 
         SpecializationTypeKey::Derived(derive_key) => {
-            let mut derived_module = derived_module.lock().unwrap();
+            let mut derived_module = derived_env.derived_module.lock().unwrap();
 
             let (_, _, specialization_lambda_sets) =
-                derived_module.get_or_insert(exposed_by_module, derive_key);
+                derived_module.get_or_insert(derived_env.exposed_types, derive_key);
 
             let specialized_lambda_set = *specialization_lambda_sets
                 .get(&lset_region)
