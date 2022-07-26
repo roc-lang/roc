@@ -169,6 +169,9 @@ comptime {
     if (builtin.target.cpu.arch != .wasm32) {
         exportUtilsFn(expect.expectFailedStart, "expect_failed_start");
         exportUtilsFn(expect.expectFailedFinalize, "expect_failed_finalize");
+
+        // sets the buffer used for expect failures
+        @export(expect.setMmappedFile, .{ .name = "set_mmapped_file", .linkage = .Strong });
     }
 
     if (builtin.target.cpu.arch == .aarch64) {

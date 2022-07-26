@@ -8,6 +8,8 @@ use roc_build::link::{LinkType, LinkingStrategy};
 use roc_collections::VecMap;
 use roc_error_macros::{internal_error, user_error};
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
+use roc_gen_llvm::run_roc::RocCallResult;
+use roc_gen_llvm::run_roc_dylib;
 use roc_load::{Expectations, LoadingProblem, Threading};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
@@ -360,26 +362,6 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         }
     });
 
-    unsafe {
-        let name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
-        let cstring = CString::new(name).unwrap();
-        let shared_fd =
-            libc::shm_open(cstring.as_ptr().cast(), libc::O_RDWR | libc::O_CREAT, 0o666);
-
-        libc::ftruncate(shared_fd, SHM_SIZE);
-
-        let _shared_ptr = libc::mmap(
-            std::ptr::null_mut(),
-            4096,
-            libc::PROT_WRITE,
-            libc::MAP_SHARED,
-            shared_fd,
-            0,
-        );
-    }
-
-    // let target_valgrind = matches.is_present(FLAG_VALGRIND);
-
     let arena = &arena;
     let target = &triple;
     let opt_level = opt_level;
@@ -414,29 +396,41 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     )
     .unwrap();
 
-    let name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
-    let cstring = CString::new(name).unwrap();
-
     let arena = &bumpalo::Bump::new();
     let interns = arena.alloc(interns);
 
     let mut writer = std::io::stdout();
+
+    // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
+    let name = "/roc_expect_buffex";
+    let cstring = CString::new(name).unwrap();
 
     let shared_ptr = unsafe {
         let shared_fd = libc::shm_open(cstring.as_ptr().cast(), libc::O_RDWR, 0o666);
 
         libc::ftruncate(shared_fd, SHM_SIZE);
 
-        libc::mmap(
+        let ptr = libc::mmap(
             std::ptr::null_mut(),
             SHM_SIZE as usize,
             libc::PROT_READ | libc::PROT_WRITE,
             libc::MAP_SHARED,
             shared_fd,
             0,
-        )
-        .cast()
+        );
+
+        if ptr as isize == -1 {
+            internal_error!("could not set up the expect shared memory region")
+        }
+
+        ptr.cast()
     };
+
+    // communicate the mmapped name to zig/roc
+    let set_mmapped_file = run_roc_dylib!(lib, "set_mmapped_file", (*const i8, usize), ());
+    let mut result = RocCallResult::default();
+    unsafe { set_mmapped_file((cstring.as_ptr(), name.len() + 1), &mut result) };
+    std::mem::forget(cstring);
 
     let (failed, passed) = roc_repl_expect::run::run_expects(
         &mut writer,
@@ -1019,7 +1013,7 @@ unsafe fn roc_run_native_debug(
 
                         roc_dev_expect(
                             &mut std::io::stdout(),
-                            &arena,
+                            arena,
                             &mut expectations,
                             interns,
                             shared_memory_ptr,
