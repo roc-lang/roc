@@ -1091,53 +1091,23 @@ unsafe fn roc_run_native_debug(
 }
 
 fn render_expect_panic<'a>(
-    _arena: &'a Bump,
+    arena: &'a Bump,
     expect: ToplevelExpect,
     message: &str,
     expectations: &mut VecMap<ModuleId, Expectations>,
     interns: &'a Interns,
 ) {
-    use roc_reporting::report::Report;
-    use roc_reporting::report::RocDocAllocator;
-    use ven_pretty::DocAllocator;
-
     let module_id = expect.symbol.module_id();
     let data = expectations.get_mut(&module_id).unwrap();
 
-    // TODO cache these line offsets?
     let path = &data.path;
     let filename = data.path.to_owned();
-    let file_string = std::fs::read_to_string(path).unwrap();
-    let src_lines: Vec<_> = file_string.lines().collect();
+    let source = std::fs::read_to_string(path).unwrap();
 
-    let line_info = roc_region::all::LineInfo::new(&file_string);
-    let line_col_region = line_info.convert_region(expect.region);
+    use roc_reporting::error::expect::Renderer;
 
-    let alloc = RocDocAllocator::new(&src_lines, module_id, interns);
-
-    let doc = alloc.stack([
-        alloc.text("This expectation crashed while running:"),
-        alloc.region(line_col_region),
-        alloc.text("The crash reported this message:"),
-        alloc.text(message),
-    ]);
-
-    let report = Report {
-        title: "EXPECT FAILED".into(),
-        doc,
-        filename,
-        severity: roc_reporting::report::Severity::RuntimeError,
-    };
-
-    let mut buf = String::new();
-
-    report.render(
-        roc_reporting::report::RenderTarget::ColorTerminal,
-        &mut buf,
-        &alloc,
-        &roc_reporting::report::DEFAULT_PALETTE,
-    );
-
+    let renderer = Renderer::new(arena, interns, module_id, filename, &source);
+    let buf = renderer.render_panic(message, expect.region);
     println!("{}", buf);
 }
 
@@ -1209,7 +1179,7 @@ fn render_expect_failure<'a>(
     use roc_reporting::error::expect::Renderer;
 
     let renderer = Renderer::new(arena, interns, module_id, filename, &source);
-    let buf = renderer.render(
+    let buf = renderer.render_failure(
         subs,
         &symbols,
         &variables,

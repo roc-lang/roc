@@ -121,7 +121,7 @@ impl<'a> Renderer<'a> {
         self.line_info.convert_region(display_region)
     }
 
-    pub fn render(
+    pub fn render_failure(
         &self,
         subs: &mut Subs,
         symbols: &[Symbol],
@@ -137,6 +137,38 @@ impl<'a> Renderer<'a> {
 
         let report = Report {
             title: "EXPECT FAILED".into(),
+            doc,
+            filename: self.filename.clone(),
+            severity: crate::report::Severity::RuntimeError,
+        };
+
+        let mut buf = String::new();
+
+        report.render(
+            crate::report::RenderTarget::ColorTerminal,
+            &mut buf,
+            &self.alloc,
+            &crate::report::DEFAULT_PALETTE,
+        );
+
+        buf
+    }
+
+    pub fn render_panic(&self, message: &str, expect_region: Region) -> String {
+        use crate::report::Report;
+        use ven_pretty::DocAllocator;
+
+        let line_col_region = self.line_info.convert_region(expect_region);
+
+        let doc = self.alloc.stack([
+            self.alloc.text("This expectation crashed while running:"),
+            self.alloc.region(line_col_region),
+            self.alloc.text("The crash reported this message:"),
+            self.alloc.text(message),
+        ]);
+
+        let report = Report {
+            title: "EXPECT PANICKED".into(),
             doc,
             filename: self.filename.clone(),
             severity: crate::report::Severity::RuntimeError,
