@@ -1530,8 +1530,6 @@ fn solve(
             }
             &Resolve(OpportunisticResolve {
                 specialization_variable,
-                // TODO: remove me
-                specialization_expectation: _,
                 member,
                 specialization_id,
             }) => {
