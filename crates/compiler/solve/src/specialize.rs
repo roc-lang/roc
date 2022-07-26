@@ -495,6 +495,7 @@ fn compact_lambda_set<P: Phase>(
     (new_must_implement_ability, new_lambda_sets_to_specialize)
 }
 
+#[derive(Debug)]
 enum SpecializationTypeKey {
     Opaque(Symbol),
     Derived(DeriveKey),
