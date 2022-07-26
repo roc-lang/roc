@@ -6510,7 +6510,6 @@ mod solve_expr {
     }
 
     #[test]
-    #[ignore = "TODO: fix unification of derived types"]
     fn encode_record() {
         infer_queries!(
             indoc!(
@@ -6523,14 +6522,11 @@ mod solve_expr {
                      # ^^^^^^^^^
                 "#
             ),
-            @r#"
-            "Encoding#toEncoder(2) : { a : Str } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting",
-            "#
+            @"Encoding#toEncoder(2) : { a : Str } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting"
         )
     }
 
     #[test]
-    #[ignore = "TODO: fix unification of derived types"]
     fn encode_record_with_nested_custom_impl() {
         infer_queries!(
             indoc!(
@@ -6539,16 +6535,14 @@ mod solve_expr {
                     imports [Encode.{ toEncoder, Encoding, custom }]
                     provides [main] to "./platform"
 
-                A := {}
+                A := {} has [Encoding {toEncoder}]
                 toEncoder = \@A _ -> custom \b, _ -> b
 
                 main = toEncoder { a: @A {} }
                      # ^^^^^^^^^
                 "#
             ),
-            @r#"
-            "Encoding#toEncoder(2) : { a : A } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting",
-            "#
+            @"Encoding#toEncoder(2) : { a : A } -[[#Derived.toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting"
         )
     }
 
