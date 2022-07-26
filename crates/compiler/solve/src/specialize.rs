@@ -8,7 +8,9 @@ use roc_can::{
     module::ExposedByModule,
 };
 use roc_collections::{VecMap, VecSet};
-use roc_debug_flags::{dbg_do, ROC_TRACE_COMPACTION};
+use roc_debug_flags::dbg_do;
+#[cfg(debug_assertions)]
+use roc_debug_flags::ROC_TRACE_COMPACTION;
 use roc_derive::SharedDerivedModule;
 use roc_derive_key::{DeriveError, DeriveKey};
 use roc_error_macros::{internal_error, todo_abilities};

@@ -945,8 +945,8 @@ fn solve(
                             awaiting_specialization,
                         } = compact_lambda_sets_of_vars(
                             subs,
-                            &derived_env,
-                            &arena,
+                            derived_env,
+                            arena,
                             pools,
                             lambda_sets_to_specialize,
                             &SolvePhase { abilities_store },
@@ -1593,6 +1593,7 @@ fn solve(
     state
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compact_lambdas_and_check_obligations(
     arena: &Bump,
     pools: &mut Pools,
@@ -1609,8 +1610,8 @@ fn compact_lambdas_and_check_obligations(
         awaiting_specialization: new_awaiting,
     } = compact_lambda_sets_of_vars(
         subs,
-        &derived_env,
-        &arena,
+        derived_env,
+        arena,
         pools,
         lambda_sets_to_specialize,
         &SolvePhase { abilities_store },
