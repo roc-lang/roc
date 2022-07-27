@@ -129,7 +129,7 @@ andMap = \@Parser parser, @Parser mapper ->
                     WithConfig parser2 config2 ->
                         parser2
                         |> andMap (@Parser mapper)
-                        |> WithConfig config2  config2
+                        |> WithConfig config2
 
                     Arg config2 run2 ->
                         # Parse first the one and then the other.
