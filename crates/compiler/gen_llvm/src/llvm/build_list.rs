@@ -632,8 +632,6 @@ where
     let ctx = env.context;
     let builder = env.builder;
 
-    let entry = env.builder.get_insert_block().unwrap();
-
     // constant 1usize
     let one = env.ptr_int().const_int(1, false);
     let zero = env.ptr_int().const_zero();
@@ -651,13 +649,9 @@ where
     {
         builder.position_at_end(loop_bb);
 
-        let current_index_phi = env.builder.build_phi(env.ptr_int(), "current_index");
-        let current_index = current_index_phi.as_basic_value().into_int_value();
-
+        let current_index = builder.build_load(index_alloca, "index").into_int_value();
         let next_index = builder.build_int_add(current_index, one, "next_index");
-
-        current_index_phi
-            .add_incoming(&[(&next_index, loop_bb), (&env.ptr_int().const_zero(), entry)]);
+        builder.build_store(index_alloca, next_index);
 
         // The body of the loop
         loop_fn(current_index);
