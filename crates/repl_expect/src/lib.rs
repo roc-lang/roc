@@ -411,4 +411,41 @@ mod test {
             ),
         );
     }
+
+    #[test]
+    fn two_strings() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = 0
+
+                expect
+                    strings = ["Astra mortemque praestare gradatim", "Profundum et fundamentum"]
+
+                    strings == []
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                5│>  expect
+                6│>      vec1 = { x: 1.0, y: 2.0 }
+                7│>      vec2 = { x: 4.0, y: 8.0 }
+                8│>
+                9│>      vec1 == vec2
+
+                When it failed, these variables had these values:
+
+                vec1 : { x : Frac a, y : Frac b }
+                vec1 = { x: 1, y: 2 }
+
+                vec2 : { x : Frac a, y : Frac b }
+                vec2 = { x: 4, y: 8 }
+                "#
+            ),
+        );
+    }
 }
