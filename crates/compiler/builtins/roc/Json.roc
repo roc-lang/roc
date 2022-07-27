@@ -2,6 +2,7 @@ interface Json
     exposes [
         Json,
         toUtf8,
+        fromUtf8,
     ]
     imports [
         List,
@@ -60,6 +61,8 @@ Json := {} has [
      ]
 
 toUtf8 = @Json {}
+
+fromUtf8 = @Json {}
 
 numToBytes = \n ->
     n |> Num.toStr |> Str.toUtf8
