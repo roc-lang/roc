@@ -153,15 +153,19 @@ impl<'a> ReplApp<'a> for ExpectReplApp<'a> {
     fn call_function_dynamic_size<T, F>(
         &mut self,
         _main_fn_name: &str,
-        ret_bytes: usize,
+        _ret_bytes: usize,
         transform: F,
     ) -> T
     where
         F: Fn(&'a Self::Memory, usize) -> T,
         Self::Memory: 'a,
     {
+        *self.memory.bytes_read.borrow_mut() = 0;
+
         let result = transform(self.memory, self.offset);
-        self.offset += ret_bytes;
+
+        self.offset += *self.memory.bytes_read.borrow();
+
         result
     }
 }

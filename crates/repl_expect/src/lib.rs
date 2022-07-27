@@ -410,7 +410,6 @@ mod test {
     }
 
     #[test]
-    #[ignore]
     fn lookup_copy_record() {
         run_expect_test(
             indoc!(
