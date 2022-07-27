@@ -368,7 +368,6 @@ mod test {
     }
 
     #[test]
-    #[ignore]
     fn lookup_result() {
         run_expect_test(
             indoc!(
@@ -382,7 +381,6 @@ mod test {
                     expected : Result I64 [OutOfBounds]*
                     expected = Ok 42
 
-
                     List.get items 0 == expected
                 "#
             ),
@@ -392,8 +390,8 @@ mod test {
 
                  5│>  expect
                  6│>      items = [0, 1]
-                 7│>      expected = Ok 42
-                 8│>
+                 7│>      expected : Result I64 [OutOfBounds]*
+                 8│>      expected = Ok 42
                  9│>
                 10│>      List.get items 0 == expected
 
@@ -402,8 +400,8 @@ mod test {
                 items : List (Num a)
                 items = [0, 1]
 
-                expected : [Ok (Num a)]b
-                expected = Ok 140526413778648
+                expected : Result I64 [OutOfBounds]*
+                expected = Ok 42
                 "#
             ),
         );

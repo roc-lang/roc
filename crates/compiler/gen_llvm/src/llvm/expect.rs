@@ -1,5 +1,5 @@
 use crate::llvm::bitcode::call_bitcode_fn;
-use crate::llvm::build::Env;
+use crate::llvm::build::{store_roc_value, Env};
 use crate::llvm::build_list::{self, incrementing_elem_loop};
 use crate::llvm::convert::basic_type_from_layout;
 use inkwell::builder::Builder;
@@ -164,7 +164,20 @@ fn build_clone<'a, 'ctx, 'env>(
 
         Layout::Union(_union_layout) => {
             if layout.safe_to_memcpy() {
-                build_copy(env, ptr, offset, value)
+                let ptr = unsafe {
+                    env.builder
+                        .build_in_bounds_gep(ptr, &[offset], "at_current_offset")
+                };
+
+                let ptr_type = value.get_type().ptr_type(AddressSpace::Generic);
+                let ptr = env
+                    .builder
+                    .build_pointer_cast(ptr, ptr_type, "cast_ptr_type");
+
+                store_roc_value(env, layout, ptr, value);
+
+                let width = value.get_type().size_of().unwrap();
+                env.builder.build_int_add(offset, width, "new_offset")
             } else {
                 todo!()
             }
