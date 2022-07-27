@@ -1,5 +1,3 @@
-use std::cell::RefCell;
-
 use roc_module::symbol::Interns;
 use roc_mono::{
     ir::ProcLayout,

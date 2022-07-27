@@ -89,8 +89,6 @@ impl<'a> ReplApp<'a> for ExpectReplApp<'a> {
             ptr.read()
         };
 
-        self.offset += std::mem::size_of::<Return>();
-
         transform(self.memory, result)
     }
 
@@ -112,25 +110,7 @@ impl<'a> ReplApp<'a> for ExpectReplApp<'a> {
         F: Fn(&'a Self::Memory, usize) -> T,
         Self::Memory: 'a,
     {
-        let string_length = RefCell::new(0);
-
-        let result = self.call_function_dynamic_size(main_fn_name, 24, |memory, addr| {
-            let last_byte_addr = addr + (3 * std::mem::size_of::<usize>()) - 1;
-            let last_byte = memory.deref_i8(last_byte_addr);
-
-            let is_small = last_byte < 0;
-
-            if !is_small {
-                let length = memory.deref_usize(addr + std::mem::size_of::<usize>());
-                *string_length.borrow_mut() = length;
-            }
-
-            transform(memory, addr)
-        });
-
-        self.offset += *string_length.borrow();
-
-        result
+        self.call_function_dynamic_size(main_fn_name, 24, transform)
     }
 
     /// Run user code that returns a struct or union, whose size is provided as an argument
