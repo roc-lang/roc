@@ -14,32 +14,17 @@ pub const PROT_WRITE: c_int = 2;
 pub const MAP_SHARED: c_int = 0x0001;
 
 // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
-var MMAPPED_FILE: []const u8 = "/roc_expect_buffer";
+var SHARED_BUFFER: []u8 = undefined;
 
-pub fn setMmappedFile(ptr: [*]u8, length: usize) callconv(.C) usize {
-    MMAPPED_FILE = ptr[0..length];
+pub fn setSharedBuffer(ptr: [*]u8, length: usize) callconv(.C) usize {
+    SHARED_BUFFER = ptr[0..length];
 
     // the rust side expects that a pointer is returned
     return 0;
 }
 
 pub fn expectFailedStart() callconv(.C) [*]u8 {
-    const name = MMAPPED_FILE;
-
-    const shared_fd = shm_open(@ptrCast(*const i8, name), O_RDWR | O_CREAT, 0o666);
-
-    const shared_ptr = mmap(
-        null,
-        4096,
-        PROT_WRITE,
-        MAP_SHARED,
-        shared_fd,
-        0,
-    );
-
-    const ptr = @ptrCast([*]u8, shared_ptr);
-
-    return ptr;
+    return SHARED_BUFFER.ptr;
 }
 
 pub fn expectFailedFinalize() callconv(.C) void {

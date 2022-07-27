@@ -173,9 +173,9 @@ mod test {
         };
 
         // communicate the mmapped name to zig/roc
-        let set_mmapped_file = run_roc_dylib!(lib, "set_mmapped_file", (*const i8, usize), ());
+        let set_mmapped_file = run_roc_dylib!(lib, "set_shared_buffer", (*mut u8, usize), ());
         let mut result = RocCallResult::default();
-        unsafe { set_mmapped_file((cstring.as_ptr(), name.len() + 1), &mut result) };
+        unsafe { set_mmapped_file((shared_ptr, SHM_SIZE as usize), &mut result) };
         std::mem::forget(cstring);
 
         let mut writer = Vec::with_capacity(1024);

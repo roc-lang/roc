@@ -171,7 +171,7 @@ comptime {
         exportUtilsFn(expect.expectFailedFinalize, "expect_failed_finalize");
 
         // sets the buffer used for expect failures
-        @export(expect.setMmappedFile, .{ .name = "set_mmapped_file", .linkage = .Weak });
+        @export(expect.setSharedBuffer, .{ .name = "set_shared_buffer", .linkage = .Weak });
     }
 
     if (builtin.target.cpu.arch == .aarch64) {
