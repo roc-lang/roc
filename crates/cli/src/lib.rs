@@ -406,7 +406,8 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let cstring = CString::new(name).unwrap();
 
     let shared_ptr = unsafe {
-        let shared_fd = libc::shm_open(cstring.as_ptr().cast(), libc::O_RDWR, 0o666);
+        let flags = libc::O_RDWR | libc::O_CREAT;
+        let shared_fd = libc::shm_open(cstring.as_ptr().cast(), flags, 0o666);
 
         libc::ftruncate(shared_fd, SHM_SIZE);
 
@@ -420,7 +421,10 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         );
 
         if ptr as isize == -1 {
-            internal_error!("could not set up the expect shared memory region")
+            internal_error!(
+                "could not set up the expect shared memory region: {:?}",
+                std::io::Error::last_os_error()
+            )
         }
 
         ptr.cast()
