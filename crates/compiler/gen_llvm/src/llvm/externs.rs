@@ -21,12 +21,14 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
 
     match env.mode {
         super::build::LlvmBackendMode::CliTest => {
-            /* linkage is strong, which means this function is exposed */
+            // expose this function
+            let fn_val = module.get_function("set_mmapped_file").unwrap();
+            fn_val.set_linkage(Linkage::External);
         }
         _ => {
-            // set linkage to private, so it is DCE'd
+            // remove this function from the module
             let fn_val = module.get_function("set_mmapped_file").unwrap();
-            fn_val.set_linkage(Linkage::Private);
+            unsafe { fn_val.delete() };
         }
     }
 
