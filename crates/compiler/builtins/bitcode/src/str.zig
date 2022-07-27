@@ -2541,14 +2541,14 @@ pub fn strCloneTo(
         const slice = string.asSlice();
 
         var relative = string;
-        relative.str_bytes = @intToPtr(?[*]u8, offset + WIDTH); // i.e. just after the string struct
+        relative.str_bytes = @intToPtr(?[*]u8, extra_offset); // i.e. just after the string struct
 
         // write the string struct
         const array = relative.asArray();
         @memcpy(ptr + offset, &array, WIDTH);
 
         // write the string bytes just after the struct
-        @memcpy(ptr + extra_offset + WIDTH, slice.ptr, slice.len);
+        @memcpy(ptr + extra_offset, slice.ptr, slice.len);
 
         return extra_offset + slice.len;
     }

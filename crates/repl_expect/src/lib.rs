@@ -294,7 +294,6 @@ mod test {
     }
 
     #[test]
-    #[ignore]
     fn lookup_list_of_list_of_strings() {
         run_expect_test(
             indoc!(
@@ -315,18 +314,18 @@ mod test {
                 This expectation failed:
 
                 5│>  expect
-                6│>      a = ["foo"]
-                7│>      b = ["a string so long that it cannot be short"]
+                6│>      a = [["foo"], []]
+                7│>      b = [["a string so long that it cannot be short", "bar"]]
                 8│>
                 9│>      a == b
 
                 When it failed, these variables had these values:
 
-                `a` : `List` `Str`
-                `a` = ["foo"]
+                a : List (List Str)
+                a = [[""], []]
 
-                `b` : `List` `Str`
-                `b` = ["a string so long that it cannot be short"]
+                b : List (List Str)
+                b = [["a string so long that it cannot be short", "bar"]]
                 "#
             ),
         );
@@ -430,18 +429,52 @@ mod test {
                 This expectation failed:
 
                 5│>  expect
-                6│>      vec1 = { x: 1.0, y: 2.0 }
-                7│>      vec2 = { x: 4.0, y: 8.0 }
-                8│>
-                9│>      vec1 == vec2
+                6│>      strings = ["Astra mortemque praestare gradatim", "Profundum et fundamentum"]
+                7│>
+                8│>      strings == []
 
                 When it failed, these variables had these values:
 
-                vec1 : { x : Frac a, y : Frac b }
-                vec1 = { x: 1, y: 2 }
+                strings : List Str
+                strings = ["Astra mortemque praestare gradatim", "Profundum et fundamentum"]
+                "#
+            ),
+        );
+    }
 
-                vec2 : { x : Frac a, y : Frac b }
-                vec2 = { x: 4, y: 8 }
+    #[test]
+    fn compare_long_strings() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = 0
+
+                expect
+                    a = "Astra mortemque praestare gradatim"
+                    b = "Profundum et fundamentum"
+
+                    a == b
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                5│>  expect
+                6│>      a = "Astra mortemque praestare gradatim"
+                7│>      b = "Profundum et fundamentum"
+                8│>
+                9│>      a == b
+
+                When it failed, these variables had these values:
+
+                a : Str
+                a = "Astra mortemque praestare gradatim"
+
+                b : Str
+                b = "Profundum et fundamentum"
                 "#
             ),
         );

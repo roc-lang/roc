@@ -13,6 +13,12 @@ use roc_region::all::Region;
 
 use super::build::{load_symbol_and_layout, Scope};
 
+#[derive(Debug, Clone, Copy)]
+struct Cursors<'ctx> {
+    offset: IntValue<'ctx>,
+    extra_offset: IntValue<'ctx>,
+}
+
 fn pointer_at_offset<'ctx>(
     bd: &Builder<'ctx>,
     ptr: PointerValue<'ctx>,
@@ -127,15 +133,28 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
 
         let (value, layout) = load_symbol_and_layout(scope, lookup);
 
-        offset = build_clone(
+        let stack_size = env
+            .ptr_int()
+            .const_int(layout.stack_size(env.target_info) as u64, false);
+
+        let mut extra_offset = env.builder.build_int_add(offset, stack_size, "offset");
+
+        let cursors = Cursors {
+            offset,
+            extra_offset,
+        };
+
+        extra_offset = build_clone(
             env,
             layout_ids,
             original_ptr,
-            offset,
+            cursors,
             value,
             *layout,
             WhenRecursive::Unreachable,
         );
+
+        offset = extra_offset;
     }
 
     {
@@ -164,25 +183,32 @@ enum WhenRecursive<'a> {
     Loop(UnionLayout<'a>),
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_clone<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     ptr: PointerValue<'ctx>,
-    offset: IntValue<'ctx>,
+    cursors: Cursors<'ctx>,
     value: BasicValueEnum<'ctx>,
     layout: Layout<'a>,
     when_recursive: WhenRecursive<'a>,
 ) -> IntValue<'ctx> {
     match layout {
-        Layout::Builtin(builtin) => {
-            build_clone_builtin(env, layout_ids, ptr, offset, value, builtin, when_recursive)
-        }
+        Layout::Builtin(builtin) => build_clone_builtin(
+            env,
+            layout_ids,
+            ptr,
+            cursors,
+            value,
+            builtin,
+            when_recursive,
+        ),
 
         Layout::Struct {
             field_layouts: _, ..
         } => {
             if layout.safe_to_memcpy() {
-                build_copy(env, ptr, offset, value)
+                build_copy(env, ptr, cursors.offset, value)
             } else {
                 todo!()
             }
@@ -194,7 +220,7 @@ fn build_clone<'a, 'ctx, 'env>(
             if layout.safe_to_memcpy() {
                 let ptr = unsafe {
                     env.builder
-                        .build_in_bounds_gep(ptr, &[offset], "at_current_offset")
+                        .build_in_bounds_gep(ptr, &[cursors.offset], "at_current_offset")
                 };
 
                 let ptr_type = value.get_type().ptr_type(AddressSpace::Generic);
@@ -205,7 +231,8 @@ fn build_clone<'a, 'ctx, 'env>(
                 store_roc_value(env, layout, ptr, value);
 
                 let width = value.get_type().size_of().unwrap();
-                env.builder.build_int_add(offset, width, "new_offset")
+                env.builder
+                    .build_int_add(cursors.offset, width, "new_offset")
             } else {
                 todo!()
             }
@@ -280,11 +307,12 @@ fn build_copy<'a, 'ctx, 'env>(
     env.builder.build_int_add(offset, width, "new_offset")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_clone_builtin<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     ptr: PointerValue<'ctx>,
-    offset: IntValue<'ctx>,
+    cursors: Cursors<'ctx>,
     value: BasicValueEnum<'ctx>,
     builtin: Builtin<'a>,
     when_recursive: WhenRecursive<'a>,
@@ -292,14 +320,23 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
     use Builtin::*;
 
     match builtin {
-        Int(_) | Float(_) | Bool | Decimal => build_copy(env, ptr, offset, value),
+        Int(_) | Float(_) | Bool | Decimal => {
+            build_copy(env, ptr, cursors.offset, value);
+
+            cursors.extra_offset
+        }
 
         Builtin::Str => {
             //
 
             call_bitcode_fn(
                 env,
-                &[ptr.into(), offset.into(), value],
+                &[
+                    ptr.into(),
+                    cursors.offset.into(),
+                    cursors.extra_offset.into(),
+                    value,
+                ],
                 bitcode::STR_CLONE_TO,
             )
             .into_int_value()
@@ -310,15 +347,10 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
             let list = value.into_struct_value();
             let (elements, len, _cap) = build_list::destructure(env.builder, list);
 
-            let list_width = env
-                .ptr_int()
-                .const_int(env.target_info.ptr_size() as u64 * 3, false);
-            let elements_offset = bd.build_int_add(offset, list_width, "new_offset");
-
-            let mut offset = offset;
+            let mut offset = cursors.offset;
 
             // we only copy the elements we actually have (and skip extra capacity)
-            offset = build_copy(env, ptr, offset, elements_offset.into());
+            offset = build_copy(env, ptr, offset, cursors.extra_offset.into());
             offset = build_copy(env, ptr, offset, len.into());
             offset = build_copy(env, ptr, offset, len.into());
 
@@ -348,23 +380,51 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
                     "elements",
                 );
 
-                let element_offset = bd.build_alloca(env.ptr_int(), "element_offset");
-                bd.build_store(element_offset, elements_start_offset);
+                // where we write the elements' stack representation
+                // let element_offset = bd.build_alloca(env.ptr_int(), "element_offset");
+                // bd.build_store(element_offset, elements_start_offset);
 
-                let body = |_index, element| {
-                    let current_offset = bd.build_load(element_offset, "element_offset");
+                // if the element has any pointers, we clone them to this offset
+                let rest_offset = bd.build_alloca(env.ptr_int(), "rest_offset");
+
+                let element_stack_size = env
+                    .ptr_int()
+                    .const_int(elem.stack_size(env.target_info) as u64, false);
+                let rest_start_offset = bd.build_int_add(
+                    cursors.extra_offset,
+                    bd.build_int_mul(len, element_stack_size, "elements_width"),
+                    "rest_start_offset",
+                );
+                bd.build_store(rest_offset, rest_start_offset);
+
+                let body = |index, element| {
+                    let current_offset =
+                        bd.build_int_mul(element_stack_size, index, "current_offset");
+                    let current_offset =
+                        bd.build_int_add(elements_start_offset, current_offset, "current_offset");
+                    let current_extra_offset = bd.build_load(rest_offset, "element_offset");
+
+                    let offset = current_offset; // env.ptr_int().const_int(60, false);
+                    let extra_offset = current_extra_offset.into_int_value(); // env.ptr_int().const_int(60 + 24, false);
 
                     let new_offset = build_clone(
                         env,
                         layout_ids,
                         ptr,
-                        current_offset.into_int_value(),
+                        Cursors {
+                            // offset: current_offset,
+                            // extra_offset: current_extra_offset.into_int_value(),
+                            offset,
+                            extra_offset,
+                        },
                         element,
                         *elem,
                         when_recursive,
                     );
 
-                    bd.build_store(element_offset, new_offset);
+                    // let new_offset = env.ptr_int().const_int(60 + 24 + 34, false);
+
+                    bd.build_store(rest_offset, new_offset);
                 };
 
                 let parent = env
@@ -375,7 +435,7 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
 
                 incrementing_elem_loop(env, parent, *elem, elements, len, "index", body);
 
-                bd.build_load(element_offset, "element_offset")
+                bd.build_load(rest_offset, "rest_start_offset")
                     .into_int_value()
             }
         }

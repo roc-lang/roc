@@ -54,8 +54,6 @@ impl ReplAppMemory for ExpectMemory {
             let length = self.deref_usize(addr + std::mem::size_of::<usize>());
             let _capacity = self.deref_usize(addr + 2 * std::mem::size_of::<usize>());
 
-            // subtract the last byte, which we've now read twice
-
             unsafe {
                 let ptr = self.start.add(offset);
                 let slice = std::slice::from_raw_parts(ptr, length);
