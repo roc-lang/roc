@@ -7353,7 +7353,7 @@ mod solve_expr {
                             A -> j a
                             #    ^
                             B -> j b
-                             #   ^
+                            #    ^
                     it
                 #   ^^
 
