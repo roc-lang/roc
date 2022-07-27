@@ -19,6 +19,17 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
     let usize_type = env.ptr_int();
     let i8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
 
+    match env.mode {
+        super::build::LlvmBackendMode::CliTest => {
+            /* linkage is strong, which means this function is exposed */
+        }
+        _ => {
+            // set linkage to private, so it is DCE'd
+            let fn_val = module.get_function("set_mmapped_file").unwrap();
+            fn_val.set_linkage(Linkage::Private);
+        }
+    }
+
     if !env.mode.has_host() {
         // roc_alloc
         {
