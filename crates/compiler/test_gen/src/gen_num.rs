@@ -1141,11 +1141,16 @@ fn gen_is_negative_f64() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn gen_is_zero_f64() {
+fn gen_is_zero_i64() {
     assert_evals_to!("Num.isZero 0", true, bool);
     assert_evals_to!("Num.isZero 0_0", true, bool);
-    assert_evals_to!("Num.isZero 0.0", true, bool);
     assert_evals_to!("Num.isZero 1", false, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn gen_is_zero_f64() {
+    assert_evals_to!("Num.isZero 0.0", true, bool);
 }
 
 #[test]
