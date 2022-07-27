@@ -1192,6 +1192,21 @@ test "countSegments: delimiter interspered" {
     try expectEqual(segments_count, 3);
 }
 
+test "countSegments: string equals delimiter" {
+    // Str.split "/" "/" == ["", ""]
+    // 2 segments
+    const str_delimiter_arr = "/";
+    const str_delimiter = RocStr.init(str_delimiter_arr, str_delimiter_arr.len);
+
+    defer {
+        str_delimiter.deinit();
+    }
+
+    const segments_count = countSegments(str_delimiter, str_delimiter);
+
+    try expectEqual(segments_count, 2);
+}
+
 // Str.countGraphemeClusters
 const grapheme = @import("helpers/grapheme.zig");
 pub fn countGraphemeClusters(string: RocStr) callconv(.C) usize {
