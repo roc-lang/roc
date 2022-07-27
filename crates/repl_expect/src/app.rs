@@ -1,5 +1,3 @@
-use std::cell::RefCell;
-
 use roc_parse::ast::Expr;
 use roc_repl_eval::{ReplApp, ReplAppMemory};
 use roc_std::RocStr;
@@ -7,14 +5,12 @@ use roc_target::TargetInfo;
 
 pub(crate) struct ExpectMemory {
     pub(crate) start: *const u8,
-    pub(crate) bytes_read: RefCell<usize>,
 }
 
 macro_rules! deref_number {
     ($name: ident, $t: ty) => {
         fn $name(&self, addr: usize) -> $t {
             let ptr = unsafe { self.start.add(addr) } as *const _;
-            *self.bytes_read.borrow_mut() += std::mem::size_of::<$t>();
             unsafe { std::ptr::read_unaligned(ptr) }
         }
     };
@@ -52,8 +48,6 @@ impl ReplAppMemory for ExpectMemory {
             let ptr = unsafe { self.start.add(addr) };
             let roc_str: &RocStr = unsafe { &*ptr.cast() };
 
-            *self.bytes_read.borrow_mut() += WIDTH - 1;
-
             roc_str.as_str()
         } else {
             let offset = self.deref_usize(addr);
@@ -61,7 +55,6 @@ impl ReplAppMemory for ExpectMemory {
             let _capacity = self.deref_usize(addr + 2 * std::mem::size_of::<usize>());
 
             // subtract the last byte, which we've now read twice
-            *self.bytes_read.borrow_mut() -= 1;
 
             unsafe {
                 let ptr = self.start.add(offset);
@@ -98,13 +91,7 @@ impl<'a> ReplApp<'a> for ExpectReplApp<'a> {
 
         self.offset += std::mem::size_of::<Return>();
 
-        *self.memory.bytes_read.borrow_mut() = 0;
-
-        let transformed = transform(self.memory, result);
-
-        self.offset += *self.memory.bytes_read.borrow();
-
-        transformed
+        transform(self.memory, result)
     }
 
     fn call_function_returns_roc_list<F>(&mut self, main_fn_name: &str, transform: F) -> Expr<'a>
@@ -160,12 +147,6 @@ impl<'a> ReplApp<'a> for ExpectReplApp<'a> {
         F: Fn(&'a Self::Memory, usize) -> T,
         Self::Memory: 'a,
     {
-        *self.memory.bytes_read.borrow_mut() = 0;
-
-        let result = transform(self.memory, self.offset);
-
-        self.offset += *self.memory.bytes_read.borrow();
-
-        result
+        transform(self.memory, self.offset)
     }
 }

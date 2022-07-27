@@ -30,10 +30,7 @@ pub fn get_values<'a>(
 ) -> Result<(usize, Vec<Expr<'a>>), ToAstProblem> {
     let mut result = Vec::with_capacity(variables.len());
 
-    let memory = ExpectMemory {
-        start,
-        bytes_read: RefCell::new(0),
-    };
+    let memory = ExpectMemory { start };
 
     let app = ExpectReplApp {
         memory: arena.alloc(memory),
