@@ -76,8 +76,6 @@ pub fn get_values<'a>(
 
 #[cfg(test)]
 mod test {
-    use std::ffi::CString;
-
     use indoc::indoc;
     use pretty_assertions::assert_eq;
     use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult, run_roc_dylib};
@@ -88,15 +86,6 @@ mod test {
     use crate::run::expect_mono_module_to_dylib;
 
     use super::*;
-
-    fn src_hash(src: &str) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let mut hash_state = DefaultHasher::new();
-        src.hash(&mut hash_state);
-        hash_state.finish()
-    }
 
     fn run_expect_test(source: &str, expected: &str) {
         let arena = bumpalo::Bump::new();
