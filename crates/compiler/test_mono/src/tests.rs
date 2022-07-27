@@ -1895,3 +1895,29 @@ fn issue_3560_nested_tag_constructor_is_newtype() {
         "#
     )
 }
+
+#[mono_test]
+fn decode_use_stdlib() {
+    indoc!(
+        r#"
+        app "test"
+            imports [Decode.{ Decoding }, Json]
+            provides [main] to "./platform"
+
+        MyNum := U8 has [Decoding {decoder: myDecoder}]
+
+        myDecoder =
+            Decode.custom \bytes, fmt ->
+                when Decode.decodeWith bytes Decode.u8 fmt is
+                    {result, rest} ->
+                        when result is
+                            Ok n -> {result: Ok (@MyNum n), rest}
+                            Err e -> {result: Err e, rest}
+
+        main =
+            when Decode.fromBytes [49, 53] Json.fromUtf8 is
+                Ok (@MyNum n) -> n
+                _ -> 101
+        "#
+    )
+}

@@ -10,6 +10,7 @@ use roc_collections::MutMap;
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
 use roc_module::symbol::ModuleId;
+use roc_solve::ability::AbilityResolver;
 use roc_solve::solve::Pools;
 use roc_solve::specialize::{compact_lambda_sets_of_vars, DerivedEnv, Phase};
 use roc_types::subs::{get_member_lambda_sets_at_region, Content, FlatType, LambdaSet};
@@ -94,6 +95,28 @@ impl AbilitiesView<'_> {
             AbilitiesView::World(wa) => wa.with_module_abilities_store(module, f),
             AbilitiesView::Module(store) => f(store),
         }
+    }
+}
+
+impl<'a> AbilityResolver for AbilitiesView<'a> {
+    fn member_parent_and_signature_var(
+        &self,
+        ability_member: roc_module::symbol::Symbol,
+    ) -> Option<(roc_module::symbol::Symbol, Variable)> {
+        self.with_module_abilities_store(ability_member.module_id(), |store| {
+            store
+                .member_def(ability_member)
+                .map(|def| (def.parent_ability, def.signature_var()))
+        })
+    }
+
+    fn get_implementation(
+        &self,
+        impl_key: roc_can::abilities::ImplKey,
+    ) -> Option<roc_types::types::MemberImpl> {
+        self.with_module_abilities_store(impl_key.opaque.module_id(), |store| {
+            store.get_implementation(impl_key).copied()
+        })
     }
 }
 

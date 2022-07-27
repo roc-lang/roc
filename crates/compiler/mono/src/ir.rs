@@ -3063,6 +3063,13 @@ fn specialize_external<'a>(
         }
     };
 
+    dbg!((
+        lambda_name.name(),
+        roc_types::subs::SubsFmtContent(
+            env.subs.get_content_without_compacting(body_var),
+            env.subs
+        )
+    ));
     let mut specialized_body = from_can(env, body_var, body, procs, layout_cache);
 
     match specialized {
@@ -5226,12 +5233,29 @@ fn late_resolve_ability_specialization<'a>(
         env.subs[spec_symbol_index]
     } else {
         // Otherwise, resolve by checking the able var.
-        let specialization = env
-            .abilities
-            .with_module_abilities_store(env.home, |store| {
-                resolve_ability_specialization(env.subs, store, member, specialization_var)
-                    .expect("Ability specialization is unknown - code generation cannot proceed!")
-            });
+        dbg!((
+            member,
+            roc_types::subs::SubsFmtContent(
+                env.subs.get_content_without_compacting(specialization_var),
+                env.subs
+            )
+        ));
+        let specialization =
+            resolve_ability_specialization(env.subs, &env.abilities, member, specialization_var)
+                .expect("Ability specialization is unknown - code generation cannot proceed!");
+        // let specialization = env
+        //     .abilities
+        //     .with_module_abilities_store(env.home, |store| {
+        //         dbg!((
+        //             member,
+        //             roc_types::subs::SubsFmtContent(
+        //                 env.subs.get_content_without_compacting(specialization_var),
+        //                 env.subs
+        //             )
+        //         ));
+        //         resolve_ability_specialization(env.subs, store, member, specialization_var)
+        //             .expect("Ability specialization is unknown - code generation cannot proceed!")
+        //     });
 
         match specialization {
             Resolved::Specialization(symbol) => symbol,
@@ -8788,6 +8812,13 @@ fn from_can_pattern_help<'a>(
             ..
         } => {
             // sorted fields based on the type
+            dbg!(
+                env.home,
+                roc_types::subs::SubsFmtContent(
+                    env.subs.get_content_without_compacting(*whole_var),
+                    env.subs
+                )
+            );
             let sorted_fields =
                 crate::layout::sort_record_fields(env.arena, *whole_var, env.subs, env.target_info)
                     .map_err(RuntimeError::from)?;
