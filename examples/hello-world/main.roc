@@ -6,8 +6,8 @@ app "helloWorld"
 Parser a := [
     Succeed a,
     Arg Config (List Str -> Result a [NotFound, WrongType]),
-    WithConfig Config (Parser a),
-    Default { parser : Parser a, default : a },
+    WithConfig (Parser a) Config,
+    Default (Parser a) a,
     Lazy ({} -> a)
 ]
 
@@ -45,9 +45,9 @@ parse = \@Parser parser, args ->
                 Err NotFound -> Err MissingRequiredArg
                 Err WrongType -> Err WrongType
 
-        Default opts ->
-            parse opts.parser args
-            |> Result.withDefault opts.default
+        Default parser2 defaultVal ->
+            parse parser2 args
+            |> Result.withDefault defaultVal
             |> Ok
 
         Lazy thunk -> Ok (thunk {})
@@ -97,8 +97,15 @@ andMap = \@Parser parser, @Parser mapper ->
                     Lazy thunk ->
                         Lazy \{} -> fn (thunk {})
 
-                    WithConfig config parser2 ->
-                        WithConfig config (andMap parser2 (@Parser mapper))
+                    WithConfig parser2 config ->
+                        parser2
+                        |> andMap (@Parser mapper)
+                        |> WithConfig config
+
+                    Default parser2 defaultVal ->
+                        parser2
+                        |> andMap (@Parser mapper)
+                        |> Default (fn defaultVal)
 
                     Arg config run ->
                         Arg config \args ->
@@ -119,17 +126,19 @@ andMap = \@Parser parser, @Parser mapper ->
                                 Ok fn -> Ok (fn (thunk {}))
                                 Err err -> Err err
 
-                    WithConfig config2 parser2 ->
-                        WithConfig config2 (andMap parser2 (@Parser mapper))
+                    WithConfig parser2 config2 ->
+                        parser2
+                        |> andMap (@Parser mapper)
+                        |> WithConfig config2  config2
 
                     Arg config2 run2 ->
-                        # Parses first the one and then the other.
+                        # Parse first the one and then the other.
                         combinedParser = Arg config2 \args ->
                             when run args is
                                 Ok fn -> run2 args |> Result.map fn
                                 Err err -> Err err
 
-                        # Stores the extra config
+                        # Store the extra config.
                         WithConfig config (@Parser combinedParser)
 
             Lazy thunk ->
