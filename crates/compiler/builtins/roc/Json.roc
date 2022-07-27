@@ -12,6 +12,10 @@ interface Json
             EncoderFormatting,
             appendWith,
         },
+        Decode,
+        Decode.{
+            DecoderFormatting,
+        }
     ]
 
 Json := {} has [
@@ -34,6 +38,24 @@ Json := {} has [
              list: encodeList,
              record: encodeRecord,
              tag: encodeTag,
+         },
+         DecoderFormatting {
+             u8: decodeU8,
+             u16: decodeU16,
+             u32: decodeU32,
+             u64: decodeU64,
+             u128: decodeU128,
+             i8: decodeI8,
+             i16: decodeI16,
+             i32: decodeI32,
+             i64: decodeI64,
+             i128: decodeI128,
+             f32: decodeF32,
+             f64: decodeF64,
+             dec: decodeDec,
+             bool: decodeBool,
+             string: decodeString,
+             list: decodeList,
          },
      ]
 
@@ -146,3 +168,103 @@ encodeTag = \name, payload ->
 
         List.append bytesWithPayload (Num.toU8 ']')
         |> List.append (Num.toU8 '}')
+
+takeWhile = \list, predicate ->
+    helper = \{taken, rest} ->
+        when List.first rest is
+            Ok elem ->
+                if predicate elem then
+                    helper {taken: List.append taken elem, rest: List.split rest 1 |> .others}
+                else
+                    {taken, rest}
+            Err _ -> {taken, rest}
+    helper {taken: [], rest: list}
+
+digits = List.range 48u8 58u8
+
+takeDigits = \bytes ->
+    takeWhile bytes \n -> List.contains digits n
+
+decodeU8 = Decode.custom \bytes, @Json {} ->
+    {taken, rest} = takeDigits bytes
+    when Str.fromUtf8 taken |> Result.try Str.toU8 is
+        Ok n -> {result: Ok n, rest}
+        Err _ -> {result: Err TooShort, rest}
+
+decodeU16 = Decode.custom \bytes, @Json {} ->
+    {taken, rest} = takeDigits bytes
+    when Str.fromUtf8 taken |> Result.try Str.toU16 is
+        Ok n -> {result: Ok n, rest}
+        Err _ -> {result: Err TooShort, rest}
+
+decodeU32 = Decode.custom \bytes, @Json {} ->
+    {taken, rest} = takeDigits bytes
+    when Str.fromUtf8 taken |> Result.try Str.toU32 is
+        Ok n -> {result: Ok n, rest}
+        Err _ -> {result: Err TooShort, rest}
+
+decodeU64 = Decode.custom \bytes, @Json {} ->
+    {taken, rest} = takeDigits bytes
+    when Str.fromUtf8 taken |> Result.try Str.toU64 is
+        Ok n -> {result: Ok n, rest}
+        Err _ -> {result: Err TooShort, rest}
+
+decodeU128 = Decode.custom \bytes, @Json {} ->
+    {taken, rest} = takeDigits bytes
+    when Str.fromUtf8 taken |> Result.try Str.toU128 is
+        Ok n -> {result: Ok n, rest}
+        Err _ -> {result: Err TooShort, rest}
+
+decodeI8 = Decode.custom \bytes, @Json {} ->
+    {taken, rest} = takeDigits bytes
+    when Str.fromUtf8 taken |> Result.try Str.toI8 is
+        Ok n -> {result: Ok n, rest}
+        Err _ -> {result: Err TooShort, rest}
+
+decodeI16 = Decode.custom \bytes, @Json {} ->
+    {taken, rest} = takeDigits bytes
+    when Str.fromUtf8 taken |> Result.try Str.toI16 is
+        Ok n -> {result: Ok n, rest}
+        Err _ -> {result: Err TooShort, rest}
+
+decodeI32 = Decode.custom \bytes, @Json {} ->
+    {taken, rest} = takeDigits bytes
+    when Str.fromUtf8 taken |> Result.try Str.toI32 is
+        Ok n -> {result: Ok n, rest}
+        Err _ -> {result: Err TooShort, rest}
+
+decodeI64 = Decode.custom \bytes, @Json {} ->
+    {taken, rest} = takeDigits bytes
+    when Str.fromUtf8 taken |> Result.try Str.toI64 is
+        Ok n -> {result: Ok n, rest}
+        Err _ -> {result: Err TooShort, rest}
+
+decodeI128 = Decode.custom \bytes, @Json {} ->
+    {taken, rest} = takeDigits bytes
+    when Str.fromUtf8 taken |> Result.try Str.toI128 is
+        Ok n -> {result: Ok n, rest}
+        Err _ -> {result: Err TooShort, rest}
+
+decodeF32 = Decode.custom \bytes, @Json {} ->
+    {taken, rest} = takeDigits bytes
+    when Str.fromUtf8 taken |> Result.try Str.toF32 is
+        Ok n -> {result: Ok n, rest}
+        Err _ -> {result: Err TooShort, rest}
+
+decodeF64 = Decode.custom \bytes, @Json {} ->
+    {taken, rest} = takeDigits bytes
+    when Str.fromUtf8 taken |> Result.try Str.toF64 is
+        Ok n -> {result: Ok n, rest}
+        Err _ -> {result: Err TooShort, rest}
+
+decodeDec = Decode.custom \bytes, @Json {} ->
+    {taken, rest} = takeDigits bytes
+    when Str.fromUtf8 taken |> Result.try Str.toDec is
+        Ok n -> {result: Ok n, rest}
+        Err _ -> {result: Err TooShort, rest}
+
+decodeBool = Decode.custom \bytes, @Json {} -> {result: Err TooShort, rest: bytes}
+decodeString = Decode.custom \bytes, @Json {} -> {result: Err TooShort, rest: bytes}
+decodeList = \decodeElem -> Decode.custom \bytes, @Json {} ->
+    when Decode.decodeWith bytes decodeElem (@Json {}) is
+        _ -> {result: Err TooShort, rest: bytes}
