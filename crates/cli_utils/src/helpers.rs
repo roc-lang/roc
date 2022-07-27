@@ -351,6 +351,11 @@ pub fn root_dir() -> PathBuf {
     path.pop();
     path.pop();
 
+    // running cargo with --target will put us in the target dir
+    if path.ends_with("target") {
+        path.pop();
+    }
+
     path
 }
 

@@ -16,7 +16,7 @@ rustPlatform.buildRustPackage {
 
   src = pkgs.nix-gitignore.gitignoreSource [] ./.;
 
-  cargoSha256 = "sha256-oSi9UIom3YowgfR1U4c6her3SsfeV//t6Dy3eOQaW9o=";
+  cargoSha256 = "sha256-ey1zHqiFhGNgjQLC6ATEH6i7RcuXJGcijGMcv9amn0w=";
 
   LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
 
@@ -37,11 +37,17 @@ rustPlatform.buildRustPackage {
   '';
 
   # required for zig
-  XDG_CACHE_HOME = "/build/xdgcache";
+  XDG_CACHE_HOME = "xdg_cache"; # prevents zig AccessDenied error github.com/ziglang/zig/issues/6810
   # nix does not store libs in /usr/lib or /lib
   NIX_GLIBC_PATH = if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";
   # want to see backtrace in case of failure
   RUST_BACKTRACE = 1;
+
+  # skip running rust tests, problems:
+  # building of example platforms requires network: Could not resolve host
+  # zig AccessDenied error github.com/ziglang/zig/issues/6810
+  # Once instance has previously been poisoned ??
+  doCheck = false;
 
   nativeBuildInputs = (with pkgs; [
     cmake
