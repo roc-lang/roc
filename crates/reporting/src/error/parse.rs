@@ -921,6 +921,27 @@ fn to_str_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
+        EString::MultilineInsufficientIndent(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(r"This multiline string is not sufficiently indented:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow(r"Lines in a multi-line string must be indented at least as "),
+                    alloc.reflow("much as the beginning \"\"\". This extra indentation is automatically removed "),
+                    alloc.reflow("from the string during compilation."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "INSUFFICIENT INDENT IN MULTI-LINE STRING".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
     }
 }
 fn to_expr_in_parens_report<'a>(
