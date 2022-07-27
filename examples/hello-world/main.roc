@@ -126,6 +126,8 @@ andMap = \@Parser parser, @Parser mapper ->
                                 Ok fn -> Ok (fn (thunk {}))
                                 Err err -> Err err
 
+                    # Default parser2 defaultVal ->
+
                     WithConfig parser2 config2 ->
                         parser2
                         |> andMap (@Parser mapper)
@@ -139,15 +141,41 @@ andMap = \@Parser parser, @Parser mapper ->
                                 Err err -> Err err
 
                         # Store the extra config.
-                        WithConfig config (@Parser combinedParser)
+                        @Parser combinedParser
+                        |> WithConfig config
 
             Lazy thunk ->
+                fn = thunk {}
+
                 when parser is
                     Succeed a ->
-                        Lazy \{} -> (thunk {}) a
+                        Lazy \{} -> fn a
 
                     Lazy innerThunk ->
-                        Lazy \{} -> (thunk {}) (innerThunk {})
+                        Lazy \{} -> fn (innerThunk {})
+
+                    WithConfig parser2 config ->
+                        parser2
+                        |> andMap (@Parser mapper)
+                        |> WithConfig config
+
+                    Default parser2 defaultVal ->
+                        parser2
+                        |> andMap (@Parser mapper)
+                        |> Default (fn defaultVal)
+
+                    Arg config run ->
+                        Arg config \args ->
+                            run args
+                            |> Result.map fn
+
+            # WithConfig parser2 config ->
+            #     parser2
+            #     |> andMap (@Parser mapper)
+            #     |> WithConfig config
+
+            # Default parser2 defaultVal ->
+            #     when parser is
 
     @Parser unwrapped
 
