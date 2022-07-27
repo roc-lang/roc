@@ -65,6 +65,11 @@ impl Wasm32Sized for usize {
     const ALIGN_OF_WASM: usize = 4;
 }
 
+impl Wasm32Sized for isize {
+    const SIZE_OF_WASM: usize = 4;
+    const ALIGN_OF_WASM: usize = 4;
+}
+
 impl<T: Wasm32Sized, U: Wasm32Sized> Wasm32Sized for (T, U) {
     const SIZE_OF_WASM: usize = T::SIZE_OF_WASM + U::SIZE_OF_WASM;
     const ALIGN_OF_WASM: usize = max(&[T::ALIGN_OF_WASM, U::ALIGN_OF_WASM]);
