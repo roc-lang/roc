@@ -689,7 +689,10 @@ fn encode_derived_list_of_records() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(all(
+    any(feature = "gen-llvm", feature = "gen-wasm"),
+    not(feature = "gen-llvm-wasm") // hits a stack limit in wasm3
+))]
 fn encode_derived_record_with_many_types() {
     assert_evals_to!(
         indoc!(
