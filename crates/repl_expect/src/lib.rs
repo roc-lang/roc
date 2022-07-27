@@ -6,7 +6,10 @@ use roc_mono::{
     layout::{CapturesNiche, LayoutCache},
 };
 use roc_parse::ast::Expr;
-use roc_repl_eval::eval::{jit_to_ast, ToAstProblem};
+use roc_repl_eval::{
+    eval::{jit_to_ast, ToAstProblem},
+    ReplAppMemory,
+};
 use roc_target::TargetInfo;
 use roc_types::subs::{Subs, Variable};
 
@@ -39,7 +42,10 @@ pub fn get_values<'a>(
 
     let app = arena.alloc(app);
 
-    for variable in variables {
+    for (i, variable) in variables.iter().enumerate() {
+        let start = app.memory.deref_usize(start_offset + i * 8);
+        app.offset = start;
+
         let expr = {
             let variable = *variable;
 

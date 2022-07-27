@@ -110,7 +110,21 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
 
     offset = write_header(env, original_ptr, offset, condition, region);
 
+    let after_header = offset;
+
+    let space_for_offsets = env
+        .ptr_int()
+        .const_int((lookups.len() * env.target_info.ptr_size()) as _, false);
+
+    let mut lookup_starts = bumpalo::collections::Vec::with_capacity_in(lookups.len(), env.arena);
+
+    offset = env
+        .builder
+        .build_int_add(offset, space_for_offsets, "offset");
+
     for lookup in lookups.iter() {
+        lookup_starts.push(offset);
+
         let (value, layout) = load_symbol_and_layout(scope, lookup);
 
         offset = build_clone(
@@ -122,6 +136,20 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
             *layout,
             WhenRecursive::Unreachable,
         );
+    }
+
+    {
+        let mut offset = after_header;
+
+        for lookup_start in lookup_starts {
+            build_copy(env, original_ptr, offset, lookup_start.into());
+
+            let ptr_width = env
+                .ptr_int()
+                .const_int(env.target_info.ptr_size() as _, false);
+
+            offset = env.builder.build_int_add(offset, ptr_width, "offset")
+        }
     }
 
     let one = env.ptr_int().const_int(1, false);
