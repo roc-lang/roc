@@ -7,7 +7,7 @@ Parser a := [
     Succeed a,
     Arg Config (List Str -> Result a [NotFound, WrongType]),
     WithConfig (Parser a) Config,
-    Default (Parser a) a,
+    # Default (Parser a) a,
     Lazy ({} -> a)
 ]
 
@@ -45,12 +45,19 @@ parse = \@Parser parser, args ->
                 Err NotFound -> Err MissingRequiredArg
                 Err WrongType -> Err WrongType
 
-        Default parser2 defaultVal ->
-            parse parser2 args
-            |> Result.withDefault defaultVal
-            |> Ok
+        # Default parser2 defaultVal ->
+        #     parse parser2 args
+        #     |> Result.withDefault defaultVal
+        #     |> Ok
 
         Lazy thunk -> Ok (thunk {})
+        WithConfig parser2 config ->
+            parse parser2 args
+
+expect
+    parser = argBool { help: "blah", long: "foo" }
+
+    parse parser ["foo"] == Ok True
 
 argBool : Config -> Parser Bool
 argBool = \config ->
@@ -102,10 +109,10 @@ andMap = \@Parser parser, @Parser mapper ->
                         |> andMap (@Parser mapper)
                         |> WithConfig config
 
-                    Default parser2 defaultVal ->
-                        parser2
-                        |> andMap (@Parser mapper)
-                        |> Default (fn defaultVal)
+                    # Default parser2 defaultVal ->
+                    #     parser2
+                    #     |> andMap (@Parser mapper)
+                    #     |> Default (fn defaultVal)
 
                     Arg config run ->
                         Arg config \args ->
@@ -159,17 +166,20 @@ andMap = \@Parser parser, @Parser mapper ->
                         |> andMap (@Parser mapper)
                         |> WithConfig config
 
-                    Default parser2 defaultVal ->
-                        parser2
-                        |> andMap (@Parser mapper)
-                        |> Default (fn defaultVal)
+                    # Default parser2 defaultVal ->
+                    #     parser2
+                    #     |> andMap (@Parser mapper)
+                    #     |> Default (fn defaultVal)
 
                     Arg config run ->
                         Arg config \args ->
                             run args
                             |> Result.map fn
 
-            WithConfig _ _ -> {}
+            WithConfig mapper2 config ->
+                @Parser parser
+                |> andMap mapper2
+                |> WithConfig config
 
     @Parser unwrapped
 
