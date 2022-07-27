@@ -789,7 +789,7 @@ fn strSplitHelp(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
     const delimiter_bytes_ptrs = delimiter.asU8ptr();
     const delimiter_len = delimiter.len();
 
-    if (str_len > delimiter_len and delimiter_len > 0) {
+    if (str_len >= delimiter_len and delimiter_len > 0) {
         const end_index: usize = str_len - delimiter_len + 1;
         while (str_index <= end_index) {
             var delimiter_index: usize = 0;
@@ -1104,7 +1104,7 @@ pub fn countSegments(string: RocStr, delimiter: RocStr) callconv(.C) usize {
 
     var count: usize = 1;
 
-    if (str_len > delimiter_len and delimiter_len > 0) {
+    if (str_len >= delimiter_len and delimiter_len > 0) {
         var str_index: usize = 0;
         const end_cond: usize = str_len - delimiter_len + 1;
 
