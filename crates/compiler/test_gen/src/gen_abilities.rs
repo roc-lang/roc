@@ -349,7 +349,7 @@ fn encode_use_stdlib() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_use_stdlib_without_wrapping_custom() {
     assert_evals_to!(
         indoc!(
@@ -374,7 +374,7 @@ fn encode_use_stdlib_without_wrapping_custom() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn to_encoder_encode_custom_has_capture() {
     assert_evals_to!(
         indoc!(
@@ -405,6 +405,9 @@ mod encode_immediate {
     #[cfg(feature = "gen-llvm")]
     use crate::helpers::llvm::assert_evals_to;
 
+    #[cfg(feature = "gen-wasm")]
+    use crate::helpers::wasm::assert_evals_to;
+
     #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
     use indoc::indoc;
 
@@ -412,7 +415,7 @@ mod encode_immediate {
     use roc_std::RocStr;
 
     #[test]
-    #[cfg(any(feature = "gen-llvm"))]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
     fn string() {
         assert_evals_to!(
             indoc!(
@@ -471,7 +474,7 @@ mod encode_immediate {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_record_one_field_string() {
     assert_evals_to!(
         indoc!(
@@ -493,7 +496,7 @@ fn encode_derived_record_one_field_string() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_record_two_fields_strings() {
     assert_evals_to!(
         indoc!(
@@ -516,7 +519,7 @@ fn encode_derived_record_two_fields_strings() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_nested_record_string() {
     assert_evals_to!(
         indoc!(
@@ -540,7 +543,7 @@ fn encode_derived_nested_record_string() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_tag_one_payload_string() {
     assert_evals_to!(
         indoc!(
@@ -564,7 +567,7 @@ fn encode_derived_tag_one_payload_string() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_tag_two_payloads_string() {
     assert_evals_to!(
         indoc!(
@@ -588,7 +591,7 @@ fn encode_derived_tag_two_payloads_string() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_nested_tag_string() {
     assert_evals_to!(
         indoc!(
@@ -613,7 +616,7 @@ fn encode_derived_nested_tag_string() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_nested_record_tag_record() {
     assert_evals_to!(
         indoc!(
@@ -638,7 +641,7 @@ fn encode_derived_nested_record_tag_record() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_list_string() {
     assert_evals_to!(
         indoc!(
@@ -662,7 +665,7 @@ fn encode_derived_list_string() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_list_of_records() {
     assert_evals_to!(
         indoc!(
@@ -686,7 +689,7 @@ fn encode_derived_list_of_records() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_record_with_many_types() {
     assert_evals_to!(
         indoc!(
