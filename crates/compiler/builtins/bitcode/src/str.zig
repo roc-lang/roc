@@ -2524,6 +2524,7 @@ test "getScalarUnsafe" {
 pub fn strCloneTo(
     ptr: [*]u8,
     offset: usize,
+    extra_offset: usize,
     string: RocStr,
 ) callconv(.C) usize {
     const WIDTH: usize = @sizeOf(RocStr);
@@ -2535,7 +2536,7 @@ pub fn strCloneTo(
             ptr[offset + i] = array[i];
         }
 
-        return offset + WIDTH;
+        return extra_offset;
     } else {
         const slice = string.asSlice();
 
@@ -2547,8 +2548,8 @@ pub fn strCloneTo(
         @memcpy(ptr + offset, &array, WIDTH);
 
         // write the string bytes just after the struct
-        @memcpy(ptr + offset + WIDTH, slice.ptr, slice.len);
+        @memcpy(ptr + extra_offset + WIDTH, slice.ptr, slice.len);
 
-        return offset + WIDTH + slice.len;
+        return extra_offset + slice.len;
     }
 }
