@@ -144,39 +144,14 @@ mod test {
         let arena = &bumpalo::Bump::new();
         let interns = arena.alloc(interns);
 
-        // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
-        let name = format!("/roc_expect_{}", src_hash(source));
-        let cstring = CString::new(&*name).unwrap();
+        const BUFFER_SIZE: usize = 1024;
 
-        const SHM_SIZE: i64 = 4096;
-
-        let shared_ptr = unsafe {
-            let shared_fd =
-                libc::shm_open(cstring.as_ptr().cast(), libc::O_RDWR | libc::O_CREAT, 0o666);
-
-            libc::ftruncate(shared_fd, SHM_SIZE);
-
-            let ptr = libc::mmap(
-                std::ptr::null_mut(),
-                SHM_SIZE as usize,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED,
-                shared_fd,
-                0,
-            );
-
-            if ptr as isize == -1 {
-                panic!("could not set up the expect shared memory region")
-            }
-
-            ptr.cast()
-        };
+        let mut shared_buffer = [0u8; BUFFER_SIZE];
 
         // communicate the mmapped name to zig/roc
-        let set_mmapped_file = run_roc_dylib!(lib, "set_shared_buffer", (*mut u8, usize), ());
+        let set_shared_buffer = run_roc_dylib!(lib, "set_shared_buffer", (*mut u8, usize), ());
         let mut result = RocCallResult::default();
-        unsafe { set_mmapped_file((shared_ptr, SHM_SIZE as usize), &mut result) };
-        std::mem::forget(cstring);
+        unsafe { set_shared_buffer((shared_buffer.as_mut_ptr(), BUFFER_SIZE), &mut result) };
 
         let mut writer = Vec::with_capacity(1024);
         let (_failed, _passed) = crate::run::run_expects(
@@ -186,7 +161,7 @@ mod test {
             interns,
             &lib,
             &mut expectations,
-            shared_ptr,
+            shared_buffer.as_mut_ptr(),
             expects,
         )
         .unwrap();
