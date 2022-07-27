@@ -169,13 +169,7 @@ andMap = \@Parser parser, @Parser mapper ->
                             run args
                             |> Result.map fn
 
-            # WithConfig parser2 config ->
-            #     parser2
-            #     |> andMap (@Parser mapper)
-            #     |> WithConfig config
-
-            # Default parser2 defaultVal ->
-            #     when parser is
+            WithConfig _ _ -> {}
 
     @Parser unwrapped
 
