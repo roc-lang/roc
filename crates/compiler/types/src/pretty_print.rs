@@ -202,7 +202,7 @@ fn find_names_needed(
                 );
             }
         }
-        Structure(Func(arg_vars, _closure_var, ret_var)) => {
+        Structure(Func(arg_vars, closure_var, ret_var)) => {
             for index in arg_vars.into_iter() {
                 let var = subs[index];
                 find_names_needed(
@@ -214,6 +214,15 @@ fn find_names_needed(
                     find_under_alias,
                 );
             }
+
+            find_names_needed(
+                *closure_var,
+                subs,
+                roots,
+                root_appearances,
+                names_taken,
+                find_under_alias,
+            );
 
             find_names_needed(
                 *ret_var,
