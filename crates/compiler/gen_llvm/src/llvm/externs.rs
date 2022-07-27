@@ -22,13 +22,15 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
     match env.mode {
         super::build::LlvmBackendMode::CliTest => {
             // expose this function
-            let fn_val = module.get_function("set_shared_buffer").unwrap();
-            fn_val.set_linkage(Linkage::External);
+            if let Some(fn_val) = module.get_function("set_shared_buffer") {
+                fn_val.set_linkage(Linkage::External);
+            }
         }
         _ => {
             // remove this function from the module
-            let fn_val = module.get_function("set_shared_buffer").unwrap();
-            unsafe { fn_val.delete() };
+            if let Some(fn_val) = module.get_function("set_shared_buffer") {
+                unsafe { fn_val.delete() };
+            }
         }
     }
 
