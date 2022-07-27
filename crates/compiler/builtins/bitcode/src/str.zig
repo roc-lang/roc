@@ -987,9 +987,7 @@ test "strSplitHelp: string equals delimiter" {
 
     strSplitHelp(array_ptr, str_delimiter, str_delimiter);
 
-    var expected = [2]RocStr{
-        RocStr.empty(), RocStr.empty()
-    };
+    var expected = [2]RocStr{ RocStr.empty(), RocStr.empty() };
 
     defer {
         for (array) |rocStr| {
