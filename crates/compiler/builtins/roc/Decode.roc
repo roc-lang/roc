@@ -69,11 +69,11 @@ fromBytesPartial = \bytes, fmt -> decodeWith bytes decoder fmt
 
 fromBytes : List U8, fmt -> Result val [Leftover (List U8)]DecodeError | val has Decoding, fmt has DecoderFormatting
 fromBytes = \bytes, fmt ->
-    { result, rest } = fromBytesPartial bytes fmt
-
-    if List.isEmpty rest then
-        when result is
-            Ok val -> Ok val
-            Err TooShort -> Err TooShort
-    else
-        Err (Leftover rest)
+    when fromBytesPartial bytes fmt is
+        { result, rest } ->
+            if List.isEmpty rest then
+                when result is
+                    Ok val -> Ok val
+                    Err TooShort -> Err TooShort
+            else
+                Err (Leftover rest)
