@@ -438,6 +438,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let (failed, passed) = roc_repl_expect::run::run_expects(
         &mut writer,
+        roc_reporting::report::RenderTarget::ColorTerminal,
         arena,
         interns,
         &lib,

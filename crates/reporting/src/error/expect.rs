@@ -9,19 +9,21 @@ use roc_types::{
     types::ErrorType,
 };
 
-use crate::report::{RocDocAllocator, RocDocBuilder};
+use crate::report::{RenderTarget, RocDocAllocator, RocDocBuilder};
 
 pub struct Renderer<'a> {
     arena: &'a Bump,
     alloc: RocDocAllocator<'a>,
     filename: PathBuf,
     line_info: LineInfo,
+    render_target: RenderTarget,
 }
 
 impl<'a> Renderer<'a> {
     pub fn new(
         arena: &'a Bump,
         interns: &'a Interns,
+        render_target: RenderTarget,
         module_id: ModuleId,
         filename: PathBuf,
         source: &'a str,
@@ -36,6 +38,7 @@ impl<'a> Renderer<'a> {
             alloc,
             line_info,
             filename,
+            render_target,
         }
     }
 
@@ -150,7 +153,7 @@ impl<'a> Renderer<'a> {
         let mut buf = String::new();
 
         report.render(
-            crate::report::RenderTarget::ColorTerminal,
+            self.render_target,
             &mut buf,
             &self.alloc,
             &crate::report::DEFAULT_PALETTE,
@@ -190,7 +193,7 @@ impl<'a> Renderer<'a> {
         let mut buf = String::new();
 
         report.render(
-            crate::report::RenderTarget::ColorTerminal,
+            self.render_target,
             &mut buf,
             &self.alloc,
             &crate::report::DEFAULT_PALETTE,

@@ -3957,8 +3957,11 @@ name = "roc_repl_expect"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
+ "indoc",
  "inkwell 0.1.0",
+ "libc",
  "libloading",
+ "pretty_assertions",
  "roc_build",
  "roc_builtins",
  "roc_collections",
@@ -3973,7 +3976,10 @@ dependencies = [
  "roc_std",
  "roc_target",
  "roc_types",
+ "strip-ansi-escapes",
  "target-lexicon",
+ "tempfile",
+ "test_gen",
 ]
 
 [[package]]

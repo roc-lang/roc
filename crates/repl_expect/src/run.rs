@@ -8,12 +8,14 @@ use roc_load::{Expectations, MonomorphizedModule};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::OptLevel;
 use roc_region::all::Region;
-use roc_reporting::error::expect::Renderer;
+use roc_reporting::{error::expect::Renderer, report::RenderTarget};
 use roc_target::TargetInfo;
 use target_lexicon::Triple;
 
+#[allow(clippy::too_many_arguments)]
 pub fn run_expects<W: std::io::Write>(
     writer: &mut W,
+    render_target: RenderTarget,
     arena: &Bump,
     interns: &Interns,
     lib: &libloading::Library,
@@ -27,6 +29,7 @@ pub fn run_expects<W: std::io::Write>(
     for expect in expects {
         let result = run_expect(
             writer,
+            render_target,
             arena,
             interns,
             lib,
@@ -44,8 +47,10 @@ pub fn run_expects<W: std::io::Write>(
     Ok((failed, passed))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_expect<W: std::io::Write>(
     writer: &mut W,
+    render_target: RenderTarget,
     arena: &Bump,
     interns: &Interns,
     lib: &libloading::Library,
@@ -69,7 +74,7 @@ fn run_expect<W: std::io::Write>(
         let filename = data.path.to_owned();
         let source = std::fs::read_to_string(path).unwrap();
 
-        let renderer = Renderer::new(arena, interns, module_id, filename, &source);
+        let renderer = Renderer::new(arena, interns, render_target, module_id, filename, &source);
 
         if let Err(roc_panic_message) = result {
             renderer.render_panic(writer, &roc_panic_message, expect.region)?;
@@ -112,7 +117,14 @@ pub fn roc_dev_expect(
     let filename = data.path.to_owned();
     let source = std::fs::read_to_string(&data.path).unwrap();
 
-    let renderer = Renderer::new(arena, interns, module_id, filename, &source);
+    let renderer = Renderer::new(
+        arena,
+        interns,
+        RenderTarget::ColorTerminal,
+        module_id,
+        filename,
+        &source,
+    );
 
     render_expect_failure(
         writer,
