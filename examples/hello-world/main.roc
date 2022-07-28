@@ -67,10 +67,12 @@ argBool = \config ->
         when findOneArg long short args is
             Err NotFound -> Err NotFound
             Ok foundArg ->
-                when foundArg is
-                    "true" -> Ok True
-                    "false" -> Ok False
-                    _ -> Err WrongType
+                if foundArg == "true" then
+                    Ok True
+                else if foundArg == "false" then
+                    Ok False
+                else
+                    Err WrongType
 
     @Parser (Arg config fn)
 
