@@ -1006,7 +1006,7 @@ define_builtins! {
 
         31 ATTR_INVALID: "#attr_invalid"
 
-        32 CLONE: "#clone" // internal function that clones a value into a buffer 
+        32 CLONE: "#clone" // internal function that clones a value into a buffer
     }
     // Fake module for synthesizing and storing derived implementations
     1 DERIVED_SYNTH: "#Derived" => {
