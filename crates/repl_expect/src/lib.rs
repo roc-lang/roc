@@ -556,4 +556,42 @@ mod test {
             ),
         );
     }
+
+    #[test]
+    fn result_with_strings() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = 0
+
+                expect
+                    a = Ok "Astra mortemque praestare gradatim"
+                    b = Err "Profundum et fundamentum"
+
+                    a == b
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                5│>  expect
+                6│>      a = Ok "Astra mortemque praestare gradatim"
+                7│>      b = Err "Profundum et fundamentum"
+                8│>
+                9│>      a == b
+
+                When it failed, these variables had these values:
+
+                a : [Ok Str]a
+                a = Ok "Astra mortemque praestare gradatim"
+
+                b : [Err Str]a
+                b = Err "Profundum et fundamentum"
+                "#
+            ),
+        );
+    }
 }

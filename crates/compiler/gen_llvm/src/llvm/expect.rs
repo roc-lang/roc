@@ -1,17 +1,21 @@
+use crate::debug_info_init;
 use crate::llvm::bitcode::call_str_bitcode_fn;
-use crate::llvm::build::{store_roc_value, Env};
+use crate::llvm::build::{get_tag_id, store_roc_value, Env};
 use crate::llvm::build_list::{self, incrementing_elem_loop};
-use crate::llvm::convert::basic_type_from_layout;
+use crate::llvm::convert::{basic_type_from_layout, RocUnion};
 use inkwell::builder::Builder;
-use inkwell::types::BasicType;
-use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
+use inkwell::module::Linkage;
+use inkwell::types::{BasicMetadataTypeEnum, BasicType};
+use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 use roc_region::all::Region;
 
-use super::build::{load_roc_value, load_symbol_and_layout, use_roc_value, Scope};
+use super::build::{
+    add_func, load_roc_value, load_symbol_and_layout, use_roc_value, FunctionSpec, Scope,
+};
 
 #[derive(Debug, Clone, Copy)]
 struct Cursors<'ctx> {
@@ -204,45 +208,15 @@ fn build_clone<'a, 'ctx, 'env>(
             when_recursive,
         ),
 
-        Layout::Struct { field_layouts, .. } => {
-            if layout.safe_to_memcpy() {
-                build_copy(env, ptr, cursors.offset, value)
-            } else {
-                let mut cursors = cursors;
-
-                let structure = value.into_struct_value();
-
-                for (i, field_layout) in field_layouts.iter().enumerate() {
-                    let field = env
-                        .builder
-                        .build_extract_value(structure, i as _, "extract")
-                        .unwrap();
-
-                    let field = use_roc_value(env, *field_layout, field, "field");
-
-                    let new_extra = build_clone(
-                        env,
-                        layout_ids,
-                        ptr,
-                        cursors,
-                        field,
-                        *field_layout,
-                        when_recursive,
-                    );
-
-                    let field_width = env
-                        .ptr_int()
-                        .const_int(field_layout.stack_size(env.target_info) as u64, false);
-
-                    cursors.extra_offset = new_extra;
-                    cursors.offset =
-                        env.builder
-                            .build_int_add(cursors.offset, field_width, "offset");
-                }
-
-                cursors.extra_offset
-            }
-        }
+        Layout::Struct { field_layouts, .. } => build_clone_struct(
+            env,
+            layout_ids,
+            ptr,
+            cursors,
+            value,
+            field_layouts,
+            when_recursive,
+        ),
 
         Layout::LambdaSet(_) => unreachable!("cannot compare closures"),
 
@@ -333,16 +307,234 @@ fn build_clone<'a, 'ctx, 'env>(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn build_clone_struct<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    ptr: PointerValue<'ctx>,
+    cursors: Cursors<'ctx>,
+    value: BasicValueEnum<'ctx>,
+    field_layouts: &[Layout<'a>],
+    when_recursive: WhenRecursive<'a>,
+) -> IntValue<'ctx> {
+    let layout = Layout::struct_no_name_order(field_layouts);
+
+    if layout.safe_to_memcpy() {
+        build_copy(env, ptr, cursors.offset, value)
+    } else {
+        let mut cursors = cursors;
+
+        let structure = value.into_struct_value();
+
+        for (i, field_layout) in field_layouts.iter().enumerate() {
+            let field = env
+                .builder
+                .build_extract_value(structure, i as _, "extract")
+                .unwrap();
+
+            let field = use_roc_value(env, *field_layout, field, "field");
+
+            let new_extra = build_clone(
+                env,
+                layout_ids,
+                ptr,
+                cursors,
+                field,
+                *field_layout,
+                when_recursive,
+            );
+
+            let field_width = env
+                .ptr_int()
+                .const_int(field_layout.stack_size(env.target_info) as u64, false);
+
+            cursors.extra_offset = new_extra;
+            cursors.offset = env
+                .builder
+                .build_int_add(cursors.offset, field_width, "offset");
+        }
+
+        cursors.extra_offset
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn build_clone_tag<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     ptr: PointerValue<'ctx>,
     cursors: Cursors<'ctx>,
     value: BasicValueEnum<'ctx>,
-    layout: UnionLayout<'a>,
+    union_layout: UnionLayout<'a>,
     when_recursive: WhenRecursive<'a>,
 ) -> IntValue<'ctx> {
-    todo!()
+    let layout = Layout::Union(union_layout);
+    let layout_id = layout_ids.get(Symbol::CLONE, &layout);
+    let fn_name = layout_id.to_symbol_string(Symbol::CLONE, &env.interns);
+
+    let function = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let block = env.builder.get_insert_block().expect("to be in a function");
+            let di_location = env.builder.get_current_debug_location().unwrap();
+
+            let function_type = env.ptr_int().fn_type(
+                &[
+                    env.context.i8_type().ptr_type(AddressSpace::Generic).into(),
+                    env.ptr_int().into(),
+                    env.ptr_int().into(),
+                    BasicMetadataTypeEnum::from(value.get_type()),
+                ],
+                false,
+            );
+
+            let function_value = add_func(
+                env.context,
+                env.module,
+                &fn_name,
+                FunctionSpec::known_fastcc(function_type),
+                Linkage::Private,
+            );
+
+            let subprogram = env.new_subprogram(&fn_name);
+            function_value.set_subprogram(subprogram);
+
+            env.dibuilder.finalize();
+
+            build_clone_tag_help(
+                env,
+                layout_ids,
+                union_layout,
+                when_recursive,
+                function_value,
+            );
+
+            env.builder.position_at_end(block);
+            env.builder
+                .set_current_debug_location(env.context, di_location);
+
+            function_value
+        }
+    };
+
+    let call = env.builder.build_call(
+        function,
+        &[
+            ptr.into(),
+            cursors.offset.into(),
+            cursors.extra_offset.into(),
+            value.into(),
+        ],
+        "build_clone_tag",
+    );
+
+    call.set_call_convention(function.get_call_conventions());
+
+    let result = call.try_as_basic_value().left().unwrap();
+
+    result.into_int_value()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_clone_tag_help<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    union_layout: UnionLayout<'a>,
+    when_recursive: WhenRecursive<'a>,
+    fn_val: FunctionValue<'ctx>,
+) {
+    use bumpalo::collections::Vec;
+
+    let context = &env.context;
+    let builder = env.builder;
+
+    // Add a basic block for the entry point
+    let entry = context.append_basic_block(fn_val, "entry");
+
+    builder.position_at_end(entry);
+
+    debug_info_init!(env, fn_val);
+
+    // Add args to scope
+    // let arg_symbol = Symbol::ARG_1;
+    // tag_value.set_name(arg_symbol.as_str(&env.interns));
+
+    let mut it = fn_val.get_param_iter();
+
+    let ptr = it.next().unwrap().into_pointer_value();
+    let offset = it.next().unwrap().into_int_value();
+    let extra_offset = it.next().unwrap().into_int_value();
+    let tag_value = it.next().unwrap();
+
+    let cursors = Cursors {
+        offset,
+        extra_offset,
+    };
+
+    let parent = fn_val;
+
+    debug_assert!(tag_value.is_pointer_value());
+
+    use UnionLayout::*;
+
+    match union_layout {
+        NonRecursive(&[]) => {
+            // we're comparing empty tag unions; this code is effectively unreachable
+            env.builder.build_unreachable();
+        }
+        NonRecursive(tags) => {
+            let id = get_tag_id(env, parent, &union_layout, tag_value);
+
+            let switch_block = env.context.append_basic_block(parent, "switch_block");
+            env.builder.build_unconditional_branch(switch_block);
+
+            let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
+
+            for (tag_id, field_layouts) in tags.iter().enumerate() {
+                let block = env.context.append_basic_block(parent, "tag_id_modify");
+                env.builder.position_at_end(block);
+
+                let raw_data_ptr = env
+                    .builder
+                    .build_struct_gep(
+                        tag_value.into_pointer_value(),
+                        RocUnion::TAG_DATA_INDEX,
+                        "tag_data",
+                    )
+                    .unwrap();
+
+                let layout = Layout::struct_no_name_order(field_layouts);
+                let basic_type = basic_type_from_layout(env, &layout);
+
+                let data_ptr = env.builder.build_pointer_cast(
+                    raw_data_ptr,
+                    basic_type.ptr_type(AddressSpace::Generic),
+                    "data_ptr",
+                );
+
+                let data = env.builder.build_load(data_ptr, "load_data");
+
+                let answer =
+                    build_clone(env, layout_ids, ptr, cursors, data, layout, when_recursive);
+
+                env.builder.build_return(Some(&answer));
+
+                cases.push((id.get_type().const_int(tag_id as u64, false), block));
+            }
+
+            env.builder.position_at_end(switch_block);
+
+            match cases.pop() {
+                Some((_, default)) => {
+                    env.builder.build_switch(id, default, &cases);
+                }
+                None => {
+                    // we're serializing an empty tag union; this code is effectively unreachable
+                    env.builder.build_unreachable();
+                }
+            }
+        }
+        _ => todo!(),
+    }
 }
 
 fn build_copy<'a, 'ctx, 'env>(
