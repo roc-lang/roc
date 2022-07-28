@@ -439,10 +439,8 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
             31 // red
         };
 
-        println!();
-
         println!(
-            "\x1B[{failed_color}m{failed}\x1B[39m failed and \x1B[32m{passed}\x1B[39m passed in {} ms.\n",
+            "\n\x1B[{failed_color}m{failed}\x1B[39m failed and \x1B[32m{passed}\x1B[39m passed in {} ms.\n",
             total_time.as_millis(),
         );
 

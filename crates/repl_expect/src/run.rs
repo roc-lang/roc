@@ -341,7 +341,5 @@ pub fn expect_mono_module_to_dylib<'a>(
         );
     }
 
-    env.module.print_to_file("/tmp/test.ll").unwrap();
-
     llvm_module_to_dylib(env.module, &target, opt_level).map(|lib| (lib, expects))
 }

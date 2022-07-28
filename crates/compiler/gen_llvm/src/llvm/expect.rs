@@ -380,10 +380,6 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
                     "elements",
                 );
 
-                // where we write the elements' stack representation
-                // let element_offset = bd.build_alloca(env.ptr_int(), "element_offset");
-                // bd.build_store(element_offset, elements_start_offset);
-
                 // if the element has any pointers, we clone them to this offset
                 let rest_offset = bd.build_alloca(env.ptr_int(), "rest_offset");
 
@@ -404,25 +400,23 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
                         bd.build_int_add(elements_start_offset, current_offset, "current_offset");
                     let current_extra_offset = bd.build_load(rest_offset, "element_offset");
 
-                    let offset = current_offset; // env.ptr_int().const_int(60, false);
-                    let extra_offset = current_extra_offset.into_int_value(); // env.ptr_int().const_int(60 + 24, false);
+                    let offset = current_offset;
+                    let extra_offset = current_extra_offset.into_int_value();
+
+                    let cursors = Cursors {
+                        offset,
+                        extra_offset,
+                    };
 
                     let new_offset = build_clone(
                         env,
                         layout_ids,
                         ptr,
-                        Cursors {
-                            // offset: current_offset,
-                            // extra_offset: current_extra_offset.into_int_value(),
-                            offset,
-                            extra_offset,
-                        },
+                        cursors,
                         element,
                         *elem,
                         when_recursive,
                     );
-
-                    // let new_offset = env.ptr_int().const_int(60 + 24 + 34, false);
 
                     bd.build_store(rest_offset, new_offset);
                 };
