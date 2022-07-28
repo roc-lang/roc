@@ -47,7 +47,7 @@ impl<T: Sized> From<RocCallResult<T>> for Result<T, String> {
 
 #[macro_export]
 macro_rules! run_roc_dylib {
-    ($lib:expr, $main_fn_name:expr, $argument_type:ty, $return_type:ty, $errors:expr) => {{
+    ($lib:expr, $main_fn_name:expr, $argument_type:ty, $return_type:ty) => {{
         use inkwell::context::Context;
         use roc_builtins::bitcode;
         use roc_gen_llvm::run_roc::RocCallResult;

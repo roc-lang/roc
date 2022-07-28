@@ -1,5 +1,6 @@
 pub use roc_gen_llvm::llvm::build::FunctionIterator;
 use roc_gen_llvm::llvm::build::{module_from_builtins, LlvmBackendMode};
+use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_load::{LoadedModule, MonomorphizedModule};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
@@ -258,6 +259,10 @@ pub fn gen_from_mono_module_llvm(
         mode: LlvmBackendMode::Binary,
         exposed_to_host: loaded.exposed_to_host.values.keys().copied().collect(),
     };
+
+    // does not add any externs for this mode (we have a host) but cleans up some functions around
+    // expects that would confuse the surgical linker
+    add_default_roc_externs(&env);
 
     roc_gen_llvm::llvm::build::build_procedures(
         &env,

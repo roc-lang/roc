@@ -2524,6 +2524,7 @@ test "getScalarUnsafe" {
 pub fn strCloneTo(
     ptr: [*]u8,
     offset: usize,
+    extra_offset: usize,
     string: RocStr,
 ) callconv(.C) usize {
     const WIDTH: usize = @sizeOf(RocStr);
@@ -2531,24 +2532,24 @@ pub fn strCloneTo(
         const array: [@sizeOf(RocStr)]u8 = @bitCast([@sizeOf(RocStr)]u8, string);
 
         var i: usize = 0;
-        while (i < array.len) : (i += 1) {
+        while (i < WIDTH) : (i += 1) {
             ptr[offset + i] = array[i];
         }
 
-        return offset + WIDTH;
+        return extra_offset;
     } else {
         const slice = string.asSlice();
 
         var relative = string;
-        relative.str_bytes = @intToPtr(?[*]u8, offset + WIDTH); // i.e. just after the string struct
+        relative.str_bytes = @intToPtr(?[*]u8, extra_offset); // i.e. just after the string struct
 
         // write the string struct
         const array = relative.asArray();
         @memcpy(ptr + offset, &array, WIDTH);
 
         // write the string bytes just after the struct
-        @memcpy(ptr + offset + WIDTH, slice.ptr, slice.len);
+        @memcpy(ptr + extra_offset, slice.ptr, slice.len);
 
-        return offset + WIDTH + slice.len;
+        return extra_offset + slice.len;
     }
 }

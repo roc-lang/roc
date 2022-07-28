@@ -20,6 +20,22 @@ roc_reporting = {path = "../reporting"}
 roc_std = {path = "../roc_std", default-features = false}
 roc_target = {path = "../compiler/roc_target"}
 roc_types = {path = "../compiler/types"}
+roc_gen_llvm = {path = "../compiler/gen_llvm"}
+roc_region = { path = "../compiler/region" }
+roc_build = { path = "../compiler/build" }
+
+libloading = "0.7.1"
+inkwell = { path = "../vendor/inkwell" }
+
+[dev-dependencies]
+test_gen = { path = "../compiler/test_gen" }
+libc = "0.2.106"
+roc_build = { path = "../compiler/build", features = ["target-aarch64", "target-x86_64"]  }
+tempfile = "3.2.0"
+indoc = "1.0.3"
+pretty_assertions = "1.0.0"
+strip-ansi-escapes = "0.1.1"
+
 
 [lib]
 name = "roc_repl_expect"
