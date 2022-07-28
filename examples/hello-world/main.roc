@@ -13,8 +13,8 @@ Parser a := [
 
 Config : {
     long : Str,
-    short ? Str,
-    help ? Str,
+    short : Str,
+    help : Str,
 }
 
 Help : {
@@ -55,14 +55,14 @@ parse = \@Parser parser, args ->
             parse parser2 args
 
 expect
-    parser = argBool { help: "blah", long: "foo" }
+    parser = argBool { help: "blah", long: "foo", short: "F" }
 
     parse parser ["foo"] == Ok True
 
 argBool : Config -> Parser Bool
 argBool = \config ->
     fn = \args ->
-        { long, short ? "" } = config
+        { long, short } = config
 
         when findOneArg long short args is
             Err NotFound -> Err NotFound
