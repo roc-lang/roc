@@ -14,8 +14,8 @@ use crate::solve::{Aliases, Pools, TypeError};
 
 #[derive(Debug, Clone)]
 pub enum AbilityImplError {
-    /// Promote this to an error that the type does not fully implement an ability
-    IncompleteAbility,
+    /// Promote this to a generic error that a type doesn't implement an ability
+    DoesNotImplement,
     /// Promote this error to a `TypeError::BadExpr` from elsewhere
     BadExpr(Region, Category, Variable),
     /// Promote this error to a `TypeError::BadPattern` from elsewhere
@@ -33,12 +33,8 @@ pub enum UnderivableReason {
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum Unfulfilled {
-    /// Incomplete custom implementation for an ability by an opaque type.
-    Incomplete {
-        typ: Symbol,
-        ability: Symbol,
-        missing_members: Vec<Loc<Symbol>>,
-    },
+    /// No claimed implementation of an ability for an opaque type.
+    OpaqueDoesNotImplement { typ: Symbol, ability: Symbol },
     /// Cannot derive implementation of an ability for a structural type.
     AdhocUnderivable {
         typ: ErrorType,
@@ -114,10 +110,6 @@ pub struct DeferredObligations {
     obligations: Vec<(MustImplementConstraints, AbilityImplError)>,
     /// Derives that module-defined opaques claim to have.
     pending_derives: PendingDerivesTable,
-    /// Derives that are claimed, but have also been determined to have
-    /// specializations. Maps to the first member specialization of the same
-    /// ability.
-    dominated_derives: VecMap<RequestedDeriveKey, Region>,
 }
 
 impl DeferredObligations {
@@ -125,19 +117,11 @@ impl DeferredObligations {
         Self {
             obligations: Default::default(),
             pending_derives,
-            dominated_derives: Default::default(),
         }
     }
 
     pub fn add(&mut self, must_implement: MustImplementConstraints, on_error: AbilityImplError) {
         self.obligations.push((must_implement, on_error));
-    }
-
-    pub fn dominate(&mut self, key: RequestedDeriveKey, impl_region: Region) {
-        // Only builtin abilities can be derived, and hence dominated.
-        if self.pending_derives.0.contains_key(&key) && !self.dominated_derives.contains_key(&key) {
-            self.dominated_derives.insert(key, impl_region);
-        }
     }
 
     // Rules for checking ability implementations:
@@ -159,13 +143,11 @@ impl DeferredObligations {
         let Self {
             obligations,
             pending_derives,
-            dominated_derives,
         } = self;
 
         let mut obligation_cache = ObligationCache {
             abilities_store,
             pending_derives: &pending_derives,
-            dominated_derives: &dominated_derives,
 
             impl_cache: VecMap::with_capacity(obligations.len()),
             derive_cache: VecMap::with_capacity(pending_derives.0.len()),
@@ -181,17 +163,6 @@ impl DeferredObligations {
                 Ok(()) => legal_derives.push(derive_key),
                 Err(problem) => problems.push(TypeError::UnfulfilledAbility(problem.clone())),
             }
-        }
-
-        for (derive_key, impl_region) in dominated_derives.iter() {
-            let derive_region = pending_derives.0.get(derive_key).unwrap().1;
-
-            problems.push(TypeError::DominatedDerive {
-                opaque: derive_key.opaque,
-                ability: derive_key.ability,
-                derive_region,
-                impl_region: *impl_region,
-            });
         }
 
         // Keep track of which types that have an incomplete ability were reported as part of
@@ -219,7 +190,7 @@ impl DeferredObligations {
 
             use AbilityImplError::*;
             match on_error {
-                IncompleteAbility => {
+                DoesNotImplement => {
                     // These aren't attached to another type error, so if these must_implement
                     // constraints aren't met, we'll emit a generic "this type doesn't implement an
                     // ability" error message at the end. We only want to do this if it turns out
@@ -267,8 +238,10 @@ impl DeferredObligations {
         // Go through and attach generic "type does not implement ability" errors, if they were not
         // part of a larger context.
         for mia in incomplete_not_in_context.into_iter() {
-            if let Err(unfulfilled) = obligation_cache.check_one(subs, mia) {
-                if !reported_in_context.contains(&mia) {
+            // If the obligation is already cached, we must have already reported it in another
+            // context.
+            if !obligation_cache.has_cached(mia) && !reported_in_context.contains(&mia) {
+                if let Err(unfulfilled) = obligation_cache.check_one(subs, mia) {
                     problems.push(TypeError::UnfulfilledAbility(unfulfilled.clone()));
                 }
             }
@@ -282,7 +255,6 @@ type ObligationResult = Result<(), Unfulfilled>;
 
 struct ObligationCache<'a> {
     abilities_store: &'a AbilitiesStore,
-    dominated_derives: &'a VecMap<RequestedDeriveKey, Region>,
     pending_derives: &'a PendingDerivesTable,
 
     impl_cache: VecMap<ImplKey, ObligationResult>,
@@ -301,6 +273,19 @@ impl ObligationCache<'_> {
         match typ {
             Obligated::Adhoc(var) => self.check_adhoc(subs, var, ability),
             Obligated::Opaque(opaque) => self.check_opaque_and_read(subs, opaque, ability).clone(),
+        }
+    }
+
+    fn has_cached(&self, mia: MustImplementAbility) -> bool {
+        match mia.typ {
+            Obligated::Opaque(opaque) => self.impl_cache.contains_key(&ImplKey {
+                opaque,
+                ability: mia.ability,
+            }),
+            Obligated::Adhoc(_) => {
+                // ad-hoc obligations are never cached
+                false
+            }
         }
     }
 
@@ -346,18 +331,8 @@ impl ObligationCache<'_> {
 
         match self.pending_derives.0.get(&derive_key) {
             Some(&(opaque_real_var, derive_region)) => {
-                if self.dominated_derives.contains_key(&derive_key) {
-                    // We have a derive, but also a custom implementation. The custom
-                    // implementation takes priority because we'll use that for codegen.
-                    // We'll report an error for the conflict, and whether the derive is
-                    // legal will be checked out-of-band.
-                    self.check_impl(impl_key);
-                    ReadCache::Impl
-                } else {
-                    // Only a derive
-                    self.check_derive(subs, derive_key, opaque_real_var, derive_region);
-                    ReadCache::Derive
-                }
+                self.check_derive(subs, derive_key, opaque_real_var, derive_region);
+                ReadCache::Derive
             }
             // Only an impl
             None => {
@@ -388,25 +363,14 @@ impl ObligationCache<'_> {
         }
 
         let ImplKey { opaque, ability } = impl_key;
+        let has_declared_impl = self
+            .abilities_store
+            .has_declared_implementation(opaque, ability);
 
-        let members_of_ability = self.abilities_store.members_of_ability(ability).unwrap();
-        let mut missing_members = Vec::new();
-        for &member in members_of_ability {
-            if self
-                .abilities_store
-                .get_implementation(member, opaque)
-                .is_none()
-            {
-                let root_data = self.abilities_store.member_def(member).unwrap();
-                missing_members.push(Loc::at(root_data.region, member));
-            }
-        }
-
-        let obligation_result = if !missing_members.is_empty() {
-            Err(Unfulfilled::Incomplete {
+        let obligation_result = if !has_declared_impl {
+            Err(Unfulfilled::OpaqueDoesNotImplement {
                 typ: opaque,
                 ability,
-                missing_members,
             })
         } else {
             Ok(())
@@ -437,11 +401,6 @@ impl ObligationCache<'_> {
             ability: derive_key.ability,
         };
         let opt_specialization_result = self.impl_cache.insert(impl_key, fake_fulfilled.clone());
-        let is_dominated = self.dominated_derives.contains_key(&derive_key);
-        debug_assert!(
-            opt_specialization_result.is_none() || is_dominated,
-            "This derive also has a specialization but it's not marked as dominated!"
-        );
 
         let old_deriving = self.derive_cache.insert(derive_key, fake_fulfilled.clone());
         debug_assert!(
@@ -671,7 +630,12 @@ pub fn resolve_ability_specialization(
 
     let resolved = match obligated {
         Obligated::Opaque(symbol) => {
-            match abilities_store.get_implementation(ability_member, symbol)? {
+            let impl_key = roc_can::abilities::ImplKey {
+                opaque: symbol,
+                ability_member,
+            };
+
+            match abilities_store.get_implementation(impl_key)? {
                 roc_types::types::MemberImpl::Impl(spec_symbol) => {
                     Resolved::Specialization(*spec_symbol)
                 }

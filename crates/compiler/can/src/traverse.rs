@@ -593,7 +593,7 @@ pub fn find_ability_member_and_owning_type_at(
         abilities_store
             .iter_declared_implementations()
             .find(|(_, member_impl)| matches!(member_impl, MemberImpl::Impl(sym) if *sym == symbol))
-            .map(|(spec, _)| spec.1)
+            .map(|(impl_key, _)| impl_key.opaque)
     }
 }
 
