@@ -11,7 +11,7 @@ use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 use roc_region::all::Region;
 
-use super::build::{load_symbol_and_layout, use_roc_value, Scope};
+use super::build::{load_roc_value, load_symbol_and_layout, use_roc_value, Scope};
 
 #[derive(Debug, Clone, Copy)]
 struct Cursors<'ctx> {
@@ -268,16 +268,38 @@ fn build_clone<'a, 'ctx, 'env>(
             }
         }
 
+        Layout::Boxed(inner_layout) => {
+            // write the offset
+            build_copy(env, ptr, cursors.offset, cursors.extra_offset.into());
+
+            let source = value.into_pointer_value();
+            let value = load_roc_value(env, *inner_layout, source, "inner");
+
+            let inner_width = env
+                .ptr_int()
+                .const_int(inner_layout.stack_size(env.target_info) as u64, false);
+
+            let new_extra = env
+                .builder
+                .build_int_add(cursors.offset, inner_width, "new_extra");
+
+            let cursors = Cursors {
+                offset: cursors.extra_offset,
+                extra_offset: new_extra,
+            };
+
+            build_clone(
+                env,
+                layout_ids,
+                ptr,
+                cursors,
+                value,
+                *inner_layout,
+                when_recursive,
+            )
+        }
+
         /*
-        Layout::Boxed(inner_layout) => build_box_eq(
-            env,
-            layout_ids,
-            when_recursive,
-            lhs_layout,
-            inner_layout,
-            lhs_val,
-            rhs_val,
-        ),
 
         Layout::RecursivePointer => match when_recursive {
             WhenRecursive::Unreachable => {
