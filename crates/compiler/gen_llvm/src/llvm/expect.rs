@@ -246,7 +246,7 @@ fn build_clone<'a, 'ctx, 'env>(
 
         Layout::LambdaSet(_) => unreachable!("cannot compare closures"),
 
-        Layout::Union(_union_layout) => {
+        Layout::Union(union_layout) => {
             if layout.safe_to_memcpy() {
                 let ptr = unsafe {
                     env.builder
@@ -260,11 +260,17 @@ fn build_clone<'a, 'ctx, 'env>(
 
                 store_roc_value(env, layout, ptr, value);
 
-                let width = value.get_type().size_of().unwrap();
-                env.builder
-                    .build_int_add(cursors.offset, width, "new_offset")
+                cursors.extra_offset
             } else {
-                todo!()
+                build_clone_tag(
+                    env,
+                    layout_ids,
+                    ptr,
+                    cursors,
+                    value,
+                    union_layout,
+                    WhenRecursive::Loop(union_layout),
+                )
             }
         }
 
@@ -299,8 +305,6 @@ fn build_clone<'a, 'ctx, 'env>(
             )
         }
 
-        /*
-
         Layout::RecursivePointer => match when_recursive {
             WhenRecursive::Unreachable => {
                 unreachable!("recursion pointers should never be compared directly")
@@ -312,29 +316,33 @@ fn build_clone<'a, 'ctx, 'env>(
                 let bt = basic_type_from_layout(env, &layout);
 
                 // cast the i64 pointer to a pointer to block of memory
-                let field1_cast = env
-                    .builder
-                    .build_bitcast(lhs_val, bt, "i64_to_opaque")
-                    .into_pointer_value();
+                let field1_cast = env.builder.build_bitcast(value, bt, "i64_to_opaque");
 
-                let field2_cast = env
-                    .builder
-                    .build_bitcast(rhs_val, bt, "i64_to_opaque")
-                    .into_pointer_value();
-
-                build_tag_eq(
+                build_clone_tag(
                     env,
                     layout_ids,
+                    ptr,
+                    cursors,
+                    field1_cast,
+                    union_layout,
                     WhenRecursive::Loop(union_layout),
-                    &union_layout,
-                    field1_cast.into(),
-                    field2_cast.into(),
                 )
             }
         },
-        */
-        _ => todo!(),
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_clone_tag<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    layout_ids: &mut LayoutIds<'a>,
+    ptr: PointerValue<'ctx>,
+    cursors: Cursors<'ctx>,
+    value: BasicValueEnum<'ctx>,
+    layout: UnionLayout<'a>,
+    when_recursive: WhenRecursive<'a>,
+) -> IntValue<'ctx> {
+    todo!()
 }
 
 fn build_copy<'a, 'ctx, 'env>(
