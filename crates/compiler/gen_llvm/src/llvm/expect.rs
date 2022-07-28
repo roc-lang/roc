@@ -1,4 +1,4 @@
-use crate::llvm::bitcode::call_bitcode_fn;
+use crate::llvm::bitcode::call_str_bitcode_fn;
 use crate::llvm::build::{store_roc_value, Env};
 use crate::llvm::build_list::{self, incrementing_elem_loop};
 use crate::llvm::convert::basic_type_from_layout;
@@ -11,7 +11,7 @@ use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 use roc_region::all::Region;
 
-use super::build::{load_symbol_and_layout, Scope};
+use super::build::{load_symbol_and_layout, use_roc_value, Scope};
 
 #[derive(Debug, Clone, Copy)]
 struct Cursors<'ctx> {
@@ -204,13 +204,43 @@ fn build_clone<'a, 'ctx, 'env>(
             when_recursive,
         ),
 
-        Layout::Struct {
-            field_layouts: _, ..
-        } => {
+        Layout::Struct { field_layouts, .. } => {
             if layout.safe_to_memcpy() {
                 build_copy(env, ptr, cursors.offset, value)
             } else {
-                todo!()
+                let mut cursors = cursors;
+
+                let structure = value.into_struct_value();
+
+                for (i, field_layout) in field_layouts.iter().enumerate() {
+                    let field = env
+                        .builder
+                        .build_extract_value(structure, i as _, "extract")
+                        .unwrap();
+
+                    let field = use_roc_value(env, *field_layout, field, "field");
+
+                    let new_extra = build_clone(
+                        env,
+                        layout_ids,
+                        ptr,
+                        cursors,
+                        field,
+                        *field_layout,
+                        when_recursive,
+                    );
+
+                    let field_width = env
+                        .ptr_int()
+                        .const_int(field_layout.stack_size(env.target_info) as u64, false);
+
+                    cursors.extra_offset = new_extra;
+                    cursors.offset =
+                        env.builder
+                            .build_int_add(cursors.offset, field_width, "offset");
+                }
+
+                cursors.extra_offset
             }
         }
 
@@ -329,14 +359,15 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
         Builtin::Str => {
             //
 
-            call_bitcode_fn(
+            call_str_bitcode_fn(
                 env,
+                &[value],
                 &[
                     ptr.into(),
                     cursors.offset.into(),
                     cursors.extra_offset.into(),
-                    value,
                 ],
+                crate::llvm::bitcode::BitcodeReturns::Basic,
                 bitcode::STR_CLONE_TO,
             )
             .into_int_value()

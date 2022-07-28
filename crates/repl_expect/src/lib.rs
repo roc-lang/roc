@@ -479,4 +479,43 @@ mod test {
             ),
         );
     }
+
+    #[test]
+    fn struct_with_strings() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = 0
+
+                expect
+                    a = {
+                        utopia: "Astra mortemque praestare gradatim",
+                        brillist: "Profundum et fundamentum",
+                    }
+
+                    a != a
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 5│>  expect
+                 6│>      a = {
+                 7│>          utopia: "Astra mortemque praestare gradatim",
+                 8│>          brillist: "Profundum et fundamentum",
+                 9│>      }
+                10│>
+                11│>      a != a
+
+                When it failed, these variables had these values:
+
+                a : { brillist : Str, utopia : Str }
+                a = { brillist: "Profundum et fundamentum", utopia: "Astra mortemque praestare gradatim" }
+                "#
+            ),
+        );
+    }
 }
