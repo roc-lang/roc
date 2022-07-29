@@ -928,51 +928,10 @@ fn solve(
                     aliases,
                     *source_index,
                 );
-                let target = *target;
 
-                match unify(&mut UEnv::new(subs), actual, target, Mode::EQ) {
-                    Success {
-                        vars,
-                        // ERROR NOT REPORTED
-                        must_implement_ability: _,
-                        lambda_sets_to_specialize,
-                        extra_metadata: _,
-                    } => {
-                        introduce(subs, rank, pools, &vars);
-
-                        let CompactionResult {
-                            obligations,
-                            awaiting_specialization,
-                        } = compact_lambda_sets_of_vars(
-                            subs,
-                            derived_env,
-                            arena,
-                            pools,
-                            lambda_sets_to_specialize,
-                            &SolvePhase { abilities_store },
-                        );
-                        // implement obligations not reported
-                        _ = obligations;
-                        // but awaited specializations must be recorded
-                        awaiting_specializations.union(awaiting_specialization);
-
-                        state
-                    }
-                    Failure(vars, _actual_type, _expected_type, _bad_impls) => {
-                        introduce(subs, rank, pools, &vars);
-
-                        // ERROR NOT REPORTED
-
-                        state
-                    }
-                    BadType(vars, _) => {
-                        introduce(subs, rank, pools, &vars);
-
-                        // ERROR NOT REPORTED
-
-                        state
-                    }
-                }
+                let actual_desc = subs.get(actual);
+                subs.union(*target, actual, actual_desc);
+                state
             }
             Lookup(symbol, expectation_index, region) => {
                 match env.get_var_by_symbol(symbol) {

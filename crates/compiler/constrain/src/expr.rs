@@ -422,12 +422,13 @@ pub fn constrain_expr(
             constraints.lookup(*symbol, expected, region)
         }
         &AbilityMember(symbol, specialization_id, specialization_var) => {
-            // make lookup constraint to lookup this symbol's type in the environment
-            let store_expected = constraints.equal_types_var(
+            // Save the expectation in the `specialization_var` so we know what to specialize, then
+            // lookup the member in the environment.
+            let store_expected = constraints.store(
+                expected.get_type_ref().clone(),
                 specialization_var,
-                expected,
-                Category::Storage(file!(), line!()),
-                region,
+                file!(),
+                line!(),
             );
             let lookup_constr = constraints.lookup(
                 symbol,
@@ -435,7 +436,7 @@ pub fn constrain_expr(
                 region,
             );
 
-            // Make sure we attempt to resolve the specialization, if we need to.
+            // Make sure we attempt to resolve the specialization, if we can.
             if let Some(specialization_id) = specialization_id {
                 env.resolutions_to_make.push(OpportunisticResolve {
                     specialization_variable: specialization_var,

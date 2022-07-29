@@ -6715,7 +6715,7 @@ mod solve_expr {
             ),
             @r#"
             A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
-            Id#id(3) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
+            Id#id(3) : a -[[] + a:id(3):1]-> ({} -[[] + a:id(3):2]-> a) | a has Id
             alias : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
             "#
             print_only_under_alias: true
@@ -7347,6 +7347,7 @@ mod solve_expr {
                 #^{-1}
 
                 f = \flag, a, b ->
+                #          ^  ^
                     it =
                 #   ^^
                         when flag is
@@ -7367,13 +7368,86 @@ mod solve_expr {
         jC : C -[[jC(8)]]-> (k -[[] + k:k(4):1]-> {}) | k has K
         jD : D -[[jD(9)]]-> (k -[[] + k:k(4):1]-> {}) | k has K
         E#k(10) : E -[[k(10)]]-> {}
-        it : k -[[] + j:j(2):2 + j:j(2):2]-> {} | j has J, k has K
-        J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + j:j(2):2 + j:j(2):2]-> {}) | j has J, k has K
-        J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + j:j(2):2 + j:j(2):2]-> {}) | j has J, k has K
-        it : k -[[] + j:j(2):2 + j:j(2):2]-> {} | j has J, k has K
-        f : [A, B], C, D -[[f(11)]]-> (E -[[] + j:j(2):2 + j:j(2):2]-> {}) | j has J
-        f A (@C {}) (@D {}) : E -[[] + j:j(2):2 + j:j(2):2]-> {} | j has J
+        a : j | j has J
+        b : j | j has J
+        it : k -[[] + j:j(2):2 + a:j(2):2]-> {} | a has J, j has J, k has K
+        J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + j:j(2):2 + a:j(2):2]-> {}) | a has J, j has J, k has K
+        J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + a:j(2):2 + j:j(2):2]-> {}) | a has J, j has J, k has K
+        it : k -[[] + j:j(2):2 + a:j(2):2]-> {} | a has J, j has J, k has K
+        f : [A, B], C, D -[[f(11)]]-> (E -[[k(10)]]-> {})
+        f A (@C {}) (@D {}) : E -[[k(10)]]-> {}
         main : {}
+        "###
+        );
+    }
+
+    #[test]
+    fn polymorphic_lambda_set_specialization_varying_over_multiple_variables_two_results() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                J has j : j -> (k -> {}) | j has J, k has K
+                K has k : k -> {} | k has K
+
+                C := {} has [J {j: jC}]
+                jC = \@C _ -> k
+                #^^{-1}
+
+                D := {} has [J {j: jD}]
+                jD = \@D _ -> k
+                #^^{-1}
+
+                E := {} has [K {k: kE}]
+                kE = \@E _ -> {}
+                #^^{-1}
+
+                F := {} has [K {k: kF}]
+                kF = \@F _ -> {}
+                #^^{-1}
+
+                f = \flag, a, b ->
+                #          ^  ^
+                    it =
+                #   ^^
+                        when flag is
+                            A -> j a
+                            #    ^
+                            B -> j b
+                            #    ^
+                    it
+                #   ^^
+
+                main =
+                #^^^^{-1}
+                    it =
+                #   ^^
+                        (f A (@C {}) (@D {}))
+                #        ^
+                    if True
+                        then it (@E {})
+                        #    ^^
+                        else it (@F {})
+                        #    ^^
+                "#
+            ),
+            @r###"
+        jC : C -[[jC(9)]]-> (k -[[] + k:k(4):1]-> {}) | k has K
+        jD : D -[[jD(10)]]-> (k -[[] + k:k(4):1]-> {}) | k has K
+        kE : E -[[kE(11)]]-> {}
+        kF : F -[[kF(12)]]-> {}
+        a : j | j has J
+        b : j | j has J
+        it : k -[[] + j:j(2):2 + a:j(2):2]-> {} | a has J, j has J, k has K
+        J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + j:j(2):2 + a:j(2):2]-> {}) | a has J, j has J, k has K
+        J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + a:j(2):2 + j:j(2):2]-> {}) | a has J, j has J, k has K
+        it : k -[[] + j:j(2):2 + a:j(2):2]-> {} | a has J, j has J, k has K
+        main : {}
+        it : k -[[] + k:k(4):1]-> {} | k has K
+        f : [A, B], C, D -[[f(13)]]-> (k -[[] + k:k(4):1]-> {}) | k has K
+        it : E -[[kE(11)]]-> {}
+        it : F -[[kF(12)]]-> {}
         "###
         );
     }
