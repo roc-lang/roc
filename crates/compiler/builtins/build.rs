@@ -162,21 +162,45 @@ fn copy_zig_builtins_to_target_dir(bitcode_path: &Path) {
 
     let zig_src_dir = bitcode_path.join("src");
 
-    std::fs::create_dir_all(&target_profile_dir).unwrap_or_else(|err| {
-        panic!(
-            "Failed to create output library directory for zig bitcode {:?}: {:?}",
-            target_profile_dir, err
-        );
-    });
-    let mut options = fs_extra::dir::CopyOptions::new();
-    options.content_only = true;
-    options.overwrite = true;
-    fs_extra::dir::copy(&zig_src_dir, &target_profile_dir, &options).unwrap_or_else(|err| {
+    cp_unless_zig_cache(&zig_src_dir, &target_profile_dir).unwrap_or_else(|err| {
         panic!(
             "Failed to copy zig bitcode files {:?} to {:?}: {:?}",
             zig_src_dir, target_profile_dir, err
         );
     });
+}
+
+// recursively copy all the .zig files from this directory, but do *not* recurse into zig-cache/
+fn cp_unless_zig_cache(src_dir: &Path, target_dir: &Path) -> io::Result<()> {
+    // Make sure the destination directory exists before we try to copy anything into it.
+    std::fs::create_dir_all(&target_dir).unwrap_or_else(|err| {
+        panic!(
+            "Failed to create output library directory for zig bitcode {:?}: {:?}",
+            target_dir, err
+        );
+    });
+
+    for entry in fs::read_dir(src_dir)? {
+        let src_path = entry?.path();
+        let src_filename = src_path.file_name().unwrap();
+
+        // Only copy individual files if they have the .zig extension
+        if src_path.extension().unwrap_or_default() == "zig" {
+            let dest = target_dir.join(src_filename);
+
+            fs::copy(&src_path, &dest).unwrap_or_else(|err| {
+                panic!(
+                    "Failed to copy zig bitcode file {:?} to {:?}: {:?}",
+                    src_path, dest, err
+                );
+            });
+        } else if src_path.is_dir() && src_filename != "zig-cache" {
+            // Recursively copy all directories except zig-cache
+            cp_unless_zig_cache(&src_path, &target_dir.join(src_filename))?;
+        }
+    }
+
+    Ok(())
 }
 
 fn run_command<S, I: Copy, P: AsRef<Path> + Copy>(path: P, command_str: &str, args: I)
