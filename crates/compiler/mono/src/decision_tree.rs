@@ -1387,8 +1387,6 @@ fn test_to_equality<'a>(
         }
 
         Test::IsInt(test_int, precision) => {
-            // TODO don't downcast i128 here
-            debug_assert!(i128::from_ne_bytes(test_int) <= i64::MAX as i128);
             let lhs = Expr::Literal(Literal::Int(test_int));
             let lhs_symbol = env.unique_symbol();
             stores.push((lhs_symbol, Layout::int_width(precision), lhs));

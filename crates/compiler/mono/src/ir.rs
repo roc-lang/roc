@@ -8957,7 +8957,7 @@ impl NumLiteral {
     fn to_pattern(&self) -> Pattern<'static> {
         match *self {
             NumLiteral::Int(n, w) => Pattern::IntLiteral(n, w),
-            NumLiteral::U128(_) => todo!(),
+            NumLiteral::U128(n) => Pattern::IntLiteral(n, IntWidth::U128),
             NumLiteral::Float(n, w) => Pattern::FloatLiteral(f64::to_bits(n), w),
             NumLiteral::Decimal(n) => Pattern::DecimalLiteral(n),
         }

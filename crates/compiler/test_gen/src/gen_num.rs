@@ -3682,3 +3682,39 @@ fn when_on_decimals() {
         i64
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn when_on_i128() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when 1701411834604692317316873037158841057i128 is
+                1701411834604692317316873037158841057 -> 42
+                32 -> 1
+                64 -> 2
+                _ -> 4
+            "#
+        ),
+        42,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn when_on_u128() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when 170141183460469231731687303715884105728u128 is
+                170141183460469231731687303715884105728u128 -> 42
+                32 -> 1
+                64 -> 2
+                _ -> 4
+            "#
+        ),
+        42,
+        i64
+    );
+}
