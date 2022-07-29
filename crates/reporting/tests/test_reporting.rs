@@ -10117,4 +10117,17 @@ All branches in an `if` must have the same type!
     determined to actually specialize `Id2`!
     "###
     );
+
+    test_report!(
+        mismatched_record_annotation,
+        indoc!(
+            r#"
+                x : { y : Str }
+                x = {}
+
+                x
+                "#
+        ),
+        @r""
+    );
 }
