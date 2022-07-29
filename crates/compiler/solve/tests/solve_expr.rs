@@ -3451,7 +3451,7 @@ mod solve_expr {
                 { id1, id2 }
                 "#
             ),
-            "{ id1 : q -> q, id2 : a -> a }",
+            "{ id1 : q -> q, id2 : q1 -> q1 }",
         );
     }
 
@@ -3966,7 +3966,7 @@ mod solve_expr {
                     { a, b }
                 "#
             ),
-            "{ a : { x : I64, y : I64, z : Num c }, b : { blah : Str, x : I64, y : I64, z : Num a } }",
+            "{ a : { x : I64, y : I64, z : Num c }, b : { blah : Str, x : I64, y : I64, z : Num c1 } }",
         );
     }
 
@@ -3997,7 +3997,7 @@ mod solve_expr {
                     { a, b }
                 "#
             ),
-            "{ a : { x : Num *, y : Float *, z : c }, b : { blah : Str, x : Num *, y : Float *, z : a } }",
+            "{ a : { x : Num *, y : Float *, z : c }, b : { blah : Str, x : Num *, y : Float *, z : c1 } }",
         );
     }
 
@@ -6157,7 +6157,7 @@ mod solve_expr {
                 hashEq = \x, y -> hash x == hash y
                 "#
             ),
-            "a, b -> Bool | a has Hash, b has Hash",
+            "a, a1 -> Bool | a has Hash, a1 has Hash",
         )
     }
 
