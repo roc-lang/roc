@@ -185,4 +185,10 @@ andMap = \@Parser parser, @Parser mapper ->
 
     @Parser unwrapped
 
-main = "Hello, World!\n"
+main =
+    parser = argBool { help: "blah", long: "foo", short: "F" }
+
+    if parse parser ["foo"] == Ok True then
+        "Hello, World!\n"
+    else
+        "nope!"
