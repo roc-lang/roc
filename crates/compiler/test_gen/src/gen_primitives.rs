@@ -944,7 +944,7 @@ fn when_peano() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = "Roc failed with message: ")]
 fn overflow_frees_list() {
     assert_evals_to!(
@@ -963,8 +963,8 @@ fn overflow_frees_list() {
             List.get myList index
                  "#
         ),
-        3,
-        i64
+        (3, 0),
+        (i64, i8)
     );
 }
 
