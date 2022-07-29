@@ -17,6 +17,7 @@ use roc_types::types::{
     RecordField,
 };
 use roc_unify::unify::unify;
+use roc_unify::unify::Env as UEnv;
 use roc_unify::unify::Mode;
 use roc_unify::unify::Unified::*;
 
@@ -227,7 +228,7 @@ fn solve<'a>(
                 expectation.get_type_ref(),
             );
 
-            match unify(subs, actual, expected, Mode::EQ) {
+            match unify(&mut UEnv::new(subs), actual, expected, Mode::EQ) {
                 Success {
                     vars,
                     must_implement_ability: _,
@@ -326,7 +327,7 @@ fn solve<'a>(
                         expectation.get_type_ref(),
                     );
 
-                    match unify(subs, actual, expected, Mode::EQ) {
+                    match unify(&mut UEnv::new(subs), actual, expected, Mode::EQ) {
                         Success {
                             vars,
                             must_implement_ability: _,
@@ -403,7 +404,7 @@ fn solve<'a>(
             );
 
             // TODO(ayazhafiz): presence constraints for Expr2/Type2
-            match unify(subs, actual, expected, Mode::EQ) {
+            match unify(&mut UEnv::new(subs), actual, expected, Mode::EQ) {
                 Success {
                     vars,
                     must_implement_ability: _,
@@ -717,7 +718,7 @@ fn solve<'a>(
             );
             let includes = type_to_var(arena, mempool, subs, rank, pools, cached_aliases, &tag_ty);
 
-            match unify(subs, actual, includes, Mode::PRESENT) {
+            match unify(&mut UEnv::new(subs), actual, includes, Mode::PRESENT) {
                 Success {
                     vars,
                     must_implement_ability: _,

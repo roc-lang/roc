@@ -1,6 +1,6 @@
 use crate::ability::{
     resolve_ability_specialization, type_implementing_specialization, AbilityImplError,
-    DeferredObligations, PendingDerivesTable, Resolved, Unfulfilled,
+    CheckedDerives, ObligationCache, PendingDerivesTable, Resolved,
 };
 use crate::module::Solved;
 use bumpalo::Bump;
@@ -21,6 +21,7 @@ use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_problem::can::CycleEntry;
 use roc_region::all::{Loc, Region};
+use roc_solve_problem::TypeError;
 use roc_types::subs::{
     self, get_member_lambda_sets_at_region, AliasVariables, Content, Descriptor, FlatType,
     GetSubsSlice, LambdaSet, Mark, OptVariable, Rank, RecordFields, Subs, SubsIndex, SubsSlice,
@@ -28,12 +29,12 @@ use roc_types::subs::{
 };
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, ErrorType, MemberImpl,
-    OptAbleType, OptAbleVar, PatternCategory, Reason, TypeExtension, Uls,
+    gather_fields_unsorted_iter, AliasCommon, AliasKind, Category, MemberImpl, OptAbleType,
+    OptAbleVar, Reason, TypeExtension, Uls,
 };
 use roc_unify::unify::{
-    unify, unify_introduced_ability_specialization, Mode, MustImplementConstraints, Obligated,
-    SpecializationLsetCollector, Unified::*,
+    unify, unify_introduced_ability_specialization, Env as UEnv, Mode, MustImplementConstraints,
+    Obligated, SpecializationLsetCollector, Unified::*,
 };
 
 // Type checking system adapted from Elm by Evan Czaplicki, BSD-3-Clause Licensed
@@ -85,32 +86,6 @@ use roc_unify::unify::{
 // Thus instead the inferred type for `id` is generalized (see the `generalize` function) to `a -> a`.
 // Ranks are used to limit the number of type variables considered for generalization. Only those inside
 // of the let (so those used in inferring the type of `\x -> x`) are considered.
-
-#[derive(Debug, Clone)]
-pub enum TypeError {
-    BadExpr(Region, Category, ErrorType, Expected<ErrorType>),
-    BadPattern(Region, PatternCategory, ErrorType, PExpected<ErrorType>),
-    CircularType(Region, Symbol, ErrorType),
-    CircularDef(Vec<CycleEntry>),
-    BadType(roc_types::types::Problem),
-    UnexposedLookup(Symbol),
-    UnfulfilledAbility(Unfulfilled),
-    BadExprMissingAbility(Region, Category, ErrorType, Vec<Unfulfilled>),
-    BadPatternMissingAbility(Region, PatternCategory, ErrorType, Vec<Unfulfilled>),
-    Exhaustive(roc_exhaustive::Error),
-    StructuralSpecialization {
-        region: Region,
-        typ: ErrorType,
-        ability: Symbol,
-        member: Symbol,
-    },
-    WrongSpecialization {
-        region: Region,
-        ability_member: Symbol,
-        expected_opaque: Symbol,
-        found_opaque: Symbol,
-    },
-}
 
 use roc_types::types::Alias;
 
@@ -674,8 +649,14 @@ fn run_in_place(
     let rank = Rank::toplevel();
     let arena = Bump::new();
 
+    let mut obligation_cache = ObligationCache::default();
+
     let pending_derives = PendingDerivesTable::new(subs, aliases, pending_derives);
-    let mut deferred_obligations = DeferredObligations::new(pending_derives);
+    let CheckedDerives {
+        legal_derives: _,
+        problems: derives_problems,
+    } = obligation_cache.check_derives(subs, abilities_store, pending_derives);
+    problems.extend(derives_problems);
 
     // Because we don't know what ability specializations are available until the entire module is
     // solved, we must wait to solve unspecialized lambda sets then.
@@ -692,7 +673,7 @@ fn run_in_place(
         subs,
         constraint,
         abilities_store,
-        &mut deferred_obligations,
+        &mut obligation_cache,
         &mut deferred_uls_to_resolve,
     );
 
@@ -708,11 +689,12 @@ fn run_in_place(
         &SolvePhase { abilities_store },
         exposed_by_module,
     );
-
-    deferred_obligations.add(new_must_implement, AbilityImplError::DoesNotImplement);
-
-    let (obligation_problems, _derived) = deferred_obligations.check_all(subs, abilities_store);
-    problems.extend(obligation_problems);
+    problems.extend(obligation_cache.check_obligations(
+        subs,
+        abilities_store,
+        new_must_implement,
+        AbilityImplError::DoesNotImplement,
+    ));
 
     state.env
 }
@@ -765,7 +747,7 @@ fn solve(
     subs: &mut Subs,
     constraint: &Constraint,
     abilities_store: &mut AbilitiesStore,
-    deferred_obligations: &mut DeferredObligations,
+    obligation_cache: &mut ObligationCache,
     deferred_uls_to_resolve: &mut UlsOfVar,
 ) -> State {
     let initial = Work::Constraint {
@@ -981,7 +963,7 @@ fn solve(
                 let expectation = &constraints.expectations[expectation_index.index()];
                 let expected = type_to_var(subs, rank, pools, aliases, expectation.get_type_ref());
 
-                match unify(subs, actual, expected, Mode::EQ) {
+                match unify(&mut UEnv::new(subs), actual, expected, Mode::EQ) {
                     Success {
                         vars,
                         must_implement_ability,
@@ -989,11 +971,15 @@ fn solve(
                         extra_metadata: _,
                     } => {
                         introduce(subs, rank, pools, &vars);
+
                         if !must_implement_ability.is_empty() {
-                            deferred_obligations.add(
+                            let new_problems = obligation_cache.check_obligations(
+                                subs,
+                                abilities_store,
                                 must_implement_ability,
                                 AbilityImplError::BadExpr(*region, category.clone(), actual),
                             );
+                            problems.extend(new_problems);
                         }
                         deferred_uls_to_resolve.union(lambda_sets_to_specialize);
 
@@ -1035,7 +1021,7 @@ fn solve(
                 );
                 let target = *target;
 
-                match unify(subs, actual, target, Mode::EQ) {
+                match unify(&mut UEnv::new(subs), actual, target, Mode::EQ) {
                     Success {
                         vars,
                         // ERROR NOT REPORTED
@@ -1095,7 +1081,7 @@ fn solve(
                         let expected =
                             type_to_var(subs, rank, pools, aliases, expectation.get_type_ref());
 
-                        match unify(subs, actual, expected, Mode::EQ) {
+                        match unify(&mut UEnv::new(subs), actual, expected, Mode::EQ) {
                             Success {
                                 vars,
                                 must_implement_ability,
@@ -1103,8 +1089,11 @@ fn solve(
                                 extra_metadata: _,
                             } => {
                                 introduce(subs, rank, pools, &vars);
+
                                 if !must_implement_ability.is_empty() {
-                                    deferred_obligations.add(
+                                    let new_problems = obligation_cache.check_obligations(
+                                        subs,
+                                        abilities_store,
                                         must_implement_ability,
                                         AbilityImplError::BadExpr(
                                             *region,
@@ -1112,6 +1101,7 @@ fn solve(
                                             actual,
                                         ),
                                     );
+                                    problems.extend(new_problems);
                                 }
                                 deferred_uls_to_resolve.union(lambda_sets_to_specialize);
 
@@ -1175,7 +1165,7 @@ fn solve(
                     _ => Mode::EQ,
                 };
 
-                match unify(subs, actual, expected, mode) {
+                match unify(&mut UEnv::new(subs), actual, expected, mode) {
                     Success {
                         vars,
                         must_implement_ability,
@@ -1183,11 +1173,15 @@ fn solve(
                         extra_metadata: _,
                     } => {
                         introduce(subs, rank, pools, &vars);
+
                         if !must_implement_ability.is_empty() {
-                            deferred_obligations.add(
+                            let new_problems = obligation_cache.check_obligations(
+                                subs,
+                                abilities_store,
                                 must_implement_ability,
                                 AbilityImplError::BadPattern(*region, category.clone(), actual),
                             );
+                            problems.extend(new_problems);
                         }
                         deferred_uls_to_resolve.union(lambda_sets_to_specialize);
 
@@ -1340,7 +1334,7 @@ fn solve(
                 );
                 let includes = type_to_var(subs, rank, pools, aliases, &tag_ty);
 
-                match unify(subs, actual, includes, Mode::PRESENT) {
+                match unify(&mut UEnv::new(subs), actual, includes, Mode::PRESENT) {
                     Success {
                         vars,
                         must_implement_ability,
@@ -1348,8 +1342,11 @@ fn solve(
                         extra_metadata: _,
                     } => {
                         introduce(subs, rank, pools, &vars);
+
                         if !must_implement_ability.is_empty() {
-                            deferred_obligations.add(
+                            let new_problems = obligation_cache.check_obligations(
+                                subs,
+                                abilities_store,
                                 must_implement_ability,
                                 AbilityImplError::BadPattern(
                                     *region,
@@ -1357,6 +1354,7 @@ fn solve(
                                     actual,
                                 ),
                             );
+                            problems.extend(new_problems);
                         }
                         deferred_uls_to_resolve.union(lambda_sets_to_specialize);
 
@@ -1444,7 +1442,7 @@ fn solve(
                 );
 
                 let snapshot = subs.snapshot();
-                let outcome = unify(subs, real_var, branches_var, Mode::EQ);
+                let outcome = unify(&mut UEnv::new(subs), real_var, branches_var, Mode::EQ);
 
                 let should_check_exhaustiveness;
                 match outcome {
@@ -1458,8 +1456,12 @@ fn solve(
 
                         introduce(subs, rank, pools, &vars);
 
-                        deferred_obligations
-                            .add(must_implement_ability, AbilityImplError::DoesNotImplement);
+                        problems.extend(obligation_cache.check_obligations(
+                            subs,
+                            abilities_store,
+                            must_implement_ability,
+                            AbilityImplError::DoesNotImplement,
+                        ));
                         deferred_uls_to_resolve.union(lambda_sets_to_specialize);
 
                         // Case 1: unify error types, but don't check exhaustiveness.
@@ -1475,7 +1477,7 @@ fn solve(
                         // open_tag_union(subs, real_var);
                         open_tag_union(subs, branches_var);
                         let almost_eq = matches!(
-                            unify(subs, real_var, branches_var, Mode::EQ),
+                            unify(&mut UEnv::new(subs), real_var, branches_var, Mode::EQ),
                             Success { .. }
                         );
 
@@ -1487,7 +1489,7 @@ fn solve(
                         } else {
                             // Case 4: incompatible types, report type error.
                             // Re-run first failed unification to get the type diff.
-                            match unify(subs, real_var, branches_var, Mode::EQ) {
+                            match unify(&mut UEnv::new(subs), real_var, branches_var, Mode::EQ) {
                                 Failure(vars, actual_type, expected_type, _bad_impls) => {
                                     introduce(subs, rank, pools, &vars);
 
@@ -1718,7 +1720,7 @@ fn check_ability_specialization(
             deep_copy_var_in(subs, Rank::toplevel(), pools, root_signature_var, arena);
         let snapshot = subs.snapshot();
         let unified = unify_introduced_ability_specialization(
-            subs,
+            &mut UEnv::new(subs),
             root_signature_var,
             symbol_loc_var.value,
             Mode::EQ,
@@ -2236,7 +2238,8 @@ fn compact_lambda_set<P: Phase>(
     // 3. Unify `t_f1 ~ t_f2`.
     trace_compact!(3iter_start. subs, this_lambda_set, t_f1, t_f2);
     let (vars, new_must_implement_ability, new_lambda_sets_to_specialize, _meta) =
-        unify(subs, t_f1, t_f2, Mode::EQ).expect_success("ambient functions don't unify");
+        unify(&mut UEnv::new(subs), t_f1, t_f2, Mode::EQ)
+            .expect_success("ambient functions don't unify");
     trace_compact!(3iter_end. subs, t_f1);
 
     introduce(subs, target_rank, pools, &vars);

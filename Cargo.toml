@@ -8,6 +8,7 @@ members = [
     "crates/compiler/parse",
     "crates/compiler/can",
     "crates/compiler/problem",
+    "crates/compiler/solve_problem",
     "crates/compiler/types",
     "crates/compiler/builtins",
     "crates/compiler/constrain",

@@ -7,8 +7,7 @@ use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{LineInfo, Loc, Region};
-use roc_solve::ability::{UnderivableReason, Unfulfilled};
-use roc_solve::solve;
+use roc_solve_problem::{TypeError, UnderivableReason, Unfulfilled};
 use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{
@@ -30,9 +29,9 @@ pub fn type_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
     lines: &LineInfo,
     filename: PathBuf,
-    problem: solve::TypeError,
+    problem: TypeError,
 ) -> Option<Report<'b>> {
-    use solve::TypeError::*;
+    use TypeError::*;
 
     fn report(title: String, doc: RocDocBuilder<'_>, filename: PathBuf) -> Option<Report<'_>> {
         Some(Report {

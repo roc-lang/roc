@@ -8,6 +8,7 @@ use roc_collections::VecMap;
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
 use roc_module::symbol::{ModuleId, Symbol};
+use roc_solve_problem::TypeError;
 use roc_types::subs::{Content, ExposedTypesStorageSubs, FlatType, StorageSubs, Subs, Variable};
 use roc_types::types::{Alias, MemberImpl};
 
@@ -32,7 +33,7 @@ impl<T> Solved<T> {
 
 #[derive(Debug)]
 pub struct SolvedModule {
-    pub problems: Vec<solve::TypeError>,
+    pub problems: Vec<TypeError>,
 
     /// all aliases and their definitions. this has to include non-exposed aliases
     /// because exposed aliases can depend on non-exposed ones)
@@ -64,12 +65,7 @@ pub fn run_solve(
     pending_derives: PendingDerives,
     exposed_by_module: &ExposedByModule,
     derived_module: SharedDerivedModule,
-) -> (
-    Solved<Subs>,
-    solve::Env,
-    Vec<solve::TypeError>,
-    AbilitiesStore,
-) {
+) -> (Solved<Subs>, solve::Env, Vec<TypeError>, AbilitiesStore) {
     for (var, name) in rigid_variables.named {
         subs.rigid_var(var, name);
     }

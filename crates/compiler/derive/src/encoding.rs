@@ -83,9 +83,9 @@ impl Env<'_> {
     }
 
     fn unify(&mut self, left: Variable, right: Variable) {
-        use roc_unify::unify::{unify, Mode, Unified};
+        use roc_unify::unify::{unify, Env, Mode, Unified};
 
-        let unified = unify(self.subs, left, right, Mode::EQ);
+        let unified = unify(&mut Env::new(self.subs), left, right, Mode::EQ);
 
         match unified {
             Unified::Success {
@@ -109,12 +109,12 @@ impl Env<'_> {
         specialization_type: Variable,
         ability_member: Symbol,
     ) -> SpecializationLambdaSets {
-        use roc_unify::unify::{unify_introduced_ability_specialization, Mode, Unified};
+        use roc_unify::unify::{unify_introduced_ability_specialization, Env, Mode, Unified};
 
         let member_signature = self.import_encode_symbol(ability_member);
 
         let unified = unify_introduced_ability_specialization(
-            self.subs,
+            &mut Env::new(self.subs),
             member_signature,
             specialization_type,
             Mode::EQ,

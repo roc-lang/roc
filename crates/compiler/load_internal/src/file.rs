@@ -43,7 +43,7 @@ use roc_parse::parser::{FileError, Parser, SyntaxError};
 use roc_region::all::{LineInfo, Loc, Region};
 use roc_reporting::report::RenderTarget;
 use roc_solve::module::{extract_module_owned_implementations, Solved, SolvedModule};
-use roc_solve::solve;
+use roc_solve_problem::TypeError;
 use roc_target::TargetInfo;
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, VarStore, Variable};
 use roc_types::types::{Alias, AliasKind};
@@ -139,7 +139,7 @@ struct ModuleCache<'a> {
     top_level_thunks: MutMap<ModuleId, MutSet<Symbol>>,
     documentation: MutMap<ModuleId, ModuleDocumentation>,
     can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
-    type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
+    type_problems: MutMap<ModuleId, Vec<TypeError>>,
 
     sources: MutMap<ModuleId, (PathBuf, &'a str)>,
 }
@@ -556,7 +556,7 @@ pub struct LoadedModule {
     pub interns: Interns,
     pub solved: Solved<Subs>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
-    pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
+    pub type_problems: MutMap<ModuleId, Vec<TypeError>>,
     pub declarations_by_id: MutMap<ModuleId, Declarations>,
     pub exposed_to_host: MutMap<Symbol, Variable>,
     pub dep_idents: IdentIdsByModule,
@@ -671,7 +671,7 @@ pub struct MonomorphizedModule<'a> {
     pub output_path: Box<Path>,
     pub platform_path: Box<Path>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
-    pub type_problems: MutMap<ModuleId, Vec<solve::TypeError>>,
+    pub type_problems: MutMap<ModuleId, Vec<TypeError>>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     pub toplevel_expects: VecMap<Symbol, Region>,
     pub entry_point: EntryPoint<'a>,
@@ -4115,7 +4115,7 @@ fn run_solve_solve(
     Solved<Subs>,
     ResolvedImplementations,
     Vec<(Symbol, Variable)>,
-    Vec<solve::TypeError>,
+    Vec<TypeError>,
     AbilitiesStore,
 ) {
     let Module {
