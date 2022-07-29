@@ -3354,3 +3354,18 @@ fn issue_3571_lowlevel_call_function_with_bool_lambda_set() {
         RocStr
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_3530_uninitialized_capacity_in_list_literal() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            [11,22,33]
+            "#
+        ),
+        3,
+        (usize, usize, usize),
+        |(_, _, cap)| cap
+    );
+}
