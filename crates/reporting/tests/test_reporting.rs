@@ -10128,6 +10128,24 @@ All branches in an `if` must have the same type!
                 x
                 "#
         ),
-        @r""
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `x` definition:
+
+    4│      x : { y : Str }
+    5│      x = {}
+                ^^
+
+    The body is a record of type:
+
+        {}
+
+    But the type annotation on `x` says it should be:
+
+        { y : Str }
+
+    Tip: Looks like the y field is missing.
+    "###
     );
 }
