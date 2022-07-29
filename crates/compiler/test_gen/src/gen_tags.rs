@@ -477,7 +477,7 @@ fn nested_pattern_match() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn if_guard_vanilla() {
     assert_evals_to!(
         indoc!(
@@ -1363,7 +1363,7 @@ fn issue_2365_monomorphize_tag_with_non_empty_ext_var() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped() {
     assert_evals_to!(
         indoc!(
@@ -1392,7 +1392,7 @@ fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped_nested() {
     assert_evals_to!(
         indoc!(

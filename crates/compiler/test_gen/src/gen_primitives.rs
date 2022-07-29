@@ -1343,7 +1343,7 @@ fn linked_list_is_empty_2() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn linked_list_singleton() {
     // verifies only that valid llvm is produced
     assert_evals_to!(
@@ -1479,7 +1479,10 @@ fn rbtree_insert() {
 }
 
 #[test]
-#[cfg(all(any(feature = "gen-llvm"), not(feature = "gen-llvm-wasm")))]
+#[cfg(all(
+    any(feature = "gen-llvm", feature = "gen-wasm"),
+    not(feature = "gen-llvm-wasm")
+))]
 fn rbtree_balance_3() {
     assert_evals_to!(
         indoc!(
@@ -1497,9 +1500,8 @@ fn rbtree_balance_3() {
                 balance 0 Empty
             "#
         ),
-        false,
-        *const i64,
-        |x: *const i64| x.is_null()
+        0,
+        usize // treat pointer as usize for null check
     );
 }
 
