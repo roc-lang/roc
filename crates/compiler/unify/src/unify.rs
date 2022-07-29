@@ -686,8 +686,6 @@ fn unify_two_aliases<M: MetaCollector>(
             .into_iter()
             .zip(other_args.all_variables().into_iter());
 
-        let length_before = env.subs.len();
-
         for (l, r) in it {
             let l_var = env.subs[l];
             let r_var = env.subs[r];
@@ -695,17 +693,35 @@ fn unify_two_aliases<M: MetaCollector>(
         }
 
         if outcome.mismatches.is_empty() {
+            // Even if there are no changes to alias arguments, and no new variables were
+            // introduced, we may still need to unify the "actual types" of the alias or opaque!
+            //
+            // The unification is not necessary from a types perspective (and in fact, we may want
+            // to disable it for `roc check` later on), but it is necessary for the monomorphizer,
+            // which expects identical types to be reflected in the same variable.
+            //
+            // As a concrete example, consider the unification of two opaques
+            //
+            //   P := [Zero, Succ P]
+            //
+            //   (@P (Succ n)) ~ (@P (Succ o))
+            //
+            // `P` has no arguments, and unification of the surface of `P` introduces nothing new.
+            // But if we do not unify the types of `n` and `o`, which are recursion variables, they
+            // will remain disjoint! Currently, the implication of this is that they will be seen
+            // to have separate recursive memory layouts in the monomorphizer - which is no good
+            // for our compilation model.
+            //
+            // As such, always unify the real vars.
+
+            // Don't report real_var mismatches, because they must always be surfaced higher, from
+            // the argument types.
+            let mut real_var_outcome =
+                unify_pool::<M>(env, pool, real_var, other_real_var, ctx.mode);
+            let _ = real_var_outcome.mismatches.drain(..);
+            outcome.union(real_var_outcome);
+
             outcome.union(merge(env, ctx, *other_content));
-        }
-
-        let length_after = env.subs.len();
-
-        let args_unification_had_changes = length_after != length_before;
-
-        if !args.is_empty() && args_unification_had_changes && outcome.mismatches.is_empty() {
-            // We need to unify the real vars because unification of type variables
-            // may have made them larger, which then needs to be reflected in the `real_var`.
-            outcome.union(unify_pool(env, pool, real_var, other_real_var, ctx.mode));
         }
 
         outcome
