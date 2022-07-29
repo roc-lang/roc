@@ -1813,3 +1813,36 @@ fn llvm_wasm_str_layout_small() {
         [i32; 3]
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn when_on_strings() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when "Deyr fé, deyja frændr" is
+                "Deyr fé, deyja frændr" -> 42
+                "deyr sjalfr it sama" -> 1
+                "en orðstírr deyr aldregi" -> 2
+                "hveim er sér góðan getr" -> 3
+                _ -> 4
+            "#
+        ),
+        42,
+        i64
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when "Deyr fé, deyja frændr" is
+                "deyr sjalfr it sama" -> 1
+                "en orðstírr deyr aldregi" -> 2
+                "hveim er sér góðan getr" -> 3
+                _ -> 4
+            "#
+        ),
+        4,
+        i64
+    );
+}

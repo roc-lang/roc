@@ -3648,3 +3648,34 @@ fn promote_u128_number_layout() {
         u128
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn when_on_decimals() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when 42.42dec is
+                42.42 -> 42
+                0.05 -> 1
+                3.14 -> 2
+                _ -> 4
+            "#
+        ),
+        42,
+        i64
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            when 42.42dec is
+                0.05 -> 1
+                3.14 -> 2
+                _ -> 4
+            "#
+        ),
+        4,
+        i64
+    );
+}
