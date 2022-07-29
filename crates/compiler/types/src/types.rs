@@ -2566,6 +2566,7 @@ fn write_type_ext(ext: TypeExt, buf: &mut String) {
 
 static THE_LETTER_A: u32 = 'a' as u32;
 
+/// Generates a fresh type variable name, composed of lowercase alphabetic characters in sequence.
 pub fn name_type_var<I, F: FnMut(&I, &str) -> bool>(
     letters_used: u32,
     taken: &mut impl Iterator<Item = I>,
@@ -2593,6 +2594,28 @@ pub fn name_type_var<I, F: FnMut(&I, &str) -> bool>(
         name_type_var(letters_used + 1, taken, predicate)
     } else {
         (buf.into(), letters_used + 1)
+    }
+}
+
+/// Generates a fresh type variable name given a hint, composed of the hint as a prefix and a
+/// number as a suffix. For example, given hint `a` we'll name the variable `a`, `a1`, or `a27`.
+pub fn name_type_var_with_hint<I, F: FnMut(&I, &str) -> bool>(
+    hint: &str,
+    taken: &mut impl Iterator<Item = I>,
+    mut predicate: F,
+) -> Lowercase {
+    if !taken.any(|item| predicate(&item, hint)) {
+        return hint.into();
+    }
+
+    let mut i = 0;
+    loop {
+        i += 1;
+        let cand = format!("{}{}", hint, i);
+
+        if !taken.any(|item| predicate(&item, &cand)) {
+            return cand.into();
+        }
     }
 }
 
