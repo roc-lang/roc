@@ -233,8 +233,10 @@ pub fn can_problem<'b>(
             title = DUPLICATE_NAME.to_string();
             severity = Severity::RuntimeError;
         }
-        Problem::CyclicAlias(symbol, region, others) => {
-            let answer = crate::error::r#type::cyclic_alias(alloc, lines, symbol, region, others);
+        Problem::CyclicAlias(symbol, region, others, alias_kind) => {
+            let answer = crate::error::r#type::cyclic_alias(
+                alloc, lines, symbol, region, others, alias_kind,
+            );
 
             doc = answer.0;
             title = answer.1;
@@ -244,6 +246,7 @@ pub fn can_problem<'b>(
             typ: alias,
             variable_region,
             variable_name,
+            alias_kind,
         } => {
             doc = alloc.stack([
                 alloc.concat([
@@ -251,10 +254,12 @@ pub fn can_problem<'b>(
                     alloc.type_variable(variable_name),
                     alloc.reflow(" type parameter is not used in the "),
                     alloc.symbol_unqualified(alias),
-                    alloc.reflow(" alias definition:"),
+                    alloc.reflow(" "),
+                    alloc.reflow(alias_kind.as_str()),
+                    alloc.reflow(" definition:"),
                 ]),
                 alloc.region(lines.convert_region(variable_region)),
-                alloc.reflow("Roc does not allow unused type alias parameters!"),
+                alloc.reflow("Roc does not allow unused type parameters!"),
                 // TODO add link to this guide section
                 alloc.tip().append(alloc.reflow(
                     "If you want an unused type parameter (a so-called \"phantom type\"), \
