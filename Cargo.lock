@@ -3391,7 +3391,6 @@ name = "roc_builtins"
 version = "0.1.0"
 dependencies = [
  "dunce",
- "fs_extra",
  "lazy_static",
  "roc_collections",
  "roc_module",
