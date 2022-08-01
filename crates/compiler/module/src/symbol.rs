@@ -47,8 +47,10 @@ const SYMBOL_HAS_NICHE: () =
 #[cfg(debug_assertions)]
 const PRETTY_PRINT_DEBUG_SYMBOLS: bool = true;
 
-pub const DERIVABLE_ABILITIES: &[(Symbol, &[Symbol])] =
-    &[(Symbol::ENCODE_ENCODING, &[Symbol::ENCODE_TO_ENCODER])];
+pub const DERIVABLE_ABILITIES: &[(Symbol, &[Symbol])] = &[
+    (Symbol::ENCODE_ENCODING, &[Symbol::ENCODE_TO_ENCODER]),
+    (Symbol::DECODE_DECODING, &[Symbol::DECODE_DECODER]),
+];
 
 /// In Debug builds only, Symbol has a name() method that lets
 /// you look up its name in a global intern table. This table is

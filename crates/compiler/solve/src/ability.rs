@@ -260,6 +260,14 @@ impl ObligationCache {
                 subs,
                 var,
             )),
+
+            Symbol::DECODE_DECODING => Some(DeriveDecoding::is_derivable(
+                self,
+                abilities_store,
+                subs,
+                var,
+            )),
+
             _ => None,
         };
 
@@ -634,6 +642,66 @@ trait DerivableVisitor {
 struct DeriveEncoding;
 impl DerivableVisitor for DeriveEncoding {
     const ABILITY: Symbol = Symbol::ENCODE_ENCODING;
+
+    #[inline(always)]
+    fn visit_recursion(_var: Variable) -> Result<Descend, DerivableError> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_apply(var: Variable, symbol: Symbol) -> Result<Descend, DerivableError> {
+        if matches!(
+            symbol,
+            Symbol::LIST_LIST | Symbol::SET_SET | Symbol::DICT_DICT | Symbol::STR_STR,
+        ) {
+            Ok(Descend(true))
+        } else {
+            Err(DerivableError::NotDerivable(var))
+        }
+    }
+
+    fn visit_record(_var: Variable) -> Result<Descend, DerivableError> {
+        Ok(Descend(true))
+    }
+
+    fn visit_tag_union(_var: Variable) -> Result<Descend, DerivableError> {
+        Ok(Descend(true))
+    }
+
+    fn visit_recursive_tag_union(_var: Variable) -> Result<Descend, DerivableError> {
+        Ok(Descend(true))
+    }
+
+    fn visit_function_or_tag_union(_var: Variable) -> Result<Descend, DerivableError> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_empty_record(_var: Variable) -> Result<(), DerivableError> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_empty_tag_union(_var: Variable) -> Result<(), DerivableError> {
+        Ok(())
+    }
+
+    fn visit_alias(_var: Variable, symbol: Symbol) -> Result<Descend, DerivableError> {
+        if is_builtin_number_alias(symbol) {
+            Ok(Descend(false))
+        } else {
+            Ok(Descend(true))
+        }
+    }
+
+    fn visit_ranged_number(_var: Variable, _range: NumericRange) -> Result<(), DerivableError> {
+        Ok(())
+    }
+}
+
+struct DeriveDecoding;
+impl DerivableVisitor for DeriveDecoding {
+    const ABILITY: Symbol = Symbol::DECODE_DECODING;
 
     #[inline(always)]
     fn visit_recursion(_var: Variable) -> Result<Descend, DerivableError> {
