@@ -588,7 +588,6 @@ fn one_field_record() {
 }
 
 #[test]
-#[ignore = "TODO #3421 unification of unspecialized variables in lambda sets currently causes this to be derived incorrectly"]
 fn two_field_record() {
     derive_test(v!({ a: v!(U8), b: v!(STR), }), |golden| {
         assert_snapshot!(golden, @r###"
@@ -600,11 +599,16 @@ fn two_field_record() {
         #   @<2>: [[custom(2) { a : val, b : a }]] | a has Encoding, val has Encoding
         #Derived.toEncoder_{a,b} =
           \#Derived.rcd ->
-            Encode.custom \#Derived.bytes, #Derived.fmt ->
-              Encode.appendWith #Derived.bytes (Encode.record [
-                { value: Encode.toEncoder #Derived.rcd.a, key: "a", },
-                { value: Encode.toEncoder #Derived.rcd.b, key: "b", },
-              ]) #Derived.fmt
+            Encode.custom
+              \#Derived.bytes, #Derived.fmt ->
+                Encode.appendWith
+                  #Derived.bytes
+                  (Encode.record
+                    [
+                      { value: Encode.toEncoder #Derived.rcd.a, key: "a", },
+                      { value: Encode.toEncoder #Derived.rcd.b, key: "b", },
+                    ])
+                  #Derived.fmt
         "###
         )
     })
@@ -647,7 +651,6 @@ fn tag_one_label_zero_args() {
 }
 
 #[test]
-#[ignore = "TODO #3421 unification of unspecialized variables in lambda sets currently causes this to be derived incorrectly"]
 fn tag_one_label_two_args() {
     derive_test(v!([A v!(U8) v!(STR)]), |golden| {
         assert_snapshot!(golden, @r###"
@@ -659,20 +662,25 @@ fn tag_one_label_two_args() {
         #   @<2>: [[custom(4) [A val a]]] | a has Encoding, val has Encoding
         #Derived.toEncoder_[A 2] =
           \#Derived.tag ->
-            Encode.custom \#Derived.bytes, #Derived.fmt ->
-              Encode.appendWith #Derived.bytes (when #Derived.tag is
-                A #Derived.2 #Derived.3 ->
-                  Encode.tag "A" [
-                    Encode.toEncoder #Derived.2,
-                    Encode.toEncoder #Derived.3,
-                  ]) #Derived.fmt
+            Encode.custom
+              \#Derived.bytes, #Derived.fmt ->
+                Encode.appendWith
+                  #Derived.bytes
+                  (when #Derived.tag is
+                    A #Derived.2 #Derived.3 ->
+                      Encode.tag
+                        "A"
+                        [
+                          Encode.toEncoder #Derived.2,
+                          Encode.toEncoder #Derived.3,
+                        ])
+                  #Derived.fmt
         "###
         )
     })
 }
 
 #[test]
-#[ignore = "TODO #3421 unification of unspecialized variables in lambda sets currently causes this to be derived incorrectly"]
 fn tag_two_labels() {
     derive_test(v!([A v!(U8) v!(STR) v!(U16), B v!(STR)]), |golden| {
         assert_snapshot!(golden, @r###"
@@ -684,23 +692,27 @@ fn tag_two_labels() {
         #   @<2>: [[custom(6) [A val a b, B c]]] | a has Encoding, b has Encoding, c has Encoding, val has Encoding
         #Derived.toEncoder_[A 3,B 1] =
           \#Derived.tag ->
-            Encode.custom \#Derived.bytes, #Derived.fmt ->
-              Encode.appendWith #Derived.bytes (when #Derived.tag is
-                A #Derived.2 #Derived.3 #Derived.4 ->
-                  Encode.tag "A" [
-                    Encode.toEncoder #Derived.2,
-                    Encode.toEncoder #Derived.3,
-                    Encode.toEncoder #Derived.4,
-                  ]
-                B #Derived.5 -> Encode.tag "B" [Encode.toEncoder #Derived.5])
-              #Derived.fmt
+            Encode.custom
+              \#Derived.bytes, #Derived.fmt ->
+                Encode.appendWith
+                  #Derived.bytes
+                  (when #Derived.tag is
+                    A #Derived.2 #Derived.3 #Derived.4 ->
+                      Encode.tag
+                        "A"
+                        [
+                          Encode.toEncoder #Derived.2,
+                          Encode.toEncoder #Derived.3,
+                          Encode.toEncoder #Derived.4,
+                        ]
+                    B #Derived.5 -> Encode.tag "B" [Encode.toEncoder #Derived.5])
+                  #Derived.fmt
         "###
         )
     })
 }
 
 #[test]
-#[ignore = "TODO #3421 unification of unspecialized variables in lambda sets currently causes this to be derived incorrectly"]
 fn recursive_tag_union() {
     derive_test(v!([Nil, Cons v!(U8) v!(*lst) ] as lst), |golden| {
         assert_snapshot!(golden, @r###"
@@ -712,14 +724,20 @@ fn recursive_tag_union() {
         #   @<2>: [[custom(4) [Cons val a, Nil]]] | a has Encoding, val has Encoding
         #Derived.toEncoder_[Cons 2,Nil 0] =
           \#Derived.tag ->
-            Encode.custom \#Derived.bytes, #Derived.fmt ->
-              Encode.appendWith #Derived.bytes (when #Derived.tag is
-                Cons #Derived.2 #Derived.3 ->
-                  Encode.tag "Cons" [
-                    Encode.toEncoder #Derived.2,
-                    Encode.toEncoder #Derived.3,
-                  ]
-                Nil -> Encode.tag "Nil" []) #Derived.fmt
+            Encode.custom
+              \#Derived.bytes, #Derived.fmt ->
+                Encode.appendWith
+                  #Derived.bytes
+                  (when #Derived.tag is
+                    Cons #Derived.2 #Derived.3 ->
+                      Encode.tag
+                        "Cons"
+                        [
+                          Encode.toEncoder #Derived.2,
+                          Encode.toEncoder #Derived.3,
+                        ]
+                    Nil -> Encode.tag "Nil" [])
+                  #Derived.fmt
         "###
         )
     })
