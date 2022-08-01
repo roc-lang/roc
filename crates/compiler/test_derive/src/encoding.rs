@@ -149,9 +149,11 @@ fn immediates() {
     check_immediate(v!(STR), Symbol::ENCODE_STRING);
 }
 
+use crate::util::DeriveBuiltin::ToEncoder;
+
 #[test]
 fn empty_record() {
-    derive_test(v!(EMPTY_RECORD), |golden| {
+    derive_test(ToEncoder, v!(EMPTY_RECORD), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for {}
         # {} -[[toEncoder_{}(0)]]-> Encoder fmt | fmt has EncoderFormatting
@@ -171,7 +173,7 @@ fn empty_record() {
 
 #[test]
 fn zero_field_record() {
-    derive_test(v!({}), |golden| {
+    derive_test(ToEncoder, v!({}), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for {}
         # {} -[[toEncoder_{}(0)]]-> Encoder fmt | fmt has EncoderFormatting
@@ -191,7 +193,7 @@ fn zero_field_record() {
 
 #[test]
 fn one_field_record() {
-    derive_test(v!({ a: v!(U8), }), |golden| {
+    derive_test(ToEncoder, v!({ a: v!(U8), }), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for { a : U8 }
         # { a : val } -[[toEncoder_{a}(0)]]-> Encoder fmt | fmt has EncoderFormatting, val has Encoding
@@ -218,7 +220,7 @@ fn one_field_record() {
 #[test]
 #[ignore = "TODO #3421 unification of unspecialized variables in lambda sets currently causes this to be derived incorrectly"]
 fn two_field_record() {
-    derive_test(v!({ a: v!(U8), b: v!(STR), }), |golden| {
+    derive_test(ToEncoder, v!({ a: v!(U8), b: v!(STR), }), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for { a : U8, b : Str }
         # { a : val, b : a } -[[toEncoder_{a,b}(0)]]-> Encoder fmt | a has Encoding, fmt has EncoderFormatting, val has Encoding
@@ -242,7 +244,7 @@ fn two_field_record() {
 #[ignore = "NOTE: this would never actually happen, because [] is uninhabited, and hence toEncoder can never be called with a value of []!
 Rightfully it induces broken assertions in other parts of the compiler, so we ignore it."]
 fn empty_tag_union() {
-    derive_test(v!(EMPTY_TAG_UNION), |golden| {
+    derive_test(ToEncoder, v!(EMPTY_TAG_UNION), |golden| {
         assert_snapshot!(
             golden,
             @r#"
@@ -253,7 +255,7 @@ fn empty_tag_union() {
 
 #[test]
 fn tag_one_label_zero_args() {
-    derive_test(v!([A]), |golden| {
+    derive_test(ToEncoder, v!([A]), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for [A]
         # [A] -[[toEncoder_[A 0](0)]]-> Encoder fmt | fmt has EncoderFormatting
@@ -277,7 +279,7 @@ fn tag_one_label_zero_args() {
 #[test]
 #[ignore = "TODO #3421 unification of unspecialized variables in lambda sets currently causes this to be derived incorrectly"]
 fn tag_one_label_two_args() {
-    derive_test(v!([A v!(U8) v!(STR)]), |golden| {
+    derive_test(ToEncoder, v!([A v!(U8) v!(STR)]), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for [A U8 Str]
         # [A val a] -[[toEncoder_[A 2](0)]]-> Encoder fmt | a has Encoding, fmt has EncoderFormatting, val has Encoding
@@ -302,8 +304,11 @@ fn tag_one_label_two_args() {
 #[test]
 #[ignore = "TODO #3421 unification of unspecialized variables in lambda sets currently causes this to be derived incorrectly"]
 fn tag_two_labels() {
-    derive_test(v!([A v!(U8) v!(STR) v!(U16), B v!(STR)]), |golden| {
-        assert_snapshot!(golden, @r###"
+    derive_test(
+        ToEncoder,
+        v!([A v!(U8) v!(STR) v!(U16), B v!(STR)]),
+        |golden| {
+            assert_snapshot!(golden, @r###"
         # derived for [A U8 Str U16, B Str]
         # [A val a b, B c] -[[toEncoder_[A 3,B 1](0)]]-> Encoder fmt | a has Encoding, b has Encoding, c has Encoding, fmt has EncoderFormatting, val has Encoding
         # [A val a b, B c] -[[toEncoder_[A 3,B 1](0)]]-> (List U8, fmt -[[custom(6) [A val a b, B c]]]-> List U8) | a has Encoding, b has Encoding, c has Encoding, fmt has EncoderFormatting, val has Encoding
@@ -323,15 +328,19 @@ fn tag_two_labels() {
                 B #Derived.5 -> Encode.tag "B" [Encode.toEncoder #Derived.5])
               #Derived.fmt
         "###
-        )
-    })
+            )
+        },
+    )
 }
 
 #[test]
 #[ignore = "TODO #3421 unification of unspecialized variables in lambda sets currently causes this to be derived incorrectly"]
 fn recursive_tag_union() {
-    derive_test(v!([Nil, Cons v!(U8) v!(*lst) ] as lst), |golden| {
-        assert_snapshot!(golden, @r###"
+    derive_test(
+        ToEncoder,
+        v!([Nil, Cons v!(U8) v!(*lst) ] as lst),
+        |golden| {
+            assert_snapshot!(golden, @r###"
         # derived for [Cons U8 $rec, Nil] as $rec
         # [Cons val a, Nil] -[[toEncoder_[Cons 2,Nil 0](0)]]-> Encoder fmt | a has Encoding, fmt has EncoderFormatting, val has Encoding
         # [Cons val a, Nil] -[[toEncoder_[Cons 2,Nil 0](0)]]-> (List U8, fmt -[[custom(4) [Cons val a, Nil]]]-> List U8) | a has Encoding, fmt has EncoderFormatting, val has Encoding
@@ -349,13 +358,14 @@ fn recursive_tag_union() {
                   ]
                 Nil -> Encode.tag "Nil" []) #Derived.fmt
         "###
-        )
-    })
+            )
+        },
+    )
 }
 
 #[test]
 fn list() {
-    derive_test(v!(Symbol::LIST_LIST v!(STR)), |golden| {
+    derive_test(ToEncoder, v!(Symbol::LIST_LIST v!(STR)), |golden| {
         assert_snapshot!(golden, @r###"
         # derived for List Str
         # List val -[[toEncoder_list(0)]]-> Encoder fmt | fmt has EncoderFormatting, val has Encoding

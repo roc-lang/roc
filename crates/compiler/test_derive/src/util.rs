@@ -30,13 +30,30 @@ use roc_types::{
 
 const DERIVED_MODULE: ModuleId = ModuleId::DERIVED_SYNTH;
 
-fn encode_path() -> PathBuf {
-    let repo_root = std::env::var("ROC_WORKSPACE_DIR").expect("are you running with `cargo test`?");
-    PathBuf::from(repo_root)
-        .join("compiler")
-        .join("builtins")
-        .join("roc")
-        .join("Encode.roc")
+#[derive(Clone, Copy)]
+pub(crate) enum DeriveBuiltin {
+    ToEncoder,
+}
+
+impl DeriveBuiltin {
+    fn module_source_and_path(&self) -> (ModuleId, &'static str, PathBuf) {
+        use roc_builtins::roc::module_source;
+
+        let repo_root =
+            std::env::var("ROC_WORKSPACE_DIR").expect("are you running with `cargo test`?");
+        let builtins_path = PathBuf::from(repo_root)
+            .join("compiler")
+            .join("builtins")
+            .join("roc");
+
+        match self {
+            DeriveBuiltin::ToEncoder => (
+                ModuleId::ENCODE,
+                module_source(ModuleId::ENCODE),
+                builtins_path.join("Encode.roc"),
+            ),
+        }
+    }
 }
 
 /// Writing out the types into content is inconvenient, so we use a DSL for testing.
@@ -185,14 +202,20 @@ fn assemble_derived_golden(
     pretty_buf
 }
 
+/// The environment of the module containing the builtin ability we're deriving for a type.
+struct DeriveBuiltinEnv {
+    module_id: ModuleId,
+    exposed_types: ExposedTypesStorageSubs,
+    abilities_store: AbilitiesStore,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn check_derived_typechecks_and_golden(
     derived_def: Def,
     test_module: ModuleId,
     mut test_subs: Subs,
     interns: &Interns,
-    exposed_encode_types: ExposedTypesStorageSubs,
-    encode_abilities_store: AbilitiesStore,
+    derive_builtin_env: DeriveBuiltinEnv,
     source_var: Variable,
     derived_program: &str,
     specialization_lsets: SpecializationLambdaSets,
@@ -205,25 +228,30 @@ fn check_derived_typechecks_and_golden(
     decls.push_def(derived_def);
     let constr = constrain_decls(&mut constraints, test_module, &decls);
 
-    // the derived depends on stuff from Encode, so
+    // the derived implementation on stuff from the builtin module, so
     //   - we need to add those dependencies as imported on the constraint
-    //   - we need to add Encode ability info to a local abilities store
-    let encode_values_to_import = exposed_encode_types
+    //   - we need to add the builtin ability info to a local abilities store
+    let values_to_import_from_builtin_module = derive_builtin_env
+        .exposed_types
         .stored_vars_by_symbol
         .keys()
         .copied()
         .collect::<VecSet<_>>();
-    let pending_abilities = encode_abilities_store.closure_from_imported(&encode_values_to_import);
+    let pending_abilities = derive_builtin_env
+        .abilities_store
+        .closure_from_imported(&values_to_import_from_builtin_module);
     let mut exposed_by_module = ExposedByModule::default();
     exposed_by_module.insert(
-        ModuleId::ENCODE,
+        derive_builtin_env.module_id,
         ExposedModuleTypes {
-            exposed_types_storage_subs: exposed_encode_types,
+            exposed_types_storage_subs: derive_builtin_env.exposed_types,
             resolved_implementations: ResolvedImplementations::default(),
         },
     );
-    let exposed_for_module =
-        ExposedForModule::new(encode_values_to_import.iter(), exposed_by_module);
+    let exposed_for_module = ExposedForModule::new(
+        values_to_import_from_builtin_module.iter(),
+        exposed_by_module,
+    );
     let mut def_types = Default::default();
     let mut rigid_vars = Default::default();
     let (import_variables, abilities_store) = add_imports(
@@ -303,32 +331,34 @@ fn check_derived_typechecks_and_golden(
     check_golden(&golden)
 }
 
-fn get_key(subs: &Subs, var: Variable) -> DeriveKey {
-    match Derived::encoding(subs, var) {
-        Ok(Derived::Key(key)) => key,
-        _ => unreachable!(),
+fn get_key(derive: DeriveBuiltin, subs: &Subs, var: Variable) -> DeriveKey {
+    match derive {
+        DeriveBuiltin::ToEncoder => match Derived::encoding(subs, var) {
+            Ok(Derived::Key(key)) => key,
+            _ => unreachable!(),
+        },
     }
 }
 
-pub(crate) fn derive_test<S>(synth_input: S, check_golden: impl Fn(&str))
+pub(crate) fn derive_test<S>(derive: DeriveBuiltin, synth_input: S, check_golden: impl Fn(&str))
 where
     S: FnOnce(&mut Subs) -> Variable,
 {
     let arena = Bump::new();
-    let source = roc_builtins::roc::module_source(ModuleId::ENCODE);
+    let (builtin_module, source, path) = derive.module_source_and_path();
     let target_info = roc_target::TargetInfo::default_x86_64();
 
     let LoadedModule {
         mut interns,
-        exposed_types_storage: exposed_encode_types,
+        exposed_types_storage,
         abilities_store,
         resolved_implementations,
         ..
     } = roc_load_internal::file::load_and_typecheck_str(
         &arena,
-        encode_path().file_name().unwrap().into(),
+        path.file_name().unwrap().into(),
         source,
-        encode_path().parent().unwrap().to_path_buf(),
+        path.parent().unwrap().to_path_buf(),
         Default::default(),
         target_info,
         roc_reporting::report::RenderTarget::ColorTerminal,
@@ -339,15 +369,15 @@ where
     let mut subs = Subs::new();
     let ident_ids = IdentIds::default();
     let source_var = synth_input(&mut subs);
-    let key = get_key(&subs, source_var);
+    let key = get_key(derive, &subs, source_var);
 
     let mut derived_module = unsafe { DerivedModule::from_components(subs, ident_ids) };
 
     let mut exposed_by_module = ExposedByModule::default();
     exposed_by_module.insert(
-        ModuleId::ENCODE,
+        builtin_module,
         ExposedModuleTypes {
-            exposed_types_storage_subs: exposed_encode_types.clone(),
+            exposed_types_storage_subs: exposed_types_storage.clone(),
             resolved_implementations,
         },
     );
@@ -370,8 +400,11 @@ where
         DERIVED_MODULE,
         subs,
         &interns,
-        exposed_encode_types,
-        abilities_store,
+        DeriveBuiltinEnv {
+            module_id: builtin_module,
+            exposed_types: exposed_types_storage,
+            abilities_store,
+        },
         source_var,
         &derived_program,
         specialization_lsets,
