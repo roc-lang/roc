@@ -51,12 +51,12 @@ impl WorldAbilities {
 
     #[inline(always)]
     pub fn with_module_exposed_type<T>(
-        &mut self,
+        &self,
         module: ModuleId,
-        mut f: impl FnMut(&mut ExposedTypesStorageSubs) -> T,
+        mut f: impl FnMut(&ExposedTypesStorageSubs) -> T,
     ) -> T {
-        let mut world = self.world.write().unwrap();
-        let (_, exposed_types) = world.get_mut(&module).expect("module not in the world");
+        let world = self.world.read().unwrap();
+        let (_, exposed_types) = world.get(&module).expect("module not in the world");
 
         f(exposed_types)
     }
