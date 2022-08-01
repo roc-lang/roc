@@ -959,8 +959,10 @@ pub fn can_problem<'b>(
 }
 
 fn list_builtin_abilities<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
-    debug_assert!(DERIVABLE_ABILITIES.len() == 1);
-    alloc.concat([alloc.symbol_qualified(DERIVABLE_ABILITIES[0].0)])
+    alloc.intersperse(
+        [alloc.symbol_qualified(DERIVABLE_ABILITIES[0].0)],
+        alloc.reflow(", "),
+    )
 }
 
 fn to_invalid_optional_value_report<'b>(
