@@ -423,7 +423,10 @@ pub fn rebuild_host(
         host_input_path.with_file_name(if shared_lib_path.is_some() {
             "dynhost"
         } else {
-            "host.o"
+            match roc_target::Architecture::from(target.architecture) {
+                roc_target::Architecture::Windows64 => "host.obj",
+                _ => "host.o",
+            }
         })
     };
 
