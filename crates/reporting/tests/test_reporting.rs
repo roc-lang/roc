@@ -10258,4 +10258,53 @@ All branches in an `if` must have the same type!
         ),
         @"" // no error
     );
+
+    test_report!(
+        function_cannot_derive_encoding,
+        indoc!(
+            r#"
+            app "test" imports [Decode.{Decoder, DecoderFormatting, decoder}] provides [main] to "./platform"
+
+            main =
+                myDecoder : Decoder (a -> a) fmt | fmt has DecoderFormatting
+                myDecoder = decoder
+
+                myDecoder
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│      myDecoder = decoder
+                        ^^^^^^^
+
+    Roc can't generate an implementation of the `Decode.Decoding` ability
+    for
+
+        a -> a
+
+    Note: `Decoding` cannot be generated for functions.
+    "###
+    );
+
+    test_report!(
+        #[ignore = "needs structural deriving to be turned on first"]
+        nested_opaque_cannot_derive_encoding,
+        indoc!(
+            r#"
+            app "test" imports [Decode.{Decoder, DecoderFormatting, decoder}] provides [main] to "./platform"
+
+            A : {}
+            main =
+                myDecoder : Decoder {x : A} fmt | fmt has DecoderFormatting
+                myDecoder = decoder
+
+                myDecoder
+            "#
+        ),
+        @r###"
+    "###
+    );
 }
