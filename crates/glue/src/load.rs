@@ -3,7 +3,7 @@ use crate::types::{Env, Types};
 use bumpalo::Bump;
 use roc_load::{LoadedModule, LoadingProblem, Threading};
 use roc_reporting::report::RenderTarget;
-use roc_target::{Architecture, TargetInfo,OperatingSystem};
+use roc_target::{Architecture, OperatingSystem, TargetInfo};
 use std::fs::File;
 use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
@@ -135,7 +135,10 @@ pub fn load_types(
 
     let types_and_targets = Architecture::iter()
         .map(|arch| {
-            let target_info = TargetInfo { architecture: arch.into(), operating_system: OperatingSystem::Unix};
+            let target_info = TargetInfo {
+                architecture: arch.into(),
+                operating_system: OperatingSystem::Unix,
+            };
             let mut env = Env::new(arena, subs, &mut interns, target_info);
 
             (env.vars_to_types(variables.clone()), target_info)

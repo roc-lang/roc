@@ -17,12 +17,11 @@ impl From<target_lexicon::OperatingSystem> for OperatingSystem {
             target_lexicon::OperatingSystem::Windows => OperatingSystem::Windows,
             target_lexicon::OperatingSystem::Wasi => OperatingSystem::Wasi,
             target_lexicon::OperatingSystem::Linux => OperatingSystem::Unix,
-            target_lexicon::OperatingSystem::MacOSX {..} => OperatingSystem::Unix,
+            target_lexicon::OperatingSystem::MacOSX { .. } => OperatingSystem::Unix,
             other => unreachable!("unsupported operating system {:?}", other),
         }
     }
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TargetInfo {
@@ -73,7 +72,10 @@ impl From<&target_lexicon::Triple> for TargetInfo {
         let architecture = Architecture::from(triple.architecture);
         let operating_system = OperatingSystem::from(triple.operating_system);
 
-        Self { architecture, operating_system }
+        Self {
+            architecture,
+            operating_system,
+        }
     }
 }
 
