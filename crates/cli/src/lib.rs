@@ -752,14 +752,18 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
             // since the process is about to exit anyway.
             std::mem::forget(arena);
 
-            if cfg!(target_family = "unix") {
+            #[cfg(target_family = "unix")]
+            {
                 use std::os::unix::ffi::OsStrExt;
 
                 run_with_wasmer(
                     generated_filename,
                     args.into_iter().map(|os_str| os_str.as_bytes()),
                 );
-            } else {
+            }
+
+            #[cfg(not(target_family = "unix"))]
+            {
                 run_with_wasmer(
                     generated_filename,
                     args.into_iter().map(|os_str| {
@@ -776,6 +780,7 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
     }
 }
 
+#[cfg(target_family = "unix")]
 fn make_argv_envp<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     arena: &'a Bump,
     executable: &ExecutableFile,
@@ -909,11 +914,17 @@ impl ExecutableFile {
                 let path_cstring = CString::new(path.as_os_str().as_bytes()).unwrap();
                 libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr())
             }
+
+            #[cfg(all(target_family = "windows"))]
+            ExecutableFile::OnDisk(_, path) => {
+                todo!()
+            }
         }
     }
 }
 
 // with Expect
+#[cfg(target_family = "unix")]
 unsafe fn roc_run_native_debug(
     executable: ExecutableFile,
     argv: &[*const c_char],
@@ -1053,10 +1064,16 @@ fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<Exec
     Ok(ExecutableFile::OnDisk(temp_dir, app_path_buf))
 }
 
+#[cfg(all(target_family = "windows"))]
+fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<ExecutableFile> {
+    todo!()
+}
+
 /// Run on the native OS (not on wasm)
 #[cfg(not(target_family = "unix"))]
 fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     _arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
+    _opt_level: OptLevel,
     _args: I,
     _binary_bytes: &mut [u8],
     _expectations: VecMap<ModuleId, Expectations>,
