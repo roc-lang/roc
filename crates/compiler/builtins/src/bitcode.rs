@@ -1,16 +1,29 @@
 use roc_module::symbol::Symbol;
 use roc_target::TargetInfo;
+use roc_utils::get_lib_path;
 use std::ops::Index;
 
-pub const BUILTINS_HOST_OBJ_PATH: &str = env!(
-    "BUILTINS_HOST_O",
-    "Env var BUILTINS_HOST_O not found. Is there a problem with the build script?"
-);
+pub fn get_builtins_host_obj_path() -> String {
+    let builtins_host_path = get_lib_path()
+        .expect("Failed to find lib dir.")
+        .join("builtins-host.o");
 
-pub const BUILTINS_WASM32_OBJ_PATH: &str = env!(
-    "BUILTINS_WASM32_O",
-    "Env var BUILTINS_WASM32_O not found. Is there a problem with the build script?"
-);
+    builtins_host_path
+        .into_os_string()
+        .into_string()
+        .expect("Failed to convert builtins_host_path to str")
+}
+
+pub fn get_builtins_wasm32_obj_path() -> String {
+    let builtins_wasm32_path = get_lib_path()
+        .expect("Failed to find lib dir.")
+        .join("builtins-wasm32.o");
+
+    builtins_wasm32_path
+        .into_os_string()
+        .into_string()
+        .expect("Failed to convert builtins_wasm32_path to str")
+}
 
 #[derive(Debug, Default, Copy, Clone)]
 pub struct IntrinsicName {
