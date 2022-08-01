@@ -188,6 +188,20 @@ digits = List.range 48u8 58u8
 takeDigits = \bytes ->
     takeWhile bytes \n -> List.contains digits n
 
+takeFloat = \bytes ->
+    {taken: intPart, rest} = takeDigits bytes
+    when List.get rest 0 is
+        Ok 46 -> # 46 = .
+            {taken: floatPart, rest: afterAll} = takeDigits rest
+            builtFloat =
+                intPart
+                |> List.append (Num.intCast '.')
+                |> List.concat floatPart
+
+            {taken: builtFloat, rest: afterAll}
+        _ ->
+            {taken: intPart, rest}
+
 decodeU8 = Decode.custom \bytes, @Json {} ->
     {taken, rest} = takeDigits bytes
     when Str.fromUtf8 taken |> Result.try Str.toU8 is
@@ -249,19 +263,19 @@ decodeI128 = Decode.custom \bytes, @Json {} ->
         Err _ -> {result: Err TooShort, rest}
 
 decodeF32 = Decode.custom \bytes, @Json {} ->
-    {taken, rest} = takeDigits bytes
+    {taken, rest} = takeFloat bytes
     when Str.fromUtf8 taken |> Result.try Str.toF32 is
         Ok n -> {result: Ok n, rest}
         Err _ -> {result: Err TooShort, rest}
 
 decodeF64 = Decode.custom \bytes, @Json {} ->
-    {taken, rest} = takeDigits bytes
+    {taken, rest} = takeFloat bytes
     when Str.fromUtf8 taken |> Result.try Str.toF64 is
         Ok n -> {result: Ok n, rest}
         Err _ -> {result: Err TooShort, rest}
 
 decodeDec = Decode.custom \bytes, @Json {} ->
-    {taken, rest} = takeDigits bytes
+    {taken, rest} = takeFloat bytes
     when Str.fromUtf8 taken |> Result.try Str.toDec is
         Ok n -> {result: Ok n, rest}
         Err _ -> {result: Err TooShort, rest}
