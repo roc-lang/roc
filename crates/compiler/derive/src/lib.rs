@@ -14,8 +14,11 @@ use roc_region::all::Loc;
 use roc_types::subs::{
     copy_import_to, Content, Descriptor, Mark, OptVariable, Rank, Subs, Variable,
 };
+use util::Env;
 
 mod encoding;
+
+mod util;
 
 pub(crate) const DERIVED_SYNTH: ModuleId = ModuleId::DERIVED_SYNTH;
 
@@ -62,7 +65,7 @@ fn build_derived_body(
         specialization_lambda_sets,
     } = match derive_key {
         DeriveKey::ToEncoder(to_encoder_key) => {
-            let mut env = encoding::Env {
+            let mut env = Env {
                 subs: derived_subs,
                 exposed_types: exposed_by_module,
                 derived_ident_ids,
