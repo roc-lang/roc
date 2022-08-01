@@ -680,18 +680,22 @@ impl DerivableVisitor for DeriveEncoding {
         }
     }
 
+    #[inline(always)]
     fn visit_record(_var: Variable) -> Result<Descend, DerivableError> {
         Ok(Descend(true))
     }
 
+    #[inline(always)]
     fn visit_tag_union(_var: Variable) -> Result<Descend, DerivableError> {
         Ok(Descend(true))
     }
 
+    #[inline(always)]
     fn visit_recursive_tag_union(_var: Variable) -> Result<Descend, DerivableError> {
         Ok(Descend(true))
     }
 
+    #[inline(always)]
     fn visit_function_or_tag_union(_var: Variable) -> Result<Descend, DerivableError> {
         Ok(Descend(true))
     }
@@ -706,6 +710,7 @@ impl DerivableVisitor for DeriveEncoding {
         Ok(())
     }
 
+    #[inline(always)]
     fn visit_alias(_var: Variable, symbol: Symbol) -> Result<Descend, DerivableError> {
         if is_builtin_number_alias(symbol) {
             Ok(Descend(false))
@@ -714,6 +719,7 @@ impl DerivableVisitor for DeriveEncoding {
         }
     }
 
+    #[inline(always)]
     fn visit_ranged_number(_var: Variable, _range: NumericRange) -> Result<(), DerivableError> {
         Ok(())
     }
@@ -745,18 +751,22 @@ impl DerivableVisitor for DeriveDecoding {
         }
     }
 
+    #[inline(always)]
     fn visit_record(_var: Variable) -> Result<Descend, DerivableError> {
         Ok(Descend(true))
     }
 
+    #[inline(always)]
     fn visit_tag_union(_var: Variable) -> Result<Descend, DerivableError> {
         Ok(Descend(true))
     }
 
+    #[inline(always)]
     fn visit_recursive_tag_union(_var: Variable) -> Result<Descend, DerivableError> {
         Ok(Descend(true))
     }
 
+    #[inline(always)]
     fn visit_function_or_tag_union(_var: Variable) -> Result<Descend, DerivableError> {
         Ok(Descend(true))
     }
@@ -771,6 +781,7 @@ impl DerivableVisitor for DeriveDecoding {
         Ok(())
     }
 
+    #[inline(always)]
     fn visit_alias(_var: Variable, symbol: Symbol) -> Result<Descend, DerivableError> {
         if is_builtin_number_alias(symbol) {
             Ok(Descend(false))
@@ -779,6 +790,7 @@ impl DerivableVisitor for DeriveDecoding {
         }
     }
 
+    #[inline(always)]
     fn visit_ranged_number(_var: Variable, _range: NumericRange) -> Result<(), DerivableError> {
         Ok(())
     }
