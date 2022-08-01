@@ -335,7 +335,48 @@ decodeString = Decode.custom \bytes, @Json {} ->
     else
         { result: Err TooShort, rest: bytes }
 
-# FIXME
 decodeList = \decodeElem -> Decode.custom \bytes, @Json {} ->
-        when Decode.decodeWith bytes decodeElem (@Json {}) is
-            _ -> { result: Err TooShort, rest: bytes }
+        decodeOne = \chunk ->
+            when Decode.decodeWith chunk decodeElem (@Json {}) is
+                { result, rest } ->
+                    when result is
+                        Ok val ->
+                            # TODO: handle spaces before ','
+                            { before: afterElem, others } = List.split rest 1
+
+                            if
+                                afterElem == [asciiByte ',']
+                            then
+                                One val others
+                            else
+                                Done val others
+
+                        Err e -> Errored e rest
+
+        decodeElems = \elemBytes, accum ->
+            when decodeOne elemBytes is
+                Errored e rest -> Errored e rest
+                One val others ->
+                    decodeElems others (List.append accum val)
+
+                Done val others ->
+                    Done (List.append accum val) others
+
+        { before, others: afterStartingBrace } = List.split bytes 1
+
+        if
+            before == [asciiByte '[']
+        then
+            when decodeElems afterStartingBrace [] is
+                Errored e rest -> { result: Err e, rest }
+                Done vals rest ->
+                    { before: maybeEndingBrace, others: afterEndingBrace } = List.split rest 1
+
+                    if
+                        maybeEndingBrace == [asciiByte ']']
+                    then
+                        { result: Ok vals, rest: afterEndingBrace }
+                    else
+                        { result: Err TooShort, rest }
+        else
+            { result: Err TooShort, rest: bytes }
