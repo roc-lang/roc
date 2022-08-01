@@ -45,12 +45,13 @@ pub enum Problem {
         shadow: Loc<Ident>,
         kind: ShadowKind,
     },
-    CyclicAlias(Symbol, Region, Vec<Symbol>),
+    CyclicAlias(Symbol, Region, Vec<Symbol>, AliasKind),
     BadRecursion(Vec<CycleEntry>),
     PhantomTypeArgument {
         typ: Symbol,
         variable_region: Region,
         variable_name: Lowercase,
+        alias_kind: AliasKind,
     },
     UnboundTypeVariable {
         typ: Symbol,

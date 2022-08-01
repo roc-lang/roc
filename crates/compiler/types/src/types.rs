@@ -1322,6 +1322,7 @@ impl Type {
                                 region,
                                 type_got: args.len() as u8,
                                 alias_needs: alias.type_variables.len() as u8,
+                                alias_kind: AliasKind::Structural,
                             });
                             return;
                         }
@@ -2028,6 +2029,15 @@ pub enum AliasKind {
     Opaque,
 }
 
+impl AliasKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AliasKind::Structural => "alias",
+            AliasKind::Opaque => "opaque",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct AliasVar {
     pub name: Lowercase,
@@ -2104,6 +2114,7 @@ pub enum Problem {
         region: Region,
         type_got: u8,
         alias_needs: u8,
+        alias_kind: AliasKind,
     },
     InvalidModule,
     SolvedTypeError,

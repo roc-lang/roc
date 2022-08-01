@@ -21,6 +21,7 @@ use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
+use roc_types::types::AliasKind;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use ven_graph::{strongly_connected_components, topological_sort_into_groups};
@@ -341,6 +342,7 @@ fn from_pending_alias<'a>(
                         typ: symbol,
                         variable_region: loc_lowercase.region,
                         variable_name: loc_lowercase.value.clone(),
+                        alias_kind: AliasKind::Structural,
                     });
                 }
             }
@@ -373,7 +375,12 @@ fn from_pending_alias<'a>(
 
                     scope.add_alias(env.pool, symbol, named, annotation_id);
                 } else {
-                    env.problem(Problem::CyclicAlias(symbol, name.region, vec![]));
+                    env.problem(Problem::CyclicAlias(
+                        symbol,
+                        name.region,
+                        vec![],
+                        AliasKind::Structural,
+                    ));
                     return output;
                 }
             } else {

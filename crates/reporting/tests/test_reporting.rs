@@ -3112,7 +3112,7 @@ mod test_reporting {
         @r###"
     ── TOO MANY TYPE ARGUMENTS ─────────────────────────────── /code/proj/Main.roc ─
 
-    The `Num` alias expects 1 type argument, but it got 2 instead:
+    The `Num` opaque expects 1 type argument, but it got 2 instead:
 
     4│      a : Num.Num Num.I64 Num.F64
                 ^^^^^^^^^^^^^^^^^^^^^^^
@@ -3134,7 +3134,7 @@ mod test_reporting {
         @r###"
     ── TOO MANY TYPE ARGUMENTS ─────────────────────────────── /code/proj/Main.roc ─
 
-    The `Num` alias expects 1 type argument, but it got 2 instead:
+    The `Num` opaque expects 1 type argument, but it got 2 instead:
 
     4│      f : Str -> Num.Num Num.I64 Num.F64
                        ^^^^^^^^^^^^^^^^^^^^^^^
@@ -3210,7 +3210,7 @@ mod test_reporting {
     4│      Foo a : [Foo]
                 ^
 
-    Roc does not allow unused type alias parameters!
+    Roc does not allow unused type parameters!
 
     Tip: If you want an unused type parameter (a so-called "phantom
     type"), read the guide section on phantom values.
@@ -10146,6 +10146,28 @@ All branches in an `if` must have the same type!
         { y : Str }
 
     Tip: Looks like the y field is missing.
+    "###
+    );
+
+    test_report!(
+        cyclic_opaque,
+        indoc!(
+            r#"
+            Recursive := [Infinitely Recursive]
+
+            0
+            "#
+        ),
+        @r###"
+    ── CYCLIC ALIAS ────────────────────────────────────────── /code/proj/Main.roc ─
+
+    The `Recursive` opaque is self-recursive in an invalid way:
+
+    4│      Recursive := [Infinitely Recursive]
+            ^^^^^^^^^
+
+    Recursion in opaquees is only allowed if recursion happens behind a
+    tagged union, at least one variant of which is not recursive.
     "###
     );
 }
