@@ -9,6 +9,8 @@ let
   pkgs = import nixpkgs { };
   rustPlatform = pkgs.rustPlatform;
   llvmPkgs = pkgs.llvmPackages_13;
+  # nix does not store libs in /usr/lib or /lib
+  nixGlibcPath = if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";
 in
 rustPlatform.buildRustPackage {
   pname = "roc";
@@ -16,14 +18,12 @@ rustPlatform.buildRustPackage {
 
   src = pkgs.nix-gitignore.gitignoreSource [] ./.;
 
-  cargoSha256 = "sha256-ZT3lH2P0OnK8XwI89csINXIK+/AhhKVmXDqNGYMy/vk=";
+  cargoSha256 = "sha256-cFzOcU982kANsZjx4YoLQOZSOYN3loj+5zowhWoBWM8=";
 
   LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
 
   # required for zig
   XDG_CACHE_HOME = "xdg_cache"; # prevents zig AccessDenied error github.com/ziglang/zig/issues/6810
-  # nix does not store libs in /usr/lib or /lib
-  NIX_GLIBC_PATH = if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";
   # want to see backtrace in case of failure
   RUST_BACKTRACE = 1;
 
@@ -77,12 +77,10 @@ rustPlatform.buildRustPackage {
       Security
   ]);
 
-  # mkdir -p $out/lib
-
   # cp: to copy str.zig,list.zig...
   # wrapProgram pkgs.stdenv.cc: to make ld available for compiler/build/src/link.rs
   postInstall = ''
     cp -r target/x86_64-unknown-linux-gnu/release/lib/. $out/lib
-    wrapProgram $out/bin/roc --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.stdenv.cc ]}
+    wrapProgram $out/bin/roc --set NIX_GLIBC_PATH ${nixGlibcPath} --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.stdenv.cc ]}
   '';
 }

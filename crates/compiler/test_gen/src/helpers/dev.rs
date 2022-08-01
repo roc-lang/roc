@@ -187,7 +187,7 @@ pub fn helper(
         // With the current method all methods are kept and it adds about 100k to all outputs.
         &[
             app_o_file.to_str().unwrap(),
-            bitcode::BUILTINS_HOST_OBJ_PATH,
+            &bitcode::get_builtins_host_obj_path(),
         ],
         LinkType::Dylib,
     )
