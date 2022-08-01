@@ -266,8 +266,13 @@ decodeDec = Decode.custom \bytes, @Json {} ->
         Ok n -> {result: Ok n, rest}
         Err _ -> {result: Err TooShort, rest}
 
+# FIXME
 decodeBool = Decode.custom \bytes, @Json {} -> {result: Err TooShort, rest: bytes}
+
+# FIXME
 decodeString = Decode.custom \bytes, @Json {} -> {result: Err TooShort, rest: bytes}
+
+# FIXME
 decodeList = \decodeElem -> Decode.custom \bytes, @Json {} ->
     when Decode.decodeWith bytes decodeElem (@Json {}) is
         _ -> {result: Err TooShort, rest: bytes}
