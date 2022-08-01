@@ -1096,11 +1096,32 @@ fn link_wasm32(
 
 fn link_windows(
     _target: &Triple,
-    _output_path: PathBuf,
-    _input_paths: &[&str],
+    output_path: PathBuf,
+    input_paths: &[&str],
     _link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
-    todo!("Add windows support to the surgical linker. See issue #2608.")
+    let zig_str_path = find_zig_str_path();
+    let wasi_libc_path = find_wasi_libc_path();
+
+    let child = Command::new(&zig_executable())
+        .args(&["build-exe"])
+        .args(input_paths)
+        .args([
+            "-lc",
+            &format!("-femit-bin={}", output_path.to_str().unwrap()),
+            "-target",
+            "native",
+            "--pkg-begin",
+            "str",
+            zig_str_path.to_str().unwrap(),
+            "--pkg-end",
+            "--strip",
+            "-O",
+            "Debug",
+        ])
+        .spawn()?;
+
+    Ok((child, output_path))
 }
 
 pub fn llvm_module_to_dylib(
