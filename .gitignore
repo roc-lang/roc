@@ -8,6 +8,8 @@ zig-cache
 *.obj
 *.tmp
 *.wasm
+*.exe
+*.pdb
 
 # llvm human-readable output
 *.ll
