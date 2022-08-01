@@ -5,3 +5,4 @@
 pub mod ability;
 pub mod module;
 pub mod solve;
+pub mod specialize;

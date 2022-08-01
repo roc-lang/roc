@@ -206,7 +206,6 @@ pub fn canonicalize_def_header_pattern<'a>(
                         // Likely a specialization of an ability.
                         Some(ability_member_name) => {
                             output.references.insert_bound(symbol);
-                            output.references.insert_value_lookup(ability_member_name);
                             Pattern::AbilityMemberSpecialization {
                                 ident: symbol,
                                 specializes: ability_member_name,
