@@ -65,6 +65,18 @@ pub enum DeriveBuiltin {
     Decoder,
 }
 
+impl TryFrom<Symbol> for DeriveBuiltin {
+    type Error = Symbol;
+
+    fn try_from(value: Symbol) -> Result<Self, Self::Error> {
+        match value {
+            Symbol::ENCODE_TO_ENCODER => Ok(DeriveBuiltin::ToEncoder),
+            Symbol::DECODE_DECODER => Ok(DeriveBuiltin::Decoder),
+            _ => Err(value),
+        }
+    }
+}
+
 impl Derived {
     pub fn builtin(
         builtin: DeriveBuiltin,
