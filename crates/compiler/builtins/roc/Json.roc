@@ -316,8 +316,24 @@ decodeBool = Decode.custom \bytes, @Json {} ->
         else
             { result: Err TooShort, rest: bytes }
 
-# FIXME
-decodeString = Decode.custom \bytes, @Json {} -> { result: Err TooShort, rest: bytes }
+decodeString = Decode.custom \bytes, @Json {} ->
+    { before, others: afterStartingQuote } = List.split bytes 1
+
+    if
+        before == [asciiByte '"']
+    then
+        # TODO: handle escape sequences
+        { taken: strSequence, rest } = takeWhile afterStartingQuote \n -> n != asciiByte '"'
+
+        when Str.fromUtf8 strSequence is
+            Ok s ->
+                { others: afterEndingQuote } = List.split rest 1
+
+                { result: Ok s, rest: afterEndingQuote }
+
+            Err _ -> { result: Err TooShort, rest }
+    else
+        { result: Err TooShort, rest: bytes }
 
 # FIXME
 decodeList = \decodeElem -> Decode.custom \bytes, @Json {} ->
