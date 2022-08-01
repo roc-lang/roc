@@ -563,8 +563,14 @@ pub enum Resolved {
 /// not available during solving.
 pub trait AbilityResolver {
     /// Gets the parent ability and type of an ability member.
-    fn member_parent_and_signature_var(&self, ability_member: Symbol)
-        -> Option<(Symbol, Variable)>;
+    ///
+    /// If needed, the type of the ability member will be imported into a local `subs` buffer; as
+    /// such, subs must be provided.
+    fn member_parent_and_signature_var(
+        &self,
+        ability_member: Symbol,
+        home_subs: &mut Subs,
+    ) -> Option<(Symbol, Variable)>;
 
     /// Finds the declared implementation of an [`ImplKey`][roc_can::abilities::ImplKey].
     fn get_implementation(&self, impl_key: roc_can::abilities::ImplKey) -> Option<MemberImpl>;
@@ -577,6 +583,7 @@ impl AbilityResolver for AbilitiesStore {
     fn member_parent_and_signature_var(
         &self,
         ability_member: Symbol,
+        _home_subs: &mut Subs, // only have access to one abilities store, do nothing with subs
     ) -> Option<(Symbol, Variable)> {
         self.member_def(ability_member)
             .map(|def| (def.parent_ability, def.signature_var()))
@@ -597,7 +604,7 @@ pub fn resolve_ability_specialization<R: AbilityResolver>(
     use roc_unify::unify::{unify, Mode};
 
     let (parent_ability, signature_var) = resolver
-        .member_parent_and_signature_var(ability_member)
+        .member_parent_and_signature_var(ability_member, subs)
         .expect("Not an ability member symbol");
 
     // Figure out the ability we're resolving in a temporary subs snapshot.
