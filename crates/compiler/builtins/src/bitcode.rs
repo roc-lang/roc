@@ -60,7 +60,7 @@ impl FloatWidth {
         match self {
             F32 => 4,
             F64 | F128 => match target_info.architecture {
-                X86_64 | Aarch64 | Wasm32 | Windows64 => 8,
+                X86_64 | Aarch64 | Wasm32 => 8,
                 X86_32 | Aarch32 => 4,
             },
         }
@@ -127,8 +127,7 @@ impl IntWidth {
                 Architecture::X86_64
                 | Architecture::Aarch64
                 | Architecture::Aarch32
-                | Architecture::Wasm32
-                | Architecture::Windows64 => 8,
+                | Architecture::Wasm32 => 8,
                 Architecture::X86_32 => 4,
             },
             U128 | I128 => {

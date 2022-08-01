@@ -75,23 +75,23 @@ pub fn build_file<'a>(
     //
     // and zig does not currently emit `.a` webassembly static libraries
     let (host_extension, app_extension, extension) = {
-        use roc_target::Architecture::*;
+        use roc_target::OperatingSystem::*;
 
-        match roc_target::Architecture::from(target.architecture) {
-            Wasm32 => {
+        match roc_target::OperatingSystem::from(target.operating_system) {
+            Wasi => {
                 if matches!(opt_level, OptLevel::Development) {
                     ("wasm", "wasm", Some("wasm"))
                 } else {
                     ("zig", "bc", Some("wasm"))
                 }
             }
-            Aarch32 | Aarch64 | Wasm32 | X86_32 | X86_64 => ("o", "o", None),
-            Windows64 => ("obj", "obj", Some("exe")),
+            Unix => ("o", "o", None),
+            Windows => ("obj", "obj", Some("exe")),
         }
     };
 
     let cwd = app_module_path.parent().unwrap();
-    let mut binary_path = cwd.join(&*loaded.output_path); // TODO should join ".exe" on Windows
+    let mut binary_path = cwd.join(&*loaded.output_path);
 
     if let Some(extension) = extension {
         binary_path.set_extension(extension);

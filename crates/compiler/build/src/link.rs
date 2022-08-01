@@ -136,7 +136,7 @@ pub fn build_zig_host_native(
         zig_str_path,
         "--pkg-end",
         // include the zig runtime
-        "-fcompiler-rt",
+        // "-fcompiler-rt",
         // include libc
         "--library",
         "c",
@@ -158,6 +158,7 @@ pub fn build_zig_host_native(
     } else if matches!(opt_level, OptLevel::Size) {
         command.args(&["-O", "ReleaseSmall"]);
     }
+
     command.output().unwrap()
 }
 
@@ -423,9 +424,10 @@ pub fn rebuild_host(
         host_input_path.with_file_name(if shared_lib_path.is_some() {
             "dynhost"
         } else {
-            match roc_target::Architecture::from(target.architecture) {
-                roc_target::Architecture::Windows64 => "host.obj",
-                _ => "host.o",
+            match roc_target::OperatingSystem::from(target.operating_system) {
+                roc_target::OperatingSystem::Windows => "host.obj",
+                roc_target::OperatingSystem::Unix => "host.o",
+                roc_target::OperatingSystem::Wasi => "host.o",
             }
         })
     };
@@ -1101,7 +1103,6 @@ fn link_windows(
     _link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
     let zig_str_path = find_zig_str_path();
-    let wasi_libc_path = find_wasi_libc_path();
 
     let child = Command::new(&zig_executable())
         .args(&["build-exe"])

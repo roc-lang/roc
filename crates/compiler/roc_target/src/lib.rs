@@ -5,8 +5,29 @@
 use strum_macros::{EnumCount, EnumIter};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum OperatingSystem {
+    Windows,
+    Unix,
+    Wasi,
+}
+
+impl From<target_lexicon::OperatingSystem> for OperatingSystem {
+    fn from(target: target_lexicon::OperatingSystem) -> Self {
+        match target {
+            target_lexicon::OperatingSystem::Windows => OperatingSystem::Windows,
+            target_lexicon::OperatingSystem::Wasi => OperatingSystem::Wasi,
+            target_lexicon::OperatingSystem::Linux => OperatingSystem::Unix,
+            target_lexicon::OperatingSystem::MacOSX {..} => OperatingSystem::Unix,
+            other => unreachable!("unsupported operating system {:?}", other),
+        }
+    }
+}
+
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TargetInfo {
     pub architecture: Architecture,
+    pub operating_system: OperatingSystem,
 }
 
 impl TargetInfo {
@@ -28,18 +49,21 @@ impl TargetInfo {
     pub const fn default_aarch64() -> Self {
         TargetInfo {
             architecture: Architecture::Aarch64,
+            operating_system: OperatingSystem::Unix,
         }
     }
 
     pub const fn default_x86_64() -> Self {
         TargetInfo {
             architecture: Architecture::X86_64,
+            operating_system: OperatingSystem::Unix,
         }
     }
 
     pub const fn default_wasm32() -> Self {
         TargetInfo {
             architecture: Architecture::Wasm32,
+            operating_system: OperatingSystem::Wasi,
         }
     }
 }
@@ -47,14 +71,9 @@ impl TargetInfo {
 impl From<&target_lexicon::Triple> for TargetInfo {
     fn from(triple: &target_lexicon::Triple) -> Self {
         let architecture = Architecture::from(triple.architecture);
+        let operating_system = OperatingSystem::from(triple.operating_system);
 
-        Self { architecture }
-    }
-}
-
-impl From<Architecture> for TargetInfo {
-    fn from(architecture: Architecture) -> Self {
-        Self { architecture }
+        Self { architecture, operating_system }
     }
 }
 
@@ -74,7 +93,6 @@ pub enum Architecture {
     Wasm32,
     X86_32,
     X86_64,
-    Windows64,
 }
 
 impl Architecture {
@@ -82,7 +100,7 @@ impl Architecture {
         use Architecture::*;
 
         match self {
-            X86_64 | Aarch64 | Windows64 => PtrWidth::Bytes8,
+            X86_64 | Aarch64 => PtrWidth::Bytes8,
             X86_32 | Aarch32 | Wasm32 => PtrWidth::Bytes4,
         }
     }
