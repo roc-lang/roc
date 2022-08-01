@@ -438,6 +438,11 @@ trait DerivableVisitor {
     const ABILITY: Symbol;
 
     #[inline(always)]
+    fn is_derivable_builtin_opaque(_symbol: Symbol) -> bool {
+        false
+    }
+
+    #[inline(always)]
     fn visit_flex(var: Variable) -> Result<(), DerivableError> {
         Err(DerivableError::NotDerivable(var))
     }
@@ -612,10 +617,20 @@ trait DerivableVisitor {
 
                     Erroneous(_) => return Err(NotDerivable(var)),
                 },
+                Alias(
+                    Symbol::NUM_NUM | Symbol::NUM_INTEGER | Symbol::NUM_FLOATINGPOINT,
+                    _alias_variables,
+                    real_var,
+                    AliasKind::Opaque,
+                ) => {
+                    // Numbers: always decay until a ground is hit.
+                    stack.push(real_var);
+                }
                 Alias(opaque, _alias_variables, _real_var, AliasKind::Opaque) => {
                     if obligation_cache
                         .check_opaque_and_read(abilities_store, opaque, Self::ABILITY)
                         .is_err()
+                        && !Self::is_derivable_builtin_opaque(opaque)
                     {
                         return Err(NotDerivable(var));
                     }
@@ -642,6 +657,11 @@ trait DerivableVisitor {
 struct DeriveEncoding;
 impl DerivableVisitor for DeriveEncoding {
     const ABILITY: Symbol = Symbol::ENCODE_ENCODING;
+
+    #[inline(always)]
+    fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
+        is_builtin_number_alias(symbol)
+    }
 
     #[inline(always)]
     fn visit_recursion(_var: Variable) -> Result<Descend, DerivableError> {
@@ -702,6 +722,11 @@ impl DerivableVisitor for DeriveEncoding {
 struct DeriveDecoding;
 impl DerivableVisitor for DeriveDecoding {
     const ABILITY: Symbol = Symbol::DECODE_DECODING;
+
+    #[inline(always)]
+    fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
+        is_builtin_number_alias(symbol)
+    }
 
     #[inline(always)]
     fn visit_recursion(_var: Variable) -> Result<Descend, DerivableError> {
