@@ -18,9 +18,9 @@ use roc_collections::VecSet;
 use roc_constrain::expr::constrain_decls;
 use roc_debug_flags::dbg_do;
 use roc_derive::DerivedModule;
-use roc_derive_key::{DeriveKey, Derived};
+use roc_derive_key::{DeriveBuiltin, DeriveKey, Derived};
 use roc_load_internal::file::{add_imports, default_aliases, LoadedModule, Threading};
-use roc_module::symbol::{IdentIds, Interns, ModuleId};
+use roc_module::symbol::{IdentIds, Interns, ModuleId, Symbol};
 use roc_region::all::LineInfo;
 use roc_reporting::report::{type_problem, RocDocAllocator};
 use roc_types::{
@@ -30,29 +30,21 @@ use roc_types::{
 
 const DERIVED_MODULE: ModuleId = ModuleId::DERIVED_SYNTH;
 
-#[derive(Clone, Copy)]
-pub(crate) enum DeriveBuiltin {
-    ToEncoder,
-}
+fn module_source_and_path(builtin: DeriveBuiltin) -> (ModuleId, &'static str, PathBuf) {
+    use roc_builtins::roc::module_source;
 
-impl DeriveBuiltin {
-    fn module_source_and_path(&self) -> (ModuleId, &'static str, PathBuf) {
-        use roc_builtins::roc::module_source;
+    let repo_root = std::env::var("ROC_WORKSPACE_DIR").expect("are you running with `cargo test`?");
+    let builtins_path = PathBuf::from(repo_root)
+        .join("compiler")
+        .join("builtins")
+        .join("roc");
 
-        let repo_root =
-            std::env::var("ROC_WORKSPACE_DIR").expect("are you running with `cargo test`?");
-        let builtins_path = PathBuf::from(repo_root)
-            .join("compiler")
-            .join("builtins")
-            .join("roc");
-
-        match self {
-            DeriveBuiltin::ToEncoder => (
-                ModuleId::ENCODE,
-                module_source(ModuleId::ENCODE),
-                builtins_path.join("Encode.roc"),
-            ),
-        }
+    match builtin {
+        DeriveBuiltin::ToEncoder => (
+            ModuleId::ENCODE,
+            module_source(ModuleId::ENCODE),
+            builtins_path.join("Encode.roc"),
+        ),
     }
 }
 
@@ -133,24 +125,55 @@ macro_rules! v {
     };
 }
 
+pub(crate) fn check_key<S1, S2>(builtin: DeriveBuiltin, eq: bool, synth1: S1, synth2: S2)
+where
+    S1: FnOnce(&mut Subs) -> Variable,
+    S2: FnOnce(&mut Subs) -> Variable,
+{
+    let mut subs = Subs::new();
+    let var1 = synth1(&mut subs);
+    let var2 = synth2(&mut subs);
+
+    let key1 = Derived::builtin(builtin, &subs, var1);
+    let key2 = Derived::builtin(builtin, &subs, var2);
+
+    if eq {
+        assert_eq!(key1, key2);
+    } else {
+        assert_ne!(key1, key2);
+    }
+}
+
 #[macro_export]
 macro_rules! test_hash_eq {
-    ($($name:ident: $synth1:expr, $synth2:expr)*) => {$(
+    ($builtin:expr, $($name:ident: $synth1:expr, $synth2:expr)*) => {$(
         #[test]
         fn $name() {
-            check_key(true, $synth1, $synth2)
+            $crate::util::check_key($builtin,true, $synth1, $synth2)
         }
     )*};
 }
 
 #[macro_export]
 macro_rules! test_hash_neq {
-    ($($name:ident: $synth1:expr, $synth2:expr)*) => {$(
+    ($builtin:expr, $($name:ident: $synth1:expr, $synth2:expr)*) => {$(
         #[test]
         fn $name() {
-            check_key(false, $synth1, $synth2)
+            $crate::util::check_key($builtin, false, $synth1, $synth2)
         }
     )*};
+}
+
+pub(crate) fn check_immediate<S>(builtin: DeriveBuiltin, synth: S, immediate: Symbol)
+where
+    S: FnOnce(&mut Subs) -> Variable,
+{
+    let mut subs = Subs::new();
+    let var = synth(&mut subs);
+
+    let key = Derived::builtin(builtin, &subs, var);
+
+    assert_eq!(key, Ok(Derived::Immediate(immediate)));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -331,21 +354,19 @@ fn check_derived_typechecks_and_golden(
     check_golden(&golden)
 }
 
-fn get_key(derive: DeriveBuiltin, subs: &Subs, var: Variable) -> DeriveKey {
-    match derive {
-        DeriveBuiltin::ToEncoder => match Derived::encoding(subs, var) {
-            Ok(Derived::Key(key)) => key,
-            _ => unreachable!(),
-        },
+fn get_key(builtin: DeriveBuiltin, subs: &Subs, var: Variable) -> DeriveKey {
+    match Derived::builtin(builtin, subs, var) {
+        Ok(Derived::Key(key)) => key,
+        _ => unreachable!(),
     }
 }
 
-pub(crate) fn derive_test<S>(derive: DeriveBuiltin, synth_input: S, check_golden: impl Fn(&str))
+pub(crate) fn derive_test<S>(builtin: DeriveBuiltin, synth_input: S, check_golden: impl Fn(&str))
 where
     S: FnOnce(&mut Subs) -> Variable,
 {
     let arena = Bump::new();
-    let (builtin_module, source, path) = derive.module_source_and_path();
+    let (builtin_module, source, path) = module_source_and_path(builtin);
     let target_info = roc_target::TargetInfo::default_x86_64();
 
     let LoadedModule {
@@ -369,7 +390,7 @@ where
     let mut subs = Subs::new();
     let ident_ids = IdentIds::default();
     let source_var = synth_input(&mut subs);
-    let key = get_key(derive, &subs, source_var);
+    let key = get_key(builtin, &subs, source_var);
 
     let mut derived_module = unsafe { DerivedModule::from_components(subs, ident_ids) };
 

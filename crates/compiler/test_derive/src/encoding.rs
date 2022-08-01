@@ -5,11 +5,14 @@
 #![allow(non_snake_case)]
 
 use insta::assert_snapshot;
-use pretty_assertions::assert_eq;
 
-use crate::{test_hash_eq, test_hash_neq, util::derive_test, v};
+use crate::{
+    test_hash_eq, test_hash_neq,
+    util::{check_immediate, derive_test},
+    v,
+};
 use roc_derive::synth_var;
-use roc_derive_key::Derived;
+use roc_derive_key::DeriveBuiltin::ToEncoder;
 use roc_module::{ident::TagName, symbol::Symbol};
 use roc_types::{
     subs::{
@@ -19,40 +22,11 @@ use roc_types::{
     types::{AliasKind, RecordField},
 };
 
-fn check_key<S1, S2>(eq: bool, synth1: S1, synth2: S2)
-where
-    S1: FnOnce(&mut Subs) -> Variable,
-    S2: FnOnce(&mut Subs) -> Variable,
-{
-    let mut subs = Subs::new();
-    let var1 = synth1(&mut subs);
-    let var2 = synth2(&mut subs);
-
-    let key1 = Derived::encoding(&subs, var1);
-    let key2 = Derived::encoding(&subs, var2);
-
-    if eq {
-        assert_eq!(key1, key2);
-    } else {
-        assert_ne!(key1, key2);
-    }
-}
-
-fn check_immediate<S>(synth: S, immediate: Symbol)
-where
-    S: FnOnce(&mut Subs) -> Variable,
-{
-    let mut subs = Subs::new();
-    let var = synth(&mut subs);
-
-    let key = Derived::encoding(&subs, var);
-
-    assert_eq!(key, Ok(Derived::Immediate(immediate)));
-}
-
 // {{{ hash tests
 
 test_hash_eq! {
+    ToEncoder,
+
     same_record:
         v!({ a: v!(U8), }), v!({ a: v!(U8), })
     same_record_fields_diff_types:
@@ -104,6 +78,8 @@ test_hash_eq! {
 }
 
 test_hash_neq! {
+    ToEncoder,
+
     different_record_fields:
         v!({ a: v!(U8), }), v!({ b: v!(U8), })
     record_empty_vs_nonempty:
@@ -133,23 +109,21 @@ test_hash_neq! {
 
 #[test]
 fn immediates() {
-    check_immediate(v!(U8), Symbol::ENCODE_U8);
-    check_immediate(v!(U16), Symbol::ENCODE_U16);
-    check_immediate(v!(U32), Symbol::ENCODE_U32);
-    check_immediate(v!(U64), Symbol::ENCODE_U64);
-    check_immediate(v!(U128), Symbol::ENCODE_U128);
-    check_immediate(v!(I8), Symbol::ENCODE_I8);
-    check_immediate(v!(I16), Symbol::ENCODE_I16);
-    check_immediate(v!(I32), Symbol::ENCODE_I32);
-    check_immediate(v!(I64), Symbol::ENCODE_I64);
-    check_immediate(v!(I128), Symbol::ENCODE_I128);
-    check_immediate(v!(DEC), Symbol::ENCODE_DEC);
-    check_immediate(v!(F32), Symbol::ENCODE_F32);
-    check_immediate(v!(F64), Symbol::ENCODE_F64);
-    check_immediate(v!(STR), Symbol::ENCODE_STRING);
+    check_immediate(ToEncoder, v!(U8), Symbol::ENCODE_U8);
+    check_immediate(ToEncoder, v!(U16), Symbol::ENCODE_U16);
+    check_immediate(ToEncoder, v!(U32), Symbol::ENCODE_U32);
+    check_immediate(ToEncoder, v!(U64), Symbol::ENCODE_U64);
+    check_immediate(ToEncoder, v!(U128), Symbol::ENCODE_U128);
+    check_immediate(ToEncoder, v!(I8), Symbol::ENCODE_I8);
+    check_immediate(ToEncoder, v!(I16), Symbol::ENCODE_I16);
+    check_immediate(ToEncoder, v!(I32), Symbol::ENCODE_I32);
+    check_immediate(ToEncoder, v!(I64), Symbol::ENCODE_I64);
+    check_immediate(ToEncoder, v!(I128), Symbol::ENCODE_I128);
+    check_immediate(ToEncoder, v!(DEC), Symbol::ENCODE_DEC);
+    check_immediate(ToEncoder, v!(F32), Symbol::ENCODE_F32);
+    check_immediate(ToEncoder, v!(F64), Symbol::ENCODE_F64);
+    check_immediate(ToEncoder, v!(STR), Symbol::ENCODE_STRING);
 }
-
-use crate::util::DeriveBuiltin::ToEncoder;
 
 #[test]
 fn empty_record() {
