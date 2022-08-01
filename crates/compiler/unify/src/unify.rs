@@ -677,7 +677,6 @@ fn unify_two_aliases<M: MetaCollector>(
     real_var: Variable,
     other_args: AliasVariables,
     other_real_var: Variable,
-    _other_content: &Content,
 ) -> Outcome<M> {
     if args.len() == other_args.len() {
         let mut outcome = Outcome::default();
@@ -800,7 +799,6 @@ fn unify_alias<M: MetaCollector>(
                     real_var,
                     *other_args,
                     *other_real_var,
-                    other_content,
                 )
             } else {
                 unify_pool(env, pool, real_var, *other_real_var, ctx.mode)
@@ -870,7 +868,6 @@ fn unify_opaque<M: MetaCollector>(
                     real_var,
                     *other_args,
                     *other_real_var,
-                    other_content,
                 )
             } else {
                 mismatch!("{:?}", symbol)
