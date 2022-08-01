@@ -118,6 +118,7 @@ pub fn build_zig_host_native(
         .env_clear()
         .env("PATH", env_path)
         .env("HOME", env_home);
+
     if let Some(shared_lib_path) = shared_lib_path {
         command.args(&[
             "build-exe",
@@ -128,9 +129,10 @@ pub fn build_zig_host_native(
     } else {
         command.args(&["build-obj", "-fPIC"]);
     }
+
     command.args(&[
         zig_host_src,
-        &format!("-femit-bin={}", emit_bin),
+        emit_bin,
         "--pkg-begin",
         "str",
         zig_str_path,
