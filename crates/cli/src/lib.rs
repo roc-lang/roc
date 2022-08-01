@@ -336,31 +336,22 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let path = Path::new(filename);
 
     // Spawn the root task
-    let path = path.canonicalize().unwrap_or_else(|err| {
-        use io::ErrorKind::*;
+    if !path.exists() {
+        let path_string = path.to_string_lossy();
 
-        match err.kind() {
-            NotFound => {
-                let path_string = path.to_string_lossy();
-
-                // TODO these should use roc_reporting to display nicer error messages.
-                match matches.value_source(ROC_FILE) {
-                    Some(ValueSource::DefaultValue) => {
-                        eprintln!(
-                            "\nNo `.roc` file was specified, and the current directory does not contain a {} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n",
-                            DEFAULT_ROC_FILENAME
-                        )
-                    }
-                    _ => eprintln!("\nThis file was not found: {}\n\nYou can run `roc help` for more information on how to provide a .roc file.\n", path_string),
-                }
-
-                process::exit(1);
+        // TODO these should use roc_reporting to display nicer error messages.
+        match matches.value_source(ROC_FILE) {
+            Some(ValueSource::DefaultValue) => {
+                eprintln!(
+                    "\nNo `.roc` file was specified, and the current directory does not contain a {} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n",
+                    DEFAULT_ROC_FILENAME
+                )
             }
-            _ => {
-                todo!("TODO Gracefully handle opening {:?} - {:?}", path, err);
-            }
+            _ => eprintln!("\nThis file was not found: {}\n\nYou can run `roc help` for more information on how to provide a .roc file.\n", path_string),
         }
-    });
+
+        process::exit(1);
+    }
 
     let arena = &arena;
     let target = &triple;
@@ -372,7 +363,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let loaded = roc_load::load_and_monomorphize(
         arena,
-        path,
+        path.to_path_buf(),
         subs_by_module,
         target_info,
         // TODO: expose this from CLI?
@@ -507,15 +498,11 @@ pub fn build(
     let path = Path::new(filename);
 
     // Spawn the root task
-    let path = path.canonicalize().unwrap_or_else(|err| {
-        use io::ErrorKind::*;
+    if !path.exists() {
+        let path_string = path.to_string_lossy();
 
-        match err.kind() {
-            NotFound => {
-                let path_string = path.to_string_lossy();
-
-                // TODO these should use roc_reporting to display nicer error messages.
-                match matches.value_source(ROC_FILE) {
+        // TODO these should use roc_reporting to display nicer error messages.
+        match matches.value_source(ROC_FILE) {
                     Some(ValueSource::DefaultValue) => {
                         eprintln!(
                             "\nNo `.roc` file was specified, and the current directory does not contain a {} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n",
@@ -525,19 +512,14 @@ pub fn build(
                     _ => eprintln!("\nThis file was not found: {}\n\nYou can run `roc help` for more information on how to provide a .roc file.\n", path_string),
                 }
 
-                process::exit(1);
-            }
-            _ => {
-                todo!("TODO Gracefully handle opening {:?} - {:?}", path, err);
-            }
-        }
-    });
+        process::exit(1);
+    }
 
     let target_valgrind = matches.is_present(FLAG_VALGRIND);
     let res_binary_path = build_file(
         &arena,
         &triple,
-        path,
+        path.to_path_buf(),
         opt_level,
         emit_debug_info,
         emit_timings,
