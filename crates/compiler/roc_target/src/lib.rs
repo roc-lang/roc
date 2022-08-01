@@ -74,6 +74,7 @@ pub enum Architecture {
     Wasm32,
     X86_32,
     X86_64,
+    Windows64,
 }
 
 impl Architecture {
@@ -81,7 +82,7 @@ impl Architecture {
         use Architecture::*;
 
         match self {
-            X86_64 | Aarch64 => PtrWidth::Bytes8,
+            X86_64 | Aarch64 | Windows64 => PtrWidth::Bytes8,
             X86_32 | Aarch32 | Wasm32 => PtrWidth::Bytes4,
         }
     }

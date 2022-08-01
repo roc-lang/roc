@@ -1711,6 +1711,7 @@ fn arch_to_str(architecture: Architecture) -> &'static str {
         Architecture::Aarch64 => "aarch64",
         Architecture::Aarch32 => "arm",
         Architecture::Wasm32 => "wasm32",
+        Architecture::Windows64 => todo!(),
     }
 }
 
@@ -1723,7 +1724,7 @@ fn write_indents(indentations: usize, buf: &mut String) {
 fn max_pointer_tagged_variants(architecture: Architecture) -> usize {
     match architecture {
         // On a 64-bit system, pointers have 3 bits that are unused, so return 2^3 = 8
-        Architecture::X86_64 | Architecture::Aarch64 => 8,
+        Architecture::X86_64 | Architecture::Aarch64 | Architecture::Windows64 => 8,
         // On a 32-bit system, pointers have 2 bits that are unused, so return 2^4 = 4
         Architecture::X86_32 | Architecture::Aarch32 | Architecture::Wasm32 => 4,
     }
@@ -1733,7 +1734,7 @@ fn max_pointer_tagged_variants(architecture: Architecture) -> usize {
 fn tagged_pointer_bitmask(architecture: Architecture) -> u8 {
     match architecture {
         // On a 64-bit system, pointers have 3 bits that are unused
-        Architecture::X86_64 | Architecture::Aarch64 => 0b0000_0111,
+        Architecture::X86_64 | Architecture::Aarch64 | Architecture::Windows64 => 0b0000_0111,
         // On a 32-bit system, pointers have 2 bits that are unused
         Architecture::X86_32 | Architecture::Aarch32 | Architecture::Wasm32 => 0b0000_0011,
     }
