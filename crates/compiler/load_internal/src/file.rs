@@ -4479,7 +4479,7 @@ fn canonicalize_and_constrain<'a>(
             Vacant(vacant) => {
                 let should_include_builtin = matches!(
                     name.module_id(),
-                    ModuleId::ENCODE | ModuleId::DICT | ModuleId::SET
+                    ModuleId::ENCODE | ModuleId::DECODE | ModuleId::DICT | ModuleId::SET
                 );
 
                 if !name.is_builtin() || should_include_builtin {
