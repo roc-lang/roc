@@ -717,3 +717,34 @@ fn encode_derived_record_with_many_types() {
         RocStr
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn decode_use_stdlib() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Decode.{ Decoding }, Json]
+                provides [main] to "./platform"
+
+            MyNum := U8 has [Decoding {decoder: myDecoder}]
+
+            myDecoder =
+                Decode.custom \bytes, fmt ->
+                    when Decode.decodeWith bytes Decode.u8 fmt is
+                        {result, rest} ->
+                            when result is
+                                Ok n -> {result: Ok (@MyNum n), rest}
+                                Err e -> {result: Err e, rest}
+
+            main =
+                when Decode.fromBytes [49, 53] Json.fromUtf8 is
+                    Ok (@MyNum n) -> n
+                    _ -> 101
+            "#
+        ),
+        15,
+        u8
+    )
+}
