@@ -1,6 +1,7 @@
 # Frequently Asked Questions
 
 # Why make a new editor instead of making an LSP plugin for VSCode, Vim or Emacs?
+
 The Roc editor is one of the key areas where we want to innovate. Constraining ourselves to a plugin for existing editors would severely limit our possibilities for innovation.
 
 A key part of our editor will be the use of plugins that are shipped with libraries. Think of a regex visualizer, parser debugger, or color picker. For library authors, it would be most convenient to write these plugins in Roc. Trying to dynamically load library plugins (written in Roc) in for example VSCode seems very difficult.
@@ -8,7 +9,7 @@ A key part of our editor will be the use of plugins that are shipped with librar
 ## Is there syntax highlighting for Vim/Emacs/VS Code or a LSP?
 
 Not currently. Although they will presumably exist someday, while Roc is in the early days there's actually a conscious
-effort to focus on the Roc Editor *instead of* adding Roc support to other editors - specifically in order to give the Roc
+effort to focus on the Roc Editor _instead of_ adding Roc support to other editors - specifically in order to give the Roc
 Editor the best possible chance at kickstarting a virtuous cycle of plugin authorship.
 
 This is an unusual approach, but there are more details in [this 2021 interview](https://youtu.be/ITrDd6-PbvY?t=212).
@@ -68,16 +69,18 @@ Both of these would make revising code riskier across the entire language, which
 Another option would be to define that function equality always returns `False`. So both of these would evaluate
 to `False`:
 
-* `(\x -> x + 1) == (\x -> 1 + x)`
-* `(\x -> x + 1) == (\x -> x + 1)`
+- `(\x -> x + 1) == (\x -> 1 + x)`
+- `(\x -> x + 1) == (\x -> x + 1)`
 
 This makes function equality effectively useless, while still technically allowing it. It has some other downsides:
-* Now if you put a function inside a record, using `==` on that record will still type-check, but it will then return `False`. This could lead to bugs if you didn't realize you had accidentally put a function in there - for example, because you were actually storing a different type (e.g. an opaque type) and didn't realize it had a function inside it.
-* If you put a function (or a value containing a function) into a `Dict` or `Set`, you'll never be able to get it out again. This is a common problem with [NaN](https://en.wikipedia.org/wiki/NaN), which is also defined not to be equal to itself.
+
+- Now if you put a function inside a record, using `==` on that record will still type-check, but it will then return `False`. This could lead to bugs if you didn't realize you had accidentally put a function in there - for example, because you were actually storing a different type (e.g. an opaque type) and didn't realize it had a function inside it.
+- If you put a function (or a value containing a function) into a `Dict` or `Set`, you'll never be able to get it out again. This is a common problem with [NaN](https://en.wikipedia.org/wiki/NaN), which is also defined not to be equal to itself.
 
 The first of these problems could be addressed by having function equality always return `True` instead of `False` (since that way it would not affect other fields' equality checks in a record), but that design has its own problems:
-* Although function equality is still useless, `(\x -> x + 1) == (\x -> x)` returns `True`. Even if it didn't lead to bugs in practice, this would certainly be surprising and confusing to beginners.
-* Now if you put several different functions into a `Dict` or `Set`, only one of them will be kept; the others will be discarded or overwritten. This could cause bugs if a value stored a function internally, and then other functions relied on that internal function for correctness.
+
+- Although function equality is still useless, `(\x -> x + 1) == (\x -> x)` returns `True`. Even if it didn't lead to bugs in practice, this would certainly be surprising and confusing to beginners.
+- Now if you put several different functions into a `Dict` or `Set`, only one of them will be kept; the others will be discarded or overwritten. This could cause bugs if a value stored a function internally, and then other functions relied on that internal function for correctness.
 
 Each of these designs makes Roc a language that's some combination of more error-prone, more confusing, and more
 brittle to change. Disallowing function equality at compile time eliminates all of these drawbacks.
@@ -107,12 +110,12 @@ To describe something that's neither an optional field nor an operation that can
 more descriptive than something like `Maybe`. For example, if a record type has an `artist` field, but the artist
 information may not be available, compare these three alternative ways to represent that:
 
-* `artist : Maybe Artist`
-* `artist : [Loading, Loaded Artist]`
-* `artist : [Unspecified, Specified Artist]`
+- `artist : Maybe Artist`
+- `artist : [Loading, Loaded Artist]`
+- `artist : [Unspecified, Specified Artist]`
 
 All three versions tell us that we might not have access to an `Artist`. However, the `Maybe` version doesn't
-tell us why that might be. The `Loading`/`Loaded` version tells us we don't have one *yet*, because we're
+tell us why that might be. The `Loading`/`Loaded` version tells us we don't have one _yet_, because we're
 still loading it, whereas the `Unspecified`/`Specified` version tells us we don't have one and shouldn't expect
 to have one later if we wait, because it wasn't specified.
 
@@ -135,8 +138,8 @@ _Since this is a FAQ answer, I'm going to assume familiarity with higher-kinded 
 A valuable aspect of Roc's type system is that it has decidable [principal](https://en.wikipedia.org/wiki/Principal_type)
 type inference. This means that:
 
-* At compile time, Roc can correctly infer the types for every expression in a program, even if you don't annotate any of the types.
-* This inference always infers the most general type possible; you couldn't possibly add a valid type annotation that would make the type more flexible than the one that Roc would infer if you deleted the annotation.
+- At compile time, Roc can correctly infer the types for every expression in a program, even if you don't annotate any of the types.
+- This inference always infers the most general type possible; you couldn't possibly add a valid type annotation that would make the type more flexible than the one that Roc would infer if you deleted the annotation.
 
 It's been proven that any type system which supports either [higher-kinded polymorphism](https://www.cl.cam.ac.uk/~jdy22/papers/lightweight-higher-kinded-polymorphism.pdf) or [arbitrary-rank types](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/putting.pdf) cannot have decidable
 principal type inference. With either of those features in the language, there will be situations where the compiler
@@ -152,9 +155,9 @@ sacrificing principal type inference to attain, so let's focus on the trade-offs
 
 Supporting Rank-2 types in Roc has been discussed before, but it has several important downsides:
 
-* It would increase the complexity of the language.
-* It would make some compiler error messages more confusing (e.g. they might mention `forall` because that was the most general type that could be inferred, even if that wasn't helpful or related to the actual problem).
-* It would substantially increase the complexity of the type checker, which would necessarily slow it down.
+- It would increase the complexity of the language.
+- It would make some compiler error messages more confusing (e.g. they might mention `forall` because that was the most general type that could be inferred, even if that wasn't helpful or related to the actual problem).
+- It would substantially increase the complexity of the type checker, which would necessarily slow it down.
 
 No implementation of Rank-2 types can remove any of these downsides. Thus far, we've been able to come up
 with sufficiently nice APIs that only require Rank-1 types, and we haven't seen a really compelling use case
@@ -201,9 +204,9 @@ Culturally, to support HKP is to take a side, and to decline to support it is al
 
 Given this, language designers have three options:
 
-* Have HKP and have Monad in the standard library. Embrace them and build a culture and ecosystem around them.
-* Have HKP and don't have Monad in the standard library. An alternate standard lbirary built around monads will inevitably emerge, and both the community and ecosystem will divide themselves along pro-monad and anti-monad lines.
-* Don't have HKP; build a culture and ecosystem around other things.
+- Have HKP and have Monad in the standard library. Embrace them and build a culture and ecosystem around them.
+- Have HKP and don't have Monad in the standard library. An alternate standard lbirary built around monads will inevitably emerge, and both the community and ecosystem will divide themselves along pro-monad and anti-monad lines.
+- Don't have HKP; build a culture and ecosystem around other things.
 
 Considering that these are the only three options, I think the best choice for Roc—not only on a technical
 level, but on a cultural level as well—is to make it clear that the plan is for Roc never to support HKP.
@@ -224,30 +227,30 @@ the result would be broken code and sadness.
 
 So why does Roc have the specific syntax changes it does? Here are some brief explanations:
 
-* `#` instead of `--` for comments - this allows [hashbang](https://senthilnayagan.medium.com/shebang-hashbang-10966b8f28a8)s to work without needing special syntax. That isn't a use case Elm supports, but it is one Roc is designed to support.
-* `{}` instead of `()` for the unit type - Elm has both, and they can both be used as a unit type. Since `{}` has other uses in the type system, but `()` doesn't, I consider it redundant and took it out.
-* `when`...`is` instead of `case`...`of` - I predict it will be easier for beginners to pick up, because usually the way I explain `case`...`of` to beginners is by saying the words "when" and "is" out loud - e.g. "when `color` is `Red`, it runs this first branch; when `color` is `Blue`, it runs this other branch..."
-* `:` instead of `=` for record field definitions (e.g. `{ foo: bar }` where Elm syntax would be `{ foo = bar }`): I like `=` being reserved for definitions, and `:` is the most popular alternative.
-* Backpassing syntax - since Roc is designed to be used for use cases like command-line apps, shell scripts, and servers, I expect chained effects to come up a lot more often than they do in Elm. I think backpassing is nice for those use cases, similarly to how `do` notation is nice for them in Haskell.
-* Tag unions instead of Elm's custom types (aka algebraic data types). This isn't just a syntactic change; tag unions are mainly in Roc because they can facilitate errors being accumulated across chained effects, which (as noted a moment ago) I expect to be a lot more common in Roc than in Elm. If you have tag unions, you don't really need a separate language feature for algebraic data types, since closed tag unions essentially work the same way - aside from not giving you a way to selectively expose variants or define phantom types. Roc's opaque types language feature covers those use cases instead.
-* No `::` operator, or `::` pattern matching for lists. Both of these are for the same reason: an Elm `List` is a linked list, so both prepending to it and removing an element from the front are very cheap operations. In contrast, a Roc `List` is a flat array, so both prepending to it and removing an element from the front are among the most expensive operations you can possibly do with it! To get good performance, this usage pattern should be encouraged in Elm and discouraged in Roc. Since having special syntax would encourage it, it would not be good for Roc to have that syntax!
-* No `<|` operator. In Elm, I almost exclusively found myself wanting to use this in conjunction with anonymous functions (e.g. `foo <| \bar -> ...`) or conditionals (e.g. `foo <| if bar then ...`). In Roc you can do both of these without the `<|`. That means the main remaining use for `<|` is to reduce parentheses, but I tend to think `|>` is better at that (or else the parens are fine), so after the other syntactic changes, I considered `<|` an unnecessary stylistic alternative to `|>` or parens.
-* The `|>` operator passes the expression before the `|>` as the *first* argument to the function after the `|>` instead of as the last argument. See the section on currying for details on why this works this way.
-* `:` instead of `type alias` - I like to avoid reserved keywords for terms that are desirable in userspace, so that people don't have to name things `typ` because `type` is a reserved keyword, or `clazz` because `class` is reserved. (I couldn't think of satisfactory alternatives for `as`, `when`, `is`, or `if` other than different reserved keywords. I could see an argument for `then`—and maybe even `is`—being replaced with a `->` or `=>` or something, but I don't anticipate missing either of those words much in userspace. `then` is used in JavaScript promises, but I think there are several better names for that function.)
-* No underscores in variable names - I've seen Elm beginners reflexively use `snake_case` over `camelCase` and then need to un-learn the habit after the compiler accepted it. I'd rather have the compiler give feedback that this isn't the way to do it in Roc, and suggest a camelCase alternative. I've also seen underscores used for lazy naming, e.g. `foo` and then `foo_`. If lazy naming is the goal, `foo2` is just as concise as `foo_`, but `foo3` is more concise than `foo__`. So in a way, removing `_` is a forcing function for improved laziness. (Of course, more descriptive naming would be even better.)
-* Trailing commas - I've seen people walk away (in some cases physically!) from Elm as soon as they saw the leading commas in collection literals. While I think they've made a mistake by not pushing past this aesthetic preference to give the language a chance, I also would prefer not put them in a position to make such a mistake in the first place. Secondarily, while I'm personally fine with either style, between the two I prefer the look of trailing commas.
-* The `!` unary prefix operator. I didn't want to have a `Basics` module (more on that in a moment), and without `Basics`, this would either need to be called fully-qualified (`Bool.not`) or else a module import of `Bool.{ not }` would be necessary. Both seemed less nice than supporting the `!` prefix that's common to so many widely-used languages, especially when we already have a unary prefix operator of `-` for negation (e.g. `-x`).
-* `!=` for the inequality operator (instead of Elm's `/=`) - this one pairs more naturally with the `!` prefix operator and is also very common in other languages.
+- `#` instead of `--` for comments - this allows [hashbang](https://senthilnayagan.medium.com/shebang-hashbang-10966b8f28a8)s to work without needing special syntax. That isn't a use case Elm supports, but it is one Roc is designed to support.
+- `{}` instead of `()` for the unit type - Elm has both, and they can both be used as a unit type. Since `{}` has other uses in the type system, but `()` doesn't, I consider it redundant and took it out.
+- `when`...`is` instead of `case`...`of` - I predict it will be easier for beginners to pick up, because usually the way I explain `case`...`of` to beginners is by saying the words "when" and "is" out loud - e.g. "when `color` is `Red`, it runs this first branch; when `color` is `Blue`, it runs this other branch..."
+- `:` instead of `=` for record field definitions (e.g. `{ foo: bar }` where Elm syntax would be `{ foo = bar }`): I like `=` being reserved for definitions, and `:` is the most popular alternative.
+- Backpassing syntax - since Roc is designed to be used for use cases like command-line apps, shell scripts, and servers, I expect chained effects to come up a lot more often than they do in Elm. I think backpassing is nice for those use cases, similarly to how `do` notation is nice for them in Haskell.
+- Tag unions instead of Elm's custom types (aka algebraic data types). This isn't just a syntactic change; tag unions are mainly in Roc because they can facilitate errors being accumulated across chained effects, which (as noted a moment ago) I expect to be a lot more common in Roc than in Elm. If you have tag unions, you don't really need a separate language feature for algebraic data types, since closed tag unions essentially work the same way - aside from not giving you a way to selectively expose variants or define phantom types. Roc's opaque types language feature covers those use cases instead.
+- No `::` operator, or `::` pattern matching for lists. Both of these are for the same reason: an Elm `List` is a linked list, so both prepending to it and removing an element from the front are very cheap operations. In contrast, a Roc `List` is a flat array, so both prepending to it and removing an element from the front are among the most expensive operations you can possibly do with it! To get good performance, this usage pattern should be encouraged in Elm and discouraged in Roc. Since having special syntax would encourage it, it would not be good for Roc to have that syntax!
+- No `<|` operator. In Elm, I almost exclusively found myself wanting to use this in conjunction with anonymous functions (e.g. `foo <| \bar -> ...`) or conditionals (e.g. `foo <| if bar then ...`). In Roc you can do both of these without the `<|`. That means the main remaining use for `<|` is to reduce parentheses, but I tend to think `|>` is better at that (or else the parens are fine), so after the other syntactic changes, I considered `<|` an unnecessary stylistic alternative to `|>` or parens.
+- The `|>` operator passes the expression before the `|>` as the _first_ argument to the function after the `|>` instead of as the last argument. See the section on currying for details on why this works this way.
+- `:` instead of `type alias` - I like to avoid reserved keywords for terms that are desirable in userspace, so that people don't have to name things `typ` because `type` is a reserved keyword, or `clazz` because `class` is reserved. (I couldn't think of satisfactory alternatives for `as`, `when`, `is`, or `if` other than different reserved keywords. I could see an argument for `then`—and maybe even `is`—being replaced with a `->` or `=>` or something, but I don't anticipate missing either of those words much in userspace. `then` is used in JavaScript promises, but I think there are several better names for that function.)
+- No underscores in variable names - I've seen Elm beginners reflexively use `snake_case` over `camelCase` and then need to un-learn the habit after the compiler accepted it. I'd rather have the compiler give feedback that this isn't the way to do it in Roc, and suggest a camelCase alternative. I've also seen underscores used for lazy naming, e.g. `foo` and then `foo_`. If lazy naming is the goal, `foo2` is just as concise as `foo_`, but `foo3` is more concise than `foo__`. So in a way, removing `_` is a forcing function for improved laziness. (Of course, more descriptive naming would be even better.)
+- Trailing commas - I've seen people walk away (in some cases physically!) from Elm as soon as they saw the leading commas in collection literals. While I think they've made a mistake by not pushing past this aesthetic preference to give the language a chance, I also would prefer not put them in a position to make such a mistake in the first place. Secondarily, while I'm personally fine with either style, between the two I prefer the look of trailing commas.
+- The `!` unary prefix operator. I didn't want to have a `Basics` module (more on that in a moment), and without `Basics`, this would either need to be called fully-qualified (`Bool.not`) or else a module import of `Bool.{ not }` would be necessary. Both seemed less nice than supporting the `!` prefix that's common to so many widely-used languages, especially when we already have a unary prefix operator of `-` for negation (e.g. `-x`).
+- `!=` for the inequality operator (instead of Elm's `/=`) - this one pairs more naturally with the `!` prefix operator and is also very common in other languages.
 
 Roc also has a different standard library from Elm. Some of the differences come down to platforms and applications (e.g. having `Task` in Roc's standard library wouldn't make sense), but others do not. Here are some brief explanations:
 
-* No `Basics` module. I wanted to have a simple rule of "all modules in the standard library are imported by default, and so are their exposed types," and that's it. Given that I wanted the comparison operators (e.g. `<`) to work only on numbers, it ended up that having `Num` and `Bool` modules meant that almost nothing would be left for a `Basics` equivalent in Roc except `identity` and `Never`. The Roc type `[]` (empty tag union) is equivalent to `Never`, so that wasn't necessary, and I generally think that `identity` is a good concept but a sign of an incomplete API whenever its use comes up in practice. For example, instead of calling `|> List.filterMap identity` I'd rather have access to a more self-descriptive function like `|> List.dropNothings`. With `Num` and `Bool`, and without `identity` and `Never`, there was nothing left in `Basics`.
-* `Str` instead of `String` - after using the `str` type in Rust, I realized I had no issue whatsoever with the more concise name, especially since it was used in so many places (similar to `Msg` and `Cmd` in Elm) - so I decided to save a couple of letters.
-* No function composition operators - I stopped using these in Elm so long ago, at one point I forgot they were in the language! See the FAQ entry on currying for details about why.
-* No `Char`. What most people think of as a "character" is a rendered glyph. However, rendered glyphs are comprised of [grapheme clusters](https://stackoverflow.com/a/27331885), which are a variable number of Unicode code points - and there's no upper bound on how many code points there can be in a single cluster. In a world of emoji, I think this makes `Char` error-prone and it's better to have `Str` be the only first-class unit. For convenience when working with unicode code points (e.g. for performance-critical tasks like parsing), the single-quote syntax is sugar for the corresponding `U32` code point - for example, writing `'鹏'` is exactly the same as writing `40527`. Like Rust, you get a compiler error if you put something in single quotes that's not a valid [Unicode scalar value](http://www.unicode.org/glossary/#unicode_scalar_value).
-* No `Debug.log` - the editor can do a better job at this, or you can write `expect x != x` to see what `x` is when the expectation fails. Using the editor means your code doesn't change, and using `expect` gives a natural reminder to remove the debugging code before shipping: the build will fail.
-* No `Debug.todo` - instead you can write a type annotation with no implementation below it; the type checker will treat it normally, but attempting to use the value will cause a runtime exception. This is a feature I've often wanted in Elm, because I like prototyping APIs by writing out the types only, but then when I want the compiler to type-check them for me, I end up having to add `Debug.todo` in various places.
-* No `Maybe`. See the "Why doesn't Roc have a `Maybe`/`Option`/`Optional` type" FAQ question
+- No `Basics` module. I wanted to have a simple rule of "all modules in the standard library are imported by default, and so are their exposed types," and that's it. Given that I wanted the comparison operators (e.g. `<`) to work only on numbers, it ended up that having `Num` and `Bool` modules meant that almost nothing would be left for a `Basics` equivalent in Roc except `identity` and `Never`. The Roc type `[]` (empty tag union) is equivalent to `Never`, so that wasn't necessary, and I generally think that `identity` is a good concept but a sign of an incomplete API whenever its use comes up in practice. For example, instead of calling `|> List.filterMap identity` I'd rather have access to a more self-descriptive function like `|> List.dropNothings`. With `Num` and `Bool`, and without `identity` and `Never`, there was nothing left in `Basics`.
+- `Str` instead of `String` - after using the `str` type in Rust, I realized I had no issue whatsoever with the more concise name, especially since it was used in so many places (similar to `Msg` and `Cmd` in Elm) - so I decided to save a couple of letters.
+- No function composition operators - I stopped using these in Elm so long ago, at one point I forgot they were in the language! See the FAQ entry on currying for details about why.
+- No `Char`. What most people think of as a "character" is a rendered glyph. However, rendered glyphs are comprised of [grapheme clusters](https://stackoverflow.com/a/27331885), which are a variable number of Unicode code points - and there's no upper bound on how many code points there can be in a single cluster. In a world of emoji, I think this makes `Char` error-prone and it's better to have `Str` be the only first-class unit. For convenience when working with unicode code points (e.g. for performance-critical tasks like parsing), the single-quote syntax is sugar for the corresponding `U32` code point - for example, writing `'鹏'` is exactly the same as writing `40527`. Like Rust, you get a compiler error if you put something in single quotes that's not a valid [Unicode scalar value](http://www.unicode.org/glossary/#unicode_scalar_value).
+- No `Debug.log` - the editor can do a better job at this, or you can write `expect x != x` to see what `x` is when the expectation fails. Using the editor means your code doesn't change, and using `expect` gives a natural reminder to remove the debugging code before shipping: the build will fail.
+- No `Debug.todo` - instead you can write a type annotation with no implementation below it; the type checker will treat it normally, but attempting to use the value will cause a runtime exception. This is a feature I've often wanted in Elm, because I like prototyping APIs by writing out the types only, but then when I want the compiler to type-check them for me, I end up having to add `Debug.todo` in various places.
+- No `Maybe`. See the "Why doesn't Roc have a `Maybe`/`Option`/`Optional` type" FAQ question
 
 ## Why aren't Roc functions curried by default?
 
@@ -259,15 +262,15 @@ by default" for the sake of brevity.
 
 As I see it, currying has one major upside and several major downsides. The upside:
 
-* It makes function calls more concise in some cases.
+- It makes function calls more concise in some cases.
 
 The downsides:
 
-* It lowers error message quality, because there can no longer be an error for "function called with too few arguments." (Calling a function with fewer arguments is always valid in curried functions; the error you get instead will unavoidably be some other sort of type mismatch, and it will be up to you to figure out that the real problem was that you forgot an argument.)
-* It makes the `|>` operator more error-prone in some cases.
-* It makes higher-order function calls need more parentheses in some cases.
-* It significantly increases the language's learning curve. (More on this later.)
-* It facilitates pointfree function composition. (More on why this is listed as a downside later.)
+- It lowers error message quality, because there can no longer be an error for "function called with too few arguments." (Calling a function with fewer arguments is always valid in curried functions; the error you get instead will unavoidably be some other sort of type mismatch, and it will be up to you to figure out that the real problem was that you forgot an argument.)
+- It makes the `|>` operator more error-prone in some cases.
+- It makes higher-order function calls need more parentheses in some cases.
+- It significantly increases the language's learning curve. (More on this later.)
+- It facilitates pointfree function composition. (More on why this is listed as a downside later.)
 
 There's also a downside that it would make runtime performance of compiled programs worse by default,
 but I assume it would be possible to optimize that away at the cost of slightly longer compile times.
@@ -284,8 +287,8 @@ In Roc, this code produces `"Hello, World!"`
     |> Str.concat "!"
 ```
 
-This is because Roc's `|>` operator uses the expression before the `|>` as the *first* argument to the function
-after it.  For functions where both arguments have the same type, but it's obvious which argument goes where (e.g.
+This is because Roc's `|>` operator uses the expression before the `|>` as the _first_ argument to the function
+after it. For functions where both arguments have the same type, but it's obvious which argument goes where (e.g.
 `Str.concat "Hello, " "World!"`, `List.concat [1, 2] [3, 4]`), this works out well. Another example would
 be `|> Num.sub 1`, which subtracts 1 from whatever came before the `|>`.
 
@@ -318,7 +321,7 @@ This is a fundamental design tension. One argument order works well with `|>` (a
 today) and with passing anonymous functions to higher-order functions, and the other works well with currying.
 It's impossible to have both.
 
-Of note, one possible design is to have currying while also having `|>` pass the *last* argument instead of the first.
+Of note, one possible design is to have currying while also having `|>` pass the _last_ argument instead of the first.
 This is what Elm does, and it makes pipeline-friendliness and curry-friendliness the same thing. However, it also
 means that either `|> Str.concat "!"` would add the `"!"` to the front of the string, or else `Str.concat`'s
 arguments would have to be flipped - meaning that `Str.concat "Hello, World" "!"` would evaluate to `"!Hello, World"`.
@@ -338,9 +341,9 @@ first pure functional programming language.
 
 Here was my experience teaching currying:
 
-* The only way to avoid teaching it is to refuse to explain why multi-argument functions have multiple `->`s in them. (If you don't explain it, at least one student will ask about it - and many if not all of the others will wonder.)
-* Teaching currying properly takes a solid chunk of time, because it requires explaining partial application, explaining how curried functions facilitate partial application, how function signatures accurately reflect that they're curried, and going through examples for all of these.
-* Even after doing all this, and iterating on my approach each time to try to explain it more effectively than I had the time before, I'd estimate that under 50% of the class ended up actually understanding currying. I consistently heard that in practice it only "clicked" for most people after spending significantly more time writing code with it.
+- The only way to avoid teaching it is to refuse to explain why multi-argument functions have multiple `->`s in them. (If you don't explain it, at least one student will ask about it - and many if not all of the others will wonder.)
+- Teaching currying properly takes a solid chunk of time, because it requires explaining partial application, explaining how curried functions facilitate partial application, how function signatures accurately reflect that they're curried, and going through examples for all of these.
+- Even after doing all this, and iterating on my approach each time to try to explain it more effectively than I had the time before, I'd estimate that under 50% of the class ended up actually understanding currying. I consistently heard that in practice it only "clicked" for most people after spending significantly more time writing code with it.
 
 This is not the end of the world, especially because it's easy enough to think "okay, I still don't totally get this
 even after that explanation, but I can remember that function arguments are separated by `->` in this language
@@ -396,10 +399,35 @@ Currying facilitates the antipattern of pointfree function composition, which I 
 Stacking up all these downsides of currying against the one upside of making certain function calls more concise,
 I concluded that it would be a mistake to have it in Roc.
 
-## Why are both rust and zig used?
+## Will Roc ever have linear types, dependent types, refinement types, or uniqueness types?
 
-At the start of the project, we did not know zig well and it was not production ready. The reason zig entered the project because it has many different backends (wasm, various assembly formats, llvm IR) and can create code with minimal dependencies
+The plan is for Roc to never have linear types, dependent types, refinement types, or uniqueness types.
 
-Rust has much more overhead in terms of code size. It's objectively not a lot, but it's less with zig.
+Fast compile times are a primary goal for Roc, and a major downside of refinement types is an exponential increase in compile times. This rules out refinement types for Roc.
 
-We think rust is a nicer language to work in for a project of this size. It has a type system that we're more familiar with, it has a package ecosystem and excellent tooling.
+If Roc were to have linear types or uniqueness types, they would move things that are currently behind-the-scenes performance optimizations into the type system. For them to be effective across the ecosystem, they couldn't really be opt-in; everyone would have to use them, even those for whom the current system of behind-the-scenes optimizations already met their performance needs without any added type system complexity. Since the overwhelming majority of use cases are expected to fall into that latter group, adding linear types or uniqueness types to Roc would be a net negative for the ecosystem.
+
+Dependent types are too risky of a bet for Roc to take. They have been implemented in programming languages for three decades, and for at least half that time period, it has been easy to find predictions that dependent types will be the future of type systems. Much harder to find are success stories of complex applications built with dependent types, which realized benefits that significantly outweighed the substantial complexity of introducing value semantics to a type system.
+
+Perhaps more success stories will emerge over time, but in the meantime it remains an open question whether dependent types are net beneficial in practice to application development. Further experimentation would be required to answer this question, and Roc is not the right language to do those experiments.
+
+## Will Roc's compiler ever be self-hosted? (That is, will it ever be written in Roc?)
+
+The plan is to never implement Roc's compiler in Roc.
+
+The goal is for Roc's compiler to deliver the best user experience possible. Compiler performance is strongly influenced by how memory is used, and there are many performance benefits to be gained from using a systems language like Rust which offers more direct control over memory than Roc ever should.
+
+Roc isn't trying to be the best possible language for high-performance compiler development, but it is trying to have a high-performance compiler. The best tool for that job is a language other than Roc, so that's what we're using!
+
+## Why does Roc use both Rust and Zig?
+
+Roc's compiler has always been written in [Rust](https://www.rust-lang.org/). Roc's standard library was briefly written in Rust, but was soon rewritten in [Zig](https://ziglang.org/).
+
+There were a few reasons for this rewrite.
+
+1. We struggled to get Rust to emit LLVM bitcode in the format we needed, which is important so that LLVM can do whole-program optimizations across the standard library and compiled application.
+2. Since the standard library has to interact with raw generated machine code (or LLVM bitcode), the Rust code unavoidable needed `unsafe` annotations all over the place. This made one of Rust's biggest selling points inapplicable in this particular use case.
+3. Given that Rust's main selling points are inapplicable (its package ecosystem being another), Zig's much faster compile times are a welcome benefit.
+4. Zig has more tools for working in a memory-unsafe environment, such as reporting memory leaks in tests. These have been helpful in finding bugs that are out of scope for safe Rust.
+
+The split of Rust for the compiler and Zig for the standard library has worked well so far, and there are no plans to change it.
