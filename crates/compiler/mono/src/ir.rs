@@ -3999,9 +3999,10 @@ pub fn with_hole<'a>(
             }
 
             // creating a record from the var will unpack it if it's just a single field.
-            let layout = layout_cache
-                .from_var(env.arena, record_var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+            let layout = match layout_cache.from_var(env.arena, record_var, env.subs) {
+                Ok(layout) => layout,
+                Err(_) => return Stmt::RuntimeError("Can't create record with improper layout"),
+            };
 
             let field_symbols = field_symbols.into_bump_slice();
 
