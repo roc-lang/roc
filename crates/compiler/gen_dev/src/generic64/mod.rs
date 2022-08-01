@@ -693,7 +693,14 @@ impl<
 
     fn build_num_add(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>) {
         match layout {
-            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
+            Layout::Builtin(Builtin::Int(
+                IntWidth::I64
+                | IntWidth::U64
+                | IntWidth::I32
+                | IntWidth::U32
+                | IntWidth::I8
+                | IntWidth::U8,
+            )) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager
