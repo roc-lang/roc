@@ -21,7 +21,7 @@ mod test_reporting {
         DEFAULT_PALETTE,
     };
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
-    use roc_solve::solve;
+    use roc_solve_problem::TypeError;
     use roc_types::subs::Subs;
     use std::path::PathBuf;
 
@@ -107,7 +107,7 @@ mod test_reporting {
     ) -> Result<
         (
             String,
-            Vec<solve::TypeError>,
+            Vec<TypeError>,
             Vec<roc_problem::can::Problem>,
             ModuleId,
             Interns,
@@ -185,7 +185,7 @@ mod test_reporting {
         expr_src: &'a str,
     ) -> Result<
         (
-            Vec<solve::TypeError>,
+            Vec<TypeError>,
             Vec<roc_problem::can::Problem>,
             ModuleId,
             Interns,
@@ -5228,6 +5228,23 @@ mod test_reporting {
     "###
     );
 
+    test_report!(
+        multi_insufficient_indent,
+        "    \"\"\"\n  testing\n    \"\"\"", // 4 space indent on the start, 2 space on the `testing` line
+        @r###"
+    ── INSUFFICIENT INDENT IN MULTI-LINE STRING ─ ..._insufficient_indent/Test.roc ─
+
+    This multiline string is not sufficiently indented:
+
+    5│        testing
+              ^
+
+    Lines in a multi-line string must be indented at least as much as the
+    beginning """. This extra indentation is automatically removed from
+    the string during compilation.
+    "###
+    );
+
     // https://github.com/rtfeldman/roc/issues/1714
     test_report!(
     interpolate_concat_is_transparent_1714,
@@ -8629,35 +8646,29 @@ All branches in an `if` must have the same type!
                 }
             "#
         ),
-        @r#"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        This expression has a type that does not implement the abilities it's expected to:
+    This expression has a type that does not implement the abilities it's expected to:
 
-        15│          notYet: hash (A 1),
-                                   ^^^
+    15│          notYet: hash (A 1),
+                               ^^^
 
-        Roc can't generate an implementation of the `#UserApp.Hash` ability for
+    Roc can't generate an implementation of the `#UserApp.Hash` ability for
 
-            [A (Num a)]b
+        [A (Num a)]b
 
-        Only builtin abilities can have generated implementations!
+    Only builtin abilities can have generated implementations!
 
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        This expression has a type that does not implement the abilities it's expected to:
+    This expression has a type that does not implement the abilities it's expected to:
 
-        14│          nope: hash (@User {}),
-                                 ^^^^^^^^
+    14│          nope: hash (@User {}),
+                             ^^^^^^^^
 
-        The type `User` does not fully implement the ability `Hash`. The following
-        specializations are missing:
-
-        A specialization for `hash`, which is defined here:
-
-        4│      hash : a -> U64 | a has Hash
-                ^^^^
-        "#
+    The type `User` does not fully implement the ability `Hash`.
+    "###
     );
 
     test_report!(
@@ -9095,37 +9106,27 @@ All branches in an `if` must have the same type!
         // TODO: this error message is quite unfortunate. We should remove the duplication, and
         // also support regions that point to things in other modules. See also https://github.com/rtfeldman/roc/issues/3056.
         @r###"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        This expression has a type that does not implement the abilities it's expected to:
+    This expression has a type that does not implement the abilities it's expected to:
 
-        4│  main = Encode.toEncoder { x: @A {} }
-                                    ^^^^^^^^^^^^
+    4│  main = Encode.toEncoder { x: @A {} }
+                                ^^^^^^^^^^^^
 
-        Roc can't generate an implementation of the `Encode.Encoding` ability
-        for
+    Roc can't generate an implementation of the `Encode.Encoding` ability
+    for
 
-            { x : A }
+        { x : A }
 
-        In particular, an implementation for
+    In particular, an implementation for
 
-            A
+        A
 
-        cannot be generated.
+    cannot be generated.
 
-        Tip: `A` does not implement `Encoding`. Consider adding a custom
-        implementation or `has Encode.Encoding` to the definition of `A`.
-
-        ── INCOMPLETE ABILITY IMPLEMENTATION ───────────────────── /code/proj/Main.roc ─
-
-        The type `A` does not fully implement the ability `Encoding`. The
-        following specializations are missing:
-
-        A specialization for `toEncoder`, which is defined here:
-
-        5│
-                                                                                                                                                                                                                                                                                                                                                                                                                                                    ^^^^^^^^^
-        "###
+    Tip: `A` does not implement `Encoding`. Consider adding a custom
+    implementation or `has Encode.Encoding` to the definition of `A`.
+    "###
     );
 
     test_report!(
@@ -10061,6 +10062,90 @@ All branches in an `if` must have the same type!
     assignment, consider removing the assignment. Since Roc is purely
     functional, assignments that don't introduce variables cannot affect a
     program's behavior!
+    "###
+    );
+
+    test_report!(
+        unused_shadow_specialization,
+        indoc!(
+            r#"
+            app "test" provides [hash, Id] to "./platform"
+
+            Hash has hash : a -> U64 | a has Hash
+
+            Id := {}
+
+            hash = \@Id _ -> 0
+            "#
+        ),
+        @r###"
+    ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
+
+    `hash` is not used anywhere in your code.
+
+    7│  hash = \@Id _ -> 0
+        ^^^^
+
+    If you didn't intend on using `hash` then remove it so future readers of
+    your code don't wonder why it is there.
+    "###
+    );
+
+    test_report!(
+        specialization_for_wrong_type,
+        indoc!(
+            r#"
+            app "test" provides [hash, Id, Id2] to "./platform"
+
+            Hash has hash : a -> U64 | a has Hash
+
+            Id := {} has [Hash {hash}]
+            Id2 := {}
+
+            hash = \@Id2 _ -> 0
+            "#
+        ),
+        @r###"
+    ── WRONG SPECIALIZATION TYPE ───────────────────────────── /code/proj/Main.roc ─
+
+    This specialization of `hash` is not for the expected type:
+
+    8│  hash = \@Id2 _ -> 0
+        ^^^^
+
+    It was previously claimed to be a specialization for `Id`, but was
+    determined to actually specialize `Id2`!
+    "###
+    );
+
+    test_report!(
+        mismatched_record_annotation,
+        indoc!(
+            r#"
+                x : { y : Str }
+                x = {}
+
+                x
+                "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `x` definition:
+
+    4│      x : { y : Str }
+    5│      x = {}
+                ^^
+
+    The body is a record of type:
+
+        {}
+
+    But the type annotation on `x` says it should be:
+
+        { y : Str }
+
+    Tip: Looks like the y field is missing.
     "###
     );
 }

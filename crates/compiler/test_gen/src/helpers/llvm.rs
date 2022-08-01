@@ -458,7 +458,16 @@ fn llvm_module_to_wasm_file(
         .unwrap();
 
     if !output.stderr.is_empty() {
-        panic!("{}", String::from_utf8_lossy(&output.stderr));
+        let msg = String::from_utf8_lossy(&output.stderr);
+
+        if msg.contains("wasm-ld: error: unknown file type") {
+            panic!(
+                "{}\nThis can happen if multiple tests have the same input string",
+                msg
+            );
+        } else {
+            panic!("{}", msg);
+        }
     }
 
     assert!(output.status.success(), "{:#?}", output);

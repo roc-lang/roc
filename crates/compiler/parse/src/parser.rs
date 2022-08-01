@@ -384,6 +384,7 @@ pub enum EString<'a> {
     UnknownEscape(Position),
     Format(&'a EExpr<'a>, Position),
     FormatEnd(Position),
+    MultilineInsufficientIndent(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

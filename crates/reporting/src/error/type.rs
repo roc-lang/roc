@@ -7,8 +7,7 @@ use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{LineInfo, Loc, Region};
-use roc_solve::ability::{UnderivableReason, Unfulfilled};
-use roc_solve::solve;
+use roc_solve_problem::{TypeError, UnderivableReason, Unfulfilled};
 use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{
@@ -30,9 +29,9 @@ pub fn type_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
     lines: &LineInfo,
     filename: PathBuf,
-    problem: solve::TypeError,
+    problem: TypeError,
 ) -> Option<Report<'b>> {
-    use solve::TypeError::*;
+    use TypeError::*;
 
     fn report(title: String, doc: RocDocBuilder<'_>, filename: PathBuf) -> Option<Report<'_>> {
         Some(Report {
@@ -221,37 +220,33 @@ pub fn type_problem<'b>(
                 severity: Severity::RuntimeError,
             })
         }
-        DominatedDerive {
-            opaque,
-            ability,
-            derive_region,
-            impl_region,
+        WrongSpecialization {
+            region,
+            ability_member,
+            expected_opaque,
+            found_opaque,
         } => {
             let stack = [
                 alloc.concat([
-                    alloc.symbol_unqualified(opaque),
-                    alloc.reflow(" both derives and custom-implements "),
-                    alloc.symbol_qualified(ability),
-                    alloc.reflow(". We found the derive here:"),
+                    alloc.reflow("This specialization of "),
+                    alloc.symbol_unqualified(ability_member),
+                    alloc.reflow(" is not for the expected type:"),
                 ]),
-                alloc.region(lines.convert_region(derive_region)),
+                alloc.region(lines.convert_region(region)),
                 alloc.concat([
-                    alloc.reflow("and one custom implementation of "),
-                    alloc.symbol_qualified(ability),
-                    alloc.reflow(" here:"),
+                    alloc.reflow("It was previously claimed to be a specialization for "),
+                    alloc.symbol_unqualified(expected_opaque),
+                    alloc.reflow(", but was determined to actually specialize "),
+                    alloc.symbol_unqualified(found_opaque),
+                    alloc.reflow("!"),
                 ]),
-                alloc.region(lines.convert_region(impl_region)),
-                alloc.concat([
-                    alloc.reflow("Derived and custom implementations can conflict, so one of them needs to be removed!"),
-                ]),
-                alloc.note("").append(alloc.reflow("We'll try to compile your program using the custom implementation first, and fall-back on the derived implementation if needed. Make sure to disambiguate which one you want!")),
             ];
 
             Some(Report {
-                title: "CONFLICTING DERIVE AND IMPLEMENTATION".to_string(),
+                title: "WRONG SPECIALIZATION TYPE".to_string(),
                 filename,
                 doc: alloc.stack(stack),
-                severity: Severity::Warning,
+                severity: Severity::RuntimeError,
             })
         }
     }
@@ -263,29 +258,14 @@ fn report_unfulfilled_ability<'a>(
     unfulfilled: Unfulfilled,
 ) -> RocDocBuilder<'a> {
     match unfulfilled {
-        Unfulfilled::Incomplete {
-            typ,
-            ability,
-            missing_members,
-        } => {
-            debug_assert!(!missing_members.is_empty());
-
-            let mut stack = vec![alloc.concat([
+        Unfulfilled::OpaqueDoesNotImplement { typ, ability } => {
+            let stack = vec![alloc.concat([
                 alloc.reflow("The type "),
                 alloc.symbol_unqualified(typ),
                 alloc.reflow(" does not fully implement the ability "),
                 alloc.symbol_unqualified(ability),
-                alloc.reflow(". The following specializations are missing:"),
+                alloc.reflow("."),
             ])];
-
-            for member in missing_members.into_iter() {
-                stack.push(alloc.concat([
-                    alloc.reflow("A specialization for "),
-                    alloc.symbol_unqualified(member.value),
-                    alloc.reflow(", which is defined here:"),
-                ]));
-                stack.push(alloc.region(lines.convert_region(member.region)));
-            }
 
             alloc.stack(stack)
         }

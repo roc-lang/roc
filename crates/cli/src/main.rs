@@ -7,7 +7,6 @@ use roc_cli::{
 };
 use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
-use roc_glue;
 use roc_load::{LoadingProblem, Threading};
 use std::fs::{self, FileType};
 use std::io;

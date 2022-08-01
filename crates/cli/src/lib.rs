@@ -8,11 +8,12 @@ use roc_build::link::{LinkType, LinkingStrategy};
 use roc_collections::VecMap;
 use roc_error_macros::{internal_error, user_error};
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
+use roc_gen_llvm::run_roc::RocCallResult;
+use roc_gen_llvm::run_roc_dylib;
 use roc_load::{Expectations, LoadingProblem, Threading};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
-use roc_region::all::Region;
-use roc_repl_cli::{expect_mono_module_to_dylib, ToplevelExpect};
+use roc_repl_expect::run::{expect_mono_module_to_dylib, roc_dev_expect};
 use roc_target::TargetInfo;
 use std::env;
 use std::ffi::{CString, OsStr};
@@ -361,26 +362,6 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         }
     });
 
-    unsafe {
-        let name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
-        let cstring = CString::new(name).unwrap();
-        let shared_fd =
-            libc::shm_open(cstring.as_ptr().cast(), libc::O_RDWR | libc::O_CREAT, 0o666);
-
-        libc::ftruncate(shared_fd, SHM_SIZE);
-
-        let _shared_ptr = libc::mmap(
-            std::ptr::null_mut(),
-            4096,
-            libc::PROT_WRITE,
-            libc::MAP_SHARED,
-            shared_fd,
-            0,
-        );
-    }
-
-    // let target_valgrind = matches.is_present(FLAG_VALGRIND);
-
     let arena = &arena;
     let target = &triple;
     let opt_level = opt_level;
@@ -415,76 +396,29 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     )
     .unwrap();
 
-    let name = "/roc_expect_buffer"; // IMPORTANT: shared memory object names must begin with / and contain no other slashes!
-    let cstring = CString::new(name).unwrap();
-
     let arena = &bumpalo::Bump::new();
     let interns = arena.alloc(interns);
 
-    use roc_gen_llvm::try_run_jit_function;
+    let mut writer = std::io::stdout();
 
-    let mut failed = 0;
-    let mut passed = 0;
+    let mut shared_buffer = vec![0u8; SHM_SIZE as usize];
 
-    unsafe {
-        let shared_fd = libc::shm_open(cstring.as_ptr().cast(), libc::O_RDWR, 0o666);
+    let set_shared_buffer = run_roc_dylib!(lib, "set_shared_buffer", (*mut u8, usize), ());
+    let mut result = RocCallResult::default();
+    let slice = (shared_buffer.as_mut_ptr(), shared_buffer.len());
+    unsafe { set_shared_buffer(slice, &mut result) };
 
-        libc::ftruncate(shared_fd, SHM_SIZE);
-
-        let shared_ptr = libc::mmap(
-            std::ptr::null_mut(),
-            SHM_SIZE as usize,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_SHARED,
-            shared_fd,
-            0,
-        );
-
-        for expect in expects {
-            // clear the state
-            libc::memset(shared_ptr.cast(), 0, SHM_SIZE as _);
-            *((shared_ptr as *mut usize).add(1)) = 16;
-
-            let result: Result<(), String> = try_run_jit_function!(lib, expect.name, (), |v: ()| v);
-
-            let shared_memory_ptr: *const u8 = shared_ptr.cast();
-
-            let buffer =
-                std::slice::from_raw_parts(shared_memory_ptr.add(16), SHM_SIZE as usize - 16);
-
-            if let Err(roc_panic_message) = result {
-                failed += 1;
-
-                render_expect_panic(
-                    arena,
-                    expect,
-                    &roc_panic_message,
-                    &mut expectations,
-                    interns,
-                );
-                println!();
-            } else if buffer.iter().any(|b| *b != 0) {
-                failed += 1;
-
-                let count = *(shared_ptr as *const usize).add(0);
-                let mut offset = 16;
-
-                for _ in 0..count {
-                    offset += render_expect_failure(
-                        arena,
-                        Some(expect),
-                        &mut expectations,
-                        interns,
-                        shared_memory_ptr.add(offset),
-                    );
-
-                    println!();
-                }
-            } else {
-                passed += 1;
-            }
-        }
-    }
+    let (failed, passed) = roc_repl_expect::run::run_expects(
+        &mut writer,
+        roc_reporting::report::RenderTarget::ColorTerminal,
+        arena,
+        interns,
+        &lib,
+        &mut expectations,
+        shared_buffer.as_mut_ptr(),
+        expects,
+    )
+    .unwrap();
 
     let total_time = start_time.elapsed();
 
@@ -506,7 +440,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         };
 
         println!(
-            "\x1B[{failed_color}m{failed}\x1B[39m failed and \x1B[32m{passed}\x1B[39m passed in {} ms.\n",
+            "\n\x1B[{failed_color}m{failed}\x1B[39m failed and \x1B[32m{passed}\x1B[39m passed in {} ms.\n",
             total_time.as_millis(),
         );
 
@@ -1050,15 +984,16 @@ unsafe fn roc_run_native_debug(
                             0,
                         );
 
-                        let shared_memory_ptr: *const u8 = shared_ptr.cast();
+                        let shared_memory_ptr: *mut u8 = shared_ptr.cast();
 
-                        render_expect_failure(
+                        roc_dev_expect(
+                            &mut std::io::stdout(),
                             arena,
-                            None,
                             &mut expectations,
                             interns,
                             shared_memory_ptr,
-                        );
+                        )
+                        .unwrap();
                     }
                     _ => println!("received signal {}", sig),
                 }
@@ -1066,230 +1001,6 @@ unsafe fn roc_run_native_debug(
         }
         _ => unreachable!(),
     }
-}
-
-fn render_expect_panic<'a>(
-    _arena: &'a Bump,
-    expect: ToplevelExpect,
-    message: &str,
-    expectations: &mut VecMap<ModuleId, Expectations>,
-    interns: &'a Interns,
-) {
-    use roc_reporting::report::Report;
-    use roc_reporting::report::RocDocAllocator;
-    use ven_pretty::DocAllocator;
-
-    let module_id = expect.symbol.module_id();
-    let data = expectations.get_mut(&module_id).unwrap();
-
-    // TODO cache these line offsets?
-    let path = &data.path;
-    let filename = data.path.to_owned();
-    let file_string = std::fs::read_to_string(path).unwrap();
-    let src_lines: Vec<_> = file_string.lines().collect();
-
-    let line_info = roc_region::all::LineInfo::new(&file_string);
-    let line_col_region = line_info.convert_region(expect.region);
-
-    let alloc = RocDocAllocator::new(&src_lines, module_id, interns);
-
-    let doc = alloc.stack([
-        alloc.text("This expectation crashed while running:"),
-        alloc.region(line_col_region),
-        alloc.text("The crash reported this message:"),
-        alloc.text(message),
-    ]);
-
-    let report = Report {
-        title: "EXPECT FAILED".into(),
-        doc,
-        filename,
-        severity: roc_reporting::report::Severity::RuntimeError,
-    };
-
-    let mut buf = String::new();
-
-    report.render(
-        roc_reporting::report::RenderTarget::ColorTerminal,
-        &mut buf,
-        &alloc,
-        &roc_reporting::report::DEFAULT_PALETTE,
-    );
-
-    println!("{}", buf);
-}
-
-fn render_expect_failure<'a>(
-    arena: &'a Bump,
-    expect: Option<ToplevelExpect>,
-    expectations: &mut VecMap<ModuleId, Expectations>,
-    interns: &'a Interns,
-    start: *const u8,
-) -> usize {
-    use roc_reporting::report::Report;
-    use roc_reporting::report::RocDocAllocator;
-    use ven_pretty::DocAllocator;
-
-    // we always run programs as the host
-    let target_info = (&target_lexicon::Triple::host()).into();
-
-    let region_bytes: [u8; 8] = unsafe { *(start.cast()) };
-    let region: Region = unsafe { std::mem::transmute(region_bytes) };
-
-    let module_id_bytes: [u8; 4] = unsafe { *(start.add(8).cast()) };
-    let module_id: ModuleId = unsafe { std::mem::transmute(module_id_bytes) };
-
-    let data = expectations.get_mut(&module_id).unwrap();
-
-    // TODO cache these line offsets?
-    let path = &data.path;
-    let filename = data.path.to_owned();
-    let file_string = std::fs::read_to_string(path).unwrap();
-    let src_lines: Vec<_> = file_string.lines().collect();
-
-    let line_info = roc_region::all::LineInfo::new(&file_string);
-    let display_region = match expect {
-        Some(expect) => {
-            if !expect.region.contains(&region) {
-                // this is an expect outside of a toplevel expect,
-                // likely in some function we called
-                region
-            } else {
-                Region::across_all([&expect.region, &region])
-            }
-        }
-        None => region,
-    };
-    let line_col_region = line_info.convert_region(display_region);
-
-    let alloc = RocDocAllocator::new(&src_lines, module_id, interns);
-
-    // 8 bytes for region, 4 for module id
-    let start_offset = 12;
-
-    let current = match data.expectations.get(&region) {
-        None => {
-            invalid_regions(alloc, filename, line_info, region);
-            return 0;
-        }
-        Some(current) => current,
-    };
-    let subs = arena.alloc(&mut data.subs);
-
-    let (symbols, variables): (Vec<_>, Vec<_>) = current.iter().map(|(a, b)| (*a, *b)).unzip();
-
-    let error_types: Vec<_> = variables
-        .iter()
-        .map(|variable| {
-            let (error_type, _) = subs.var_to_error_type(*variable);
-            error_type
-        })
-        .collect();
-
-    let (offset, expressions) = roc_repl_expect::get_values(
-        target_info,
-        arena,
-        subs,
-        interns,
-        start,
-        start_offset,
-        &variables,
-    )
-    .unwrap();
-
-    use roc_fmt::annotation::Formattable;
-    use roc_reporting::error::r#type::error_type_to_doc;
-
-    let it =
-        symbols
-            .iter()
-            .zip(expressions)
-            .zip(error_types)
-            .map(|((symbol, expr), error_type)| {
-                let mut buf = roc_fmt::Buf::new_in(arena);
-                expr.format(&mut buf, 0);
-
-                alloc.vcat([
-                    alloc
-                        .symbol_unqualified(*symbol)
-                        .append(" : ")
-                        .append(error_type_to_doc(&alloc, error_type)),
-                    alloc
-                        .symbol_unqualified(*symbol)
-                        .append(" = ")
-                        .append(buf.into_bump_str()),
-                ])
-            });
-
-    let doc = if it.len() > 0 {
-        alloc.stack([
-            alloc.text("This expectation failed:"),
-            alloc.region(line_col_region),
-            alloc.text("When it failed, these variables had these values:"),
-            alloc.stack(it),
-        ])
-    } else {
-        alloc.stack([
-            alloc.text("This expectation failed:"),
-            alloc.region(line_col_region),
-        ])
-    };
-
-    let report = Report {
-        title: "EXPECT FAILED".into(),
-        doc,
-        filename,
-        severity: roc_reporting::report::Severity::RuntimeError,
-    };
-
-    let mut buf = String::new();
-
-    report.render(
-        roc_reporting::report::RenderTarget::ColorTerminal,
-        &mut buf,
-        &alloc,
-        &roc_reporting::report::DEFAULT_PALETTE,
-    );
-
-    println!("{}", buf);
-
-    offset
-}
-
-fn invalid_regions(
-    alloc: roc_reporting::report::RocDocAllocator,
-    filename: PathBuf,
-    line_info: roc_region::all::LineInfo,
-    region: Region,
-) {
-    use ven_pretty::DocAllocator;
-
-    let line_col_region = line_info.convert_region(region);
-
-    let doc = alloc.stack([
-        alloc.text("Internal expect failure"),
-        alloc.region(line_col_region),
-    ]);
-
-    let report = roc_reporting::report::Report {
-        title: "EXPECT FAILED".into(),
-        doc,
-        filename,
-        severity: roc_reporting::report::Severity::RuntimeError,
-    };
-
-    let mut buf = String::new();
-
-    report.render(
-        roc_reporting::report::RenderTarget::ColorTerminal,
-        &mut buf,
-        &alloc,
-        &roc_reporting::report::DEFAULT_PALETTE,
-    );
-
-    println!("{}", buf);
-
-    panic!();
 }
 
 #[cfg(target_os = "linux")]

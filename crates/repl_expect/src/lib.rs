@@ -1,5 +1,3 @@
-use std::cell::RefCell;
-
 use roc_module::symbol::Interns;
 use roc_mono::{
     ir::ProcLayout,
@@ -8,17 +6,21 @@ use roc_mono::{
 use roc_parse::ast::Expr;
 use roc_repl_eval::{
     eval::{jit_to_ast, ToAstProblem},
-    ReplApp, ReplAppMemory,
+    ReplAppMemory,
 };
-use roc_std::RocStr;
 use roc_target::TargetInfo;
 use roc_types::subs::{Subs, Variable};
+
+mod app;
+pub mod run;
+
+use app::{ExpectMemory, ExpectReplApp};
 
 #[allow(clippy::too_many_arguments)]
 pub fn get_values<'a>(
     target_info: TargetInfo,
     arena: &'a bumpalo::Bump,
-    subs: &'a Subs,
+    subs: &Subs,
     interns: &'a Interns,
     start: *const u8,
     start_offset: usize,
@@ -26,10 +28,7 @@ pub fn get_values<'a>(
 ) -> Result<(usize, Vec<Expr<'a>>), ToAstProblem> {
     let mut result = Vec::with_capacity(variables.len());
 
-    let memory = ExpectMemory {
-        start,
-        bytes_read: RefCell::new(0),
-    };
+    let memory = ExpectMemory { start };
 
     let app = ExpectReplApp {
         memory: arena.alloc(memory),
@@ -38,7 +37,10 @@ pub fn get_values<'a>(
 
     let app = arena.alloc(app);
 
-    for variable in variables {
+    for (i, variable) in variables.iter().enumerate() {
+        let start = app.memory.deref_usize(start_offset + i * 8);
+        app.offset = start;
+
         let expr = {
             let variable = *variable;
 
@@ -73,159 +75,523 @@ pub fn get_values<'a>(
     Ok((app.offset, result))
 }
 
-struct ExpectMemory {
-    start: *const u8,
-    bytes_read: RefCell<usize>,
-}
+#[cfg(test)]
+mod test {
+    use indoc::indoc;
+    use pretty_assertions::assert_eq;
+    use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult, run_roc_dylib};
+    use roc_load::Threading;
+    use roc_reporting::report::RenderTarget;
+    use target_lexicon::Triple;
 
-macro_rules! deref_number {
-    ($name: ident, $t: ty) => {
-        fn $name(&self, addr: usize) -> $t {
-            // dbg!(std::any::type_name::<$t>(), self.start, addr);
-            let ptr = unsafe { self.start.add(addr) } as *const _;
-            *self.bytes_read.borrow_mut() += std::mem::size_of::<$t>();
-            unsafe { std::ptr::read_unaligned(ptr) }
-        }
-    };
-}
+    use crate::run::expect_mono_module_to_dylib;
 
-impl ReplAppMemory for ExpectMemory {
-    deref_number!(deref_bool, bool);
+    use super::*;
 
-    deref_number!(deref_u8, u8);
-    deref_number!(deref_u16, u16);
-    deref_number!(deref_u32, u32);
-    deref_number!(deref_u64, u64);
-    deref_number!(deref_u128, u128);
-    deref_number!(deref_usize, usize);
+    fn run_expect_test(source: &str, expected: &str) {
+        let arena = bumpalo::Bump::new();
+        let arena = &arena;
 
-    deref_number!(deref_i8, i8);
-    deref_number!(deref_i16, i16);
-    deref_number!(deref_i32, i32);
-    deref_number!(deref_i64, i64);
-    deref_number!(deref_i128, i128);
-    deref_number!(deref_isize, isize);
+        let triple = Triple::host();
+        let target = &triple;
 
-    deref_number!(deref_f32, f32);
-    deref_number!(deref_f64, f64);
+        let opt_level = roc_mono::ir::OptLevel::Normal;
+        let target_info = TargetInfo::from(target);
 
-    fn deref_str(&self, addr: usize) -> &str {
-        let last_byte_addr = addr + (3 * std::mem::size_of::<usize>()) - 1;
-        let last_byte = self.deref_i8(last_byte_addr);
+        // Step 1: compile the app and generate the .o file
+        let src_dir = tempfile::tempdir().unwrap();
+        let filename = src_dir.path().join("Test.roc");
 
-        let is_small = last_byte < 0;
+        std::fs::write(&filename, source).unwrap();
 
-        if is_small {
-            let ptr = unsafe { self.start.add(addr) };
-            let roc_str: &RocStr = unsafe { &*ptr.cast() };
+        let loaded = roc_load::load_and_monomorphize_from_str(
+            arena,
+            filename,
+            source,
+            src_dir.path().to_path_buf(),
+            Default::default(),
+            target_info,
+            RenderTarget::ColorTerminal,
+            Threading::Single,
+        )
+        .unwrap();
 
-            roc_str.as_str()
+        let mut loaded = loaded;
+        let mut expectations = std::mem::take(&mut loaded.expectations);
+        let loaded = loaded;
+
+        let interns = loaded.interns.clone();
+
+        let (lib, expects) = expect_mono_module_to_dylib(
+            arena,
+            target.clone(),
+            loaded,
+            opt_level,
+            LlvmBackendMode::CliTest,
+        )
+        .unwrap();
+
+        let arena = &bumpalo::Bump::new();
+        let interns = arena.alloc(interns);
+
+        const BUFFER_SIZE: usize = 1024;
+
+        let mut shared_buffer = [0u8; BUFFER_SIZE];
+
+        // communicate the mmapped name to zig/roc
+        let set_shared_buffer = run_roc_dylib!(lib, "set_shared_buffer", (*mut u8, usize), ());
+        let mut result = RocCallResult::default();
+        unsafe { set_shared_buffer((shared_buffer.as_mut_ptr(), BUFFER_SIZE), &mut result) };
+
+        let mut writer = Vec::with_capacity(1024);
+        let (_failed, _passed) = crate::run::run_expects(
+            &mut writer,
+            RenderTarget::ColorTerminal,
+            arena,
+            interns,
+            &lib,
+            &mut expectations,
+            shared_buffer.as_mut_ptr(),
+            expects,
+        )
+        .unwrap();
+
+        // Remove ANSI escape codes from the answer - for example:
+        //
+        //     Before: "42 \u{1b}[35m:\u{1b}[0m Num *"
+        //     After:  "42 : Num *"
+        let bytes = strip_ansi_escapes::strip(writer).unwrap();
+        let actual = String::from_utf8(bytes).unwrap();
+
+        if !actual.is_empty() {
+            // trim off the first line; it contains a path in a tempdir that
+            // changes between test runs
+            let p = actual.bytes().position(|c| c == b'\n').unwrap();
+            let (_, x) = actual.split_at(p);
+            let x = x.trim_start();
+
+            if x != expected {
+                println!("{}", x);
+            }
+
+            assert_eq!(x, expected);
         } else {
-            let offset = self.deref_usize(addr);
-            let length = self.deref_usize(addr + std::mem::size_of::<usize>());
-
-            // we don't store extra capacity
-            // let capacity = self.deref_usize(addr + 2 * std::mem::size_of::<usize>());
-
-            unsafe {
-                let ptr = self.start.add(offset);
-                let slice = std::slice::from_raw_parts(ptr, length);
-
-                std::str::from_utf8_unchecked(slice)
-            }
+            assert_eq!(actual, expected);
         }
     }
-}
 
-struct ExpectReplApp<'a> {
-    memory: &'a ExpectMemory,
-    offset: usize,
-}
+    #[test]
+    fn equals_pass() {
+        run_expect_test(
+            r#"
+            app "test" provides [main] to "./platform"
 
-impl<'a> ReplApp<'a> for ExpectReplApp<'a> {
-    type Memory = ExpectMemory;
+            main = 0
 
-    /// Run user code that returns a type with a `Builtin` layout
-    /// Size of the return value is statically determined from its Rust type
-    /// The `transform` callback takes the app's memory and the returned value
-    /// _main_fn_name is always the same and we don't use it here
-    fn call_function<Return, F>(&mut self, _main_fn_name: &str, transform: F) -> Expr<'a>
-    where
-        F: Fn(&'a Self::Memory, Return) -> Expr<'a>,
-        Self::Memory: 'a,
-    {
-        let result: Return = unsafe {
-            let ptr = self.memory.start.add(self.offset);
-            let ptr: *const Return = std::mem::transmute(ptr);
-            ptr.read()
-        };
-
-        self.offset += std::mem::size_of::<Return>();
-
-        *self.memory.bytes_read.borrow_mut() = 0;
-
-        let transformed = transform(self.memory, result);
-
-        self.offset += *self.memory.bytes_read.borrow();
-
-        transformed
+            expect 1 == 1
+            "#,
+            "",
+        );
     }
 
-    fn call_function_returns_roc_list<F>(&mut self, main_fn_name: &str, transform: F) -> Expr<'a>
-    where
-        F: Fn(&'a Self::Memory, (usize, usize, usize)) -> Expr<'a>,
-        Self::Memory: 'a,
-    {
-        self.call_function(main_fn_name, transform)
+    #[test]
+    fn equals_fail() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = 0
+
+                expect 1 == 2
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                5│  expect 1 == 2
+                    ^^^^^^^^^^^^^
+                "#
+            ),
+        );
     }
 
-    fn call_function_returns_roc_str<T, F>(
-        &mut self,
-        _target_info: TargetInfo,
-        main_fn_name: &str,
-        transform: F,
-    ) -> T
-    where
-        F: Fn(&'a Self::Memory, usize) -> T,
-        Self::Memory: 'a,
-    {
-        let string_length = RefCell::new(0);
+    #[test]
+    fn lookup_integer() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
 
-        let result = self.call_function_dynamic_size(main_fn_name, 24, |memory, addr| {
-            let last_byte_addr = addr + (3 * std::mem::size_of::<usize>()) - 1;
-            let last_byte = memory.deref_i8(last_byte_addr);
+                main = 0
 
-            let is_small = last_byte < 0;
+                expect
+                    a = 1
+                    b = 2
 
-            if !is_small {
-                let length = memory.deref_usize(addr + std::mem::size_of::<usize>());
-                *string_length.borrow_mut() = length;
-            }
+                    a == b
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
 
-            transform(memory, addr)
-        });
+                5│>  expect
+                6│>      a = 1
+                7│>      b = 2
+                8│>
+                9│>      a == b
 
-        self.offset += *string_length.borrow();
+                When it failed, these variables had these values:
 
-        result
+                a : Num a
+                a = 1
+
+                b : Num a
+                b = 2
+                "#
+            ),
+        );
     }
 
-    /// Run user code that returns a struct or union, whose size is provided as an argument
-    /// The `transform` callback takes the app's memory and the address of the returned value
-    /// _main_fn_name and _ret_bytes are only used for the CLI REPL. For Wasm they are compiled-in
-    /// to the test_wrapper function of the app itself
-    fn call_function_dynamic_size<T, F>(
-        &mut self,
-        _main_fn_name: &str,
-        ret_bytes: usize,
-        transform: F,
-    ) -> T
-    where
-        F: Fn(&'a Self::Memory, usize) -> T,
-        Self::Memory: 'a,
-    {
-        let result = transform(self.memory, self.offset);
-        self.offset += ret_bytes;
-        result
+    #[test]
+    fn lookup_list_of_strings() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = 0
+
+                expect
+                    a = ["foo"]
+                    b = ["a string so long that it cannot be short"]
+
+                    a == b
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                5│>  expect
+                6│>      a = ["foo"]
+                7│>      b = ["a string so long that it cannot be short"]
+                8│>
+                9│>      a == b
+
+                When it failed, these variables had these values:
+
+                a : List Str
+                a = ["foo"]
+
+                b : List Str
+                b = ["a string so long that it cannot be short"]
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn lookup_list_of_list_of_strings() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = 0
+
+                expect
+                    a = [["foo"], []]
+                    b = [["a string so long that it cannot be short", "bar"]]
+
+                    a == b
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                5│>  expect
+                6│>      a = [["foo"], []]
+                7│>      b = [["a string so long that it cannot be short", "bar"]]
+                8│>
+                9│>      a == b
+
+                When it failed, these variables had these values:
+
+                a : List (List Str)
+                a = [[""], []]
+
+                b : List (List Str)
+                b = [["a string so long that it cannot be short", "bar"]]
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn lookup_result() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = 0
+
+                expect
+                    items = [0, 1]
+                    expected : Result I64 [OutOfBounds]*
+                    expected = Ok 42
+
+                    List.get items 0 == expected
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 5│>  expect
+                 6│>      items = [0, 1]
+                 7│>      expected : Result I64 [OutOfBounds]*
+                 8│>      expected = Ok 42
+                 9│>
+                10│>      List.get items 0 == expected
+
+                When it failed, these variables had these values:
+
+                items : List (Num a)
+                items = [0, 1]
+
+                expected : Result I64 [OutOfBounds]*
+                expected = Ok 42
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn lookup_copy_record() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = 0
+
+                expect
+                    vec1 = { x: 1.0, y: 2.0 }
+                    vec2 = { x: 4.0, y: 8.0 }
+
+                    vec1 == vec2
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                5│>  expect
+                6│>      vec1 = { x: 1.0, y: 2.0 }
+                7│>      vec2 = { x: 4.0, y: 8.0 }
+                8│>
+                9│>      vec1 == vec2
+
+                When it failed, these variables had these values:
+
+                vec1 : { x : Frac a, y : Frac b }
+                vec1 = { x: 1, y: 2 }
+
+                vec2 : { x : Frac a, y : Frac b }
+                vec2 = { x: 4, y: 8 }
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn two_strings() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = 0
+
+                expect
+                    strings = ["Astra mortemque praestare gradatim", "Profundum et fundamentum"]
+
+                    strings == []
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                5│>  expect
+                6│>      strings = ["Astra mortemque praestare gradatim", "Profundum et fundamentum"]
+                7│>
+                8│>      strings == []
+
+                When it failed, these variables had these values:
+
+                strings : List Str
+                strings = ["Astra mortemque praestare gradatim", "Profundum et fundamentum"]
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn compare_long_strings() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = 0
+
+                expect
+                    a = "Astra mortemque praestare gradatim"
+                    b = "Profundum et fundamentum"
+
+                    a == b
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                5│>  expect
+                6│>      a = "Astra mortemque praestare gradatim"
+                7│>      b = "Profundum et fundamentum"
+                8│>
+                9│>      a == b
+
+                When it failed, these variables had these values:
+
+                a : Str
+                a = "Astra mortemque praestare gradatim"
+
+                b : Str
+                b = "Profundum et fundamentum"
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn struct_with_strings() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = 0
+
+                expect
+                    a = {
+                        utopia: "Astra mortemque praestare gradatim",
+                        brillist: "Profundum et fundamentum",
+                    }
+
+                    a != a
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 5│>  expect
+                 6│>      a = {
+                 7│>          utopia: "Astra mortemque praestare gradatim",
+                 8│>          brillist: "Profundum et fundamentum",
+                 9│>      }
+                10│>
+                11│>      a != a
+
+                When it failed, these variables had these values:
+
+                a : { brillist : Str, utopia : Str }
+                a = { brillist: "Profundum et fundamentum", utopia: "Astra mortemque praestare gradatim" }
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn box_with_strings() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = 0
+
+                expect
+                    a = Box.box "Astra mortemque praestare gradatim"
+                    b = Box.box "Profundum et fundamentum"
+
+                    a == b
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                5│>  expect
+                6│>      a = Box.box "Astra mortemque praestare gradatim"
+                7│>      b = Box.box "Profundum et fundamentum"
+                8│>
+                9│>      a == b
+
+                When it failed, these variables had these values:
+
+                a : Box Str
+                a = Box.box "Astra mortemque praestare gradatim"
+
+                b : Box Str
+                b = Box.box "Profundum et fundamentum"
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn result_with_strings() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = 0
+
+                expect
+                    a = Ok "Astra mortemque praestare gradatim"
+                    b = Err "Profundum et fundamentum"
+
+                    a == b
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                5│>  expect
+                6│>      a = Ok "Astra mortemque praestare gradatim"
+                7│>      b = Err "Profundum et fundamentum"
+                8│>
+                9│>      a == b
+
+                When it failed, these variables had these values:
+
+                a : [Ok Str]a
+                a = Ok "Astra mortemque praestare gradatim"
+
+                b : [Err Str]a
+                b = Err "Profundum et fundamentum"
+                "#
+            ),
+        );
     }
 }

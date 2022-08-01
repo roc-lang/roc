@@ -3375,7 +3375,7 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_reporting",
- "roc_solve",
+ "roc_solve_problem",
  "roc_std",
  "roc_target",
  "roc_types",
@@ -3392,7 +3392,6 @@ name = "roc_builtins"
 version = "0.1.0"
 dependencies = [
  "dunce",
- "fs_extra",
  "lazy_static",
  "roc_collections",
  "roc_module",
@@ -3827,6 +3826,7 @@ dependencies = [
  "roc_region",
  "roc_reporting",
  "roc_solve",
+ "roc_solve_problem",
  "roc_target",
  "roc_test_utils",
  "roc_types",
@@ -3959,18 +3959,29 @@ name = "roc_repl_expect"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
+ "indoc",
+ "inkwell 0.1.0",
+ "libc",
+ "libloading",
+ "pretty_assertions",
+ "roc_build",
  "roc_builtins",
  "roc_collections",
+ "roc_gen_llvm",
  "roc_load",
  "roc_module",
  "roc_mono",
  "roc_parse",
+ "roc_region",
  "roc_repl_eval",
  "roc_reporting",
  "roc_std",
  "roc_target",
  "roc_types",
+ "strip-ansi-escapes",
  "target-lexicon",
+ "tempfile",
+ "test_gen",
 ]
 
 [[package]]
@@ -4010,12 +4021,14 @@ dependencies = [
  "roc_constrain",
  "roc_derive",
  "roc_exhaustive",
+ "roc_fmt",
  "roc_load",
  "roc_module",
  "roc_parse",
  "roc_problem",
  "roc_region",
  "roc_solve",
+ "roc_solve_problem",
  "roc_std",
  "roc_target",
  "roc_test_utils",
@@ -4049,10 +4062,24 @@ dependencies = [
  "roc_region",
  "roc_reporting",
  "roc_solve",
+ "roc_solve_problem",
  "roc_target",
  "roc_types",
  "roc_unify",
  "tempfile",
+]
+
+[[package]]
+name = "roc_solve_problem"
+version = "0.1.0"
+dependencies = [
+ "roc_can",
+ "roc_collections",
+ "roc_exhaustive",
+ "roc_module",
+ "roc_problem",
+ "roc_region",
+ "roc_types",
 ]
 
 [[package]]
@@ -4098,10 +4125,12 @@ name = "roc_unify"
 version = "0.1.0"
 dependencies = [
  "bitflags",
+ "roc_can",
  "roc_collections",
  "roc_debug_flags",
  "roc_error_macros",
  "roc_module",
+ "roc_solve_problem",
  "roc_types",
 ]
 

@@ -107,30 +107,6 @@ fn fn_record() {
             r#"
                     rec = { x: 15, y: 17, z: 19 }
 
-                    rec.y
-                "#
-        ),
-        17,
-        i64
-    );
-
-    assert_evals_to!(
-        indoc!(
-            r#"
-                    rec = { x: 15, y: 17, z: 19 }
-
-                    rec.z
-                "#
-        ),
-        19,
-        i64
-    );
-
-    assert_evals_to!(
-        indoc!(
-            r#"
-                    rec = { x: 15, y: 17, z: 19 }
-
                     rec.z + rec.x
                 "#
         ),

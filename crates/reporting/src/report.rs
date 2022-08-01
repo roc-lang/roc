@@ -633,7 +633,12 @@ impl<'a> RocDocAllocator<'a> {
 
         // If the outer region takes more than 1 full screen (~60 lines), only show the inner region
         if region.end().line.saturating_sub(region.start().line) > 60 {
-            return self.region_with_subregion(sub_region, sub_region);
+            // If the inner region contains the outer region (or if they are the same),
+            // attempting this will recurse forever, so don't do that! Instead, give up and
+            // accept that this report will take up more than 1 full screen.
+            if !sub_region.contains(&region) {
+                return self.region_with_subregion(sub_region, sub_region);
+            }
         }
 
         // if true, the final line of the snippet will be some ^^^ that point to the region where

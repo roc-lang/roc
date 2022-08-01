@@ -46,8 +46,8 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
     app: &mut A,
     main_fn_name: &str,
     layout: ProcLayout<'a>,
-    content: &'a Content,
-    subs: &'a Subs,
+    content: &Content,
+    subs: &Subs,
     interns: &'a Interns,
     target_info: TargetInfo,
 ) -> Result<Expr<'a>, ToAstProblem> {
@@ -72,9 +72,9 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
 }
 
 #[derive(Debug)]
-enum NewtypeKind<'a> {
-    Tag(&'a TagName),
-    RecordField(&'a str),
+enum NewtypeKind {
+    Tag(TagName),
+    RecordField(String),
     Opaque(Symbol),
 }
 
@@ -92,11 +92,11 @@ enum NewtypeKind<'a> {
 /// back as an option.
 ///
 /// Returns (new type containers, optional alias content, real content).
-fn unroll_newtypes_and_aliases<'a>(
-    env: &Env<'a, 'a>,
+fn unroll_newtypes_and_aliases<'a, 'env>(
+    env: &Env<'a, 'env>,
 
-    mut content: &'a Content,
-) -> (Vec<'a, NewtypeKind<'a>>, Option<&'a Content>, &'a Content) {
+    mut content: &'env Content,
+) -> (Vec<'a, NewtypeKind>, Option<&'env Content>, &'env Content) {
     let mut newtype_containers = Vec::with_capacity_in(1, env.arena);
     let mut alias_content = None;
     loop {
@@ -108,7 +108,7 @@ fn unroll_newtypes_and_aliases<'a>(
                     .unsorted_iterator(env.subs, Variable::EMPTY_TAG_UNION)
                     .next()
                     .unwrap();
-                newtype_containers.push(NewtypeKind::Tag(tag_name));
+                newtype_containers.push(NewtypeKind::Tag(tag_name.clone()));
                 let var = vars[0];
                 content = env.subs.get_content_without_compacting(var);
             }
@@ -117,9 +117,7 @@ fn unroll_newtypes_and_aliases<'a>(
                     .sorted_iterator(env.subs, Variable::EMPTY_RECORD)
                     .next()
                     .unwrap();
-                newtype_containers.push(NewtypeKind::RecordField(
-                    env.arena.alloc_str(label.as_str()),
-                ));
+                newtype_containers.push(NewtypeKind::RecordField(label.to_string()));
                 content = env.subs.get_content_without_compacting(field.into_inner());
             }
             Content::Alias(name, _, real_var, kind) => {
@@ -146,13 +144,13 @@ fn unroll_newtypes_and_aliases<'a>(
 
 fn apply_newtypes<'a>(
     env: &Env<'a, '_>,
-    newtype_containers: Vec<'a, NewtypeKind<'a>>,
+    newtype_containers: &'a [NewtypeKind],
     mut expr: Expr<'a>,
 ) -> Expr<'a> {
     let arena = env.arena;
     // Reverse order of what we receieve from `unroll_newtypes_and_aliases` since
     // we want the deepest container applied first.
-    for container in newtype_containers.into_iter().rev() {
+    for container in newtype_containers.iter().rev() {
         match container {
             NewtypeKind::Tag(tag_name) => {
                 let tag_expr = tag_name_to_expr(env, tag_name);
@@ -162,7 +160,7 @@ fn apply_newtypes<'a>(
                 expr = Expr::Apply(loc_tag_expr, loc_arg_exprs, CalledVia::Space);
             }
             NewtypeKind::RecordField(field_name) => {
-                let label = Loc::at_zero(*arena.alloc(field_name));
+                let label = Loc::at_zero(field_name.as_str());
                 let field_val = arena.alloc(Loc::at_zero(expr));
                 let field = Loc::at_zero(AssignedField::RequiredValue(label, &[], field_val));
                 expr = Expr::Record(Collection::with_items(&*arena.alloc([field])))
@@ -179,7 +177,7 @@ fn apply_newtypes<'a>(
     expr
 }
 
-fn unroll_recursion_var<'a>(env: &Env<'a, 'a>, mut content: &'a Content) -> &'a Content {
+fn unroll_recursion_var<'env>(env: &Env<'_, 'env>, mut content: &'env Content) -> &'env Content {
     while let Content::RecursionVar { structure, .. } = content {
         content = env.subs.get_content_without_compacting(*structure);
     }
@@ -204,8 +202,8 @@ fn get_tags_vars_and_variant<'a>(
     (vars_of_tag, union_variant)
 }
 
-fn expr_of_tag<'a, M: ReplAppMemory>(
-    env: &Env<'a, 'a>,
+fn expr_of_tag<'a, 'env, M: ReplAppMemory>(
+    env: &Env<'a, 'env>,
     mem: &'a M,
     data_addr: usize,
     tag_name: &TagName,
@@ -228,8 +226,8 @@ fn expr_of_tag<'a, M: ReplAppMemory>(
 
 /// Gets the tag ID of a union variant, assuming that the tag ID is stored alongside (after) the
 /// tag data. The caller is expected to check that the tag ID is indeed stored this way.
-fn tag_id_from_data<'a, M: ReplAppMemory>(
-    env: &Env<'a, 'a>,
+fn tag_id_from_data<'a, 'env, M: ReplAppMemory>(
+    env: &Env<'a, 'env>,
     mem: &M,
     union_layout: UnionLayout,
     data_addr: usize,
@@ -253,7 +251,7 @@ fn tag_id_from_data<'a, M: ReplAppMemory>(
 ///   - the tag ID
 ///   - the address of the data of the union variant, unmasked if the pointer held the tag ID
 fn tag_id_from_recursive_ptr<'a, M: ReplAppMemory>(
-    env: &Env<'a, 'a>,
+    env: &Env<'a, '_>,
     mem: &M,
     union_layout: UnionLayout,
     rec_addr: usize,
@@ -278,11 +276,11 @@ const OPAQUE_FUNCTION: Expr = Expr::Var {
 };
 
 fn jit_to_ast_help<'a, A: ReplApp<'a>>(
-    env: &Env<'a, 'a>,
+    env: &Env<'a, '_>,
     app: &mut A,
     main_fn_name: &str,
     layout: &Layout<'a>,
-    content: &'a Content,
+    content: &Content,
 ) -> Result<Expr<'a>, ToAstProblem> {
     let (newtype_containers, alias_content, raw_content) =
         unroll_newtypes_and_aliases(env, content);
@@ -472,7 +470,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
             ))
         }
     };
-    result.map(|e| apply_newtypes(env, newtype_containers, e))
+    result.map(|e| apply_newtypes(env, newtype_containers.into_bump_slice(), e))
 }
 
 fn tag_name_to_expr<'a>(env: &Env<'a, '_>, tag_name: &TagName) -> Expr<'a> {
@@ -488,12 +486,12 @@ enum WhenRecursive<'a> {
 }
 
 fn addr_to_ast<'a, M: ReplAppMemory>(
-    env: &Env<'a, 'a>,
+    env: &Env<'a, '_>,
     mem: &'a M,
     addr: usize,
     layout: &Layout<'a>,
     when_recursive: WhenRecursive<'a>,
-    content: &'a Content,
+    content: &Content,
 ) -> Expr<'a> {
     macro_rules! helper {
         ($method: ident, $ty: ty) => {{
@@ -780,11 +778,11 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             );
         }
     };
-    apply_newtypes(env, newtype_containers, expr)
+    apply_newtypes(env, newtype_containers.into_bump_slice(), expr)
 }
 
 fn list_to_ast<'a, M: ReplAppMemory>(
-    env: &Env<'a, 'a>,
+    env: &Env<'a, '_>,
     mem: &'a M,
     addr: usize,
     len: usize,
@@ -825,7 +823,11 @@ fn list_to_ast<'a, M: ReplAppMemory>(
             WhenRecursive::Unreachable,
             elem_content,
         );
-        let expr = Loc::at_zero(apply_newtypes(env, newtype_containers, expr));
+        let expr = Loc::at_zero(apply_newtypes(
+            env,
+            newtype_containers.into_bump_slice(),
+            expr,
+        ));
 
         output.push(&*arena.alloc(expr));
     }
@@ -835,8 +837,8 @@ fn list_to_ast<'a, M: ReplAppMemory>(
     Expr::List(Collection::with_items(output))
 }
 
-fn single_tag_union_to_ast<'a, M: ReplAppMemory>(
-    env: &Env<'a, 'a>,
+fn single_tag_union_to_ast<'a, 'env, M: ReplAppMemory>(
+    env: &Env<'a, 'env>,
     mem: &'a M,
     addr: usize,
     field_layouts: &'a [Layout<'a>],
@@ -862,8 +864,8 @@ fn single_tag_union_to_ast<'a, M: ReplAppMemory>(
     Expr::Apply(loc_tag_expr, output, CalledVia::Space)
 }
 
-fn sequence_of_expr<'a, I, M: ReplAppMemory>(
-    env: &Env<'a, 'a>,
+fn sequence_of_expr<'a, 'env, I, M: ReplAppMemory>(
+    env: &Env<'a, 'env>,
     mem: &'a M,
     addr: usize,
     sequence: I,
@@ -894,8 +896,8 @@ where
     output
 }
 
-fn struct_to_ast<'a, M: ReplAppMemory>(
-    env: &Env<'a, 'a>,
+fn struct_to_ast<'a, 'env, M: ReplAppMemory>(
+    env: &Env<'a, 'env>,
     mem: &'a M,
     addr: usize,
     record_fields: RecordFields,

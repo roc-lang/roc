@@ -204,6 +204,7 @@ mod test_parse {
         pass/not_docs.expr,
         pass/number_literal_suffixes.expr,
         pass/one_backpassing.expr,
+        pass/multiline_string.expr,
         pass/one_char_string.expr,
         pass/one_def.expr,
         pass/one_minus_two.expr,

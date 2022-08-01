@@ -12,13 +12,16 @@ mod solve_expr {
     use crate::helpers::with_larger_debug_stack;
     use lazy_static::lazy_static;
     use regex::Regex;
-    use roc_can::traverse::{find_ability_member_and_owning_type_at, find_type_at};
+    use roc_can::{
+        abilities::ImplKey,
+        traverse::{find_ability_member_and_owning_type_at, find_type_at},
+    };
     use roc_load::LoadedModule;
     use roc_module::symbol::{Interns, ModuleId};
     use roc_problem::can::Problem;
     use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Region};
     use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
-    use roc_solve::solve::TypeError;
+    use roc_solve_problem::TypeError;
     use roc_types::{
         pretty_print::{name_and_print_var, DebugPrint},
         types::MemberImpl,
@@ -367,12 +370,12 @@ mod solve_expr {
         }
 
         let known_specializations = abilities_store.iter_declared_implementations().filter_map(
-            |((member, typ), member_impl)| match member_impl {
+            |(impl_key, member_impl)| match member_impl {
                 MemberImpl::Impl(impl_symbol) => {
                     let specialization = abilities_store.specialization_info(*impl_symbol).expect(
                         "declared implementations should be resolved conclusively after solving",
                     );
-                    Some((member, typ, specialization.clone()))
+                    Some((impl_key, specialization.clone()))
                 }
                 MemberImpl::Derived | MemberImpl::Error => None,
             },
@@ -381,13 +384,17 @@ mod solve_expr {
         use std::collections::HashSet;
         let pretty_specializations = known_specializations
             .into_iter()
-            .map(|(member, typ, _)| {
-                let member_data = abilities_store.member_def(member).unwrap();
-                let member_str = member.as_str(&interns);
+            .map(|(impl_key, _)| {
+                let ImplKey {
+                    opaque,
+                    ability_member,
+                } = impl_key;
+                let member_data = abilities_store.member_def(ability_member).unwrap();
+                let member_str = ability_member.as_str(&interns);
                 let ability_str = member_data.parent_ability.as_str(&interns);
                 (
                     format!("{}:{}", ability_str, member_str),
-                    typ.as_str(&interns),
+                    opaque.as_str(&interns),
                 )
             })
             .collect::<HashSet<_>>();
@@ -3444,7 +3451,7 @@ mod solve_expr {
                 { id1, id2 }
                 "#
             ),
-            "{ id1 : q -> q, id2 : a -> a }",
+            "{ id1 : q -> q, id2 : q1 -> q1 }",
         );
     }
 
@@ -3959,7 +3966,7 @@ mod solve_expr {
                     { a, b }
                 "#
             ),
-            "{ a : { x : I64, y : I64, z : Num c }, b : { blah : Str, x : I64, y : I64, z : Num a } }",
+            "{ a : { x : I64, y : I64, z : Num c }, b : { blah : Str, x : I64, y : I64, z : Num c1 } }",
         );
     }
 
@@ -3990,7 +3997,7 @@ mod solve_expr {
                     { a, b }
                 "#
             ),
-            "{ a : { x : Num *, y : Float *, z : c }, b : { blah : Str, x : Num *, y : Float *, z : a } }",
+            "{ a : { x : Num *, y : Float *, z : c }, b : { blah : Str, x : Num *, y : Float *, z : c1 } }",
         );
     }
 
@@ -6150,7 +6157,7 @@ mod solve_expr {
                 hashEq = \x, y -> hash x == hash y
                 "#
             ),
-            "a, b -> Bool | a has Hash, b has Hash",
+            "a, a1 -> Bool | a has Hash, a1 has Hash",
         )
     }
 

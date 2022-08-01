@@ -1,5 +1,5 @@
 use crate::solve::{self, Aliases};
-use roc_can::abilities::{AbilitiesStore, ImplKey, ResolvedImpl};
+use roc_can::abilities::{AbilitiesStore, ResolvedImpl};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
 use roc_can::expr::PendingDerives;
 use roc_can::module::{ExposedByModule, ResolvedImplementations, RigidVariables};
@@ -8,6 +8,7 @@ use roc_collections::VecMap;
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
 use roc_module::symbol::{ModuleId, Symbol};
+use roc_solve_problem::TypeError;
 use roc_types::subs::{Content, ExposedTypesStorageSubs, FlatType, StorageSubs, Subs, Variable};
 use roc_types::types::{Alias, MemberImpl};
 
@@ -32,7 +33,7 @@ impl<T> Solved<T> {
 
 #[derive(Debug)]
 pub struct SolvedModule {
-    pub problems: Vec<solve::TypeError>,
+    pub problems: Vec<TypeError>,
 
     /// all aliases and their definitions. this has to include non-exposed aliases
     /// because exposed aliases can depend on non-exposed ones)
@@ -64,12 +65,7 @@ pub fn run_solve(
     pending_derives: PendingDerives,
     exposed_by_module: &ExposedByModule,
     derived_module: SharedDerivedModule,
-) -> (
-    Solved<Subs>,
-    solve::Env,
-    Vec<solve::TypeError>,
-    AbilitiesStore,
-) {
+) -> (Solved<Subs>, solve::Env, Vec<TypeError>, AbilitiesStore) {
     for (var, name) in rigid_variables.named {
         subs.rigid_var(var, name);
     }
@@ -190,16 +186,14 @@ pub fn extract_module_owned_implementations(
 ) -> ResolvedImplementations {
     abilities_store
         .iter_declared_implementations()
-        .filter_map(|((member, typ), member_impl)| {
+        .filter_map(|(impl_key, member_impl)| {
             // This module solved this specialization if either the member or the type comes from the
             // module.
-            if member.module_id() != module_id && typ.module_id() != module_id {
+            if impl_key.ability_member.module_id() != module_id
+                && impl_key.opaque.module_id() != module_id
+            {
                 return None;
             }
-            let impl_key = ImplKey {
-                opaque: typ,
-                ability_member: member,
-            };
 
             let resolved_impl = match member_impl {
                 MemberImpl::Impl(impl_symbol) => {
