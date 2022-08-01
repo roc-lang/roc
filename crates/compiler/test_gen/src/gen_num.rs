@@ -693,6 +693,19 @@ fn gen_add_dec() {
 }
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn gen_add_f32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    1.1f32 + 2.4f32 + 3
+                "#
+        ),
+        6.5,
+        f32
+    );
+}
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn gen_add_f64() {
     assert_evals_to!(
         indoc!(

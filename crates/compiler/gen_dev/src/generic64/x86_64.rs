@@ -957,6 +957,22 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         }
     }
     #[inline(always)]
+    fn add_freg32_freg32_freg32(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64FloatReg,
+        src1: X86_64FloatReg,
+        src2: X86_64FloatReg,
+    ) {
+        if dst == src1 {
+            addss_freg32_freg32(buf, dst, src2);
+        } else if dst == src2 {
+            addss_freg32_freg32(buf, dst, src1);
+        } else {
+            movss_freg32_freg32(buf, dst, src1);
+            addss_freg32_freg32(buf, dst, src2);
+        }
+    }
+    #[inline(always)]
     fn add_freg64_freg64_freg64(
         buf: &mut Vec<'_, u8>,
         dst: X86_64FloatReg,
@@ -1360,6 +1376,26 @@ fn addsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64Fl
     }
 }
 
+/// `ADDSS xmm1,xmm2/m64` -> Add the low single-precision floating-point value from xmm2/mem to xmm1 and store the result in xmm1.
+#[inline(always)]
+fn addss_freg32_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+    let src_high = src as u8 > 7;
+    let src_mod = src as u8 % 8;
+    if dst_high || src_high {
+        buf.extend(&[
+            0xF3,
+            0x40 | ((dst_high as u8) << 2) | (src_high as u8),
+            0x0F,
+            0x58,
+            0xC0 | (dst_mod << 3) | (src_mod),
+        ])
+    } else {
+        buf.extend(&[0xF3, 0x0F, 0x58, 0xC0 | (dst_mod << 3) | (src_mod)])
+    }
+}
+
 #[inline(always)]
 fn andpd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
     let dst_high = dst as u8 > 7;
@@ -1578,6 +1614,36 @@ fn raw_movsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_
         ])
     } else {
         buf.extend(&[0xF2, 0x0F, 0x10, 0xC0 | (dst_mod << 3) | (src_mod)])
+    }
+}
+
+/// `MOVSS xmm1,xmm2` -> Move scalar low single-precision floating-point value from xmm2 to xmm1 register.
+/// This will not generate anything if dst and src are the same.
+#[inline(always)]
+fn movss_freg32_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    if dst != src {
+        raw_movss_freg32_freg32(buf, dst, src);
+    }
+}
+
+/// `MOVSS xmm1,xmm2` -> Move scalar low single-precision floating-point from xmm2 to xmm1 register.
+/// This will always generate the move. It is used for verification.
+#[inline(always)]
+fn raw_movss_freg32_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    let dst_high = dst as u8 > 7;
+    let dst_mod = dst as u8 % 8;
+    let src_high = src as u8 > 7;
+    let src_mod = src as u8 % 8;
+    if dst_high || src_high {
+        buf.extend(&[
+            0xF3,
+            0x40 | ((dst_high as u8) << 2) | (src_high as u8),
+            0x0F,
+            0x10,
+            0xC0 | (dst_mod << 3) | (src_mod),
+        ])
+    } else {
+        buf.extend(&[0xF3, 0x0F, 0x10, 0xC0 | (dst_mod << 3) | (src_mod)])
     }
 }
 
@@ -1961,6 +2027,16 @@ mod tests {
     }
 
     #[test]
+    fn test_addss_freg32_freg32() {
+        disassembler_test!(
+            addss_freg32_freg32,
+            |reg1, reg2| format!("addss {}, {}", reg1, reg2),
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
     fn test_andpd_freg64_freg64() {
         disassembler_test!(
             andpd_freg64_freg64,
@@ -2126,6 +2202,16 @@ mod tests {
         disassembler_test!(
             raw_movsd_freg64_freg64,
             |reg1, reg2| format!("movsd {}, {}", reg1, reg2),
+            ALL_FLOAT_REGS,
+            ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_movss_freg32_freg32() {
+        disassembler_test!(
+            raw_movss_freg32_freg32,
+            |reg1, reg2| format!("movss {}, {}", reg1, reg2),
             ALL_FLOAT_REGS,
             ALL_FLOAT_REGS
         );

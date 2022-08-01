@@ -124,6 +124,12 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     );
 
     fn add_reg64_reg64_imm32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src1: GeneralReg, imm32: i32);
+    fn add_freg32_freg32_freg32(
+        buf: &mut Vec<'_, u8>,
+        dst: FloatReg,
+        src1: FloatReg,
+        src2: FloatReg,
+    );
     fn add_freg64_freg64_freg64(
         buf: &mut Vec<'_, u8>,
         dst: FloatReg,
@@ -715,6 +721,12 @@ impl<
                 let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
                 let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
                 ASM::add_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+                ASM::add_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
             x => todo!("NumAdd: layout, {:?}", x),
         }
