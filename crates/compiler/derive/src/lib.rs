@@ -69,7 +69,7 @@ fn build_derived_body(
             };
             encoding::derive_to_encoder(&mut env, to_encoder_key, derived_symbol)
         }
-        DeriveKey::Decoding => todo!(),
+        DeriveKey::Decoder(_decoder_key) => todo!(),
     };
 
     let def = Def {

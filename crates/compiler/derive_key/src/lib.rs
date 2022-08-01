@@ -13,8 +13,10 @@
 //! For these reasons the content keying is based on a strategy as well, which are the variants of
 //! [`DeriveKey`].
 
+pub mod decoding;
 pub mod encoding;
 
+use decoding::{FlatDecodable, FlatDecodableKey};
 use encoding::{FlatEncodable, FlatEncodableKey};
 
 use roc_module::symbol::Symbol;
@@ -33,15 +35,14 @@ pub enum DeriveError {
 #[repr(u8)]
 pub enum DeriveKey {
     ToEncoder(FlatEncodableKey),
-    #[allow(unused)]
-    Decoding,
+    Decoder(FlatDecodableKey),
 }
 
 impl DeriveKey {
     pub fn debug_name(&self) -> String {
         match self {
             DeriveKey::ToEncoder(key) => format!("toEncoder_{}", key.debug_name()),
-            DeriveKey::Decoding => todo!(),
+            DeriveKey::Decoder(key) => format!("decoder_{}", key.debug_name()),
         }
     }
 }
@@ -61,6 +62,7 @@ pub enum Derived {
 #[derive(Clone, Copy)]
 pub enum DeriveBuiltin {
     ToEncoder,
+    Decoder,
 }
 
 impl Derived {
@@ -73,6 +75,10 @@ impl Derived {
             DeriveBuiltin::ToEncoder => match encoding::FlatEncodable::from_var(subs, var)? {
                 FlatEncodable::Immediate(imm) => Ok(Derived::Immediate(imm)),
                 FlatEncodable::Key(repr) => Ok(Derived::Key(DeriveKey::ToEncoder(repr))),
+            },
+            DeriveBuiltin::Decoder => match decoding::FlatDecodable::from_var(subs, var)? {
+                FlatDecodable::Immediate(imm) => Ok(Derived::Immediate(imm)),
+                FlatDecodable::Key(repr) => Ok(Derived::Key(DeriveKey::Decoder(repr))),
             },
         }
     }
