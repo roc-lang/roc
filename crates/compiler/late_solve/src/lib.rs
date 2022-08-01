@@ -10,6 +10,7 @@ use roc_collections::MutMap;
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
 use roc_module::symbol::ModuleId;
+use roc_module::symbol::Symbol;
 use roc_solve::ability::AbilityResolver;
 use roc_solve::solve::Pools;
 use roc_solve::specialize::{compact_lambda_sets_of_vars, DerivedEnv, Phase};
@@ -17,7 +18,6 @@ use roc_types::subs::{get_member_lambda_sets_at_region, Content, FlatType, Lambd
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, Variable};
 use roc_unify::unify::{unify as unify_unify, Env, Mode, Unified};
 
-pub use roc_solve::ability::resolve_ability_specialization;
 pub use roc_solve::ability::Resolved;
 pub use roc_types::subs::instantiate_rigids;
 
@@ -98,26 +98,73 @@ impl AbilitiesView<'_> {
     }
 }
 
-impl<'a> AbilityResolver for AbilitiesView<'a> {
+pub struct LateResolver<'a> {
+    home: ModuleId,
+    abilities: &'a AbilitiesView<'a>,
+}
+
+impl<'a> AbilityResolver for LateResolver<'a> {
     fn member_parent_and_signature_var(
         &self,
         ability_member: roc_module::symbol::Symbol,
+        home_subs: &mut Subs,
     ) -> Option<(roc_module::symbol::Symbol, Variable)> {
-        self.with_module_abilities_store(ability_member.module_id(), |store| {
-            store
-                .member_def(ability_member)
-                .map(|def| (def.parent_ability, def.signature_var()))
-        })
+        let (parent_ability, signature_var) =
+            self.abilities
+                .with_module_abilities_store(ability_member.module_id(), |store| {
+                    store
+                        .member_def(ability_member)
+                        .map(|def| (def.parent_ability, def.signature_var()))
+                })?;
+
+        let parent_ability_module = parent_ability.module_id();
+        debug_assert_eq!(parent_ability_module, ability_member.module_id());
+
+        let signature_var = match (parent_ability_module == self.home, self.abilities) {
+            (false, AbilitiesView::World(world)) => {
+                // Need to copy the type from an external module into our home subs
+                world.with_module_exposed_type(parent_ability_module, |external_types| {
+                    let stored_signature_var =
+                        external_types.stored_ability_member_vars.get(&signature_var).expect("Ability member is in an external store, but its signature variables are not stored accordingly!");
+
+                    let home_copy = external_types
+                        .storage_subs
+                        .export_variable_to(home_subs, *stored_signature_var);
+
+                    home_copy.variable
+                })
+            }
+            _ => signature_var,
+        };
+
+        Some((parent_ability, signature_var))
     }
 
     fn get_implementation(
         &self,
         impl_key: roc_can::abilities::ImplKey,
     ) -> Option<roc_types::types::MemberImpl> {
-        self.with_module_abilities_store(impl_key.opaque.module_id(), |store| {
-            store.get_implementation(impl_key).copied()
-        })
+        self.abilities
+            .with_module_abilities_store(impl_key.opaque.module_id(), |store| {
+                store.get_implementation(impl_key).copied()
+            })
     }
+}
+
+pub fn resolve_ability_specialization(
+    home: ModuleId,
+    subs: &mut Subs,
+    abilities: &AbilitiesView,
+    ability_member: Symbol,
+    specialization_var: Variable,
+) -> Option<Resolved> {
+    let late_resolver = LateResolver { home, abilities };
+    roc_solve::ability::resolve_ability_specialization(
+        subs,
+        &late_resolver,
+        ability_member,
+        specialization_var,
+    )
 }
 
 pub struct LatePhase<'a> {

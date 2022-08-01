@@ -4922,10 +4922,8 @@ pub fn with_hole<'a>(
                         UnspecializedExpr(symbol) => {
                             match procs.ability_member_aliases.get(symbol).unwrap() {
                                 &self::AbilityMember(member) => {
-                                    let resolved_proc = env.abilities.with_module_abilities_store(env.home, |store|
-                                        resolve_ability_specialization(env.subs, store, member, fn_var)
-                                            .expect("Recorded as an ability member, but it doesn't have a specialization")
-                                    );
+                                    let resolved_proc = resolve_ability_specialization(env.home, env.subs, &env.abilities, member, fn_var)
+                                            .expect("Recorded as an ability member, but it doesn't have a specialization");
 
                                     let resolved_proc = match resolved_proc {
                                         Resolved::Specialization(symbol) => symbol,
@@ -5240,9 +5238,14 @@ fn late_resolve_ability_specialization<'a>(
                 env.subs
             )
         ));
-        let specialization =
-            resolve_ability_specialization(env.subs, &env.abilities, member, specialization_var)
-                .expect("Ability specialization is unknown - code generation cannot proceed!");
+        let specialization = resolve_ability_specialization(
+            env.home,
+            env.subs,
+            &env.abilities,
+            member,
+            specialization_var,
+        )
+        .expect("Ability specialization is unknown - code generation cannot proceed!");
         // let specialization = env
         //     .abilities
         //     .with_module_abilities_store(env.home, |store| {
