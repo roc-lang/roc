@@ -748,3 +748,34 @@ fn decode_use_stdlib() {
         u8
     )
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn decode_use_stdlib_json_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Decode.{ Decoding }, Json]
+                provides [main] to "./platform"
+
+            MyNumList := List U8 has [Decoding {decoder: myDecoder}]
+
+            myDecoder =
+                Decode.custom \bytes, fmt ->
+                    when Decode.decodeWith bytes (Decode.list Decode.u8) fmt is
+                        {result, rest} ->
+                            when result is
+                                Ok lst -> {result: Ok (@MyNumList lst), rest}
+                                Err e -> {result: Err e, rest}
+
+            main =
+                when Str.toUtf8 "[1,2,3]" |> Decode.fromBytes Json.fromUtf8 is
+                    Ok (@MyNumList lst) -> lst
+                    _ -> []
+            "#
+        ),
+        RocList::from_slice(&[1u8, 2u8, 3u8]),
+        RocList<u8>
+    )
+}
