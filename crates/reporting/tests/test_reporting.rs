@@ -3626,8 +3626,8 @@ mod test_reporting {
     Is there an import missing? Perhaps there is a typo. Did you mean one
     of these?
 
-        List
         Set
+        List
         Dict
         Result
 
