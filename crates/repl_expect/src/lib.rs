@@ -479,4 +479,119 @@ mod test {
             ),
         );
     }
+
+    #[test]
+    fn struct_with_strings() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = 0
+
+                expect
+                    a = {
+                        utopia: "Astra mortemque praestare gradatim",
+                        brillist: "Profundum et fundamentum",
+                    }
+
+                    a != a
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 5│>  expect
+                 6│>      a = {
+                 7│>          utopia: "Astra mortemque praestare gradatim",
+                 8│>          brillist: "Profundum et fundamentum",
+                 9│>      }
+                10│>
+                11│>      a != a
+
+                When it failed, these variables had these values:
+
+                a : { brillist : Str, utopia : Str }
+                a = { brillist: "Profundum et fundamentum", utopia: "Astra mortemque praestare gradatim" }
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn box_with_strings() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = 0
+
+                expect
+                    a = Box.box "Astra mortemque praestare gradatim"
+                    b = Box.box "Profundum et fundamentum"
+
+                    a == b
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                5│>  expect
+                6│>      a = Box.box "Astra mortemque praestare gradatim"
+                7│>      b = Box.box "Profundum et fundamentum"
+                8│>
+                9│>      a == b
+
+                When it failed, these variables had these values:
+
+                a : Box Str
+                a = Box.box "Astra mortemque praestare gradatim"
+
+                b : Box Str
+                b = Box.box "Profundum et fundamentum"
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn result_with_strings() {
+        run_expect_test(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = 0
+
+                expect
+                    a = Ok "Astra mortemque praestare gradatim"
+                    b = Err "Profundum et fundamentum"
+
+                    a == b
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                5│>  expect
+                6│>      a = Ok "Astra mortemque praestare gradatim"
+                7│>      b = Err "Profundum et fundamentum"
+                8│>
+                9│>      a == b
+
+                When it failed, these variables had these values:
+
+                a : [Ok Str]a
+                a = Ok "Astra mortemque praestare gradatim"
+
+                b : [Err Str]a
+                b = Err "Profundum et fundamentum"
+                "#
+            ),
+        );
+    }
 }
