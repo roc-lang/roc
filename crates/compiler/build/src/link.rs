@@ -130,7 +130,7 @@ pub fn build_zig_host_native(
     }
     command.args(&[
         zig_host_src,
-        emit_bin,
+        &format!("-femit-bin={}", emit_bin),
         "--pkg-begin",
         "str",
         zig_str_path,
