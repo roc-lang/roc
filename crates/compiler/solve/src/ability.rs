@@ -611,13 +611,6 @@ pub fn resolve_ability_specialization<R: AbilityResolver>(
     let snapshot = subs.snapshot();
 
     instantiate_rigids(subs, signature_var);
-    dbg!((
-        roc_types::subs::SubsFmtContent(
-            subs.get_content_without_compacting(specialization_var),
-            subs
-        ),
-        roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(signature_var), subs)
-    ));
     let (_vars, must_implement_ability, _lambda_sets_to_specialize, _meta) = unify(
         &mut Env::new(subs),
         specialization_var,
@@ -630,11 +623,7 @@ pub fn resolve_ability_specialization<R: AbilityResolver>(
 
     subs.rollback_to(snapshot);
 
-    dbg!((&must_implement_ability, parent_ability));
-
     let obligated = type_implementing_specialization(&must_implement_ability, parent_ability)?;
-
-    dbg!(&obligated);
 
     let resolved = match obligated {
         Obligated::Opaque(symbol) => {
@@ -659,5 +648,5 @@ pub fn resolve_ability_specialization<R: AbilityResolver>(
         }
     };
 
-    dbg!(Some(resolved))
+    Some(resolved)
 }
