@@ -300,6 +300,8 @@ decodeDec = Decode.custom \bytes, @Json {} ->
 decodeBool = Decode.custom \bytes, @Json {} ->
     { before: maybeFalse, others: afterFalse } = List.split bytes 5
 
+    # Note: this could be more performant by traversing both branches char-by-char.
+    # Doing that would also make `rest` more correct in the erroring case.
     if
         maybeFalse == [asciiByte 'f', asciiByte 'a', asciiByte 'l', asciiByte 's', asciiByte 'e']
     then
