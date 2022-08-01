@@ -183,7 +183,9 @@ takeWhile = \list, predicate ->
             Err _ -> {taken, rest}
     helper {taken: [], rest: list}
 
-digits = List.range 48u8 58u8
+asciiByte = \b -> Num.toU8 b
+
+digits = List.range (asciiByte '0') ((asciiByte '9') + 1)
 
 takeDigits = \bytes ->
     takeWhile bytes \n -> List.contains digits n
@@ -194,9 +196,7 @@ takeFloat = \bytes ->
         Ok 46 -> # 46 = .
             {taken: floatPart, rest: afterAll} = takeDigits rest
             builtFloat =
-                intPart
-                |> List.append (Num.intCast '.')
-                |> List.concat floatPart
+                List.concat (List.append intPart (asciiByte '.')) floatPart
 
             {taken: builtFloat, rest: afterAll}
         _ ->
