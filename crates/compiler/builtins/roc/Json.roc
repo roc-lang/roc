@@ -280,8 +280,15 @@ decodeDec = Decode.custom \bytes, @Json {} ->
         Ok n -> {result: Ok n, rest}
         Err _ -> {result: Err TooShort, rest}
 
-# FIXME
-decodeBool = Decode.custom \bytes, @Json {} -> {result: Err TooShort, rest: bytes}
+decodeBool = Decode.custom \bytes, @Json {} ->
+    {before: maybeFalse, others: afterFalse} = List.split bytes 5
+    if maybeFalse == [ (asciiByte 'f'), asciiByte 'a', asciiByte 'l', asciiByte 's', asciiByte 'e' ]
+    then {result: Ok False, rest: afterFalse}
+    else
+        {before: maybeTrue, others: afterTrue} = List.split bytes 4
+        if maybeTrue == [asciiByte 't', asciiByte 'r', asciiByte 'u', asciiByte 'e']
+        then {result: Ok True, rest: afterTrue}
+        else {result: Err TooShort, rest: bytes}
 
 # FIXME
 decodeString = Decode.custom \bytes, @Json {} -> {result: Err TooShort, rest: bytes}
