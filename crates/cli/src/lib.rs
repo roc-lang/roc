@@ -917,7 +917,18 @@ impl ExecutableFile {
 
             #[cfg(all(target_family = "windows"))]
             ExecutableFile::OnDisk(_, path) => {
-                todo!()
+                use std::process::Command;
+
+                let _ = argv;
+                let _ = envp;
+
+                let mut command = Command::new(path);
+
+                let output = command.output().unwrap();
+
+                println!("{}", String::from_utf8_lossy(&output.stdout));
+
+                std::process::exit(0)
             }
         }
     }
@@ -1066,39 +1077,73 @@ fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<Exec
 
 #[cfg(all(target_family = "windows"))]
 fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<ExecutableFile> {
-    todo!()
+    use std::fs::OpenOptions;
+    use std::io::Write;
+
+    let temp_dir = tempfile::tempdir()?;
+
+    // We have not found a way to use a virtual file on non-Linux OSes.
+    // Hence we fall back to just writing the file to the file system, and using that file.
+    let app_path_buf = temp_dir.path().join("roc_app_binary.exe");
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        //.mode(0o777) // create the file as executable
+        .open(&app_path_buf)?;
+
+    file.write_all(binary_bytes)?;
+
+    // We store the TempDir in this variant alongside the path to the executable,
+    // so that the TempDir doesn't get dropped until after we're done with the path.
+    // If we didn't do that, then the tempdir would potentially get deleted by the
+    // TempDir's Drop impl before the file had been executed.
+    Ok(ExecutableFile::OnDisk(temp_dir, app_path_buf))
 }
 
 /// Run on the native OS (not on wasm)
 #[cfg(not(target_family = "unix"))]
 fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
-    _arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
-    _opt_level: OptLevel,
+    arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
+    opt_level: OptLevel,
     _args: I,
-    _binary_bytes: &mut [u8],
+    binary_bytes: &mut [u8],
     _expectations: VecMap<ModuleId, Expectations>,
     _interns: Interns,
 ) -> io::Result<i32> {
-    todo!("TODO support running roc programs on non-UNIX targets");
-    // let mut cmd = std::process::Command::new(&binary_path);
+    use bumpalo::collections::CollectIn;
 
-    // // Run the compiled app
-    // let exit_status = cmd
-    //     .spawn()
-    //     .unwrap_or_else(|err| panic!("Failed to run app after building it: {:?}", err))
-    //     .wait()
-    //     .expect("TODO gracefully handle block_on failing when `roc` spawns a subprocess for the compiled app");
+    unsafe {
+        let executable = roc_run_executable_file_path(binary_bytes)?;
 
-    // // `roc [FILE]` exits with the same status code as the app it ran.
-    // //
-    // // If you want to know whether there were compilation problems
-    // // via status code, use either `roc build` or `roc check` instead!
-    // match exit_status.code() {
-    //     Some(code) => Ok(code),
-    //     None => {
-    //         todo!("TODO gracefully handle the `roc [FILE]` subprocess terminating with a signal.");
-    //     }
-    // }
+        // TODO forward the arguments
+        // let (argv_cstrings, envp_cstrings) = make_argv_envp(&arena, &executable, args);
+        let argv_cstrings = bumpalo::vec![ in &arena; CString::default()];
+        let envp_cstrings = bumpalo::vec![ in &arena; CString::default()];
+
+        let argv: bumpalo::collections::Vec<*const c_char> = argv_cstrings
+            .iter()
+            .map(|s| s.as_ptr())
+            .chain([std::ptr::null()])
+            .collect_in(&arena);
+
+        let envp: bumpalo::collections::Vec<*const c_char> = envp_cstrings
+            .iter()
+            .map(|s| s.as_ptr())
+            .chain([std::ptr::null()])
+            .collect_in(&arena);
+
+        match opt_level {
+            OptLevel::Development => {
+                // roc_run_native_debug(executable, &argv, &envp, expectations, interns)
+                todo!()
+            }
+            OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => {
+                roc_run_native_fast(executable, &argv, &envp);
+            }
+        }
+    }
+
+    Ok(1)
 }
 
 #[cfg(feature = "run-wasm32")]
