@@ -336,7 +336,7 @@ decodeString = Decode.custom \bytes, @Json {} ->
         { result: Err TooShort, rest: bytes }
 
 decodeList = \decodeElem -> Decode.custom \bytes, @Json {} ->
-        decodeOne = \chunk ->
+        decodeElems = \chunk, accum ->
             when Decode.decodeWith chunk decodeElem (@Json {}) is
                 { result, rest } ->
                     when result is
@@ -347,26 +347,18 @@ decodeList = \decodeElem -> Decode.custom \bytes, @Json {} ->
                             if
                                 afterElem == [asciiByte ',']
                             then
-                                One val others
+                                decodeElems others (List.append accum val)
                             else
-                                Done val others
+                                Done (List.append accum val) rest
 
                         Err e -> Errored e rest
-
-        decodeElems = \elemBytes, accum ->
-            when decodeOne elemBytes is
-                Errored e rest -> Errored e rest
-                One val others ->
-                    decodeElems others (List.append accum val)
-
-                Done val others ->
-                    Done (List.append accum val) others
 
         { before, others: afterStartingBrace } = List.split bytes 1
 
         if
             before == [asciiByte '[']
         then
+            # TODO: empty lists
             when decodeElems afterStartingBrace [] is
                 Errored e rest -> { result: Err e, rest }
                 Done vals rest ->
