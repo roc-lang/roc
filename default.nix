@@ -16,25 +16,9 @@ rustPlatform.buildRustPackage {
 
   src = pkgs.nix-gitignore.gitignoreSource [] ./.;
 
-  cargoSha256 = "sha256-ey1zHqiFhGNgjQLC6ATEH6i7RcuXJGcijGMcv9amn0w=";
+  cargoSha256 = "sha256-ZT3lH2P0OnK8XwI89csINXIK+/AhhKVmXDqNGYMy/vk=";
 
   LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
-
-  # for cli bindgen "No such file or directory"
-  preBuild = ''
-    # From: https://github.com/NixOS/nixpkgs/blob/1fab95f5190d087e66a3502481e34e15d62090aa/pkgs/applications/networking/browsers/firefox/common.nix#L247-L253
-    # Set C flags for Rust's bindgen program. Unlike ordinary C
-    # compilation, bindgen does not invoke $CC directly. Instead it
-    # uses LLVM's libclang. To make sure all necessary flags are
-    # included we need to look in a few places.
-    export BINDGEN_EXTRA_CLANG_ARGS="$(< ${pkgs.stdenv.cc}/nix-support/libc-crt1-cflags) \
-      $(< ${pkgs.stdenv.cc}/nix-support/libc-cflags) \
-      $(< ${pkgs.stdenv.cc}/nix-support/cc-cflags) \
-      $(< ${pkgs.stdenv.cc}/nix-support/libcxx-cxxflags) \
-      ${pkgs.lib.optionalString pkgs.stdenv.cc.isClang "-idirafter ${pkgs.stdenv.cc.cc}/lib/clang/${pkgs.lib.getVersion pkgs.stdenv.cc.cc}/include"} \
-      ${pkgs.lib.optionalString pkgs.stdenv.cc.isGNU "-isystem ${pkgs.stdenv.cc.cc}/include/c++/${pkgs.lib.getVersion pkgs.stdenv.cc.cc} -isystem ${pkgs.stdenv.cc.cc}/include/c++/${pkgs.lib.getVersion pkgs.stdenv.cc.cc}/${pkgs.stdenv.hostPlatform.config}"}
-    "
-  '';
 
   # required for zig
   XDG_CACHE_HOME = "xdg_cache"; # prevents zig AccessDenied error github.com/ziglang/zig/issues/6810
@@ -68,6 +52,7 @@ rustPlatform.buildRustPackage {
     ncurses
     zlib
     cargo
+    makeWrapper # necessary for postBuild wrapProgram
   ]
   ++ lib.optionals pkgs.stdenv.isLinux [
       alsa-lib
@@ -92,4 +77,12 @@ rustPlatform.buildRustPackage {
       Security
   ]);
 
+  # mkdir -p $out/lib
+
+  # cp: to copy str.zig,list.zig...
+  # wrapProgram pkgs.stdenv.cc: to make ld available for compiler/build/src/link.rs
+  postInstall = ''
+    cp -r target/x86_64-unknown-linux-gnu/release/lib/. $out/lib
+    wrapProgram $out/bin/roc --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.stdenv.cc ]}
+  '';
 }
