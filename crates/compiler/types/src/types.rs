@@ -2661,6 +2661,9 @@ pub fn gather_fields_unsorted_iter(
             // TODO investigate apparently this one pops up in the reporting tests!
             RigidVar(_) => break,
 
+            // Stop on errors in the record
+            Error => break,
+
             _ => return Err(RecordFieldsError),
         }
     }
