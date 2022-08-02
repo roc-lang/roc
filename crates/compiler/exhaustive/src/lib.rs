@@ -169,6 +169,13 @@ pub enum Guard {
     NoGuard,
 }
 
+/// Whether to include non-exhaustive constructors (like `*` in [A]*) when checking patterns.
+///
+/// You almost always want this to be `true`. The exception is when checking for material
+/// non-exhaustive constructors between patterns and a type.
+#[derive(Clone, Copy)]
+pub struct IncludeNonExhaustiveCtors(pub bool);
+
 /// Check
 
 pub fn check(

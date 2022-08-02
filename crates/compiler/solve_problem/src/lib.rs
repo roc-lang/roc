@@ -17,6 +17,7 @@ pub enum TypeError {
     BadExprMissingAbility(Region, Category, ErrorType, Vec<Unfulfilled>),
     BadPatternMissingAbility(Region, PatternCategory, ErrorType, Vec<Unfulfilled>),
     Exhaustive(roc_exhaustive::Error),
+    ConditionExhaustive(roc_exhaustive::Error),
     StructuralSpecialization {
         region: Region,
         typ: ErrorType,

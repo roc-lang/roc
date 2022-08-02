@@ -12451,37 +12451,43 @@ All branches in an `if` must have the same type!
         condition_type_not_covered_by_patterns,
         indoc!(
             r#"
-            pingRoc : {} -> Result {} [RateLimited, TimeOut, NoRoc]*
+            pingRoc : {} -> Result [A, B, C [D]*]* [RateLimited [RetryIn U8]a, Timeout, Unknown]b
 
             when pingRoc {} is
-                Ok {} -> {}
-                Err e ->
-                    when e is
-                        RateLimited -> {}
-                        TimeOut -> {}
-                        NoCaml -> {}
-                        _ -> {}
-            "#
+                Ok A -> {}
+                Ok B -> {}
+                Ok (C D) -> {}
+                Ok (C E) -> {}
+                Err (RateLimited (RetryIn _)) -> {}
+                Err (RateLimited QuotaExpired) -> {}
+                Err Timeout -> {}
+                Err _ -> {}
+                "#
         ),
         @r###"
-    ── TYPES NOT COVERED IN CONDITION ──────────────────────── /code/proj/Main.roc ─
+    ── PATTERN UNSPECIFIED IN CONDITION ────────────────────── /code/proj/Main.roc ─
 
-    These patterns match cases that aren't explicitly in the type of the
-    condition:
+    The patterns of this `when` expression match cases that aren't
+    explicitly in the type of the condition:
 
-     9│>              when e is
-    10│>                  RateLimited -> {}
-    11│>                  TimeOut -> {}
-    12│>                  NoCaml -> {}
-    13│>                  _ -> {}
+     6│>      when pingRoc {} is
+     7│>          Ok A -> {}
+     8│>          Ok B -> {}
+     9│>          Ok (C D) -> {}
+    10│>          Ok (C E) -> {}
+    11│>          Err (RateLimited (RetryIn _)) -> {}
+    12│>          Err (RateLimited QuotaExpired) -> {}
+    13│>          Err Timeout -> {}
+    14│>          Err _ -> {}
 
     The cases that are covered by the patterns but aren't explicitly in
     the condition type are:
 
-        [NoCaml]a
+        Err (RateLimited QuotaExpired)
+        Ok (C E)
 
-    Note: If you intended to match those patterns, no worries! Just
-    letting you know, in case this was unintentional.
+    If you meant to match these patterns, consider adding them to the type
+    of the condition! Otherwise, it is safe to remove them!
     "###
     );
 }

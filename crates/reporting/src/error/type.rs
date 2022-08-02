@@ -216,6 +216,9 @@ pub fn type_problem<'b>(
                 severity: Severity::Warning,
             })
         }
+        ConditionExhaustive(problem) => {
+            condition_exhaustive_problem(alloc, lines, filename, problem)
+        }
     }
 }
 
@@ -4276,6 +4279,44 @@ fn exhaustive_problem<'a>(
                 doc,
                 severity: Severity::Warning,
             }
+        }
+    }
+}
+
+fn condition_exhaustive_problem<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    problem: roc_exhaustive::Error,
+) -> Option<Report<'a>> {
+    use roc_exhaustive::Error::*;
+
+    match problem {
+        Incomplete(region, _context, missing) => {
+            let doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("The patterns of this "),
+                    alloc.keyword("when"),
+                    alloc.reflow( " expression match cases that aren't explicitly in the type of the condition:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("The cases that are covered by the patterns but aren't explicitly in the condition type are:"),
+                unhandled_patterns_to_doc_block(alloc, missing),
+                alloc.reflow(
+                    "If you meant to match these patterns, consider adding them to the type of the condition! Otherwise, it is safe to remove them!",
+                ),
+            ]);
+
+            Some(Report {
+                filename,
+                title: "PATTERN UNSPECIFIED IN CONDITION".to_string(),
+                doc,
+                severity: Severity::Warning,
+            })
+        }
+        Redundant { .. } => {
+            // Don't report redundant errors for condition exhaustion checks
+            None
         }
     }
 }
