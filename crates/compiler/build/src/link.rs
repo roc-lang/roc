@@ -138,7 +138,7 @@ pub fn build_zig_host_native(
         zig_str_path,
         "--pkg-end",
         // include the zig runtime
-        // "-fcompiler-rt",
+        "-fcompiler-rt",
         // include libc
         "--library",
         "c",
