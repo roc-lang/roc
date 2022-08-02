@@ -27,7 +27,7 @@ fn build_wasm_linking_test_host() {
         .join("wasm_linking_host_imports.zig");
 
     let host_wasm_path = PathBuf::from("build").join("wasm_linking_test_host.wasm");
-    let host_native_path = PathBuf::from("build").join("wasm_linking_test_host.exe");
+    let host_native_path = PathBuf::from("build").join("wasm_linking_test_host");
 
     let host_source: &str = host_source_path.to_str().unwrap();
     let import_source: &str = import_source_path.to_str().unwrap();
