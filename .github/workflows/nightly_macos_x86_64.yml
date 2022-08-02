@@ -24,6 +24,12 @@ jobs:
         run: zig version
       - name: Install LLVM
         run: brew install llvm@13
+      # build has to be done before tests #2572
+      - name: build release
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --locked
       - name: execute rust tests
         uses: actions-rs/cargo@v1
         with:
@@ -31,11 +37,6 @@ jobs:
           args: --locked # no --release yet until #3166 is fixed
       - name: write version to file
         run: ./ci/write_version.sh
-      - name: build release
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --release --locked
       - name: package release
         run: ./ci/package_release.sh roc_darwin_x86_64.tar.gz
       - name: Create pre-release with test_archive.tar.gz
