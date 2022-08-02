@@ -18,6 +18,7 @@ impl From<target_lexicon::OperatingSystem> for OperatingSystem {
             target_lexicon::OperatingSystem::Wasi => OperatingSystem::Wasi,
             target_lexicon::OperatingSystem::Linux => OperatingSystem::Unix,
             target_lexicon::OperatingSystem::MacOSX { .. } => OperatingSystem::Unix,
+            target_lexicon::OperatingSystem::Darwin => OperatingSystem::Unix,
             other => unreachable!("unsupported operating system {:?}", other),
         }
     }
