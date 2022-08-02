@@ -59,6 +59,8 @@ fn build_wasm_linking_test_host() {
         "build-obj",
         host_source,
         &format!("-femit-bin={}", &host_obj),
+        "-target",
+        "wasm32-wasi",
     ]);
 
     let import_obj_path = PathBuf::from("build").join("wasm_linking_host_imports.o");
@@ -67,6 +69,8 @@ fn build_wasm_linking_test_host() {
         "build-obj",
         import_source,
         &format!("-femit-bin={}", &import_obj),
+        "-target",
+        "wasm32-wasi",
     ]);
 
     run_zig(&[
@@ -74,6 +78,8 @@ fn build_wasm_linking_test_host() {
         host_obj,
         import_obj,
         &format!("-femit-bin={}", host_native),
+        "-target",
+        "wasm32-wasi",
     ]);
 }
 
